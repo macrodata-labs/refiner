@@ -1,0 +1,29 @@
+[project]
+name = "carton-forklift"
+version = "0.1.0"
+description = "ForkLift by Carton, a data processing framework for Machine Learning large scale datasets"
+readme = "README.md"
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+]
+authors = [
+    { name = "Guilherme Penedo", email = "guilherme@carton.dev" },
+    { name = "Hynek Kydlíček", email = "hynek@carton.dev" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "fsspec"
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.0.0",
+    "ruff>=0.14.10",
+    "ty>=0.0.7",
+]
+
+[tool.ty]
+[tool.ty.terminal]
+error-on-warning = false
+output-format = "concise"
