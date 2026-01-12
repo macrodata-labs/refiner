@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-from typing import Literal, Optional
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Any, Literal, Optional
 
 import pyarrow.parquet as pq
+from fsspec import AbstractFileSystem
+
+from refiner.io.fileset import DataFileSetLike
 
 from .base import BaseReader, Shard
 from .row import ArrowRowView, Row
@@ -15,10 +18,10 @@ class ParquetReader(BaseReader):
 
     def __init__(
         self,
-        inputs,
+        inputs: DataFileSetLike,
         *,
-        fs=None,
-        storage_options=None,
+        fs: AbstractFileSystem | None = None,
+        storage_options: Mapping[str, Any] | None = None,
         recursive: bool = False,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         arrow_batch_size: int = 65536,

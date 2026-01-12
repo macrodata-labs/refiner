@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import csv
 import io
-from collections.abc import Iterator
-from typing import Literal, Optional
+from collections.abc import Iterator, Mapping
+from typing import Any, Literal, Optional
+
+from fsspec import AbstractFileSystem
+
+from refiner.io.fileset import DataFileSetLike
 
 from .base import BaseReader, Shard
 from .row import DictRow, Row
@@ -21,10 +25,10 @@ class CsvReader(BaseReader):
 
     def __init__(
         self,
-        inputs,
+        inputs: DataFileSetLike,
         *,
-        fs=None,
-        storage_options=None,
+        fs: AbstractFileSystem | None = None,
+        storage_options: Mapping[str, Any] | None = None,
         recursive: bool = False,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         multiline_rows: bool = False,

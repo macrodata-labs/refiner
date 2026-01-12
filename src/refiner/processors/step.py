@@ -4,7 +4,7 @@ from abc import ABC
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any, TypeAlias
 
-from .readers import Row
+from refiner.readers import Row
 
 
 class RefinerStep(ABC):
