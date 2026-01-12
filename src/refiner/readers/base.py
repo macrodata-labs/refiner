@@ -2,27 +2,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from fsspec import AbstractFileSystem
 
-from forklift.io import DataFileSet
-from forklift.io.fileset import DataFileSetLike
-
-
-@dataclass(frozen=True, slots=True)
-class Shard:
-    """A unit of read work.
-
-    Notes:
-        - `path` is stored in the form expected by `fs.open/fs.exists` (no protocol required).
-        - `start/end` are numeric offsets interpreted by the reader (e.g. byte offsets or row-group indices).
-    """
-
-    path: str
-    start: int
-    end: int
+from refiner.io import DataFileSet
+from refiner.io.fileset import DataFileSetLike
+from refiner.ledger.shard import Shard
 
 
 class BaseReader(ABC):

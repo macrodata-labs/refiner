@@ -1,6 +1,6 @@
 import orjson
 
-from forklift.readers import JsonlReader
+from refiner.readers import JsonlReader
 
 
 def test_jsonl_bytes_lazy_reads_all_objects(tmp_path):

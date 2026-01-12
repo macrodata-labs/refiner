@@ -1,21 +1,25 @@
 [project]
-name = "carton-forklift"
+name = "refiner"
 version = "0.1.0"
-description = "ForkLift by Carton, a data processing framework for Machine Learning large scale datasets"
+description = "Refiner by Macrodata Labs, a data processing framework for Machine Learning large scale datasets"
 readme = "README.md"
 license = { file = "LICENSE" }
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
 ]
 authors = [
-    { name = "Guilherme Penedo", email = "guilherme@carton.dev" },
-    { name = "Hynek Kydlíček", email = "hynek@carton.dev" }
+    { name = "Macrodata Labs" }
 ]
 requires-python = ">=3.10"
 dependencies = [
     "fsspec",
     "orjson",
     "pyarrow",
+]
+
+[project.optional-dependencies]
+redis = [
+    "redis>=5.0.0",
 ]
 
 [dependency-groups]

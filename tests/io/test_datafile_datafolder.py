@@ -1,7 +1,7 @@
 from fsspec.implementations.local import LocalFileSystem
 
-from forklift.io.datafile import DataFile
-from forklift.io.datafolder import DataFolder
+from refiner.io.datafile import DataFile
+from refiner.io.datafolder import DataFolder
 
 
 def test_datafile_resolve_with_path_string(tmp_path):

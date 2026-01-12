@@ -38,7 +38,7 @@ class JsonlReader(BaseReader):
             fs=fs,
             storage_options=storage_options,
             recursive=recursive,
-            extensions=(".jsonl", ".ndjson", ".jsonlines"),
+            extensions=(".jsonl", ".jsonl.gz", ".ndjson", ".jsonlines"),
         )
         self.target_shard_bytes = clamp_target_bytes(target_shard_bytes)
 

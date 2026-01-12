@@ -1,4 +1,4 @@
-from forklift.readers import CsvReader
+from refiner.readers import CsvReader
 
 
 def test_csv_bytes_lazy_reads_all_rows_exactly_once(tmp_path):

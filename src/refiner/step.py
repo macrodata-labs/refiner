@@ -7,7 +7,7 @@ from typing import Any, TypeAlias
 from .readers import Row
 
 
-class ForkLiftStep(ABC):
+class RefinerStep(ABC):
     pass
 
 
