@@ -1,13 +1,13 @@
-from collections.abc import Mapping, Iterable
+from collections.abc import Iterable, Mapping
+from typing import IO, Any, TypeAlias, Union
+
 from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
-from typing import IO, TypeAlias, Any
+
 from .datafile import DataFile
 
-DataFolderLike: TypeAlias = (
-    str | tuple[str, Mapping[str, Any]] | tuple[str, AbstractFileSystem] | "DataFolder"
-)
+DataFolderLike: TypeAlias = Union[str, "DataFolder"]
 
 
 class DataFolder(DirFileSystem):
@@ -44,21 +44,25 @@ class DataFolder(DirFileSystem):
         self.auto_mkdir = auto_mkdir
 
     @classmethod
-    def resolve(cls, data: DataFolderLike) -> "DataFolder":
+    def resolve(
+        cls,
+        data: DataFolderLike,
+        *,
+        fs: AbstractFileSystem | None = None,
+        storage_options: Mapping[str, Any] | None = None,
+    ) -> "DataFolder":
         """
         `DataFolder` factory.
         Possible input combinations:
         - `str`: the simplest way is to pass a single string. Example: `/home/user/mydir`, `s3://mybucket/myinputdata`,
-        `hf://datasets/allenai/c4/en/`
-        - `(str, fsspec filesystem instance)`: a string path and a fully initialized filesystem object.
-        Example: `("s3://mybucket/myinputdata", S3FileSystem(client_kwargs={"endpoint_url": endpoint_uri}))`
-        - `(str, Mapping)`: a string path and a dictionary with options to initialize a fs. Example
-        (equivalent to the previous line): `("s3://mybucket/myinputdata", {"client_kwargs": {"endpoint_url": endpoint_uri}})`
+          `hf://datasets/allenai/c4/en/`
         - `DataFolder`: you can initialize a DataFolder object directly and pass it as an argument
 
 
         Args:
-            data: DataFolder | str | tuple[str, Mapping] | tuple[str, AbstractFileSystem]:
+            data: `DataFolder` | `str`
+            fs: Optional initialized filesystem to use. If provided, `storage_options` is ignored.
+            storage_options: Optional fsspec filesystem init options (used only when `fs` is not provided).
 
         Returns:
             `DataFolder` instance
@@ -68,24 +72,11 @@ class DataFolder(DirFileSystem):
             return data
         # simple string path
         if isinstance(data, str):
-            return cls(data)
-        # (str path, fs init options Mapping)
-        if (
-            isinstance(data, tuple)
-            and isinstance(data[0], str)
-            and isinstance(data[1], Mapping)
-        ):
-            return cls(data[0], **data[1])
-        # (str path, initialized fs object)
-        if (
-            isinstance(data, tuple)
-            and isinstance(data[0], str)
-            and isinstance(data[1], AbstractFileSystem)
-        ):
-            return cls(data[0], fs=data[1])
-        raise TypeError(
-            "You must pass a DataFolder instance, a str path, a (str path, fs_init_kwargs) or (str path, fs object)"
-        )
+            if fs is not None:
+                path = fs._strip_protocol(data)  # type: ignore[attr-defined]
+                return cls(path, fs=fs)
+            return cls(data, **dict(storage_options or {}))
+        raise TypeError("You must pass a DataFolder instance or a str path")
 
     def _abs_path(self, path: str) -> str:
         # make sure we strip file:// and similar
@@ -134,7 +125,7 @@ class DataFolder(DirFileSystem):
             *args: additional arguments to pass to the open
             **kwargs: additional arguments to pass to the open
         """
-        mode: str = kwargs.get("mode", args[0] if args else "rb")
+        mode: str = kwargs.pop("mode", args[0] if args else "rb")
         if self.auto_mkdir and isinstance(mode, str) and (set(mode) & set("wax+")):
             self.fs.makedirs(self.fs._parent(self._join(path)), exist_ok=True)
         return super().open(path, *args, mode=mode, **kwargs)

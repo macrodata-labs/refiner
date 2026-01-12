@@ -13,15 +13,23 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "fsspec"
+    "fsspec",
+    "orjson",
+    "pyarrow",
 ]
 
 [dependency-groups]
 dev = [
     "pre-commit>=4.0.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
     "ruff>=0.14.10",
     "ty>=0.0.7",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
 
 [tool.ty]
 [tool.ty.terminal]

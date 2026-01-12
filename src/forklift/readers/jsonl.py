@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import io
+from collections.abc import Iterator
+
+import orjson  # type: ignore[import-not-found]
+
+from .base import BaseReader, Shard
+from .row import DictRow, Row
+from .utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    BoundedBinaryReader,
+    align_byte_range_to_newlines,
+    clamp_target_bytes,
+    is_splittable_by_bytes,
+)
+
+
+class JsonlReader(BaseReader):
+    """JSONL / NDJSON reader sharded by byte ranges (per-file).
+
+    Notes:
+        - This reader assumes one JSON value per line (newline-delimited JSON).
+        - Sharding mode is bytes-lazy only: `list_shards()` is cheap, and `read_shard()` aligns to newline boundaries.
+    """
+
+    def __init__(
+        self,
+        inputs,
+        *,
+        fs=None,
+        storage_options=None,
+        recursive: bool = False,
+        target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    ):
+        super().__init__(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            extensions=(".jsonl", ".ndjson", ".jsonlines"),
+        )
+        self.target_shard_bytes = clamp_target_bytes(target_shard_bytes)
+
+    def list_shards(self) -> list[Shard]:
+        shards: list[Shard] = []
+        for path in self.files:
+            if not is_splittable_by_bytes(self.fs, path):
+                shards.append(Shard(path=path, start=0, end=-1))
+                continue
+
+            size = self.fileset.size(path)
+            if size <= self.target_shard_bytes:
+                shards.append(Shard(path=path, start=0, end=size))
+                continue
+
+            start = 0
+            while start < size:
+                end = min(size, start + self.target_shard_bytes)
+                shards.append(Shard(path=path, start=start, end=end))
+                start = end
+
+        return shards
+
+    def read_shard(self, shard: Shard) -> Iterator[Row]:
+        if shard.end == -1:
+            # Non-splittable inputs: read the entire file with decompression if needed.
+            with self.fs.open(
+                shard.path,
+                mode="rb",
+                compression="infer",
+            ) as tf:
+                for line in tf:
+                    s = line.strip()
+                    if not s:
+                        continue
+                    obj = orjson.loads(s)
+                    if not isinstance(obj, dict):
+                        raise ValueError(
+                            "JSONL reader expects each line to be a JSON object"
+                        )
+                    yield DictRow(obj)
+            return
+
+        fh, _ = self._get_file_handle(shard.path, mode="rb")
+        size = self.fileset.size(shard.path)
+
+        aligned = align_byte_range_to_newlines(
+            fh, start=shard.start, end=shard.end, size=size
+        )
+        if aligned is None:
+            return
+        start, end = aligned
+
+        try:
+            fh.seek(start)
+        except Exception:
+            fh, _ = self._get_file_handle(shard.path, mode="rb", force_reopen=True)
+            fh.seek(start)
+
+        raw = io.BufferedReader(BoundedBinaryReader(fh, end - start))
+        for line in raw:
+            s = line.strip()
+            if not s:
+                continue
+            obj = orjson.loads(s)
+            if not isinstance(obj, dict):
+                raise ValueError("JSONL reader expects each line to be a JSON object")
+            yield DictRow(obj)
+
+
+__all__ = ["JsonlReader"]

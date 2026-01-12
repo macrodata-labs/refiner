@@ -2,17 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, TypeAlias, cast
+from typing import Any, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.local import LocalFileSystem
 
-DataFileLike: TypeAlias = (
-    str
-    | tuple[str, Mapping[str, Any]]
-    | tuple[str, AbstractFileSystem]  # (path, fs)
-    | "DataFile"
-)
+DataFileLike: TypeAlias = Union[str, "DataFile"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,48 +16,44 @@ class DataFile:
 
     Notes:
         - `path` is stored in the form expected by `fs.open/fs.exists` (no protocol required).
-        - `resolve()` accepts:
-            * `str` URL/path
-            * `(str, Mapping)` interpreted as `(url, storage_options)`
-            * `(str, AbstractFileSystem)` interpreted as `(path, fs)` (your existing convention)
-            * `DataFile` (pass-through)
+        - `resolve()` accepts `str` URL/path or `DataFile` (pass-through).
+        - If `fs` is provided to `resolve()`, it wins and `storage_options` is ignored.
     """
 
     fs: AbstractFileSystem
     path: str
 
     @classmethod
-    def resolve(cls, data: DataFileLike) -> "DataFile":
+    def resolve(
+        cls,
+        data: DataFileLike,
+        *,
+        fs: AbstractFileSystem | None = None,
+        storage_options: Mapping[str, Any] | None = None,
+    ) -> "DataFile":
+        """Resolve a string URL/path into a `DataFile`, or pass through an existing `DataFile`.
+
+        Args:
+            data: A `str` URL/path or an existing `DataFile`.
+            fs: Optional initialized filesystem to use. If provided, `storage_options` is ignored.
+            storage_options: Optional fsspec filesystem init options (used only when `fs` is not provided).
+        """
         if isinstance(data, cls):
             return data
 
         # simple string url/path
         if isinstance(data, str):
-            fs, path = url_to_fs(data)
-            return cls(fs=fs, path=path)
+            if fs is not None:
+                # Best-effort strip protocol so `.path` is in the form expected by `fs.open/fs.exists`.
+                path = fs._strip_protocol(data)  # type: ignore[attr-defined]
+                return cls(fs=fs, path=path)
 
-        # (url/path, storage_options)
-        if (
-            isinstance(data, tuple)
-            and len(data) == 2
-            and isinstance(data[0], str)
-            and isinstance(data[1], Mapping)
-        ):
-            fs, path = url_to_fs(data[0], **cast(Mapping[str, Any], data[1]))
-            return cls(fs=fs, path=path)
+            next_fs, path = url_to_fs(
+                data, **cast(Mapping[str, Any], storage_options or {})
+            )
+            return cls(fs=next_fs, path=path)
 
-        # (path, initialized fs)
-        if (
-            isinstance(data, tuple)
-            and len(data) == 2
-            and isinstance(data[0], str)
-            and isinstance(data[1], AbstractFileSystem)
-        ):
-            return cls(fs=data[1], path=data[0])
-
-        raise TypeError(
-            "DataFileLike must be: str | (str, Mapping) | (str, AbstractFileSystem) | DataFile"
-        )
+        raise TypeError("DataFileLike must be: str | DataFile")
 
     def open(self, mode: str = "rt", **kwargs):
         return self.fs.open(self.path, mode=mode, **kwargs)
