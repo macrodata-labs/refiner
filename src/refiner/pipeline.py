@@ -3,9 +3,10 @@ from typing import Any, List, Literal
 
 from fsspec import AbstractFileSystem
 
-from refiner import BaseReader, RefinerStep
 from refiner.io.fileset import DataFileSetLike
+from refiner.processors.step import RefinerStep
 from refiner.readers import CsvReader, JsonlReader, ParquetReader
+from refiner.readers.base import BaseReader
 from refiner.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 
@@ -16,7 +17,7 @@ class RefinerPipeline:
     def __init__(
         self, source: BaseReader, pipeline_steps: List[RefinerStep] | None = None
     ):
-        self.source = source
+        self.source: BaseReader = source
         self.pipeline_steps = list(pipeline_steps) if pipeline_steps else []
 
     def __add_step(self, step: RefinerStep) -> "RefinerPipeline":
