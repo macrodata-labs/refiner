@@ -46,7 +46,8 @@ A **stage** is a sequence of operations.
 
 - Inside a stage:
   - operations are **fully fused**
-  - records flow one-by-one (generator-style)
+  - execution uses a **tight imperative loop** over shard rows
+  - row/batch operators run in fused micro-batches (no per-step iterator chaining)
   - no disk writes unless memory limits force a spill
 - Between stages:
   - data is **materialized**
@@ -94,6 +95,42 @@ Worker loop:
 
 No central scheduler process is required.
 
+### Worker Execution (Fused)
+
+Within a claimed shard, workers execute a fused plan with two logical step types:
+
+- **Single-row step**: `row -> row | None`
+- **Batchable step**: `list[row] -> list[row]`
+
+Arbitrary mixes are supported by a per-step fused scheduler with step-local queues.
+Batchable operators trigger only when their own queue reaches full batch size (tails flush at end-of-stream).
+
+Workers batch across multiple claimed shards before completion:
+- claim enough consecutive shards to satisfy current fused batch needs
+- run fused operators on the concatenated row stream
+- complete all claimed shards together on success (fail all on exception)
+- this enables larger batchable windows without introducing a materialization boundary
+
+Pseudo-flow:
+1. Read rows from `reader.read_shard(shard)`
+2. Apply fused row segments inline
+3. Accumulate into bounded buffers for batchable segments
+4. Emit outputs
+5. Heartbeat periodically and complete/fail in ledger
+
+### Cross-System Comparison (This Problem)
+
+For fused in-worker execution with row/batch operators:
+
+* **Spark**: fuses narrow operators inside a task (whole-stage style); breaks at shuffle/exchange.
+* **Beam/Dataflow**: fuses adjacent element-wise transforms into runner stages; breaks at shuffle/stateful boundaries.
+* **Daft**: optimizes lazy plans and executes fused partition-local operators; breaks at repartition/sort/join boundaries.
+
+Refiner follows the same shape:
+* fuse narrow local operators in one worker loop
+* keep async inference as in-process fusion boundary
+* materialize only at true stage boundaries (shuffle/sort/join/dedup)
+
 ---
 
 ## 4. Shard Lifecycle
@@ -125,19 +162,27 @@ tmp/run_id/work_id/attempt_k/...
 ## 5. Fusion vs Materialization
 
 ### Default: Implicit Fusion
-User code:
-```python
-def step(data_gen):
-  for row in data_gen:
-      yield f(row)
-````
-
 Execution:
 
-* Steps are inlined
+* Steps are inlined into one execution plan
 * No intermediate files
-* Bounded memory
+* Bounded memory via micro-batch buffers
 * Re-execution is cheap
+
+---
+
+### Fusion Boundaries (No Materialization)
+
+A **fusion boundary** stops inlining but stays in the **same process**.
+
+Use cases:
+* Async inference islands
+* Local execution-mode transitions (row-mode to async-mode and back)
+
+Properties:
+* No stage handoff
+* No worker-count change
+* No durable boundary output required
 
 ---
 
@@ -156,6 +201,7 @@ At a boundary:
 
 * Data is written to disk/object store
 * Next stage operates on these outputs
+* Next stage may run with a different worker count/resource class
 
 ---
 
@@ -318,6 +364,22 @@ Merge job:
 * Results returned via queues
 
 Only inference is async; rest remains synchronous.
+
+Important:
+* This is a **fusion boundary**, not a materialization boundary.
+* Workers fuse all pre-inference operators, enter async island, then continue fused post-inference operators in the same process.
+* Ordering can be relaxed for throughput unless explicit ordering is required.
+
+### Local / Notebook Mode
+
+`RefinerPipeline` exposes local execution helpers:
+- `iter_rows()` for lazy fused execution over all shards (single-process, single-worker semantics)
+- `materialize()` to eagerly collect all rows into memory
+- `take(n)` for bounded sampling without full materialization
+
+This mirrors the common pattern in Spark/Daft-style local usage:
+- lazy transformation graph
+- explicit terminal action for full materialization
 
 ---
 

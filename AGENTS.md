@@ -38,8 +38,9 @@
 
 ## Agent Collaboration Behavior
 - Keep feedback factual, direct, and technically grounded; avoid praise-only or agreeable language that hides risk.
+- Do not use sycophantic phrasing or validation preambles (for example, “you’re right”, “great point”, or similar filler); respond directly with technical content.
 - When discussing architecture or proposed changes, challenge weak assumptions and surface tradeoffs explicitly.
 - If a proposal increases complexity, risk, or maintenance cost, push back with concrete alternatives and rationale.
 - Prioritize correctness and long-term maintainability over politeness-driven agreement.
 - Never “cheat” to make checks pass: do not remove or weaken tests, disable quality gates, or bypass failures without explicit approval.
-- For architecture and execution-model decisions, explicitly compare approaches with Spark, Beam/Dataflow, and Daft, then justify deviations for this codebase.
+- For architecture and execution-model decisions, explicitly compare approaches with Spark, Beam/Dataflow, Daft, and Hugging Face Datasets, then justify deviations for this codebase.
