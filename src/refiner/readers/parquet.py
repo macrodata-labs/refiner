@@ -64,6 +64,7 @@ class ParquetReader(BaseReader):
         self.sharding_mode = sharding_mode
 
         self._open_pf: Optional[pq.ParquetFile] = None
+        self._index_by_name_cache: dict[tuple[str, ...], dict[str, int]] = {}
 
     def _get_parquet_file(self, path: str) -> pq.ParquetFile:
         """Get or open a cached ParquetFile for the current path (single-open-file policy)."""
@@ -229,8 +230,17 @@ class ParquetReader(BaseReader):
         ):
             names = tuple(batch.schema.names)
             cols = tuple(batch.columns)
+            index_by_name = self._index_by_name_cache.get(names)
+            if index_by_name is None:
+                index_by_name = {name: i for i, name in enumerate(names)}
+                self._index_by_name_cache[names] = index_by_name
             for i in range(batch.num_rows):
-                yield ArrowRowView(names=names, columns=cols, row_idx=i)
+                yield ArrowRowView(
+                    names=names,
+                    columns=cols,
+                    index_by_name=index_by_name,
+                    row_idx=i,
+                )
 
 
 __all__ = ["ParquetReader"]

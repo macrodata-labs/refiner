@@ -35,14 +35,14 @@ class Row(Mapping[str, Any]):
         if not merged:
             return self
 
-        if isinstance(self, OverlayRow):
+        if isinstance(self, _OverlayRow):
             # Updating an overlay should "undelete" any keys being set.
             deleted = self.deleted.difference(merged.keys())
             combined_patch = dict(self.patch)
             combined_patch.update(merged)
-            return OverlayRow(base=self.base, patch=combined_patch, deleted=deleted)
+            return _OverlayRow(base=self.base, patch=combined_patch, deleted=deleted)
 
-        return OverlayRow(base=self, patch=merged, deleted=frozenset())
+        return _OverlayRow(base=self, patch=merged, deleted=frozenset())
 
     def drop(self, *keys: str) -> "Row":
         """Return a new Row with the given keys hidden (immutable).
@@ -53,15 +53,15 @@ class Row(Mapping[str, Any]):
         if not keys:
             return self
 
-        if isinstance(self, OverlayRow):
+        if isinstance(self, _OverlayRow):
             deleted = self.deleted.union(keys)
             # If a key is dropped, it should not be present in the patch either.
             patch = dict(self.patch)
             for k in keys:
                 patch.pop(k, None)
-            return OverlayRow(base=self.base, patch=patch, deleted=deleted)
+            return _OverlayRow(base=self.base, patch=patch, deleted=deleted)
 
-        return OverlayRow(base=self, patch={}, deleted=frozenset(keys))
+        return _OverlayRow(base=self, patch={}, deleted=frozenset(keys))
 
     def pop(self, key: str, default: Any = _MISSING) -> tuple["Row", Any]:
         """Persistent pop: returns (new_row, value) without mutating the base row."""
@@ -75,7 +75,7 @@ class Row(Mapping[str, Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class OverlayRow(Row):
+class _OverlayRow(Row):
     """A `Row` overlay that applies a patch and/or deletes keys over a base row."""
 
     base: Row
@@ -135,12 +135,13 @@ class ArrowRowView(Row):
 
     names: tuple[str, ...]
     columns: tuple[Any, ...]
+    index_by_name: Mapping[str, int]
     row_idx: int
 
     def __getitem__(self, key: str) -> Any:
         try:
-            j = self.names.index(key)
-        except ValueError as e:
+            j = self.index_by_name[key]
+        except KeyError as e:
             raise KeyError(key) from e
         return self.columns[j][self.row_idx].as_py()
 
@@ -151,50 +152,4 @@ class ArrowRowView(Row):
         return len(self.names)
 
 
-class RowQueue:
-    __slots__ = ("_buf", "_head")
-
-    def __init__(self):
-        self._buf: list[Row] = []
-        self._head = 0
-
-    def __len__(self) -> int:
-        return len(self._buf) - self._head
-
-    def append(self, row: Row) -> None:
-        self._buf.append(row)
-
-    def extend(self, rows: list[Row]) -> None:
-        if rows:
-            self._buf.extend(rows)
-
-    def take(self, n: int) -> list[Row]:
-        if n <= 0:
-            return []
-        available = len(self)
-        if available <= 0:
-            return []
-        if n > available:
-            n = available
-        start = self._head
-        end = start + n
-        out = self._buf[start:end]
-        self._head = end
-        self._maybe_compact()
-        return out
-
-    def take_all(self) -> list[Row]:
-        return self.take(len(self))
-
-    def _maybe_compact(self) -> None:
-        if self._head == 0:
-            return
-        if self._head >= 1024 and self._head * 2 >= len(self._buf):
-            self._buf = self._buf[self._head :]
-            self._head = 0
-        elif self._head == len(self._buf):
-            self._buf.clear()
-            self._head = 0
-
-
-__all__ = ["Row", "OverlayRow", "DictRow", "ArrowRowView", "RowQueue"]
+__all__ = ["Row", "DictRow", "ArrowRowView"]

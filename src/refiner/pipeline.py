@@ -17,7 +17,8 @@ from refiner.processors.step import (
 )
 from refiner.readers import CsvReader, JsonlReader, ParquetReader
 from refiner.readers.base import BaseReader
-from refiner.readers.row import Row, RowQueue
+from refiner.readers.row import Row
+from refiner.runtime.row_queue import RowQueue
 from refiner.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 
