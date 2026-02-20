@@ -110,12 +110,7 @@ class RefinerPipeline:
 
     def iter_rows(self) -> Iterable[Row]:
         """Local execution mode: lazily process all shards and yield output rows."""
-
-        def _source_rows() -> Iterable[Row]:
-            for shard in self.source.list_shards():
-                yield from self.source.read_shard(shard)
-
-        return self.execute_rows(_source_rows())
+        return self.execute_rows(self.source.read())
 
     def materialize(self) -> list[Row]:
         """Compute all output rows into memory (local/dev utility)."""
