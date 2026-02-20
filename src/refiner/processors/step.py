@@ -13,10 +13,11 @@ class RefinerStep(ABC):
     """Base marker for executable processing steps."""
 
 
-MapResult: TypeAlias = Row | Mapping[str, Any] | None
+MapResult: TypeAlias = Row | Mapping[str, Any]
 MapFn: TypeAlias = Callable[[Row], MapResult]
 BatchItem: TypeAlias = Row | Mapping[str, Any] | None
 BatchFn: TypeAlias = Callable[[list[Row]], Iterable[BatchItem]]
+FlatMapFn: TypeAlias = Callable[[Row], Iterable[BatchItem]]
 
 
 class RowStep(RefinerStep, ABC):
@@ -55,17 +56,28 @@ class FnBatchStep(BatchStep):
             yield from self.fn(rows[i : i + self.batch_size])
 
 
-def normalize_row_result(row: Row, result: MapResult) -> Row | None:
+class FlatMapStep(RefinerStep, ABC):
+    @abstractmethod
+    def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class FnFlatMapStep(FlatMapStep):
+    fn: FlatMapFn
+
+    def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
+        return self.fn(row)
+
+
+def normalize_row_result(row: Row, result: MapResult) -> Row:
     """Normalize a user map() function's output.
 
     Contract:
-        - None => drop the row
         - Row  => replace the row
         - Mapping[str, Any] => treated as a patch to merge into the input row
     """
 
-    if result is None:
-        return None
     if isinstance(result, Row):
         return result
     if isinstance(result, Mapping):
@@ -88,12 +100,15 @@ __all__ = [
     "RefinerStep",
     "RowStep",
     "BatchStep",
+    "FlatMapStep",
     "FnRowStep",
     "FnBatchStep",
+    "FnFlatMapStep",
     "MapResult",
     "MapFn",
     "BatchItem",
     "BatchFn",
+    "FlatMapFn",
     "normalize_row_result",
     "normalize_batch_item",
 ]

@@ -61,8 +61,8 @@ def test_pipeline_executes_row_and_batch_steps() -> None:
     pipeline = (
         RefinerPipeline(source=_FakeReader({}))
         .map(lambda r: {"x": r["x"] + 1})
-        .map(lambda r: None if r["x"] % 2 == 0 else r)
-        .map(lambda rows: [row for row in rows if row["x"] >= 3], batch_size=2)
+        .filter(lambda r: int(r["x"]) % 2 != 0)
+        .batch_map(lambda rows: [row for row in rows if row["x"] >= 3], batch_size=2)
         .map(lambda r: {"y": r["x"] * 10})
     )
 
@@ -93,7 +93,7 @@ def test_worker_runs_fused_pipeline_and_updates_ledger() -> None:
     pipeline = (
         RefinerPipeline(source=_FakeReader(rows_by_shard))
         .map(lambda r: {"x": r["x"] + 1})
-        .map(lambda rows: list(reversed(rows)), batch_size=2)
+        .batch_map(lambda rows: list(reversed(rows)), batch_size=2)
         .map(tap)
     )
 
@@ -128,7 +128,7 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
         shard2.id: [DictRow({"x": 2})],
     }
 
-    def maybe_fail(row: Row) -> Row | None:
+    def maybe_fail(row: Row) -> Row:
         if row["x"] == 2:
             raise RuntimeError("kaboom")
         return row
@@ -162,7 +162,7 @@ def test_worker_can_batch_across_shards() -> None:
 
     pipeline = (
         RefinerPipeline(source=_FakeReader(rows_by_shard))
-        .map(lambda rows: list(reversed(rows)), batch_size=2)
+        .batch_map(lambda rows: list(reversed(rows)), batch_size=2)
         .map(tap)
     )
 

@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, List, Literal, cast
+from typing import Any, Callable, List, Literal
 
 from fsspec import AbstractFileSystem
 
@@ -7,7 +7,10 @@ from refiner.io.fileset import DataFileSetLike
 from refiner.processors.step import (
     BatchFn,
     BatchStep,
+    FlatMapFn,
+    FlatMapStep,
     FnBatchStep,
+    FnFlatMapStep,
     FnRowStep,
     MapFn,
     RefinerStep,
@@ -35,12 +38,19 @@ class RefinerPipeline:
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
         return self.__class__(self.source, self.pipeline_steps + [step])
 
-    def map(self, fn: MapFn | BatchFn, *, batch_size: int = 1) -> "RefinerPipeline":
-        if batch_size <= 0:
-            raise ValueError("batch_size must be > 0")
-        if batch_size == 1:
-            return self.add_step(FnRowStep(fn=cast(MapFn, fn)))
-        return self.add_step(FnBatchStep(fn=cast(BatchFn, fn), batch_size=batch_size))
+    def map(self, fn: MapFn) -> "RefinerPipeline":
+        return self.add_step(FnRowStep(fn=fn))
+
+    def batch_map(self, fn: BatchFn, *, batch_size: int) -> "RefinerPipeline":
+        if batch_size <= 1:
+            raise ValueError("batch_size for batch_map must be > 1")
+        return self.add_step(FnBatchStep(fn=fn, batch_size=batch_size))
+
+    def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
+        return self.add_step(FnFlatMapStep(fn=fn))
+
+    def filter(self, predicate: Callable[[Row], bool]) -> "RefinerPipeline":
+        return self.flat_map(lambda row: [row] if predicate(row) else [])
 
     def execute_rows(self, rows: Iterable[Row]) -> Iterable[Row]:
         """Execute rows with per-step queues and step-local batch triggering."""
@@ -63,8 +73,18 @@ class RefinerPipeline:
             if isinstance(step, RowStep):
                 for row in inp.take_all():
                     normalized = normalize_row_result(row, step.apply_row(row))
-                    if normalized is not None:
-                        out.append(normalized)
+                    out.append(normalized)
+                return
+
+            if isinstance(step, FlatMapStep):
+                tmp = scratch[i]
+                tmp.clear()
+                for row in inp.take_all():
+                    for item in step.apply_row_many(row):
+                        normalized = normalize_batch_item(item)
+                        if normalized is not None:
+                            tmp.append(normalized)
+                out.extend(tmp)
                 return
 
             if isinstance(step, BatchStep):

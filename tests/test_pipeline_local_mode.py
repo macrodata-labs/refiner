@@ -36,7 +36,7 @@ def test_iter_rows_is_lazy_and_crosses_shards() -> None:
     pipeline = (
         RefinerPipeline(source=_LocalFakeReader([s1, s2], rows))
         .map(lambda r: {"x": r["x"]})
-        .map(batch_fn, batch_size=3)
+        .batch_map(batch_fn, batch_size=3)
     )
 
     it = iter(pipeline)
@@ -77,8 +77,8 @@ def test_batch_groups_split_on_increasing_batch_size() -> None:
 
     pipeline = (
         RefinerPipeline(source=_LocalFakeReader([s], rows))
-        .map(b4, batch_size=4)
-        .map(b8, batch_size=8)
+        .batch_map(b4, batch_size=4)
+        .batch_map(b8, batch_size=8)
     )
 
     out = list(pipeline.iter_rows())
@@ -103,11 +103,37 @@ def test_downstream_batch_waits_after_upstream_drop() -> None:
 
     pipeline = (
         RefinerPipeline(source=_LocalFakeReader([s], rows))
-        .map(drop_to_one, batch_size=4)
-        .map(b2, batch_size=2)
+        .batch_map(drop_to_one, batch_size=4)
+        .batch_map(b2, batch_size=2)
     )
 
     out = list(pipeline.iter_rows())
     assert len(out) == 2
     # b2 should run once with a full batch collected across two upstream outputs.
     assert seen_b2 == [2]
+
+
+def test_flat_map_can_expand_rows() -> None:
+    s = Shard(path="a", start=0, end=1)
+    rows = {s.id: [DictRow({"x": 1}), DictRow({"x": 2})]}
+
+    pipeline = RefinerPipeline(source=_LocalFakeReader([s], rows)).flat_map(
+        lambda r: [{"x": r["x"]}, {"x": r["x"] * 10}]
+    )
+
+    out = list(pipeline.iter_rows())
+    assert [r["x"] for r in out] == [1, 10, 2, 20]
+
+
+def test_filter_primitive_keeps_matching_rows() -> None:
+    s = Shard(path="a", start=0, end=1)
+    rows = {s.id: [DictRow({"x": i}) for i in range(6)]}
+
+    pipeline = (
+        RefinerPipeline(source=_LocalFakeReader([s], rows))
+        .filter(lambda r: int(r["x"]) % 2 == 0)
+        .map(lambda r: {"y": int(r["x"]) + 100})
+    )
+
+    out = list(pipeline.iter_rows())
+    assert [r["y"] for r in out] == [100, 102, 104]

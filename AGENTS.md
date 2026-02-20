@@ -44,3 +44,10 @@
 - Prioritize correctness and long-term maintainability over politeness-driven agreement.
 - Never “cheat” to make checks pass: do not remove or weaken tests, disable quality gates, or bypass failures without explicit approval.
 - For architecture and execution-model decisions, explicitly compare approaches with Spark, Beam/Dataflow, Daft, and Hugging Face Datasets, then justify deviations for this codebase.
+
+## Documentation Discipline
+- Keep project docs in Mintlify-style Markdown with frontmatter (`title`, `description`) under `docs/`.
+- Any new feature, execution block, architectural change, or user-visible behavior change must include corresponding doc updates in the same change set.
+- Write docs user-first: explain how to use the API/workflow and expected behavior before discussing internals.
+- Include internal implementation notes only at the end of each doc in a short `## Internal Notes` section.
+- In docs, import from the package top level (`import refiner as mdr`) instead of module-level imports.

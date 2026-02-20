@@ -1,8 +1,18 @@
 from .io import DataFile, DataFileSet, DataFolder
 from .ledger.shard import Shard
 from .pipeline import RefinerPipeline, read_csv, read_jsonl, read_parquet
-from .processors import BatchStep, FnBatchStep, FnRowStep, RefinerStep, RowStep
+from .processors import (
+    BatchStep,
+    FlatMapFn,
+    FlatMapStep,
+    FnBatchStep,
+    FnFlatMapStep,
+    FnRowStep,
+    RefinerStep,
+    RowStep,
+)
 from .readers import BaseReader, CsvReader, JsonlReader, ParquetReader, Row
+from .worker import Worker, WorkerRunStats
 
 __all__ = [
     "RefinerStep",
@@ -10,6 +20,9 @@ __all__ = [
     "BatchStep",
     "FnRowStep",
     "FnBatchStep",
+    "FlatMapStep",
+    "FnFlatMapStep",
+    "FlatMapFn",
     "RefinerPipeline",
     "DataFile",
     "DataFolder",
@@ -20,6 +33,8 @@ __all__ = [
     "CsvReader",
     "JsonlReader",
     "ParquetReader",
+    "Worker",
+    "WorkerRunStats",
     "read_csv",
     "read_jsonl",
     "read_parquet",
