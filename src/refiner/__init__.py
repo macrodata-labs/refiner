@@ -12,6 +12,7 @@ from .processors import (
     RowStep,
 )
 from .readers import BaseReader, CsvReader, JsonlReader, ParquetReader, Row
+from .runtime.launchers import BaseLauncher, LaunchStats, LocalLauncher
 from .worker import Worker, WorkerRunStats
 
 __all__ = [
@@ -24,6 +25,9 @@ __all__ = [
     "FnFlatMapStep",
     "FlatMapFn",
     "RefinerPipeline",
+    "BaseLauncher",
+    "LocalLauncher",
+    "LaunchStats",
     "DataFile",
     "DataFolder",
     "DataFileSet",

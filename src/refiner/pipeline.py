@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Callable, List, Literal
+from typing import TYPE_CHECKING, Any, Callable, List, Literal
 
 from fsspec import AbstractFileSystem
 
@@ -23,6 +23,9 @@ from refiner.readers.base import BaseReader
 from refiner.readers.row import Row
 from refiner.runtime.row_queue import RowQueue
 from refiner.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+
+if TYPE_CHECKING:
+    from refiner.runtime.launchers.local import LaunchStats
 
 
 class RefinerPipeline:
@@ -150,6 +153,27 @@ class RefinerPipeline:
 
     def __iter__(self):
         return iter(self.iter_rows())
+
+    def launch_local(
+        self,
+        *,
+        name: str,
+        num_workers: int = 1,
+        workdir: str | None = None,
+        heartbeat_every_rows: int = 4096,
+        cpus_per_worker: int | None = None,
+    ) -> "LaunchStats":
+        from refiner.runtime.launchers.local import LocalLauncher
+
+        launcher = LocalLauncher(
+            pipeline=self,
+            name=name,
+            num_workers=num_workers,
+            workdir=workdir,
+            heartbeat_every_rows=heartbeat_every_rows,
+            cpus_per_worker=cpus_per_worker,
+        )
+        return launcher.launch()
 
 
 ## readers

@@ -43,7 +43,8 @@
 - If a proposal increases complexity, risk, or maintenance cost, push back with concrete alternatives and rationale.
 - Prioritize correctness and long-term maintainability over politeness-driven agreement.
 - Never “cheat” to make checks pass: do not remove or weaken tests, disable quality gates, or bypass failures without explicit approval.
-- For architecture and execution-model decisions, explicitly compare approaches with Spark, Beam/Dataflow, Daft, and Hugging Face Datasets, then justify deviations for this codebase.
+- Do not preserve backwards compatibility by default; when architecture or API cleanup is requested, remove legacy paths unless the user explicitly asks to keep compatibility.
+- For architecture and execution-model decisions, explicitly compare approaches with Spark, Beam/Dataflow, Daft, Hugging Face Datasets, and Ray/Ray Data, then justify deviations for this codebase.
 
 ## Documentation Discipline
 - Keep project docs in Mintlify-style Markdown with frontmatter (`title`, `description`) under `docs/`.

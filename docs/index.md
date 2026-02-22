@@ -29,6 +29,7 @@ Refiner is being built as a batch-first processing engine with:
 2. `docs/local-execution.md` for lazy local iteration and materialization.
 3. `docs/readers-and-sharding.md` for input readers and shard behavior.
 4. `docs/worker-runtime.md` for worker lifecycle and ledger interaction.
+5. `docs/launchers.md` for local launcher usage.
 
 ## Planned Additions
 
