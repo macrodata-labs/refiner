@@ -1,0 +1,1 @@
+"""Macrodata CLI package."""

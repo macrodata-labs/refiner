@@ -14,9 +14,13 @@ requires-python = ">=3.10"
 dependencies = [
     "cloudpickle",
     "fsspec",
+    "httpx",
     "orjson",
     "pyarrow",
 ]
+
+[project.scripts]
+macrodata = "refiner.cli.main:main"
 
 [project.optional-dependencies]
 redis = [

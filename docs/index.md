@@ -30,6 +30,7 @@ Refiner is being built as a batch-first processing engine with:
 3. `docs/readers-and-sharding.md` for input readers and shard behavior.
 4. `docs/worker-runtime.md` for worker lifecycle and ledger interaction.
 5. `docs/launchers.md` for local launcher usage.
+6. `docs/cli-auth.md` for `macrodata login`, `whoami`, and `logout`.
 
 ## Planned Additions
 
