@@ -188,6 +188,7 @@ def read_csv(
     encoding: str = "utf-8",
     sharding_mode: Literal["bytes_lazy", "scan"] = "bytes_lazy",
 ) -> RefinerPipeline:
+    """Create a pipeline with a CSV reader source."""
     return RefinerPipeline(
         source=CsvReader(
             inputs,
@@ -210,6 +211,7 @@ def read_jsonl(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
 ) -> RefinerPipeline:
+    """Create a pipeline with a JSONL reader source."""
     return RefinerPipeline(
         source=JsonlReader(
             inputs,
@@ -232,6 +234,7 @@ def read_parquet(
     columns_to_read: Sequence[str] | None = None,
     sharding_mode: Literal["rowgroups", "bytes_lazy"] = "rowgroups",
 ) -> RefinerPipeline:
+    """Create a pipeline with a Parquet reader source."""
     return RefinerPipeline(
         source=ParquetReader(
             inputs,

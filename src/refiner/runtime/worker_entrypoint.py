@@ -2,34 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
-import warnings
 
 import cloudpickle
 
 from refiner.ledger import FsLedger
+from refiner.runtime.cpu import set_cpu_affinity
 from refiner.runtime.worker import Worker
-
-
-def _set_cpu_affinity(cpu_ids: list[int]) -> None:
-    if not cpu_ids:
-        return
-    if not hasattr(os, "sched_setaffinity"):
-        warnings.warn(
-            "cpus_per_worker requested but os.sched_setaffinity is not available; running without CPU pinning",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return
-    try:
-        os.sched_setaffinity(0, set(cpu_ids))
-    except Exception as e:
-        warnings.warn(
-            f"Failed to set CPU affinity ({e}); running without CPU pinning",
-            RuntimeWarning,
-            stacklevel=2,
-        )
 
 
 def _parse_cpu_ids(raw: str) -> list[int]:
@@ -58,7 +37,7 @@ def main() -> int:
     try:
         cpu_ids = _parse_cpu_ids(args.cpu_ids)
         if cpu_ids:
-            _set_cpu_affinity(cpu_ids)
+            set_cpu_affinity(cpu_ids)
 
         with open(args.pipeline_payload, "rb") as f:
             pipeline = cloudpickle.load(f)

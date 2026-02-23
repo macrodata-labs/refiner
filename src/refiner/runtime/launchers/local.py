@@ -83,7 +83,6 @@ class LocalLauncher(BaseLauncher):
         return cast(FsLedger, self.ledger)
 
     def launch(self) -> LaunchStats:
-        self.seed_ledger()
         cpu_sets = (
             build_cpu_sets(
                 num_workers=self.num_workers,
@@ -94,6 +93,7 @@ class LocalLauncher(BaseLauncher):
         )
 
         if self.num_workers == 1:
+            self.seed_ledger()
             cpu_ids = cpu_sets[0]
             old_affinity: set[int] | None = None
             if cpu_ids is not None and hasattr(os, "sched_getaffinity"):
@@ -120,6 +120,7 @@ class LocalLauncher(BaseLauncher):
             )
 
         payload_path = self._write_pipeline_payload()
+        self.seed_ledger()
         procs: list[subprocess.Popen[str]] = []
         for rank in range(self.num_workers):
             stats_path = self._stats_path(rank)
