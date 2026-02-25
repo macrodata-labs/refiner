@@ -121,7 +121,10 @@ class LocalLauncher(BaseLauncher):
             return _ObserverLaunchContext(client=client, job=job)
         except Exception as e:  # noqa: BLE001
             if fail_open:
-                self._warn(f"observability setup failed (continuing without it): {e}")
+                self._warn(
+                    "observability setup failed (continuing without it): "
+                    f"{type(e).__name__}: {e}"
+                )
                 return None
             raise
 
@@ -137,13 +140,13 @@ class LocalLauncher(BaseLauncher):
                 status=status,
             )
         except Exception as e:  # noqa: BLE001
-            self._warn(f"observability finish_stage failed: {e}")
+            self._warn(f"observability finish_stage failed: {type(e).__name__}: {e}")
         try:
             observer_ctx.client.finish_job(
                 job_id=observer_ctx.job.job_id, status=status
             )
         except Exception as e:  # noqa: BLE001
-            self._warn(f"observability finish_job failed: {e}")
+            self._warn(f"observability finish_job failed: {type(e).__name__}: {e}")
 
     def launch(self) -> LaunchStats:
         cpu_sets = (

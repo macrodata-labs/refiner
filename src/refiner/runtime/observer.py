@@ -22,7 +22,9 @@ class WorkerLifecycleObserver:
 
     def _warn(self, action: str, err: Exception) -> None:
         print(
-            f"[refiner] observer {action} failed for worker {self.context.worker_id}: {err}",
+            "[refiner] observer "
+            f"{action} failed for worker {self.context.worker_id}: "
+            f"{type(err).__name__}: {err}",
             file=sys.stderr,
         )
 

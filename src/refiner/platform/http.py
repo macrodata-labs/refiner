@@ -6,6 +6,11 @@ from typing import Any
 import httpx
 
 
+def _sanitize_terminal_text(value: str) -> str:
+    # Drop ASCII control chars (including ESC) to avoid terminal escape injection.
+    return "".join(ch for ch in value if ch >= " " and ch != "\x7f")
+
+
 @dataclass
 class MacrodataApiError(Exception):
     status: int
@@ -36,18 +41,18 @@ def _http_error_message(resp: httpx.Response) -> str:
         content_type = resp.headers.get("content-type", "").lower()
         text = resp.text.strip()
         if "html" in content_type:
-            return resp.reason_phrase or "HTTP error"
+            return _sanitize_terminal_text(resp.reason_phrase or "HTTP error")
         if not text:
-            return resp.reason_phrase or "HTTP error"
+            return _sanitize_terminal_text(resp.reason_phrase or "HTTP error")
         one_line = " ".join(text.split())
         if len(one_line) > 200:
             one_line = f"{one_line[:197]}..."
-        return one_line
+        return _sanitize_terminal_text(one_line)
     if isinstance(payload, dict):
         message = payload.get("error") or payload.get("message")
         if isinstance(message, str) and message:
-            return message
-    return resp.reason_phrase or "HTTP error"
+            return _sanitize_terminal_text(message)
+    return _sanitize_terminal_text(resp.reason_phrase or "HTTP error")
 
 
 def request_json(

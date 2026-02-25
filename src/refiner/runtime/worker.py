@@ -64,7 +64,10 @@ class Worker:
             try:
                 fn(*args, **kwargs)
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
-                print(f"[refiner] observer hook failed: {e}", file=sys.stderr)
+                print(
+                    f"[refiner] observer hook failed: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
 
         if self.observer is not None:
             _notify(self.observer.on_worker_start, rank=self.rank)

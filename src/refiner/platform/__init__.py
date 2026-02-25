@@ -17,7 +17,6 @@ from .http import MacrodataApiError, verify_api_key
 from .observer_client import (
     ObserverClient,
     ObserverJobContext,
-    compile_shard_descriptors,
 )
 
 __all__ = [
@@ -34,5 +33,4 @@ __all__ = [
     "verify_api_key",
     "ObserverClient",
     "ObserverJobContext",
-    "compile_shard_descriptors",
 ]
