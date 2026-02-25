@@ -12,6 +12,7 @@ import cloudpickle
 
 from refiner.ledger import FsLedger
 from refiner.runtime.cpu import build_cpu_sets, set_cpu_affinity
+from refiner.runtime.observer import WorkerLifecycleObserver, WorkerObserverContext
 from refiner.runtime.worker import Worker, WorkerRunStats
 
 from .base import BaseLauncher
@@ -93,7 +94,9 @@ class LocalLauncher(BaseLauncher):
         )
 
         if self.num_workers == 1:
-            self.seed_ledger()
+            shards = list(self.pipeline.source.list_shards())
+            observer_ctx = self._setup_observer(shards=shards)
+            self.seed_ledger(shards=shards)
             cpu_ids = cpu_sets[0]
             old_affinity: set[int] | None = None
             if cpu_ids is not None and hasattr(os, "sched_getaffinity"):
@@ -101,15 +104,28 @@ class LocalLauncher(BaseLauncher):
                 set_cpu_affinity(cpu_ids)
             ledger = FsLedger(run_id=self.run_id, worker_id=0, workdir=self.workdir)
             try:
+                worker_observer = None
+                if observer_ctx is not None:
+                    worker_observer = WorkerLifecycleObserver(
+                        client=observer_ctx.client,
+                        context=WorkerObserverContext(
+                            job_id=observer_ctx.job.job_id,
+                            stage_id=observer_ctx.job.stage_id,
+                            worker_id="local-rank-0",
+                        ),
+                    )
                 stats = Worker(
                     rank=0,
                     ledger=ledger,
                     pipeline=self.pipeline,
                     heartbeat_every_rows=self.heartbeat_every_rows,
+                    observer=worker_observer,
                 ).run()
             finally:
                 if old_affinity is not None:
                     os.sched_setaffinity(0, old_affinity)
+            status = "failed" if stats.failed > 0 else "completed"
+            self._finish_observer_terminal(observer_ctx, status=status)
             return LaunchStats(
                 run_id=self.run_id,
                 workers=1,
@@ -120,7 +136,9 @@ class LocalLauncher(BaseLauncher):
             )
 
         payload_path = self._write_pipeline_payload()
-        self.seed_ledger()
+        shards = list(self.pipeline.source.list_shards())
+        observer_ctx = self._setup_observer(shards=shards)
+        self.seed_ledger(shards=shards)
         procs: list[subprocess.Popen[str]] = []
         for rank in range(self.num_workers):
             stats_path = self._stats_path(rank)
@@ -147,6 +165,17 @@ class LocalLauncher(BaseLauncher):
                 "--cpu-ids",
                 cpu_arg,
             ]
+            if observer_ctx is not None:
+                cmd.extend(
+                    [
+                        "--job-id",
+                        observer_ctx.job.job_id,
+                        "--stage-id",
+                        observer_ctx.job.stage_id,
+                        "--worker-id",
+                        f"local-rank-{rank}",
+                    ]
+                )
             p = subprocess.Popen(cmd, text=True)
             procs.append(p)
 
@@ -174,6 +203,8 @@ class LocalLauncher(BaseLauncher):
                 output_rows=agg.output_rows + int(msg["output_rows"]),
             )
 
+        final_status = "failed" if errors or agg.failed > 0 else "completed"
+        self._finish_observer_terminal(observer_ctx, status=final_status)
         if errors:
             raise RuntimeError("; ".join(errors))
 

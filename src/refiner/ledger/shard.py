@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,14 @@ class Shard:
             shard_id=self.id,
             worker_id=worker_id,
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "shard_id": self.id,
+            "path": self.path,
+            "start": int(self.start),
+            "end": int(self.end),
+        }
 
 
 _RE_SHARD_FILENAME = re.compile(

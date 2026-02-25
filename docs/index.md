@@ -31,6 +31,7 @@ Refiner is being built as a batch-first processing engine with:
 4. `docs/worker-runtime.md` for worker lifecycle and ledger interaction.
 5. `docs/launchers.md` for local launcher usage.
 6. `docs/cli-auth.md` for `macrodata login`, `whoami`, and `logout`.
+7. `docs/observability.md` for Macrodata Observer lifecycle integration.
 
 ## Planned Additions
 

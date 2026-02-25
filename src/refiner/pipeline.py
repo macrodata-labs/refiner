@@ -42,18 +42,25 @@ class RefinerPipeline:
         return self.__class__(self.source, self.pipeline_steps + [step])
 
     def map(self, fn: MapFn) -> "RefinerPipeline":
-        return self.add_step(FnRowStep(fn=fn))
+        return self.add_step(FnRowStep(fn=fn, op_name="map"))
 
     def batch_map(self, fn: BatchFn, *, batch_size: int) -> "RefinerPipeline":
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")
-        return self.add_step(FnBatchStep(fn=fn, batch_size=batch_size))
+        return self.add_step(
+            FnBatchStep(fn=fn, batch_size=batch_size, op_name="batch_map")
+        )
 
     def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
-        return self.add_step(FnFlatMapStep(fn=fn))
+        return self.add_step(FnFlatMapStep(fn=fn, op_name="flat_map"))
 
     def filter(self, predicate: Callable[[Row], bool]) -> "RefinerPipeline":
-        return self.flat_map(lambda row: [row] if predicate(row) else [])
+        return self.add_step(
+            FnFlatMapStep(
+                fn=lambda row: [row] if predicate(row) else [],
+                op_name="filter",
+            )
+        )
 
     def execute_rows(self, rows: Iterable[Row]) -> Iterable[Row]:
         """Execute rows with per-step queues and step-local batch triggering."""

@@ -15,6 +15,7 @@ dependencies = [
     "cloudpickle",
     "fsspec",
     "httpx",
+    "huggingface-hub>=1.4.1",
     "orjson",
     "pyarrow",
 ]
