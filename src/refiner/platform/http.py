@@ -33,25 +33,39 @@ def _http_error_message(resp: httpx.Response) -> str:
     try:
         payload = resp.json()
     except ValueError:
+        content_type = resp.headers.get("content-type", "").lower()
         text = resp.text.strip()
-        return text or resp.reason_phrase
+        if "html" in content_type:
+            return resp.reason_phrase or "HTTP error"
+        if not text:
+            return resp.reason_phrase or "HTTP error"
+        one_line = " ".join(text.split())
+        if len(one_line) > 200:
+            one_line = f"{one_line[:197]}..."
+        return one_line
     if isinstance(payload, dict):
         message = payload.get("error") or payload.get("message")
         if isinstance(message, str) and message:
             return message
-    text = resp.text.strip()
-    return text or resp.reason_phrase
+    return resp.reason_phrase or "HTTP error"
 
 
-def verify_api_key(
-    base_url: str, api_key: str, timeout_s: float = 10.0
+def request_json(
+    *,
+    method: str,
+    path: str,
+    api_key: str,
+    base_url: str,
+    json_payload: dict[str, Any] | None = None,
+    timeout_s: float = 10.0,
 ) -> dict[str, Any]:
-    """Validate an API key and return the platform `/api/me` JSON payload."""
-    endpoint = f"{base_url}/api/me"
+    url = f"{base_url.rstrip('/')}{path}"
     try:
-        resp = httpx.get(
-            endpoint,
+        resp = httpx.request(
+            method,
+            url,
             headers={"Authorization": f"Bearer {api_key}"},
+            json=json_payload,
             timeout=timeout_s,
         )
     except httpx.RequestError as err:
@@ -62,4 +76,17 @@ def verify_api_key(
             status=resp.status_code, message=_http_error_message(resp)
         )
 
-    return _decode_json_object(resp, context="/api/me")
+    return _decode_json_object(resp, context=path)
+
+
+def verify_api_key(
+    base_url: str, api_key: str, timeout_s: float = 10.0
+) -> dict[str, Any]:
+    """Validate an API key and return the platform `/api/me` JSON payload."""
+    return request_json(
+        method="GET",
+        path="/api/me",
+        api_key=api_key,
+        base_url=base_url,
+        timeout_s=timeout_s,
+    )

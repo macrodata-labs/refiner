@@ -7,7 +7,9 @@ from pathlib import Path
 import cloudpickle
 
 from refiner.ledger import FsLedger
+from refiner.platform import CredentialsError, ObserverClient, current_api_key
 from refiner.runtime.cpu import set_cpu_affinity
+from refiner.runtime.observer import WorkerLifecycleObserver, WorkerObserverContext
 from refiner.runtime.worker import Worker
 
 
@@ -32,6 +34,9 @@ def main() -> int:
     parser.add_argument("--pipeline-payload", type=str, required=True)
     parser.add_argument("--stats-path", type=str, required=True)
     parser.add_argument("--cpu-ids", type=str, default="")
+    parser.add_argument("--job-id", type=str, default="")
+    parser.add_argument("--stage-id", type=str, default="")
+    parser.add_argument("--worker-id", type=str, default="")
     args = parser.parse_args()
 
     try:
@@ -43,11 +48,25 @@ def main() -> int:
             pipeline = cloudpickle.load(f)
 
         ledger = FsLedger(run_id=args.run_id, worker_id=args.rank, workdir=args.workdir)
+        observer = None
+        if args.job_id and args.stage_id and args.worker_id:
+            try:
+                observer = WorkerLifecycleObserver(
+                    client=ObserverClient(api_key=current_api_key()),
+                    context=WorkerObserverContext(
+                        job_id=args.job_id,
+                        stage_id=args.stage_id,
+                        worker_id=args.worker_id,
+                    ),
+                )
+            except CredentialsError:
+                observer = None
         stats = Worker(
             rank=args.rank,
             ledger=ledger,
             pipeline=pipeline,
             heartbeat_every_rows=args.heartbeat_every_rows,
+            observer=observer,
         ).run()
         _write_stats(
             args.stats_path,

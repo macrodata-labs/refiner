@@ -12,6 +12,8 @@ from refiner.readers import Row
 class RefinerStep(ABC):
     """Base marker for executable processing steps."""
 
+    op_name: str | None = None
+
 
 MapResult: TypeAlias = Row | Mapping[str, Any]
 MapFn: TypeAlias = Callable[[Row], MapResult]
@@ -29,6 +31,7 @@ class RowStep(RefinerStep, ABC):
 @dataclass(frozen=True, slots=True)
 class FnRowStep(RowStep):
     fn: MapFn
+    op_name: str | None = None
 
     def apply_row(self, row: Row) -> MapResult:
         return self.fn(row)
@@ -46,6 +49,7 @@ class BatchStep(RefinerStep, ABC):
 class FnBatchStep(BatchStep):
     fn: BatchFn
     batch_size: int
+    op_name: str | None = None
 
     def __post_init__(self) -> None:
         if self.batch_size <= 1:
@@ -65,6 +69,7 @@ class FlatMapStep(RefinerStep, ABC):
 @dataclass(frozen=True, slots=True)
 class FnFlatMapStep(FlatMapStep):
     fn: FlatMapFn
+    op_name: str | None = None
 
     def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
         return self.fn(row)

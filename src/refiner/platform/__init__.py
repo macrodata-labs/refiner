@@ -14,6 +14,11 @@ from .config import (
     resolve_platform_base_url,
 )
 from .http import MacrodataApiError, verify_api_key
+from .observer_client import (
+    ObserverClient,
+    ObserverJobContext,
+    compile_shard_descriptors,
+)
 
 __all__ = [
     "API_KEY_ENV_VAR",
@@ -27,4 +32,7 @@ __all__ = [
     "resolve_platform_base_url",
     "MacrodataApiError",
     "verify_api_key",
+    "ObserverClient",
+    "ObserverJobContext",
+    "compile_shard_descriptors",
 ]
