@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import socket
-import sys
 from dataclasses import dataclass
 
 from refiner.ledger.shard import Shard
@@ -20,64 +19,44 @@ class WorkerLifecycleObserver:
         self.client = client
         self.context = context
 
-    def _warn(self, action: str, err: Exception) -> None:
-        print(
-            "[refiner] observer "
-            f"{action} failed for worker {self.context.worker_id}: "
-            f"{type(err).__name__}: {err}",
-            file=sys.stderr,
-        )
-
     def on_worker_start(self, *, rank: int) -> None:
         del rank
         try:
             host = socket.gethostname()
         except Exception:
             host = None
-        try:
-            self.client.start_worker(
-                job_id=self.context.job_id,
-                stage_id=self.context.stage_id,
-                worker_id=self.context.worker_id,
-                host=host,
-            )
-        except Exception as err:  # noqa: BLE001
-            self._warn("start_worker", err)
+        self.client.start_worker(
+            job_id=self.context.job_id,
+            stage_id=self.context.stage_id,
+            worker_id=self.context.worker_id,
+            host=host,
+        )
 
     def on_shard_start(self, shard: Shard) -> None:
-        try:
-            self.client.start_shard(
-                job_id=self.context.job_id,
-                stage_id=self.context.stage_id,
-                worker_id=self.context.worker_id,
-                shard_id=shard.id,
-            )
-        except Exception as err:  # noqa: BLE001
-            self._warn("start_shard", err)
+        self.client.start_shard(
+            job_id=self.context.job_id,
+            stage_id=self.context.stage_id,
+            worker_id=self.context.worker_id,
+            shard_id=shard.id,
+        )
 
     def on_shard_finish(
         self, shard: Shard, *, status: str, error: str | None = None
     ) -> None:
-        try:
-            self.client.finish_shard(
-                job_id=self.context.job_id,
-                stage_id=self.context.stage_id,
-                worker_id=self.context.worker_id,
-                shard_id=shard.id,
-                status=status,
-                error=error,
-            )
-        except Exception as err:  # noqa: BLE001
-            self._warn("finish_shard", err)
+        self.client.finish_shard(
+            job_id=self.context.job_id,
+            stage_id=self.context.stage_id,
+            worker_id=self.context.worker_id,
+            shard_id=shard.id,
+            status=status,
+            error=error,
+        )
 
     def on_worker_finish(self, *, status: str, error: str | None = None) -> None:
-        try:
-            self.client.finish_worker(
-                job_id=self.context.job_id,
-                stage_id=self.context.stage_id,
-                worker_id=self.context.worker_id,
-                status=status,
-                error=error,
-            )
-        except Exception as err:  # noqa: BLE001
-            self._warn("finish_worker", err)
+        self.client.finish_worker(
+            job_id=self.context.job_id,
+            stage_id=self.context.stage_id,
+            worker_id=self.context.worker_id,
+            status=status,
+            error=error,
+        )

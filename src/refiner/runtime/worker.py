@@ -57,9 +57,10 @@ class Worker:
         output_rows_since_hb = 0
         inflight: list[Shard] = []
         failed_error: str | None = None
+        observer = self.observer
 
         def _notify(fn, *args, **kwargs) -> None:
-            if self.observer is None:
+            if observer is None:
                 return
             try:
                 fn(*args, **kwargs)
@@ -69,8 +70,8 @@ class Worker:
                     file=sys.stderr,
                 )
 
-        if self.observer is not None:
-            _notify(self.observer.on_worker_start, rank=self.rank)
+        if observer is not None:
+            _notify(observer.on_worker_start, rank=self.rank)
 
         def _source_rows():
             nonlocal previous, claimed
@@ -80,8 +81,8 @@ class Worker:
                     break
                 claimed += 1
                 inflight.append(shard)
-                if self.observer is not None:
-                    _notify(self.observer.on_shard_start, shard)
+                if observer is not None:
+                    _notify(observer.on_shard_start, shard)
                 yield from self.pipeline.source.read_shard(shard)
                 previous = shard
 
@@ -97,9 +98,9 @@ class Worker:
                 for shard in inflight:
                     self.ledger.heartbeat(shard)
                     self.ledger.complete(shard)
-                    if self.observer is not None:
+                    if observer is not None:
                         _notify(
-                            self.observer.on_shard_finish,
+                            observer.on_shard_finish,
                             shard,
                             status="completed",
                             error=None,
@@ -111,9 +112,9 @@ class Worker:
                 failed_error = str(e)
                 for shard in inflight:
                     self.ledger.fail(shard, str(e))
-                    if self.observer is not None:
+                    if observer is not None:
                         _notify(
-                            self.observer.on_shard_finish,
+                            observer.on_shard_finish,
                             shard,
                             status="failed",
                             error=str(e),
@@ -123,9 +124,9 @@ class Worker:
                 previous = None
                 break
 
-        if self.observer is not None:
+        if observer is not None:
             _notify(
-                self.observer.on_worker_finish,
+                observer.on_worker_finish,
                 status="failed" if failed_error is not None else "completed",
                 error=failed_error,
             )
