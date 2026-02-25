@@ -50,7 +50,7 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
     reader_name = pipeline.source.__class__.__name__.replace("Reader", "").lower()
     source_step_name = f"read_{reader_name}"
     files: list[Any] = list(getattr(pipeline.source, "files", []))
-    path_arg = files[0] if len(files) == 1 else (files[0] if files else "")
+    path_arg = files[0] if files else ""
     if len(files) > 1 and path_arg:
         path_arg = f"{path_arg} (+{len(files) - 1} more)"
     source_args: dict[str, Any] = {}
