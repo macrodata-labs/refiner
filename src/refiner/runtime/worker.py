@@ -59,19 +59,14 @@ class Worker:
         failed_error: str | None = None
         observer = self.observer
 
-        def _notify(fn, *args, **kwargs) -> None:
-            if observer is None:
-                return
+        if observer is not None:
             try:
-                fn(*args, **kwargs)
+                observer.on_worker_start(rank=self.rank)
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 print(
                     f"[refiner] observer hook failed: {type(e).__name__}: {e}",
                     file=sys.stderr,
                 )
-
-        if observer is not None:
-            _notify(observer.on_worker_start, rank=self.rank)
 
         def _source_rows():
             nonlocal previous, claimed
@@ -82,7 +77,13 @@ class Worker:
                 claimed += 1
                 inflight.append(shard)
                 if observer is not None:
-                    _notify(observer.on_shard_start, shard)
+                    try:
+                        observer.on_shard_start(shard)
+                    except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+                        print(
+                            f"[refiner] observer hook failed: {type(e).__name__}: {e}",
+                            file=sys.stderr,
+                        )
                 yield from self.pipeline.source.read_shard(shard)
                 previous = shard
 
@@ -99,12 +100,18 @@ class Worker:
                     self.ledger.heartbeat(shard)
                     self.ledger.complete(shard)
                     if observer is not None:
-                        _notify(
-                            observer.on_shard_finish,
-                            shard,
-                            status="completed",
-                            error=None,
-                        )
+                        try:
+                            observer.on_shard_finish(
+                                shard,
+                                status="completed",
+                                error=None,
+                            )
+                        except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+                            print(
+                                "[refiner] observer hook failed: "
+                                f"{type(e).__name__}: {e}",
+                                file=sys.stderr,
+                            )
                     completed += 1
                 inflight.clear()
                 break
@@ -113,23 +120,34 @@ class Worker:
                 for shard in inflight:
                     self.ledger.fail(shard, str(e))
                     if observer is not None:
-                        _notify(
-                            observer.on_shard_finish,
-                            shard,
-                            status="failed",
-                            error=str(e),
-                        )
+                        try:
+                            observer.on_shard_finish(
+                                shard,
+                                status="failed",
+                                error=str(e),
+                            )
+                        except Exception as e2:  # noqa: BLE001 - fail-open observer hooks
+                            print(
+                                "[refiner] observer hook failed: "
+                                f"{type(e2).__name__}: {e2}",
+                                file=sys.stderr,
+                            )
                     failed += 1
                 inflight.clear()
                 previous = None
                 break
 
         if observer is not None:
-            _notify(
-                observer.on_worker_finish,
-                status="failed" if failed_error is not None else "completed",
-                error=failed_error,
-            )
+            try:
+                observer.on_worker_finish(
+                    status="failed" if failed_error is not None else "completed",
+                    error=failed_error,
+                )
+            except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+                print(
+                    f"[refiner] observer hook failed: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
 
         return WorkerRunStats(
             claimed=claimed,
