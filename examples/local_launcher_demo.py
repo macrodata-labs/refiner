@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
-from pathlib import Path
 
 import refiner as mdr
 
 
-NOTEBOOKS_DIR = Path(__file__).resolve().parents[1] / "notebooks"
-SAMPLE_PARQUET = NOTEBOOKS_DIR / "train-00000-of-00003.parquet"
+SAMPLE_PARQUET = (
+    "hf://datasets/OpenResearcher/OpenResearcher-Dataset/"
+    "seed_51/train-00000-of-00003.parquet"
+)
 SLEEP_SECONDS_PER_SHARD = 120
 
 
@@ -53,7 +54,7 @@ def duplicate_short_rows(row):
 
 def main() -> None:
     base_pipeline = mdr.read_parquet(
-        str(SAMPLE_PARQUET),
+        SAMPLE_PARQUET,
         # Keep shards small so the demo exercises multi-shard scheduling/observer updates.
         target_shard_bytes=1 * 1024 * 1024,
     )
