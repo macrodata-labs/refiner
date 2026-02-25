@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING, cast
 import cloudpickle
 
 from refiner.ledger import FsLedger
-from refiner.platform import CredentialsError, ObserverClient, current_api_key
-from refiner.platform.observer_client import ObserverJobContext
 from refiner.runtime.cpu import build_cpu_sets, set_cpu_affinity
 from refiner.runtime.observer import WorkerLifecycleObserver, WorkerObserverContext
 from refiner.runtime.worker import Worker, WorkerRunStats
@@ -31,12 +29,6 @@ class LaunchStats:
     completed: int
     failed: int
     output_rows: int
-
-
-@dataclass(frozen=True, slots=True)
-class _ObserverLaunchContext:
-    client: ObserverClient
-    job: ObserverJobContext
 
 
 class LocalLauncher(BaseLauncher):
@@ -90,63 +82,6 @@ class LocalLauncher(BaseLauncher):
         if self.ledger is None:
             raise ValueError("launcher.ledger is not configured")
         return cast(FsLedger, self.ledger)
-
-    def _warn(self, message: str) -> None:
-        print(f"[refiner] {message}", file=sys.stderr)
-
-    def _observer_client_or_none(self) -> ObserverClient | None:
-        try:
-            api_key = current_api_key()
-        except CredentialsError:
-            self._warn(
-                "observability disabled: no Macrodata API key found. "
-                "Run `macrodata login` or set MACRODATA_API_KEY to enable it."
-            )
-            return None
-        return ObserverClient(api_key=api_key)
-
-    def _setup_observer(
-        self, *, shards: list, fail_open: bool = True
-    ) -> _ObserverLaunchContext | None:
-        client = self._observer_client_or_none()
-        if client is None:
-            return None
-        try:
-            job = client.submit_job(name=self.name, pipeline=self.pipeline)
-            client.register_stage_shards(
-                job_id=job.job_id,
-                stage_id=job.stage_id,
-                shards=shards,
-            )
-            return _ObserverLaunchContext(client=client, job=job)
-        except Exception as e:  # noqa: BLE001
-            if fail_open:
-                self._warn(
-                    "observability setup failed (continuing without it): "
-                    f"{type(e).__name__}: {e}"
-                )
-                return None
-            raise
-
-    def _finish_observer_terminal(
-        self, observer_ctx: _ObserverLaunchContext | None, *, status: str
-    ) -> None:
-        if observer_ctx is None:
-            return
-        try:
-            observer_ctx.client.finish_stage(
-                job_id=observer_ctx.job.job_id,
-                stage_id=observer_ctx.job.stage_id,
-                status=status,
-            )
-        except Exception as e:  # noqa: BLE001
-            self._warn(f"observability finish_stage failed: {type(e).__name__}: {e}")
-        try:
-            observer_ctx.client.finish_job(
-                job_id=observer_ctx.job.job_id, status=status
-            )
-        except Exception as e:  # noqa: BLE001
-            self._warn(f"observability finish_job failed: {type(e).__name__}: {e}")
 
     def launch(self) -> LaunchStats:
         cpu_sets = (
