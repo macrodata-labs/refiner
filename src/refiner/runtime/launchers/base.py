@@ -22,22 +22,16 @@ class BaseLauncher(ABC):
         self.name = name
         self.run_id = run_id or self._build_run_id(name)
         self.ledger: BaseLedger | None = None
-        self._resolved_shards: list[Shard] | None = None
 
     @staticmethod
     def _build_run_id(name: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-") or "job"
         return f"{slug}-{int(time.time())}-{uuid4().hex[:8]}"
 
-    def resolve_shards(self) -> list["Shard"]:
-        if self._resolved_shards is None:
-            self._resolved_shards = list(self.pipeline.source.list_shards())
-        return list(self._resolved_shards)
-
-    def seed_ledger(self) -> None:
+    def seed_ledger(self, *, shards: list["Shard"]) -> None:
         if self.ledger is None:
             raise ValueError("launcher.ledger is not configured")
-        self.ledger.seed_shards(self.resolve_shards())
+        self.ledger.seed_shards(shards)
 
     @abstractmethod
     def launch(self):

@@ -159,9 +159,9 @@ class LocalLauncher(BaseLauncher):
         )
 
         if self.num_workers == 1:
-            shards = self.resolve_shards()
+            shards = list(self.pipeline.source.list_shards())
             observer_ctx = self._setup_observer(shards=shards)
-            self.seed_ledger()
+            self.seed_ledger(shards=shards)
             cpu_ids = cpu_sets[0]
             old_affinity: set[int] | None = None
             if cpu_ids is not None and hasattr(os, "sched_getaffinity"):
@@ -201,9 +201,9 @@ class LocalLauncher(BaseLauncher):
             )
 
         payload_path = self._write_pipeline_payload()
-        shards = self.resolve_shards()
+        shards = list(self.pipeline.source.list_shards())
         observer_ctx = self._setup_observer(shards=shards)
-        self.seed_ledger()
+        self.seed_ledger(shards=shards)
         procs: list[subprocess.Popen[str]] = []
         for rank in range(self.num_workers):
             stats_path = self._stats_path(rank)
