@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from typing import cast
+
 from refiner.pipeline import read_jsonl
 from refiner.platform.cloud.models import CloudPipelinePayload
+from refiner.platform.cloud.models import CloudRunCreateRequest
 
 
 def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
@@ -55,7 +58,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert captured["api_key"] == "ing_test"
     assert captured["base_url"] is None
 
-    request = captured["request"]
+    request = cast(CloudRunCreateRequest, captured["request"])
     assert request.name == "demo cloud"
     assert request.runtime.num_workers == 3
     assert request.runtime.heartbeat_every_rows == 2048

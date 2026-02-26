@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 from refiner.platform.client import MacrodataClient
 from refiner.platform.cloud.models import (
     CloudPipelinePayload,
@@ -26,7 +28,7 @@ def _request() -> CloudRunCreateRequest:
 def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_request_json(**kwargs):
+    def fake_request_json(**kwargs: object) -> dict[str, str]:
         captured.update(kwargs)
         return {"job_id": "job-1", "stage_id": "stage-1", "status": "queued"}
 
@@ -42,8 +44,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert captured["path"] == "/api/cloud/runs"
     assert captured["api_key"] == "ing_test"
     assert captured["base_url"] == "https://example.com"
-    json_payload = captured["json_payload"]
-    assert isinstance(json_payload, dict)
+    json_payload = cast(dict[str, object], captured["json_payload"])
     assert json_payload["executor"] == {"type": "refiner-cloud"}
 
 
