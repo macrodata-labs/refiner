@@ -4,7 +4,7 @@ import socket
 from dataclasses import dataclass
 
 from refiner.ledger.shard import Shard
-from refiner.platform.observer_client import ObserverClient
+from refiner.platform.client import MacrodataClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,7 +15,7 @@ class WorkerObserverContext:
 
 
 class WorkerLifecycleObserver:
-    def __init__(self, *, client: ObserverClient, context: WorkerObserverContext):
+    def __init__(self, *, client: MacrodataClient, context: WorkerObserverContext):
         self.client = client
         self.context = context
 
@@ -25,7 +25,7 @@ class WorkerLifecycleObserver:
             host = socket.gethostname()
         except Exception:
             host = None
-        self.client.start_worker(
+        self.client.report_worker_started(
             job_id=self.context.job_id,
             stage_id=self.context.stage_id,
             worker_id=self.context.worker_id,
@@ -33,7 +33,7 @@ class WorkerLifecycleObserver:
         )
 
     def on_shard_start(self, shard: Shard) -> None:
-        self.client.start_shard(
+        self.client.report_shard_started(
             job_id=self.context.job_id,
             stage_id=self.context.stage_id,
             worker_id=self.context.worker_id,
@@ -43,7 +43,7 @@ class WorkerLifecycleObserver:
     def on_shard_finish(
         self, shard: Shard, *, status: str, error: str | None = None
     ) -> None:
-        self.client.finish_shard(
+        self.client.report_shard_finished(
             job_id=self.context.job_id,
             stage_id=self.context.stage_id,
             worker_id=self.context.worker_id,
@@ -53,7 +53,7 @@ class WorkerLifecycleObserver:
         )
 
     def on_worker_finish(self, *, status: str, error: str | None = None) -> None:
-        self.client.finish_worker(
+        self.client.report_worker_finished(
             job_id=self.context.job_id,
             stage_id=self.context.stage_id,
             worker_id=self.context.worker_id,

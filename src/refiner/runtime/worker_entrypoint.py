@@ -7,7 +7,7 @@ from pathlib import Path
 import cloudpickle
 
 from refiner.ledger import FsLedger
-from refiner.platform import CredentialsError, ObserverClient, current_api_key
+from refiner.platform import CredentialsError, MacrodataClient, current_api_key
 from refiner.runtime.cpu import set_cpu_affinity
 from refiner.runtime.observer import WorkerLifecycleObserver, WorkerObserverContext
 from refiner.runtime.worker import Worker
@@ -52,7 +52,7 @@ def main() -> int:
         if args.job_id and args.stage_id and args.worker_id:
             try:
                 observer = WorkerLifecycleObserver(
-                    client=ObserverClient(api_key=current_api_key()),
+                    client=MacrodataClient(api_key=current_api_key()),
                     context=WorkerObserverContext(
                         job_id=args.job_id,
                         stage_id=args.stage_id,

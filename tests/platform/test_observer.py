@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from refiner.ledger.shard import Shard
-from refiner.platform.observer_client import compile_shard_descriptors
+from refiner.platform.client import compile_shard_descriptors
 
 
 def test_compile_shard_descriptors_uses_stable_shard_id() -> None:

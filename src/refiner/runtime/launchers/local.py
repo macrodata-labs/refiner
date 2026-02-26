@@ -42,14 +42,13 @@ class LocalLauncher(BaseLauncher):
         heartbeat_every_rows: int = 4096,
         cpus_per_worker: int | None = None,
     ):
-        super().__init__(pipeline=pipeline, name=name)
-        if num_workers <= 0:
-            raise ValueError("num_workers must be > 0")
-        if heartbeat_every_rows <= 0:
-            raise ValueError("heartbeat_every_rows must be > 0")
-        self.num_workers = int(num_workers)
+        super().__init__(
+            pipeline=pipeline,
+            name=name,
+            num_workers=num_workers,
+            heartbeat_every_rows=heartbeat_every_rows,
+        )
         self.workdir = workdir
-        self.heartbeat_every_rows = int(heartbeat_every_rows)
         self.cpus_per_worker = (
             int(cpus_per_worker) if cpus_per_worker is not None else None
         )

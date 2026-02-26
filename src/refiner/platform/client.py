@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from refiner.runtime.planning import compile_pipeline_plan
+
+from .cloud.models import CloudRunCreateRequest, CloudRunCreateResponse
 from .config import resolve_platform_base_url
 from .http import MacrodataApiError, request_json
-from refiner.runtime.planning import compile_pipeline_plan
 
 if TYPE_CHECKING:
     from refiner.ledger.shard import Shard
@@ -17,19 +19,17 @@ def compile_shard_descriptors(shards: list["Shard"]) -> list[dict[str, Any]]:
 
 
 @dataclass(frozen=True, slots=True)
-class ObserverJobContext:
+class JobContext:
     job_id: str
     stage_id: str
 
 
-class ObserverClient:
+class MacrodataClient:
     def __init__(self, *, api_key: str, base_url: str | None = None):
         self.api_key = api_key
         self.base_url = (base_url or resolve_platform_base_url()).rstrip("/")
 
-    def submit_job(
-        self, *, name: str, pipeline: "RefinerPipeline"
-    ) -> ObserverJobContext:
+    def create_job(self, *, name: str, pipeline: "RefinerPipeline") -> JobContext:
         payload = {
             "name": name,
             "executor": {"type": "refiner-local"},
@@ -44,25 +44,20 @@ class ObserverClient:
         )
         job = resp.get("job")
         if not isinstance(job, dict):
-            raise MacrodataApiError(
-                status=200, message="Missing job in /api/jobs response"
-            )
+            raise MacrodataApiError(status=200, message="Missing job in /api/jobs response")
         job_id = job.get("id")
         stages = job.get("stages")
         if not isinstance(job_id, str) or not job_id:
-            raise MacrodataApiError(
-                status=200, message="Missing job.id in /api/jobs response"
-            )
+            raise MacrodataApiError(status=200, message="Missing job.id in /api/jobs response")
         if not isinstance(stages, list) or not stages:
-            raise MacrodataApiError(
-                status=200, message="Missing stages in /api/jobs response"
-            )
+            raise MacrodataApiError(status=200, message="Missing stages in /api/jobs response")
         stage0 = stages[0]
-        if not isinstance(stage0, dict) or not isinstance(stage0.get("id"), str):
-            raise MacrodataApiError(
-                status=200, message="Missing stage id in /api/jobs response"
-            )
-        return ObserverJobContext(job_id=job_id, stage_id=stage0["id"])
+        if not isinstance(stage0, dict):
+            raise MacrodataApiError(status=200, message="Missing stage id in /api/jobs response")
+        stage_id = stage0.get("id")
+        if not isinstance(stage_id, str) or not stage_id:
+            raise MacrodataApiError(status=200, message="Missing stage id in /api/jobs response")
+        return JobContext(job_id=job_id, stage_id=stage_id)
 
     def register_stage_shards(
         self, *, job_id: str, stage_id: str, shards: list["Shard"]
@@ -75,7 +70,7 @@ class ObserverClient:
             json_payload={"shards": compile_shard_descriptors(shards)},
         )
 
-    def start_worker(
+    def report_worker_started(
         self, *, job_id: str, stage_id: str, worker_id: str, host: str | None = None
     ) -> dict[str, Any]:
         payload = {"host": host} if host else {}
@@ -87,7 +82,7 @@ class ObserverClient:
             json_payload=payload,
         )
 
-    def start_shard(
+    def report_shard_started(
         self, *, job_id: str, stage_id: str, worker_id: str, shard_id: str
     ) -> dict[str, Any]:
         return request_json(
@@ -98,7 +93,7 @@ class ObserverClient:
             json_payload={"shard_id": shard_id},
         )
 
-    def finish_shard(
+    def report_shard_finished(
         self,
         *,
         job_id: str,
@@ -119,7 +114,7 @@ class ObserverClient:
             json_payload=payload,
         )
 
-    def finish_worker(
+    def report_worker_finished(
         self,
         *,
         job_id: str,
@@ -139,7 +134,7 @@ class ObserverClient:
             json_payload=payload,
         )
 
-    def finish_stage(
+    def report_stage_finished(
         self, *, job_id: str, stage_id: str, status: str
     ) -> dict[str, Any]:
         return request_json(
@@ -150,7 +145,7 @@ class ObserverClient:
             json_payload={"status": status},
         )
 
-    def finish_job(self, *, job_id: str, status: str) -> dict[str, Any]:
+    def report_job_finished(self, *, job_id: str, status: str) -> dict[str, Any]:
         return request_json(
             method="POST",
             path=f"/api/jobs/{job_id}/finish",
@@ -159,5 +154,27 @@ class ObserverClient:
             json_payload={"status": status},
         )
 
+    def cloud_submit_job(
+        self, *, request: CloudRunCreateRequest
+    ) -> CloudRunCreateResponse:
+        payload = request_json(
+            method="POST",
+            path="/api/cloud/runs",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload=request.to_dict(),
+        )
 
-__all__ = ["ObserverClient", "ObserverJobContext"]
+        job_id = payload.get("job_id")
+        stage_id = payload.get("stage_id")
+        status = payload.get("status")
+        if not isinstance(job_id, str) or not job_id:
+            raise MacrodataApiError(status=200, message="Missing job_id in /api/cloud/runs response")
+        if not isinstance(stage_id, str) or not stage_id:
+            raise MacrodataApiError(status=200, message="Missing stage_id in /api/cloud/runs response")
+        if not isinstance(status, str) or not status:
+            raise MacrodataApiError(status=200, message="Missing status in /api/cloud/runs response")
+        return CloudRunCreateResponse(job_id=job_id, stage_id=stage_id, status=status)
+
+
+__all__ = ["MacrodataClient", "JobContext", "compile_shard_descriptors"]

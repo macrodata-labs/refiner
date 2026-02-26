@@ -8,8 +8,8 @@ import re
 import sys
 import time
 
-from refiner.platform import CredentialsError, ObserverClient, current_api_key
-from refiner.platform.observer_client import ObserverJobContext
+from refiner.platform import CredentialsError, MacrodataClient, current_api_key
+from refiner.platform.client import JobContext
 
 if TYPE_CHECKING:
     from refiner.ledger import BaseLedger
@@ -19,7 +19,13 @@ if TYPE_CHECKING:
 
 class BaseLauncher(ABC):
     def __init__(
-        self, *, pipeline: RefinerPipeline, name: str, run_id: str | None = None
+        self,
+        *,
+        pipeline: RefinerPipeline,
+        name: str,
+        run_id: str | None = None,
+        num_workers: int | None = None,
+        heartbeat_every_rows: int | None = None,
     ):
         if not name.strip():
             raise ValueError("name must be non-empty")
@@ -27,6 +33,14 @@ class BaseLauncher(ABC):
         self.name = name
         self.run_id = run_id or self._build_run_id(name)
         self.ledger: BaseLedger | None = None
+        if num_workers is not None:
+            if num_workers <= 0:
+                raise ValueError("num_workers must be > 0")
+            self.num_workers = num_workers
+        if heartbeat_every_rows is not None:
+            if heartbeat_every_rows <= 0:
+                raise ValueError("heartbeat_every_rows must be > 0")
+            self.heartbeat_every_rows = heartbeat_every_rows
 
     @staticmethod
     def _build_run_id(name: str) -> str:
@@ -36,7 +50,7 @@ class BaseLauncher(ABC):
     def _warn(self, message: str) -> None:
         print(f"[refiner] {message}", file=sys.stderr)
 
-    def _observer_client_or_none(self) -> ObserverClient | None:
+    def _observer_client_or_none(self) -> MacrodataClient | None:
         try:
             api_key = current_api_key()
         except CredentialsError:
@@ -45,7 +59,7 @@ class BaseLauncher(ABC):
                 "Run `macrodata login` or set MACRODATA_API_KEY to enable it."
             )
             return None
-        return ObserverClient(api_key=api_key)
+        return MacrodataClient(api_key=api_key)
 
     def _setup_observer(
         self, *, shards: list["Shard"], fail_open: bool = True
@@ -54,7 +68,7 @@ class BaseLauncher(ABC):
         if client is None:
             return None
         try:
-            job = client.submit_job(name=self.name, pipeline=self.pipeline)
+            job = client.create_job(name=self.name, pipeline=self.pipeline)
             client.register_stage_shards(
                 job_id=job.job_id,
                 stage_id=job.stage_id,
@@ -76,7 +90,7 @@ class BaseLauncher(ABC):
         if observer_ctx is None:
             return
         try:
-            observer_ctx.client.finish_stage(
+            observer_ctx.client.report_stage_finished(
                 job_id=observer_ctx.job.job_id,
                 stage_id=observer_ctx.job.stage_id,
                 status=status,
@@ -84,7 +98,7 @@ class BaseLauncher(ABC):
         except Exception as e:  # noqa: BLE001
             self._warn(f"observability finish_stage failed: {type(e).__name__}: {e}")
         try:
-            observer_ctx.client.finish_job(
+            observer_ctx.client.report_job_finished(
                 job_id=observer_ctx.job.job_id, status=status
             )
         except Exception as e:  # noqa: BLE001
@@ -105,5 +119,5 @@ __all__ = ["BaseLauncher"]
 
 @dataclass(frozen=True, slots=True)
 class _ObserverLaunchContext:
-    client: ObserverClient
-    job: ObserverJobContext
+    client: MacrodataClient
+    job: JobContext
