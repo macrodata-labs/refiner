@@ -22,4 +22,3 @@ def test_serialize_pipeline_inline_enforces_size_limit() -> None:
         assert "inline cloud submission limit" in str(err)
     else:  # pragma: no cover
         raise AssertionError("expected size limit error")
-

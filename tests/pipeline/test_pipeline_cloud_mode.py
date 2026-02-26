@@ -22,7 +22,9 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
 
             return _Resp()
 
-    monkeypatch.setattr("refiner.runtime.launchers.cloud.current_api_key", lambda: "ing_test")
+    monkeypatch.setattr(
+        "refiner.runtime.launchers.cloud.current_api_key", lambda: "ing_test"
+    )
     monkeypatch.setattr(
         "refiner.runtime.launchers.cloud.MacrodataClient", FakeMacrodataClient
     )

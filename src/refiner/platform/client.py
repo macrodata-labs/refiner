@@ -44,19 +44,29 @@ class MacrodataClient:
         )
         job = resp.get("job")
         if not isinstance(job, dict):
-            raise MacrodataApiError(status=200, message="Missing job in /api/jobs response")
+            raise MacrodataApiError(
+                status=200, message="Missing job in /api/jobs response"
+            )
         job_id = job.get("id")
         stages = job.get("stages")
         if not isinstance(job_id, str) or not job_id:
-            raise MacrodataApiError(status=200, message="Missing job.id in /api/jobs response")
+            raise MacrodataApiError(
+                status=200, message="Missing job.id in /api/jobs response"
+            )
         if not isinstance(stages, list) or not stages:
-            raise MacrodataApiError(status=200, message="Missing stages in /api/jobs response")
+            raise MacrodataApiError(
+                status=200, message="Missing stages in /api/jobs response"
+            )
         stage0 = stages[0]
         if not isinstance(stage0, dict):
-            raise MacrodataApiError(status=200, message="Missing stage id in /api/jobs response")
+            raise MacrodataApiError(
+                status=200, message="Missing stage id in /api/jobs response"
+            )
         stage_id = stage0.get("id")
         if not isinstance(stage_id, str) or not stage_id:
-            raise MacrodataApiError(status=200, message="Missing stage id in /api/jobs response")
+            raise MacrodataApiError(
+                status=200, message="Missing stage id in /api/jobs response"
+            )
         return JobContext(job_id=job_id, stage_id=stage_id)
 
     def register_stage_shards(
@@ -169,11 +179,17 @@ class MacrodataClient:
         stage_id = payload.get("stage_id")
         status = payload.get("status")
         if not isinstance(job_id, str) or not job_id:
-            raise MacrodataApiError(status=200, message="Missing job_id in /api/cloud/runs response")
+            raise MacrodataApiError(
+                status=200, message="Missing job_id in /api/cloud/runs response"
+            )
         if not isinstance(stage_id, str) or not stage_id:
-            raise MacrodataApiError(status=200, message="Missing stage_id in /api/cloud/runs response")
+            raise MacrodataApiError(
+                status=200, message="Missing stage_id in /api/cloud/runs response"
+            )
         if not isinstance(status, str) or not status:
-            raise MacrodataApiError(status=200, message="Missing status in /api/cloud/runs response")
+            raise MacrodataApiError(
+                status=200, message="Missing status in /api/cloud/runs response"
+            )
         return CloudRunCreateResponse(job_id=job_id, stage_id=stage_id, status=status)
 
 
