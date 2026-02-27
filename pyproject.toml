@@ -16,6 +16,10 @@ dependencies = [
     "fsspec",
     "httpx",
     "huggingface-hub>=1.4.1",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-sdk",
+    "psutil",
+    "uuid6",
     "orjson",
     "pyarrow",
 ]

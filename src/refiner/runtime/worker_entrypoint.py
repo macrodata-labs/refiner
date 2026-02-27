@@ -53,7 +53,7 @@ def main() -> int:
             try:
                 observer = WorkerLifecycleObserver(
                     client=ObserverClient(api_key=current_api_key()),
-                    context=WorkerObserverContext(
+                    context=WorkerObserverContext.from_runtime(
                         job_id=args.job_id,
                         stage_id=args.stage_id,
                         worker_id=args.worker_id,

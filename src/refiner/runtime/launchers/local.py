@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import cloudpickle
+import uuid6
 
 from refiner.ledger import FsLedger
 from refiner.runtime.cpu import build_cpu_sets, set_cpu_affinity
@@ -108,10 +109,10 @@ class LocalLauncher(BaseLauncher):
                 if observer_ctx is not None:
                     worker_observer = WorkerLifecycleObserver(
                         client=observer_ctx.client,
-                        context=WorkerObserverContext(
+                        context=WorkerObserverContext.from_runtime(
                             job_id=observer_ctx.job.job_id,
                             stage_id=observer_ctx.job.stage_id,
-                            worker_id="local-rank-0",
+                            worker_id=str(uuid6.uuid7()),
                         ),
                     )
                 stats = Worker(
@@ -173,7 +174,7 @@ class LocalLauncher(BaseLauncher):
                         "--stage-id",
                         observer_ctx.job.stage_id,
                         "--worker-id",
-                        f"local-rank-{rank}",
+                        str(uuid6.uuid7()),
                     ]
                 )
             p = subprocess.Popen(cmd, text=True)
