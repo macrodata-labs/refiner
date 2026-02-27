@@ -42,7 +42,7 @@ class CloudRunCreateRequest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
-            "executor": {"type": "refiner-cloud"},
+            "executor": {"type": "macrodata-cloud"},
             "plan": self.plan,
             "runtime": self.runtime.to_dict(),
             "pipeline_payload": self.pipeline_payload.to_dict(),
