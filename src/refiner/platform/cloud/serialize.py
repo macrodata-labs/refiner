@@ -15,6 +15,8 @@ def serialize_pipeline_inline(
     *,
     max_bytes: int = INLINE_PIPELINE_PAYLOAD_MAX_BYTES,
 ) -> CloudPipelinePayload:
+    # This payload is executable-by-design and must only be deserialized
+    # in a trusted tenant boundary for the submitting account.
     payload_bytes = cloudpickle.dumps(pipeline)
     size_bytes = len(payload_bytes)
     if size_bytes > max_bytes:

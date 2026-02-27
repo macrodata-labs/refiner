@@ -175,22 +175,20 @@ class MacrodataClient:
             json_payload=request.to_dict(),
         )
 
-        job_id = payload.get("job_id")
-        stage_id = payload.get("stage_id")
-        status = payload.get("status")
-        if not isinstance(job_id, str) or not job_id:
-            raise MacrodataApiError(
-                status=200, message="Missing job_id in /api/cloud/runs response"
-            )
-        if not isinstance(stage_id, str) or not stage_id:
-            raise MacrodataApiError(
-                status=200, message="Missing stage_id in /api/cloud/runs response"
-            )
-        if not isinstance(status, str) or not status:
-            raise MacrodataApiError(
-                status=200, message="Missing status in /api/cloud/runs response"
-            )
-        return CloudRunCreateResponse(job_id=job_id, stage_id=stage_id, status=status)
+        def required_str(key: str) -> str:
+            value = payload.get(key)
+            if not isinstance(value, str) or not value:
+                raise MacrodataApiError(
+                    status=200,
+                    message=f"Missing {key} in /api/cloud/runs response",
+                )
+            return value
+
+        return CloudRunCreateResponse(
+            job_id=required_str("job_id"),
+            stage_id=required_str("stage_id"),
+            status=required_str("status"),
+        )
 
 
 __all__ = ["MacrodataClient", "JobContext", "compile_shard_descriptors"]
