@@ -9,6 +9,9 @@ from fsspec import AbstractFileSystem
 from refiner.io import DataFileSet
 from refiner.io.fileset import DataFileSetLike
 from refiner.ledger.shard import Shard
+from refiner.metrics import metric_counter
+from refiner.readers.row import DictRow, Row
+from refiner.runtime.metrics_context import set_active_step_index
 
 
 class BaseReader(ABC):
@@ -21,7 +24,6 @@ class BaseReader(ABC):
     Note:
         This object is expected to be used by a single worker at a time (no concurrent read_shard calls).
     """
-
     def __init__(
         self,
         inputs: DataFileSetLike,
@@ -117,10 +119,16 @@ class BaseReader(ABC):
         """
         raise NotImplementedError
 
+    def iter_shard_rows(self, shard: Shard) -> Iterator[Row]:
+        for row in self.read_shard(shard):
+            metric_counter("rows_read", 1, shard_id=shard.id)
+            yield row.update(shard_id=shard.id)
+
     def read(self) -> Iterator[Any]:
         """Convenience iterator: sequentially read all shards returned by `list_shards()`."""
-        for shard in self.list_shards():
-            yield from self.read_shard(shard)
-
+        with set_active_step_index(0):
+            for shard in self.list_shards():
+                for row in self.iter_shard_rows(shard):
+                    yield row
 
 __all__ = ["Shard", "BaseReader"]

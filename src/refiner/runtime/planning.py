@@ -35,9 +35,14 @@ def _callable_code_hint(obj: Any) -> str | None:
 
 
 def _step_payload(
-    *, name: str, step_type: str, args: dict[str, Any] | None, code: str | None
+    *,
+    name: str,
+    step_type: str,
+    index: int,
+    args: dict[str, Any] | None,
+    code: str | None,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {"name": name, "type": step_type}
+    payload: dict[str, Any] = {"name": name, "type": step_type, "index": index}
     if args:
         payload["args"] = args
     if code is not None:
@@ -69,6 +74,7 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
         _step_payload(
             name=_unique_name(source_step_name),
             step_type="reader",
+            index=0,
             args=source_args,
             code=None,
         )
@@ -79,6 +85,7 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
             _step_payload(
                 name=_unique_name(base_name),
                 step_type=step_type,
+                index=step.index,
                 args=args,
                 code=_callable_code_hint(step),
             )
@@ -88,6 +95,7 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
         "stages": [
             {
                 "name": "stage_0",
+                "index": 0,
                 "steps": steps,
             }
         ]

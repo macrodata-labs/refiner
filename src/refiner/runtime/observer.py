@@ -14,7 +14,7 @@ class WorkerObserverContext:
     """Context for observer callbacks. worker_id must be a UUID v7 string."""
 
     job_id: str
-    stage_id: str
+    stage_index: int
     worker_id: str  # UUID v7
     host: str
     config: WorkerConfig
@@ -24,14 +24,14 @@ class WorkerObserverContext:
         cls,
         *,
         job_id: str,
-        stage_id: str,
+        stage_index: int,
         worker_id: str,
         host: str | None = None,
         config: WorkerConfig | None = None,
     ) -> "WorkerObserverContext":
         return cls(
             job_id=job_id,
-            stage_id=stage_id,
+            stage_index=stage_index,
             worker_id=worker_id,
             host=host or socket.gethostname(),
             config=config or WorkerConfig.from_runtime(),
@@ -45,7 +45,7 @@ class WorkerLifecycleObserver:
         try:
             self.otel: WorkerTelemetry = client.worker_telemetry(
                 job_id=context.job_id,
-                stage_id=context.stage_id,
+                stage_index=context.stage_index,
                 worker_id=context.worker_id,
             )
         except Exception:
@@ -55,7 +55,7 @@ class WorkerLifecycleObserver:
         del rank
         self.client.start_worker(
             job_id=self.context.job_id,
-            stage_id=self.context.stage_id,
+            stage_index=self.context.stage_index,
             worker_id=self.context.worker_id,
             host=self.context.host,
             config=self.context.config,
@@ -64,7 +64,7 @@ class WorkerLifecycleObserver:
     def on_shard_start(self, shard: Shard) -> None:
         self.client.start_shard(
             job_id=self.context.job_id,
-            stage_id=self.context.stage_id,
+            stage_index=self.context.stage_index,
             worker_id=self.context.worker_id,
             shard_id=shard.id,
         )
@@ -73,9 +73,18 @@ class WorkerLifecycleObserver:
     def on_shard_finish(
         self, shard: Shard, *, status: str, error: str | None = None
     ) -> None:
+        if status == "completed":
+            try:
+                self.otel.force_flush_metrics()
+            except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+                logger.warning(
+                    "telemetry force_flush_metrics failed: %s: %s",
+                    type(e).__name__,
+                    e,
+                )
         self.client.finish_shard(
             job_id=self.context.job_id,
-            stage_id=self.context.stage_id,
+            stage_index=self.context.stage_index,
             worker_id=self.context.worker_id,
             shard_id=shard.id,
             status=status,
@@ -84,13 +93,21 @@ class WorkerLifecycleObserver:
         logger.info(f"Shard {shard.id} finished with status {status}")
 
     def on_worker_finish(self, *, status: str, error: str | None = None) -> None:
+        try:
+            self.otel.force_flush_metrics()
+        except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+            logger.warning(
+                "telemetry force_flush_metrics failed on worker finish: %s: %s",
+                type(e).__name__,
+                e,
+            )
         self.client.finish_worker(
             job_id=self.context.job_id,
-            stage_id=self.context.stage_id,
+            stage_index=self.context.stage_index,
             worker_id=self.context.worker_id,
             status=status,
             error=error,
         )
 
-    def on_records_processed(self, count: int) -> None:
-        self.otel.record_records_processed(count)
+    def metrics_emitter(self) -> WorkerTelemetry:
+        return self.otel

@@ -14,7 +14,37 @@ from .metric_helpers import (
 
 
 class WorkerTelemetry(Protocol):
-    def record_records_processed(self, delta: int) -> None: ...
+    def emit_user_counter(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None: ...
+
+    def emit_user_gauge(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None: ...
+
+    def emit_user_histogram(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None: ...
+
+    def force_flush_metrics(self) -> None: ...
 
 
 class OtelTelemetryEmitter:
@@ -24,7 +54,7 @@ class OtelTelemetryEmitter:
         base_url: str,
         api_key: str,
         job_id: str,
-        stage_id: str,
+        stage_index: int,
         worker_id: str,
     ):
         # Lazy imports keep non-observability flows working when OTel deps are absent.
@@ -35,8 +65,9 @@ class OtelTelemetryEmitter:
         from opentelemetry.sdk._logs import LoggerProvider
         from opentelemetry.sdk._logs import LoggingHandler
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+        from opentelemetry.metrics import CallbackOptions, Observation
         from opentelemetry.sdk.metrics import MeterProvider
-        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader, ConsoleMetricExporter
         from opentelemetry.sdk.resources import Resource
 
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -44,7 +75,7 @@ class OtelTelemetryEmitter:
             {
                 "service.name": "refiner-worker",
                 "job.id": job_id,
-                "stage.id": stage_id,
+                "stage.index": stage_index,
                 "worker.id": worker_id,
             }
         )
@@ -53,6 +84,7 @@ class OtelTelemetryEmitter:
             endpoint=f"{base_url}/api/metrics",
             headers=headers,
         )
+        # metric_exporter = ConsoleMetricExporter()
         metric_reader = PeriodicExportingMetricReader(
             exporter=metric_exporter,
             export_interval_millis=2_000,
@@ -83,10 +115,15 @@ class OtelTelemetryEmitter:
             callbacks=[get_network_out],
             unit="B",
         )
-        self._records_processed_counter = meter.create_counter(
-            "refiner.worker.records_processed",
+        self._user_counter = meter.create_counter(
+            "refiner.user.counter",
             unit="records",
         )
+        self._user_histogram = meter.create_histogram(
+            "refiner.user.histogram",
+            explicit_bucket_boundaries_advisory=[],
+        )
+        self._user_gauge = meter.create_gauge("refiner.user.gauge")
 
         log_exporter = OTLPLogExporter(
             endpoint=f"{base_url}/api/logs",
@@ -101,14 +138,110 @@ class OtelTelemetryEmitter:
         py_logger.propagate = False
         py_logger.addHandler(LoggingHandler(logger_provider=self._logger_provider))
 
-    def record_records_processed(self, delta: int) -> None:
-        if delta > 0:
-            self._records_processed_counter.add(delta)
+    @staticmethod
+    def _attrs_with_step(
+        *, attrs: dict[str, str | int], step_index: int | None
+    ) -> dict[str, str | int]:
+        if step_index is not None:
+            attrs["step.index"] = int(step_index)
+        return attrs
+
+    def emit_user_counter(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        attrs: dict[str, str | int] = {"label": label, "shard_id": shard_id}
+        if unit:
+            attrs["unit"] = unit
+        self._user_counter.add(
+            value,
+            attributes=self._attrs_with_step(
+                attrs=attrs,
+                step_index=step_index,
+            ),
+        )
+
+    def emit_user_gauge(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        attrs_base: dict[str, str | int] = {"label": label, "shard_id": shard_id}
+        if unit:
+            attrs_base["unit"] = unit
+        attrs = self._attrs_with_step(attrs=attrs_base, step_index=step_index)
+
+        self._user_gauge.set(value, attributes=attrs)
+
+    def emit_user_histogram(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        attrs: dict[str, str | int] = {"label": label, "shard_id": shard_id}
+        if unit:
+            attrs["unit"] = unit
+        self._user_histogram.record(
+            value,
+            attributes=self._attrs_with_step(
+                attrs=attrs,
+                step_index=step_index,
+            ),
+        )
+
+    def force_flush_metrics(self) -> None:
+        self._meter_provider.force_flush()
 
 
 class NoopTelemetryEmitter:
-    def record_records_processed(self, delta: int) -> None:
-        del delta
+    def emit_user_counter(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        del label, value, shard_id, step_index, unit
+
+    def emit_user_gauge(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        del label, value, shard_id, step_index, unit
+
+    def emit_user_histogram(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        del label, value, shard_id, step_index, unit
+
+    def force_flush_metrics(self) -> None:
+        return None
 
 
 __all__ = ["WorkerTelemetry", "OtelTelemetryEmitter", "NoopTelemetryEmitter"]

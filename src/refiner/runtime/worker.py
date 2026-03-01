@@ -7,6 +7,12 @@ from typing import Protocol
 from refiner.ledger import BaseLedger
 from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
+from refiner.runtime.metrics_context import (
+    NOOP_USER_METRICS_EMITTER,
+    UserMetricsEmitter,
+    set_active_step_index,
+    set_active_user_metrics_emitter,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +33,8 @@ class WorkerObserver(Protocol):
     ) -> None: ...
 
     def on_worker_finish(self, *, status: str, error: str | None = None) -> None: ...
+
+    def metrics_emitter(self) -> UserMetricsEmitter: ...
 
 
 class Worker:
@@ -59,9 +67,11 @@ class Worker:
         failed_error: str | None = None
         observer = self.observer
 
+        user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
         if observer is not None:
             try:
                 observer.on_worker_start(rank=self.rank)
+                user_metrics_emitter = observer.metrics_emitter()
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 print(
                     f"[refiner] observer hook failed: {type(e).__name__}: {e}",
@@ -84,58 +94,60 @@ class Worker:
                             f"[refiner] observer hook failed: {type(e).__name__}: {e}",
                             file=sys.stderr,
                         )
-                yield from self.pipeline.source.read_shard(shard)
+                with set_active_step_index(0):
+                    yield from self.pipeline.source.iter_shard_rows(shard)
                 previous = shard
 
-        while True:
-            try:
-                for _ in self.pipeline.execute_rows(_source_rows()):
-                    output_rows += 1
-                    output_rows_since_hb += 1
-                    if output_rows_since_hb % self.heartbeat_every_rows == 0:
-                        for shard in inflight:
-                            self.ledger.heartbeat(shard)
+        with set_active_user_metrics_emitter(user_metrics_emitter):
+            while True:
+                try:
+                    for _ in self.pipeline.execute_rows(_source_rows()):
+                        output_rows += 1
+                        output_rows_since_hb += 1
+                        if output_rows_since_hb % self.heartbeat_every_rows == 0:
+                            for shard in inflight:
+                                self.ledger.heartbeat(shard)
 
-                for shard in inflight:
-                    self.ledger.heartbeat(shard)
-                    self.ledger.complete(shard)
-                    if observer is not None:
-                        try:
-                            observer.on_shard_finish(
-                                shard,
-                                status="completed",
-                                error=None,
-                            )
-                        except Exception as e:  # noqa: BLE001 - fail-open observer hooks
-                            print(
-                                "[refiner] observer hook failed: "
-                                f"{type(e).__name__}: {e}",
-                                file=sys.stderr,
-                            )
-                    completed += 1
-                inflight.clear()
-                break
-            except Exception as e:
-                failed_error = str(e)
-                for shard in inflight:
-                    self.ledger.fail(shard, str(e))
-                    if observer is not None:
-                        try:
-                            observer.on_shard_finish(
-                                shard,
-                                status="failed",
-                                error=str(e),
-                            )
-                        except Exception as e2:  # noqa: BLE001 - fail-open observer hooks
-                            print(
-                                "[refiner] observer hook failed: "
-                                f"{type(e2).__name__}: {e2}",
-                                file=sys.stderr,
-                            )
-                    failed += 1
-                inflight.clear()
-                previous = None
-                break
+                    for shard in inflight:
+                        self.ledger.heartbeat(shard)
+                        self.ledger.complete(shard)
+                        if observer is not None:
+                            try:
+                                observer.on_shard_finish(
+                                    shard,
+                                    status="completed",
+                                    error=None,
+                                )
+                            except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+                                print(
+                                    "[refiner] observer hook failed: "
+                                    f"{type(e).__name__}: {e}",
+                                    file=sys.stderr,
+                                )
+                        completed += 1
+                    inflight.clear()
+                    break
+                except Exception as e:
+                    failed_error = str(e)
+                    for shard in inflight:
+                        self.ledger.fail(shard, str(e))
+                        if observer is not None:
+                            try:
+                                observer.on_shard_finish(
+                                    shard,
+                                    status="failed",
+                                    error=str(e),
+                                )
+                            except Exception as e2:  # noqa: BLE001 - fail-open observer hooks
+                                print(
+                                    "[refiner] observer hook failed: "
+                                    f"{type(e2).__name__}: {e2}",
+                                    file=sys.stderr,
+                                )
+                        failed += 1
+                    inflight.clear()
+                    previous = None
+                    break
 
         if observer is not None:
             try:

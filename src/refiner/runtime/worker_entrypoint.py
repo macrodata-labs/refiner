@@ -35,7 +35,7 @@ def main() -> int:
     parser.add_argument("--stats-path", type=str, required=True)
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--job-id", type=str, default="")
-    parser.add_argument("--stage-id", type=str, default="")
+    parser.add_argument("--stage-index", type=int, default=-1)
     parser.add_argument("--worker-id", type=str, default="")
     args = parser.parse_args()
 
@@ -49,13 +49,13 @@ def main() -> int:
 
         ledger = FsLedger(run_id=args.run_id, worker_id=args.rank, workdir=args.workdir)
         observer = None
-        if args.job_id and args.stage_id and args.worker_id:
+        if args.job_id and args.stage_index >= 0 and args.worker_id:
             try:
                 observer = WorkerLifecycleObserver(
                     client=ObserverClient(api_key=current_api_key()),
                     context=WorkerObserverContext.from_runtime(
                         job_id=args.job_id,
-                        stage_id=args.stage_id,
+                        stage_index=args.stage_index,
                         worker_id=args.worker_id,
                     ),
                 )

@@ -111,7 +111,7 @@ class LocalLauncher(BaseLauncher):
                         client=observer_ctx.client,
                         context=WorkerObserverContext.from_runtime(
                             job_id=observer_ctx.job.job_id,
-                            stage_id=observer_ctx.job.stage_id,
+                            stage_index=observer_ctx.job.stage_index,
                             worker_id=str(uuid6.uuid7()),
                         ),
                     )
@@ -171,8 +171,8 @@ class LocalLauncher(BaseLauncher):
                     [
                         "--job-id",
                         observer_ctx.job.job_id,
-                        "--stage-id",
-                        observer_ctx.job.stage_id,
+                        "--stage-index",
+                        str(observer_ctx.job.stage_index),
                         "--worker-id",
                         str(uuid6.uuid7()),
                     ]

@@ -21,7 +21,7 @@ def compile_shard_descriptors(shards: list["Shard"]) -> list[dict[str, Any]]:
 @dataclass(frozen=True, slots=True)
 class ObserverJobContext:
     job_id: str
-    stage_id: str
+    stage_index: int
 
 
 class ObserverClient:
@@ -32,46 +32,33 @@ class ObserverClient:
     def submit_job(
         self, *, name: str, pipeline: "RefinerPipeline"
     ) -> ObserverJobContext:
+        plan = compile_pipeline_plan(pipeline)
         payload = {
             "name": name,
             "executor": {"type": "refiner-local"},
-            "plan": compile_pipeline_plan(pipeline),
+            "plan": plan,
         }
         resp = request_json(
             method="POST",
-            path="/api/jobs",
+            path="/api/jobs/submit",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=payload,
         )
-        job = resp.get("job")
-        if not isinstance(job, dict):
-            raise MacrodataApiError(
-                status=200, message="Missing job in /api/jobs response"
-            )
-        job_id = job.get("id")
-        stages = job.get("stages")
-        if not isinstance(job_id, str) or not job_id:
-            raise MacrodataApiError(
-                status=200, message="Missing job.id in /api/jobs response"
-            )
-        if not isinstance(stages, list) or not stages:
-            raise MacrodataApiError(
-                status=200, message="Missing stages in /api/jobs response"
-            )
-        stage0 = stages[0]
-        if not isinstance(stage0, dict) or not isinstance(stage0.get("id"), str):
-            raise MacrodataApiError(
-                status=200, message="Missing stage id in /api/jobs response"
-            )
-        return ObserverJobContext(job_id=job_id, stage_id=stage0["id"])
+
+        job_id = resp["job"]["id"]
+        stage_index = 0
+        return ObserverJobContext(
+            job_id=job_id,
+            stage_index=stage_index,
+        )
 
     def register_stage_shards(
-        self, *, job_id: str, stage_id: str, shards: list["Shard"]
+        self, *, job_id: str, stage_index: int, shards: list["Shard"]
     ) -> dict[str, Any]:
         return request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/shards/register",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/register",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"shards": compile_shard_descriptors(shards)},
@@ -81,7 +68,7 @@ class ObserverClient:
         self,
         *,
         job_id: str,
-        stage_id: str,
+        stage_index: int,
         worker_id: str,
         host: str | None = None,
         config: WorkerConfig | None = None,
@@ -95,18 +82,18 @@ class ObserverClient:
             payload["config"] = config.to_api_payload()
         return request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/start",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/start",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=payload,
         )
 
     def start_shard(
-        self, *, job_id: str, stage_id: str, worker_id: str, shard_id: str
+        self, *, job_id: str, stage_index: int, worker_id: str, shard_id: str
     ) -> dict[str, Any]:
         return request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/{worker_id}/shards/start",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/shards/start",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"shard_id": shard_id},
@@ -116,7 +103,7 @@ class ObserverClient:
         self,
         *,
         job_id: str,
-        stage_id: str,
+        stage_index: int,
         worker_id: str,
         shard_id: str,
         status: str,
@@ -127,7 +114,7 @@ class ObserverClient:
             payload["error"] = error
         return request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/{worker_id}/shards/finish",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/shards/finish",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=payload,
@@ -137,7 +124,7 @@ class ObserverClient:
         self,
         *,
         job_id: str,
-        stage_id: str,
+        stage_index: int,
         worker_id: str,
         status: str,
         error: str | None = None,
@@ -147,18 +134,18 @@ class ObserverClient:
             payload["error"] = error
         return request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/{worker_id}/finish",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/finish",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=payload,
         )
 
     def finish_stage(
-        self, *, job_id: str, stage_id: str, status: str
+        self, *, job_id: str, stage_index: int, status: str
     ) -> dict[str, Any]:
         return request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/finish",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"status": status},
@@ -174,13 +161,13 @@ class ObserverClient:
         )
 
     def worker_telemetry(
-        self, *, job_id: str, stage_id: str, worker_id: str
+        self, *, job_id: str, stage_index: int, worker_id: str
     ) -> WorkerTelemetry:
         return OtelTelemetryEmitter(
             base_url=self.base_url,
             api_key=self.api_key,
             job_id=job_id,
-            stage_id=stage_id,
+            stage_index=stage_index,
             worker_id=worker_id,
         )
 
@@ -217,4 +204,14 @@ class WorkerConfig:
         return out
 
 
-__all__ = ["ObserverClient", "ObserverJobContext", "WorkerConfig"]
+
+__all__ = [
+    "ObserverClient",
+    "ObserverJobContext",
+    "ObserverContractError",
+    "WorkerConfig",
+]
+
+
+class ObserverContractError(RuntimeError):
+    """Raised when observer responses violate required contract shape."""

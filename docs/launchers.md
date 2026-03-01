@@ -36,7 +36,7 @@ Local launches automatically attempt Macrodata Observer lifecycle reporting when
   - local key file from `macrodata login`
 - If no key is found, the launch still runs and prints a warning explaining how to enable observability.
 
-This integration currently reports job/stage/worker/shard lifecycle events (no pulse metrics yet).
+This integration reports job/stage/worker/shard lifecycle events and user-emitted OTEL metrics (`mdr.metric_counter`, `mdr.metric_gauge`, `mdr.metric_histogram`).
 
 ## Launch Result
 

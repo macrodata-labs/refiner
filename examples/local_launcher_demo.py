@@ -10,7 +10,7 @@ SAMPLE_PARQUET = (
     "hf://datasets/OpenResearcher/OpenResearcher-Dataset/"
     "seed_51/train-00000-of-00003.parquet"
 )
-SLEEP_SECONDS_PER_SHARD = 120
+SLEEP_SECONDS_PER_SHARD = 1
 
 
 class SlowPerShardReader(mdr.BaseReader):
@@ -37,6 +37,11 @@ class SlowPerShardReader(mdr.BaseReader):
 
 def add_text_len(row):
     text = row.get("text")
+    shard_id = str(row["shard_id"])
+    mdr.metric_histogram("text_len_histogram", 3, shard_id=shard_id)
+    mdr.metric_counter("text_len_counter", 3, shard_id)
+    mdr.metric_gauge("text_len_gauge", 3, shard_id=shard_id)
+    mdr.metric_gauge("text_mem_usage", 9, shard_id=shard_id)
     if text is None:
         return {"text_len": 0}
     return {"text_len": len(str(text))}

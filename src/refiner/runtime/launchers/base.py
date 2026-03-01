@@ -57,7 +57,7 @@ class BaseLauncher(ABC):
             job = client.submit_job(name=self.name, pipeline=self.pipeline)
             client.register_stage_shards(
                 job_id=job.job_id,
-                stage_id=job.stage_id,
+                stage_index=job.stage_index,
                 shards=shards,
             )
             return _ObserverLaunchContext(client=client, job=job)
@@ -78,7 +78,7 @@ class BaseLauncher(ABC):
         try:
             observer_ctx.client.finish_stage(
                 job_id=observer_ctx.job.job_id,
-                stage_id=observer_ctx.job.stage_id,
+                stage_index=observer_ctx.job.stage_index,
                 status=status,
             )
         except Exception as e:  # noqa: BLE001

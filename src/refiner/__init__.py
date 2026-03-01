@@ -1,5 +1,6 @@
 from .io import DataFile, DataFileSet, DataFolder
 from .ledger.shard import Shard
+from .metrics import metric_counter, metric_gauge, metric_histogram
 from .pipeline import RefinerPipeline, read_csv, read_jsonl, read_parquet
 from .processors import (
     BatchStep,
@@ -42,4 +43,7 @@ __all__ = [
     "read_csv",
     "read_jsonl",
     "read_parquet",
+    "metric_counter",
+    "metric_gauge",
+    "metric_histogram",
 ]
