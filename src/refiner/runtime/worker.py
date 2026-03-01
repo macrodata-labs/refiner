@@ -7,6 +7,7 @@ from typing import Protocol
 from refiner.ledger import BaseLedger
 from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
+from refiner.runtime.errors import UserMetricsFlushError
 from refiner.runtime.metrics_context import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
@@ -108,9 +109,8 @@ class Worker:
                             for shard in inflight:
                                 self.ledger.heartbeat(shard)
 
-                    for shard in inflight:
+                    for shard in list(inflight):
                         self.ledger.heartbeat(shard)
-                        self.ledger.complete(shard)
                         if observer is not None:
                             try:
                                 observer.on_shard_finish(
@@ -119,11 +119,15 @@ class Worker:
                                     error=None,
                                 )
                             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+                                if isinstance(e, UserMetricsFlushError):
+                                    raise
                                 print(
                                     "[refiner] observer hook failed: "
                                     f"{type(e).__name__}: {e}",
                                     file=sys.stderr,
                                 )
+                        self.ledger.complete(shard)
+                        inflight.remove(shard)
                         completed += 1
                     inflight.clear()
                     break

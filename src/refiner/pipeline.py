@@ -91,12 +91,11 @@ class RefinerPipeline:
                 if isinstance(step, FlatMapStep):
                     tmp = scratch[i]
                     tmp.clear()
-                    with set_active_step_index(step.index):
-                        for row in inp.take_all():
-                            for item in step.apply_row_many(row):
-                                normalized = normalize_batch_item(item)
-                                if normalized is not None:
-                                    tmp.append(normalized)
+                    for row in inp.take_all():
+                        for item in step.apply_row_many(row):
+                            normalized = normalize_batch_item(item)
+                            if normalized is not None:
+                                tmp.append(normalized)
                     out.extend(tmp)
                     return
 
@@ -112,11 +111,10 @@ class RefinerPipeline:
                         return
                     tmp = scratch[i]
                     tmp.clear()
-                    with set_active_step_index(step.index):
-                        for item in step.apply_batch(batch_in):
-                            normalized = normalize_batch_item(item)
-                            if normalized is not None:
-                                tmp.append(normalized)
+                    for item in step.apply_batch(batch_in):
+                        normalized = normalize_batch_item(item)
+                        if normalized is not None:
+                            tmp.append(normalized)
                     out.extend(tmp)
                     return
 

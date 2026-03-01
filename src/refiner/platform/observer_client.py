@@ -5,9 +5,10 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from .config import resolve_platform_base_url
-from .http import MacrodataApiError, request_json
-from .telemetry import OtelTelemetryEmitter, WorkerTelemetry
+from .http import request_json
 from refiner.runtime.planning import compile_pipeline_plan
+from refiner.runtime.metrics_context import UserMetricsEmitter
+from .telemetry import OtelTelemetryEmitter
 
 if TYPE_CHECKING:
     from refiner.ledger.shard import Shard
@@ -162,7 +163,7 @@ class ObserverClient:
 
     def worker_telemetry(
         self, *, job_id: str, stage_index: int, worker_id: str
-    ) -> WorkerTelemetry:
+    ) -> UserMetricsEmitter:
         return OtelTelemetryEmitter(
             base_url=self.base_url,
             api_key=self.api_key,
@@ -208,10 +209,5 @@ class WorkerConfig:
 __all__ = [
     "ObserverClient",
     "ObserverJobContext",
-    "ObserverContractError",
     "WorkerConfig",
 ]
-
-
-class ObserverContractError(RuntimeError):
-    """Raised when observer responses violate required contract shape."""

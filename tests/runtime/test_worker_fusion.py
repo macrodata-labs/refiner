@@ -7,6 +7,8 @@ from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
 from refiner.readers.base import BaseReader
 from refiner.readers.row import DictRow, Row
+from refiner.runtime.errors import UserMetricsFlushError
+from refiner.runtime.metrics_context import NOOP_USER_METRICS_EMITTER
 from refiner.worker import Worker
 
 
@@ -49,6 +51,31 @@ class _FakeLedger(BaseLedger):
 
     def fail(self, shard: Shard, error: str | None = None) -> None:
         self.failed_ids.append(shard.id)
+
+
+class _FlushFailObserver:
+    def __init__(self) -> None:
+        self.worker_finish_status: str | None = None
+
+    def on_worker_start(self, *, rank: int) -> None:
+        del rank
+
+    def on_shard_start(self, shard: Shard) -> None:
+        del shard
+
+    def on_shard_finish(
+        self, shard: Shard, *, status: str, error: str | None = None
+    ) -> None:
+        del error
+        if status == "completed":
+            raise UserMetricsFlushError(f"flush failed for shard {shard.id}")
+
+    def on_worker_finish(self, *, status: str, error: str | None = None) -> None:
+        del error
+        self.worker_finish_status = status
+
+    def metrics_emitter(self):
+        return NOOP_USER_METRICS_EMITTER
 
 
 def test_pipeline_executes_row_and_batch_steps() -> None:
@@ -177,6 +204,28 @@ def test_worker_can_batch_across_shards() -> None:
     assert stats.completed == 2
     # batch reverse should cross shard boundary and invert shard emission order.
     assert emitted == [shard2.id, shard1.id]
+
+
+def test_worker_fails_shard_when_completed_flush_fails() -> None:
+    shard = Shard(path="s1", start=0, end=1)
+    ledger = _FakeLedger([shard])
+    pipeline = RefinerPipeline(source=_FakeReader({shard.id: [DictRow({"x": 1})]}))
+    observer = _FlushFailObserver()
+
+    worker = Worker(
+        rank=0,
+        ledger=ledger,
+        pipeline=pipeline,
+        observer=observer,
+    )
+    stats = worker.run()
+
+    assert stats.claimed == 1
+    assert stats.completed == 0
+    assert stats.failed == 1
+    assert ledger.completed_ids == []
+    assert ledger.failed_ids == [shard.id]
+    assert observer.worker_finish_status == "failed"
 
 
 # Keep pytest from treating imported typing names as tests on some plugins.

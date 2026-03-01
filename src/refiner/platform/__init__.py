@@ -16,7 +16,6 @@ from .config import (
 from .http import MacrodataApiError, verify_api_key
 from .observer_client import (
     ObserverClient,
-    ObserverContractError,
     ObserverJobContext,
 )
 
@@ -33,6 +32,5 @@ __all__ = [
     "MacrodataApiError",
     "verify_api_key",
     "ObserverClient",
-    "ObserverContractError",
     "ObserverJobContext",
 ]

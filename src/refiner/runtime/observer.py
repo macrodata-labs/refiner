@@ -4,7 +4,8 @@ from logging import getLogger
 
 from refiner.ledger.shard import Shard
 from refiner.platform.observer_client import ObserverClient, WorkerConfig
-from refiner.platform.telemetry import NoopTelemetryEmitter, WorkerTelemetry
+from refiner.runtime.errors import UserMetricsFlushError
+from refiner.runtime.metrics_context import NOOP_USER_METRICS_EMITTER, UserMetricsEmitter
 
 logger = getLogger("refiner.observer")
 
@@ -43,13 +44,13 @@ class WorkerLifecycleObserver:
         self.client = client
         self.context = context
         try:
-            self.otel: WorkerTelemetry = client.worker_telemetry(
+            self.otel: UserMetricsEmitter = client.worker_telemetry(
                 job_id=context.job_id,
                 stage_index=context.stage_index,
                 worker_id=context.worker_id,
             )
         except Exception:
-            self.otel = NoopTelemetryEmitter()
+            self.otel = NOOP_USER_METRICS_EMITTER
 
     def on_worker_start(self, *, rank: int) -> None:
         del rank
@@ -75,10 +76,17 @@ class WorkerLifecycleObserver:
     ) -> None:
         if status == "completed":
             try:
-                self.otel.force_flush_metrics()
+                self.otel.force_flush_user_metrics()
+            except Exception as e:  # noqa: BLE001 - explicit fatal path
+                raise UserMetricsFlushError(
+                    f"user metrics flush failed for completed shard {shard.id}"
+                ) from e
+        else:
+            try:
+                self.otel.force_flush_user_metrics()
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 logger.warning(
-                    "telemetry force_flush_metrics failed: %s: %s",
+                    "telemetry force_flush_user_metrics failed: %s: %s",
                     type(e).__name__,
                     e,
                 )
@@ -94,10 +102,10 @@ class WorkerLifecycleObserver:
 
     def on_worker_finish(self, *, status: str, error: str | None = None) -> None:
         try:
-            self.otel.force_flush_metrics()
+            self.otel.force_flush_resource_metrics()
         except Exception as e:  # noqa: BLE001 - fail-open observer hooks
             logger.warning(
-                "telemetry force_flush_metrics failed on worker finish: %s: %s",
+                "telemetry force_flush_resource_metrics failed on worker finish: %s: %s",
                 type(e).__name__,
                 e,
             )
@@ -109,5 +117,5 @@ class WorkerLifecycleObserver:
             error=error,
         )
 
-    def metrics_emitter(self) -> WorkerTelemetry:
+    def metrics_emitter(self) -> UserMetricsEmitter:
         return self.otel

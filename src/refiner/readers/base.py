@@ -10,7 +10,7 @@ from refiner.io import DataFileSet
 from refiner.io.fileset import DataFileSetLike
 from refiner.ledger.shard import Shard
 from refiner.metrics import metric_counter
-from refiner.readers.row import DictRow, Row
+from refiner.readers.row import Row
 from refiner.runtime.metrics_context import set_active_step_index
 
 

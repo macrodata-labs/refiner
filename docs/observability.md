@@ -49,7 +49,7 @@ Available helpers:
 
 When provided, `unit` is emitted as OTEL point attribute `unit`.
 
-`metric_counter` requires `shard_id` for idempotency keying and completed-shard flush behavior.
+`metric_counter` requires `shard_id` for idempotency keying and shard-end flush behavior.
 Backend dedupe key for counters should be `(job.id, stage.index, label, shard_id)`.
 `shard_id` is attached to rows automatically by the reader runtime.
 `step.index` is attached from runtime execution context:
@@ -77,5 +77,6 @@ If a key is present, the run appears in Macrodata Observer with lifecycle progre
 
 - Current Refiner pipelines are submitted as a single stage (`stage_0`) in the Observer job plan.
 - Refiner registers shard descriptors (`shard_id`, `path`, `start`, `end`) and uses `shard_id` for shard lifecycle events.
-- Worker runtime forces OTEL metric flush on every completed shard.
-- Observer failures are fail-open in local launcher mode (processing continues; warnings are printed).
+- User OTEL metrics export every 60 seconds and force flush on shard end.
+- Worker resource OTEL metrics export every 10 seconds and force flush on worker end.
+- Observer failures are fail-open in local launcher mode (processing continues; warnings are printed), except completed-shard user-metrics flush failures, which fail the shard.
