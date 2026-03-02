@@ -23,11 +23,8 @@ class CloudLedger(BaseLedger):
     ) -> None:
         cfg = config or load_ledger_config_from_env()
         super().__init__(job_id=job_id, worker_id=worker_id, config=cfg)
-        if not job_id:
-            raise ValueError("job_id must be non-empty")
         if not stage_id:
             raise ValueError("stage_id must be non-empty")
-        self.job_id = job_id
         self.stage_id = stage_id
         self.client = MacrodataClient(api_key=api_key)
 

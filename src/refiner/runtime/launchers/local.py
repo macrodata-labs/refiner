@@ -6,12 +6,11 @@ from pathlib import Path
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import cloudpickle
 
 from refiner.ledger import FsLedger
-from refiner.platform import CredentialsError, MacrodataClient
 from refiner.runtime.cpu import build_cpu_sets, set_cpu_affinity
 from refiner.runtime.memory import restore_memory_soft_limit, set_memory_soft_limit_mb
 from refiner.runtime.worker import Worker, WorkerLifecycleContext, WorkerRunStats
@@ -106,6 +105,16 @@ class LocalLauncher(BaseLauncher):
     def _reset_ledger(self) -> None:
         self.ledger = FsLedger(job_id=self.job_id, worker_id=None, workdir=self.workdir)
 
+    def _log_tracking_url(self, observer_ctx: Any | None) -> None:
+        if observer_ctx is not None:
+            self._info(
+                f"Track job here: {self._job_tracking_url(client=observer_ctx.client, job_id=observer_ctx.job.job_id)}"
+            )
+        else:
+            self._info(
+                f"Local launch running without observability; no tracking URL (job_id={self.job_id})"
+            )
+
     def launch(self) -> LaunchStats:
         cpu_sets = (
             build_cpu_sets(
@@ -119,14 +128,7 @@ class LocalLauncher(BaseLauncher):
         if self.num_workers == 1:
             shards = list(self.pipeline.source.list_shards())
             observer_ctx = self._setup_observer(shards=shards)
-            if observer_ctx is not None:
-                self._info(
-                    f"Track job here: {self._job_tracking_url(client=observer_ctx.client, job_id=observer_ctx.job.job_id)}"
-                )
-            else:
-                self._info(
-                    f"Local launch running without observability; no tracking URL (job_id={self.job_id})"
-                )
+            self._log_tracking_url(observer_ctx)
             self._reset_ledger()
             self.seed_ledger(shards=shards)
             cpu_ids = cpu_sets[0]
@@ -142,16 +144,12 @@ class LocalLauncher(BaseLauncher):
                 lifecycle_client = None
                 lifecycle_context = None
                 if observer_ctx is not None:
-                    try:
-                        lifecycle_client = MacrodataClient()
-                        lifecycle_context = WorkerLifecycleContext(
-                            job_id=observer_ctx.job.job_id,
-                            stage_id=observer_ctx.job.stage_id,
-                            worker_id="local-rank-0",
-                        )
-                    except CredentialsError:
-                        lifecycle_client = None
-                        lifecycle_context = None
+                    lifecycle_client = observer_ctx.client
+                    lifecycle_context = WorkerLifecycleContext(
+                        job_id=observer_ctx.job.job_id,
+                        stage_id=observer_ctx.job.stage_id,
+                        worker_id="local-rank-0",
+                    )
                 stats = Worker(
                     rank=0,
                     ledger=ledger,
@@ -179,14 +177,7 @@ class LocalLauncher(BaseLauncher):
         payload = self._serialize_pipeline_payload()
         shards = list(self.pipeline.source.list_shards())
         observer_ctx = self._setup_observer(shards=shards)
-        if observer_ctx is not None:
-            self._info(
-                f"Track job here: {self._job_tracking_url(client=observer_ctx.client, job_id=observer_ctx.job.job_id)}"
-            )
-        else:
-            self._info(
-                f"Local launch running without observability; no tracking URL (job_id={self.job_id})"
-            )
+        self._log_tracking_url(observer_ctx)
         self._reset_ledger()
         payload_path = self._write_pipeline_payload(payload)
         self.seed_ledger(shards=shards)
