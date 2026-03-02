@@ -57,7 +57,7 @@ class CloudLauncher(BaseLauncher):
         try:
             client = MacrodataClient()
         except CredentialsError as e:
-            raise RuntimeError(
+            raise SystemExit(
                 "Cloud launch requires Macrodata authentication. "
                 "Run `macrodata login` or set MACRODATA_API_KEY."
             ) from e
