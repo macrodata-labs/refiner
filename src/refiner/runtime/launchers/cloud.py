@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 from refiner.platform import MacrodataClient
 from refiner.platform.client import compile_shard_descriptors
-from refiner.platform.auth import current_api_key
 from refiner.platform.cloud.models import CloudRunCreateRequest, CloudRuntimeConfig
 from refiner.platform.cloud.serialize import serialize_pipeline_inline
 from refiner.runtime.planning import compile_pipeline_plan
@@ -55,8 +54,7 @@ class CloudLauncher(BaseLauncher):
         )
 
     def launch(self) -> CloudLaunchResult:
-        api_key = current_api_key()
-        client = MacrodataClient(api_key=api_key)
+        client = MacrodataClient()
         request = CloudRunCreateRequest(
             name=self.name,
             plan=compile_pipeline_plan(self.pipeline),

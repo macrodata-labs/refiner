@@ -8,11 +8,10 @@ from pathlib import Path
 import cloudpickle
 
 from refiner.ledger import CloudLedger, FsLedger
-from refiner.platform import CredentialsError, MacrodataClient, current_api_key
+from refiner.platform import CredentialsError, MacrodataClient
 from refiner.runtime.cpu import set_cpu_affinity
 from refiner.runtime.memory import set_memory_soft_limit_mb
-from refiner.runtime.observer import WorkerLifecycleObserver, WorkerObserverContext
-from refiner.runtime.worker import Worker
+from refiner.runtime.worker import Worker, WorkerLifecycleContext
 
 
 def _parse_cpu_ids(raw: str) -> list[int]:
@@ -28,7 +27,7 @@ def _write_stats(path: str, payload: dict[str, int | str]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Refiner local worker entrypoint")
+    parser = argparse.ArgumentParser(description="Refiner runtime worker entrypoint")
     parser.add_argument("--rank", type=int, required=True)
     parser.add_argument("--run-id", type=str, required=True)
     parser.add_argument("--workdir", type=str, required=True)
@@ -75,25 +74,26 @@ def main() -> int:
             ledger = FsLedger(
                 run_id=args.run_id, worker_id=args.rank, workdir=args.workdir
             )
-        observer = None
+        lifecycle_client = None
+        lifecycle_context = None
         if args.job_id and args.stage_id and args.worker_id:
             try:
-                observer = WorkerLifecycleObserver(
-                    client=MacrodataClient(api_key=current_api_key()),
-                    context=WorkerObserverContext(
-                        job_id=args.job_id,
-                        stage_id=args.stage_id,
-                        worker_id=args.worker_id,
-                    ),
+                lifecycle_client = MacrodataClient()
+                lifecycle_context = WorkerLifecycleContext(
+                    job_id=args.job_id,
+                    stage_id=args.stage_id,
+                    worker_id=args.worker_id,
                 )
             except CredentialsError:
-                observer = None
+                lifecycle_client = None
+                lifecycle_context = None
         stats = Worker(
             rank=args.rank,
             ledger=ledger,
             pipeline=pipeline,
             heartbeat_every_rows=args.heartbeat_every_rows,
-            observer=observer,
+            lifecycle_client=lifecycle_client,
+            lifecycle_context=lifecycle_context,
         ).run()
         _write_stats(
             args.stats_path,

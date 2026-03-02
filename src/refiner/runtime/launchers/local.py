@@ -11,10 +11,10 @@ from typing import TYPE_CHECKING, cast
 import cloudpickle
 
 from refiner.ledger import FsLedger
+from refiner.platform import CredentialsError, MacrodataClient
 from refiner.runtime.cpu import build_cpu_sets, set_cpu_affinity
 from refiner.runtime.memory import restore_memory_soft_limit, set_memory_soft_limit_mb
-from refiner.runtime.observer import WorkerLifecycleObserver, WorkerObserverContext
-from refiner.runtime.worker import Worker, WorkerRunStats
+from refiner.runtime.worker import Worker, WorkerLifecycleContext, WorkerRunStats
 
 from .base import BaseLauncher
 
@@ -119,22 +119,26 @@ class LocalLauncher(BaseLauncher):
                 old_mem_limits = set_memory_soft_limit_mb(self.mem_mb_per_worker)
             ledger = FsLedger(run_id=self.run_id, worker_id=0, workdir=self.workdir)
             try:
-                worker_observer = None
+                lifecycle_client = None
+                lifecycle_context = None
                 if observer_ctx is not None:
-                    worker_observer = WorkerLifecycleObserver(
-                        client=observer_ctx.client,
-                        context=WorkerObserverContext(
+                    try:
+                        lifecycle_client = MacrodataClient()
+                        lifecycle_context = WorkerLifecycleContext(
                             job_id=observer_ctx.job.job_id,
                             stage_id=observer_ctx.job.stage_id,
                             worker_id="local-rank-0",
-                        ),
-                    )
+                        )
+                    except CredentialsError:
+                        lifecycle_client = None
+                        lifecycle_context = None
                 stats = Worker(
                     rank=0,
                     ledger=ledger,
                     pipeline=self.pipeline,
                     heartbeat_every_rows=self.heartbeat_every_rows,
-                    observer=worker_observer,
+                    lifecycle_client=lifecycle_client,
+                    lifecycle_context=lifecycle_context,
                 ).run()
             finally:
                 if old_affinity is not None:

@@ -8,7 +8,7 @@ import re
 import sys
 import time
 
-from refiner.platform import CredentialsError, MacrodataClient, current_api_key
+from refiner.platform import CredentialsError, MacrodataClient
 from refiner.platform.client import JobContext
 
 if TYPE_CHECKING:
@@ -64,14 +64,13 @@ class BaseLauncher(ABC):
 
     def _observer_client_or_none(self) -> MacrodataClient | None:
         try:
-            api_key = current_api_key()
+            return MacrodataClient()
         except CredentialsError:
             self._warn(
                 "observability disabled: no Macrodata API key found. "
                 "Run `macrodata login` or set MACRODATA_API_KEY to enable it."
             )
             return None
-        return MacrodataClient(api_key=api_key)
 
     def _setup_observer(
         self, *, shards: list["Shard"], fail_open: bool = True

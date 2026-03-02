@@ -12,9 +12,8 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class FakeMacrodataClient:
-        def __init__(self, *, api_key: str, base_url: str | None = None):
-            captured["api_key"] = api_key
-            captured["base_url"] = base_url
+        def __init__(self):
+            captured["client_initialized"] = True
 
         def cloud_submit_job(self, *, request):
             captured["request"] = request
@@ -26,9 +25,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
 
             return _Resp()
 
-    monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.current_api_key", lambda: "ing_test"
-    )
     monkeypatch.setattr(
         "refiner.runtime.launchers.cloud.MacrodataClient", FakeMacrodataClient
     )
@@ -67,8 +63,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert result.job_id == "job-123"
     assert result.stage_id == "stage-456"
     assert result.status == "queued"
-    assert captured["api_key"] == "ing_test"
-    assert captured["base_url"] is None
+    assert captured["client_initialized"] is True
 
     request = cast(CloudRunCreateRequest, captured["request"])
     assert request.name == "demo cloud"

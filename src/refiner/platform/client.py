@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from refiner.runtime.planning import compile_pipeline_plan
 
+from .auth import current_api_key
 from .cloud.models import CloudRunCreateRequest, CloudRunCreateResponse
 from .config import resolve_platform_base_url
 from .http import MacrodataApiError, request_json
@@ -25,8 +26,8 @@ class JobContext:
 
 
 class MacrodataClient:
-    def __init__(self, *, api_key: str, base_url: str | None = None):
-        self.api_key = api_key
+    def __init__(self, *, api_key: str | None = None, base_url: str | None = None):
+        self.api_key = api_key if api_key is not None else current_api_key()
         self.base_url = (base_url or resolve_platform_base_url()).rstrip("/")
 
     def create_job(self, *, name: str, pipeline: "RefinerPipeline") -> JobContext:
