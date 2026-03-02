@@ -19,8 +19,8 @@ def _h_int(*parts: str) -> int:
 class ClaimPolicy:
     BLOCK_SIZE = 8
 
-    def __init__(self, *, run_id: str, worker_id: int):
-        self.run_id = str(run_id)
+    def __init__(self, *, job_id: str, worker_id: int):
+        self.job_id = str(job_id)
         self.worker_id = int(worker_id)
 
     @dataclass(frozen=True, slots=True)
@@ -89,7 +89,7 @@ class ClaimPolicy:
                 return None
             bs = ClaimPolicy.BLOCK_SIZE
             num_blocks = (n + bs - 1) // bs
-            offset = _h_int(self.run_id, str(self.worker_id), file_key) % max(
+            offset = _h_int(self.job_id, str(self.worker_id), file_key) % max(
                 1, num_blocks
             )
             for j in range(num_blocks):
@@ -107,7 +107,7 @@ class ClaimPolicy:
             # 3) uniform pseudo-random pending shard in this file (deterministic permutation)
             ordered = sorted(
                 pending_list,
-                key=lambda s: _h_int(self.run_id, str(self.worker_id), s.shard_id),
+                key=lambda s: _h_int(self.job_id, str(self.worker_id), s.shard_id),
             )
             for s in ordered:
                 if try_claim(s):
@@ -131,7 +131,7 @@ class ClaimPolicy:
         # pseudo-random file order (deterministic)
         file_keys_sorted = sorted(
             (fk for fk in file_keys if fk not in tried),
-            key=lambda fk: _h_int(self.run_id, str(self.worker_id), fk),
+            key=lambda fk: _h_int(self.job_id, str(self.worker_id), fk),
         )
         for fk in file_keys_sorted:
             out = _try_file(fk, None)

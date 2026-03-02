@@ -29,14 +29,13 @@ def _write_stats(path: str, payload: dict[str, int | str]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Refiner runtime worker entrypoint")
     parser.add_argument("--rank", type=int, required=True)
-    parser.add_argument("--run-id", type=str, required=True)
+    parser.add_argument("--job-id", type=str, required=True)
     parser.add_argument("--workdir", type=str, required=True)
     parser.add_argument("--heartbeat-every-rows", type=int, required=True)
     parser.add_argument("--pipeline-payload", type=str, required=True)
     parser.add_argument("--stats-path", type=str, required=True)
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--mem-mb-per-worker", type=int, default=0)
-    parser.add_argument("--job-id", type=str, default="")
     parser.add_argument("--stage-id", type=str, default="")
     parser.add_argument("--worker-id", type=str, default="")
     parser.add_argument(
@@ -64,15 +63,14 @@ def main() -> int:
                     "cloud ledger requires --job-id, --stage-id, and REFINER_CLOUD_RUNTIME_TOKEN"
                 )
             ledger = CloudLedger(
-                run_id=args.run_id,
-                worker_id=args.rank,
                 job_id=args.job_id,
+                worker_id=args.rank,
                 stage_id=args.stage_id,
                 api_key=cloud_api_key,
             )
         else:
             ledger = FsLedger(
-                run_id=args.run_id, worker_id=args.rank, workdir=args.workdir
+                job_id=args.job_id, worker_id=args.rank, workdir=args.workdir
             )
         lifecycle_client = None
         lifecycle_context = None

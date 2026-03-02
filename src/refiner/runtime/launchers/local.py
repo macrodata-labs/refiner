@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class LaunchStats:
-    run_id: str
+    job_id: str
     workers: int
     claimed: int
     completed: int
@@ -65,11 +65,11 @@ class LocalLauncher(BaseLauncher):
             mem_mb_per_worker=mem_mb_per_worker,
         )
         self.workdir = workdir
-        self.ledger = FsLedger(run_id=self.run_id, worker_id=None, workdir=self.workdir)
+        self.ledger = FsLedger(job_id=self.job_id, worker_id=None, workdir=self.workdir)
 
     def _launcher_run_dir(self) -> Path:
         ledger = self._require_fs_ledger()
-        return Path(ledger.workdir) / "runs" / self.run_id / "launcher"
+        return Path(ledger.workdir) / "runs" / self.job_id / "launcher"
 
     def _pipeline_payload_path(self) -> Path:
         return self._launcher_run_dir() / "pipeline.cloudpickle"
@@ -95,6 +95,9 @@ class LocalLauncher(BaseLauncher):
             raise ValueError("launcher.ledger is not configured")
         return cast(FsLedger, self.ledger)
 
+    def _reset_ledger(self) -> None:
+        self.ledger = FsLedger(job_id=self.job_id, worker_id=None, workdir=self.workdir)
+
     def launch(self) -> LaunchStats:
         cpu_sets = (
             build_cpu_sets(
@@ -108,6 +111,7 @@ class LocalLauncher(BaseLauncher):
         if self.num_workers == 1:
             shards = list(self.pipeline.source.list_shards())
             observer_ctx = self._setup_observer(shards=shards)
+            self._reset_ledger()
             self.seed_ledger(shards=shards)
             cpu_ids = cpu_sets[0]
             old_affinity: set[int] | None = None
@@ -117,7 +121,7 @@ class LocalLauncher(BaseLauncher):
                 set_cpu_affinity(cpu_ids)
             if self.mem_mb_per_worker is not None:
                 old_mem_limits = set_memory_soft_limit_mb(self.mem_mb_per_worker)
-            ledger = FsLedger(run_id=self.run_id, worker_id=0, workdir=self.workdir)
+            ledger = FsLedger(job_id=self.job_id, worker_id=0, workdir=self.workdir)
             try:
                 lifecycle_client = None
                 lifecycle_context = None
@@ -148,7 +152,7 @@ class LocalLauncher(BaseLauncher):
             status = "failed" if stats.failed > 0 else "completed"
             self._finish_observer_terminal(observer_ctx, status=status)
             return LaunchStats(
-                run_id=self.run_id,
+                job_id=self.job_id,
                 workers=1,
                 claimed=stats.claimed,
                 completed=stats.completed,
@@ -156,9 +160,10 @@ class LocalLauncher(BaseLauncher):
                 output_rows=stats.output_rows,
             )
 
-        payload_path = self._write_pipeline_payload()
         shards = list(self.pipeline.source.list_shards())
         observer_ctx = self._setup_observer(shards=shards)
+        self._reset_ledger()
+        payload_path = self._write_pipeline_payload()
         self.seed_ledger(shards=shards)
         procs: list[subprocess.Popen[str]] = []
         for rank in range(self.num_workers):
@@ -173,8 +178,8 @@ class LocalLauncher(BaseLauncher):
                 "refiner.runtime.worker_entrypoint",
                 "--rank",
                 str(rank),
-                "--run-id",
-                self.run_id,
+                "--job-id",
+                self.job_id,
                 "--workdir",
                 self._require_fs_ledger().workdir,
                 "--heartbeat-every-rows",
@@ -191,8 +196,6 @@ class LocalLauncher(BaseLauncher):
             if observer_ctx is not None:
                 cmd.extend(
                     [
-                        "--job-id",
-                        observer_ctx.job.job_id,
                         "--stage-id",
                         observer_ctx.job.stage_id,
                         "--worker-id",
@@ -232,7 +235,7 @@ class LocalLauncher(BaseLauncher):
             raise RuntimeError("; ".join(errors))
 
         return LaunchStats(
-            run_id=self.run_id,
+            job_id=self.job_id,
             workers=self.num_workers,
             claimed=agg.claimed,
             completed=agg.completed,

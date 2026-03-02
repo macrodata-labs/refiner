@@ -15,15 +15,14 @@ class CloudLedger(BaseLedger):
     def __init__(
         self,
         *,
-        run_id: str,
-        worker_id: int | None,
         job_id: str,
+        worker_id: int | None,
         stage_id: str,
         api_key: str,
         config: LedgerConfig | None = None,
     ) -> None:
         cfg = config or load_ledger_config_from_env()
-        super().__init__(run_id=run_id, worker_id=worker_id, config=cfg)
+        super().__init__(job_id=job_id, worker_id=worker_id, config=cfg)
         if not job_id:
             raise ValueError("job_id must be non-empty")
         if not stage_id:

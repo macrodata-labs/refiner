@@ -4,9 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
-import re
 import sys
-import time
 
 from refiner.platform import CredentialsError, MacrodataClient
 from refiner.platform.client import JobContext
@@ -23,7 +21,7 @@ class BaseLauncher(ABC):
         *,
         pipeline: RefinerPipeline,
         name: str,
-        run_id: str | None = None,
+        job_id: str | None = None,
         num_workers: int | None = None,
         heartbeat_every_rows: int | None = None,
         cpus_per_worker: int | None = None,
@@ -33,7 +31,7 @@ class BaseLauncher(ABC):
             raise ValueError("name must be non-empty")
         self.pipeline = pipeline
         self.name = name
-        self.run_id = run_id or self._build_run_id(name)
+        self.job_id = job_id or self._build_local_job_id()
         self.ledger: BaseLedger | None = None
         self.cpus_per_worker: int | None = None
         self.mem_mb_per_worker: int | None = None
@@ -55,9 +53,8 @@ class BaseLauncher(ABC):
             self.mem_mb_per_worker = mem_mb_per_worker
 
     @staticmethod
-    def _build_run_id(name: str) -> str:
-        slug = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-") or "job"
-        return f"{slug}-{int(time.time())}-{uuid4().hex[:8]}"
+    def _build_local_job_id() -> str:
+        return f"job-{uuid4()}"
 
     def _warn(self, message: str) -> None:
         print(f"[refiner] {message}", file=sys.stderr)
@@ -80,6 +77,7 @@ class BaseLauncher(ABC):
             return None
         try:
             job = client.create_job(name=self.name, pipeline=self.pipeline)
+            self.job_id = job.job_id
             client.register_stage_shards(
                 job_id=job.job_id,
                 stage_id=job.stage_id,

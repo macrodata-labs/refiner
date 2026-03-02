@@ -21,7 +21,7 @@ from .base import BaseLedger, LedgerConfig
 class FsLedger(BaseLedger):
     """Filesystem-backed shard ledger.
 
-    Layout (under `<workdir>/runs/<run_id>/ledger/`):
+    Layout (under `<workdir>/runs/<job_id>/ledger/`):
       - pending/<pathhash>__<start>__<end>__<shardid>.json
       - leased/<same>__w<workerid>.json          (mtime is heartbeat freshness)
       - done/<same>.json
@@ -31,16 +31,16 @@ class FsLedger(BaseLedger):
     def __init__(
         self,
         *,
-        run_id: str,
+        job_id: str,
         worker_id: int | None = None,
         workdir: str | None = None,
         config: LedgerConfig | None = None,
     ):
         cfg = config or load_ledger_config_from_env()
-        super().__init__(run_id=run_id, worker_id=worker_id, config=cfg)
+        super().__init__(job_id=job_id, worker_id=worker_id, config=cfg)
         self.workdir = resolve_workdir(workdir)
 
-        self._root = Path(self.workdir) / "runs" / self.run_id / "ledger"
+        self._root = Path(self.workdir) / "runs" / self.job_id / "ledger"
         self._pending_dir = self._root / "pending"
         self._leased_dir = self._root / "leased"
         self._done_dir = self._root / "done"
@@ -197,7 +197,7 @@ class FsLedger(BaseLedger):
             if k is not None:
                 all_keys.add(k)
 
-        policy = ClaimPolicy(run_id=self.run_id, worker_id=self._require_worker_id())
+        policy = ClaimPolicy(job_id=self.job_id, worker_id=self._require_worker_id())
 
         def _try_claim(k: ClaimPolicy._ShardKey) -> bool:
             base = self._pending_name_from_key(k)

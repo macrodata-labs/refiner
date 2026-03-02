@@ -25,7 +25,7 @@ class _FakeReader(BaseReader):
 
 class _FakeLedger(BaseLedger):
     def __init__(self, shards: list[Shard]):
-        super().__init__(run_id="run", worker_id=1, config=LedgerConfig())
+        super().__init__(job_id="job", worker_id=1, config=LedgerConfig())
         self._remaining = list(shards)
         self.claim_previous: list[Shard | None] = []
         self.completed_ids: list[str] = []

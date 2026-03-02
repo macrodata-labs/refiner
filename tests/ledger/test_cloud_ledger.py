@@ -34,9 +34,8 @@ def test_cloud_ledger_register_and_lifecycle(monkeypatch) -> None:
     monkeypatch.setattr("refiner.ledger.backend.cloud.MacrodataClient", FakeClient)
 
     ledger = CloudLedger(
-        run_id="run-1",
-        worker_id=7,
         job_id="job-1",
+        worker_id=7,
         stage_id="stage-1",
         api_key="ing_test",
     )
@@ -71,9 +70,8 @@ def test_cloud_ledger_claim_none_when_queue_empty(monkeypatch) -> None:
     monkeypatch.setattr("refiner.ledger.backend.cloud.MacrodataClient", FakeClient)
 
     ledger = CloudLedger(
-        run_id="run-1",
-        worker_id=1,
         job_id="job-1",
+        worker_id=1,
         stage_id="stage-1",
         api_key="ing_test",
     )
