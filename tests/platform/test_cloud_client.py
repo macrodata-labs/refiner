@@ -28,7 +28,12 @@ def _request() -> CloudRunCreateRequest:
             size_bytes=3,
         ),
         shards=[
-            {"shard_id": "s1", "path": "hf://dataset/file.parquet", "start": 0, "end": 10}
+            {
+                "shard_id": "s1",
+                "path": "hf://dataset/file.parquet",
+                "start": 0,
+                "end": 10,
+            }
         ],
     )
 
