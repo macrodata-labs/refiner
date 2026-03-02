@@ -1,4 +1,5 @@
 from .backend.base import BaseLedger, LedgerConfig
+from .backend.cloud import CloudLedger
 from .backend.fs import FsLedger
 
 try:
@@ -9,6 +10,7 @@ except Exception:  # pragma: no cover
 
 __all__ = [
     "BaseLedger",
+    "CloudLedger",
     "LedgerConfig",
     "FsLedger",
     "RedisLedger",

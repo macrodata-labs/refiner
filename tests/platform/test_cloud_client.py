@@ -15,13 +15,21 @@ def _request() -> CloudRunCreateRequest:
     return CloudRunCreateRequest(
         name="demo-cloud-job",
         plan={"stages": [{"name": "stage_0", "steps": []}]},
-        runtime=CloudRuntimeConfig(num_workers=2, heartbeat_every_rows=4096),
+        runtime=CloudRuntimeConfig(
+            num_workers=2,
+            heartbeat_every_rows=4096,
+            cpus_per_worker=4,
+            mem_mb_per_worker=16384,
+        ),
         pipeline_payload=CloudPipelinePayload(
             format="cloudpickle",
             bytes_b64="AQID",
             sha256="abc123",
             size_bytes=3,
         ),
+        shards=[
+            {"shard_id": "s1", "path": "hf://dataset/file.parquet", "start": 0, "end": 10}
+        ],
     )
 
 
@@ -46,6 +54,11 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert captured["base_url"] == "https://example.com"
     json_payload = cast(dict[str, object], captured["json_payload"])
     assert json_payload["executor"] == {"type": "macrodata-cloud"}
+    runtime = cast(dict[str, object], json_payload["runtime"])
+    assert runtime["cpus_per_worker"] == 4
+    assert runtime["mem_mb_per_worker"] == 16384
+    shards = cast(list[dict[str, object]], json_payload["shards"])
+    assert shards[0]["shard_id"] == "s1"
 
 
 def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -> None:

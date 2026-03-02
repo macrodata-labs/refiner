@@ -26,6 +26,8 @@ class BaseLauncher(ABC):
         run_id: str | None = None,
         num_workers: int | None = None,
         heartbeat_every_rows: int | None = None,
+        cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
     ):
         if not name.strip():
             raise ValueError("name must be non-empty")
@@ -33,6 +35,8 @@ class BaseLauncher(ABC):
         self.name = name
         self.run_id = run_id or self._build_run_id(name)
         self.ledger: BaseLedger | None = None
+        self.cpus_per_worker: int | None = None
+        self.mem_mb_per_worker: int | None = None
         if num_workers is not None:
             if num_workers <= 0:
                 raise ValueError("num_workers must be > 0")
@@ -41,6 +45,14 @@ class BaseLauncher(ABC):
             if heartbeat_every_rows <= 0:
                 raise ValueError("heartbeat_every_rows must be > 0")
             self.heartbeat_every_rows = heartbeat_every_rows
+        if cpus_per_worker is not None:
+            if cpus_per_worker <= 0:
+                raise ValueError("cpus_per_worker must be > 0")
+            self.cpus_per_worker = cpus_per_worker
+        if mem_mb_per_worker is not None:
+            if mem_mb_per_worker <= 0:
+                raise ValueError("mem_mb_per_worker must be > 0")
+            self.mem_mb_per_worker = mem_mb_per_worker
 
     @staticmethod
     def _build_run_id(name: str) -> str:

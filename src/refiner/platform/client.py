@@ -173,6 +173,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=request.to_dict(),
+            timeout_s=60.0,
         )
 
         def required_str(key: str) -> str:
@@ -188,6 +189,78 @@ class MacrodataClient:
             job_id=required_str("job_id"),
             stage_id=required_str("stage_id"),
             status=required_str("status"),
+        )
+
+    def cloud_ledger_register_stage_shards(
+        self, *, job_id: str, stage_id: str, shards: list["Shard"]
+    ) -> dict[str, Any]:
+        return request_json(
+            method="POST",
+            path=f"/api/cloud/ledger/jobs/{job_id}/stages/{stage_id}/shards/register",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload={"shards": compile_shard_descriptors(shards)},
+        )
+
+    def cloud_ledger_claim_shard(
+        self,
+        *,
+        job_id: str,
+        stage_id: str,
+        worker_id: str,
+        previous_shard_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"worker_id": worker_id}
+        if previous_shard_id:
+            payload["previous_shard_id"] = previous_shard_id
+        return request_json(
+            method="POST",
+            path=f"/api/cloud/ledger/jobs/{job_id}/stages/{stage_id}/shards/claim",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload=payload,
+        )
+
+    def cloud_ledger_heartbeat_shard(
+        self, *, job_id: str, stage_id: str, worker_id: str, shard_id: str
+    ) -> dict[str, Any]:
+        return request_json(
+            method="POST",
+            path=f"/api/cloud/ledger/jobs/{job_id}/stages/{stage_id}/shards/heartbeat",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload={"worker_id": worker_id, "shard_id": shard_id},
+        )
+
+    def cloud_ledger_complete_shard(
+        self, *, job_id: str, stage_id: str, worker_id: str, shard_id: str
+    ) -> dict[str, Any]:
+        return request_json(
+            method="POST",
+            path=f"/api/cloud/ledger/jobs/{job_id}/stages/{stage_id}/shards/complete",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload={"worker_id": worker_id, "shard_id": shard_id},
+        )
+
+    def cloud_ledger_fail_shard(
+        self,
+        *,
+        job_id: str,
+        stage_id: str,
+        worker_id: str,
+        shard_id: str,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"worker_id": worker_id, "shard_id": shard_id}
+        if error:
+            payload["error"] = error
+        return request_json(
+            method="POST",
+            path=f"/api/cloud/ledger/jobs/{job_id}/stages/{stage_id}/shards/fail",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload=payload,
         )
 
 

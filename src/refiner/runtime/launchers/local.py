@@ -12,6 +12,7 @@ import cloudpickle
 
 from refiner.ledger import FsLedger
 from refiner.runtime.cpu import build_cpu_sets, set_cpu_affinity
+from refiner.runtime.memory import restore_memory_soft_limit, set_memory_soft_limit_mb
 from refiner.runtime.observer import WorkerLifecycleObserver, WorkerObserverContext
 from refiner.runtime.worker import Worker, WorkerRunStats
 
@@ -32,6 +33,18 @@ class LaunchStats:
 
 
 class LocalLauncher(BaseLauncher):
+    """Local multi-process launcher for a pipeline.
+
+    Args:
+        pipeline: Pipeline to execute.
+        name: Human-readable run name.
+        num_workers: Number of local worker processes.
+        workdir: Optional working directory for ledger and run artifacts.
+        heartbeat_every_rows: Heartbeat cadence for worker progress reporting.
+        cpus_per_worker: Optional CPU cores pinned per worker process.
+        mem_mb_per_worker: Optional per-worker soft address-space limit in MB.
+    """
+
     def __init__(
         self,
         *,
@@ -41,17 +54,17 @@ class LocalLauncher(BaseLauncher):
         workdir: str | None = None,
         heartbeat_every_rows: int = 4096,
         cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
     ):
         super().__init__(
             pipeline=pipeline,
             name=name,
             num_workers=num_workers,
             heartbeat_every_rows=heartbeat_every_rows,
+            cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
         )
         self.workdir = workdir
-        self.cpus_per_worker = (
-            int(cpus_per_worker) if cpus_per_worker is not None else None
-        )
         self.ledger = FsLedger(run_id=self.run_id, worker_id=None, workdir=self.workdir)
 
     def _launcher_run_dir(self) -> Path:
@@ -98,9 +111,12 @@ class LocalLauncher(BaseLauncher):
             self.seed_ledger(shards=shards)
             cpu_ids = cpu_sets[0]
             old_affinity: set[int] | None = None
+            old_mem_limits: tuple[int, int] | None = None
             if cpu_ids is not None and hasattr(os, "sched_getaffinity"):
                 old_affinity = set(int(x) for x in os.sched_getaffinity(0))
                 set_cpu_affinity(cpu_ids)
+            if self.mem_mb_per_worker is not None:
+                old_mem_limits = set_memory_soft_limit_mb(self.mem_mb_per_worker)
             ledger = FsLedger(run_id=self.run_id, worker_id=0, workdir=self.workdir)
             try:
                 worker_observer = None
@@ -123,6 +139,8 @@ class LocalLauncher(BaseLauncher):
             finally:
                 if old_affinity is not None:
                     os.sched_setaffinity(0, old_affinity)
+                if old_mem_limits is not None:
+                    restore_memory_soft_limit(old_mem_limits)
             status = "failed" if stats.failed > 0 else "completed"
             self._finish_observer_terminal(observer_ctx, status=status)
             return LaunchStats(
@@ -164,6 +182,8 @@ class LocalLauncher(BaseLauncher):
                 "--cpu-ids",
                 cpu_arg,
             ]
+            if self.mem_mb_per_worker is not None:
+                cmd.extend(["--mem-mb-per-worker", str(self.mem_mb_per_worker)])
             if observer_ctx is not None:
                 cmd.extend(
                     [

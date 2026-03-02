@@ -8,12 +8,19 @@ from typing import Any
 class CloudRuntimeConfig:
     num_workers: int
     heartbeat_every_rows: int
+    cpus_per_worker: int | None = None
+    mem_mb_per_worker: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "num_workers": self.num_workers,
             "heartbeat_every_rows": self.heartbeat_every_rows,
         }
+        if self.cpus_per_worker is not None:
+            payload["cpus_per_worker"] = self.cpus_per_worker
+        if self.mem_mb_per_worker is not None:
+            payload["mem_mb_per_worker"] = self.mem_mb_per_worker
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +45,7 @@ class CloudRunCreateRequest:
     plan: dict[str, Any]
     runtime: CloudRuntimeConfig
     pipeline_payload: CloudPipelinePayload
+    shards: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +54,7 @@ class CloudRunCreateRequest:
             "plan": self.plan,
             "runtime": self.runtime.to_dict(),
             "pipeline_payload": self.pipeline_payload.to_dict(),
+            "shards": self.shards,
         }
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 from refiner.pipeline import read_jsonl
+from refiner.ledger.shard import Shard
 from refiner.platform.cloud.models import CloudPipelinePayload
 from refiner.platform.cloud.models import CloudRunCreateRequest
 
@@ -44,12 +45,23 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         "refiner.runtime.launchers.cloud.compile_pipeline_plan",
         lambda pipeline: {"stages": [{"name": "stage_0", "steps": []}]},
     )
+    monkeypatch.setattr(
+        "refiner.runtime.launchers.cloud.compile_shard_descriptors",
+        lambda shards: [s.to_dict() for s in shards],
+    )
 
     pipeline = read_jsonl("input.jsonl")
+    monkeypatch.setattr(
+        pipeline.source,
+        "list_shards",
+        lambda: [Shard(path="input.jsonl", start=0, end=1)],
+    )
     result = pipeline.launch_cloud(
         name="demo cloud",
         num_workers=3,
         heartbeat_every_rows=2048,
+        cpus_per_worker=2,
+        mem_mb_per_worker=8192,
     )
 
     assert result.job_id == "job-123"
@@ -62,4 +74,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.name == "demo cloud"
     assert request.runtime.num_workers == 3
     assert request.runtime.heartbeat_every_rows == 2048
+    assert request.runtime.cpus_per_worker == 2
+    assert request.runtime.mem_mb_per_worker == 8192
+    assert request.shards[0]["path"] == "input.jsonl"
     assert request.plan["stages"][0]["name"] == "stage_0"
