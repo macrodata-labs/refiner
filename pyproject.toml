@@ -23,11 +23,6 @@ dependencies = [
 [project.scripts]
 macrodata = "refiner.cli.main:main"
 
-[project.optional-dependencies]
-redis = [
-    "redis>=5.0.0",
-]
-
 [dependency-groups]
 dev = [
     "pre-commit>=4.0.0",

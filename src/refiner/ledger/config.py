@@ -42,16 +42,8 @@ def resolve_workdir(workdir: str | None) -> str:
     return str(p)
 
 
-def redis_url_from_env() -> str | None:
-    v = os.environ.get("REFINER_LEDGER_REDIS_URL")
-    if v is None or v == "":
-        return None
-    return v
-
-
 __all__ = [
     "default_workdir",
     "resolve_workdir",
     "load_ledger_config_from_env",
-    "redis_url_from_env",
 ]

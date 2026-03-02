@@ -19,7 +19,7 @@ def test_shard_id_is_stable() -> None:
 
 def test_fs_ledger_claim_complete(tmp_path: Path) -> None:
     cfg = LedgerConfig(lease_seconds=600, heartbeat_seconds=120)
-    ledger = FsLedger(run_id="run1", worker_id=1, workdir=str(tmp_path), config=cfg)
+    ledger = FsLedger(job_id="job1", worker_id=1, workdir=str(tmp_path), config=cfg)
 
     s1 = Shard(path="p1", start=0, end=1)
     s2 = Shard(path="p2", start=0, end=2)
@@ -37,13 +37,13 @@ def test_fs_ledger_claim_complete(tmp_path: Path) -> None:
 
 def test_fs_ledger_enqueue_without_worker_id(tmp_path: Path) -> None:
     cfg = LedgerConfig(lease_seconds=600, heartbeat_seconds=120)
-    ledger = FsLedger(run_id="run3", worker_id=None, workdir=str(tmp_path), config=cfg)
+    ledger = FsLedger(job_id="job3", worker_id=None, workdir=str(tmp_path), config=cfg)
     ledger.seed_shards([Shard(path="p", start=0, end=1)])
 
 
 def test_fs_ledger_enqueue_overwrites_manifest(tmp_path: Path) -> None:
     cfg = LedgerConfig(lease_seconds=600, heartbeat_seconds=120)
-    ledger = FsLedger(run_id="run4", worker_id=1, workdir=str(tmp_path), config=cfg)
+    ledger = FsLedger(job_id="job4", worker_id=1, workdir=str(tmp_path), config=cfg)
     s1 = Shard(path="p1", start=0, end=1)
     s2 = Shard(path="p2", start=0, end=2)
     ledger.seed_shards([s1])
@@ -55,9 +55,9 @@ def test_fs_ledger_enqueue_overwrites_manifest(tmp_path: Path) -> None:
 
 def test_fs_ledger_reclaims_stale_lease(tmp_path: Path) -> None:
     cfg = LedgerConfig(lease_seconds=10, heartbeat_seconds=120)
-    run_id = "run2"
-    ledger1 = FsLedger(run_id=run_id, worker_id=1, workdir=str(tmp_path), config=cfg)
-    ledger2 = FsLedger(run_id=run_id, worker_id=2, workdir=str(tmp_path), config=cfg)
+    job_id = "job2"
+    ledger1 = FsLedger(job_id=job_id, worker_id=1, workdir=str(tmp_path), config=cfg)
+    ledger2 = FsLedger(job_id=job_id, worker_id=2, workdir=str(tmp_path), config=cfg)
 
     shard = Shard(path="p", start=0, end=1)
     ledger1.seed_shards([shard])
@@ -66,7 +66,7 @@ def test_fs_ledger_reclaims_stale_lease(tmp_path: Path) -> None:
     assert got is not None
 
     # Force the lease to be stale by setting an old mtime.
-    leased_dir = tmp_path / "runs" / run_id / "ledger" / "leased"
+    leased_dir = tmp_path / "runs" / job_id / "ledger" / "leased"
     leased_files = list(leased_dir.iterdir())
     assert len(leased_files) == 1
     lease_path = leased_files[0]

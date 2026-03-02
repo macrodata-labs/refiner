@@ -25,6 +25,7 @@ from refiner.runtime.row_queue import RowQueue
 from refiner.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 if TYPE_CHECKING:
+    from refiner.runtime.launchers.cloud import CloudLaunchResult
     from refiner.runtime.launchers.local import LaunchStats
 
 
@@ -169,7 +170,18 @@ class RefinerPipeline:
         workdir: str | None = None,
         heartbeat_every_rows: int = 4096,
         cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
     ) -> "LaunchStats":
+        """Launch the pipeline locally.
+
+        Args:
+            name: Human-readable run name.
+            num_workers: Number of local worker processes.
+            workdir: Optional working directory for ledger and run artifacts.
+            heartbeat_every_rows: Heartbeat cadence for worker progress reporting.
+            cpus_per_worker: Optional CPU cores pinned per worker.
+            mem_mb_per_worker: Optional per-worker soft memory limit in MB.
+        """
         from refiner.runtime.launchers.local import LocalLauncher
 
         launcher = LocalLauncher(
@@ -179,6 +191,37 @@ class RefinerPipeline:
             workdir=workdir,
             heartbeat_every_rows=heartbeat_every_rows,
             cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
+        )
+        return launcher.launch()
+
+    def launch_cloud(
+        self,
+        *,
+        name: str,
+        num_workers: int = 1,
+        heartbeat_every_rows: int = 4096,
+        cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
+    ) -> "CloudLaunchResult":
+        """Launch the pipeline on Macrodata Cloud.
+
+        Args:
+            name: Human-readable run name.
+            num_workers: Requested logical worker count.
+            heartbeat_every_rows: Worker heartbeat cadence.
+            cpus_per_worker: Optional requested CPU cores per worker.
+            mem_mb_per_worker: Optional requested memory per worker in MB.
+        """
+        from refiner.runtime.launchers.cloud import CloudLauncher
+
+        launcher = CloudLauncher(
+            pipeline=self,
+            name=name,
+            num_workers=num_workers,
+            heartbeat_every_rows=heartbeat_every_rows,
+            cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
         )
         return launcher.launch()
 

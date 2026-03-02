@@ -17,12 +17,12 @@ class LedgerConfig:
 class BaseLedger(ABC):
     """Ledger for shard work distribution."""
 
-    def __init__(self, *, run_id: str, worker_id: int | None, config: LedgerConfig):
-        if not run_id:
-            raise ValueError("run_id must be non-empty")
+    def __init__(self, *, job_id: str, worker_id: int | None, config: LedgerConfig):
+        if not job_id:
+            raise ValueError("job_id must be non-empty")
         # worker_id is optional so a coordinator can seed shards without pretending to be a worker.
         self.worker_id = int(worker_id) if worker_id is not None else None
-        self.run_id = str(run_id)
+        self.job_id = str(job_id)
         self.config = config
 
     def _require_worker_id(self) -> int:
