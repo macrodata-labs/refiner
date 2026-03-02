@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from refiner.platform import MacrodataClient
+from refiner.platform import CredentialsError, MacrodataClient
 from refiner.platform.client import compile_shard_descriptors
 from refiner.platform.cloud.models import CloudRunCreateRequest, CloudRuntimeConfig
 from refiner.platform.cloud.serialize import serialize_pipeline_inline
@@ -54,7 +54,13 @@ class CloudLauncher(BaseLauncher):
         )
 
     def launch(self) -> CloudLaunchResult:
-        client = MacrodataClient()
+        try:
+            client = MacrodataClient()
+        except CredentialsError as e:
+            raise RuntimeError(
+                "Cloud launch requires Macrodata authentication. "
+                "Run `macrodata login` or set MACRODATA_API_KEY."
+            ) from e
         request = CloudRunCreateRequest(
             name=self.name,
             plan=compile_pipeline_plan(self.pipeline),
