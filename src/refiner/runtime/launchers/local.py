@@ -74,13 +74,21 @@ class LocalLauncher(BaseLauncher):
     def _pipeline_payload_path(self) -> Path:
         return self._launcher_run_dir() / "pipeline.cloudpickle"
 
-    def _write_pipeline_payload(self) -> Path:
+    def _serialize_pipeline_payload(self) -> bytes:
+        try:
+            return cloudpickle.dumps(self.pipeline)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to serialize pipeline for subprocess workers: {e}"
+            ) from e
+
+    def _write_pipeline_payload(self, payload: bytes) -> Path:
         run_dir = self._launcher_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
         payload_path = self._pipeline_payload_path()
         try:
             with payload_path.open("wb") as f:
-                cloudpickle.dump(self.pipeline, f)
+                f.write(payload)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to serialize pipeline for subprocess workers: {e}"
@@ -168,6 +176,7 @@ class LocalLauncher(BaseLauncher):
                 output_rows=stats.output_rows,
             )
 
+        payload = self._serialize_pipeline_payload()
         shards = list(self.pipeline.source.list_shards())
         observer_ctx = self._setup_observer(shards=shards)
         if observer_ctx is not None:
@@ -179,7 +188,7 @@ class LocalLauncher(BaseLauncher):
                 f"Local launch running without observability; no tracking URL (job_id={self.job_id})"
             )
         self._reset_ledger()
-        payload_path = self._write_pipeline_payload()
+        payload_path = self._write_pipeline_payload(payload)
         self.seed_ledger(shards=shards)
         procs: list[subprocess.Popen[str]] = []
         for rank in range(self.num_workers):
