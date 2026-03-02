@@ -68,6 +68,9 @@ class CloudLauncher(BaseLauncher):
             shards=compile_shard_descriptors(list(self.pipeline.source.list_shards())),
         )
         resp = client.cloud_submit_job(request=request)
+        self._info(
+            f"Track job here: {self._job_tracking_url(client=client, job_id=resp.job_id)}"
+        )
         return CloudLaunchResult(
             job_id=resp.job_id,
             stage_id=resp.stage_id,

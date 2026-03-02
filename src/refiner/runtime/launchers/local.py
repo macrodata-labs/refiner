@@ -111,6 +111,14 @@ class LocalLauncher(BaseLauncher):
         if self.num_workers == 1:
             shards = list(self.pipeline.source.list_shards())
             observer_ctx = self._setup_observer(shards=shards)
+            if observer_ctx is not None:
+                self._info(
+                    f"Track job here: {self._job_tracking_url(client=observer_ctx.client, job_id=observer_ctx.job.job_id)}"
+                )
+            else:
+                self._info(
+                    f"Local launch running without observability; no tracking URL (job_id={self.job_id})"
+                )
             self._reset_ledger()
             self.seed_ledger(shards=shards)
             cpu_ids = cpu_sets[0]
@@ -162,6 +170,14 @@ class LocalLauncher(BaseLauncher):
 
         shards = list(self.pipeline.source.list_shards())
         observer_ctx = self._setup_observer(shards=shards)
+        if observer_ctx is not None:
+            self._info(
+                f"Track job here: {self._job_tracking_url(client=observer_ctx.client, job_id=observer_ctx.job.job_id)}"
+            )
+        else:
+            self._info(
+                f"Local launch running without observability; no tracking URL (job_id={self.job_id})"
+            )
         self._reset_ledger()
         payload_path = self._write_pipeline_payload()
         self.seed_ledger(shards=shards)

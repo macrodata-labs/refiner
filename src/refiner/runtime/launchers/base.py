@@ -62,6 +62,12 @@ class BaseLauncher(ABC):
     def _warn(self, message: str) -> None:
         print(f"[refiner] {message}", file=sys.stderr)
 
+    def _info(self, message: str) -> None:
+        print(f"[refiner] {message}")
+
+    def _job_tracking_url(self, *, client: MacrodataClient, job_id: str) -> str:
+        return f"{client.base_url}/jobs/{job_id}"
+
     def _observer_client_or_none(self) -> MacrodataClient | None:
         try:
             return MacrodataClient()

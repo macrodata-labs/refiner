@@ -14,6 +14,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     class FakeMacrodataClient:
         def __init__(self):
             captured["client_initialized"] = True
+            self.base_url = "https://example.com"
 
         def cloud_submit_job(self, *, request):
             captured["request"] = request
