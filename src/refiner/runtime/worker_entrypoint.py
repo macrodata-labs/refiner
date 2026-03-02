@@ -70,7 +70,6 @@ def main() -> int:
                 job_id=args.job_id,
                 stage_id=args.stage_id,
                 api_key=cloud_api_key,
-                base_url=None,
             )
         else:
             ledger = FsLedger(

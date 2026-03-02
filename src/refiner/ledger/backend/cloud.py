@@ -20,7 +20,6 @@ class CloudLedger(BaseLedger):
         job_id: str,
         stage_id: str,
         api_key: str,
-        base_url: str | None = None,
         config: LedgerConfig | None = None,
     ) -> None:
         cfg = config or load_ledger_config_from_env()
@@ -31,7 +30,7 @@ class CloudLedger(BaseLedger):
             raise ValueError("stage_id must be non-empty")
         self.job_id = job_id
         self.stage_id = stage_id
-        self.client = MacrodataClient(api_key=api_key, base_url=base_url)
+        self.client = MacrodataClient(api_key=api_key)
 
     def seed_shards(self, shards: Iterable[Shard]) -> None:
         self.client.cloud_ledger_register_stage_shards(
@@ -88,4 +87,3 @@ class CloudLedger(BaseLedger):
 
 
 __all__ = ["CloudLedger"]
-
