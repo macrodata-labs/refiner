@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from refiner.processors.step import RefinerStep, VectorizedOp, VectorizedSegmentStep
+from refiner.runtime.execution.row_queue import RowQueue
 from refiner.runtime.execution.row_steps import execute_row_steps
 from refiner.runtime.execution.vectorized import (
     TabularBlock,
@@ -62,7 +63,8 @@ def execute_segments(
         stream,
         block_rows=vectorized_chunk_rows,
     )
-    for segment in segments:
+    for idx, segment in enumerate(segments):
+        next_segment = segments[idx + 1] if idx + 1 < len(segments) else None
         if isinstance(segment, VectorSegment):
             current = _execute_vector_segment(
                 current,
@@ -74,6 +76,7 @@ def execute_segments(
                 current,
                 segment.steps,
                 output_block_rows=vectorized_chunk_rows,
+                output_tabular=isinstance(next_segment, VectorSegment),
             )
     yield from current
 
@@ -156,11 +159,19 @@ def _execute_row_segment(
     steps: Sequence[RefinerStep],
     *,
     output_block_rows: int,
-) -> Iterator[list[Row]]:
+    output_tabular: bool,
+) -> Iterator[Block]:
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
     rows = iter_rows(stream)
-    yield from _chunk_output_rows(execute_row_steps(rows, steps), output_block_rows)
+    step_out = execute_row_steps(rows, steps)
+    if not output_tabular:
+        yield from _chunk_output_rows(step_out, output_block_rows)
+        return
+    for batch in _chunk_output_rows(step_out, output_block_rows):
+        table = rows_to_table(batch)
+        if table.num_rows > 0:
+            yield table
 
 
 def _execute_vector_segment(
@@ -169,7 +180,7 @@ def _execute_vector_segment(
     *,
     vectorized_chunk_rows: int,
 ) -> Iterator[TabularBlock]:
-    pending_rows: list[Row] = []
+    pending_rows = RowQueue()
 
     def _run_block(block: TabularBlock) -> TabularBlock:
         out = block
@@ -178,11 +189,9 @@ def _execute_vector_segment(
         return out
 
     def _flush_rows() -> Iterator[TabularBlock]:
-        nonlocal pending_rows
-        if not pending_rows:
+        if len(pending_rows) == 0:
             return
-        batch = pending_rows
-        pending_rows = []
+        batch = pending_rows.take_all()
         out = _run_block(rows_to_table(batch))
         if out.num_rows > 0:
             yield out
@@ -191,8 +200,7 @@ def _execute_vector_segment(
         if isinstance(item, list):
             pending_rows.extend(item)
             while len(pending_rows) >= vectorized_chunk_rows:
-                chunk = pending_rows[:vectorized_chunk_rows]
-                del pending_rows[:vectorized_chunk_rows]
+                chunk = pending_rows.take(vectorized_chunk_rows)
                 out = _run_block(rows_to_table(chunk))
                 if out.num_rows > 0:
                     yield out

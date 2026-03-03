@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, List, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from fsspec import AbstractFileSystem
 
@@ -33,6 +33,7 @@ from refiner.sources import (
 from refiner.sources.row import Row
 from refiner.runtime.execution.engine import (
     Block,
+    Segment,
     compile_segments,
     execute_segments,
     iter_rows,
@@ -46,16 +47,18 @@ if TYPE_CHECKING:
 
 class RefinerPipeline:
     source: BaseSource
-    pipeline_steps: List[RefinerStep]
+    pipeline_steps: tuple[RefinerStep, ...]
+    _compiled_segments: tuple[Segment, ...] | None
 
     def __init__(
-        self, source: BaseSource, pipeline_steps: List[RefinerStep] | None = None
+        self, source: BaseSource, pipeline_steps: Sequence[RefinerStep] | None = None
     ):
         self.source = source
-        self.pipeline_steps = list(pipeline_steps) if pipeline_steps else []
+        self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
+        self._compiled_segments = None
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
-        return self.__class__(self.source, self.pipeline_steps + [step])
+        return self.__class__(self.source, self.pipeline_steps + (step,))
 
     def _add_vectorized_op(self, op: VectorizedOp) -> "RefinerPipeline":
         # Fuse adjacent expression-backed operations so each fused segment does
@@ -65,8 +68,13 @@ class RefinerPipeline:
         ):
             prev = self.pipeline_steps[-1]
             merged = VectorizedSegmentStep(ops=prev.ops + (op,))
-            return self.__class__(self.source, self.pipeline_steps[:-1] + [merged])
+            return self.__class__(self.source, self.pipeline_steps[:-1] + (merged,))
         return self.add_step(VectorizedSegmentStep(ops=(op,)))
+
+    def _get_compiled_segments(self) -> tuple[Segment, ...]:
+        if self._compiled_segments is None:
+            self._compiled_segments = compile_segments(self.pipeline_steps)
+        return self._compiled_segments
 
     def map(self, fn: MapFn) -> "RefinerPipeline":
         return self.add_step(
@@ -140,7 +148,7 @@ class RefinerPipeline:
         Returns internal execution blocks (row blocks or Arrow blocks).
         Use `iter_rows()` to force row iteration.
         """
-        yield from execute_segments(rows, compile_segments(self.pipeline_steps))
+        yield from execute_segments(rows, self._get_compiled_segments())
 
     def iter_rows(self) -> Iterable[Row]:
         """Local execution mode: lazily process all shards and yield output rows."""

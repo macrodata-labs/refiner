@@ -101,7 +101,11 @@ def _broadcast_scalar(
 ) -> pa.Array | pa.ChunkedArray:
     if not isinstance(values, pa.Scalar):
         return values
-    return pa.array([values.as_py()] * num_rows, type=values.type)
+    if num_rows <= 0:
+        return pa.array([], type=values.type)
+    # Broadcast without materializing a Python list of repeated values.
+    all_rows = pc.call_function("is_null", [pa.nulls(num_rows)])
+    return pc.call_function("if_else", [all_rows, values, values])
 
 
 __all__ = [

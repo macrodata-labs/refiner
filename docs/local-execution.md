@@ -38,5 +38,6 @@ Local iteration consumes the source stream continuously, so downstream batch ste
 
 ## Internal Notes
 
-- Local execution paths use `iter_rows() -> execute_rows(source.read())`.
+- Local execution compiles pipeline steps into row/vector segments once per pipeline instance and reuses that plan across repeated runs.
+- Row/UDF segments emit row blocks; when a vectorized segment follows, those rows are converted back to Arrow blocks at the segment boundary.
 - `take(n)` stops early without forcing full-stream materialization.
