@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pyarrow as pa
 import pytest
 
 from refiner.pipeline import from_items
@@ -63,3 +64,24 @@ def test_datetime_namespace_to_date_and_year() -> None:
 def test_cast_unknown_column_raises() -> None:
     with pytest.raises(KeyError):
         from_items([{"x": 1}]).cast(y="int64").materialize()
+
+
+def test_execute_blocks_keeps_arrow_for_vectorized_segment() -> None:
+    pipeline = from_items([{"x": 1}, {"x": 2}]).with_column("y", col("x") + 1)
+    blocks = list(pipeline.execute_blocks(pipeline.source.read()))
+    assert blocks
+    assert all(isinstance(block, (pa.RecordBatch, pa.Table)) for block in blocks)
+    assert sum(int(block.num_rows) for block in blocks) == 2
+
+
+def test_execute_blocks_switches_back_to_arrow_after_row_segment() -> None:
+    pipeline = (
+        from_items([{"x": 1}, {"x": 2}])
+        .with_column("y", col("x") + 1)
+        .map(lambda row: {"z": int(row["y"]) * 10})
+        .with_column("w", col("z") + 5)
+    )
+    blocks = list(pipeline.execute_blocks(pipeline.source.read()))
+    assert blocks
+    assert all(isinstance(block, (pa.RecordBatch, pa.Table)) for block in blocks)
+    assert sum(int(block.num_rows) for block in blocks) == 2

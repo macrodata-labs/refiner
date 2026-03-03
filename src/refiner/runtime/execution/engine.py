@@ -8,11 +8,11 @@ import pyarrow as pa
 from refiner.processors.step import RefinerStep, VectorizedOp, VectorizedSegmentStep
 from refiner.runtime.execution.row_steps import execute_row_steps
 from refiner.runtime.execution.vectorized import (
+    TabularBlock,
     apply_vectorized_op,
-    chunk_rows,
-    record_batch_to_rows,
+    iter_record_batch_rows,
+    iter_table_rows,
     rows_to_table,
-    table_to_rows,
 )
 from refiner.sources.row import Row
 
@@ -30,7 +30,8 @@ class VectorSegment:
 
 
 Segment = RowSegment | VectorSegment
-StreamItem = Row | list[Row] | pa.Table | pa.RecordBatch
+Block = list[Row] | TabularBlock
+StreamItem = Row | Block
 
 
 def compile_segments(steps: Sequence[RefinerStep]) -> tuple[Segment, ...]:
@@ -56,8 +57,11 @@ def execute_segments(
     segments: Sequence[Segment],
     *,
     vectorized_chunk_rows: int = _DEFAULT_VECTORIZED_CHUNK_ROWS,
-) -> Iterator[Row]:
-    current: Iterable[StreamItem] = stream
+) -> Iterator[Block]:
+    current: Iterable[Block] = _normalize_blocks(
+        stream,
+        block_rows=vectorized_chunk_rows,
+    )
     for segment in segments:
         if isinstance(segment, VectorSegment):
             current = _execute_vector_segment(
@@ -66,9 +70,12 @@ def execute_segments(
                 vectorized_chunk_rows=vectorized_chunk_rows,
             )
         else:
-            # Row segments consume rows only; iter_rows handles Arrow inputs.
-            current = execute_row_steps(iter_rows(current), segment.steps)
-    yield from iter_rows(current)
+            current = _execute_row_segment(
+                current,
+                segment.steps,
+                output_block_rows=vectorized_chunk_rows,
+            )
+    yield from current
 
 
 def iter_rows(stream: Iterable[StreamItem]) -> Iterator[Row]:
@@ -77,76 +84,146 @@ def iter_rows(stream: Iterable[StreamItem]) -> Iterator[Row]:
             yield item
             continue
         if isinstance(item, list):
-            for row in item:
-                yield row
+            yield from item
             continue
         if isinstance(item, pa.RecordBatch):
-            # Fast path: convert batches directly without intermediate Table.
-            yield from record_batch_to_rows(item)
+            yield from iter_record_batch_rows(item)
             continue
         if isinstance(item, pa.Table):
-            yield from table_to_rows(item)
+            yield from iter_table_rows(item)
             continue
         raise TypeError(f"Unsupported stream item: {type(item)!r}")
 
 
-def _execute_vector_segment(
-    stream: Iterable[StreamItem],
-    ops: Sequence[VectorizedOp],
-    *,
-    vectorized_chunk_rows: int,
-) -> Iterator[Row]:
+def block_num_rows(item: StreamItem) -> int:
+    if isinstance(item, Row):
+        return 1
+    if isinstance(item, list):
+        return len(item)
+    if isinstance(item, pa.RecordBatch):
+        return int(item.num_rows)
+    if isinstance(item, pa.Table):
+        return int(item.num_rows)
+    raise TypeError(f"Unsupported stream item: {type(item)!r}")
+
+
+def _normalize_blocks(
+    stream: Iterable[StreamItem], *, block_rows: int
+) -> Iterator[Block]:
     pending_rows: list[Row] = []
 
-    def _run_table(table: pa.Table) -> Iterator[Row]:
-        out = table
-        for op in ops:
-            out = apply_vectorized_op(out, op)
-        yield from table_to_rows(out)
-
-    def _flush_rows() -> Iterator[Row]:
+    def _flush_pending_rows() -> Iterator[list[Row]]:
+        nonlocal pending_rows
         if not pending_rows:
             return
-        # Chunk row inputs before Arrow conversion to bound transient memory.
-        batches = chunk_rows(pending_rows, vectorized_chunk_rows)
-        pending_rows.clear()
-        for batch in batches:
-            yield from _run_table(rows_to_table(batch))
+        batch = pending_rows
+        pending_rows = []
+        yield batch
 
     for item in stream:
         if isinstance(item, Row):
             pending_rows.append(item)
-            if len(pending_rows) >= vectorized_chunk_rows:
-                yield from _flush_rows()
+            if len(pending_rows) >= block_rows:
+                yield from _flush_pending_rows()
             continue
 
+        if pending_rows:
+            yield from _flush_pending_rows()
+
+        if isinstance(item, list):
+            if item:
+                yield item
+            continue
+
+        if isinstance(item, pa.RecordBatch):
+            if item.num_rows > 0:
+                yield item
+            continue
+
+        if isinstance(item, pa.Table):
+            if item.num_rows > 0:
+                yield item
+            continue
+
+        raise TypeError(f"Unsupported stream item: {type(item)!r}")
+
+    if pending_rows:
+        yield from _flush_pending_rows()
+
+
+def _execute_row_segment(
+    stream: Iterable[Block],
+    steps: Sequence[RefinerStep],
+    *,
+    output_block_rows: int,
+) -> Iterator[list[Row]]:
+    # Row/UDF execution consumes row views and emits row blocks for downstream
+    # vectorized segments (or final row iteration).
+    rows = iter_rows(stream)
+    yield from _chunk_output_rows(execute_row_steps(rows, steps), output_block_rows)
+
+
+def _execute_vector_segment(
+    stream: Iterable[Block],
+    ops: Sequence[VectorizedOp],
+    *,
+    vectorized_chunk_rows: int,
+) -> Iterator[TabularBlock]:
+    pending_rows: list[Row] = []
+
+    def _run_block(block: TabularBlock) -> TabularBlock:
+        out = block
+        for op in ops:
+            out = apply_vectorized_op(out, op)
+        return out
+
+    def _flush_rows() -> Iterator[TabularBlock]:
+        nonlocal pending_rows
+        if not pending_rows:
+            return
+        batch = pending_rows
+        pending_rows = []
+        out = _run_block(rows_to_table(batch))
+        if out.num_rows > 0:
+            yield out
+
+    for item in stream:
         if isinstance(item, list):
             pending_rows.extend(item)
             while len(pending_rows) >= vectorized_chunk_rows:
                 chunk = pending_rows[:vectorized_chunk_rows]
                 del pending_rows[:vectorized_chunk_rows]
-                yield from _run_table(rows_to_table(chunk))
+                out = _run_block(rows_to_table(chunk))
+                if out.num_rows > 0:
+                    yield out
             continue
 
-        if isinstance(item, pa.RecordBatch):
-            yield from _flush_rows()
-            yield from _run_table(pa.Table.from_batches([item]))
-            continue
-
-        if isinstance(item, pa.Table):
-            yield from _flush_rows()
-            yield from _run_table(item)
-            continue
-
-        raise TypeError(f"Unsupported stream item: {type(item)!r}")
+        yield from _flush_rows()
+        out = _run_block(item)
+        if out.num_rows > 0:
+            yield out
 
     yield from _flush_rows()
 
 
+def _chunk_output_rows(rows: Iterable[Row], block_rows: int) -> Iterator[list[Row]]:
+    pending: list[Row] = []
+    for row in rows:
+        pending.append(row)
+        if len(pending) >= block_rows:
+            out = pending
+            pending = []
+            yield out
+    if pending:
+        yield pending
+
+
 __all__ = [
+    "Block",
+    "RowSegment",
+    "VectorSegment",
+    "block_num_rows",
     "compile_segments",
     "execute_segments",
     "iter_rows",
-    "RowSegment",
-    "VectorSegment",
 ]

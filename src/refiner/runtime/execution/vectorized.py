@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -17,59 +17,55 @@ from refiner.processors.step import (
 )
 from refiner.sources.row import ArrowRowView, Row
 
+TabularBlock = pa.Table | pa.RecordBatch
+
 
 def rows_to_table(rows: Iterable[Row]) -> pa.Table:
-    return pa.Table.from_pylist([dict(row) for row in rows])
+    if isinstance(rows, list):
+        return pa.Table.from_pylist(rows)
+    return pa.Table.from_pylist(list(rows))
 
 
-def table_to_rows(table: pa.Table) -> list[Row]:
+def iter_table_rows(table: pa.Table) -> Iterator[Row]:
     names = tuple(str(name) for name in table.column_names)
     columns = tuple(table.column(name) for name in names)
     index_by_name = {name: i for i, name in enumerate(names)}
-    out: list[Row] = []
     for idx in range(table.num_rows):
-        out.append(
-            ArrowRowView(
-                names=names,
-                columns=columns,
-                index_by_name=index_by_name,
-                row_idx=idx,
-            )
+        yield ArrowRowView(
+            names=names,
+            columns=columns,
+            index_by_name=index_by_name,
+            row_idx=idx,
         )
-    return out
 
 
-def record_batch_to_rows(batch: pa.RecordBatch) -> list[Row]:
-    # Same view model as table_to_rows, but avoids temporary Table allocation.
+def iter_record_batch_rows(batch: pa.RecordBatch) -> Iterator[Row]:
+    # Same row-view model as tables, without temporary Table allocation.
     names = tuple(str(name) for name in batch.schema.names)
     columns = tuple(batch.column(i) for i in range(batch.num_columns))
     index_by_name = {name: i for i, name in enumerate(names)}
-    out: list[Row] = []
     for idx in range(batch.num_rows):
-        out.append(
-            ArrowRowView(
-                names=names,
-                columns=columns,
-                index_by_name=index_by_name,
-                row_idx=idx,
-            )
+        yield ArrowRowView(
+            names=names,
+            columns=columns,
+            index_by_name=index_by_name,
+            row_idx=idx,
         )
-    return out
 
 
-def apply_vectorized_op(table: pa.Table, op: VectorizedOp) -> pa.Table:
+def apply_vectorized_op(block: TabularBlock, op: VectorizedOp) -> TabularBlock:
     if isinstance(op, SelectStep):
-        return table.select(list(op.columns))
+        return block.select(list(op.columns))
 
     if isinstance(op, DropStep):
-        return table.drop(list(op.columns))
+        return block.drop_columns(list(op.columns))
 
     if isinstance(op, RenameStep):
-        names = [op.mapping.get(name, name) for name in table.column_names]
-        return table.rename_columns(names)
+        names = [op.mapping.get(name, name) for name in block.schema.names]
+        return block.rename_columns(names)
 
     if isinstance(op, CastStep):
-        out = table
+        out = block
         for col_name, dtype in op.dtypes.items():
             idx = out.schema.get_field_index(col_name)
             if idx < 0:
@@ -79,7 +75,7 @@ def apply_vectorized_op(table: pa.Table, op: VectorizedOp) -> pa.Table:
         return out
 
     if isinstance(op, WithColumnsStep):
-        out = table
+        out = block
         for col_name, expr in op.assignments.items():
             values = eval_expr_arrow(expr, out)
             # Keep scalar expressions column-shaped for append/set_column.
@@ -92,10 +88,10 @@ def apply_vectorized_op(table: pa.Table, op: VectorizedOp) -> pa.Table:
         return out
 
     if isinstance(op, FilterExprStep):
-        mask = eval_expr_arrow(op.predicate, table)
+        mask = eval_expr_arrow(op.predicate, block)
         if isinstance(mask, pa.Scalar):
-            return table if bool(mask.as_py()) else table.slice(0, 0)
-        return table.filter(mask)
+            return block if bool(mask.as_py()) else block.slice(0, 0)
+        return block.filter(mask)
 
     raise TypeError(f"Unsupported vectorized op: {type(op)!r}")
 
@@ -108,19 +104,10 @@ def _broadcast_scalar(
     return pa.array([values.as_py()] * num_rows, type=values.type)
 
 
-def chunk_rows(rows: list[Row], chunk_size: int) -> list[list[Row]]:
-    if chunk_size <= 0:
-        return [rows]
-    out: list[list[Row]] = []
-    for i in range(0, len(rows), chunk_size):
-        out.append(rows[i : i + chunk_size])
-    return out
-
-
 __all__ = [
+    "TabularBlock",
     "rows_to_table",
-    "table_to_rows",
-    "record_batch_to_rows",
+    "iter_table_rows",
+    "iter_record_batch_rows",
     "apply_vectorized_op",
-    "chunk_rows",
 ]

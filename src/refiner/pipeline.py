@@ -32,6 +32,7 @@ from refiner.sources import (
 )
 from refiner.sources.row import Row
 from refiner.runtime.execution.engine import (
+    Block,
     compile_segments,
     execute_segments,
     iter_rows,
@@ -133,12 +134,13 @@ class RefinerPipeline:
             raise ValueError("cast requires at least one dtype mapping")
         return self._add_vectorized_op(CastStep(dtypes=dtypes))
 
-    def execute_rows(self, rows: Iterable[Any]) -> Iterable[Row]:
-        """Execute rows (and batch-native source items) through compiled segments."""
-        if not self.pipeline_steps:
-            yield from iter_rows(rows)
-            return
+    def execute_blocks(self, rows: Iterable[Any]) -> Iterable[Block]:
+        """Execute source stream through compiled segments and yield blocks."""
         yield from execute_segments(rows, compile_segments(self.pipeline_steps))
+
+    def execute_rows(self, rows: Iterable[Any]) -> Iterable[Row]:
+        """Execute source stream and yield row views."""
+        yield from iter_rows(self.execute_blocks(rows))
 
     def iter_rows(self) -> Iterable[Row]:
         """Local execution mode: lazily process all shards and yield output rows."""

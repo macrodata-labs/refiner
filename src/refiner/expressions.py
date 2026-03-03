@@ -154,7 +154,7 @@ def _call(name: str, *args: Any, **kwargs: Any) -> Any:
 
 
 def eval_expr_arrow(
-    expr: Expr, table: pa.Table
+    expr: Expr, table: pa.Table | pa.RecordBatch
 ) -> pa.Array | pa.ChunkedArray | pa.Scalar:
     op = expr.op
     args = expr.args
