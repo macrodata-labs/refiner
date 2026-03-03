@@ -162,7 +162,9 @@ class LocalLauncher(BaseLauncher):
                 ).run()
             finally:
                 if old_affinity is not None:
-                    os.sched_setaffinity(0, old_affinity)
+                    set_affinity = getattr(os, "sched_setaffinity", None)
+                    if callable(set_affinity):
+                        set_affinity(0, old_affinity)
                 if old_mem_limits is not None:
                     restore_memory_soft_limit(old_mem_limits)
             status = "failed" if stats.failed > 0 else "completed"

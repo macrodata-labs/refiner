@@ -346,6 +346,7 @@ def task(
     return RefinerPipeline(source=source).add_step(
         FnRowStep(
             fn=lambda row: fn(row["task_rank"], num_tasks),
+            index=1,
             op_name="task",
         )
     )
