@@ -37,7 +37,7 @@ def test_compile_pipeline_plan_includes_reader_and_steps() -> None:
     stages = payload["stages"]
     assert len(stages) == 1
     steps = stages[0]["steps"]
-    assert steps[0]["type"] == "reader"
+    assert steps[0]["type"] == "source"
     assert [step["name"] for step in steps[1:]] == ["map", "batch_map", "flat_map"]
     assert steps[2]["args"]["batch_size"] == 2
     assert "code" not in steps[0]
