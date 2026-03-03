@@ -39,6 +39,23 @@ def table_to_rows(table: pa.Table) -> list[Row]:
     return out
 
 
+def record_batch_to_rows(batch: pa.RecordBatch) -> list[Row]:
+    names = tuple(str(name) for name in batch.schema.names)
+    columns = tuple(batch.column(i) for i in range(batch.num_columns))
+    index_by_name = {name: i for i, name in enumerate(names)}
+    out: list[Row] = []
+    for idx in range(batch.num_rows):
+        out.append(
+            ArrowRowView(
+                names=names,
+                columns=columns,
+                index_by_name=index_by_name,
+                row_idx=idx,
+            )
+        )
+    return out
+
+
 def apply_vectorized_op(table: pa.Table, op: VectorizedOp) -> pa.Table:
     if isinstance(op, SelectStep):
         return table.select(list(op.columns))
@@ -101,6 +118,7 @@ def chunk_rows(rows: list[Row], chunk_size: int) -> list[list[Row]]:
 __all__ = [
     "rows_to_table",
     "table_to_rows",
+    "record_batch_to_rows",
     "apply_vectorized_op",
     "chunk_rows",
 ]

@@ -10,6 +10,7 @@ from refiner.runtime.row_steps import execute_row_steps
 from refiner.runtime.vectorized import (
     apply_vectorized_op,
     chunk_rows,
+    record_batch_to_rows,
     rows_to_table,
     table_to_rows,
 )
@@ -77,7 +78,7 @@ def iter_rows(stream: Iterable[StreamItem]) -> Iterator[Row]:
                 yield row
             continue
         if isinstance(item, pa.RecordBatch):
-            yield from table_to_rows(pa.Table.from_batches([item]))
+            yield from record_batch_to_rows(item)
             continue
         if isinstance(item, pa.Table):
             yield from table_to_rows(item)
