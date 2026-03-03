@@ -5,7 +5,6 @@ from collections.abc import Iterator
 
 import refiner as mdr
 
-
 SAMPLE_PARQUET = (
     "hf://datasets/OpenResearcher/OpenResearcher-Dataset/"
     "seed_51/train-00000-of-00003.parquet"
@@ -13,12 +12,12 @@ SAMPLE_PARQUET = (
 SLEEP_SECONDS_PER_SHARD = 1
 
 
-class SlowPerShardReader(mdr.BaseReader):
+class SlowPerShardReader(mdr.BaseSource):
     """Reader wrapper that sleeps once before each shard is read.
     simulate longer processing
     """
 
-    def __init__(self, inner: mdr.BaseReader, *, sleep_seconds: int):
+    def __init__(self, inner: mdr.BaseSource, *, sleep_seconds: int):
         self.inner = inner
         self.sleep_seconds = sleep_seconds
 
@@ -89,7 +88,6 @@ def main() -> None:
     dt = time.time() - t0
 
     print("\nLaunch complete")
-    print(f"run_id      : {stats.run_id}")
     print(f"workers     : {stats.workers}")
     print(f"claimed     : {stats.claimed}")
     print(f"completed   : {stats.completed}")

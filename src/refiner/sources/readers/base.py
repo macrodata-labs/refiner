@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from fsspec import AbstractFileSystem
@@ -10,12 +11,13 @@ from refiner.io import DataFileSet
 from refiner.io.fileset import DataFileSetLike
 from refiner.ledger.shard import Shard
 from refiner.metrics import log_counter
-from refiner.readers.row import Row
+from refiner.sources.base import BaseSource
+from refiner.sources.row import Row
 from refiner.runtime.metrics_context import set_active_step_index
 
 
-class BaseReader(ABC):
-    """Base class for file-based readers.
+class BaseReader(BaseSource):
+    """Base class for file-backed readers.
 
     Responsibilities:
         - Resolve an input fsspec path into a deterministic list of file paths.
@@ -24,6 +26,9 @@ class BaseReader(ABC):
     Note:
         This object is expected to be used by a single worker at a time (no concurrent read_shard calls).
     """
+
+    name: str = ""
+
     def __init__(
         self,
         inputs: DataFileSetLike,
@@ -52,6 +57,10 @@ class BaseReader(ABC):
         self._open_path: str | None = None
         self._open_fh: Any | None = None
 
+        if not self.name:
+            reader_name = self.__class__.__name__.replace("Reader", "").lower()
+            self.name = f"read_{reader_name}"
+
     @property
     def fileset(self) -> DataFileSet:
         """Resolved input files and filesystem (cached)."""
@@ -74,6 +83,21 @@ class BaseReader(ABC):
     def files(self) -> list[str]:
         """Deterministic list of resolved input file paths (fs-native, protocol-stripped)."""
         return list(self.fileset.files)
+
+    def describe(self) -> dict[str, Any]:
+        # Keep planning metadata cheap: do not resolve/list inputs here.
+        raw = self._inputs
+        if isinstance(raw, (str, Path)):
+            return {"path": str(raw)}
+        if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+            if not raw:
+                return {}
+            first = raw[0]
+            if isinstance(first, (str, Path)):
+                if len(raw) == 1:
+                    return {"path": str(first)}
+                return {"path": f"{first} (+{len(raw) - 1} more)"}
+        return {}
 
     def _get_file_handle(
         self, path: str, *, mode: str = "rb", force_reopen: bool = False
@@ -128,10 +152,10 @@ class BaseReader(ABC):
                 yield {**row, "shard_id": shard.id}
 
     def read(self) -> Iterator[Any]:
-        """Convenience iterator: sequentially read all shards returned by `list_shards()`."""
         with set_active_step_index(0):
             for shard in self.list_shards():
                 for row in self.iter_shard_rows(shard):
                     yield row
 
-__all__ = ["Shard", "BaseReader"]
+
+__all__ = ["BaseReader"]

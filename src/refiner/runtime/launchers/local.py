@@ -6,15 +6,14 @@ from pathlib import Path
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import cloudpickle
-import uuid6
 
 from refiner.ledger import FsLedger
 from refiner.runtime.cpu import build_cpu_sets, set_cpu_affinity
-from refiner.runtime.observer import WorkerLifecycleObserver, WorkerObserverContext
-from refiner.runtime.worker import Worker, WorkerRunStats
+from refiner.runtime.memory import restore_memory_soft_limit, set_memory_soft_limit_mb
+from refiner.runtime.worker import Worker, WorkerLifecycleContext, WorkerRunStats
 
 from .base import BaseLauncher
 
@@ -24,7 +23,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class LaunchStats:
-    run_id: str
+    job_id: str
     workers: int
     claimed: int
     completed: int
@@ -33,6 +32,18 @@ class LaunchStats:
 
 
 class LocalLauncher(BaseLauncher):
+    """Local multi-process launcher for a pipeline.
+
+    Args:
+        pipeline: Pipeline to execute.
+        name: Human-readable run name.
+        num_workers: Number of local worker processes.
+        workdir: Optional working directory for ledger and run artifacts.
+        heartbeat_every_rows: Heartbeat cadence for worker progress reporting.
+        cpus_per_worker: Optional CPU cores pinned per worker process.
+        mem_mb_per_worker: Optional per-worker soft address-space limit in MB.
+    """
+
     def __init__(
         self,
         *,
@@ -42,34 +53,41 @@ class LocalLauncher(BaseLauncher):
         workdir: str | None = None,
         heartbeat_every_rows: int = 4096,
         cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
     ):
-        super().__init__(pipeline=pipeline, name=name)
-        if num_workers <= 0:
-            raise ValueError("num_workers must be > 0")
-        if heartbeat_every_rows <= 0:
-            raise ValueError("heartbeat_every_rows must be > 0")
-        self.num_workers = int(num_workers)
-        self.workdir = workdir
-        self.heartbeat_every_rows = int(heartbeat_every_rows)
-        self.cpus_per_worker = (
-            int(cpus_per_worker) if cpus_per_worker is not None else None
+        super().__init__(
+            pipeline=pipeline,
+            name=name,
+            num_workers=num_workers,
+            heartbeat_every_rows=heartbeat_every_rows,
+            cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
         )
-        self.ledger = FsLedger(run_id=self.run_id, worker_id=None, workdir=self.workdir)
+        self.workdir = workdir
+        self.ledger = FsLedger(job_id=self.job_id, worker_id=None, workdir=self.workdir)
 
     def _launcher_run_dir(self) -> Path:
         ledger = self._require_fs_ledger()
-        return Path(ledger.workdir) / "runs" / self.run_id / "launcher"
+        return Path(ledger.workdir) / "runs" / self.job_id / "launcher"
 
     def _pipeline_payload_path(self) -> Path:
         return self._launcher_run_dir() / "pipeline.cloudpickle"
 
-    def _write_pipeline_payload(self) -> Path:
+    def _serialize_pipeline_payload(self) -> bytes:
+        try:
+            return cloudpickle.dumps(self.pipeline)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to serialize pipeline for subprocess workers: {e}"
+            ) from e
+
+    def _write_pipeline_payload(self, payload: bytes) -> Path:
         run_dir = self._launcher_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
         payload_path = self._pipeline_payload_path()
         try:
             with payload_path.open("wb") as f:
-                cloudpickle.dump(self.pipeline, f)
+                f.write(payload)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to serialize pipeline for subprocess workers: {e}"
@@ -84,6 +102,19 @@ class LocalLauncher(BaseLauncher):
             raise ValueError("launcher.ledger is not configured")
         return cast(FsLedger, self.ledger)
 
+    def _reset_ledger(self) -> None:
+        self.ledger = FsLedger(job_id=self.job_id, worker_id=None, workdir=self.workdir)
+
+    def _log_tracking_url(self, observer_ctx: Any | None) -> None:
+        if observer_ctx is not None:
+            self._info(
+                f"Track job here: {self._job_tracking_url(client=observer_ctx.client, job_id=observer_ctx.job.job_id)}"
+            )
+        else:
+            self._info(
+                f"Local launch running without observability; no tracking URL (job_id={self.job_id})"
+            )
+
     def launch(self) -> LaunchStats:
         cpu_sets = (
             build_cpu_sets(
@@ -97,38 +128,45 @@ class LocalLauncher(BaseLauncher):
         if self.num_workers == 1:
             shards = list(self.pipeline.source.list_shards())
             observer_ctx = self._setup_observer(shards=shards)
+            self._log_tracking_url(observer_ctx)
+            self._reset_ledger()
             self.seed_ledger(shards=shards)
             cpu_ids = cpu_sets[0]
             old_affinity: set[int] | None = None
+            old_mem_limits: tuple[int, int] | None = None
             if cpu_ids is not None and hasattr(os, "sched_getaffinity"):
                 old_affinity = set(int(x) for x in os.sched_getaffinity(0))
                 set_cpu_affinity(cpu_ids)
-            ledger = FsLedger(run_id=self.run_id, worker_id=0, workdir=self.workdir)
+            if self.mem_mb_per_worker is not None:
+                old_mem_limits = set_memory_soft_limit_mb(self.mem_mb_per_worker)
+            ledger = FsLedger(job_id=self.job_id, worker_id=0, workdir=self.workdir)
             try:
-                worker_observer = None
+                lifecycle_client = None
+                lifecycle_context = None
                 if observer_ctx is not None:
-                    worker_observer = WorkerLifecycleObserver(
-                        client=observer_ctx.client,
-                        context=WorkerObserverContext.from_runtime(
-                            job_id=observer_ctx.job.job_id,
-                            stage_index=observer_ctx.job.stage_index,
-                            worker_id=str(uuid6.uuid7()),
-                        ),
+                    lifecycle_client = observer_ctx.client
+                    lifecycle_context = WorkerLifecycleContext(
+                        job_id=observer_ctx.job.job_id,
+                        stage_id=observer_ctx.job.stage_id,
+                        worker_id="local-rank-0",
                     )
                 stats = Worker(
                     rank=0,
                     ledger=ledger,
                     pipeline=self.pipeline,
                     heartbeat_every_rows=self.heartbeat_every_rows,
-                    observer=worker_observer,
+                    lifecycle_client=lifecycle_client,
+                    lifecycle_context=lifecycle_context,
                 ).run()
             finally:
                 if old_affinity is not None:
                     os.sched_setaffinity(0, old_affinity)
+                if old_mem_limits is not None:
+                    restore_memory_soft_limit(old_mem_limits)
             status = "failed" if stats.failed > 0 else "completed"
             self._finish_observer_terminal(observer_ctx, status=status)
             return LaunchStats(
-                run_id=self.run_id,
+                job_id=self.job_id,
                 workers=1,
                 claimed=stats.claimed,
                 completed=stats.completed,
@@ -136,9 +174,12 @@ class LocalLauncher(BaseLauncher):
                 output_rows=stats.output_rows,
             )
 
-        payload_path = self._write_pipeline_payload()
+        payload = self._serialize_pipeline_payload()
         shards = list(self.pipeline.source.list_shards())
         observer_ctx = self._setup_observer(shards=shards)
+        self._log_tracking_url(observer_ctx)
+        self._reset_ledger()
+        payload_path = self._write_pipeline_payload(payload)
         self.seed_ledger(shards=shards)
         procs: list[subprocess.Popen[str]] = []
         for rank in range(self.num_workers):
@@ -153,8 +194,8 @@ class LocalLauncher(BaseLauncher):
                 "refiner.runtime.worker_entrypoint",
                 "--rank",
                 str(rank),
-                "--run-id",
-                self.run_id,
+                "--job-id",
+                self.job_id,
                 "--workdir",
                 self._require_fs_ledger().workdir,
                 "--heartbeat-every-rows",
@@ -166,15 +207,15 @@ class LocalLauncher(BaseLauncher):
                 "--cpu-ids",
                 cpu_arg,
             ]
+            if self.mem_mb_per_worker is not None:
+                cmd.extend(["--mem-mb-per-worker", str(self.mem_mb_per_worker)])
             if observer_ctx is not None:
                 cmd.extend(
                     [
-                        "--job-id",
-                        observer_ctx.job.job_id,
-                        "--stage-index",
-                        str(observer_ctx.job.stage_index),
+                        "--stage-id",
+                        observer_ctx.job.stage_id,
                         "--worker-id",
-                        str(uuid6.uuid7()),
+                        f"local-rank-{rank}",
                     ]
                 )
             p = subprocess.Popen(cmd, text=True)
@@ -210,7 +251,7 @@ class LocalLauncher(BaseLauncher):
             raise RuntimeError("; ".join(errors))
 
         return LaunchStats(
-            run_id=self.run_id,
+            job_id=self.job_id,
             workers=self.num_workers,
             claimed=agg.claimed,
             completed=agg.completed,

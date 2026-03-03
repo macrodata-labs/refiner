@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import socket
 import sys
-from typing import Protocol
 
 from refiner.ledger import BaseLedger
 from refiner.ledger.shard import Shard
+from refiner.platform.client import MacrodataClient
 from refiner.pipeline import RefinerPipeline
 from refiner.runtime.metrics_context import (
     NOOP_USER_METRICS_EMITTER,
@@ -23,18 +24,11 @@ class WorkerRunStats:
     output_rows: int = 0
 
 
-class WorkerObserver(Protocol):
-    def on_worker_start(self, *, rank: int) -> None: ...
-
-    def on_shard_start(self, shard: Shard) -> None: ...
-
-    def on_shard_finish(
-        self, shard: Shard, *, status: str, error: str | None = None
-    ) -> None: ...
-
-    def on_worker_finish(self, *, status: str, error: str | None = None) -> None: ...
-
-    def metrics_emitter(self) -> UserMetricsEmitter: ...
+@dataclass(frozen=True, slots=True)
+class WorkerLifecycleContext:
+    job_id: str
+    stage_id: str
+    worker_id: str
 
 
 class Worker:
@@ -45,13 +39,15 @@ class Worker:
         pipeline: RefinerPipeline,
         *,
         heartbeat_every_rows: int = 4096,
-        observer: WorkerObserver | None = None,
+        lifecycle_client: MacrodataClient | None = None,
+        lifecycle_context: WorkerLifecycleContext | None = None,
     ):
         self.rank = rank
         self.ledger = ledger
         self.pipeline = pipeline
         self.heartbeat_every_rows = heartbeat_every_rows
-        self.observer = observer
+        self.lifecycle_client = lifecycle_client
+        self.lifecycle_context = lifecycle_context
 
     def run(self) -> WorkerRunStats:
         if self.heartbeat_every_rows <= 0:
@@ -65,16 +61,25 @@ class Worker:
         output_rows_since_hb = 0
         inflight: list[Shard] = []
         failed_error: str | None = None
-        observer = self.observer
-
+        lifecycle_client = self.lifecycle_client
+        lifecycle_context = self.lifecycle_context
         user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
-        if observer is not None:
+
+        if lifecycle_client is not None and lifecycle_context is not None:
             try:
-                observer.on_worker_start(rank=self.rank)
-                user_metrics_emitter = observer.metrics_emitter()
+                try:
+                    host = socket.gethostname()
+                except Exception:
+                    host = None
+                lifecycle_client.report_worker_started(
+                    job_id=lifecycle_context.job_id,
+                    stage_id=lifecycle_context.stage_id,
+                    worker_id=lifecycle_context.worker_id,
+                    host=host,
+                )
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 print(
-                    f"[refiner] observer hook failed: {type(e).__name__}: {e}",
+                    f"[refiner] lifecycle reporting failed: {type(e).__name__}: {e}",
                     file=sys.stderr,
                 )
 
@@ -86,16 +91,26 @@ class Worker:
                     break
                 claimed += 1
                 inflight.append(shard)
-                if observer is not None:
+                if lifecycle_client is not None and lifecycle_context is not None:
                     try:
-                        observer.on_shard_start(shard)
+                        lifecycle_client.report_shard_started(
+                            job_id=lifecycle_context.job_id,
+                            stage_id=lifecycle_context.stage_id,
+                            worker_id=lifecycle_context.worker_id,
+                            shard_id=shard.id,
+                        )
                     except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                         print(
-                            f"[refiner] observer hook failed: {type(e).__name__}: {e}",
+                            "[refiner] lifecycle reporting failed: "
+                            f"{type(e).__name__}: {e}",
                             file=sys.stderr,
                         )
                 with set_active_step_index(0):
-                    yield from self.pipeline.source.iter_shard_rows(shard)
+                    iter_rows = getattr(self.pipeline.source, "iter_shard_rows", None)
+                    if callable(iter_rows):
+                        yield from iter_rows(shard)
+                    else:
+                        yield from self.pipeline.source.read_shard(shard)
                 previous = shard
 
         with set_active_user_metrics_emitter(user_metrics_emitter):
@@ -110,10 +125,12 @@ class Worker:
 
                     for shard in list(inflight):
                         self.ledger.heartbeat(shard)
-                        if observer is not None:
-                            # (Hynek) if the metrics flush fails, the we can't consider the shard as completed as otherwise the stats wouldn't be accurate.
-                            observer.on_shard_finish(
-                                shard,
+                        if lifecycle_client is not None and lifecycle_context is not None:
+                            lifecycle_client.report_shard_finished(
+                                job_id=lifecycle_context.job_id,
+                                stage_id=lifecycle_context.stage_id,
+                                worker_id=lifecycle_context.worker_id,
+                                shard_id=shard.id,
                                 status="completed",
                                 error=None,
                             )
@@ -126,16 +143,19 @@ class Worker:
                     failed_error = str(e)
                     for shard in inflight:
                         self.ledger.fail(shard, str(e))
-                        if observer is not None:
+                        if lifecycle_client is not None and lifecycle_context is not None:
                             try:
-                                observer.on_shard_finish(
-                                    shard,
+                                lifecycle_client.report_shard_finished(
+                                    job_id=lifecycle_context.job_id,
+                                    stage_id=lifecycle_context.stage_id,
+                                    worker_id=lifecycle_context.worker_id,
+                                    shard_id=shard.id,
                                     status="failed",
                                     error=str(e),
                                 )
                             except Exception as e2:  # noqa: BLE001 - fail-open observer hooks
                                 print(
-                                    "[refiner] observer hook failed: "
+                                    "[refiner] lifecycle reporting failed: "
                                     f"{type(e2).__name__}: {e2}",
                                     file=sys.stderr,
                                 )
@@ -144,15 +164,18 @@ class Worker:
                     previous = None
                     break
 
-        if observer is not None:
+        if lifecycle_client is not None and lifecycle_context is not None:
             try:
-                observer.on_worker_finish(
+                lifecycle_client.report_worker_finished(
+                    job_id=lifecycle_context.job_id,
+                    stage_id=lifecycle_context.stage_id,
+                    worker_id=lifecycle_context.worker_id,
                     status="failed" if failed_error is not None else "completed",
                     error=failed_error,
                 )
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 print(
-                    f"[refiner] observer hook failed: {type(e).__name__}: {e}",
+                    f"[refiner] lifecycle reporting failed: {type(e).__name__}: {e}",
                     file=sys.stderr,
                 )
 
@@ -164,4 +187,4 @@ class Worker:
         )
 
 
-__all__ = ["Worker", "WorkerRunStats", "WorkerObserver"]
+__all__ = ["Worker", "WorkerRunStats", "WorkerLifecycleContext"]

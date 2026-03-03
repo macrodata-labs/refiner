@@ -18,41 +18,58 @@ from refiner.processors.step import (
     normalize_batch_item,
     normalize_row_result,
 )
-from refiner.readers import CsvReader, JsonlReader, ParquetReader
-from refiner.readers.base import BaseReader
-from refiner.readers.row import Row
+from refiner.sources import (
+    BaseSource,
+    CsvReader,
+    ItemsSource,
+    JsonlReader,
+    ParquetReader,
+    TaskSource,
+)
+from refiner.sources.row import Row
 from refiner.runtime.metrics_context import set_active_step_index
 from refiner.runtime.row_queue import RowQueue
-from refiner.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 if TYPE_CHECKING:
+    from refiner.runtime.launchers.cloud import CloudLaunchResult
     from refiner.runtime.launchers.local import LaunchStats
 
 
 class RefinerPipeline:
-    source: BaseReader
+    source: BaseSource
     pipeline_steps: List[RefinerStep]
 
     def __init__(
-        self, source: BaseReader, pipeline_steps: List[RefinerStep] | None = None
+        self, source: BaseSource, pipeline_steps: List[RefinerStep] | None = None
     ):
         self.source = source
         self.pipeline_steps = list(pipeline_steps) if pipeline_steps else []
+
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
         return self.__class__(self.source, self.pipeline_steps + [step])
 
     def map(self, fn: MapFn) -> "RefinerPipeline":
-        return self.add_step(FnRowStep(fn=fn, op_name="map", index=len(self.pipeline_steps) + 1))
+        return self.add_step(
+            FnRowStep(fn=fn, op_name="map", index=len(self.pipeline_steps) + 1)
+        )
 
     def batch_map(self, fn: BatchFn, *, batch_size: int) -> "RefinerPipeline":
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")
         return self.add_step(
-            FnBatchStep(fn=fn, batch_size=batch_size, op_name="batch_map", index=len(self.pipeline_steps) + 1)
+            FnBatchStep(
+                fn=fn,
+                batch_size=batch_size,
+                op_name="batch_map",
+                index=len(self.pipeline_steps) + 1,
+            )
         )
 
     def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
-        return self.add_step(FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1))
+        return self.add_step(
+            FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
+        )
 
     def filter(self, predicate: Callable[[Row], bool]) -> "RefinerPipeline":
         return self.add_step(
@@ -171,7 +188,18 @@ class RefinerPipeline:
         workdir: str | None = None,
         heartbeat_every_rows: int = 4096,
         cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
     ) -> "LaunchStats":
+        """Launch the pipeline locally.
+
+        Args:
+            name: Human-readable run name.
+            num_workers: Number of local worker processes.
+            workdir: Optional working directory for ledger and run artifacts.
+            heartbeat_every_rows: Heartbeat cadence for worker progress reporting.
+            cpus_per_worker: Optional CPU cores pinned per worker.
+            mem_mb_per_worker: Optional per-worker soft memory limit in MB.
+        """
         from refiner.runtime.launchers.local import LocalLauncher
 
         launcher = LocalLauncher(
@@ -181,6 +209,37 @@ class RefinerPipeline:
             workdir=workdir,
             heartbeat_every_rows=heartbeat_every_rows,
             cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
+        )
+        return launcher.launch()
+
+    def launch_cloud(
+        self,
+        *,
+        name: str,
+        num_workers: int = 1,
+        heartbeat_every_rows: int = 4096,
+        cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
+    ) -> "CloudLaunchResult":
+        """Launch the pipeline on Macrodata Cloud.
+
+        Args:
+            name: Human-readable run name.
+            num_workers: Requested logical worker count.
+            heartbeat_every_rows: Worker heartbeat cadence.
+            cpus_per_worker: Optional requested CPU cores per worker.
+            mem_mb_per_worker: Optional requested memory per worker in MB.
+        """
+        from refiner.runtime.launchers.cloud import CloudLauncher
+
+        launcher = CloudLauncher(
+            pipeline=self,
+            name=name,
+            num_workers=num_workers,
+            heartbeat_every_rows=heartbeat_every_rows,
+            cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
         )
         return launcher.launch()
 
@@ -254,5 +313,39 @@ def read_parquet(
             arrow_batch_size=arrow_batch_size,
             columns_to_read=columns_to_read,
             sharding_mode=sharding_mode,
+        )
+    )
+
+
+def from_items(
+    items: Sequence[Any],
+    *,
+    shard_size_rows: int = 1_000,
+) -> RefinerPipeline:
+    """Create a pipeline from in-memory rows.
+
+    Intended for small/medium inline datasets; large datasets should use file-backed
+    readers (`read_parquet`/`read_jsonl`/`read_csv`). Primitive items are wrapped
+    as ``{"item": value}``.
+    """
+    return RefinerPipeline(
+        source=ItemsSource(
+            items=items,
+            shard_size_rows=shard_size_rows,
+        )
+    )
+
+
+def task(
+    fn: Callable[[int, int], Any],
+    *,
+    num_tasks: int,
+) -> RefinerPipeline:
+    """Create a task-style pipeline with one callback invocation per rank."""
+    source = TaskSource(num_tasks=num_tasks)
+    return RefinerPipeline(source=source).add_step(
+        FnRowStep(
+            fn=lambda row: fn(row["task_rank"], num_tasks),
+            op_name="task",
         )
     )
