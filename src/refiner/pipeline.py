@@ -18,11 +18,17 @@ from refiner.processors.step import (
     normalize_batch_item,
     normalize_row_result,
 )
-from refiner.readers import CsvReader, JsonlReader, ParquetReader
-from refiner.readers.base import BaseReader
-from refiner.readers.row import Row
+from refiner.sources import (
+    BaseSource,
+    CsvReader,
+    ItemsSource,
+    JsonlReader,
+    ParquetReader,
+    TaskSource,
+)
+from refiner.sources.row import Row
 from refiner.runtime.row_queue import RowQueue
-from refiner.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 if TYPE_CHECKING:
     from refiner.runtime.launchers.cloud import CloudLaunchResult
@@ -30,11 +36,11 @@ if TYPE_CHECKING:
 
 
 class RefinerPipeline:
-    source: BaseReader
+    source: BaseSource
     pipeline_steps: List[RefinerStep]
 
     def __init__(
-        self, source: BaseReader, pipeline_steps: List[RefinerStep] | None = None
+        self, source: BaseSource, pipeline_steps: List[RefinerStep] | None = None
     ):
         self.source = source
         self.pipeline_steps = list(pipeline_steps) if pipeline_steps else []
@@ -295,5 +301,39 @@ def read_parquet(
             arrow_batch_size=arrow_batch_size,
             columns_to_read=columns_to_read,
             sharding_mode=sharding_mode,
+        )
+    )
+
+
+def from_items(
+    items: Sequence[Any],
+    *,
+    shard_size_rows: int = 1_000,
+) -> RefinerPipeline:
+    """Create a pipeline from in-memory rows.
+
+    Intended for small/medium inline datasets; large datasets should use file-backed
+    readers (`read_parquet`/`read_jsonl`/`read_csv`). Primitive items are wrapped
+    as ``{"item": value}``.
+    """
+    return RefinerPipeline(
+        source=ItemsSource(
+            items=items,
+            shard_size_rows=shard_size_rows,
+        )
+    )
+
+
+def task(
+    fn: Callable[[int, int], Any],
+    *,
+    num_tasks: int,
+) -> RefinerPipeline:
+    """Create a task-style pipeline with one callback invocation per rank."""
+    source = TaskSource(num_tasks=num_tasks)
+    return RefinerPipeline(source=source).add_step(
+        FnRowStep(
+            fn=lambda row: fn(row["task_rank"], num_tasks),
+            op_name="task",
         )
     )

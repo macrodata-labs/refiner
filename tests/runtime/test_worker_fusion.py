@@ -5,8 +5,8 @@ from collections.abc import Iterable, Iterator
 from refiner.ledger.backend.base import BaseLedger, LedgerConfig
 from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
-from refiner.readers.base import BaseReader
-from refiner.readers.row import DictRow, Row
+from refiner.sources.readers.base import BaseReader
+from refiner.sources.row import DictRow, Row
 from refiner.worker import Worker
 
 

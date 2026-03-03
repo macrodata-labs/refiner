@@ -4,8 +4,8 @@ from collections.abc import Iterator
 
 from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
-from refiner.readers.base import BaseReader
-from refiner.readers.row import DictRow, Row
+from refiner.sources.readers.base import BaseReader
+from refiner.sources.row import DictRow, Row
 
 
 class _LocalFakeReader(BaseReader):

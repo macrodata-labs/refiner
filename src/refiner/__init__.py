@@ -1,6 +1,13 @@
 from .io import DataFile, DataFileSet, DataFolder
 from .ledger.shard import Shard
-from .pipeline import RefinerPipeline, read_csv, read_jsonl, read_parquet
+from .pipeline import (
+    RefinerPipeline,
+    from_items,
+    read_csv,
+    read_jsonl,
+    read_parquet,
+    task,
+)
 from .processors import (
     BatchStep,
     FlatMapFn,
@@ -11,7 +18,7 @@ from .processors import (
     RefinerStep,
     RowStep,
 )
-from .readers import BaseReader, CsvReader, JsonlReader, ParquetReader, Row
+from .sources import BaseReader, BaseSource, CsvReader, JsonlReader, ParquetReader, Row
 from .runtime.launchers import BaseLauncher, LaunchStats, LocalLauncher
 from .worker import Worker, WorkerRunStats
 
@@ -32,6 +39,7 @@ __all__ = [
     "DataFolder",
     "DataFileSet",
     "BaseReader",
+    "BaseSource",
     "Shard",
     "Row",
     "CsvReader",
@@ -42,4 +50,6 @@ __all__ = [
     "read_csv",
     "read_jsonl",
     "read_parquet",
+    "from_items",
+    "task",
 ]
