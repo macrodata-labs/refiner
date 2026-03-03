@@ -50,7 +50,7 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         )
 
         metric_exporter = OTLPMetricExporter(
-            endpoint=f"{base_url}/api/metrics",
+            endpoint=f"{base_url}/api/observability/metrics",
             headers=headers,
         )
         user_metric_reader = PeriodicExportingMetricReader(
@@ -64,7 +64,7 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
 
         resource_metric_reader = PeriodicExportingMetricReader(
             exporter=OTLPMetricExporter(
-                endpoint=f"{base_url}/api/metrics",
+                endpoint=f"{base_url}/api/observability/metrics",
                 headers=headers,
             ),
             export_interval_millis=_RESOURCE_METRIC_EXPORT_INTERVAL_MS,
@@ -112,7 +112,7 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         self._user_gauge = user_meter.create_gauge("refiner.user.gauge")
 
         log_exporter = OTLPLogExporter(
-            endpoint=f"{base_url}/api/logs",
+            endpoint=f"{base_url}/api/observability/logs",
             headers=headers,
         )
         self._logger_provider = LoggerProvider(resource=resource)
