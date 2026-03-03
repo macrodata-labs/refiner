@@ -47,15 +47,8 @@ def _step_payload(
 
 def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
     """Compile a transport-neutral plan description for a pipeline."""
-    reader_name = pipeline.source.__class__.__name__.replace("Reader", "").lower()
-    source_step_name = f"read_{reader_name}"
-    files: list[Any] = list(getattr(pipeline.source, "files", []))
-    path_arg = files[0] if files else ""
-    if len(files) > 1 and path_arg:
-        path_arg = f"{path_arg} (+{len(files) - 1} more)"
-    source_args: dict[str, Any] = {}
-    if path_arg:
-        source_args["path"] = path_arg
+    source_step_name = str(getattr(pipeline.source, "name", "source"))
+    source_args: dict[str, Any] = dict(pipeline.source.describe())
 
     steps: list[dict[str, Any]] = []
     used_names: dict[str, int] = {}
@@ -68,7 +61,7 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
     steps.append(
         _step_payload(
             name=_unique_name(source_step_name),
-            step_type="reader",
+            step_type="source",
             args=source_args,
             code=None,
         )

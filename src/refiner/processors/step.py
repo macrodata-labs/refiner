@@ -5,8 +5,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, TypeAlias
 
-from refiner.readers.row import DictRow
-from refiner.readers import Row
+from refiner.sources.row import DictRow, Row
 
 
 class RefinerStep(ABC):

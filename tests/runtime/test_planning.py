@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from refiner.ledger.shard import Shard
-from refiner.pipeline import RefinerPipeline
-from refiner.readers.base import BaseReader
-from refiner.readers.row import DictRow, Row
+from refiner.pipeline import RefinerPipeline, from_items
+from refiner.sources.readers.base import BaseReader
+from refiner.sources.row import DictRow, Row
 from refiner.runtime.planning import compile_pipeline_plan
 
 
@@ -38,7 +38,6 @@ def test_compile_pipeline_plan_includes_reader_and_steps() -> None:
     assert len(stages) == 1
     steps = stages[0]["steps"]
     assert steps[0]["type"] == "reader"
-    assert steps[0]["args"]["path"] == "data/a.parquet"
     assert [step["name"] for step in steps[1:]] == ["map", "batch_map", "flat_map"]
     assert steps[2]["args"]["batch_size"] == 2
     assert "code" not in steps[0]
@@ -65,3 +64,12 @@ def test_compile_pipeline_plan_dedupes_same_top_level_op_names() -> None:
     payload = compile_pipeline_plan(pipeline)
     steps = payload["stages"][0]["steps"]
     assert [step["name"] for step in steps[1:]] == ["filter", "filter_2"]
+
+
+def test_compile_pipeline_plan_includes_from_items_metadata() -> None:
+    pipeline = from_items([{"x": 1}, {"x": 2}, {"x": 3}], shard_size_rows=2)
+    payload = compile_pipeline_plan(pipeline)
+    source_step = payload["stages"][0]["steps"][0]
+    assert source_step["name"] == "from_items"
+    assert source_step["args"]["rows"] == 3
+    assert source_step["args"]["shard_size_rows"] == 2

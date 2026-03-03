@@ -6,8 +6,8 @@ import pytest
 
 from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline, read_jsonl
-from refiner.readers.base import BaseReader
-from refiner.readers.row import DictRow, Row
+from refiner.sources.readers.base import BaseReader
+from refiner.sources.row import DictRow, Row
 from refiner.runtime.cpu import build_cpu_sets
 
 

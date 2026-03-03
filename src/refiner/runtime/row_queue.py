@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from refiner.readers.row import Row
+from refiner.sources.row import Row
 
 
 class RowQueue:

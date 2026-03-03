@@ -10,7 +10,7 @@ from fsspec import AbstractFileSystem
 from refiner.io.fileset import DataFileSetLike
 
 from .base import BaseReader, Shard
-from .row import DictRow, Row
+from ..row import DictRow, Row
 from .utils import (
     DEFAULT_TARGET_SHARD_BYTES,
     BoundedBinaryReader,

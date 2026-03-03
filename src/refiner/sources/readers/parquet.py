@@ -9,7 +9,7 @@ from fsspec import AbstractFileSystem
 from refiner.io.fileset import DataFileSetLike
 
 from .base import BaseReader, Shard
-from .row import ArrowRowView, Row
+from ..row import ArrowRowView, Row
 from .utils import DEFAULT_TARGET_SHARD_BYTES, clamp_target_bytes
 
 
