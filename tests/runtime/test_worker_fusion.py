@@ -228,5 +228,21 @@ def test_worker_fails_shard_when_completed_flush_fails() -> None:
     assert observer.worker_finish_status == "failed"
 
 
+def test_worker_accepts_plain_dict_rows_from_reader() -> None:
+    shard = Shard(path="s1", start=0, end=1)
+    ledger = _FakeLedger([shard])
+    pipeline = (
+        RefinerPipeline(source=_FakeReader({shard.id: [{"x": 1}]}))  # type: ignore[list-item]
+        .map(lambda r: {"x2": int(r["x"]) + 1, "sid": str(r["shard_id"])})
+    )
+
+    worker = Worker(rank=0, ledger=ledger, pipeline=pipeline)
+    stats = worker.run()
+
+    assert stats.output_rows == 1
+    assert stats.completed == 1
+    assert ledger.completed_ids == [shard.id]
+
+
 # Keep pytest from treating imported typing names as tests on some plugins.
 __all__: list[str] = []

@@ -13,7 +13,7 @@ from .metric_helpers import (
 from refiner.runtime.metrics_context import UserMetricsEmitter
 
 _REFINER_OTEL_HANDLER_MARKER = "_refiner_otel_handler"
-_USER_METRIC_EXPORT_INTERVAL_MS = 60_000
+_USER_METRIC_EXPORT_INTERVAL_MS = 10_000
 _RESOURCE_METRIC_EXPORT_INTERVAL_MS = 10_000
 
 

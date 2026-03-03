@@ -9,7 +9,7 @@ from fsspec import AbstractFileSystem
 from refiner.io import DataFileSet
 from refiner.io.fileset import DataFileSetLike
 from refiner.ledger.shard import Shard
-from refiner.metrics import metric_counter
+from refiner.metrics import log_counter
 from refiner.readers.row import Row
 from refiner.runtime.metrics_context import set_active_step_index
 
@@ -121,8 +121,11 @@ class BaseReader(ABC):
 
     def iter_shard_rows(self, shard: Shard) -> Iterator[Row]:
         for row in self.read_shard(shard):
-            metric_counter("rows_read", 1, shard_id=shard.id)
-            yield row.update(shard_id=shard.id)
+            log_counter("rows_read", 1, shard_id=shard.id)
+            if isinstance(row, Row):
+                yield row.update(shard_id=shard.id)
+            else:
+                yield {**row, "shard_id": shard.id}
 
     def read(self) -> Iterator[Any]:
         """Convenience iterator: sequentially read all shards returned by `list_shards()`."""

@@ -7,7 +7,6 @@ from typing import Protocol
 from refiner.ledger import BaseLedger
 from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
-from refiner.runtime.errors import UserMetricsFlushError
 from refiner.runtime.metrics_context import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
@@ -112,20 +111,12 @@ class Worker:
                     for shard in list(inflight):
                         self.ledger.heartbeat(shard)
                         if observer is not None:
-                            try:
-                                observer.on_shard_finish(
-                                    shard,
-                                    status="completed",
-                                    error=None,
-                                )
-                            except Exception as e:  # noqa: BLE001 - fail-open observer hooks
-                                if isinstance(e, UserMetricsFlushError):
-                                    raise
-                                print(
-                                    "[refiner] observer hook failed: "
-                                    f"{type(e).__name__}: {e}",
-                                    file=sys.stderr,
-                                )
+                            # (Hynek) if the metrics flush fails, the we can't consider the shard as completed as otherwise the stats wouldn't be accurate.
+                            observer.on_shard_finish(
+                                shard,
+                                status="completed",
+                                error=None,
+                            )
                         self.ledger.complete(shard)
                         inflight.remove(shard)
                         completed += 1

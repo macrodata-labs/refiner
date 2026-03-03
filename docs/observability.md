@@ -33,9 +33,9 @@ import refiner as mdr
 
 pipeline = mdr.read_parquet("data/*.parquet").map(
     lambda r: (
-        mdr.metric_counter("rows_seen", 1, str(r["shard_id"]), unit="rows"),
-        mdr.metric_gauge("batch_size", 128, shard_id=str(r["shard_id"]), unit="rows"),
-        mdr.metric_histogram("latency_ms", 42.5, shard_id=str(r["shard_id"]), unit="ms"),
+        mdr.log_counter("rows_seen", 1, str(r["shard_id"])),
+        mdr.log_gauge("batch_size", 128, shard_id=str(r["shard_id"])),
+        mdr.log_histogram("latency_ms", 42.5, shard_id=str(r["shard_id"]), unit="ms"),
         r,
     )[-1]
 )
@@ -43,13 +43,13 @@ pipeline = mdr.read_parquet("data/*.parquet").map(
 
 Available helpers:
 
-- `mdr.metric_counter(label, value, shard_id, *, unit=None)` -> OTEL counter (`refiner.user.counter`)
-- `mdr.metric_gauge(label, value, shard_id, *, unit=None)` -> OTEL gauge (`refiner.user.gauge`)
-- `mdr.metric_histogram(label, value, shard_id, *, unit=None)` -> OTEL histogram (`refiner.user.histogram`)
+- `mdr.log_counter(label, value, shard_id)` -> OTEL counter (`refiner.user.counter`)
+- `mdr.log_gauge(label, value, shard_id)` -> OTEL gauge (`refiner.user.gauge`)
+- `mdr.log_histogram(label, value, shard_id, *, unit="Document")` -> OTEL histogram (`refiner.user.histogram`)
 
-When provided, `unit` is emitted as OTEL point attribute `unit`.
+For `log_histogram`, `unit` is emitted as OTEL point attribute `unit`.
 
-`metric_counter` requires `shard_id` for idempotency keying and shard-end flush behavior.
+`log_counter` requires `shard_id` for idempotency keying and shard-end flush behavior.
 Backend dedupe key for counters should be `(job.id, stage.index, label, shard_id)`.
 `shard_id` is attached to rows automatically by the reader runtime.
 `step.index` is attached from runtime execution context:

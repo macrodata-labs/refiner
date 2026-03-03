@@ -38,10 +38,9 @@ class SlowPerShardReader(mdr.BaseReader):
 def add_text_len(row):
     text = row.get("text")
     shard_id = str(row["shard_id"])
-    mdr.metric_histogram("text_len_histogram", 3, shard_id=shard_id)
-    mdr.metric_counter("text_len_counter", 3, shard_id)
-    mdr.metric_gauge("text_len_gauge", 3, shard_id=shard_id)
-    mdr.metric_gauge("text_mem_usage", 9, shard_id=shard_id)
+    mdr.log_counter("text_len_counter", len(str(text)), shard_id=shard_id)
+    mdr.log_histogram("text_len_histogram", len(str(text)), shard_id=shard_id)
+
     if text is None:
         return {"text_len": 0}
     return {"text_len": len(str(text))}
@@ -61,7 +60,7 @@ def main() -> None:
     base_pipeline = mdr.read_parquet(
         SAMPLE_PARQUET,
         # Keep shards small so the demo exercises multi-shard scheduling/observer updates.
-        target_shard_bytes=1 * 1024 * 1024,
+        target_shard_bytes=1,
     )
     slow_reader = SlowPerShardReader(
         base_pipeline.source, sleep_seconds=SLEEP_SECONDS_PER_SHARD
@@ -73,15 +72,17 @@ def main() -> None:
         .flat_map(duplicate_short_rows)
     )
 
+    NUM_WORKERS = 3
+
     print("Launching local Refiner job...")
     print(f"Input: {SAMPLE_PARQUET}")
-    print("Workers: 3")
+    print(f"Workers: {NUM_WORKERS}")
     print(f"Sleep per shard: {SLEEP_SECONDS_PER_SHARD}s")
 
     t0 = time.time()
     stats = pipeline.launch_local(
         name="notebook-local-demo",
-        num_workers=3,
+        num_workers=NUM_WORKERS,
         # Optional: pin each worker to a CPU subset if desired.
         # cpus_per_worker=2,
     )
