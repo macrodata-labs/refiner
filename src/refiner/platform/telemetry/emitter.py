@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from .metric_helpers import (
@@ -13,7 +12,6 @@ from .metric_helpers import (
 )
 from refiner.runtime.metrics_context import UserMetricsEmitter
 
-_REFINER_OTEL_HANDLER_MARKER = "_refiner_otel_handler"
 _USER_METRIC_EXPORT_INTERVAL_MS = 10_000
 _RESOURCE_METRIC_EXPORT_INTERVAL_MS = 10_000
 
@@ -33,8 +31,8 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
             OTLPMetricExporter,
         )
+        from opentelemetry._logs.severity import SeverityNumber
         from opentelemetry.sdk._logs import LoggerProvider
-        from opentelemetry.sdk._logs import LoggingHandler
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.metrics import MeterProvider
         from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
@@ -120,20 +118,16 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         self._logger_provider.add_log_record_processor(
             BatchLogRecordProcessor(log_exporter)
         )
-        self._otel_logger = logging.getLogger("refiner.otel.loguru")
-        self._otel_logger.setLevel(logging.INFO)
-        self._otel_logger.propagate = False
-        # Ensure repeated launches do not stack multiple OTEL logging handlers.
-        for handler in tuple(self._otel_logger.handlers):
-            if getattr(handler, _REFINER_OTEL_HANDLER_MARKER, False):
-                self._otel_logger.removeHandler(handler)
-                try:
-                    handler.close()
-                except Exception:
-                    pass
-        otel_handler = LoggingHandler(logger_provider=self._logger_provider)
-        setattr(otel_handler, _REFINER_OTEL_HANDLER_MARKER, True)
-        self._otel_logger.addHandler(otel_handler)
+        self._otel_logger = self._logger_provider.get_logger("refiner.loguru")
+        self._severity_by_level = {
+            "TRACE": SeverityNumber.TRACE,
+            "DEBUG": SeverityNumber.DEBUG,
+            "INFO": SeverityNumber.INFO,
+            "SUCCESS": SeverityNumber.INFO2,
+            "WARNING": SeverityNumber.WARN,
+            "ERROR": SeverityNumber.ERROR,
+            "CRITICAL": SeverityNumber.FATAL,
+        }
 
         self._loguru_logger: Any | None = None
         self._loguru_sink_id: int | None = None
@@ -147,9 +141,27 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
 
         def _forward_loguru(message: Any) -> None:
             record = message.record
-            level_no = int(record["level"].no)
+            level_name = str(record["level"].name).upper()
+            severity_number = self._severity_by_level.get(level_name)
             text = str(record.get("message") or "")
-            self._otel_logger.log(level_no, text)
+            timestamp_ns = int(record["time"].timestamp() * 1_000_000_000)
+            attrs: dict[str, Any] = {
+                "logger.name": str(record.get("name") or ""),
+                "code.filepath": str(record.get("file").path),
+                "code.lineno": int(record.get("line") or 0),
+                "code.function": str(record.get("function") or ""),
+            }
+            for key, value in dict(record.get("extra") or {}).items():
+                attrs[f"loguru.extra.{key}"] = str(value)
+
+            self._otel_logger.emit(
+                timestamp=timestamp_ns,
+                observed_timestamp=timestamp_ns,
+                severity_number=severity_number,
+                severity_text=level_name,
+                body=text,
+                attributes=attrs,
+            )
 
         self._loguru_sink_id = loguru_logger.add(
             _forward_loguru,

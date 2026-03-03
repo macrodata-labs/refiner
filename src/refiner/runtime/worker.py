@@ -93,11 +93,12 @@ class Worker:
                     host=host,
                     worker_name=lifecycle_context.worker_name,
                 )
-                obs_logger.bind(
-                    job_id=lifecycle_context.job_id,
-                    stage_id=lifecycle_context.stage_id,
-                    worker_id=lifecycle_context.worker_id,
-                ).info("worker started")
+                obs_logger.info(
+                    "worker started job_id={} stage_id={} worker_id={}",
+                    lifecycle_context.job_id,
+                    lifecycle_context.stage_id,
+                    lifecycle_context.worker_id,
+                )
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 print(
                     f"[refiner] lifecycle reporting failed: {type(e).__name__}: {e}",
@@ -120,12 +121,13 @@ class Worker:
                             worker_id=lifecycle_context.worker_id,
                             shard_id=shard.id,
                         )
-                        obs_logger.bind(
-                            job_id=lifecycle_context.job_id,
-                            stage_id=lifecycle_context.stage_id,
-                            worker_id=lifecycle_context.worker_id,
-                            shard_id=shard.id,
-                        ).info("shard started")
+                        obs_logger.info(
+                            "shard started job_id={} stage_id={} worker_id={} shard_id={}",
+                            lifecycle_context.job_id,
+                            lifecycle_context.stage_id,
+                            lifecycle_context.worker_id,
+                            shard.id,
+                        )
                     except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                         print(
                             "[refiner] lifecycle reporting failed: "
@@ -160,13 +162,13 @@ class Worker:
                                 status="completed",
                                 error=None,
                             )
-                            obs_logger.bind(
-                                job_id=lifecycle_context.job_id,
-                                stage_id=lifecycle_context.stage_id,
-                                worker_id=lifecycle_context.worker_id,
-                                shard_id=shard.id,
-                                status="completed",
-                            ).info("shard finished")
+                            obs_logger.info(
+                                "shard finished job_id={} stage_id={} worker_id={} shard_id={} status=completed",
+                                lifecycle_context.job_id,
+                                lifecycle_context.stage_id,
+                                lifecycle_context.worker_id,
+                                shard.id,
+                            )
                         user_metrics_emitter.force_flush_user_metrics()
                         self.ledger.complete(shard)
                         inflight.remove(shard)
@@ -190,13 +192,13 @@ class Worker:
                                     status="failed",
                                     error=str(e),
                                 )
-                                obs_logger.bind(
-                                    job_id=lifecycle_context.job_id,
-                                    stage_id=lifecycle_context.stage_id,
-                                    worker_id=lifecycle_context.worker_id,
-                                    shard_id=shard.id,
-                                    status="failed",
-                                ).info("shard finished")
+                                obs_logger.info(
+                                    "shard finished job_id={} stage_id={} worker_id={} shard_id={} status=failed",
+                                    lifecycle_context.job_id,
+                                    lifecycle_context.stage_id,
+                                    lifecycle_context.worker_id,
+                                    shard.id,
+                                )
                             except Exception as e2:  # noqa: BLE001 - fail-open observer hooks
                                 print(
                                     "[refiner] lifecycle reporting failed: "
@@ -217,12 +219,13 @@ class Worker:
                     status="failed" if failed_error is not None else "completed",
                     error=failed_error,
                 )
-                obs_logger.bind(
-                    job_id=lifecycle_context.job_id,
-                    stage_id=lifecycle_context.stage_id,
-                    worker_id=lifecycle_context.worker_id,
-                    status="failed" if failed_error is not None else "completed",
-                ).info("worker finished")
+                obs_logger.info(
+                    "worker finished job_id={} stage_id={} worker_id={} status={}",
+                    lifecycle_context.job_id,
+                    lifecycle_context.stage_id,
+                    lifecycle_context.worker_id,
+                    "failed" if failed_error is not None else "completed",
+                )
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 print(
                     f"[refiner] lifecycle reporting failed: {type(e).__name__}: {e}",
