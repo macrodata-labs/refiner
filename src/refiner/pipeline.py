@@ -134,17 +134,17 @@ class RefinerPipeline:
             raise ValueError("cast requires at least one dtype mapping")
         return self._add_vectorized_op(CastStep(dtypes=dtypes))
 
-    def execute_blocks(self, rows: Iterable[Any]) -> Iterable[Block]:
-        """Execute source stream through compiled segments and yield blocks."""
-        yield from execute_segments(rows, compile_segments(self.pipeline_steps))
+    def execute(self, rows: Iterable[Any]) -> Iterable[Block]:
+        """Execute source stream through compiled segments.
 
-    def execute_rows(self, rows: Iterable[Any]) -> Iterable[Row]:
-        """Execute source stream and yield row views."""
-        yield from iter_rows(self.execute_blocks(rows))
+        Returns internal execution blocks (row blocks or Arrow blocks).
+        Use `iter_rows()` to force row iteration.
+        """
+        yield from execute_segments(rows, compile_segments(self.pipeline_steps))
 
     def iter_rows(self) -> Iterable[Row]:
         """Local execution mode: lazily process all shards and yield output rows."""
-        return self.execute_rows(self.source.read())
+        return iter_rows(self.execute(self.source.read()))
 
     def materialize(self) -> list[Row]:
         """Compute all output rows into memory (local/dev utility)."""

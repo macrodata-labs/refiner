@@ -8,6 +8,7 @@ import pytest
 from refiner.ledger.backend.base import BaseLedger, LedgerConfig
 from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
+from refiner.runtime.execution.engine import iter_rows
 from refiner.sources.readers.base import BaseReader
 from refiner.sources.row import DictRow, Row
 from refiner.runtime.worker import Worker, WorkerLifecycleContext
@@ -132,7 +133,7 @@ def test_pipeline_executes_row_and_batch_steps() -> None:
         .map(lambda r: {"y": r["x"] * 10})
     )
 
-    out = list(pipeline.execute_rows(source_rows))
+    out = list(iter_rows(pipeline.execute(source_rows)))
 
     assert [r["x"] for r in out] == [3, 5]
     assert [r["y"] for r in out] == [30, 50]

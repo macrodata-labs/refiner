@@ -127,7 +127,7 @@ class Worker:
             run_exception: Exception | None = None
             try:
                 try:
-                    for block in self.pipeline.execute_blocks(_source_rows()):
+                    for block in self.pipeline.execute(_source_rows()):
                         produced = block_num_rows(block)
                         if produced <= 0:
                             continue
