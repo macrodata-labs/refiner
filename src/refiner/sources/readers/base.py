@@ -10,10 +10,7 @@ from fsspec import AbstractFileSystem
 from refiner.io import DataFileSet
 from refiner.io.fileset import DataFileSetLike
 from refiner.ledger.shard import Shard
-from refiner.metrics import log_counter
 from refiner.sources.base import BaseSource
-from refiner.sources.row import Row
-from refiner.runtime.metrics_context import set_active_step_index
 
 
 class BaseReader(BaseSource):
@@ -142,20 +139,6 @@ class BaseReader(BaseSource):
             - Should be safe to call sequentially (single-worker, no concurrent calls).
         """
         raise NotImplementedError
-
-    def iter_shard_rows(self, shard: Shard) -> Iterator[Row]:
-        for row in self.read_shard(shard):
-            log_counter("rows_read", 1, shard_id=shard.id)
-            if isinstance(row, Row):
-                yield row.update(shard_id=shard.id)
-            else:
-                yield {**row, "shard_id": shard.id}
-
-    def read(self) -> Iterator[Any]:
-        with set_active_step_index(0):
-            for shard in self.list_shards():
-                for row in self.iter_shard_rows(shard):
-                    yield row
 
 
 __all__ = ["BaseReader"]

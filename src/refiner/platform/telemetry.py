@@ -3,21 +3,53 @@
 from __future__ import annotations
 
 import logging
+from typing import Protocol
 
-from .metric_helpers import (
-    get_cpu_usage_callback,
+from refiner.platform.telemetry.metric_helpers import (
+    get_cpu_usage,
     get_memory_usage_callback,
     get_network_in,
     get_network_out,
 )
-from refiner.runtime.metrics_context import UserMetricsEmitter
 
 _REFINER_OTEL_HANDLER_MARKER = "_refiner_otel_handler"
-_USER_METRIC_EXPORT_INTERVAL_MS = 10_000
-_RESOURCE_METRIC_EXPORT_INTERVAL_MS = 10_000
 
 
-class OtelTelemetryEmitter(UserMetricsEmitter):
+class WorkerTelemetry(Protocol):
+    def emit_user_counter(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None: ...
+
+    def emit_user_gauge(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None: ...
+
+    def emit_user_histogram(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None: ...
+
+    def force_flush_metrics(self) -> None: ...
+
+
+class OtelTelemetryEmitter:
     def __init__(
         self,
         *,
@@ -36,7 +68,7 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         from opentelemetry.sdk._logs import LoggingHandler
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.metrics import MeterProvider
-        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader, ConsoleMetricExporter
         from opentelemetry.sdk.resources import Resource
 
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -49,67 +81,50 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             }
         )
 
-        metric_exporter = OTLPMetricExporter(
-            endpoint=f"{base_url}/api/metrics",
-            headers=headers,
-        )
-        user_metric_reader = PeriodicExportingMetricReader(
+        # metric_exporter = OTLPMetricExporter(
+        #     endpoint=f"{base_url}/api/metrics",
+        #     headers=headers,
+        # )
+        metric_exporter = ConsoleMetricExporter()
+        metric_reader = PeriodicExportingMetricReader(
             exporter=metric_exporter,
-            export_interval_millis=_USER_METRIC_EXPORT_INTERVAL_MS,
+            export_interval_millis=2_000,
         )
-        self._user_meter_provider = MeterProvider(
+        self._meter_provider = MeterProvider(
             resource=resource,
-            metric_readers=[user_metric_reader],
+            metric_readers=[metric_reader],
         )
 
-        resource_metric_reader = PeriodicExportingMetricReader(
-            exporter=OTLPMetricExporter(
-                endpoint=f"{base_url}/api/metrics",
-                headers=headers,
-            ),
-            export_interval_millis=_RESOURCE_METRIC_EXPORT_INTERVAL_MS,
-        )
-        self._resource_meter_provider = MeterProvider(
-            resource=resource,
-            metric_readers=[resource_metric_reader],
-        )
-
-        resource_meter = self._resource_meter_provider.get_meter(
-            "refiner.platform.telemetry.resource"
-        )
-        resource_meter.create_observable_gauge(
+        meter = self._meter_provider.get_meter("refiner.platform.telemetry")
+        meter.create_observable_gauge(
             "refiner.worker.cpu_usage",
-            callbacks=[get_cpu_usage_callback()],
+            callbacks=[get_cpu_usage()],
             unit="%",
         )
-        resource_meter.create_observable_gauge(
+        meter.create_observable_gauge(
             "refiner.worker.memory_usage",
-            callbacks=[get_memory_usage_callback()],
+            callbacks=[get_memory_usage_callback],
             unit="MB",
         )
-        resource_meter.create_observable_gauge(
+        meter.create_observable_gauge(
             "refiner.worker.network_in",
             callbacks=[get_network_in],
             unit="B",
         )
-        resource_meter.create_observable_gauge(
+        meter.create_observable_gauge(
             "refiner.worker.network_out",
             callbacks=[get_network_out],
             unit="B",
         )
-
-        user_meter = self._user_meter_provider.get_meter(
-            "refiner.platform.telemetry.user"
-        )
-        self._user_counter = user_meter.create_counter(
+        self._user_counter = meter.create_counter(
             "refiner.user.counter",
             unit="records",
         )
-        self._user_histogram = user_meter.create_histogram(
+        self._user_histogram = meter.create_histogram(
             "refiner.user.histogram",
             explicit_bucket_boundaries_advisory=[],
         )
-        self._user_gauge = user_meter.create_gauge("refiner.user.gauge")
+        self._user_gauge = meter.create_gauge("refiner.user.gauge")
 
         log_exporter = OTLPLogExporter(
             endpoint=f"{base_url}/api/logs",
@@ -198,10 +213,46 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             ),
         )
 
-    def force_flush_user_metrics(self) -> None:
-        self._user_meter_provider.force_flush()
+    def force_flush_metrics(self) -> None:
+        self._meter_provider.force_flush()
 
-    def force_flush_resource_metrics(self) -> None:
-        self._resource_meter_provider.force_flush()
 
-__all__ = ["OtelTelemetryEmitter"]
+class NoopTelemetryEmitter:
+    def emit_user_counter(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        del label, value, shard_id, step_index, unit
+
+    def emit_user_gauge(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        del label, value, shard_id, step_index, unit
+
+    def emit_user_histogram(
+        self,
+        *,
+        label: str,
+        value: float,
+        shard_id: str,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        del label, value, shard_id, step_index, unit
+
+    def force_flush_metrics(self) -> None:
+        return None
+
+
+__all__ = ["WorkerTelemetry", "OtelTelemetryEmitter", "NoopTelemetryEmitter"]

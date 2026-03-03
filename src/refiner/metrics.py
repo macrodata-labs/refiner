@@ -4,26 +4,8 @@ from refiner.runtime.metrics_context import (
     get_active_step_index,
     get_active_user_metrics_emitter,
 )
-
-
-def _validate_label(label: str) -> str:
-    normalized = label.strip()
-    if not normalized:
-        raise ValueError("label must be non-empty")
-    return normalized
-
-
-def _validate_shard_id(shard_id: str) -> str:
-    normalized = shard_id.strip()
-    if not normalized:
-        raise ValueError("shard_id must be non-empty")
-    return normalized
-
-
-def _validate_value(value: float | int) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError("value must be a number")
-    return float(value)
+def is_not_empty(value: str) -> bool:
+    return value.strip() != ""
 
 
 def log_counter(
@@ -31,16 +13,19 @@ def log_counter(
     value: float | int,
     shard_id: str,
 ) -> None:
-    normalized_label = _validate_label(label)
-    normalized_shard_id = _validate_shard_id(shard_id)
-    normalized_value = _validate_value(value)
-    if normalized_value < 0:
-        raise ValueError("counter value must be >= 0")
+    if not is_not_empty(label):
+        raise ValueError("label must be non-empty")
+    if not is_not_empty(shard_id):
+        raise ValueError("shard_id must be non-empty")
+
+    if value < 0:
+        raise ValueError("value must be >= 0")
+
     emitter = get_active_user_metrics_emitter()
     emitter.emit_user_counter(
-        label=normalized_label,
-        value=normalized_value,
-        shard_id=normalized_shard_id,
+        label=label,
+        value=value,
+        shard_id=shard_id,
         step_index=get_active_step_index(),
         unit="sec",
     )
@@ -51,14 +36,15 @@ def log_gauge(
     value: float | int,
     shard_id: str,
 ) -> None:
-    normalized_label = _validate_label(label)
-    normalized_shard_id = _validate_shard_id(shard_id)
-    normalized_value = _validate_value(value)
+    if not is_not_empty(label):
+        raise ValueError("label must be non-empty")
+    if not is_not_empty(shard_id):
+        raise ValueError("shard_id must be non-empty")
     emitter = get_active_user_metrics_emitter()
     emitter.emit_user_gauge(
-        label=normalized_label,
-        value=normalized_value,
-        shard_id=normalized_shard_id,
+        label=label,
+        value=value,
+        shard_id=shard_id,
         step_index=get_active_step_index(),
         unit="meter",
     )
@@ -71,14 +57,16 @@ def log_histogram(
     *,
     unit: str | None = "Document",
 ) -> None:
-    normalized_label = _validate_label(label)
-    normalized_shard_id = _validate_shard_id(shard_id)
-    normalized_value = _validate_value(value)
     emitter = get_active_user_metrics_emitter()
+    if not is_not_empty(label):
+        raise ValueError("label must be non-empty")
+    if not is_not_empty(shard_id):
+        raise ValueError("shard_id must be non-empty")
+    value = float(value)
     emitter.emit_user_histogram(
-        label=normalized_label,
-        value=normalized_value,
-        shard_id=normalized_shard_id,
+        label=label,
+        value=value,
+        shard_id=shard_id,
         step_index=get_active_step_index(),
         unit=unit,
     )

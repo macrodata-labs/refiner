@@ -16,7 +16,7 @@ If no key is available, the launch still runs and prints a warning with a login/
 
 ## What Is Reported (Current)
 
-- Job creation (`/api/jobs/submit`)
+- Job creation (`/api/jobs`)
 - Stage shard registration
 - Worker start / finish
 - Shard start / finish

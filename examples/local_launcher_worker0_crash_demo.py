@@ -6,7 +6,7 @@ import time
 from collections.abc import Iterator
 
 import refiner as mdr
-from refiner.readers import DictRow
+from refiner.sources.row import DictRow
 
 
 def _parse_worker_rank_from_argv() -> int:
@@ -98,7 +98,7 @@ def main() -> None:
 
     dt = time.time() - t0
     print("\nLaunch unexpectedly completed")
-    print(f"run_id      : {stats.run_id}")
+    print(f"run_id      : {stats.job_id}")
     print(f"workers     : {stats.workers}")
     print(f"claimed     : {stats.claimed}")
     print(f"completed   : {stats.completed}")

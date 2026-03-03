@@ -12,34 +12,30 @@ except ImportError:
     psutil = None  # type: ignore[assignment]
 
 
-def get_cpu_usage():
+def get_cpu_usage_callback():
     process = psutil.Process() if psutil else None
 
-    def cpu_usage_callback(
+    def get_cpu_usage(
         options: CallbackOptions,
     ) -> Generator[Observation, CallbackOptions, None]:
-        del options
         value = process.cpu_percent(interval=None) if process else 0.0
         yield Observation(value, {})
 
-    return cpu_usage_callback
+    return get_cpu_usage
 
 
-def get_memory_usage(
-    options: CallbackOptions,
-) -> Generator[Observation, CallbackOptions, None]:
-    del options
-    if psutil:
-        value = psutil.Process().memory_info().rss / (1024 * 1024)
-    else:
-        value = 0.0
-    yield Observation(value, {})
+def get_memory_usage_callback():
+    process = psutil.Process() if psutil else None
+    def get_memory_usage(options: CallbackOptions) -> Generator[Observation, CallbackOptions, None]:
+        value = process.memory_info().rss / (1024 * 1024) if process else 0.0
+        yield Observation(value, {})
+
+    return get_memory_usage
 
 
 def get_network_in(
     options: CallbackOptions,
 ) -> Generator[Observation, CallbackOptions, None]:
-    del options
     if psutil:
         net = psutil.net_io_counters()  # This is actually per whole machine
         value = float(net.bytes_recv) if net else 0.0

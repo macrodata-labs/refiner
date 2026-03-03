@@ -106,11 +106,7 @@ class Worker:
                             file=sys.stderr,
                         )
                 with set_active_step_index(0):
-                    iter_rows = getattr(self.pipeline.source, "iter_shard_rows", None)
-                    if callable(iter_rows):
-                        yield from iter_rows(shard)
-                    else:
-                        yield from self.pipeline.source.read_shard(shard)
+                    yield from self.pipeline.source.iter_shard_rows(shard)
                 previous = shard
 
         with set_active_user_metrics_emitter(user_metrics_emitter):
