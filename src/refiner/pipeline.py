@@ -49,16 +49,28 @@ class RefinerPipeline:
     source: BaseSource
     pipeline_steps: tuple[RefinerStep, ...]
     _compiled_segments: tuple[Segment, ...] | None
+    max_vectorized_block_bytes: int | None
 
     def __init__(
-        self, source: BaseSource, pipeline_steps: Sequence[RefinerStep] | None = None
+        self,
+        source: BaseSource,
+        pipeline_steps: Sequence[RefinerStep] | None = None,
+        *,
+        max_vectorized_block_bytes: int | None = None,
     ):
+        if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
+            raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
         self.source = source
         self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
         self._compiled_segments = None
+        self.max_vectorized_block_bytes = max_vectorized_block_bytes
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
-        return self.__class__(self.source, self.pipeline_steps + (step,))
+        return self.__class__(
+            self.source,
+            self.pipeline_steps + (step,),
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+        )
 
     def _add_vectorized_op(self, op: VectorizedOp) -> "RefinerPipeline":
         # Fuse adjacent expression-backed operations so each fused segment does
@@ -68,8 +80,21 @@ class RefinerPipeline:
         ):
             prev = self.pipeline_steps[-1]
             merged = VectorizedSegmentStep(ops=prev.ops + (op,))
-            return self.__class__(self.source, self.pipeline_steps[:-1] + (merged,))
+            return self.__class__(
+                self.source,
+                self.pipeline_steps[:-1] + (merged,),
+                max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            )
         return self.add_step(VectorizedSegmentStep(ops=(op,)))
+
+    def with_max_vectorized_block_bytes(
+        self, max_vectorized_block_bytes: int | None
+    ) -> "RefinerPipeline":
+        return self.__class__(
+            self.source,
+            self.pipeline_steps,
+            max_vectorized_block_bytes=max_vectorized_block_bytes,
+        )
 
     def _get_compiled_segments(self) -> tuple[Segment, ...]:
         if self._compiled_segments is None:
@@ -148,7 +173,11 @@ class RefinerPipeline:
         Returns internal execution blocks (row blocks or Arrow blocks).
         Use `iter_rows()` to force row iteration.
         """
-        yield from execute_segments(rows, self._get_compiled_segments())
+        yield from execute_segments(
+            rows,
+            self._get_compiled_segments(),
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+        )
 
     def iter_rows(self) -> Iterable[Row]:
         """Local execution mode: lazily process all shards and yield output rows."""

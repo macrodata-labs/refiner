@@ -6,6 +6,7 @@ import pyarrow as pa
 import pytest
 
 import refiner.pipeline as pipeline_module
+import refiner.runtime.execution.engine as engine_module
 from refiner.pipeline import from_items
 from refiner import col
 
@@ -104,3 +105,49 @@ def test_execute_caches_compiled_segments(monkeypatch) -> None:
     list(pipeline.execute(pipeline.source.read()))
 
     assert compile_calls == 1
+
+
+def test_max_vectorized_block_bytes_can_force_smaller_blocks() -> None:
+    pipeline = (
+        from_items([{"x": 1}, {"x": 2}, {"x": 3}, {"x": 4}])
+        .with_column("y", col("x") + 1)
+        .with_max_vectorized_block_bytes(1)
+    )
+    blocks = list(pipeline.execute(pipeline.source.read()))
+    assert blocks
+    assert all(isinstance(block, (pa.RecordBatch, pa.Table)) for block in blocks)
+    assert all(int(block.num_rows) <= 1 for block in blocks)
+
+
+def test_vectorized_chunk_shrink_is_run_local(monkeypatch) -> None:
+    calls: list[int] = []
+    original_rows_to_table = engine_module.rows_to_table
+
+    def _rows_to_table_with_oom(rows):
+        calls.append(len(rows))
+        if len(rows) > 2:
+            raise pa.ArrowMemoryError("oom")
+        return original_rows_to_table(rows)
+
+    monkeypatch.setattr(engine_module, "rows_to_table", _rows_to_table_with_oom)
+
+    pipeline = (
+        from_items([{"x": i} for i in range(8)])
+        .with_column("y", col("x") + 1)
+        .with_max_vectorized_block_bytes(1_000_000)
+    )
+
+    first_run_start = len(calls)
+    out1 = pipeline.materialize()
+    second_run_start = len(calls)
+    out2 = pipeline.materialize()
+
+    assert len(out1) == 8
+    assert len(out2) == 8
+    assert calls[first_run_start] == 8
+    assert calls[second_run_start] == 8
+
+
+def test_with_max_vectorized_block_bytes_validates_positive() -> None:
+    with pytest.raises(ValueError):
+        from_items([{"x": 1}]).with_max_vectorized_block_bytes(0)

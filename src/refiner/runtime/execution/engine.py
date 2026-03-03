@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 
@@ -58,6 +59,7 @@ def execute_segments(
     segments: Sequence[Segment],
     *,
     vectorized_chunk_rows: int = _DEFAULT_VECTORIZED_CHUNK_ROWS,
+    max_vectorized_block_bytes: int | None = None,
 ) -> Iterator[Block]:
     current: Iterable[Block] = _normalize_blocks(
         stream,
@@ -70,6 +72,7 @@ def execute_segments(
                 current,
                 segment.ops,
                 vectorized_chunk_rows=vectorized_chunk_rows,
+                max_vectorized_block_bytes=max_vectorized_block_bytes,
             )
         else:
             current = _execute_row_segment(
@@ -77,6 +80,7 @@ def execute_segments(
                 segment.steps,
                 output_block_rows=vectorized_chunk_rows,
                 output_tabular=isinstance(next_segment, VectorSegment),
+                max_vectorized_block_bytes=max_vectorized_block_bytes,
             )
     yield from current
 
@@ -160,12 +164,13 @@ def _execute_row_segment(
     *,
     output_block_rows: int,
     output_tabular: bool,
+    max_vectorized_block_bytes: int | None,
 ) -> Iterator[Block]:
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
     rows = iter_rows(stream)
     step_out = execute_row_steps(rows, steps)
-    if not output_tabular:
+    if not output_tabular or max_vectorized_block_bytes is not None:
         yield from _chunk_output_rows(step_out, output_block_rows)
         return
     for batch in _chunk_output_rows(step_out, output_block_rows):
@@ -179,8 +184,11 @@ def _execute_vector_segment(
     ops: Sequence[VectorizedOp],
     *,
     vectorized_chunk_rows: int,
+    max_vectorized_block_bytes: int | None,
 ) -> Iterator[TabularBlock]:
     pending_rows = RowQueue()
+    current_chunk_rows = max(1, int(vectorized_chunk_rows))
+    estimated_row_bytes: float | None = None
 
     def _run_block(block: TabularBlock) -> TabularBlock:
         out = block
@@ -188,30 +196,116 @@ def _execute_vector_segment(
             out = apply_vectorized_op(out, op)
         return out
 
-    def _flush_rows() -> Iterator[TabularBlock]:
-        if len(pending_rows) == 0:
+    def _chunk_rows_for_budget() -> int:
+        if (
+            max_vectorized_block_bytes is None
+            or estimated_row_bytes is None
+            or estimated_row_bytes <= 0
+        ):
+            return current_chunk_rows
+        budget_rows = int(max_vectorized_block_bytes / estimated_row_bytes)
+        return max(1, min(current_chunk_rows, budget_rows))
+
+    def _run_pending_chunk(target_rows: int) -> Iterator[TabularBlock]:
+        nonlocal current_chunk_rows, estimated_row_bytes
+        rows_for_try = max(1, target_rows)
+        while True:
+            batch = pending_rows.peek(rows_for_try)
+            try:
+                table = rows_to_table(batch)
+            except pa.ArrowMemoryError:
+                if rows_for_try <= 1:
+                    raise
+                rows_for_try = max(1, rows_for_try // 2)
+                current_chunk_rows = min(current_chunk_rows, rows_for_try)
+                continue
+
+            if table.num_rows > 0:
+                estimated_row_bytes = table.nbytes / int(table.num_rows)
+
+            if (
+                max_vectorized_block_bytes is not None
+                and table.num_rows > 1
+                and table.nbytes > max_vectorized_block_bytes
+            ):
+                scaled_rows = int(
+                    rows_for_try
+                    * (max_vectorized_block_bytes / max(1, int(table.nbytes)))
+                )
+                rows_for_try = min(rows_for_try - 1, max(1, scaled_rows))
+                current_chunk_rows = min(current_chunk_rows, rows_for_try)
+                continue
+
+            try:
+                out = _run_block(table)
+            except pa.ArrowMemoryError:
+                if rows_for_try <= 1:
+                    raise
+                rows_for_try = max(1, rows_for_try // 2)
+                current_chunk_rows = min(current_chunk_rows, rows_for_try)
+                continue
+
+            pending_rows.discard(rows_for_try)
+            if out.num_rows > 0:
+                yield out
             return
-        batch = pending_rows.take_all()
-        out = _run_block(rows_to_table(batch))
-        if out.num_rows > 0:
-            yield out
+
+    def _drain_rows(*, force: bool) -> Iterator[TabularBlock]:
+        while len(pending_rows) > 0:
+            desired_rows = _chunk_rows_for_budget()
+            if not force and len(pending_rows) < desired_rows:
+                return
+            yield from _run_pending_chunk(min(len(pending_rows), desired_rows))
+
+    def _yield_tabular_chunks(block: TabularBlock) -> Iterator[TabularBlock]:
+        nonlocal current_chunk_rows, estimated_row_bytes
+        queue: deque[TabularBlock] = deque([block])
+        while queue:
+            chunk = queue.popleft()
+            chunk_rows = int(chunk.num_rows)
+            if chunk_rows <= 0:
+                continue
+
+            if (
+                max_vectorized_block_bytes is not None
+                and chunk_rows > 1
+                and chunk.nbytes > max_vectorized_block_bytes
+            ):
+                scaled_rows = int(
+                    chunk_rows
+                    * (max_vectorized_block_bytes / max(1, int(chunk.nbytes)))
+                )
+                split_rows = min(chunk_rows - 1, max(1, scaled_rows))
+                for start in range(0, chunk_rows, split_rows):
+                    queue.append(chunk.slice(start, split_rows))
+                current_chunk_rows = min(current_chunk_rows, split_rows)
+                continue
+
+            try:
+                out = _run_block(chunk)
+            except pa.ArrowMemoryError:
+                if chunk_rows <= 1:
+                    raise
+                split_rows = max(1, chunk_rows // 2)
+                queue.appendleft(chunk.slice(split_rows, chunk_rows - split_rows))
+                queue.appendleft(chunk.slice(0, split_rows))
+                current_chunk_rows = min(current_chunk_rows, split_rows)
+                continue
+
+            estimated_row_bytes = chunk.nbytes / chunk_rows
+            if out.num_rows > 0:
+                yield out
 
     for item in stream:
         if isinstance(item, list):
             pending_rows.extend(item)
-            while len(pending_rows) >= vectorized_chunk_rows:
-                chunk = pending_rows.take(vectorized_chunk_rows)
-                out = _run_block(rows_to_table(chunk))
-                if out.num_rows > 0:
-                    yield out
+            yield from _drain_rows(force=False)
             continue
 
-        yield from _flush_rows()
-        out = _run_block(item)
-        if out.num_rows > 0:
-            yield out
+        yield from _drain_rows(force=True)
+        yield from _yield_tabular_chunks(item)
 
-    yield from _flush_rows()
+    yield from _drain_rows(force=True)
 
 
 def _chunk_output_rows(rows: Iterable[Row], block_rows: int) -> Iterator[list[Row]]:

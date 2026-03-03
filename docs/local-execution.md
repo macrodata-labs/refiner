@@ -32,6 +32,16 @@ Use `.take(n)` for quick inspection:
 sample = pipeline.take(10)
 ```
 
+## Vectorized Memory Guardrail
+
+Use a max-bytes cap when running vectorized segments to reduce OOM risk:
+
+```python
+pipeline = pipeline.with_max_vectorized_block_bytes(64 * 1024 * 1024)
+```
+
+When set, Refiner shrinks row-to-Arrow chunk sizes during that run if an Arrow allocation fails, and retries with smaller chunks.
+
 ## Behavior Across Shards
 
 Local iteration consumes the source stream continuously, so downstream batch steps can consume data that spans multiple shards.
