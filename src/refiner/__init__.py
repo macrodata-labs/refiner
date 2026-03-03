@@ -22,7 +22,7 @@ from .processors import (
 )
 from .sources import BaseReader, BaseSource, CsvReader, JsonlReader, ParquetReader, Row
 from .runtime.launchers import BaseLauncher, LaunchStats, LocalLauncher
-from .worker import Worker, WorkerRunStats
+from .runtime.worker import Worker, WorkerRunStats
 
 __all__ = [
     "RefinerStep",

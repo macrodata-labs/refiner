@@ -10,8 +10,7 @@ from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
 from refiner.sources.readers.base import BaseReader
 from refiner.sources.row import DictRow, Row
-from refiner.worker import Worker
-from refiner.runtime.worker import WorkerLifecycleContext
+from refiner.runtime.worker import Worker, WorkerLifecycleContext
 
 
 def _lifecycle_context() -> WorkerLifecycleContext:
