@@ -25,9 +25,7 @@ class ItemsSource(BaseSource):
         if shard_size_rows <= 0:
             raise ValueError("shard_size_rows must be > 0")
 
-        normalized_rows = [_normalize_item(item) for item in items]
-
-        self._rows = tuple(normalized_rows)
+        self._rows = tuple(_normalize_item(item) for item in items)
         self._row_count = len(self._rows)
         self._shard_size_rows = shard_size_rows
         self._source_path = _ITEMS_SOURCE_PATH

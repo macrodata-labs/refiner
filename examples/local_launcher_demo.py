@@ -12,12 +12,12 @@ SAMPLE_PARQUET = (
 SLEEP_SECONDS_PER_SHARD = 120
 
 
-class SlowPerShardReader(mdr.BaseReader):
+class SlowPerShardReader(mdr.BaseSource):
     """Reader wrapper that sleeps once before each shard is read.
     simulate longer processing
     """
 
-    def __init__(self, inner: mdr.BaseReader, *, sleep_seconds: int):
+    def __init__(self, inner: mdr.BaseSource, *, sleep_seconds: int):
         self.inner = inner
         self.sleep_seconds = sleep_seconds
 

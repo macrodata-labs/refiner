@@ -333,7 +333,7 @@ def task(
     source = TaskSource(num_tasks=num_tasks)
     return RefinerPipeline(source=source).add_step(
         FnRowStep(
-            fn=lambda row: fn(int(row["task_rank"]), num_tasks),
+            fn=lambda row: fn(row["task_rank"], num_tasks),
             op_name="task",
         )
     )
