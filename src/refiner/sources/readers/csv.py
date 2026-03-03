@@ -171,6 +171,8 @@ class CsvReader(BaseReader):
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[Any]:
+        # Arrow path is the fast/default path. Multiline CSV needs the Python
+        # parser because byte-range splitting + quotes/newlines is trickier.
         if self.multiline_rows:
             yield from self._read_shard_python(shard)
             return
@@ -178,6 +180,8 @@ class CsvReader(BaseReader):
 
     def _read_shard_arrow(self, shard: Shard) -> Iterator[Any]:
         if shard.end == -1:
+            # Whole-file read (e.g. compressed/non-splittable): let Arrow parse
+            # directly and stream RecordBatch objects downstream.
             with self.fs.open(
                 shard.path,
                 mode="rb",
@@ -207,6 +211,7 @@ class CsvReader(BaseReader):
         start = shard.start
         end = shard.end
         if mode == "bytes_lazy":
+            # Keep only records whose start offsets belong to the planned range.
             aligned = align_byte_range_to_newlines(fh, start=start, end=end, size=size)
             if aligned is None:
                 return
@@ -220,6 +225,7 @@ class CsvReader(BaseReader):
             fh.seek(start)
 
         raw = io.BufferedReader(BoundedBinaryReader(fh, end - start))
+        # Non-zero-start shards don't contain headers; reuse cached header names.
         if start == 0:
             read_options = pa_csv.ReadOptions(
                 use_threads=False,
@@ -277,6 +283,7 @@ class CsvReader(BaseReader):
             fh, _ = self._get_file_handle(shard.path, mode="rb", force_reopen=True)
             fh.seek(start)
 
+        # Python fallback preserves behavior for multiline quoted records.
         raw = io.BufferedReader(BoundedBinaryReader(fh, end - start))
         tf = io.TextIOWrapper(raw, encoding=self.encoding, newline="")
         reader = csv.reader(tf)

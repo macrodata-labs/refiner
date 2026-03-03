@@ -10,7 +10,7 @@ from refiner.processors.step import (
     normalize_batch_item,
     normalize_row_result,
 )
-from refiner.runtime.row_queue import RowQueue
+from refiner.runtime.execution.row_queue import RowQueue
 from refiner.sources.row import Row
 
 

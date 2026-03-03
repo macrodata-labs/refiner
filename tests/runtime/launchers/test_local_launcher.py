@@ -8,7 +8,7 @@ from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline, read_jsonl
 from refiner.sources.readers.base import BaseReader
 from refiner.sources.row import DictRow, Row
-from refiner.runtime.cpu import build_cpu_sets
+from refiner.runtime.resources.cpu import build_cpu_sets
 
 
 class _FakeReader(BaseReader):
@@ -48,7 +48,7 @@ def test_launch_local_single_worker() -> None:
 
 def test_build_cpu_sets_partitions_cpus(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "refiner.runtime.cpu.available_cpu_ids",
+        "refiner.runtime.resources.cpu.available_cpu_ids",
         lambda: [0, 1, 2, 3, 4, 5],
     )
     sets = build_cpu_sets(num_workers=3, cpus_per_worker=2)
@@ -59,7 +59,7 @@ def test_build_cpu_sets_raises_when_insufficient(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "refiner.runtime.cpu.available_cpu_ids",
+        "refiner.runtime.resources.cpu.available_cpu_ids",
         lambda: [0, 1, 2],
     )
     with pytest.raises(ValueError):

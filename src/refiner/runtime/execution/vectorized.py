@@ -40,6 +40,7 @@ def table_to_rows(table: pa.Table) -> list[Row]:
 
 
 def record_batch_to_rows(batch: pa.RecordBatch) -> list[Row]:
+    # Same view model as table_to_rows, but avoids temporary Table allocation.
     names = tuple(str(name) for name in batch.schema.names)
     columns = tuple(batch.column(i) for i in range(batch.num_columns))
     index_by_name = {name: i for i, name in enumerate(names)}
@@ -81,6 +82,7 @@ def apply_vectorized_op(table: pa.Table, op: VectorizedOp) -> pa.Table:
         out = table
         for col_name, expr in op.assignments.items():
             values = eval_expr_arrow(expr, out)
+            # Keep scalar expressions column-shaped for append/set_column.
             values = _broadcast_scalar(values, out.num_rows)
             idx = out.schema.get_field_index(col_name)
             if idx < 0:

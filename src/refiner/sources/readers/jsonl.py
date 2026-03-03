@@ -67,6 +67,7 @@ class JsonlReader(BaseReader):
 
     def read_shard(self, shard: Shard) -> Iterator[Any]:
         if shard.end == -1:
+            # Whole-file read for non-splittable inputs.
             with self.fs.open(
                 shard.path,
                 mode="rb",
@@ -88,6 +89,7 @@ class JsonlReader(BaseReader):
         )
         if aligned is None:
             return
+        # JSONL is one-object-per-line, so newline alignment defines record bounds.
         start, end = aligned
 
         try:

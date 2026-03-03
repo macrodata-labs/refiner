@@ -6,8 +6,8 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from refiner.processors.step import RefinerStep, VectorizedOp, VectorizedSegmentStep
-from refiner.runtime.row_steps import execute_row_steps
-from refiner.runtime.vectorized import (
+from refiner.runtime.execution.row_steps import execute_row_steps
+from refiner.runtime.execution.vectorized import (
     apply_vectorized_op,
     chunk_rows,
     record_batch_to_rows,
@@ -34,6 +34,8 @@ StreamItem = Row | list[Row] | pa.Table | pa.RecordBatch
 
 
 def compile_segments(steps: Sequence[RefinerStep]) -> tuple[Segment, ...]:
+    # Vectorized segments are explicit fused nodes; everything else is executed
+    # through the row-step engine until the next vectorized boundary.
     out: list[Segment] = []
     row_steps: list[RefinerStep] = []
     for step in steps:
@@ -64,6 +66,7 @@ def execute_segments(
                 vectorized_chunk_rows=vectorized_chunk_rows,
             )
         else:
+            # Row segments consume rows only; iter_rows handles Arrow inputs.
             current = execute_row_steps(iter_rows(current), segment.steps)
     yield from iter_rows(current)
 
@@ -78,6 +81,7 @@ def iter_rows(stream: Iterable[StreamItem]) -> Iterator[Row]:
                 yield row
             continue
         if isinstance(item, pa.RecordBatch):
+            # Fast path: convert batches directly without intermediate Table.
             yield from record_batch_to_rows(item)
             continue
         if isinstance(item, pa.Table):
@@ -103,6 +107,7 @@ def _execute_vector_segment(
     def _flush_rows() -> Iterator[Row]:
         if not pending_rows:
             return
+        # Chunk row inputs before Arrow conversion to bound transient memory.
         batches = chunk_rows(pending_rows, vectorized_chunk_rows)
         pending_rows.clear()
         for batch in batches:

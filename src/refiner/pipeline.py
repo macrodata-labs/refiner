@@ -31,7 +31,11 @@ from refiner.sources import (
     TaskSource,
 )
 from refiner.sources.row import Row
-from refiner.runtime.segmented import compile_segments, execute_segments, iter_rows
+from refiner.runtime.execution.engine import (
+    compile_segments,
+    execute_segments,
+    iter_rows,
+)
 from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 if TYPE_CHECKING:

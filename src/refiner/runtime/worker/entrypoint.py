@@ -11,9 +11,9 @@ from loguru import logger
 
 from refiner.ledger import CloudLedger, FsLedger
 from refiner.platform import CredentialsError, MacrodataClient
-from refiner.runtime.cpu import set_cpu_affinity
-from refiner.runtime.memory import set_memory_soft_limit_mb
-from refiner.runtime.worker import Worker, WorkerLifecycleContext
+from refiner.runtime.resources.cpu import set_cpu_affinity
+from refiner.runtime.resources.memory import set_memory_soft_limit_mb
+from refiner.runtime.worker.runner import Worker, WorkerLifecycleContext
 
 
 def _parse_cpu_ids(raw: str) -> list[int]:
