@@ -7,25 +7,20 @@ from refiner.expressions import Expr, col as col_expr, lit
 from refiner.io.fileset import DataFileSetLike
 from refiner.processors.step import (
     BatchFn,
-    BatchStep,
     CastStep,
     DropStep,
     FilterExprStep,
     FlatMapFn,
-    FlatMapStep,
     FnBatchStep,
     FnFlatMapStep,
     FnRowStep,
     MapFn,
     RenameStep,
     RefinerStep,
-    RowStep,
     SelectStep,
     VectorizedOp,
     VectorizedSegmentStep,
     WithColumnsStep,
-    normalize_batch_item,
-    normalize_row_result,
 )
 from refiner.sources import (
     BaseSource,
@@ -36,22 +31,12 @@ from refiner.sources import (
     TaskSource,
 )
 from refiner.sources.row import Row
-from refiner.runtime.metrics_context import set_active_step_index
-from refiner.runtime.row_queue import RowQueue
-from refiner.runtime.vectorized import (
-    apply_vectorized_op,
-    chunk_rows,
-    rows_to_table,
-    table_to_rows,
-)
+from refiner.runtime.segmented import compile_segments, execute_segments, iter_rows
 from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 if TYPE_CHECKING:
     from refiner.runtime.launchers.cloud import CloudLaunchResult
     from refiner.runtime.launchers.local import LaunchStats
-
-
-_VECTORIZED_CHUNK_ROWS = 2048
 
 
 class RefinerPipeline:
@@ -144,103 +129,12 @@ class RefinerPipeline:
             raise ValueError("cast requires at least one dtype mapping")
         return self._add_vectorized_op(CastStep(dtypes=dtypes))
 
-    def execute_rows(self, rows: Iterable[Row]) -> Iterable[Row]:
-        """Execute rows with per-step queues and step-local batch triggering."""
-        steps = tuple(self.pipeline_steps)
-        if not steps:
-            for row in rows:
-                yield row
+    def execute_rows(self, rows: Iterable[Any]) -> Iterable[Row]:
+        """Execute rows (and batch-native source items) through compiled segments."""
+        if not self.pipeline_steps:
+            yield from iter_rows(rows)
             return
-
-        queues: list[RowQueue] = [RowQueue() for _ in range(len(steps) + 1)]
-        scratch: list[list[Row]] = [[] for _ in steps]
-
-        def _run_step(i: int, *, flush_all: bool) -> None:
-            step = steps[i]
-            inp = queues[i]
-            if not inp:
-                return
-            out = queues[i + 1]
-
-            with set_active_step_index(step.index):
-                if isinstance(step, VectorizedSegmentStep):
-                    if flush_all:
-                        in_rows = inp.take_all()
-                    else:
-                        n = (len(inp) // _VECTORIZED_CHUNK_ROWS) * _VECTORIZED_CHUNK_ROWS
-                        if n == 0:
-                            return
-                        in_rows = inp.take(n)
-                    if not in_rows:
-                        return
-                    tmp = scratch[i]
-                    tmp.clear()
-                    for batch in chunk_rows(in_rows, _VECTORIZED_CHUNK_ROWS):
-                        table = rows_to_table(batch)
-                        for op in step.ops:
-                            table = apply_vectorized_op(table, op)
-                        tmp.extend(table_to_rows(table))
-                    out.extend(tmp)
-                    return
-
-                if isinstance(step, RowStep):
-                    for row in inp.take_all():
-                        normalized = normalize_row_result(row, step.apply_row(row))
-                        out.append(normalized)
-                    return
-
-                if isinstance(step, FlatMapStep):
-                    tmp = scratch[i]
-                    tmp.clear()
-                    for row in inp.take_all():
-                        for item in step.apply_row_many(row):
-                            normalized = normalize_batch_item(item)
-                            if normalized is not None:
-                                tmp.append(normalized)
-                    out.extend(tmp)
-                    return
-
-                if isinstance(step, BatchStep):
-                    if flush_all:
-                        batch_in = inp.take_all()
-                    else:
-                        n = (len(inp) // step.batch_size) * step.batch_size
-                        if n == 0:
-                            return
-                        batch_in = inp.take(n)
-                    if not batch_in:
-                        return
-                    tmp = scratch[i]
-                    tmp.clear()
-                    for item in step.apply_batch(batch_in):
-                        normalized = normalize_batch_item(item)
-                        if normalized is not None:
-                            tmp.append(normalized)
-                    out.extend(tmp)
-                    return
-
-            raise TypeError(f"Unsupported step type: {type(step)!r}")
-
-        def _pump(flush_all: bool) -> None:
-            for i in range(len(steps)):
-                _run_step(i, flush_all=flush_all)
-
-        def _drain_output() -> Iterable[Row]:
-            outq = queues[-1]
-            if not outq:
-                return
-            for row in outq.take_all():
-                yield row
-
-        for row in rows:
-            queues[0].append(row)
-            _pump(flush_all=False)
-            for out in _drain_output():
-                yield out
-
-        _pump(flush_all=True)
-        for out in _drain_output():
-            yield out
+        yield from execute_segments(rows, compile_segments(self.pipeline_steps))
 
     def iter_rows(self) -> Iterable[Row]:
         """Local execution mode: lazily process all shards and yield output rows."""

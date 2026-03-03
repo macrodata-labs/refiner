@@ -9,7 +9,6 @@ from fsspec import AbstractFileSystem
 from refiner.io.fileset import DataFileSetLike
 
 from .base import BaseReader, Shard
-from ..row import ArrowRowView, Row
 from .utils import DEFAULT_TARGET_SHARD_BYTES, clamp_target_bytes
 
 
@@ -64,7 +63,6 @@ class ParquetReader(BaseReader):
         self.sharding_mode = sharding_mode
 
         self._open_pf: Optional[pq.ParquetFile] = None
-        self._index_by_name_cache: dict[tuple[str, ...], dict[str, int]] = {}
 
     def _get_parquet_file(self, path: str) -> pq.ParquetFile:
         """Get or open a cached ParquetFile for the current path (single-open-file policy)."""
@@ -153,13 +151,8 @@ class ParquetReader(BaseReader):
 
         return shards
 
-    def read_shard(self, shard: Shard) -> Iterator[Row]:
-        """Read a parquet shard and yield `Row` objects.
-
-        Notes:
-            - Yields `ArrowRowView` rows backed by streamed Arrow RecordBatches.
-            - If `shard.end == -1`, the whole file is read.
-        """
+    def read_shard(self, shard: Shard) -> Iterator[Any]:
+        """Read a parquet shard and yield Arrow RecordBatches."""
         pf = self._get_parquet_file(shard.path)
 
         # Determine row groups to read.
@@ -228,19 +221,7 @@ class ParquetReader(BaseReader):
             batch_size=self.arrow_batch_size,
             columns=self.columns_to_read,
         ):
-            names = tuple(batch.schema.names)
-            cols = tuple(batch.columns)
-            index_by_name = self._index_by_name_cache.get(names)
-            if index_by_name is None:
-                index_by_name = {name: i for i, name in enumerate(names)}
-                self._index_by_name_cache[names] = index_by_name
-            for i in range(batch.num_rows):
-                yield ArrowRowView(
-                    names=names,
-                    columns=cols,
-                    index_by_name=index_by_name,
-                    row_idx=i,
-                )
+            yield batch
 
 
 __all__ = ["ParquetReader"]

@@ -8,6 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+.pre-commit-cache/
+.uv-cache/
 
 notebooks/
 thoughts/
+.worktrees/
