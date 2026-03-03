@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from .metric_helpers import (
     get_cpu_usage_callback,
@@ -119,20 +120,44 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         self._logger_provider.add_log_record_processor(
             BatchLogRecordProcessor(log_exporter)
         )
-        py_logger = logging.getLogger("refiner.observer")
-        py_logger.setLevel(logging.INFO)
-        py_logger.propagate = False
+        self._otel_logger = logging.getLogger("refiner.otel.loguru")
+        self._otel_logger.setLevel(logging.INFO)
+        self._otel_logger.propagate = False
         # Ensure repeated launches do not stack multiple OTEL logging handlers.
-        for handler in tuple(py_logger.handlers):
+        for handler in tuple(self._otel_logger.handlers):
             if getattr(handler, _REFINER_OTEL_HANDLER_MARKER, False):
-                py_logger.removeHandler(handler)
+                self._otel_logger.removeHandler(handler)
                 try:
                     handler.close()
                 except Exception:
                     pass
         otel_handler = LoggingHandler(logger_provider=self._logger_provider)
         setattr(otel_handler, _REFINER_OTEL_HANDLER_MARKER, True)
-        py_logger.addHandler(otel_handler)
+        self._otel_logger.addHandler(otel_handler)
+
+        self._loguru_logger: Any | None = None
+        self._loguru_sink_id: int | None = None
+        self._install_loguru_bridge()
+
+    def _install_loguru_bridge(self) -> None:
+        try:
+            from loguru import logger as loguru_logger
+        except Exception:
+            return
+
+        def _forward_loguru(message: Any) -> None:
+            record = message.record
+            level_no = int(record["level"].no)
+            text = str(record.get("message") or "")
+            self._otel_logger.log(level_no, text)
+
+        self._loguru_sink_id = loguru_logger.add(
+            _forward_loguru,
+            level="INFO",
+            enqueue=False,
+            catch=True,
+        )
+        self._loguru_logger = loguru_logger
 
     @staticmethod
     def _attrs_with_step(
@@ -203,6 +228,21 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
 
     def force_flush_resource_metrics(self) -> None:
         self._resource_meter_provider.force_flush()
+
+    def force_flush_logs(self) -> None:
+        self._logger_provider.force_flush()
+
+    def shutdown(self) -> None:
+        try:
+            self.force_flush_logs()
+        finally:
+            self._logger_provider.shutdown()
+            if self._loguru_logger is not None and self._loguru_sink_id is not None:
+                try:
+                    self._loguru_logger.remove(self._loguru_sink_id)
+                except Exception:
+                    pass
+                self._loguru_sink_id = None
 
 
 __all__ = ["OtelTelemetryEmitter"]

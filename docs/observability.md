@@ -23,6 +23,7 @@ If no key is available, the launch still runs and prints a warning with a login/
 - Stage finish
 - Job finish
 - OTEL metrics emitted from worker runtime
+- OTEL logs exported from Loguru
 
 ## User Metrics API
 
@@ -57,6 +58,20 @@ Backend dedupe key for counters should be `(job.id, stage.index, label, shard_id
 - pipeline transform steps use index `1..N`
 
 If telemetry is unavailable (for example local iteration via `pipeline.iter_rows()` or no Observer credentials), these calls are no-op.
+
+
+## Logging API
+
+Refiner forwards Loguru records to Observer OTLP logs when observability is enabled.
+
+```python
+from loguru import logger
+
+logger.info("started processing")
+logger.info("batch finished")
+```
+
+No extra logger wiring is required in user code.
 
 ## User Flow
 

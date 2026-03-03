@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import socket
 import sys
 
+from loguru import logger
+
 from refiner.ledger import BaseLedger
 from refiner.ledger.shard import Shard
 from refiner.platform.client import MacrodataClient
@@ -65,6 +67,7 @@ class Worker:
         lifecycle_client = self.lifecycle_client
         lifecycle_context = self.lifecycle_context
         user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
+        obs_logger = logger.bind(rank=self.rank)
 
         if lifecycle_client is not None and lifecycle_context is not None:
             try:
@@ -90,6 +93,11 @@ class Worker:
                     host=host,
                     worker_name=lifecycle_context.worker_name,
                 )
+                obs_logger.bind(
+                    job_id=lifecycle_context.job_id,
+                    stage_id=lifecycle_context.stage_id,
+                    worker_id=lifecycle_context.worker_id,
+                ).info("worker started")
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 print(
                     f"[refiner] lifecycle reporting failed: {type(e).__name__}: {e}",
@@ -112,6 +120,12 @@ class Worker:
                             worker_id=lifecycle_context.worker_id,
                             shard_id=shard.id,
                         )
+                        obs_logger.bind(
+                            job_id=lifecycle_context.job_id,
+                            stage_id=lifecycle_context.stage_id,
+                            worker_id=lifecycle_context.worker_id,
+                            shard_id=shard.id,
+                        ).info("shard started")
                     except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                         print(
                             "[refiner] lifecycle reporting failed: "
@@ -146,6 +160,14 @@ class Worker:
                                 status="completed",
                                 error=None,
                             )
+                            obs_logger.bind(
+                                job_id=lifecycle_context.job_id,
+                                stage_id=lifecycle_context.stage_id,
+                                worker_id=lifecycle_context.worker_id,
+                                shard_id=shard.id,
+                                status="completed",
+                            ).info("shard finished")
+                        user_metrics_emitter.force_flush_user_metrics()
                         self.ledger.complete(shard)
                         inflight.remove(shard)
                         completed += 1
@@ -168,6 +190,13 @@ class Worker:
                                     status="failed",
                                     error=str(e),
                                 )
+                                obs_logger.bind(
+                                    job_id=lifecycle_context.job_id,
+                                    stage_id=lifecycle_context.stage_id,
+                                    worker_id=lifecycle_context.worker_id,
+                                    shard_id=shard.id,
+                                    status="failed",
+                                ).info("shard finished")
                             except Exception as e2:  # noqa: BLE001 - fail-open observer hooks
                                 print(
                                     "[refiner] lifecycle reporting failed: "
@@ -188,11 +217,24 @@ class Worker:
                     status="failed" if failed_error is not None else "completed",
                     error=failed_error,
                 )
+                obs_logger.bind(
+                    job_id=lifecycle_context.job_id,
+                    stage_id=lifecycle_context.stage_id,
+                    worker_id=lifecycle_context.worker_id,
+                    status="failed" if failed_error is not None else "completed",
+                ).info("worker finished")
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 print(
                     f"[refiner] lifecycle reporting failed: {type(e).__name__}: {e}",
                     file=sys.stderr,
                 )
+        try:
+            user_metrics_emitter.force_flush_user_metrics()
+            user_metrics_emitter.force_flush_resource_metrics()
+            user_metrics_emitter.force_flush_logs()
+        finally:
+            user_metrics_emitter.shutdown()
+
         return WorkerRunStats(
             claimed=claimed,
             completed=completed,

@@ -40,6 +40,10 @@ class UserMetricsEmitter(Protocol):
 
     def force_flush_resource_metrics(self) -> None: ...
 
+    def force_flush_logs(self) -> None: ...
+
+    def shutdown(self) -> None: ...
+
 
 class _NoopUserMetricsEmitter(UserMetricsEmitter):
     def emit_user_counter(
@@ -79,6 +83,12 @@ class _NoopUserMetricsEmitter(UserMetricsEmitter):
         return None
 
     def force_flush_resource_metrics(self) -> None:
+        return None
+
+    def force_flush_logs(self) -> None:
+        return None
+
+    def shutdown(self) -> None:
         return None
 
 
