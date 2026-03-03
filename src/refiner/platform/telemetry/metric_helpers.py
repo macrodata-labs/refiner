@@ -26,7 +26,10 @@ def get_cpu_usage_callback():
 
 def get_memory_usage_callback():
     process = psutil.Process() if psutil else None
-    def get_memory_usage(options: CallbackOptions) -> Generator[Observation, CallbackOptions, None]:
+
+    def get_memory_usage(
+        options: CallbackOptions,
+    ) -> Generator[Observation, CallbackOptions, None]:
         value = process.memory_info().rss / (1024 * 1024) if process else 0.0
         yield Observation(value, {})
 

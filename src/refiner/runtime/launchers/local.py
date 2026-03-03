@@ -6,7 +6,6 @@ from pathlib import Path
 import subprocess
 import sys
 from dataclasses import dataclass
-import re
 from typing import TYPE_CHECKING, Any, cast
 from uuid6 import uuid7
 

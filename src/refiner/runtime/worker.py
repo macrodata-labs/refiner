@@ -134,7 +134,10 @@ class Worker:
 
                     for shard in list(inflight):
                         self.ledger.heartbeat(shard)
-                        if lifecycle_client is not None and lifecycle_context is not None:
+                        if (
+                            lifecycle_client is not None
+                            and lifecycle_context is not None
+                        ):
                             lifecycle_client.report_shard_finished(
                                 job_id=lifecycle_context.job_id,
                                 stage_id=lifecycle_context.stage_id,
@@ -152,7 +155,10 @@ class Worker:
                     failed_error = str(e)
                     for shard in inflight:
                         self.ledger.fail(shard, str(e))
-                        if lifecycle_client is not None and lifecycle_context is not None:
+                        if (
+                            lifecycle_client is not None
+                            and lifecycle_context is not None
+                        ):
                             try:
                                 lifecycle_client.report_shard_finished(
                                     job_id=lifecycle_context.job_id,

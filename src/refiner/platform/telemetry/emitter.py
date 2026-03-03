@@ -204,4 +204,5 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
     def force_flush_resource_metrics(self) -> None:
         self._resource_meter_provider.force_flush()
 
+
 __all__ = ["OtelTelemetryEmitter"]

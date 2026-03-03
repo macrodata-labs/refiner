@@ -4,6 +4,8 @@ from refiner.runtime.metrics_context import (
     get_active_step_index,
     get_active_user_metrics_emitter,
 )
+
+
 def is_not_empty(value: str) -> bool:
     return value.strip() != ""
 

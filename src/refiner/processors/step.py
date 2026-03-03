@@ -10,6 +10,7 @@ from refiner.sources.row import DictRow, Row
 
 class RefinerStep(ABC):
     """Base marker for executable processing steps."""
+
     index: int
     op_name: str | None = None
 
@@ -48,7 +49,7 @@ class BatchStep(RefinerStep, ABC):
 @dataclass(frozen=True, slots=True)
 class FnBatchStep(BatchStep):
     fn: BatchFn
-    index: int 
+    index: int
     batch_size: int
     op_name: str | None = None
 
