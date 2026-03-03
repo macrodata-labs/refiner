@@ -93,6 +93,11 @@ class Expr:
     def __invert__(self) -> "Expr":
         return Expr(op="not", args=(self,))
 
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "Expr cannot be coerced to bool; use '&', '|' and '~' to compose predicates."
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class StringExpr:

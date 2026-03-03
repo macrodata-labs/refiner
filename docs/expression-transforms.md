@@ -19,6 +19,8 @@ Core constructors:
 - `mdr.lit(value)`
 - `mdr.coalesce(...)`
 
+Use `&`, `|`, and `~` to combine boolean expressions. Do not use Python `and`, `or`, or `not` with `Expr` objects.
+
 ## Vectorized Transforms
 
 These methods are shard-local and expression-backed:
