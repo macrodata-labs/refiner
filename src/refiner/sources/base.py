@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
-from refiner import Row
+from refiner.sources.row import Row
 from refiner.ledger.shard import Shard
 from refiner.metrics import log_counter
 

@@ -6,7 +6,9 @@ from pathlib import Path
 import subprocess
 import sys
 from dataclasses import dataclass
+import re
 from typing import TYPE_CHECKING, Any, cast
+from uuid6 import uuid7
 
 import cloudpickle
 
@@ -148,7 +150,8 @@ class LocalLauncher(BaseLauncher):
                     lifecycle_context = WorkerLifecycleContext(
                         job_id=observer_ctx.job.job_id,
                         stage_id=observer_ctx.job.stage_id,
-                        worker_id="local-rank-0",
+                        worker_id=str(uuid7()),
+                        worker_name="local-rank-0",
                     )
                 stats = Worker(
                     rank=0,
@@ -215,6 +218,8 @@ class LocalLauncher(BaseLauncher):
                         "--stage-id",
                         observer_ctx.job.stage_id,
                         "--worker-id",
+                        str(uuid7()),
+                        "--worker-name",
                         f"local-rank-{rank}",
                     ]
                 )

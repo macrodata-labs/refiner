@@ -63,12 +63,12 @@ class MacrodataClient:
             raise MacrodataApiError(
                 status=200, message="Missing stage id in /api/jobs response"
             )
-        stage_id = stage0.get("id")
-        if not isinstance(stage_id, str) or not stage_id:
+        stage_index = stage0.get("index")
+        if not isinstance(stage_index, int):
             raise MacrodataApiError(
-                status=200, message="Missing stage id in /api/jobs response"
+                status=200, message="Missing stage index in /api/jobs response"
             )
-        return JobContext(job_id=job_id, stage_id=stage_id)
+        return JobContext(job_id=job_id, stage_id=str(stage_index))
 
     def register_stage_shards(
         self, *, job_id: str, stage_id: str, shards: list["Shard"]
@@ -82,12 +82,25 @@ class MacrodataClient:
         )
 
     def report_worker_started(
-        self, *, job_id: str, stage_id: str, worker_id: str, host: str | None = None
+        self,
+        *,
+        job_id: str,
+        stage_id: str,
+        worker_id: str,
+        host: str | None = None,
+        worker_name: str | None = None,
     ) -> dict[str, Any]:
-        payload = {"host": host} if host else {}
+        payload: dict[str, Any] = {
+            "worker_id": worker_id,
+        }
+        if host:
+            payload["host"] = host
+        if worker_name:
+            payload["name"] = worker_name
+
         return request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/{worker_id}/start",
+            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/start",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=payload,

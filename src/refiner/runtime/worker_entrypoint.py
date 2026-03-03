@@ -38,6 +38,7 @@ def main() -> int:
     parser.add_argument("--mem-mb-per-worker", type=int, default=0)
     parser.add_argument("--stage-id", type=str, default="")
     parser.add_argument("--worker-id", type=str, default="")
+    parser.add_argument("--worker-name", type=str, default="")
     parser.add_argument(
         "--ledger-backend",
         type=str,
@@ -81,6 +82,7 @@ def main() -> int:
                     job_id=args.job_id,
                     stage_id=args.stage_id,
                     worker_id=args.worker_id,
+                    worker_name=(args.worker_name or None),
                 )
             except CredentialsError:
                 lifecycle_client = None

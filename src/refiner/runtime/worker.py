@@ -29,6 +29,7 @@ class WorkerLifecycleContext:
     job_id: str
     stage_id: str
     worker_id: str
+    worker_name: str | None = None
 
 
 class Worker:
@@ -76,6 +77,7 @@ class Worker:
                     stage_id=lifecycle_context.stage_id,
                     worker_id=lifecycle_context.worker_id,
                     host=host,
+                    worker_name=lifecycle_context.worker_name,
                 )
             except Exception as e:  # noqa: BLE001 - fail-open observer hooks
                 print(
