@@ -13,6 +13,7 @@ from .http import MacrodataApiError, request_json
 if TYPE_CHECKING:
     from refiner.ledger.shard import Shard
     from refiner.pipeline import RefinerPipeline
+    from refiner.runtime.metrics_context import UserMetricsEmitter
 
 
 def compile_shard_descriptors(shards: list["Shard"]) -> list[dict[str, Any]]:
@@ -176,6 +177,20 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"status": status},
+        )
+
+    def worker_telemetry(
+        self, *, job_id: str, stage_id: str, worker_id: str
+    ) -> "UserMetricsEmitter":
+        from .telemetry import OtelTelemetryEmitter
+
+        stage_index = int(stage_id)
+        return OtelTelemetryEmitter(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            job_id=job_id,
+            stage_index=stage_index,
+            worker_id=worker_id,
         )
 
     def cloud_submit_job(

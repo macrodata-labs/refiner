@@ -50,7 +50,7 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         )
 
         metric_exporter = OTLPMetricExporter(
-            endpoint=f"{base_url}/api/observability/metrics",
+            endpoint=f"{base_url}/api/observabiity/metrics",
             headers=headers,
         )
         user_metric_reader = PeriodicExportingMetricReader(

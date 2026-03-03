@@ -68,6 +68,17 @@ class Worker:
 
         if lifecycle_client is not None and lifecycle_context is not None:
             try:
+                user_metrics_emitter = lifecycle_client.worker_telemetry(
+                    job_id=lifecycle_context.job_id,
+                    stage_id=lifecycle_context.stage_id,
+                    worker_id=lifecycle_context.worker_id,
+                )
+            except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+                print(
+                    f"[refiner] telemetry setup failed: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
+            try:
                 try:
                     host = socket.gethostname()
                 except Exception:
@@ -176,7 +187,6 @@ class Worker:
                     f"[refiner] lifecycle reporting failed: {type(e).__name__}: {e}",
                     file=sys.stderr,
                 )
-
         return WorkerRunStats(
             claimed=claimed,
             completed=completed,
