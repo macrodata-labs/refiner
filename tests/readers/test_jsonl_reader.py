@@ -1,6 +1,16 @@
 import orjson
+import pyarrow as pa
 
 from refiner.sources.readers import JsonlReader
+
+
+def _rows_from_shard_units(units):
+    for unit in units:
+        if isinstance(unit, pa.RecordBatch):
+            tbl = pa.Table.from_batches([unit])
+            yield from tbl.to_pylist()
+        else:
+            yield unit
 
 
 def test_jsonl_bytes_lazy_reads_all_objects(tmp_path):
@@ -19,7 +29,7 @@ def test_jsonl_bytes_lazy_reads_all_objects(tmp_path):
     ids = set()
     count = 0
     for s in shards:
-        for row in r.read_shard(s):
+        for row in _rows_from_shard_units(r.read_shard(s)):
             ids.add(int(row["id"]))
             count += 1
 
