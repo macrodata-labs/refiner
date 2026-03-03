@@ -134,10 +134,7 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         self._install_loguru_bridge()
 
     def _install_loguru_bridge(self) -> None:
-        try:
-            from loguru import logger as loguru_logger
-        except Exception:
-            return
+        from loguru import logger as loguru_logger
 
         def _forward_loguru(message: Any) -> None:
             record = message.record

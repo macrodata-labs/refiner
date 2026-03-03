@@ -39,7 +39,7 @@ class MacrodataClient:
         }
         resp = request_json(
             method="POST",
-            path="/api/jobs",
+            path="/api/jobs/submit",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=payload,
@@ -47,27 +47,27 @@ class MacrodataClient:
         job = resp.get("job")
         if not isinstance(job, dict):
             raise MacrodataApiError(
-                status=200, message="Missing job in /api/jobs response"
+                status=200, message="Missing job in /api/jobs/submit response"
             )
         job_id = job.get("id")
         stages = job.get("stages")
         if not isinstance(job_id, str) or not job_id:
             raise MacrodataApiError(
-                status=200, message="Missing job.id in /api/jobs response"
+                status=200, message="Missing job.id in /api/jobs/submit response"
             )
         if not isinstance(stages, list) or not stages:
             raise MacrodataApiError(
-                status=200, message="Missing stages in /api/jobs response"
+                status=200, message="Missing stages in /api/jobs/submit response"
             )
         stage0 = stages[0]
         if not isinstance(stage0, dict):
             raise MacrodataApiError(
-                status=200, message="Missing stage id in /api/jobs response"
+                status=200, message="Missing stage index in /api/jobs/submit response"
             )
         stage_index = stage0.get("index")
         if not isinstance(stage_index, int):
             raise MacrodataApiError(
-                status=200, message="Missing stage index in /api/jobs response"
+                status=200, message="Missing stage index in /api/jobs/submit response"
             )
         return JobContext(job_id=job_id, stage_id=str(stage_index))
 
