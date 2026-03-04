@@ -16,7 +16,7 @@ If no key is available, the launch still runs and prints a warning with a login/
 
 ## What Is Reported (Current)
 
-- Job creation (`/api/jobs`)
+- Job creation (`/api/jobs/submit`)
 - Stage shard registration
 - Worker start / finish
 - Shard start / finish
@@ -34,9 +34,9 @@ import refiner as mdr
 
 pipeline = mdr.read_parquet("data/*.parquet").map(
     lambda r: (
-        mdr.log_counter("rows_seen", 1, str(r["shard_id"])),
-        mdr.log_gauge("batch_size", 128, shard_id=str(r["shard_id"])),
-        mdr.log_histogram("latency_ms", 42.5, shard_id=str(r["shard_id"]), unit="ms"),
+        mdr.log_counter("rows_seen", 1, str(r["__shard_id"]), unit="rows"),
+        mdr.log_gauge("batch_size", 128, shard_id=str(r["__shard_id"]), unit="rows"),
+        mdr.log_histogram("latency_ms", 42.5, shard_id=str(r["__shard_id"]), unit="ms"),
         r,
     )[-1]
 )
@@ -44,15 +44,15 @@ pipeline = mdr.read_parquet("data/*.parquet").map(
 
 Available helpers:
 
-- `mdr.log_counter(label, value, shard_id)` -> OTEL counter (`refiner.user.counter`)
-- `mdr.log_gauge(label, value, shard_id)` -> OTEL gauge (`refiner.user.gauge`)
-- `mdr.log_histogram(label, value, shard_id, *, unit="Document")` -> OTEL histogram (`refiner.user.histogram`)
+- `mdr.log_counter(label, value, shard_id, *, unit=None)` -> OTEL counter (`refiner.user.counter`)
+- `mdr.log_gauge(label, value, shard_id, *, unit=None)` -> OTEL gauge (`refiner.user.gauge`)
+- `mdr.log_histogram(label, value, shard_id, *, unit=None)` -> OTEL histogram (`refiner.user.histogram`)
 
 For `log_histogram`, `unit` is emitted as OTEL point attribute `unit`.
 
 `log_counter` requires `shard_id` for idempotency keying and shard-end flush behavior.
 Backend dedupe key for counters should be `(job.id, stage.index, label, shard_id)`.
-`shard_id` is attached to rows automatically by the reader runtime.
+`__shard_id` is attached to rows automatically by the source runtime.
 `step.index` is attached from runtime execution context:
 - source/reader step uses index `0`
 - pipeline transform steps use index `1..N`
@@ -92,6 +92,6 @@ If a key is present, the run appears in Macrodata Observer with lifecycle progre
 
 - Current Refiner pipelines are submitted as a single stage (`stage_0`) in the Observer job plan.
 - Refiner registers shard descriptors (`shard_id`, `path`, `start`, `end`) and uses `shard_id` for shard lifecycle events.
-- User OTEL metrics export every 60 seconds and force flush on shard end.
+- User OTEL metrics export every 10 seconds and force flush on shard end.
 - Worker resource OTEL metrics export every 10 seconds and force flush on worker end.
-- Observer failures are fail-open in local launcher mode (processing continues; warnings are printed), except completed-shard user-metrics flush failures, which fail the shard.
+- Observer failures are fail-open in local launcher mode (processing continues; warnings are printed).

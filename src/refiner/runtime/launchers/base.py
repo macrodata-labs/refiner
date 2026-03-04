@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
 import re
-import sys
 import time
+
+from loguru import logger
 
 from refiner.platform import CredentialsError, MacrodataClient
 from refiner.platform.client import JobContext
@@ -60,10 +61,10 @@ class BaseLauncher(ABC):
         return f"{slug}-{int(time.time())}-{uuid4().hex[:8]}"
 
     def _warn(self, message: str) -> None:
-        print(f"[refiner] {message}", file=sys.stderr)
+        logger.warning(message)
 
     def _info(self, message: str) -> None:
-        print(f"[refiner] {message}")
+        logger.info(message)
 
     def _job_tracking_url(self, *, client: MacrodataClient, job_id: str) -> str:
         return f"{client.base_url}/jobs/{job_id}"

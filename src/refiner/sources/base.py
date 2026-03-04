@@ -6,7 +6,9 @@ from typing import Any
 
 from refiner.sources.row import Row
 from refiner.ledger.shard import Shard
-from refiner.metrics import log_counter
+from refiner.metrics import log_throughput
+
+_INTERNAL_SHARD_ID_KEY = "__shard_id"
 
 
 class BaseSource(ABC):
@@ -19,15 +21,15 @@ class BaseSource(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def read_shard(self, shard: Shard) -> Iterator[Any]:
+    def read_shard(self, shard: Shard) -> Iterator[Row]:
         raise NotImplementedError
 
     def iter_shard_rows(self, shard: Shard) -> Iterator[Row]:
         for row in self.read_shard(shard):
-            log_counter("rows_read", 1, shard_id=shard.id)
-            yield row.update(shard_id=shard.id)
+            log_throughput("rows_read", 1, shard_id=shard.id, unit="rows")
+            yield row.update(**{_INTERNAL_SHARD_ID_KEY: shard.id})
 
-    def read(self) -> Iterator[Any]:
+    def read(self) -> Iterator[Row]:
         for shard in self.list_shards():
             yield from self.iter_shard_rows(shard)
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from .metric_helpers import (
-    get_cpu_usage_callback,
-    get_memory_usage_callback,
+    get_cpu_callback,
+    get_memory_callback,
     get_network_in,
     get_network_out,
 )
@@ -77,13 +77,13 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             "refiner.platform.telemetry.resource"
         )
         resource_meter.create_observable_gauge(
-            "refiner.worker.cpu_usage",
-            callbacks=[get_cpu_usage_callback()],
+            "refiner.worker.cpu",
+            callbacks=[get_cpu_callback()],
             unit="%",
         )
         resource_meter.create_observable_gauge(
-            "refiner.worker.memory_usage",
-            callbacks=[get_memory_usage_callback()],
+            "refiner.worker.memory",
+            callbacks=[get_memory_callback()],
             unit="MB",
         )
         resource_meter.create_observable_gauge(
@@ -201,11 +201,13 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         *,
         label: str,
         value: float,
-        shard_id: str,
+        kind: str | None,
         step_index: int | None,
         unit: str | None,
     ) -> None:
-        attrs_base: dict[str, str | int] = {"label": label, "shard_id": shard_id}
+        attrs_base: dict[str, str | int] = {"label": label}
+        if kind:
+            attrs_base["kind"] = kind
         if unit:
             attrs_base["unit"] = unit
         attrs = self._attrs_with_step(attrs=attrs_base, step_index=step_index)
@@ -218,10 +220,15 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         label: str,
         value: float,
         shard_id: str,
+        per: str,
         step_index: int | None,
         unit: str | None,
     ) -> None:
-        attrs: dict[str, str | int] = {"label": label, "shard_id": shard_id}
+        attrs: dict[str, str | int] = {
+            "label": label,
+            "shard_id": shard_id,
+            "per": per,
+        }
         if unit:
             attrs["unit"] = unit
         self._user_histogram.record(
@@ -243,15 +250,18 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
 
     def shutdown(self) -> None:
         try:
+            self.force_flush_user_metrics()
+            self.force_flush_resource_metrics()
             self.force_flush_logs()
+        except Exception:
+            pass
         finally:
-            self._logger_provider.shutdown()
-            if self._loguru_logger is not None and self._loguru_sink_id is not None:
-                try:
+            try:
+                self._logger_provider.shutdown()
+            finally:
+                if self._loguru_logger is not None and self._loguru_sink_id is not None:
                     self._loguru_logger.remove(self._loguru_sink_id)
-                except Exception:
-                    pass
-                self._loguru_sink_id = None
+                    self._loguru_sink_id = None
 
 
 __all__ = ["OtelTelemetryEmitter"]

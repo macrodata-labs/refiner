@@ -21,7 +21,7 @@ class UserMetricsEmitter(Protocol):
         *,
         label: str,
         value: float,
-        shard_id: str,
+        kind: str | None,
         step_index: int | None,
         unit: str | None,
     ) -> None: ...
@@ -32,6 +32,7 @@ class UserMetricsEmitter(Protocol):
         label: str,
         value: float,
         shard_id: str,
+        per: str,
         step_index: int | None,
         unit: str | None,
     ) -> None: ...
@@ -62,7 +63,7 @@ class _NoopUserMetricsEmitter(UserMetricsEmitter):
         *,
         label: str,
         value: float,
-        shard_id: str,
+        kind: str | None,
         step_index: int | None,
         unit: str | None,
     ) -> None:
@@ -74,6 +75,7 @@ class _NoopUserMetricsEmitter(UserMetricsEmitter):
         label: str,
         value: float,
         shard_id: str,
+        per: str,
         step_index: int | None,
         unit: str | None,
     ) -> None:

@@ -5,9 +5,9 @@ import json
 import os
 from pathlib import Path
 import socket
-import sys
 
 import cloudpickle
+from loguru import logger
 
 from refiner.ledger import CloudLedger, FsLedger
 from refiner.platform import CredentialsError, MacrodataClient
@@ -59,17 +59,21 @@ def main() -> int:
             pipeline = cloudpickle.load(f)
 
         if args.ledger_backend == "cloud":
-            cloud_api_key = os.environ.get("REFINER_CLOUD_RUNTIME_TOKEN", "").strip()
-            if not args.job_id or not args.stage_id or not cloud_api_key:
+            if not args.job_id or not args.stage_id:
                 raise ValueError(
-                    "cloud ledger requires --job-id, --stage-id, and REFINER_CLOUD_RUNTIME_TOKEN"
+                    "cloud ledger requires --job-id and --stage-id"
                 )
-            ledger = CloudLedger(
-                job_id=args.job_id,
-                worker_id=args.rank,
-                stage_id=args.stage_id,
-                api_key=cloud_api_key,
-            )
+            try:
+                ledger = CloudLedger(
+                    job_id=args.job_id,
+                    worker_id=args.rank,
+                    stage_id=args.stage_id,
+                )
+            except CredentialsError as e:
+                raise ValueError(
+                    "cloud ledger requires Macrodata authentication. "
+                    "Run `macrodata login` or set MACRODATA_API_KEY."
+                ) from e
         else:
             ledger = FsLedger(
                 job_id=args.job_id, worker_id=args.rank, workdir=args.workdir
@@ -107,9 +111,10 @@ def main() -> int:
             except CredentialsError:
                 lifecycle_client = None
             except Exception as e:
-                print(
-                    f"[refiner] lifecycle worker start failed: {type(e).__name__}: {e}",
-                    file=sys.stderr,
+                logger.warning(
+                    "lifecycle worker start failed: {}: {}",
+                    type(e).__name__,
+                    e,
                 )
                 lifecycle_client = None
         stats = Worker(

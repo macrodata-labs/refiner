@@ -1,6 +1,6 @@
 from .io import DataFile, DataFileSet, DataFolder
 from .ledger.shard import Shard
-from .metrics import log_counter, log_gauge, log_histogram
+from .metrics import log_gauge, log_gauges, log_histogram, log_throughput
 from .pipeline import (
     RefinerPipeline,
     from_items,
@@ -53,7 +53,8 @@ __all__ = [
     "read_parquet",
     "from_items",
     "task",
-    "log_counter",
+    "log_throughput",
     "log_gauge",
+    "log_gauges",
     "log_histogram",
 ]
