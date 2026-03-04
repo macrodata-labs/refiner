@@ -34,11 +34,17 @@ class SlowPerShardReader(mdr.BaseSource):
         yield from self.inner.read_shard(shard)
 
 
+NUM = 0
+
+
 def add_text_len(row):
+    global NUM
     text = row.get("text")
     shard_id = str(row["shard_id"])
     mdr.log_counter("text_len_counter", len(str(text)), shard_id=shard_id)
     mdr.log_histogram("text_len_histogram", len(str(text)), shard_id=shard_id)
+    mdr.log_gauge("meter", NUM, shard_id=shard_id)
+    NUM += 1
 
     if text is None:
         return {"text_len": 0}

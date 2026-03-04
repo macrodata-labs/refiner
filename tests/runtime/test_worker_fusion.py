@@ -8,6 +8,11 @@ from refiner.pipeline import RefinerPipeline
 from refiner.sources.readers.base import BaseReader
 from refiner.sources.row import DictRow, Row
 from refiner.worker import Worker
+from refiner.runtime.worker import WorkerLifecycleContext
+
+
+def _lifecycle_context() -> WorkerLifecycleContext:
+    return WorkerLifecycleContext(job_id="job", stage_id="", worker_id="")
 
 
 class _FakeReader(BaseReader):
@@ -102,6 +107,7 @@ def test_worker_runs_fused_pipeline_and_updates_ledger() -> None:
         ledger=ledger,
         pipeline=pipeline,
         heartbeat_every_rows=1,
+        lifecycle_context=_lifecycle_context(),
     )
 
     stats = worker.run()
@@ -134,7 +140,12 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
         return row
 
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail)
-    worker = Worker(rank=0, ledger=ledger, pipeline=pipeline)
+    worker = Worker(
+        rank=0,
+        ledger=ledger,
+        pipeline=pipeline,
+        lifecycle_context=_lifecycle_context(),
+    )
 
     stats = worker.run()
 
@@ -170,6 +181,7 @@ def test_worker_can_batch_across_shards() -> None:
         rank=0,
         ledger=ledger,
         pipeline=pipeline,
+        lifecycle_context=_lifecycle_context(),
     )
     stats = worker.run()
 

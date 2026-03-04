@@ -4,6 +4,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+import socket
+import sys
 
 import cloudpickle
 
@@ -37,7 +39,6 @@ def main() -> int:
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--mem-mb-per-worker", type=int, default=0)
     parser.add_argument("--stage-id", type=str, default="")
-    parser.add_argument("--worker-id", type=str, default="")
     parser.add_argument("--worker-name", type=str, default="")
     parser.add_argument(
         "--ledger-backend",
@@ -74,19 +75,43 @@ def main() -> int:
                 job_id=args.job_id, worker_id=args.rank, workdir=args.workdir
             )
         lifecycle_client = None
-        lifecycle_context = None
-        if args.job_id and args.stage_id and args.worker_id:
+        worker_name = args.worker_name or f"worker-{args.rank}"
+        lifecycle_context = WorkerLifecycleContext(
+            job_id=args.job_id,
+            stage_id=args.stage_id,
+            worker_id="",
+            worker_name=worker_name,
+        )
+        if args.job_id and args.stage_id:
             try:
                 lifecycle_client = MacrodataClient()
+                try:
+                    host = socket.gethostname()
+                except Exception:
+                    host = None
+                started_resp = lifecycle_client.report_worker_started(
+                    job_id=args.job_id,
+                    stage_id=args.stage_id,
+                    host=host,
+                    worker_name=worker_name,
+                )
+                reported_worker_id = started_resp.get("worker_id")
+                if not isinstance(reported_worker_id, str) or not reported_worker_id:
+                    raise RuntimeError("workers/start response missing worker_id")
                 lifecycle_context = WorkerLifecycleContext(
                     job_id=args.job_id,
                     stage_id=args.stage_id,
-                    worker_id=args.worker_id,
-                    worker_name=(args.worker_name or None),
+                    worker_id=reported_worker_id,
+                    worker_name=worker_name,
                 )
             except CredentialsError:
                 lifecycle_client = None
-                lifecycle_context = None
+            except Exception as e:
+                print(
+                    f"[refiner] lifecycle worker start failed: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
+                lifecycle_client = None
         stats = Worker(
             rank=args.rank,
             ledger=ledger,

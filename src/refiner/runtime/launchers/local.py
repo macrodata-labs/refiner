@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
-from uuid6 import uuid7
 
 import cloudpickle
 
@@ -143,15 +143,33 @@ class LocalLauncher(BaseLauncher):
             ledger = FsLedger(job_id=self.job_id, worker_id=0, workdir=self.workdir)
             try:
                 lifecycle_client = None
-                lifecycle_context = None
+                lifecycle_context = WorkerLifecycleContext(
+                    job_id=self.job_id,
+                    stage_id="",
+                    worker_id="",
+                    worker_name="local-rank-0",
+                )
                 if observer_ctx is not None:
-                    lifecycle_client = observer_ctx.client
-                    lifecycle_context = WorkerLifecycleContext(
+                    worker_name = "local-rank-0"
+                    try:
+                        host = socket.gethostname()
+                    except Exception:
+                        host = None
+                    started_resp = observer_ctx.client.report_worker_started(
                         job_id=observer_ctx.job.job_id,
                         stage_id=observer_ctx.job.stage_id,
-                        worker_id=str(uuid7()),
-                        worker_name="local-rank-0",
+                        host=host,
+                        worker_name=worker_name,
                     )
+                    reported_worker_id = started_resp.get("worker_id")
+                    if isinstance(reported_worker_id, str) and reported_worker_id:
+                        lifecycle_client = observer_ctx.client
+                        lifecycle_context = WorkerLifecycleContext(
+                            job_id=observer_ctx.job.job_id,
+                            stage_id=observer_ctx.job.stage_id,
+                            worker_id=reported_worker_id,
+                            worker_name=worker_name,
+                        )
                 stats = Worker(
                     rank=0,
                     ledger=ledger,
@@ -186,6 +204,7 @@ class LocalLauncher(BaseLauncher):
         payload_path = self._write_pipeline_payload(payload)
         self.seed_ledger(shards=shards)
         procs: list[subprocess.Popen[str]] = []
+        src_dir = Path(__file__).resolve().parents[3]
         for rank in range(self.num_workers):
             stats_path = self._stats_path(rank)
             cpu_ids = cpu_sets[rank]
@@ -218,13 +237,18 @@ class LocalLauncher(BaseLauncher):
                     [
                         "--stage-id",
                         observer_ctx.job.stage_id,
-                        "--worker-id",
-                        str(uuid7()),
                         "--worker-name",
                         f"local-rank-{rank}",
                     ]
                 )
-            p = subprocess.Popen(cmd, text=True)
+            env = os.environ.copy()
+            existing_pythonpath = env.get("PYTHONPATH", "").strip()
+            env["PYTHONPATH"] = (
+                f"{src_dir}:{existing_pythonpath}"
+                if existing_pythonpath
+                else str(src_dir)
+            )
+            p = subprocess.Popen(cmd, text=True, env=env)
             procs.append(p)
 
         errors: list[str] = []

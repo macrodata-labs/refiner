@@ -87,13 +87,10 @@ class MacrodataClient:
         *,
         job_id: str,
         stage_id: str,
-        worker_id: str,
         host: str | None = None,
         worker_name: str | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "worker_id": worker_id,
-        }
+        payload: dict[str, Any] = {}
         if host:
             payload["host"] = host
         if worker_name:
