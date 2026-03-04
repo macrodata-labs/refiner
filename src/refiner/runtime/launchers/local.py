@@ -204,7 +204,6 @@ class LocalLauncher(BaseLauncher):
         payload_path = self._write_pipeline_payload(payload)
         self.seed_ledger(shards=shards)
         procs: list[subprocess.Popen[str]] = []
-        src_dir = Path(__file__).resolve().parents[3]
         for rank in range(self.num_workers):
             stats_path = self._stats_path(rank)
             cpu_ids = cpu_sets[rank]
@@ -241,14 +240,7 @@ class LocalLauncher(BaseLauncher):
                         f"local-rank-{rank}",
                     ]
                 )
-            env = os.environ.copy()
-            existing_pythonpath = env.get("PYTHONPATH", "").strip()
-            env["PYTHONPATH"] = (
-                f"{src_dir}:{existing_pythonpath}"
-                if existing_pythonpath
-                else str(src_dir)
-            )
-            p = subprocess.Popen(cmd, text=True, env=env)
+            p = subprocess.Popen(cmd, text=True)
             procs.append(p)
 
         errors: list[str] = []
