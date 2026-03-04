@@ -133,21 +133,21 @@ class Worker:
                     for shard in list(inflight):
                         self.ledger.heartbeat(shard)
                         if lifecycle_client is not None:
-                                lifecycle_client.report_shard_finished(
-                                    job_id=lifecycle_context.job_id,
-                                    stage_id=lifecycle_context.stage_id,
-                                    worker_id=lifecycle_context.worker_id,
-                                    shard_id=shard.id,
-                                    status="completed",
-                                    error=None,
-                                )
-                                obs_logger.info(
-                                    "shard finished job_id={} stage_id={} worker_id={} shard_id={} status=completed",
-                                    lifecycle_context.job_id,
-                                    lifecycle_context.stage_id,
-                                    lifecycle_context.worker_id,
-                                    shard.id,
-                                )
+                            lifecycle_client.report_shard_finished(
+                                job_id=lifecycle_context.job_id,
+                                stage_id=lifecycle_context.stage_id,
+                                worker_id=lifecycle_context.worker_id,
+                                shard_id=shard.id,
+                                status="completed",
+                                error=None,
+                            )
+                            obs_logger.info(
+                                "shard finished job_id={} stage_id={} worker_id={} shard_id={} status=completed",
+                                lifecycle_context.job_id,
+                                lifecycle_context.stage_id,
+                                lifecycle_context.worker_id,
+                                shard.id,
+                            )
                         user_metrics_emitter.force_flush_user_metrics()
                         self.ledger.complete(shard)
                         inflight.remove(shard)
