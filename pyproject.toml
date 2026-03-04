@@ -12,10 +12,14 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "cloudpickle",
+    "cloudpickle==3.1.2",
     "fsspec",
     "httpx",
+    "loguru",
     "huggingface-hub>=1.4.1",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-sdk",
+    "psutil",
     "orjson",
     "pyarrow",
 ]

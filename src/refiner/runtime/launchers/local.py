@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -142,14 +143,33 @@ class LocalLauncher(BaseLauncher):
             ledger = FsLedger(job_id=self.job_id, worker_id=0, workdir=self.workdir)
             try:
                 lifecycle_client = None
-                lifecycle_context = None
+                lifecycle_context = WorkerLifecycleContext(
+                    job_id=self.job_id,
+                    stage_id="",
+                    worker_id="",
+                    worker_name="local-rank-0",
+                )
                 if observer_ctx is not None:
-                    lifecycle_client = observer_ctx.client
-                    lifecycle_context = WorkerLifecycleContext(
+                    worker_name = "local-rank-0"
+                    try:
+                        host = socket.gethostname()
+                    except Exception:
+                        host = None
+                    started_resp = observer_ctx.client.report_worker_started(
                         job_id=observer_ctx.job.job_id,
                         stage_id=observer_ctx.job.stage_id,
-                        worker_id="local-rank-0",
+                        host=host,
+                        worker_name=worker_name,
                     )
+                    reported_worker_id = started_resp.get("worker_id")
+                    if isinstance(reported_worker_id, str) and reported_worker_id:
+                        lifecycle_client = observer_ctx.client
+                        lifecycle_context = WorkerLifecycleContext(
+                            job_id=observer_ctx.job.job_id,
+                            stage_id=observer_ctx.job.stage_id,
+                            worker_id=reported_worker_id,
+                            worker_name=worker_name,
+                        )
                 stats = Worker(
                     rank=0,
                     ledger=ledger,
@@ -160,7 +180,9 @@ class LocalLauncher(BaseLauncher):
                 ).run()
             finally:
                 if old_affinity is not None:
-                    os.sched_setaffinity(0, old_affinity)
+                    set_affinity = getattr(os, "sched_setaffinity", None)
+                    if callable(set_affinity):
+                        set_affinity(0, old_affinity)
                 if old_mem_limits is not None:
                     restore_memory_soft_limit(old_mem_limits)
             status = "failed" if stats.failed > 0 else "completed"
@@ -214,7 +236,7 @@ class LocalLauncher(BaseLauncher):
                     [
                         "--stage-id",
                         observer_ctx.job.stage_id,
-                        "--worker-id",
+                        "--worker-name",
                         f"local-rank-{rank}",
                     ]
                 )

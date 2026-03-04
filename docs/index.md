@@ -14,7 +14,7 @@ Refiner is being built as a batch-first processing engine with:
 - Long-lived worker execution with shard-based progress and retries.
 - Async model-processing islands inside a stage without forcing stage handoff.
 - Launcher portability across local, Slurm, and Ray runtimes.
-- Observability-first lifecycle integration (job, stage, worker, shard, metrics, logs).
+- Observability-first lifecycle integration (job, stage, worker, shard, logs, and user OTEL metrics).
 
 ## What You Can Use Now
 
@@ -38,7 +38,7 @@ Refiner is being built as a batch-first processing engine with:
 - `launch_local()` user API and launcher interfaces shared by future Slurm/Ray launchers.
 - Stage/materialization boundary operators (shuffle, dedup, sort, join).
 - Async-island execution model for model-based processing with pull-based completion.
-- Expanded observability docs once launcher telemetry endpoints are integrated.
+- Expanded observability docs for backend metric querying and cardinality guardrails.
 
 ## Internal Notes
 

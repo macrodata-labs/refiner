@@ -13,6 +13,7 @@ from .http import MacrodataApiError, request_json
 if TYPE_CHECKING:
     from refiner.ledger.shard import Shard
     from refiner.pipeline import RefinerPipeline
+    from refiner.runtime.metrics_context import UserMetricsEmitter
 
 
 def compile_shard_descriptors(shards: list["Shard"]) -> list[dict[str, Any]]:
@@ -38,7 +39,7 @@ class MacrodataClient:
         }
         resp = request_json(
             method="POST",
-            path="/api/jobs",
+            path="/api/jobs/submit",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=payload,
@@ -46,29 +47,29 @@ class MacrodataClient:
         job = resp.get("job")
         if not isinstance(job, dict):
             raise MacrodataApiError(
-                status=200, message="Missing job in /api/jobs response"
+                status=200, message="Missing job in /api/jobs/submit response"
             )
         job_id = job.get("id")
         stages = job.get("stages")
         if not isinstance(job_id, str) or not job_id:
             raise MacrodataApiError(
-                status=200, message="Missing job.id in /api/jobs response"
+                status=200, message="Missing job.id in /api/jobs/submit response"
             )
         if not isinstance(stages, list) or not stages:
             raise MacrodataApiError(
-                status=200, message="Missing stages in /api/jobs response"
+                status=200, message="Missing stages in /api/jobs/submit response"
             )
         stage0 = stages[0]
         if not isinstance(stage0, dict):
             raise MacrodataApiError(
-                status=200, message="Missing stage id in /api/jobs response"
+                status=200, message="Missing stage index in /api/jobs/submit response"
             )
-        stage_id = stage0.get("id")
-        if not isinstance(stage_id, str) or not stage_id:
+        stage_index = stage0.get("index")
+        if not isinstance(stage_index, int):
             raise MacrodataApiError(
-                status=200, message="Missing stage id in /api/jobs response"
+                status=200, message="Missing stage index in /api/jobs/submit response"
             )
-        return JobContext(job_id=job_id, stage_id=stage_id)
+        return JobContext(job_id=job_id, stage_id=str(stage_index))
 
     def register_stage_shards(
         self, *, job_id: str, stage_id: str, shards: list["Shard"]
@@ -82,12 +83,22 @@ class MacrodataClient:
         )
 
     def report_worker_started(
-        self, *, job_id: str, stage_id: str, worker_id: str, host: str | None = None
+        self,
+        *,
+        job_id: str,
+        stage_id: str,
+        host: str | None = None,
+        worker_name: str | None = None,
     ) -> dict[str, Any]:
-        payload = {"host": host} if host else {}
+        payload: dict[str, Any] = {}
+        if host:
+            payload["host"] = host
+        if worker_name:
+            payload["name"] = worker_name
+
         return request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/{worker_id}/start",
+            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/start",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=payload,
@@ -163,6 +174,20 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"status": status},
+        )
+
+    def worker_telemetry(
+        self, *, job_id: str, stage_id: str, worker_id: str
+    ) -> "UserMetricsEmitter":
+        from .telemetry import OtelTelemetryEmitter
+
+        stage_index = int(stage_id)
+        return OtelTelemetryEmitter(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            job_id=job_id,
+            stage_index=stage_index,
+            worker_id=worker_id,
         )
 
     def cloud_submit_job(

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from typing import Any, cast
+
+import pytest
 
 from refiner.ledger.backend.base import BaseLedger, LedgerConfig
 from refiner.ledger.shard import Shard
@@ -8,6 +11,11 @@ from refiner.pipeline import RefinerPipeline
 from refiner.sources.readers.base import BaseReader
 from refiner.sources.row import DictRow, Row
 from refiner.worker import Worker
+from refiner.runtime.worker import WorkerLifecycleContext
+
+
+def _lifecycle_context() -> WorkerLifecycleContext:
+    return WorkerLifecycleContext(job_id="job", stage_id="", worker_id="")
 
 
 class _FakeReader(BaseReader):
@@ -49,6 +57,65 @@ class _FakeLedger(BaseLedger):
 
     def fail(self, shard: Shard, error: str | None = None) -> None:
         self.failed_ids.append(shard.id)
+
+
+class _NoopTelemetryEmitter:
+    def emit_user_counter(self, **kwargs) -> None:
+        del kwargs
+
+    def emit_user_gauge(self, **kwargs) -> None:
+        del kwargs
+
+    def emit_user_histogram(self, **kwargs) -> None:
+        del kwargs
+
+    def force_flush_user_metrics(self) -> None:
+        return None
+
+    def force_flush_resource_metrics(self) -> None:
+        return None
+
+    def force_flush_logs(self) -> None:
+        return None
+
+    def shutdown(self) -> None:
+        return None
+
+
+class _FlushFailingTelemetryEmitter(_NoopTelemetryEmitter):
+    def force_flush_user_metrics(self) -> None:
+        raise RuntimeError("flush failed")
+
+
+class _ShardFinishFailingLifecycleClient:
+    def report_shard_started(self, **kwargs) -> None:
+        del kwargs
+
+    def report_shard_finished(self, **kwargs) -> None:
+        del kwargs
+        raise RuntimeError("observer unavailable")
+
+    def report_worker_finished(self, **kwargs) -> None:
+        del kwargs
+
+    def worker_telemetry(self, **kwargs):
+        del kwargs
+        return _NoopTelemetryEmitter()
+
+
+class _LifecycleClientWithFailingTelemetry:
+    def report_shard_started(self, **kwargs) -> None:
+        del kwargs
+
+    def report_shard_finished(self, **kwargs) -> None:
+        del kwargs
+
+    def report_worker_finished(self, **kwargs) -> None:
+        del kwargs
+
+    def worker_telemetry(self, **kwargs):
+        del kwargs
+        return _FlushFailingTelemetryEmitter()
 
 
 def test_pipeline_executes_row_and_batch_steps() -> None:
@@ -102,6 +169,7 @@ def test_worker_runs_fused_pipeline_and_updates_ledger() -> None:
         ledger=ledger,
         pipeline=pipeline,
         heartbeat_every_rows=1,
+        lifecycle_context=_lifecycle_context(),
     )
 
     stats = worker.run()
@@ -134,7 +202,12 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
         return row
 
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail)
-    worker = Worker(rank=0, ledger=ledger, pipeline=pipeline)
+    worker = Worker(
+        rank=0,
+        ledger=ledger,
+        pipeline=pipeline,
+        lifecycle_context=_lifecycle_context(),
+    )
 
     stats = worker.run()
 
@@ -170,6 +243,7 @@ def test_worker_can_batch_across_shards() -> None:
         rank=0,
         ledger=ledger,
         pipeline=pipeline,
+        lifecycle_context=_lifecycle_context(),
     )
     stats = worker.run()
 
@@ -177,6 +251,54 @@ def test_worker_can_batch_across_shards() -> None:
     assert stats.completed == 2
     # batch reverse should cross shard boundary and invert shard emission order.
     assert emitted == [shard2.id, shard1.id]
+
+
+def test_worker_shard_finish_reporting_errors_are_not_swallowed() -> None:
+    shard = Shard(path="p", start=0, end=1)
+    ledger = _FakeLedger([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 1})]}
+    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
+
+    worker = Worker(
+        rank=0,
+        ledger=ledger,
+        pipeline=pipeline,
+        lifecycle_client=cast(Any, _ShardFinishFailingLifecycleClient()),
+        lifecycle_context=WorkerLifecycleContext(
+            job_id="job",
+            stage_id="0",
+            worker_id="worker-0",
+        ),
+    )
+    with pytest.raises(RuntimeError, match="observer unavailable"):
+        worker.run()
+
+    assert ledger.completed_ids == []
+    assert ledger.failed_ids == []
+
+
+def test_worker_shard_flush_errors_are_not_swallowed() -> None:
+    shard = Shard(path="p", start=0, end=1)
+    ledger = _FakeLedger([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 1})]}
+    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
+
+    worker = Worker(
+        rank=0,
+        ledger=ledger,
+        pipeline=pipeline,
+        lifecycle_client=cast(Any, _LifecycleClientWithFailingTelemetry()),
+        lifecycle_context=WorkerLifecycleContext(
+            job_id="job",
+            stage_id="0",
+            worker_id="worker-0",
+        ),
+    )
+    with pytest.raises(RuntimeError, match="flush failed"):
+        worker.run()
+
+    assert ledger.completed_ids == []
+    assert ledger.failed_ids == []
 
 
 # Keep pytest from treating imported typing names as tests on some plugins.

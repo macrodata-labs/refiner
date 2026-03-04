@@ -3,7 +3,7 @@ title: "Observability"
 description: "Send local launcher lifecycle events to Macrodata Observer"
 ---
 
-Refiner local launches can report job/stage/worker/shard lifecycle events to Macrodata Observer.
+Refiner launches can report job/stage/worker/shard lifecycle events and user metrics to Macrodata Observer.
 
 ## How It Enables
 
@@ -16,14 +16,65 @@ If no key is available, the launch still runs and prints a warning with a login/
 
 ## What Is Reported (Current)
 
-- Job creation (`/api/jobs`)
+- Job creation (`/api/jobs/submit`)
 - Stage shard registration
 - Worker start / finish
 - Shard start / finish
 - Stage finish
 - Job finish
+- OTEL metrics emitted from worker runtime
+- OTEL logs exported from Loguru
 
-Metrics / pulse reporting is not sent yet.
+## User Metrics API
+
+Use top-level helpers inside pipeline functions:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_parquet("data/*.parquet").map(
+    lambda r: (
+        mdr.log_throughput("rows_seen", 1, shard_id=str(r["__shard_id"]), unit="rows"),
+        mdr.log_gauge("batch_size", 128, unit="rows"),
+        mdr.log_gauges("memory", unit="MB", used=512, limit=1024),
+        mdr.log_histogram("latency_ms", 42.5, shard_id=str(r["__shard_id"]), unit="ms"),
+        r,
+    )[-1]
+)
+```
+
+Available helpers:
+
+- `mdr.log_throughput(label, value, shard_id, *, unit=None)` -> OTEL counter (`refiner.user.counter`)
+- `mdr.log_gauge(label, value, *, kind=None, unit=None)` -> OTEL gauge (`refiner.user.gauge`)
+- `mdr.log_gauges(label, *, unit=None, **values)` -> convenience wrapper for multiple gauge `kind` values
+- `mdr.log_histogram(label, value, shard_id, *, per="row", unit=None)` -> OTEL histogram (`refiner.user.histogram`)
+
+For gauges, `kind` is emitted as OTEL point attribute `kind`.
+For histograms, `per` and `unit` are emitted as OTEL point attributes.
+
+`log_throughput` requires `shard_id` for shard-level attribution and shard-end flush behavior.
+Backend dedupe key for counters should be `(job.id, stage.index, label, shard_id)`.
+`__shard_id` is attached to rows automatically by the source runtime.
+`step.index` is attached from runtime execution context:
+- source/reader step uses index `0`
+- pipeline transform steps use index `1..N`
+
+If telemetry is unavailable (for example local iteration via `pipeline.iter_rows()` or no Observer credentials), these calls are no-op.
+
+
+## Logging API
+
+Refiner forwards Loguru records to Observer OTLP logs when observability is enabled.
+
+```python
+from loguru import logger
+
+logger.info("started processing")
+logger.info("batch finished")
+```
+
+No extra logger wiring is required in user code.
 
 ## User Flow
 
@@ -44,5 +95,9 @@ If a key is present, the run appears in Macrodata Observer with lifecycle progre
 
 - Current Refiner pipelines are submitted as a single stage (`stage_0`) in the Observer job plan.
 - Refiner registers shard descriptors (`shard_id`, `path`, `start`, `end`) and uses `shard_id` for shard lifecycle events.
-- Observer failures are fail-open in local launcher mode (processing continues; warnings are printed).
-
+- User OTEL metrics export every 10 seconds and force flush on shard end.
+- Worker resource OTEL metrics export every 10 seconds and are flushed at worker shutdown.
+- Resource gauges for CPU and memory are emitted as grouped series with `kind` labels:
+  - `refiner.worker.cpu`: `kind=used`, `kind=quota` (when quota is detectable)
+  - `refiner.worker.memory`: `kind=used`, `kind=limit` (when memory limit is detectable)
+- Worker shard finish reporting and per-shard metric flush are non-swallowed.

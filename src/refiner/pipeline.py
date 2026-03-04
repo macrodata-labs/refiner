@@ -27,6 +27,7 @@ from refiner.sources import (
     TaskSource,
 )
 from refiner.sources.row import Row
+from refiner.runtime.metrics_context import set_active_step_index
 from refiner.runtime.row_queue import RowQueue
 from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
@@ -49,23 +50,33 @@ class RefinerPipeline:
         return self.__class__(self.source, self.pipeline_steps + [step])
 
     def map(self, fn: MapFn) -> "RefinerPipeline":
-        return self.add_step(FnRowStep(fn=fn, op_name="map"))
+        return self.add_step(
+            FnRowStep(fn=fn, op_name="map", index=len(self.pipeline_steps) + 1)
+        )
 
     def batch_map(self, fn: BatchFn, *, batch_size: int) -> "RefinerPipeline":
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")
         return self.add_step(
-            FnBatchStep(fn=fn, batch_size=batch_size, op_name="batch_map")
+            FnBatchStep(
+                fn=fn,
+                batch_size=batch_size,
+                op_name="batch_map",
+                index=len(self.pipeline_steps) + 1,
+            )
         )
 
     def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
-        return self.add_step(FnFlatMapStep(fn=fn, op_name="flat_map"))
+        return self.add_step(
+            FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
+        )
 
     def filter(self, predicate: Callable[[Row], bool]) -> "RefinerPipeline":
         return self.add_step(
             FnFlatMapStep(
                 fn=lambda row: [row] if predicate(row) else [],
                 op_name="filter",
+                index=len(self.pipeline_steps) + 1,
             )
         )
 
@@ -87,41 +98,42 @@ class RefinerPipeline:
                 return
             out = queues[i + 1]
 
-            if isinstance(step, RowStep):
-                for row in inp.take_all():
-                    normalized = normalize_row_result(row, step.apply_row(row))
-                    out.append(normalized)
-                return
+            with set_active_step_index(step.index):
+                if isinstance(step, RowStep):
+                    for row in inp.take_all():
+                        normalized = normalize_row_result(row, step.apply_row(row))
+                        out.append(normalized)
+                    return
 
-            if isinstance(step, FlatMapStep):
-                tmp = scratch[i]
-                tmp.clear()
-                for row in inp.take_all():
-                    for item in step.apply_row_many(row):
+                if isinstance(step, FlatMapStep):
+                    tmp = scratch[i]
+                    tmp.clear()
+                    for row in inp.take_all():
+                        for item in step.apply_row_many(row):
+                            normalized = normalize_batch_item(item)
+                            if normalized is not None:
+                                tmp.append(normalized)
+                    out.extend(tmp)
+                    return
+
+                if isinstance(step, BatchStep):
+                    if flush_all:
+                        batch_in = inp.take_all()
+                    else:
+                        n = (len(inp) // step.batch_size) * step.batch_size
+                        if n == 0:
+                            return
+                        batch_in = inp.take(n)
+                    if not batch_in:
+                        return
+                    tmp = scratch[i]
+                    tmp.clear()
+                    for item in step.apply_batch(batch_in):
                         normalized = normalize_batch_item(item)
                         if normalized is not None:
                             tmp.append(normalized)
-                out.extend(tmp)
-                return
-
-            if isinstance(step, BatchStep):
-                if flush_all:
-                    batch_in = inp.take_all()
-                else:
-                    n = (len(inp) // step.batch_size) * step.batch_size
-                    if n == 0:
-                        return
-                    batch_in = inp.take(n)
-                if not batch_in:
+                    out.extend(tmp)
                     return
-                tmp = scratch[i]
-                tmp.clear()
-                for item in step.apply_batch(batch_in):
-                    normalized = normalize_batch_item(item)
-                    if normalized is not None:
-                        tmp.append(normalized)
-                out.extend(tmp)
-                return
 
             raise TypeError(f"Unsupported step type: {type(step)!r}")
 
@@ -334,6 +346,7 @@ def task(
     return RefinerPipeline(source=source).add_step(
         FnRowStep(
             fn=lambda row: fn(row["task_rank"], num_tasks),
+            index=1,
             op_name="task",
         )
     )

@@ -18,7 +18,7 @@ class CloudLedger(BaseLedger):
         job_id: str,
         worker_id: int | None,
         stage_id: str,
-        api_key: str,
+        api_key: str | None = None,
         config: LedgerConfig | None = None,
     ) -> None:
         cfg = config or load_ledger_config_from_env()

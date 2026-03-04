@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import socket
-import sys
+
+from loguru import logger
 
 from refiner.ledger import BaseLedger
 from refiner.ledger.shard import Shard
 from refiner.platform.client import MacrodataClient
 from refiner.pipeline import RefinerPipeline
+from refiner.runtime.metrics_context import (
+    NOOP_USER_METRICS_EMITTER,
+    UserMetricsEmitter,
+    set_active_step_index,
+    set_active_user_metrics_emitter,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +29,7 @@ class WorkerLifecycleContext:
     job_id: str
     stage_id: str
     worker_id: str
+    worker_name: str | None = None
 
 
 class Worker:
@@ -34,7 +41,7 @@ class Worker:
         *,
         heartbeat_every_rows: int = 4096,
         lifecycle_client: MacrodataClient | None = None,
-        lifecycle_context: WorkerLifecycleContext | None = None,
+        lifecycle_context: WorkerLifecycleContext,
     ):
         self.rank = rank
         self.ledger = ledger
@@ -57,24 +64,30 @@ class Worker:
         failed_error: str | None = None
         lifecycle_client = self.lifecycle_client
         lifecycle_context = self.lifecycle_context
+        user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
+        obs_logger = logger.bind(rank=self.rank)
 
-        if lifecycle_client is not None and lifecycle_context is not None:
+        if lifecycle_client is not None:
+            obs_logger.info(
+                "worker started job_id={} stage_id={} worker_id={}",
+                lifecycle_context.job_id,
+                lifecycle_context.stage_id,
+                lifecycle_context.worker_id,
+            )
             try:
-                try:
-                    host = socket.gethostname()
-                except Exception:
-                    host = None
-                lifecycle_client.report_worker_started(
+                telemetry_emitter = lifecycle_client.worker_telemetry(
                     job_id=lifecycle_context.job_id,
                     stage_id=lifecycle_context.stage_id,
                     worker_id=lifecycle_context.worker_id,
-                    host=host,
                 )
-            except Exception as e:  # noqa: BLE001 - fail-open observer hooks
-                print(
-                    f"[refiner] lifecycle reporting failed: {type(e).__name__}: {e}",
-                    file=sys.stderr,
+            except Exception as e:  # noqa: BLE001 - fail-open telemetry setup
+                obs_logger.warning(
+                    "telemetry setup failed: {}: {}",
+                    type(e).__name__,
+                    e,
                 )
+            else:
+                user_metrics_emitter = telemetry_emitter
 
         def _source_rows():
             nonlocal previous, claimed
@@ -84,7 +97,7 @@ class Worker:
                     break
                 claimed += 1
                 inflight.append(shard)
-                if lifecycle_client is not None and lifecycle_context is not None:
+                if lifecycle_client is not None:
                     try:
                         lifecycle_client.report_shard_started(
                             job_id=lifecycle_context.job_id,
@@ -92,52 +105,38 @@ class Worker:
                             worker_id=lifecycle_context.worker_id,
                             shard_id=shard.id,
                         )
-                    except Exception as e:  # noqa: BLE001 - fail-open observer hooks
-                        print(
-                            "[refiner] lifecycle reporting failed: "
-                            f"{type(e).__name__}: {e}",
-                            file=sys.stderr,
+                        obs_logger.info(
+                            "shard started job_id={} stage_id={} worker_id={} shard_id={}",
+                            lifecycle_context.job_id,
+                            lifecycle_context.stage_id,
+                            lifecycle_context.worker_id,
+                            shard.id,
                         )
-                yield from self.pipeline.source.read_shard(shard)
+                    except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+                        obs_logger.warning(
+                            "lifecycle reporting failed: {}: {}",
+                            type(e).__name__,
+                            e,
+                        )
+                with set_active_step_index(0):
+                    yield from self.pipeline.source.iter_shard_rows(shard)
                 previous = shard
 
-        while True:
+        with set_active_user_metrics_emitter(user_metrics_emitter):
+            run_exception: Exception | None = None
             try:
-                for _ in self.pipeline.execute_rows(_source_rows()):
-                    output_rows += 1
-                    output_rows_since_hb += 1
-                    if output_rows_since_hb % self.heartbeat_every_rows == 0:
-                        for shard in inflight:
-                            self.ledger.heartbeat(shard)
-
-                for shard in inflight:
-                    self.ledger.heartbeat(shard)
-                    self.ledger.complete(shard)
-                    if lifecycle_client is not None and lifecycle_context is not None:
-                        try:
-                            lifecycle_client.report_shard_finished(
-                                job_id=lifecycle_context.job_id,
-                                stage_id=lifecycle_context.stage_id,
-                                worker_id=lifecycle_context.worker_id,
-                                shard_id=shard.id,
-                                status="completed",
-                                error=None,
-                            )
-                        except Exception as e:  # noqa: BLE001 - fail-open observer hooks
-                            print(
-                                "[refiner] lifecycle reporting failed: "
-                                f"{type(e).__name__}: {e}",
-                                file=sys.stderr,
-                            )
-                    completed += 1
-                inflight.clear()
-                break
-            except Exception as e:
-                failed_error = str(e)
-                for shard in inflight:
-                    self.ledger.fail(shard, str(e))
-                    if lifecycle_client is not None and lifecycle_context is not None:
-                        try:
+                try:
+                    for _ in self.pipeline.execute_rows(_source_rows()):
+                        output_rows += 1
+                        output_rows_since_hb += 1
+                        if output_rows_since_hb % self.heartbeat_every_rows == 0:
+                            for shard in inflight:
+                                self.ledger.heartbeat(shard)
+                except Exception as e:
+                    failed_error = str(e)
+                    for shard in list(inflight):
+                        self.ledger.fail(shard, str(e))
+                        if lifecycle_client is not None:
                             lifecycle_client.report_shard_finished(
                                 job_id=lifecycle_context.job_id,
                                 stage_id=lifecycle_context.stage_id,
@@ -146,38 +145,93 @@ class Worker:
                                 status="failed",
                                 error=str(e),
                             )
-                        except Exception as e2:  # noqa: BLE001 - fail-open observer hooks
-                            print(
-                                "[refiner] lifecycle reporting failed: "
-                                f"{type(e2).__name__}: {e2}",
-                                file=sys.stderr,
+                            obs_logger.info(
+                                "shard finished job_id={} stage_id={} worker_id={} shard_id={} status=failed",
+                                lifecycle_context.job_id,
+                                lifecycle_context.stage_id,
+                                lifecycle_context.worker_id,
+                                shard.id,
                             )
-                    failed += 1
-                inflight.clear()
-                previous = None
-                break
+                        user_metrics_emitter.force_flush_user_metrics()
+                        failed += 1
+                    inflight.clear()
+                else:
+                    for shard in list(inflight):
+                        self.ledger.heartbeat(shard)
+                        if lifecycle_client is not None:
+                            lifecycle_client.report_shard_finished(
+                                job_id=lifecycle_context.job_id,
+                                stage_id=lifecycle_context.stage_id,
+                                worker_id=lifecycle_context.worker_id,
+                                shard_id=shard.id,
+                                status="completed",
+                                error=None,
+                            )
+                            obs_logger.info(
+                                "shard finished job_id={} stage_id={} worker_id={} shard_id={} status=completed",
+                                lifecycle_context.job_id,
+                                lifecycle_context.stage_id,
+                                lifecycle_context.worker_id,
+                                shard.id,
+                            )
+                        user_metrics_emitter.force_flush_user_metrics()
+                        self.ledger.complete(shard)
+                        inflight.remove(shard)
+                        completed += 1
+                    inflight.clear()
 
-        if lifecycle_client is not None and lifecycle_context is not None:
-            try:
-                lifecycle_client.report_worker_finished(
-                    job_id=lifecycle_context.job_id,
-                    stage_id=lifecycle_context.stage_id,
-                    worker_id=lifecycle_context.worker_id,
-                    status="failed" if failed_error is not None else "completed",
-                    error=failed_error,
+                return WorkerRunStats(
+                    claimed=claimed,
+                    completed=completed,
+                    failed=failed,
+                    output_rows=output_rows,
                 )
-            except Exception as e:  # noqa: BLE001 - fail-open observer hooks
-                print(
-                    f"[refiner] lifecycle reporting failed: {type(e).__name__}: {e}",
-                    file=sys.stderr,
-                )
+            except Exception as e:
+                run_exception = e
+                raise
+            finally:
+                if lifecycle_client is not None:
+                    status = (
+                        "failed"
+                        if failed_error is not None or run_exception is not None
+                        else "completed"
+                    )
+                    error = failed_error
+                    if error is None and run_exception is not None:
+                        error = str(run_exception)
+                    try:
+                        lifecycle_client.report_worker_finished(
+                            job_id=lifecycle_context.job_id,
+                            stage_id=lifecycle_context.stage_id,
+                            worker_id=lifecycle_context.worker_id,
+                            status=status,
+                            error=error,
+                        )
+                        obs_logger.info(
+                            "worker finished job_id={} stage_id={} worker_id={} status={}",
+                            lifecycle_context.job_id,
+                            lifecycle_context.stage_id,
+                            lifecycle_context.worker_id,
+                            status,
+                        )
+                    except Exception as e:  # noqa: BLE001 - fail-open observer hooks
+                        obs_logger.warning(
+                            "lifecycle reporting failed: {}: {}",
+                            type(e).__name__,
+                            e,
+                        )
 
-        return WorkerRunStats(
-            claimed=claimed,
-            completed=completed,
-            failed=failed,
-            output_rows=output_rows,
-        )
+                if failed_error is None and run_exception is None:
+                    user_metrics_emitter.shutdown()
+                else:
+                    try:
+                        user_metrics_emitter.shutdown()
+                    except Exception as e:  # noqa: BLE001 - do not mask primary failure
+                        obs_logger.warning(
+                            "telemetry shutdown failed during worker failure handling: {}: {}",
+                            type(e).__name__,
+                            e,
+                        )
 
 
 __all__ = ["Worker", "WorkerRunStats", "WorkerLifecycleContext"]

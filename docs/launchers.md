@@ -36,7 +36,7 @@ Local launches automatically attempt Macrodata Observer lifecycle reporting when
   - local key file from `macrodata login`
 - If no key is found, the launch still runs and prints a warning explaining how to enable observability.
 
-This integration currently reports job/stage/worker/shard lifecycle events (no pulse metrics yet).
+This integration reports job/stage/worker/shard lifecycle events and user-emitted OTEL metrics (`mdr.log_counter`, `mdr.log_gauge`, `mdr.log_histogram`).
 
 ## Launch Result
 
@@ -54,6 +54,7 @@ This integration currently reports job/stage/worker/shard lifecycle events (no p
 - Interface is intentionally minimal right now: launcher construction (`__init__(pipeline, name, ...)`) and `launch()`.
 - Local launcher uses filesystem ledger coordination and subprocess worker execution under the hood.
 - Worker subprocesses load pipeline payloads serialized with `cloudpickle`.
+- Example failure scenario script: `examples/local_launcher_worker0_crash_demo.py` intentionally exits worker rank `0` after its first successful shard.
 - CPU pinning is opt-in (`cpus_per_worker`) and does not enforce thread-count limits by default.
 - Observability is auto-enabled from platform auth state (env/local key) without an explicit launcher flag.
 - Slurm and Ray launchers are expected to implement the same minimal launcher shape later.

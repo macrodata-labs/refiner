@@ -11,6 +11,7 @@ from refiner.sources.row import DictRow, Row
 class RefinerStep(ABC):
     """Base marker for executable processing steps."""
 
+    index: int
     op_name: str | None = None
 
 
@@ -30,6 +31,7 @@ class RowStep(RefinerStep, ABC):
 @dataclass(frozen=True, slots=True)
 class FnRowStep(RowStep):
     fn: MapFn
+    index: int
     op_name: str | None = None
 
     def apply_row(self, row: Row) -> MapResult:
@@ -47,6 +49,7 @@ class BatchStep(RefinerStep, ABC):
 @dataclass(frozen=True, slots=True)
 class FnBatchStep(BatchStep):
     fn: BatchFn
+    index: int
     batch_size: int
     op_name: str | None = None
 
@@ -68,6 +71,7 @@ class FlatMapStep(RefinerStep, ABC):
 @dataclass(frozen=True, slots=True)
 class FnFlatMapStep(FlatMapStep):
     fn: FlatMapFn
+    index: int
     op_name: str | None = None
 
     def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
