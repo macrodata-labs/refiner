@@ -60,9 +60,7 @@ def main() -> int:
 
         if args.ledger_backend == "cloud":
             if not args.job_id or not args.stage_id:
-                raise ValueError(
-                    "cloud ledger requires --job-id and --stage-id"
-                )
+                raise ValueError("cloud ledger requires --job-id and --stage-id")
             try:
                 ledger = CloudLedger(
                     job_id=args.job_id,

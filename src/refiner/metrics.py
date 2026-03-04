@@ -18,10 +18,10 @@ def log_throughput(
     unit: str | None = None,
 ) -> None:
     """
-        Used to measure the rate of "label" in "unit" over time.
-        Example: if we just processed 6 documents since the last call to this function, we call
-        log_throughput("documents_extracted", value=6, unit="docs", shard_id=...)
-        Users will be able to see how many documents were processed in a given time period, as well as average rate
+    Used to measure the rate of "label" in "unit" over time.
+    Example: if we just processed 6 documents since the last call to this function, we call
+    log_throughput("documents_extracted", value=6, unit="docs", shard_id=...)
+    Users will be able to see how many documents were processed in a given time period, as well as average rate
     """
     if not is_not_empty(label):
         raise ValueError("label must be non-empty")
@@ -49,15 +49,15 @@ def log_gauge(
     unit: str | None = None,
 ) -> None:
     """
-        Instantaneous measure of "label" in "unit" at the current point in time
-        Example: current memory usage is 9gb out of 12gb:
-        log_gauge("memory", 9, kind=usage, unit="GB")
+    Instantaneous measure of "label" in "unit" at the current point in time
+    Example: current memory usage is 9gb out of 12gb:
+    log_gauge("memory", 9, kind=usage, unit="GB")
 
-        OR
+    OR
 
-        log_gauge("temperature", 65, unit="C")
+    log_gauge("temperature", 65, unit="C")
 
-        For multiple values for the same plot/quantity, either send separate requests or use log_gauges
+    For multiple values for the same plot/quantity, either send separate requests or use log_gauges
     """
     if not is_not_empty(label):
         raise ValueError("label must be non-empty")
@@ -79,8 +79,8 @@ def log_gauges(
     **values: float | int,
 ) -> None:
     """
-        Convenience method when you want to log multiple values for the same label
-        log_gauges("memory", unit="GB", used=9, allocated=10)
+    Convenience method when you want to log multiple values for the same label
+    log_gauges("memory", unit="GB", used=9, allocated=10)
     """
     for kind, value in values.items():
         log_gauge(label, value, kind=kind, unit=unit)
