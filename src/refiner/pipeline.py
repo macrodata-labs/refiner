@@ -3,18 +3,27 @@ from typing import TYPE_CHECKING, Any, Callable, List, Literal
 
 from fsspec import AbstractFileSystem
 
+from refiner.expressions import Expr, col as col_expr, lit
 from refiner.io.fileset import DataFileSetLike
 from refiner.processors.step import (
     BatchFn,
     BatchStep,
+    CastStep,
+    DropStep,
+    FilterExprStep,
     FlatMapFn,
     FlatMapStep,
     FnBatchStep,
     FnFlatMapStep,
     FnRowStep,
     MapFn,
+    RenameStep,
     RefinerStep,
     RowStep,
+    SelectStep,
+    VectorizedOp,
+    VectorizedSegmentStep,
+    WithColumnsStep,
     normalize_batch_item,
     normalize_row_result,
 )
@@ -29,11 +38,20 @@ from refiner.sources import (
 from refiner.sources.row import Row
 from refiner.runtime.metrics_context import set_active_step_index
 from refiner.runtime.row_queue import RowQueue
+from refiner.runtime.vectorized import (
+    apply_vectorized_op,
+    chunk_rows,
+    rows_to_table,
+    table_to_rows,
+)
 from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 if TYPE_CHECKING:
     from refiner.runtime.launchers.cloud import CloudLaunchResult
     from refiner.runtime.launchers.local import LaunchStats
+
+
+_VECTORIZED_CHUNK_ROWS = 2048
 
 
 class RefinerPipeline:
@@ -48,6 +66,17 @@ class RefinerPipeline:
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
         return self.__class__(self.source, self.pipeline_steps + [step])
+
+    def _add_vectorized_op(self, op: VectorizedOp) -> "RefinerPipeline":
+        # Fuse adjacent expression-backed operations so each fused segment does
+        # one row->Arrow and Arrow->row conversion boundary.
+        if self.pipeline_steps and isinstance(
+            self.pipeline_steps[-1], VectorizedSegmentStep
+        ):
+            prev = self.pipeline_steps[-1]
+            merged = VectorizedSegmentStep(ops=prev.ops + (op,))
+            return self.__class__(self.source, self.pipeline_steps[:-1] + [merged])
+        return self.add_step(VectorizedSegmentStep(ops=(op,)))
 
     def map(self, fn: MapFn) -> "RefinerPipeline":
         return self.add_step(
@@ -71,7 +100,9 @@ class RefinerPipeline:
             FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
         )
 
-    def filter(self, predicate: Callable[[Row], bool]) -> "RefinerPipeline":
+    def filter(self, predicate: Callable[[Row], bool] | Expr) -> "RefinerPipeline":
+        if isinstance(predicate, Expr):
+            return self._add_vectorized_op(FilterExprStep(predicate=predicate))
         return self.add_step(
             FnFlatMapStep(
                 fn=lambda row: [row] if predicate(row) else [],
@@ -79,6 +110,39 @@ class RefinerPipeline:
                 index=len(self.pipeline_steps) + 1,
             )
         )
+
+    def select(self, *columns: str) -> "RefinerPipeline":
+        if not columns:
+            raise ValueError("select requires at least one column")
+        return self._add_vectorized_op(SelectStep(columns=tuple(columns)))
+
+    def with_columns(self, **assignments: Expr | Any) -> "RefinerPipeline":
+        if not assignments:
+            raise ValueError("with_columns requires at least one assignment")
+        exprs = {
+            name: value if isinstance(value, Expr) else lit(value)
+            for name, value in assignments.items()
+        }
+        return self._add_vectorized_op(WithColumnsStep(assignments=exprs))
+
+    def with_column(self, name: str, value: Expr | Any) -> "RefinerPipeline":
+        expr = value if isinstance(value, Expr) else lit(value)
+        return self._add_vectorized_op(WithColumnsStep(assignments={name: expr}))
+
+    def drop(self, *columns: str) -> "RefinerPipeline":
+        if not columns:
+            raise ValueError("drop requires at least one column")
+        return self._add_vectorized_op(DropStep(columns=tuple(columns)))
+
+    def rename(self, **mapping: str) -> "RefinerPipeline":
+        if not mapping:
+            raise ValueError("rename requires at least one mapping")
+        return self._add_vectorized_op(RenameStep(mapping=mapping))
+
+    def cast(self, **dtypes: str) -> "RefinerPipeline":
+        if not dtypes:
+            raise ValueError("cast requires at least one dtype mapping")
+        return self._add_vectorized_op(CastStep(dtypes=dtypes))
 
     def execute_rows(self, rows: Iterable[Row]) -> Iterable[Row]:
         """Execute rows with per-step queues and step-local batch triggering."""
@@ -99,6 +163,26 @@ class RefinerPipeline:
             out = queues[i + 1]
 
             with set_active_step_index(step.index):
+                if isinstance(step, VectorizedSegmentStep):
+                    if flush_all:
+                        in_rows = inp.take_all()
+                    else:
+                        n = (len(inp) // _VECTORIZED_CHUNK_ROWS) * _VECTORIZED_CHUNK_ROWS
+                        if n == 0:
+                            return
+                        in_rows = inp.take(n)
+                    if not in_rows:
+                        return
+                    tmp = scratch[i]
+                    tmp.clear()
+                    for batch in chunk_rows(in_rows, _VECTORIZED_CHUNK_ROWS):
+                        table = rows_to_table(batch)
+                        for op in step.ops:
+                            table = apply_vectorized_op(table, op)
+                        tmp.extend(table_to_rows(table))
+                    out.extend(tmp)
+                    return
+
                 if isinstance(step, RowStep):
                     for row in inp.take_all():
                         normalized = normalize_row_result(row, step.apply_row(row))
@@ -350,3 +434,6 @@ def task(
             op_name="task",
         )
     )
+
+
+col = col_expr

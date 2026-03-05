@@ -1,6 +1,7 @@
 from .io import DataFile, DataFileSet, DataFolder
 from .ledger.shard import Shard
 from .metrics import log_gauge, log_gauges, log_histogram, log_throughput
+from .expressions import coalesce, col, lit
 from .pipeline import (
     RefinerPipeline,
     from_items,
@@ -57,4 +58,7 @@ __all__ = [
     "log_gauge",
     "log_gauges",
     "log_histogram",
+    "col",
+    "lit",
+    "coalesce",
 ]

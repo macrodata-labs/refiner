@@ -7,7 +7,17 @@ if TYPE_CHECKING:
 
 
 def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
-    from refiner.processors.step import FnBatchStep, FnFlatMapStep, FnRowStep
+    from refiner.processors.step import (
+        CastStep,
+        DropStep,
+        FilterExprStep,
+        FnBatchStep,
+        FnFlatMapStep,
+        FnRowStep,
+        RenameStep,
+        SelectStep,
+        WithColumnsStep,
+    )
 
     explicit_name = getattr(step, "op_name", None)
     if isinstance(step, FnRowStep):
@@ -20,6 +30,26 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         )
     if isinstance(step, FnFlatMapStep):
         return (explicit_name or "flat_map"), "flat_map", None
+    if isinstance(step, SelectStep):
+        return (explicit_name or "select"), "select", {"columns": list(step.columns)}
+    if isinstance(step, WithColumnsStep):
+        return (
+            explicit_name or "with_columns",
+            "with_columns",
+            {"columns": {k: v.to_plan() for k, v in step.assignments.items()}},
+        )
+    if isinstance(step, DropStep):
+        return (explicit_name or "drop"), "drop", {"columns": list(step.columns)}
+    if isinstance(step, RenameStep):
+        return (explicit_name or "rename"), "rename", {"mapping": dict(step.mapping)}
+    if isinstance(step, CastStep):
+        return (explicit_name or "cast"), "cast", {"dtypes": dict(step.dtypes)}
+    if isinstance(step, FilterExprStep):
+        return (
+            explicit_name or "filter",
+            "filter_expr",
+            {"predicate": step.predicate.to_plan()},
+        )
     return step.__class__.__name__, step.__class__.__name__.lower(), None
 
 
@@ -72,7 +102,21 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
             code=None,
         )
     )
+    from refiner.processors.step import VectorizedSegmentStep
+
     for step in pipeline.pipeline_steps:
+        if isinstance(step, VectorizedSegmentStep):
+            for op in step.ops:
+                base_name, step_type, args = _step_name_type(op)
+                steps.append(
+                    _step_payload(
+                        name=_unique_name(base_name),
+                        step_type=step_type,
+                        args=args,
+                        code=None,
+                    )
+                )
+            continue
         base_name, step_type, args = _step_name_type(step)
         steps.append(
             _step_payload(

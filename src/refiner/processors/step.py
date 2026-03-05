@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, TypeAlias
 
+from refiner.expressions import Expr
 from refiner.sources.row import DictRow, Row
 
 
@@ -78,6 +79,59 @@ class FnFlatMapStep(FlatMapStep):
         return self.fn(row)
 
 
+@dataclass(frozen=True, slots=True)
+class SelectStep(RefinerStep):
+    columns: tuple[str, ...]
+    op_name: str | None = "select"
+
+
+@dataclass(frozen=True, slots=True)
+class WithColumnsStep(RefinerStep):
+    assignments: Mapping[str, Expr]
+    op_name: str | None = "with_columns"
+
+
+@dataclass(frozen=True, slots=True)
+class DropStep(RefinerStep):
+    columns: tuple[str, ...]
+    op_name: str | None = "drop"
+
+
+@dataclass(frozen=True, slots=True)
+class RenameStep(RefinerStep):
+    mapping: Mapping[str, str]
+    op_name: str | None = "rename"
+
+
+@dataclass(frozen=True, slots=True)
+class CastStep(RefinerStep):
+    dtypes: Mapping[str, str]
+    op_name: str | None = "cast"
+
+
+@dataclass(frozen=True, slots=True)
+class FilterExprStep(RefinerStep):
+    predicate: Expr
+    op_name: str | None = "filter"
+
+
+VectorizedOp: TypeAlias = (
+    SelectStep | WithColumnsStep | DropStep | RenameStep | CastStep | FilterExprStep
+)
+
+
+@dataclass(frozen=True, slots=True)
+class VectorizedSegmentStep(RefinerStep):
+    """A fused shard-local vectorized segment.
+
+    Adjacent expression-backed operations are fused during pipeline construction so
+    row->Arrow and Arrow->row conversion happens only once per segment.
+    """
+
+    ops: tuple[VectorizedOp, ...]
+    op_name: str | None = "vectorized"
+
+
 def normalize_row_result(row: Row, result: MapResult) -> Row:
     """Normalize a user map() function's output.
 
@@ -117,6 +171,14 @@ __all__ = [
     "BatchItem",
     "BatchFn",
     "FlatMapFn",
+    "SelectStep",
+    "WithColumnsStep",
+    "DropStep",
+    "RenameStep",
+    "CastStep",
+    "FilterExprStep",
+    "VectorizedOp",
+    "VectorizedSegmentStep",
     "normalize_row_result",
     "normalize_batch_item",
 ]

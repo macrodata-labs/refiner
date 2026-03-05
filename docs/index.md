@@ -30,8 +30,9 @@ Refiner is being built as a batch-first processing engine with:
 3. `docs/readers-and-sharding.md` for input readers and shard behavior.
 4. `docs/worker-runtime.md` for worker lifecycle and ledger interaction.
 5. `docs/launchers.md` for local launcher usage.
-6. `docs/cli-auth.md` for `macrodata login`, `whoami`, and `logout`.
-7. `docs/observability.md` for Macrodata Observer lifecycle integration.
+6. `docs/expression-transforms.md` for expression-backed vectorized transforms.
+7. `docs/cli-auth.md` for `macrodata login`, `whoami`, and `logout`.
+8. `docs/observability.md` for Macrodata Observer lifecycle integration.
 
 ## Planned Additions
 
@@ -42,5 +43,5 @@ Refiner is being built as a batch-first processing engine with:
 
 ## Internal Notes
 
-- These docs reflect current behavior in `src/refiner/pipeline.py`, `src/refiner/readers/`, and `src/refiner/runtime/worker.py`.
+- These docs reflect current behavior in `src/refiner/pipeline.py`, `src/refiner/sources/readers/`, and `src/refiner/runtime/worker.py`.
 - Long-term goals are aligned with `OVERVIEW.md` and should remain consistent with architecture updates.
