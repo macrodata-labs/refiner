@@ -8,7 +8,7 @@ import pytest
 import refiner.pipeline as pipeline_module
 import refiner.runtime.execution.engine as engine_module
 from refiner.pipeline import from_items
-from refiner import col
+from refiner import col, if_else
 
 
 def test_vectorized_pipeline_ops_execute_in_order() -> None:
@@ -151,3 +151,63 @@ def test_vectorized_chunk_shrink_is_run_local(monkeypatch) -> None:
 def test_with_max_vectorized_block_bytes_validates_positive() -> None:
     with pytest.raises(ValueError):
         from_items([{"x": 1}]).with_max_vectorized_block_bytes(0)
+
+
+def test_vectorized_expression_extensions() -> None:
+    out = (
+        from_items(
+            [
+                {"x": 1, "s": "foo1", "y": None, "z": 1.2},
+                {"x": 2, "s": "bar2", "y": 5, "z": 2.6},
+                {"x": 3, "s": "baz3", "y": None, "z": -3.1},
+            ]
+        )
+        .with_columns(
+            in_set=col("x").is_in([1, 3]),
+            between_2_3=col("x").between(2, 3),
+            starts=col("s").str.startswith("ba"),
+            ends=col("s").str.endswith("3"),
+            has_digit=col("s").str.regex_contains(r"\d"),
+            no_digit=col("s").str.regex_replace(r"\d", ""),
+            y_filled=col("y").fill_null(0),
+            x_null_if_2=col("x").null_if(2),
+            bucket=if_else(col("x") > 1, "gt1", "le1"),
+            z_abs=col("z").abs(),
+            z_floor=col("z").floor(),
+            z_ceil=col("z").ceil(),
+            z_round=col("z").round(0),
+            z_clip=col("z").clip(min_value=1.5, max_value=2.5),
+        )
+        .select(
+            "in_set",
+            "between_2_3",
+            "starts",
+            "ends",
+            "has_digit",
+            "no_digit",
+            "y_filled",
+            "x_null_if_2",
+            "bucket",
+            "z_abs",
+            "z_floor",
+            "z_ceil",
+            "z_round",
+            "z_clip",
+        )
+        .materialize()
+    )
+
+    assert [bool(r["in_set"]) for r in out] == [True, False, True]
+    assert [bool(r["between_2_3"]) for r in out] == [False, True, True]
+    assert [bool(r["starts"]) for r in out] == [False, True, True]
+    assert [bool(r["ends"]) for r in out] == [False, False, True]
+    assert [bool(r["has_digit"]) for r in out] == [True, True, True]
+    assert [str(r["no_digit"]) for r in out] == ["foo", "bar", "baz"]
+    assert [int(r["y_filled"]) for r in out] == [0, 5, 0]
+    assert [r["x_null_if_2"] for r in out] == [1, None, 3]
+    assert [str(r["bucket"]) for r in out] == ["le1", "gt1", "gt1"]
+    assert [float(r["z_abs"]) for r in out] == pytest.approx([1.2, 2.6, 3.1])
+    assert [int(r["z_floor"]) for r in out] == [1, 2, -4]
+    assert [int(r["z_ceil"]) for r in out] == [2, 3, -3]
+    assert [float(r["z_round"]) for r in out] == pytest.approx([1.0, 3.0, -3.0])
+    assert [float(r["z_clip"]) for r in out] == pytest.approx([1.5, 2.5, 1.5])

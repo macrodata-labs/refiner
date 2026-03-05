@@ -34,6 +34,44 @@ class Expr:
     def is_not_null(self) -> "Expr":
         return Expr(op="is_not_null", args=(self,))
 
+    def is_in(self, values: list[Any] | tuple[Any, ...]) -> "Expr":
+        return Expr(op="is_in", args=(self, tuple(values)))
+
+    def between(self, lower: Any, upper: Any) -> "Expr":
+        return (self >= _as_expr(lower)) & (self <= _as_expr(upper))
+
+    def fill_null(self, value: Any) -> "Expr":
+        return Expr(op="fill_null", args=(self, _as_expr(value)))
+
+    def null_if(self, value: Any) -> "Expr":
+        return Expr(op="null_if", args=(self, _as_expr(value)))
+
+    def abs(self) -> "Expr":
+        return Expr(op="abs", args=(self,))
+
+    def floor(self) -> "Expr":
+        return Expr(op="floor", args=(self,))
+
+    def ceil(self) -> "Expr":
+        return Expr(op="ceil", args=(self,))
+
+    def round(self, ndigits: int = 0) -> "Expr":
+        return Expr(op="round", args=(self, int(ndigits)))
+
+    def clip(
+        self, min_value: Any | None = None, max_value: Any | None = None
+    ) -> "Expr":
+        if min_value is None and max_value is None:
+            raise ValueError("clip requires min_value and/or max_value")
+        return Expr(
+            op="clip",
+            args=(
+                self,
+                _as_expr(min_value) if min_value is not None else None,
+                _as_expr(max_value) if max_value is not None else None,
+            ),
+        )
+
     def to_plan(self) -> dict[builtins.str, Any]:
         def _serialize(v: Any) -> Any:
             if isinstance(v, Expr):
@@ -118,8 +156,20 @@ class StringExpr:
     def contains(self, pattern: str) -> Expr:
         return Expr(op="str_contains", args=(self.base, pattern))
 
+    def startswith(self, prefix: str) -> Expr:
+        return Expr(op="str_startswith", args=(self.base, prefix))
+
+    def endswith(self, suffix: str) -> Expr:
+        return Expr(op="str_endswith", args=(self.base, suffix))
+
+    def regex_contains(self, pattern: str) -> Expr:
+        return Expr(op="str_regex_contains", args=(self.base, pattern))
+
     def replace(self, pattern: str, replacement: str) -> Expr:
         return Expr(op="str_replace", args=(self.base, pattern, replacement))
+
+    def regex_replace(self, pattern: str, replacement: str) -> Expr:
+        return Expr(op="str_regex_replace", args=(self.base, pattern, replacement))
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,8 +204,18 @@ def coalesce(*values: Any) -> Expr:
     return Expr(op="coalesce", args=tuple(_as_expr(v) for v in values))
 
 
+def if_else(condition: Any, on_true: Any, on_false: Any) -> Expr:
+    return Expr(
+        op="if_else", args=(_as_expr(condition), _as_expr(on_true), _as_expr(on_false))
+    )
+
+
 def _call(name: str, *args: Any, **kwargs: Any) -> Any:
     return pc.call_function(name, list(args), **kwargs)
+
+
+def _null_scalar_like(value: pa.Array | pa.ChunkedArray | pa.Scalar) -> pa.Scalar:
+    return pa.scalar(None, type=value.type)
 
 
 def eval_expr_arrow(
@@ -170,6 +230,51 @@ def eval_expr_arrow(
         return pa.scalar(args[0])
     if op == "coalesce":
         return _call("coalesce", *[eval_expr_arrow(v, table) for v in args])
+    if op == "if_else":
+        condition = eval_expr_arrow(args[0], table)
+        on_true = eval_expr_arrow(args[1], table)
+        on_false = eval_expr_arrow(args[2], table)
+        return _call("if_else", condition, on_true, on_false)
+    if op == "is_in":
+        options = pc.SetLookupOptions(value_set=pa.array(list(args[1])))
+        return _call("is_in", eval_expr_arrow(args[0], table), options=options)
+    if op == "fill_null":
+        return _call(
+            "coalesce", eval_expr_arrow(args[0], table), eval_expr_arrow(args[1], table)
+        )
+    if op == "null_if":
+        value = eval_expr_arrow(args[0], table)
+        other = eval_expr_arrow(args[1], table)
+        return _call(
+            "if_else", _call("equal", value, other), _null_scalar_like(value), value
+        )
+    if op == "abs":
+        return _call("abs", eval_expr_arrow(args[0], table))
+    if op == "floor":
+        return _call("floor", eval_expr_arrow(args[0], table))
+    if op == "ceil":
+        return _call("ceil", eval_expr_arrow(args[0], table))
+    if op == "round":
+        options = pc.RoundOptions(int(args[1]))
+        return _call("round", eval_expr_arrow(args[0], table), options=options)
+    if op == "clip":
+        value = eval_expr_arrow(args[0], table)
+        lower = args[1]
+        upper = args[2]
+        if lower is not None:
+            lower_value = eval_expr_arrow(lower, table)
+            value = _call(
+                "if_else", _call("less", value, lower_value), lower_value, value
+            )
+        if upper is not None:
+            upper_value = eval_expr_arrow(upper, table)
+            value = _call(
+                "if_else",
+                _call("greater", value, upper_value),
+                upper_value,
+                value,
+            )
+        return value
 
     if op in {
         "add",
@@ -226,17 +331,40 @@ def eval_expr_arrow(
     if op == "str_len":
         return _call("utf8_length", eval_expr_arrow(args[0], table))
     if op == "str_contains":
+        options = pc.MatchSubstringOptions(pattern=str(args[1]))
         return _call(
-            "match_substring",
+            "match_substring", eval_expr_arrow(args[0], table), options=options
+        )
+    if op == "str_startswith":
+        options = pc.MatchSubstringOptions(pattern=str(args[1]))
+        return _call("starts_with", eval_expr_arrow(args[0], table), options=options)
+    if op == "str_endswith":
+        options = pc.MatchSubstringOptions(pattern=str(args[1]))
+        return _call("ends_with", eval_expr_arrow(args[0], table), options=options)
+    if op == "str_regex_contains":
+        options = pc.MatchSubstringOptions(pattern=str(args[1]))
+        return _call(
+            "match_substring_regex",
             eval_expr_arrow(args[0], table),
-            pattern=str(args[1]),
+            options=options,
         )
     if op == "str_replace":
-        return _call(
-            "replace_substring",
-            eval_expr_arrow(args[0], table),
+        options = pc.ReplaceSubstringOptions(
             pattern=str(args[1]),
             replacement=str(args[2]),
+        )
+        return _call(
+            "replace_substring", eval_expr_arrow(args[0], table), options=options
+        )
+    if op == "str_regex_replace":
+        options = pc.ReplaceSubstringOptions(
+            pattern=str(args[1]),
+            replacement=str(args[2]),
+        )
+        return _call(
+            "replace_substring_regex",
+            eval_expr_arrow(args[0], table),
+            options=options,
         )
 
     if op == "datetime_year":
@@ -260,5 +388,6 @@ __all__ = [
     "col",
     "lit",
     "coalesce",
+    "if_else",
     "eval_expr_arrow",
 ]
