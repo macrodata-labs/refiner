@@ -7,6 +7,7 @@ import pyarrow.parquet as pq
 from fsspec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.runtime.types import SourceUnit
 
 from .base import BaseReader, Shard
 from .utils import DEFAULT_TARGET_SHARD_BYTES, clamp_target_bytes
@@ -151,7 +152,7 @@ class ParquetReader(BaseReader):
 
         return shards
 
-    def read_shard(self, shard: Shard) -> Iterator[Any]:
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read a parquet shard and yield Arrow RecordBatches."""
         pf = self._get_parquet_file(shard.path)
 

@@ -15,9 +15,8 @@ from refiner.processors.step import (
     VectorizedOp,
     WithColumnsStep,
 )
+from refiner.runtime.types import TabularBlock
 from refiner.sources.row import ArrowRowView, Row
-
-TabularBlock = pa.Table | pa.RecordBatch
 
 
 def rows_to_table(rows: Iterable[Row]) -> pa.Table:

@@ -38,6 +38,7 @@ from refiner.runtime.execution.engine import (
     execute_segments,
     iter_rows,
 )
+from refiner.runtime.types import SourceUnit
 from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 if TYPE_CHECKING:
@@ -167,7 +168,7 @@ class RefinerPipeline:
             raise ValueError("cast requires at least one dtype mapping")
         return self._add_vectorized_op(CastStep(dtypes=dtypes))
 
-    def execute(self, rows: Iterable[Any]) -> Iterable[Block]:
+    def execute(self, rows: Iterable[SourceUnit]) -> Iterable[Block]:
         """Execute source stream through compiled segments.
 
         Returns internal execution blocks (row blocks or Arrow blocks).

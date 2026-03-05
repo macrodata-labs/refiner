@@ -7,6 +7,7 @@ from typing import Any
 import pyarrow as pa
 
 from refiner.sources.row import Row
+from refiner.runtime.types import SourceUnit
 from refiner.ledger.shard import Shard
 from refiner.metrics import log_throughput
 
@@ -23,19 +24,19 @@ class BaseSource(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def read_shard(self, shard: Shard) -> Iterator[Any]:
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         raise NotImplementedError
 
-    def iter_shard_rows(self, shard: Shard) -> Iterator[Any]:
+    def iter_shard_units(self, shard: Shard) -> Iterator[SourceUnit]:
         for unit in self.read_shard(shard):
             rows = _unit_num_rows(unit)
             if rows > 0:
                 log_throughput("rows_read", rows, shard_id=shard.id, unit="rows")
             yield _with_shard_id(unit, shard.id)
 
-    def read(self) -> Iterator[Any]:
+    def read(self) -> Iterator[SourceUnit]:
         for shard in self.list_shards():
-            yield from self.iter_shard_rows(shard)
+            yield from self.iter_shard_units(shard)
 
     def describe(self) -> dict[str, Any]:
         """Optional source metadata for planning/observability."""
@@ -45,7 +46,7 @@ class BaseSource(ABC):
 __all__ = ["BaseSource"]
 
 
-def _unit_num_rows(unit: Any) -> int:
+def _unit_num_rows(unit: SourceUnit) -> int:
     if isinstance(unit, Row):
         return 1
     if isinstance(unit, pa.RecordBatch):
@@ -55,7 +56,7 @@ def _unit_num_rows(unit: Any) -> int:
     raise TypeError(f"Unsupported source unit type: {type(unit)!r}")
 
 
-def _with_shard_id(unit: Any, shard_id: str) -> Any:
+def _with_shard_id(unit: SourceUnit, shard_id: str) -> SourceUnit:
     if isinstance(unit, Row):
         return unit.update(**{_INTERNAL_SHARD_ID_KEY: shard_id})
 

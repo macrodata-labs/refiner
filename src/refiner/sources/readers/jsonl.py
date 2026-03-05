@@ -8,6 +8,7 @@ from fsspec import AbstractFileSystem
 import pyarrow.json as pa_json
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.runtime.types import SourceUnit
 
 from .base import BaseReader, Shard
 from .utils import (
@@ -65,7 +66,7 @@ class JsonlReader(BaseReader):
 
         return shards
 
-    def read_shard(self, shard: Shard) -> Iterator[Any]:
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         if shard.end == -1:
             # Whole-file read for non-splittable inputs.
             with self.fs.open(

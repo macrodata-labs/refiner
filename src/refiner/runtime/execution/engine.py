@@ -10,12 +10,12 @@ from refiner.processors.step import RefinerStep, VectorizedOp, VectorizedSegment
 from refiner.runtime.execution.row_queue import RowQueue
 from refiner.runtime.execution.row_steps import execute_row_steps
 from refiner.runtime.execution.vectorized import (
-    TabularBlock,
     apply_vectorized_op,
     iter_record_batch_rows,
     iter_table_rows,
     rows_to_table,
 )
+from refiner.runtime.types import TabularBlock
 from refiner.sources.row import Row
 
 _DEFAULT_VECTORIZED_CHUNK_ROWS = 2048
@@ -33,7 +33,7 @@ class VectorSegment:
 
 Segment = RowSegment | VectorSegment
 Block = list[Row] | TabularBlock
-StreamItem = Row | Block
+StreamItem = Row | list[Row] | TabularBlock
 
 
 def compile_segments(steps: Sequence[RefinerStep]) -> tuple[Segment, ...]:

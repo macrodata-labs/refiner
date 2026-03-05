@@ -120,7 +120,7 @@ class Worker:
                             e,
                         )
                 with set_active_step_index(0):
-                    yield from self.pipeline.source.iter_shard_rows(shard)
+                    yield from self.pipeline.source.iter_shard_units(shard)
                 previous = shard
 
         with set_active_user_metrics_emitter(user_metrics_emitter):

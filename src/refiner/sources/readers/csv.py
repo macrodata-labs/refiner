@@ -9,6 +9,7 @@ import pyarrow.csv as pa_csv
 from fsspec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.runtime.types import SourceUnit
 
 from .base import BaseReader, Shard
 from ..row import DictRow
@@ -170,7 +171,7 @@ class CsvReader(BaseReader):
 
         return shards
 
-    def read_shard(self, shard: Shard) -> Iterator[Any]:
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         # Arrow path is the fast/default path. Multiline CSV needs the Python
         # parser because byte-range splitting + quotes/newlines is trickier.
         if self.multiline_rows:
@@ -178,7 +179,7 @@ class CsvReader(BaseReader):
             return
         yield from self._read_shard_arrow(shard)
 
-    def _read_shard_arrow(self, shard: Shard) -> Iterator[Any]:
+    def _read_shard_arrow(self, shard: Shard) -> Iterator[SourceUnit]:
         if shard.end == -1:
             # Whole-file read (e.g. compressed/non-splittable): let Arrow parse
             # directly and stream RecordBatch objects downstream.
@@ -248,7 +249,7 @@ class CsvReader(BaseReader):
         for batch in reader:
             yield batch
 
-    def _read_shard_python(self, shard: Shard) -> Iterator[Any]:
+    def _read_shard_python(self, shard: Shard) -> Iterator[SourceUnit]:
         if shard.end == -1:
             with self.fs.open(
                 shard.path,
