@@ -112,6 +112,7 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
                     _step_payload(
                         name=_unique_name(base_name),
                         step_type=step_type,
+                        index=len(steps),
                         args=args,
                         code=None,
                     )
