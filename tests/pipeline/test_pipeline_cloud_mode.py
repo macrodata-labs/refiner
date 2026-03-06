@@ -48,7 +48,11 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "refiner.runtime.launchers.cloud.build_run_manifest",
-        lambda: {"version": 1, "script": {"text": "print('hi')"}},
+        lambda: {
+            "version": 1,
+            "environment": {"refiner_ref": "abc123def456"},
+            "script": {"text": "print('hi')"},
+        },
     )
 
     pipeline = read_jsonl("input.jsonl")
@@ -78,4 +82,8 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.runtime.mem_mb_per_worker == 8192
     assert request.shards[0]["path"] == "input.jsonl"
     assert request.plan["stages"][0]["name"] == "stage_0"
-    assert request.manifest == {"version": 1, "script": {"text": "print('hi')"}}
+    assert request.manifest == {
+        "version": 1,
+        "environment": {"refiner_ref": "abc123def456"},
+        "script": {"text": "print('hi')"},
+    }

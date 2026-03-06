@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from refiner.platform.manifest import build_run_manifest
+from refiner.platform.refiner_metadata import RefinerRuntimeMetadata
 
 
 def test_build_run_manifest_captures_script_from_argv(
@@ -13,6 +14,10 @@ def test_build_run_manifest_captures_script_from_argv(
     script_path.write_text("print('hello')\n", encoding="utf-8")
 
     monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest.resolve_refiner_runtime_metadata",
+        lambda: RefinerRuntimeMetadata(version="0.1.0", git_sha="abc123def456"),
+    )
 
     manifest = build_run_manifest()
 
@@ -21,4 +26,5 @@ def test_build_run_manifest_captures_script_from_argv(
     assert manifest["script"]["text"] == "print('hello')\n"
     assert isinstance(manifest["script"]["sha256"], str)
     assert manifest["environment"]["python_version"]
+    assert manifest["environment"]["refiner_ref"] == "abc123def456"
     assert isinstance(manifest["dependencies"], list)

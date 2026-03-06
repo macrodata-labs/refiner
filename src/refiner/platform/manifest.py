@@ -8,6 +8,8 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
+from .refiner_metadata import resolve_refiner_runtime_metadata
+
 
 def _is_external_script(path: Path) -> bool:
     resolved_str = str(path)
@@ -54,13 +56,6 @@ def _read_script(
     return str(script_path), text, sha256
 
 
-def _package_version(name: str) -> str | None:
-    try:
-        return importlib_metadata.version(name)
-    except importlib_metadata.PackageNotFoundError:
-        return None
-
-
 def _collect_dependencies() -> list[dict[str, str]]:
     dependencies_by_name: dict[str, str] = {}
     for dist in importlib_metadata.distributions():
@@ -82,10 +77,8 @@ def _collect_dependencies() -> list[dict[str, str]]:
 def build_run_manifest() -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
-
-    refiner_version = _package_version("refiner")
-    if refiner_version is None:
-        refiner_version = _package_version("macrodata-refiner")
+    metadata = resolve_refiner_runtime_metadata()
+    refiner_ref = metadata.git_sha or metadata.version
 
     return {
         "version": 1,
@@ -96,7 +89,7 @@ def build_run_manifest() -> dict[str, Any]:
         },
         "environment": {
             "python_version": platform.python_version(),
-            "refiner_version": refiner_version,
+            "refiner_ref": refiner_ref,
             "platform": f"{platform.system().lower()}-{platform.machine().lower()}",
         },
         "dependencies": _collect_dependencies(),
