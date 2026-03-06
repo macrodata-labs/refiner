@@ -1,22 +1,26 @@
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, List, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from fsspec import AbstractFileSystem
 
+from refiner.expressions import Expr, col as col_expr, lit
 from refiner.io.fileset import DataFileSetLike
 from refiner.processors.step import (
     BatchFn,
-    BatchStep,
+    CastStep,
+    DropStep,
+    FilterExprStep,
     FlatMapFn,
-    FlatMapStep,
     FnBatchStep,
     FnFlatMapStep,
     FnRowStep,
     MapFn,
+    RenameStep,
     RefinerStep,
-    RowStep,
-    normalize_batch_item,
-    normalize_row_result,
+    SelectStep,
+    VectorizedOp,
+    VectorizedSegmentStep,
+    WithColumnsStep,
 )
 from refiner.sources import (
     BaseSource,
@@ -27,8 +31,14 @@ from refiner.sources import (
     TaskSource,
 )
 from refiner.sources.row import Row
-from refiner.runtime.metrics_context import set_active_step_index
-from refiner.runtime.row_queue import RowQueue
+from refiner.runtime.execution.engine import (
+    Block,
+    Segment,
+    compile_segments,
+    execute_segments,
+    iter_rows,
+)
+from refiner.runtime.types import SourceUnit
 from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 
 if TYPE_CHECKING:
@@ -38,16 +48,59 @@ if TYPE_CHECKING:
 
 class RefinerPipeline:
     source: BaseSource
-    pipeline_steps: List[RefinerStep]
+    pipeline_steps: tuple[RefinerStep, ...]
+    _compiled_segments: tuple[Segment, ...] | None
+    max_vectorized_block_bytes: int | None
 
     def __init__(
-        self, source: BaseSource, pipeline_steps: List[RefinerStep] | None = None
+        self,
+        source: BaseSource,
+        pipeline_steps: Sequence[RefinerStep] | None = None,
+        *,
+        max_vectorized_block_bytes: int | None = None,
     ):
+        if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
+            raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
         self.source = source
-        self.pipeline_steps = list(pipeline_steps) if pipeline_steps else []
+        self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
+        self._compiled_segments = None
+        self.max_vectorized_block_bytes = max_vectorized_block_bytes
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
-        return self.__class__(self.source, self.pipeline_steps + [step])
+        return self.__class__(
+            self.source,
+            self.pipeline_steps + (step,),
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+        )
+
+    def _add_vectorized_op(self, op: VectorizedOp) -> "RefinerPipeline":
+        # Fuse adjacent expression-backed operations so each fused segment does
+        # one row->Arrow and Arrow->row conversion boundary.
+        if self.pipeline_steps and isinstance(
+            self.pipeline_steps[-1], VectorizedSegmentStep
+        ):
+            prev = self.pipeline_steps[-1]
+            merged = VectorizedSegmentStep(ops=prev.ops + (op,))
+            return self.__class__(
+                self.source,
+                self.pipeline_steps[:-1] + (merged,),
+                max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            )
+        return self.add_step(VectorizedSegmentStep(ops=(op,)))
+
+    def with_max_vectorized_block_bytes(
+        self, max_vectorized_block_bytes: int | None
+    ) -> "RefinerPipeline":
+        return self.__class__(
+            self.source,
+            self.pipeline_steps,
+            max_vectorized_block_bytes=max_vectorized_block_bytes,
+        )
+
+    def _get_compiled_segments(self) -> tuple[Segment, ...]:
+        if self._compiled_segments is None:
+            self._compiled_segments = compile_segments(self.pipeline_steps)
+        return self._compiled_segments
 
     def map(self, fn: MapFn) -> "RefinerPipeline":
         return self.add_step(
@@ -71,7 +124,9 @@ class RefinerPipeline:
             FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
         )
 
-    def filter(self, predicate: Callable[[Row], bool]) -> "RefinerPipeline":
+    def filter(self, predicate: Callable[[Row], bool] | Expr) -> "RefinerPipeline":
+        if isinstance(predicate, Expr):
+            return self._add_vectorized_op(FilterExprStep(predicate=predicate))
         return self.add_step(
             FnFlatMapStep(
                 fn=lambda row: [row] if predicate(row) else [],
@@ -80,87 +135,54 @@ class RefinerPipeline:
             )
         )
 
-    def execute_rows(self, rows: Iterable[Row]) -> Iterable[Row]:
-        """Execute rows with per-step queues and step-local batch triggering."""
-        steps = tuple(self.pipeline_steps)
-        if not steps:
-            for row in rows:
-                yield row
-            return
+    def select(self, *columns: str) -> "RefinerPipeline":
+        if not columns:
+            raise ValueError("select requires at least one column")
+        return self._add_vectorized_op(SelectStep(columns=tuple(columns)))
 
-        queues: list[RowQueue] = [RowQueue() for _ in range(len(steps) + 1)]
-        scratch: list[list[Row]] = [[] for _ in steps]
+    def with_columns(self, **assignments: Expr | Any) -> "RefinerPipeline":
+        if not assignments:
+            raise ValueError("with_columns requires at least one assignment")
+        exprs = {
+            name: value if isinstance(value, Expr) else lit(value)
+            for name, value in assignments.items()
+        }
+        return self._add_vectorized_op(WithColumnsStep(assignments=exprs))
 
-        def _run_step(i: int, *, flush_all: bool) -> None:
-            step = steps[i]
-            inp = queues[i]
-            if not inp:
-                return
-            out = queues[i + 1]
+    def with_column(self, name: str, value: Expr | Any) -> "RefinerPipeline":
+        expr = value if isinstance(value, Expr) else lit(value)
+        return self._add_vectorized_op(WithColumnsStep(assignments={name: expr}))
 
-            with set_active_step_index(step.index):
-                if isinstance(step, RowStep):
-                    for row in inp.take_all():
-                        normalized = normalize_row_result(row, step.apply_row(row))
-                        out.append(normalized)
-                    return
+    def drop(self, *columns: str) -> "RefinerPipeline":
+        if not columns:
+            raise ValueError("drop requires at least one column")
+        return self._add_vectorized_op(DropStep(columns=tuple(columns)))
 
-                if isinstance(step, FlatMapStep):
-                    tmp = scratch[i]
-                    tmp.clear()
-                    for row in inp.take_all():
-                        for item in step.apply_row_many(row):
-                            normalized = normalize_batch_item(item)
-                            if normalized is not None:
-                                tmp.append(normalized)
-                    out.extend(tmp)
-                    return
+    def rename(self, **mapping: str) -> "RefinerPipeline":
+        if not mapping:
+            raise ValueError("rename requires at least one mapping")
+        return self._add_vectorized_op(RenameStep(mapping=mapping))
 
-                if isinstance(step, BatchStep):
-                    if flush_all:
-                        batch_in = inp.take_all()
-                    else:
-                        n = (len(inp) // step.batch_size) * step.batch_size
-                        if n == 0:
-                            return
-                        batch_in = inp.take(n)
-                    if not batch_in:
-                        return
-                    tmp = scratch[i]
-                    tmp.clear()
-                    for item in step.apply_batch(batch_in):
-                        normalized = normalize_batch_item(item)
-                        if normalized is not None:
-                            tmp.append(normalized)
-                    out.extend(tmp)
-                    return
+    def cast(self, **dtypes: str) -> "RefinerPipeline":
+        if not dtypes:
+            raise ValueError("cast requires at least one dtype mapping")
+        return self._add_vectorized_op(CastStep(dtypes=dtypes))
 
-            raise TypeError(f"Unsupported step type: {type(step)!r}")
+    def execute(self, rows: Iterable[SourceUnit]) -> Iterable[Block]:
+        """Execute source stream through compiled segments.
 
-        def _pump(flush_all: bool) -> None:
-            for i in range(len(steps)):
-                _run_step(i, flush_all=flush_all)
-
-        def _drain_output() -> Iterable[Row]:
-            outq = queues[-1]
-            if not outq:
-                return
-            for row in outq.take_all():
-                yield row
-
-        for row in rows:
-            queues[0].append(row)
-            _pump(flush_all=False)
-            for out in _drain_output():
-                yield out
-
-        _pump(flush_all=True)
-        for out in _drain_output():
-            yield out
+        Returns internal execution blocks (row blocks or Arrow blocks).
+        Use `iter_rows()` to force row iteration.
+        """
+        yield from execute_segments(
+            rows,
+            self._get_compiled_segments(),
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+        )
 
     def iter_rows(self) -> Iterable[Row]:
         """Local execution mode: lazily process all shards and yield output rows."""
-        return self.execute_rows(self.source.read())
+        return iter_rows(self.execute(self.source.read()))
 
     def materialize(self) -> list[Row]:
         """Compute all output rows into memory (local/dev utility)."""
@@ -350,3 +372,6 @@ def task(
             op_name="task",
         )
     )
+
+
+col = col_expr

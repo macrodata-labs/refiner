@@ -5,12 +5,14 @@ import io
 from collections.abc import Iterator, Mapping
 from typing import Any, Literal, Optional
 
+import pyarrow.csv as pa_csv
 from fsspec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.runtime.types import SourceUnit
 
 from .base import BaseReader, Shard
-from ..row import DictRow, Row
+from ..row import DictRow
 from .utils import (
     DEFAULT_TARGET_SHARD_BYTES,
     BoundedBinaryReader,
@@ -169,16 +171,85 @@ class CsvReader(BaseReader):
 
         return shards
 
-    def read_shard(self, shard: Shard) -> Iterator[Row]:
-        """Read a CSV shard and yield `Row` objects.
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
+        # Arrow path is the fast/default path. Multiline CSV needs the Python
+        # parser because byte-range splitting + quotes/newlines is trickier.
+        if self.multiline_rows:
+            yield from self._read_shard_python(shard)
+            return
+        yield from self._read_shard_arrow(shard)
 
-        Notes:
-            - Yields `DictRow` rows (dict-backed).
-            - For `end == -1` (non-splittable inputs), the entire file is read with `compression='infer'`.
-            - For byte-range shards, shard boundaries are assumed to be at record boundaries
-              (enforced by `list_shards()` when sharding is enabled).
-        """
-        # Non-splittable inputs: read the entire file with decompression if needed.
+    def _read_shard_arrow(self, shard: Shard) -> Iterator[SourceUnit]:
+        if shard.end == -1:
+            # Whole-file read (e.g. compressed/non-splittable): let Arrow parse
+            # directly and stream RecordBatch objects downstream.
+            with self.fs.open(
+                shard.path,
+                mode="rb",
+                compression="infer",
+            ) as raw:
+                reader = pa_csv.open_csv(
+                    raw,
+                    read_options=pa_csv.ReadOptions(
+                        use_threads=False,
+                        encoding=self.encoding,
+                    ),
+                    parse_options=pa_csv.ParseOptions(
+                        newlines_in_values=False,
+                    ),
+                )
+                for batch in reader:
+                    yield batch
+            return
+
+        fh, header = self._get_handle_and_header(shard.path)
+        size = self.fileset.size(shard.path)
+
+        mode = self.sharding_mode
+        if self.multiline_rows and mode == "bytes_lazy":
+            mode = "scan"
+
+        start = shard.start
+        end = shard.end
+        if mode == "bytes_lazy":
+            # Keep only records whose start offsets belong to the planned range.
+            aligned = align_byte_range_to_newlines(fh, start=start, end=end, size=size)
+            if aligned is None:
+                return
+            start, end = aligned
+
+        try:
+            fh.seek(start)
+        except Exception:
+            self._open_header = None
+            fh, _ = self._get_file_handle(shard.path, mode="rb", force_reopen=True)
+            fh.seek(start)
+
+        raw = io.BufferedReader(BoundedBinaryReader(fh, end - start))
+        # Non-zero-start shards don't contain headers; reuse cached header names.
+        if start == 0:
+            read_options = pa_csv.ReadOptions(
+                use_threads=False,
+                encoding=self.encoding,
+            )
+        else:
+            read_options = pa_csv.ReadOptions(
+                use_threads=False,
+                encoding=self.encoding,
+                column_names=header,
+            )
+
+        reader = pa_csv.open_csv(
+            raw,
+            read_options=read_options,
+            parse_options=pa_csv.ParseOptions(
+                newlines_in_values=False,
+            ),
+        )
+        for batch in reader:
+            yield batch
+
+    def _read_shard_python(self, shard: Shard) -> Iterator[SourceUnit]:
         if shard.end == -1:
             with self.fs.open(
                 shard.path,
@@ -192,56 +263,44 @@ class CsvReader(BaseReader):
                     yield DictRow(row)
             return
 
-        # Splittable: reuse single open binary file if possible, seek to shard.start.
         fh, header = self._get_handle_and_header(shard.path)
         size = self.fileset.size(shard.path)
-
         mode = self.sharding_mode
         if self.multiline_rows and mode == "bytes_lazy":
-            # TODO: warning
             mode = "scan"
 
         start = shard.start
         end = shard.end
-
         if mode == "bytes_lazy":
-            # Align planned [start, end) to newline boundaries so we include lines whose *start* is in [start, end).
-            # We interpret record boundaries as '\n' (valid only when multiline_rows=False).
             aligned = align_byte_range_to_newlines(fh, start=start, end=end, size=size)
             if aligned is None:
                 return
             start, end = aligned
 
-        # Seek to shard start for this shard.
         try:
             fh.seek(start)
         except Exception:
-            # fallback: reopen (still one-at-a-time)
             self._open_header = None
             fh, _ = self._get_file_handle(shard.path, mode="rb", force_reopen=True)
             fh.seek(start)
 
-        # Build a bounded text stream for this shard. We assume shard boundaries are at record boundaries.
+        # Python fallback preserves behavior for multiline quoted records.
         raw = io.BufferedReader(BoundedBinaryReader(fh, end - start))
         tf = io.TextIOWrapper(raw, encoding=self.encoding, newline="")
         reader = csv.reader(tf)
-
-        # In the first shard, the first record is the header; otherwise treat all records as data.
         if start == 0:
             try:
-                next(reader)  # consume header already cached
+                next(reader)
             except StopIteration:
                 return
 
         for fields in reader:
             if not fields:
                 continue
-            # If row has fewer fields than header, pad with None; if more, truncate.
             if len(fields) < len(header):
                 fields = list(fields) + [None] * (len(header) - len(fields))
             if len(fields) > len(header):
                 fields = fields[: len(header)]
-
             yield DictRow(dict(zip(header, fields)))
 
 

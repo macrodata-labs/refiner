@@ -38,6 +38,29 @@ class RowQueue:
     def take_all(self) -> list[Row]:
         return self.take(len(self))
 
+    def peek(self, n: int) -> list[Row]:
+        if n <= 0:
+            return []
+        available = len(self)
+        if available <= 0:
+            return []
+        if n > available:
+            n = available
+        start = self._head
+        end = start + n
+        return self._buf[start:end]
+
+    def discard(self, n: int) -> None:
+        if n <= 0:
+            return
+        available = len(self)
+        if available <= 0:
+            return
+        if n > available:
+            n = available
+        self._head += n
+        self._maybe_compact()
+
     def _maybe_compact(self) -> None:
         if self._head == 0:
             return

@@ -1,6 +1,7 @@
 from .io import DataFile, DataFileSet, DataFolder
 from .ledger.shard import Shard
 from .metrics import log_gauge, log_gauges, log_histogram, log_throughput
+from .expressions import coalesce, col, if_else, lit
 from .pipeline import (
     RefinerPipeline,
     from_items,
@@ -21,7 +22,7 @@ from .processors import (
 )
 from .sources import BaseReader, BaseSource, CsvReader, JsonlReader, ParquetReader, Row
 from .runtime.launchers import BaseLauncher, LaunchStats, LocalLauncher
-from .worker import Worker, WorkerRunStats
+from .runtime.worker import Worker, WorkerRunStats
 
 __all__ = [
     "RefinerStep",
@@ -57,4 +58,8 @@ __all__ = [
     "log_gauge",
     "log_gauges",
     "log_histogram",
+    "col",
+    "lit",
+    "coalesce",
+    "if_else",
 ]

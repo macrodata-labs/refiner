@@ -16,5 +16,5 @@ repos:
         name: ty (uv)
         entry: uv run ty check
         language: system
+        args: [--respect-ignore-files]
         pass_filenames: false
-

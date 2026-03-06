@@ -8,6 +8,7 @@ from refiner.ledger import BaseLedger
 from refiner.ledger.shard import Shard
 from refiner.platform.client import MacrodataClient
 from refiner.pipeline import RefinerPipeline
+from refiner.runtime.execution.engine import block_num_rows
 from refiner.runtime.metrics_context import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
@@ -119,19 +120,23 @@ class Worker:
                             e,
                         )
                 with set_active_step_index(0):
-                    yield from self.pipeline.source.iter_shard_rows(shard)
+                    yield from self.pipeline.source.iter_shard_units(shard)
                 previous = shard
 
         with set_active_user_metrics_emitter(user_metrics_emitter):
             run_exception: Exception | None = None
             try:
                 try:
-                    for _ in self.pipeline.execute_rows(_source_rows()):
-                        output_rows += 1
-                        output_rows_since_hb += 1
-                        if output_rows_since_hb % self.heartbeat_every_rows == 0:
+                    for block in self.pipeline.execute(_source_rows()):
+                        produced = block_num_rows(block)
+                        if produced <= 0:
+                            continue
+                        output_rows += produced
+                        output_rows_since_hb += produced
+                        while output_rows_since_hb >= self.heartbeat_every_rows:
                             for shard in inflight:
                                 self.ledger.heartbeat(shard)
+                            output_rows_since_hb -= self.heartbeat_every_rows
                 except Exception as e:
                     failed_error = str(e)
                     for shard in list(inflight):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from refiner.ledger.shard import Shard
+from refiner import col
 from refiner.pipeline import RefinerPipeline, from_items
 from refiner.sources.readers.base import BaseReader
 from refiner.sources.row import DictRow, Row
@@ -73,3 +74,23 @@ def test_compile_pipeline_plan_includes_from_items_metadata() -> None:
     assert source_step["name"] == "from_items"
     assert source_step["args"]["rows"] == 3
     assert source_step["args"]["shard_size_rows"] == 2
+
+
+def test_compile_pipeline_plan_flattens_vectorized_segment_ops() -> None:
+    payload = (
+        from_items([{"x": 1}, {"x": 2}])
+        .filter(col("x") > 1)
+        .with_columns(y=col("x") + 10)
+        .select("y")
+    )
+    plan = compile_pipeline_plan(payload)
+    steps = plan["stages"][0]["steps"]
+    assert [step["name"] for step in steps] == [
+        "from_items",
+        "filter",
+        "with_columns",
+        "select",
+    ]
+    assert steps[1]["type"] == "filter_expr"
+    assert steps[2]["type"] == "with_columns"
+    assert steps[3]["type"] == "select"

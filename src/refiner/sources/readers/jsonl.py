@@ -4,13 +4,13 @@ import io
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-import orjson  # type: ignore[import-not-found]
 from fsspec import AbstractFileSystem
+import pyarrow.json as pa_json
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.runtime.types import SourceUnit
 
 from .base import BaseReader, Shard
-from ..row import DictRow, Row
 from .utils import (
     DEFAULT_TARGET_SHARD_BYTES,
     BoundedBinaryReader,
@@ -66,24 +66,20 @@ class JsonlReader(BaseReader):
 
         return shards
 
-    def read_shard(self, shard: Shard) -> Iterator[Row]:
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         if shard.end == -1:
-            # Non-splittable inputs: read the entire file with decompression if needed.
+            # Whole-file read for non-splittable inputs.
             with self.fs.open(
                 shard.path,
                 mode="rb",
                 compression="infer",
-            ) as tf:
-                for line in tf:
-                    s = line.strip()
-                    if not s:
-                        continue
-                    obj = orjson.loads(s)
-                    if not isinstance(obj, dict):
-                        raise ValueError(
-                            "JSONL reader expects each line to be a JSON object"
-                        )
-                    yield DictRow(obj)
+            ) as raw:
+                reader = pa_json.open_json(
+                    raw,
+                    read_options=pa_json.ReadOptions(use_threads=False),
+                )
+                for batch in reader:
+                    yield batch
             return
 
         fh, _ = self._get_file_handle(shard.path, mode="rb")
@@ -94,6 +90,7 @@ class JsonlReader(BaseReader):
         )
         if aligned is None:
             return
+        # JSONL is one-object-per-line, so newline alignment defines record bounds.
         start, end = aligned
 
         try:
@@ -103,14 +100,12 @@ class JsonlReader(BaseReader):
             fh.seek(start)
 
         raw = io.BufferedReader(BoundedBinaryReader(fh, end - start))
-        for line in raw:
-            s = line.strip()
-            if not s:
-                continue
-            obj = orjson.loads(s)
-            if not isinstance(obj, dict):
-                raise ValueError("JSONL reader expects each line to be a JSON object")
-            yield DictRow(obj)
+        reader = pa_json.open_json(
+            raw,
+            read_options=pa_json.ReadOptions(use_threads=False),
+        )
+        for batch in reader:
+            yield batch
 
 
 __all__ = ["JsonlReader"]

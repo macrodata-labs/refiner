@@ -12,9 +12,12 @@ from typing import TYPE_CHECKING, Any, cast
 import cloudpickle
 
 from refiner.ledger import FsLedger
-from refiner.runtime.cpu import build_cpu_sets, set_cpu_affinity
-from refiner.runtime.memory import restore_memory_soft_limit, set_memory_soft_limit_mb
-from refiner.runtime.worker import Worker, WorkerLifecycleContext, WorkerRunStats
+from refiner.runtime.resources.cpu import build_cpu_sets, set_cpu_affinity
+from refiner.runtime.resources.memory import (
+    restore_memory_soft_limit,
+    set_memory_soft_limit_mb,
+)
+from refiner.runtime.worker.runner import Worker, WorkerLifecycleContext, WorkerRunStats
 
 from .base import BaseLauncher
 
@@ -213,7 +216,7 @@ class LocalLauncher(BaseLauncher):
             cmd = [
                 sys.executable,
                 "-m",
-                "refiner.runtime.worker_entrypoint",
+                "refiner.runtime.worker.entrypoint",
                 "--rank",
                 str(rank),
                 "--job-id",

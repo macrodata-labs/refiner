@@ -11,7 +11,7 @@ from refiner.io import DataFileSet
 from refiner.io.fileset import DataFileSetLike
 from refiner.ledger.shard import Shard
 from refiner.sources.base import BaseSource
-from refiner.sources.row import Row
+from refiner.runtime.types import SourceUnit
 
 
 class BaseReader(BaseSource):
@@ -132,12 +132,13 @@ class BaseReader(BaseSource):
         raise NotImplementedError
 
     @abstractmethod
-    def read_shard(self, shard: Shard) -> Iterator[Row]:
-        """Read a shard and yield row-like objects.
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
+        """Read a shard and yield row units.
 
         Contract:
             - Must accept shards returned by `list_shards()`.
             - Should be safe to call sequentially (single-worker, no concurrent calls).
+            - Units can be `Row` or Arrow tabular blocks (`RecordBatch`/`Table`).
         """
         raise NotImplementedError
 

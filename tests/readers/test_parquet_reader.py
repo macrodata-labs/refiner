@@ -17,6 +17,15 @@ def _write_parquet(tmp_path):
     return p
 
 
+def _rows_from_shard_units(units):
+    for unit in units:
+        if isinstance(unit, pa.RecordBatch):
+            tbl = pa.Table.from_batches([unit])
+            yield from tbl.to_pylist()
+        else:
+            yield unit
+
+
 def test_parquet_rowgroups_reads_all_rows(tmp_path):
     p = _write_parquet(tmp_path)
     r = ParquetReader(str(p), sharding_mode="rowgroups", target_shard_bytes=1)
@@ -25,7 +34,7 @@ def test_parquet_rowgroups_reads_all_rows(tmp_path):
 
     out = []
     for s in shards:
-        out.extend(list(r.read_shard(s)))
+        out.extend(list(_rows_from_shard_units(r.read_shard(s))))
 
     ids = sorted(int(row["id"]) for row in out)
     assert ids == list(range(50))
@@ -40,7 +49,7 @@ def test_parquet_bytes_lazy_reads_all_rows(tmp_path):
 
     out = []
     for s in shards:
-        out.extend(list(r.read_shard(s)))
+        out.extend(list(_rows_from_shard_units(r.read_shard(s))))
 
     ids = sorted(int(row["id"]) for row in out)
     assert ids == list(range(50))

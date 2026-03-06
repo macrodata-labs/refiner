@@ -1,4 +1,15 @@
+import pyarrow as pa
+
 from refiner.sources.readers import CsvReader
+
+
+def _rows_from_shard_units(units):
+    for unit in units:
+        if isinstance(unit, pa.RecordBatch):
+            tbl = pa.Table.from_batches([unit])
+            yield from tbl.to_pylist()
+        else:
+            yield unit
 
 
 def test_csv_bytes_lazy_reads_all_rows_exactly_once(tmp_path):
@@ -20,7 +31,7 @@ def test_csv_bytes_lazy_reads_all_rows_exactly_once(tmp_path):
     ids = set()
     count = 0
     for s in shards:
-        for row in r.read_shard(s):
+        for row in _rows_from_shard_units(r.read_shard(s)):
             ids.add(int(row["id"]))
             count += 1
 
@@ -42,7 +53,7 @@ def test_csv_multiline_forces_scan_and_parses_embedded_newline(tmp_path):
 
     rows = []
     for s in shards:
-        rows.extend(list(r.read_shard(s)))
+        rows.extend(list(_rows_from_shard_units(r.read_shard(s))))
 
     assert len(rows) == 2
     assert rows[0]["id"] == "0"
