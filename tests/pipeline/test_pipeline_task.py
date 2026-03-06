@@ -27,3 +27,5 @@ def test_task_compiles_source_and_task_step_plan() -> None:
     assert steps[0]["args"]["num_tasks"] == 3
     assert steps[1]["name"] == "task_2"
     assert steps[1]["type"] == "row_map"
+    assert "fn" in steps[1]["args"]
+    assert steps[1]["args"]["__meta"]["fn"] == "code"

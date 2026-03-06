@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from refiner.runtime.planning import compile_pipeline_plan
 
 from .auth import current_api_key
+from .manifest import build_run_manifest
 from .cloud.models import CloudRunCreateRequest, CloudRunCreateResponse
 from .config import resolve_platform_base_url
 from .http import MacrodataApiError, request_json
@@ -36,6 +37,7 @@ class MacrodataClient:
             "name": name,
             "executor": {"type": "refiner-local"},
             "plan": compile_pipeline_plan(pipeline),
+            "manifest": build_run_manifest(),
         }
         resp = request_json(
             method="POST",

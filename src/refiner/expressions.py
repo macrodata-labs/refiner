@@ -22,6 +22,143 @@ def _as_expr(value: Any) -> "Expr":
     return Expr(op="lit", args=(value,))
 
 
+def value_to_code(value: Any) -> str:
+    if isinstance(value, Expr):
+        return expr_to_code(value)
+    if isinstance(value, str):
+        return repr(value)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(value_to_code(item) for item in value) + "]"
+    if isinstance(value, tuple):
+        if len(value) == 1:
+            return f"({value_to_code(value[0])},)"
+        return "(" + ", ".join(value_to_code(item) for item in value) + ")"
+    if isinstance(value, dict):
+        return (
+            "{"
+            + ", ".join(
+                f"{value_to_code(key)}: {value_to_code(item)}"
+                for key, item in value.items()
+            )
+            + "}"
+        )
+    return repr(value)
+
+
+def expr_to_code(value: Any) -> str:
+    if not isinstance(value, Expr):
+        return value_to_code(value)
+
+    op = value.op
+    args = value.args
+
+    if op == "col":
+        return f"col({args[0]!r})"
+    if op == "lit":
+        return value_to_code(args[0])
+    if op == "coalesce":
+        return f"coalesce({', '.join(expr_to_code(arg) for arg in args)})"
+    if op == "if_else":
+        return f"if_else({expr_to_code(args[0])}, {expr_to_code(args[1])}, {expr_to_code(args[2])})"
+
+    binary_ops = {
+        "add": "+",
+        "sub": "-",
+        "mul": "*",
+        "div": "/",
+        "floordiv": "//",
+        "mod": "%",
+        "eq": "==",
+        "ne": "!=",
+        "lt": "<",
+        "le": "<=",
+        "gt": ">",
+        "ge": ">=",
+        "and": "&",
+        "or": "|",
+    }
+    if op in binary_ops:
+        return f"({expr_to_code(args[0])} {binary_ops[op]} {expr_to_code(args[1])})"
+    if op == "not":
+        return f"(~{expr_to_code(args[0])})"
+
+    if op == "is_null":
+        return f"{expr_to_code(args[0])}.is_null()"
+    if op == "is_not_null":
+        return f"{expr_to_code(args[0])}.is_not_null()"
+    if op == "is_in":
+        return f"{expr_to_code(args[0])}.is_in({value_to_code(list(args[1]))})"
+    if op == "fill_null":
+        return f"{expr_to_code(args[0])}.fill_null({expr_to_code(args[1])})"
+    if op == "null_if":
+        return f"{expr_to_code(args[0])}.null_if({expr_to_code(args[1])})"
+
+    if op == "abs":
+        return f"{expr_to_code(args[0])}.abs()"
+    if op == "floor":
+        return f"{expr_to_code(args[0])}.floor()"
+    if op == "ceil":
+        return f"{expr_to_code(args[0])}.ceil()"
+    if op == "round":
+        return f"{expr_to_code(args[0])}.round({value_to_code(args[1])})"
+    if op == "clip":
+        kwargs: list[str] = []
+        if args[1] is not None:
+            kwargs.append(f"min_value={expr_to_code(args[1])}")
+        if args[2] is not None:
+            kwargs.append(f"max_value={expr_to_code(args[2])}")
+        return f"{expr_to_code(args[0])}.clip({', '.join(kwargs)})"
+
+    if op == "str_lower":
+        return f"{expr_to_code(args[0])}.str.lower()"
+    if op == "str_upper":
+        return f"{expr_to_code(args[0])}.str.upper()"
+    if op == "str_strip":
+        return f"{expr_to_code(args[0])}.str.strip()"
+    if op == "str_len":
+        return f"{expr_to_code(args[0])}.str.len()"
+    if op == "str_contains":
+        return f"{expr_to_code(args[0])}.str.contains({value_to_code(args[1])})"
+    if op == "str_startswith":
+        return f"{expr_to_code(args[0])}.str.startswith({value_to_code(args[1])})"
+    if op == "str_endswith":
+        return f"{expr_to_code(args[0])}.str.endswith({value_to_code(args[1])})"
+    if op == "str_regex_contains":
+        return f"{expr_to_code(args[0])}.str.regex_contains({value_to_code(args[1])})"
+    if op == "str_replace":
+        return (
+            f"{expr_to_code(args[0])}.str.replace("
+            f"{value_to_code(args[1])}, {value_to_code(args[2])})"
+        )
+    if op == "str_regex_replace":
+        return (
+            f"{expr_to_code(args[0])}.str.regex_replace("
+            f"{value_to_code(args[1])}, {value_to_code(args[2])})"
+        )
+
+    if op == "datetime_year":
+        return f"{expr_to_code(args[0])}.datetime.year()"
+    if op == "datetime_month":
+        return f"{expr_to_code(args[0])}.datetime.month()"
+    if op == "datetime_day":
+        return f"{expr_to_code(args[0])}.datetime.day()"
+    if op == "datetime_hour":
+        return f"{expr_to_code(args[0])}.datetime.hour()"
+    if op == "datetime_to_date":
+        return f"{expr_to_code(args[0])}.datetime.to_date()"
+
+    return value_to_code(value.to_plan())
+
+
+def with_columns_assignments_to_code(assignments: dict[str, Any]) -> str:
+    return ", ".join(
+        f"{name}={expr.to_code() if isinstance(expr, Expr) else expr_to_code(expr)}"
+        for name, expr in assignments.items()
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Expr:
     op: builtins.str
@@ -92,6 +229,9 @@ class Expr:
             return v
 
         return {"op": self.op, "args": [_serialize(v) for v in self.args]}
+
+    def to_code(self) -> builtins.str:
+        return expr_to_code(self)
 
     def __add__(self, other: Any) -> "Expr":
         return Expr(op="add", args=(self, _as_expr(other)))
