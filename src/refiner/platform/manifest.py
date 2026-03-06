@@ -51,7 +51,7 @@ def _read_script(
         return str(script_path), None, None
 
     sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return str(script_path), text if text else None, sha256
+    return str(script_path), text, sha256
 
 
 def _package_version(name: str) -> str | None:
@@ -65,7 +65,7 @@ def _collect_dependencies() -> list[dict[str, str]]:
     dependencies_by_name: dict[str, str] = {}
     for dist in importlib_metadata.distributions():
         dist_name_raw = dist.metadata["Name"]
-        dist_name = str(dist_name_raw).strip()
+        dist_name = str(dist_name_raw).strip() if dist_name_raw else ""
         if not dist_name:
             continue
         dist_version = dist.version

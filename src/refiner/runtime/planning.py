@@ -104,7 +104,7 @@ def _extract_lambda_source(source: str) -> str | None:
     return None
 
 
-def _callable_source(fn: Any) -> str | None:
+def _callable_source(fn: Any) -> str:
     try:
         source = inspect.getsource(fn)
     except (OSError, TypeError):
