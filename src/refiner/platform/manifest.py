@@ -119,12 +119,15 @@ def _resolve_local_repo_git_sha() -> str | None:
     repo_root = _resolve_repo_root(Path(__file__))
     if repo_root is None:
         return None
-    result = subprocess.run(
-        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
     if result.returncode != 0:
         return None
     sha = result.stdout.strip()
