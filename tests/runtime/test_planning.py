@@ -7,7 +7,7 @@ from refiner import col
 from refiner.pipeline import RefinerPipeline, from_items
 from refiner.sources.readers.base import BaseReader
 from refiner.sources.row import DictRow, Row
-from refiner.runtime.planning import compile_pipeline_plan
+from refiner.runtime.planning import _extract_lambda_source, compile_pipeline_plan
 
 
 class _FakeReader(BaseReader):
@@ -24,6 +24,10 @@ class _FakeReader(BaseReader):
     def read_shard(self, shard: Shard) -> Iterator[Row]:
         del shard
         yield DictRow({"x": 1})
+
+
+def _score_filter_lambda():
+    return lambda row: int(row["score"]) >= 15
 
 
 def test_compile_pipeline_plan_includes_reader_and_steps() -> None:
@@ -115,3 +119,18 @@ def test_compile_pipeline_plan_uses_named_callable_for_step_name() -> None:
     steps = payload["stages"][0]["steps"]
     assert steps[1]["name"] == "duplicate_selected"
     assert steps[1]["type"] == "row_map"
+
+
+def test_extract_lambda_source_handles_chained_call_fragment() -> None:
+    fn = _score_filter_lambda()
+    source = '.filter(lambda row: int(row["score"]) >= 15)'
+    assert _extract_lambda_source(source, fn) == 'lambda row: int(row["score"]) >= 15'
+
+
+def test_extract_lambda_source_matches_exact_lambda_when_multiple_present() -> None:
+    fn = _score_filter_lambda()
+    source = (
+        'pipeline.map(lambda row: row["score"]).filter('
+        'lambda row: int(row["score"]) >= 15)'
+    )
+    assert _extract_lambda_source(source, fn) == 'lambda row: int(row["score"]) >= 15'
