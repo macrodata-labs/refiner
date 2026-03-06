@@ -41,7 +41,11 @@ def test_compile_pipeline_plan_includes_reader_and_steps() -> None:
     assert steps[0]["type"] == "source"
     assert [step["name"] for step in steps[1:]] == ["map", "batch_map", "flat_map"]
     assert steps[2]["args"]["batch_size"] == 2
-    assert "code" not in steps[0]
+    assert "fn" not in steps[0].get("args", {})
+    assert "lambda row" in steps[1]["args"]["fn"]
+    assert steps[1]["args"]["__meta"]["fn"] == "code"
+    assert "lambda rows" in steps[2]["args"]["fn"]
+    assert steps[2]["args"]["__meta"]["fn"] == "code"
 
 
 def test_compile_pipeline_plan_makes_step_names_unique() -> None:
@@ -55,6 +59,8 @@ def test_compile_pipeline_plan_makes_step_names_unique() -> None:
     steps = payload["stages"][0]["steps"]
     assert steps[0]["name"].startswith("read_")
     assert [step["name"] for step in steps[1:]] == ["filter", "flat_map"]
+    assert steps[1]["type"] == "filter"
+    assert "lambda row: True" in steps[1]["args"]["fn"]
 
 
 def test_compile_pipeline_plan_dedupes_same_top_level_op_names() -> None:
@@ -94,3 +100,18 @@ def test_compile_pipeline_plan_flattens_vectorized_segment_ops() -> None:
     assert steps[1]["type"] == "filter_expr"
     assert steps[2]["type"] == "with_columns"
     assert steps[3]["type"] == "select"
+    assert "expression" in steps[1]["args"]
+    assert "callable" not in steps[1]
+    assert steps[2]["args"] == {"y": "(col('x') + 10)"}
+    assert "callable" not in steps[2]
+
+
+def test_compile_pipeline_plan_uses_named_callable_for_step_name() -> None:
+    def duplicate_selected(row):
+        return {"x": row["x"], "dup": True}
+
+    pipeline = RefinerPipeline(_FakeReader()).map(duplicate_selected)
+    payload = compile_pipeline_plan(pipeline)
+    steps = payload["stages"][0]["steps"]
+    assert steps[1]["name"] == "duplicate_selected"
+    assert steps[1]["type"] == "row_map"

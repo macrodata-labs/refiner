@@ -1,9 +1,22 @@
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+
+
+def _explicit_callable_name(fn: Any) -> str | None:
+    name = getattr(fn, "__name__", None)
+    if not isinstance(name, str):
+        return None
+    normalized = name.strip()
+    if not normalized or normalized == "<lambda>":
+        return None
+    return normalized
 
 
 def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
@@ -11,6 +24,7 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         CastStep,
         DropStep,
         FilterExprStep,
+        FilterRowStep,
         FnBatchStep,
         FnFlatMapStep,
         FnRowStep,
@@ -21,22 +35,45 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
 
     explicit_name = getattr(step, "op_name", None)
     if isinstance(step, FnRowStep):
-        return (explicit_name or "map"), "row_map", None
-    if isinstance(step, FnBatchStep):
-        return (
-            (explicit_name or "batch_map"),
-            "batch_map",
-            {"batch_size": step.batch_size},
+        inferred_name = (
+            explicit_name
+            if explicit_name and explicit_name != "map"
+            else _explicit_callable_name(step.fn)
         )
+        return (inferred_name or "map"), "row_map", {"fn": step.fn}
+    if isinstance(step, FnBatchStep):
+        inferred_name = (
+            explicit_name
+            if explicit_name and explicit_name != "batch_map"
+            else _explicit_callable_name(step.fn)
+        )
+        return (
+            (inferred_name or "batch_map"),
+            "batch_map",
+            {"fn": step.fn, "batch_size": step.batch_size},
+        )
+    if isinstance(step, FilterRowStep):
+        inferred_name = (
+            explicit_name
+            if explicit_name and explicit_name != "filter"
+            else _explicit_callable_name(step.predicate)
+        )
+        return (inferred_name or "filter"), "filter", {"fn": step.predicate}
     if isinstance(step, FnFlatMapStep):
-        return (explicit_name or "flat_map"), "flat_map", None
+        inferred_name = (
+            explicit_name
+            if explicit_name and explicit_name != "flat_map"
+            else _explicit_callable_name(step.fn)
+        )
+        step_name = inferred_name or "flat_map"
+        return step_name, "flat_map", {"fn": step.fn}
     if isinstance(step, SelectStep):
         return (explicit_name or "select"), "select", {"columns": list(step.columns)}
     if isinstance(step, WithColumnsStep):
         return (
             explicit_name or "with_columns",
             "with_columns",
-            {"columns": {k: v.to_plan() for k, v in step.assignments.items()}},
+            {name: expr.to_code() for name, expr in step.assignments.items()},
         )
     if isinstance(step, DropStep):
         return (explicit_name or "drop"), "drop", {"columns": list(step.columns)}
@@ -48,15 +85,36 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         return (
             explicit_name or "filter",
             "filter_expr",
-            {"predicate": step.predicate.to_plan()},
+            {"expression": step.predicate.to_code()},
         )
     return step.__class__.__name__, step.__class__.__name__.lower(), None
 
 
-def _callable_code_hint(obj: Any) -> str | None:
-    fn = getattr(obj, "fn", None)
-    if fn is None:
+def _extract_lambda_source(source: str) -> str | None:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
         return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Lambda):
+            segment = ast.get_source_segment(source, node)
+            if isinstance(segment, str) and segment.strip():
+                return segment.strip()
+    return None
+
+
+def _callable_source(fn: Any) -> str:
+    try:
+        source = inspect.getsource(fn)
+    except (OSError, TypeError):
+        source = None
+
+    if isinstance(source, str) and source.strip():
+        normalized = textwrap.dedent(source).strip()
+        lambda_source = _extract_lambda_source(normalized)
+        return lambda_source or normalized
+
     module = getattr(fn, "__module__", None)
     qualname = getattr(fn, "__qualname__", None)
     if isinstance(module, str) and isinstance(qualname, str):
@@ -70,14 +128,31 @@ def _step_payload(
     step_type: str,
     index: int,
     args: dict[str, Any] | None,
-    code: str | None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"name": name, "type": step_type, "index": index}
     if args:
         payload["args"] = args
-    if code is not None:
-        payload["code"] = code
     return payload
+
+
+def _serialize_args(args: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not args:
+        return args
+
+    serialized: dict[str, Any] = {}
+    meta: dict[str, str] = {}
+    for key, value in args.items():
+        if callable(value):
+            source = _callable_source(value)
+            if source is not None:
+                serialized[key] = source
+                meta[key] = "code"
+                continue
+        serialized[key] = value
+
+    if meta:
+        serialized["__meta"] = meta
+    return serialized
 
 
 def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
@@ -93,13 +168,13 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
         used_names[base] = count
         return base if count == 1 else f"{base}_{count}"
 
+    source_name = _unique_name(source_step_name)
     steps.append(
         _step_payload(
-            name=_unique_name(source_step_name),
+            name=source_name,
             step_type="source",
             index=0,
-            args=source_args,
-            code=None,
+            args=_serialize_args(source_args),
         )
     )
     from refiner.processors.step import VectorizedSegmentStep
@@ -108,24 +183,24 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
         if isinstance(step, VectorizedSegmentStep):
             for op in step.ops:
                 base_name, step_type, args = _step_name_type(op)
+                unique_name = _unique_name(base_name)
                 steps.append(
                     _step_payload(
-                        name=_unique_name(base_name),
+                        name=unique_name,
                         step_type=step_type,
                         index=len(steps),
-                        args=args,
-                        code=None,
+                        args=_serialize_args(args),
                     )
                 )
             continue
         base_name, step_type, args = _step_name_type(step)
+        unique_name = _unique_name(base_name)
         steps.append(
             _step_payload(
-                name=_unique_name(base_name),
+                name=unique_name,
                 step_type=step_type,
                 index=step.index,
-                args=args,
-                code=_callable_code_hint(step),
+                args=_serialize_args(args),
             )
         )
 

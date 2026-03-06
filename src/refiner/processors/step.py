@@ -18,6 +18,7 @@ class RefinerStep(ABC):
 
 MapResult: TypeAlias = Row | Mapping[str, Any]
 MapFn: TypeAlias = Callable[[Row], MapResult]
+PredicateFn: TypeAlias = Callable[[Row], bool]
 BatchItem: TypeAlias = Row | Mapping[str, Any] | None
 BatchFn: TypeAlias = Callable[[list[Row]], Iterable[BatchItem]]
 FlatMapFn: TypeAlias = Callable[[Row], Iterable[BatchItem]]
@@ -77,6 +78,16 @@ class FnFlatMapStep(FlatMapStep):
 
     def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
         return self.fn(row)
+
+
+@dataclass(frozen=True, slots=True)
+class FilterRowStep(RefinerStep):
+    predicate: PredicateFn
+    index: int
+    op_name: str | None = "filter"
+
+    def apply_predicate(self, row: Row) -> bool:
+        return bool(self.predicate(row))
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,8 +177,10 @@ __all__ = [
     "FnRowStep",
     "FnBatchStep",
     "FnFlatMapStep",
+    "FilterRowStep",
     "MapResult",
     "MapFn",
+    "PredicateFn",
     "BatchItem",
     "BatchFn",
     "FlatMapFn",

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from refiner.platform import CredentialsError, MacrodataClient
 from refiner.platform.client import compile_shard_descriptors
+from refiner.platform.manifest import build_run_manifest
 from refiner.platform.cloud.models import CloudRunCreateRequest, CloudRuntimeConfig
 from refiner.platform.cloud.serialize import serialize_pipeline_inline
 from refiner.runtime.planning import compile_pipeline_plan
@@ -72,6 +73,7 @@ class CloudLauncher(BaseLauncher):
             ),
             pipeline_payload=serialize_pipeline_inline(self.pipeline),
             shards=compile_shard_descriptors(list(self.pipeline.source.list_shards())),
+            manifest=build_run_manifest(),
         )
         resp = client.cloud_submit_job(request=request)
         self._info(

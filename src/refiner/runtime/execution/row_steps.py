@@ -4,6 +4,7 @@ from collections.abc import Iterable, Iterator, Sequence
 
 from refiner.processors.step import (
     BatchStep,
+    FilterRowStep,
     FlatMapStep,
     RefinerStep,
     RowStep,
@@ -41,6 +42,12 @@ def execute_row_steps(
             for row in inp.take_all():
                 normalized = normalize_row_result(row, step.apply_row(row))
                 out.append(normalized)
+            return
+
+        if isinstance(step, FilterRowStep):
+            for row in inp.take_all():
+                if step.apply_predicate(row):
+                    out.append(row)
             return
 
         if isinstance(step, FlatMapStep):

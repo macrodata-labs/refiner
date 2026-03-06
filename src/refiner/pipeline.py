@@ -10,6 +10,7 @@ from refiner.processors.step import (
     CastStep,
     DropStep,
     FilterExprStep,
+    FilterRowStep,
     FlatMapFn,
     FnBatchStep,
     FnFlatMapStep,
@@ -128,8 +129,8 @@ class RefinerPipeline:
         if isinstance(predicate, Expr):
             return self._add_vectorized_op(FilterExprStep(predicate=predicate))
         return self.add_step(
-            FnFlatMapStep(
-                fn=lambda row: [row] if predicate(row) else [],
+            FilterRowStep(
+                predicate=predicate,
                 op_name="filter",
                 index=len(self.pipeline_steps) + 1,
             )

@@ -46,9 +46,10 @@ class CloudRunCreateRequest:
     runtime: CloudRuntimeConfig
     pipeline_payload: CloudPipelinePayload
     shards: list[dict[str, Any]]
+    manifest: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "name": self.name,
             "executor": {"type": "macrodata-cloud"},
             "plan": self.plan,
@@ -56,6 +57,9 @@ class CloudRunCreateRequest:
             "pipeline_payload": self.pipeline_payload.to_dict(),
             "shards": self.shards,
         }
+        if self.manifest is not None:
+            payload["manifest"] = self.manifest
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

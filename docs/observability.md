@@ -17,6 +17,7 @@ If no key is available, the launch still runs and prints a warning with a login/
 ## What Is Reported (Current)
 
 - Job creation (`/api/jobs/submit`)
+- Job manifest capture (script text/path/hash, environment, dependencies)
 - Stage shard registration
 - Worker start / finish
 - Shard start / finish
@@ -94,6 +95,7 @@ If a key is present, the run appears in Macrodata Observer with lifecycle progre
 ## Internal Notes
 
 - Current Refiner pipelines are submitted as a single stage (`stage_0`) in the Observer job plan.
+- Plan step payloads include callable-source `callable` (when present) and expression-first `args.expression` values for UI rendering.
 - Refiner registers shard descriptors (`shard_id`, `path`, `start`, `end`) and uses `shard_id` for shard lifecycle events.
 - User OTEL metrics export every 10 seconds and force flush on shard end.
 - Worker resource OTEL metrics export every 10 seconds and are flushed at worker shutdown.
