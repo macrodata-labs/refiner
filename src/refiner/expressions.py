@@ -8,6 +8,13 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.compute as pc
 
+_ARROW_FUNCTIONS = frozenset(pc.list_functions())
+_HAS_FLOOR_DIVIDE_KERNEL = "floor_divide" in _ARROW_FUNCTIONS
+_HAS_MOD_KERNEL = "mod" in _ARROW_FUNCTIONS
+_HAS_MAXIMUM_KERNEL = "maximum" in _ARROW_FUNCTIONS
+_HAS_MINIMUM_KERNEL = "minimum" in _ARROW_FUNCTIONS
+_ELEMENT_WISE_KEEP_NULLS = pc.ElementWiseAggregateOptions(skip_nulls=False)
+
 
 def _as_expr(value: Any) -> "Expr":
     if isinstance(value, Expr):
@@ -263,17 +270,28 @@ def eval_expr_arrow(
         upper = args[2]
         if lower is not None:
             lower_value = eval_expr_arrow(lower, table)
-            value = _call(
-                "if_else", _call("less", value, lower_value), lower_value, value
-            )
+            if _HAS_MAXIMUM_KERNEL:
+                value = _call("maximum", value, lower_value)
+            else:
+                # `maximum` is not available on older Arrow versions.
+                value = _call(
+                    "max_element_wise",
+                    value,
+                    lower_value,
+                    options=_ELEMENT_WISE_KEEP_NULLS,
+                )
         if upper is not None:
             upper_value = eval_expr_arrow(upper, table)
-            value = _call(
-                "if_else",
-                _call("greater", value, upper_value),
-                upper_value,
-                value,
-            )
+            if _HAS_MINIMUM_KERNEL:
+                value = _call("minimum", value, upper_value)
+            else:
+                # `minimum` is not available on older Arrow versions.
+                value = _call(
+                    "min_element_wise",
+                    value,
+                    upper_value,
+                    options=_ELEMENT_WISE_KEEP_NULLS,
+                )
         return value
 
     if op in {
@@ -299,6 +317,8 @@ def eval_expr_arrow(
             "sub": "subtract",
             "mul": "multiply",
             "div": "divide",
+            "floordiv": "floor_divide" if _HAS_FLOOR_DIVIDE_KERNEL else None,
+            "mod": "mod" if _HAS_MOD_KERNEL else None,
             "eq": "equal",
             "ne": "not_equal",
             "lt": "less",
@@ -308,12 +328,15 @@ def eval_expr_arrow(
             "and": "and_kleene",
             "or": "or_kleene",
         }
+        direct_kernel = binary_map[op]
+        if direct_kernel is not None:
+            return _call(direct_kernel, left, right)
         if op == "floordiv":
             return _call("floor", _call("divide", left, right))
         if op == "mod":
             floored = _call("floor", _call("divide", left, right))
             return _call("subtract", left, _call("multiply", floored, right))
-        return _call(binary_map[op], left, right)
+        raise ValueError(f"Unsupported binary expression op: {op}")
 
     if op == "not":
         return _call("invert", eval_expr_arrow(args[0], table))

@@ -19,4 +19,3 @@ def test_expr_rejects_python_and_or_short_circuit() -> None:
 def test_expr_uses_bitwise_ops_for_logical_composition() -> None:
     expr = (mdr.col("a") > 1) & (mdr.col("b") < 2)
     assert expr.to_plan()["op"] == "and"
-

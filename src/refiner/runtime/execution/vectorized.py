@@ -102,9 +102,7 @@ def _broadcast_scalar(
         return values
     if num_rows <= 0:
         return pa.array([], type=values.type)
-    # Broadcast without materializing a Python list of repeated values.
-    all_rows = pc.call_function("is_null", [pa.nulls(num_rows)])
-    return pc.call_function("if_else", [all_rows, values, values])
+    return pa.repeat(values, num_rows)
 
 
 __all__ = [
