@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import hashlib
 import inspect
+import json
 import platform
+import subprocess
 import sys
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
-
-from .refiner_metadata import resolve_refiner_runtime_metadata
 
 
 def _is_external_script(path: Path) -> bool:
@@ -74,11 +75,75 @@ def _collect_dependencies() -> list[dict[str, str]]:
     ]
 
 
+def _resolve_installed_version() -> str | None:
+    for package_name in ("refiner", "macrodata-refiner"):
+        try:
+            version = importlib_metadata.version(package_name).strip()
+        except importlib_metadata.PackageNotFoundError:
+            continue
+        if version:
+            return version
+    return None
+
+
+def _resolve_direct_url_git_sha() -> str | None:
+    for package_name in ("refiner", "macrodata-refiner"):
+        try:
+            dist = importlib_metadata.distribution(package_name)
+        except importlib_metadata.PackageNotFoundError:
+            continue
+        raw = dist.read_text("direct_url.json")
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        vcs_info = data.get("vcs_info")
+        if not isinstance(vcs_info, dict):
+            continue
+        commit = str(vcs_info.get("commit_id", "")).strip()
+        if commit:
+            return commit
+    return None
+
+
+def _resolve_repo_root(start: Path) -> Path | None:
+    for parent in start.resolve().parents:
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def _resolve_local_repo_git_sha() -> str | None:
+    repo_root = _resolve_repo_root(Path(__file__))
+    if repo_root is None:
+        return None
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    sha = result.stdout.strip()
+    return sha or None
+
+
+@lru_cache(maxsize=1)
+def _resolve_refiner_ref() -> str | None:
+    return (
+        _resolve_direct_url_git_sha()
+        or _resolve_local_repo_git_sha()
+        or _resolve_installed_version()
+    )
+
+
 def build_run_manifest() -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
-    metadata = resolve_refiner_runtime_metadata()
-    refiner_ref = metadata.git_sha or metadata.version
+    refiner_ref = _resolve_refiner_ref()
 
     return {
         "version": 1,

@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 
 from refiner.platform.manifest import build_run_manifest
-from refiner.platform.refiner_metadata import RefinerRuntimeMetadata
 
 
 def test_build_run_manifest_captures_script_from_argv(
@@ -15,8 +14,8 @@ def test_build_run_manifest_captures_script_from_argv(
 
     monkeypatch.setattr(sys, "argv", [str(script_path)])
     monkeypatch.setattr(
-        "refiner.platform.manifest.resolve_refiner_runtime_metadata",
-        lambda: RefinerRuntimeMetadata(version="0.1.0", git_sha="abc123def456"),
+        "refiner.platform.manifest._resolve_refiner_ref",
+        lambda: "abc123def456",
     )
 
     manifest = build_run_manifest()
