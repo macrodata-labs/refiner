@@ -244,6 +244,7 @@ class RefinerPipeline:
         heartbeat_every_rows: int = 4096,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
+        sync_local_dependencies: bool = True,
     ) -> "CloudLaunchResult":
         """Launch the pipeline on Macrodata Cloud.
 
@@ -253,6 +254,7 @@ class RefinerPipeline:
             heartbeat_every_rows: Worker heartbeat cadence.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory per worker in MB.
+            sync_local_dependencies: Sync submitting environment dependencies in cloud image.
         """
         from refiner.runtime.launchers.cloud import CloudLauncher
 
@@ -263,6 +265,7 @@ class RefinerPipeline:
             heartbeat_every_rows=heartbeat_every_rows,
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,
+            sync_local_dependencies=sync_local_dependencies,
         )
         return launcher.launch()
 

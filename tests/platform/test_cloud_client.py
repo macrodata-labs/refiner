@@ -58,7 +58,10 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert captured["api_key"] == "ing_test"
     assert captured["base_url"] == "https://example.com"
     json_payload = cast(dict[str, object], captured["json_payload"])
-    assert json_payload["executor"] == {"type": "macrodata-cloud"}
+    assert json_payload["executor"] == {
+        "type": "macrodata-cloud",
+        "sync_local_dependencies": True,
+    }
     runtime = cast(dict[str, object], json_payload["runtime"])
     assert runtime["cpus_per_worker"] == 4
     assert runtime["mem_mb_per_worker"] == 16384

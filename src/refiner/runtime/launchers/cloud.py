@@ -44,6 +44,7 @@ class CloudLauncher(BaseLauncher):
         heartbeat_every_rows: int = 4096,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
+        sync_local_dependencies: bool = True,
     ):
         super().__init__(
             pipeline=pipeline,
@@ -53,6 +54,7 @@ class CloudLauncher(BaseLauncher):
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,
         )
+        self.sync_local_dependencies = sync_local_dependencies
 
     def launch(self) -> CloudLaunchResult:
         try:
@@ -74,6 +76,7 @@ class CloudLauncher(BaseLauncher):
             pipeline_payload=serialize_pipeline_inline(self.pipeline),
             shards=compile_shard_descriptors(list(self.pipeline.source.list_shards())),
             manifest=build_run_manifest(),
+            sync_local_dependencies=self.sync_local_dependencies,
         )
         resp = client.cloud_submit_job(request=request)
         self._info(
