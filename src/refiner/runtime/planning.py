@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
+from types import CodeType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -90,18 +91,88 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
     return step.__class__.__name__, step.__class__.__name__.lower(), None
 
 
-def _extract_lambda_source(source: str) -> str | None:
+def _parse_lambda_segments(source: str) -> list[str]:
+    attempts = [source]
+    if source.startswith("."):
+        # inspect.getsource can return chained call fragments like
+        # ".filter(lambda row: ...)", which are invalid as standalone syntax.
+        attempts.append(f"_refiner_receiver{source}")
+
+    segments: list[tuple[int, int, str]] = []
+    seen_segments: set[str] = set()
+    for candidate in attempts:
+        try:
+            tree = ast.parse(candidate)
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Lambda):
+                continue
+            segment = ast.get_source_segment(candidate, node)
+            if not isinstance(segment, str):
+                continue
+            normalized = segment.strip()
+            if not normalized or normalized in seen_segments:
+                continue
+            seen_segments.add(normalized)
+            segments.append((node.lineno, node.col_offset, normalized))
+
+    segments.sort(key=lambda item: (item[0], item[1]))
+    return [segment for _, _, segment in segments]
+
+
+def _compiled_lambda_code(source: str) -> CodeType | None:
     try:
-        tree = ast.parse(source)
+        code = compile(source, "<refiner-lambda>", "eval")
     except SyntaxError:
         return None
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Lambda):
-            segment = ast.get_source_segment(source, node)
-            if isinstance(segment, str) and segment.strip():
-                return segment.strip()
+    for const in code.co_consts:
+        if isinstance(const, CodeType) and const.co_name == "<lambda>":
+            return const
     return None
+
+
+def _const_fingerprint(value: Any) -> Any:
+    if isinstance(value, CodeType):
+        return _code_fingerprint(value)
+    return value
+
+
+def _code_fingerprint(code: CodeType) -> tuple[Any, ...]:
+    return (
+        code.co_argcount,
+        code.co_posonlyargcount,
+        code.co_kwonlyargcount,
+        code.co_code,
+        code.co_names,
+        code.co_varnames,
+        code.co_freevars,
+        code.co_cellvars,
+        tuple(_const_fingerprint(const) for const in code.co_consts),
+    )
+
+
+def _code_objects_equal(left: CodeType, right: CodeType) -> bool:
+    return _code_fingerprint(left) == _code_fingerprint(right)
+
+
+def _extract_lambda_source(source: str, fn: Any) -> str | None:
+    segments = _parse_lambda_segments(source)
+    if not segments:
+        return None
+
+    target_code = getattr(fn, "__code__", None)
+    if isinstance(target_code, CodeType):
+        for segment in segments:
+            candidate = _compiled_lambda_code(segment)
+            if isinstance(candidate, CodeType) and _code_objects_equal(
+                candidate, target_code
+            ):
+                return segment
+
+    return segments[0]
 
 
 def _callable_source(fn: Any) -> str:
@@ -112,7 +183,7 @@ def _callable_source(fn: Any) -> str:
 
     if isinstance(source, str) and source.strip():
         normalized = textwrap.dedent(source).strip()
-        lambda_source = _extract_lambda_source(normalized)
+        lambda_source = _extract_lambda_source(normalized, fn)
         return lambda_source or normalized
 
     module = getattr(fn, "__module__", None)

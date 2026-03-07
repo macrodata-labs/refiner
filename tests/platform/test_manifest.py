@@ -13,6 +13,10 @@ def test_build_run_manifest_captures_script_from_argv(
     script_path.write_text("print('hello')\n", encoding="utf-8")
 
     monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_refiner_ref",
+        lambda: "abc123def456",
+    )
 
     manifest = build_run_manifest()
 
@@ -21,4 +25,5 @@ def test_build_run_manifest_captures_script_from_argv(
     assert manifest["script"]["text"] == "print('hello')\n"
     assert isinstance(manifest["script"]["sha256"], str)
     assert manifest["environment"]["python_version"]
+    assert manifest["environment"]["refiner_ref"] == "abc123def456"
     assert isinstance(manifest["dependencies"], list)

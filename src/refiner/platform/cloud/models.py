@@ -47,11 +47,15 @@ class CloudRunCreateRequest:
     pipeline_payload: CloudPipelinePayload
     shards: list[dict[str, Any]]
     manifest: dict[str, Any] | None = None
+    sync_local_dependencies: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "name": self.name,
-            "executor": {"type": "macrodata-cloud"},
+            "executor": {
+                "type": "macrodata-cloud",
+                "sync_local_dependencies": self.sync_local_dependencies,
+            },
             "plan": self.plan,
             "runtime": self.runtime.to_dict(),
             "pipeline_payload": self.pipeline_payload.to_dict(),
