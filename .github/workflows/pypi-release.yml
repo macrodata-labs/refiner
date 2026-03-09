@@ -109,8 +109,15 @@ jobs:
             echo "create_release=$create_release"
           } >> "$GITHUB_OUTPUT"
 
-  build:
+  ci-gate:
     needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs:
+      - prepare
+      - ci-gate
     if: needs.prepare.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -135,7 +142,7 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          current_version="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path(\"pyproject.toml\").read_text(encoding=\"utf-8\"))[\"project\"][\"version\"])')"
+          current_version="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
           if [ "$current_version" != "$EXPECTED_VERSION" ]; then
             echo "Version changed unexpectedly during workflow." >&2
             exit 1
