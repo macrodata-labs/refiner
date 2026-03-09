@@ -13,6 +13,7 @@ def _ok_payload() -> dict[str, object]:
         "name": "Ingestion Backend Key",
         "created": 1,
         "enabled": True,
+        "workspace": {"name": "Macrodata", "slug": "macrodata"},
         "user": {"name": "Jane Doe", "username": "jane", "email": "jane@example.com"},
     }
 
@@ -24,12 +25,13 @@ def test_login_with_token_success(monkeypatch, capsys) -> None:
         auth, "resolve_platform_base_url", lambda: "https://app.example.com"
     )
 
-    rc = auth.cmd_login(Namespace(token="ing_abc", token_stdin=False, quiet=True))
+    rc = auth.cmd_login(Namespace(token="md_abc", token_stdin=False, quiet=True))
     out = capsys.readouterr()
 
     assert rc == 0
     assert "Logged in as jane (jane@example.com)" in out.out
     assert "API key name: Ingestion Backend Key" in out.out
+    assert "Workspace: Macrodata (macrodata)" in out.out
 
 
 def test_login_invalid_token(monkeypatch, capsys) -> None:
@@ -41,19 +43,19 @@ def test_login_invalid_token(monkeypatch, capsys) -> None:
         auth, "resolve_platform_base_url", lambda: "https://app.example.com"
     )
 
-    rc = auth.cmd_login(Namespace(token="ing_bad", token_stdin=False, quiet=True))
+    rc = auth.cmd_login(Namespace(token="md_bad", token_stdin=False, quiet=True))
     out = capsys.readouterr()
 
     assert rc == 1
     assert "Invalid API key." in out.err
-    assert "/settings/tokens" in out.err
+    assert "/settings/api-keys" in out.err
 
 
 def test_login_warns_before_overwrite_before_prompt(
     monkeypatch, capsys, tmp_path
 ) -> None:
     existing = tmp_path / "api_key"
-    existing.write_text("ing_old\n")
+    existing.write_text("md_old\n")
 
     monkeypatch.setattr(auth, "credentials_path", lambda: existing)
     monkeypatch.setattr(auth.sys.stdin, "isatty", lambda: True)
@@ -74,7 +76,7 @@ def test_login_warns_before_overwrite_before_prompt(
 
 
 def test_whoami_success(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(auth, "current_api_key", lambda: "ing_abc")
+    monkeypatch.setattr(auth, "current_api_key", lambda: "md_abc")
     monkeypatch.setattr(auth, "verify_api_key", lambda **_: _ok_payload())
     monkeypatch.setattr(
         auth, "resolve_platform_base_url", lambda: "https://app.example.com"
@@ -86,6 +88,28 @@ def test_whoami_success(monkeypatch, capsys) -> None:
     assert rc == 0
     assert "Logged in as jane (jane@example.com)" in out.out
     assert "API key name: Ingestion Backend Key" in out.out
+    assert "Workspace: Macrodata (macrodata)" in out.out
+
+
+def test_login_sanitizes_workspace_and_key_display(monkeypatch, capsys) -> None:
+    payload = _ok_payload()
+    payload["name"] = "Key\x1b[31m"
+    payload["workspace"] = {"name": "Macro\x1b[31mdata", "slug": "macro\x07data"}
+
+    monkeypatch.setattr(auth, "verify_api_key", lambda **_: payload)
+    monkeypatch.setattr(auth, "save_api_key", lambda token: f"/tmp/{token}")
+    monkeypatch.setattr(
+        auth, "resolve_platform_base_url", lambda: "https://app.example.com"
+    )
+
+    rc = auth.cmd_login(Namespace(token="md_abc", token_stdin=False, quiet=True))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "API key name: Key[31m" in out.out
+    assert "Workspace: Macro[31mdata (macrodata)" in out.out
+    assert "\x1b" not in out.out
+    assert "\x07" not in out.out
 
 
 def test_logout_no_credentials(monkeypatch, capsys) -> None:

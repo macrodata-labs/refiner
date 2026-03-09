@@ -13,7 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     login = subparsers.add_parser(
         "login", help="Store and validate a Macrodata API key"
     )
-    login.add_argument("--token", help="Macrodata API key (ing_...)")
+    login.add_argument("--token", help="Macrodata API key (md_...)")
     login.add_argument(
         "--token-stdin",
         action="store_true",

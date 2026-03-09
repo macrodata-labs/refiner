@@ -47,7 +47,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
 
     monkeypatch.setattr("refiner.platform.client.request_json", fake_request_json)
 
-    client = MacrodataClient(api_key="ing_test", base_url="https://example.com")
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     resp = client.cloud_submit_job(request=_request())
 
     assert resp.job_id == "job-1"
@@ -55,7 +55,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert resp.status == "queued"
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/cloud/runs"
-    assert captured["api_key"] == "ing_test"
+    assert captured["api_key"] == "md_test"
     assert captured["base_url"] == "https://example.com"
     json_payload = cast(dict[str, object], captured["json_payload"])
     assert json_payload["executor"] == {
@@ -75,7 +75,7 @@ def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -
         lambda **_: {"status": "queued"},
     )
 
-    client = MacrodataClient(api_key="ing_test", base_url="https://example.com")
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     try:
         client.cloud_submit_job(request=_request())
     except MacrodataApiError as err:

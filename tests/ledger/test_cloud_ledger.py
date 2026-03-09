@@ -9,7 +9,7 @@ def test_cloud_ledger_register_and_lifecycle(monkeypatch) -> None:
 
     class FakeClient:
         def __init__(self, *, api_key: str):
-            assert api_key == "ing_test"
+            assert api_key == "md_test"
 
         def cloud_ledger_register_stage_shards(self, **kwargs):
             calls.append(("register", kwargs))
@@ -37,7 +37,7 @@ def test_cloud_ledger_register_and_lifecycle(monkeypatch) -> None:
         job_id="job-1",
         worker_id=7,
         stage_id="stage-1",
-        api_key="ing_test",
+        api_key="md_test",
     )
     shards = [Shard(path="p0", start=0, end=1)]
     ledger.seed_shards(shards)
@@ -73,6 +73,6 @@ def test_cloud_ledger_claim_none_when_queue_empty(monkeypatch) -> None:
         job_id="job-1",
         worker_id=1,
         stage_id="stage-1",
-        api_key="ing_test",
+        api_key="md_test",
     )
     assert ledger.claim() is None

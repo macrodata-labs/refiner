@@ -25,6 +25,7 @@ def compile_shard_descriptors(shards: list["Shard"]) -> list[dict[str, Any]]:
 class JobContext:
     job_id: str
     stage_id: str
+    workspace_slug: str | None = None
 
 
 class MacrodataClient:
@@ -71,7 +72,14 @@ class MacrodataClient:
             raise MacrodataApiError(
                 status=200, message="Missing stage index in /api/jobs/submit response"
             )
-        return JobContext(job_id=job_id, stage_id=str(stage_index))
+        workspace_slug = job.get("workspaceSlug")
+        if isinstance(workspace_slug, str):
+            workspace_slug = workspace_slug.strip() or None
+        else:
+            workspace_slug = None
+        return JobContext(
+            job_id=job_id, stage_id=str(stage_index), workspace_slug=workspace_slug
+        )
 
     def register_stage_shards(
         self, *, job_id: str, stage_id: str, shards: list["Shard"]
