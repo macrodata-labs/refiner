@@ -149,6 +149,7 @@ jobs:
           fi
 
       - name: Ensure release tag does not already exist
+        if: needs.prepare.outputs.publish_pypi == 'true'
         env:
           TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
         run: |
