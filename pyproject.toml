@@ -1,12 +1,9 @@
 [project]
-name = "refiner"
-version = "0.1.0"
+name = "macrodata-refiner"
+version = "0.0.0"
 description = "Refiner by Macrodata Labs, a data processing framework for Machine Learning large scale datasets"
 readme = "README.md"
-license = { file = "LICENSE" }
-classifiers = [
-    "License :: OSI Approved :: Apache Software License",
-]
+license = "Apache-2.0"
 authors = [
     { name = "Macrodata Labs" }
 ]
@@ -26,6 +23,16 @@ dependencies = [
 
 [project.scripts]
 macrodata = "refiner.cli.main:main"
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+refiner = ["py.typed"]
 
 [dependency-groups]
 dev = [
