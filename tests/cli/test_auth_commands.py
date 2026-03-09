@@ -91,6 +91,27 @@ def test_whoami_success(monkeypatch, capsys) -> None:
     assert "Workspace: Macrodata (macrodata)" in out.out
 
 
+def test_login_sanitizes_workspace_and_key_display(monkeypatch, capsys) -> None:
+    payload = _ok_payload()
+    payload["name"] = "Key\x1b[31m"
+    payload["workspace"] = {"name": "Macro\x1b[31mdata", "slug": "macro\x07data"}
+
+    monkeypatch.setattr(auth, "verify_api_key", lambda **_: payload)
+    monkeypatch.setattr(auth, "save_api_key", lambda token: f"/tmp/{token}")
+    monkeypatch.setattr(
+        auth, "resolve_platform_base_url", lambda: "https://app.example.com"
+    )
+
+    rc = auth.cmd_login(Namespace(token="md_abc", token_stdin=False, quiet=True))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "API key name: Key[31m" in out.out
+    assert "Workspace: Macro[31mdata (macrodata)" in out.out
+    assert "\x1b" not in out.out
+    assert "\x07" not in out.out
+
+
 def test_logout_no_credentials(monkeypatch, capsys) -> None:
     monkeypatch.setattr(auth, "clear_api_key", lambda: False)
     rc = auth.cmd_logout(Namespace())

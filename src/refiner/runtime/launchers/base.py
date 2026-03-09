@@ -10,6 +10,7 @@ import time
 from loguru import logger
 
 from refiner.platform import CredentialsError, MacrodataClient
+from refiner.platform.http import sanitize_terminal_text
 from refiner.platform.client import JobContext
 
 if TYPE_CHECKING:
@@ -69,9 +70,14 @@ class BaseLauncher(ABC):
     def _job_tracking_url(
         self, *, client: MacrodataClient, job_id: str, workspace_slug: str | None = None
     ) -> str:
-        if workspace_slug:
-            return f"{client.base_url}/jobs/{workspace_slug}/{job_id}"
-        return f"{client.base_url}/jobs/{job_id}"
+        safe_base_url = sanitize_terminal_text(client.base_url).strip().rstrip("/")
+        safe_job_id = sanitize_terminal_text(job_id).strip() or job_id
+        safe_workspace_slug = (
+            sanitize_terminal_text(workspace_slug).strip() if workspace_slug else None
+        )
+        if safe_workspace_slug:
+            return f"{safe_base_url}/jobs/{safe_workspace_slug}/{safe_job_id}"
+        return f"{safe_base_url}/jobs/{safe_job_id}"
 
     def _observer_client_or_none(self) -> MacrodataClient | None:
         try:

@@ -71,7 +71,9 @@ class MacrodataClient:
                 status=200, message="Missing stage index in /api/jobs/submit response"
             )
         workspace_slug = job.get("workspaceSlug")
-        if not isinstance(workspace_slug, str):
+        if isinstance(workspace_slug, str):
+            workspace_slug = workspace_slug.strip() or None
+        else:
             workspace_slug = None
         return JobContext(
             job_id=job_id, stage_id=str(stage_index), workspace_slug=workspace_slug
