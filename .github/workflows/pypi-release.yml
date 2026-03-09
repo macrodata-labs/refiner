@@ -85,21 +85,7 @@ jobs:
           else
             old_version=""
             if [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
-              old_version="$(python - "$BEFORE_SHA" <<'PY' || true
-import subprocess
-import sys
-import tomllib
-
-before_sha = sys.argv[1]
-try:
-    content = subprocess.check_output(["git", "show", f"{before_sha}:pyproject.toml"])
-except Exception:
-    sys.exit(0)
-
-data = tomllib.loads(content.decode("utf-8"))
-print(data["project"]["version"])
-PY
-)"
+              old_version="$(git show "$BEFORE_SHA:pyproject.toml" 2>/dev/null | sed -nE 's/^version = \"([^\"]+)\"$/\1/p' | head -n1 || true)"
             fi
 
             if [ "$old_version" != "$CURRENT_VERSION" ]; then
