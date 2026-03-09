@@ -135,14 +135,7 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          current_version="$(python - <<'PY'
-import tomllib
-from pathlib import Path
-
-data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-print(data["project"]["version"])
-PY
-)"
+          current_version="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path(\"pyproject.toml\").read_text(encoding=\"utf-8\"))[\"project\"][\"version\"])')"
           if [ "$current_version" != "$EXPECTED_VERSION" ]; then
             echo "Version changed unexpectedly during workflow." >&2
             exit 1
