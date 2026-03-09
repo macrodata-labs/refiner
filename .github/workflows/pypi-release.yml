@@ -127,9 +127,6 @@ PY
     needs: prepare
     if: needs.prepare.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ needs.prepare.outputs.version }}
-      tag_name: ${{ needs.prepare.outputs.tag_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
