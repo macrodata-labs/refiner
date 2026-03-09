@@ -16,7 +16,7 @@ from ..platform.config import resolve_platform_base_url
 from ..platform.http import MacrodataApiError, verify_api_key
 from .ui import display_identity, print_banner
 
-_TOKEN_SETTINGS_SUFFIX = "/settings/tokens"
+_TOKEN_SETTINGS_SUFFIX = "/settings/api-keys"
 
 
 def _token_settings_url(base_url: str) -> str:
@@ -46,7 +46,7 @@ def _read_token(args: argparse.Namespace) -> str:
             print("Continuing will overwrite the stored key.")
             print("")
 
-    token = getpass.getpass("Paste your Macrodata API key (ing_...): ").strip()
+    token = getpass.getpass("Paste your Macrodata API key (md_...): ").strip()
     if not token:
         raise RuntimeError("No API key provided")
     return token
@@ -55,6 +55,20 @@ def _read_token(args: argparse.Namespace) -> str:
 def _extract_user(payload: dict[str, Any]) -> dict[str, object]:
     user = payload.get("user")
     return user if isinstance(user, dict) else {}
+
+
+def _workspace_display(payload: dict[str, Any]) -> str | None:
+    workspace = payload.get("workspace")
+    if not isinstance(workspace, dict):
+        return None
+
+    name = str(workspace.get("name") or "").strip()
+    slug = str(workspace.get("slug") or "").strip()
+    if not name and not slug:
+        return None
+    if name and slug:
+        return f"{name} ({slug})"
+    return name or slug
 
 
 def cmd_login(args: argparse.Namespace) -> int:
@@ -85,6 +99,9 @@ def cmd_login(args: argparse.Namespace) -> int:
 
     print(f"Logged in as {display_identity(user)}")
     print(f"API key name: {payload.get('name')}")
+    workspace = _workspace_display(payload)
+    if workspace:
+        print(f"Workspace: {workspace}")
     print(f"Credentials saved to {path}")
     return 0
 
@@ -110,6 +127,9 @@ def cmd_whoami(_: argparse.Namespace) -> int:
     user = _extract_user(payload)
     print(f"Logged in as {display_identity(user)}")
     print(f"API key name: {payload.get('name')}")
+    workspace = _workspace_display(payload)
+    if workspace:
+        print(f"Workspace: {workspace}")
     return 0
 
 

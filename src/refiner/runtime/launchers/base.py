@@ -66,7 +66,11 @@ class BaseLauncher(ABC):
     def _info(self, message: str) -> None:
         logger.info(message)
 
-    def _job_tracking_url(self, *, client: MacrodataClient, job_id: str) -> str:
+    def _job_tracking_url(
+        self, *, client: MacrodataClient, job_id: str, workspace_slug: str | None = None
+    ) -> str:
+        if workspace_slug:
+            return f"{client.base_url}/jobs/{workspace_slug}/{job_id}"
         return f"{client.base_url}/jobs/{job_id}"
 
     def _observer_client_or_none(self) -> MacrodataClient | None:

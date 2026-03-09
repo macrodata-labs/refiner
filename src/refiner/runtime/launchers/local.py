@@ -111,9 +111,12 @@ class LocalLauncher(BaseLauncher):
 
     def _log_tracking_url(self, observer_ctx: Any | None) -> None:
         if observer_ctx is not None:
-            self._info(
-                f"Track job here: {self._job_tracking_url(client=observer_ctx.client, job_id=observer_ctx.job.job_id)}"
+            tracking_url = self._job_tracking_url(
+                client=observer_ctx.client,
+                job_id=observer_ctx.job.job_id,
+                workspace_slug=observer_ctx.job.workspace_slug,
             )
+            self._info(f"Track job here: {tracking_url}")
         else:
             self._info(
                 f"Local launch running without observability; no tracking URL (job_id={self.job_id})"
