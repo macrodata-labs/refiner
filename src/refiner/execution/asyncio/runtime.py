@@ -68,6 +68,10 @@ class AsyncRuntime:
 _runtime = AsyncRuntime()
 
 
+def get_async_runtime() -> AsyncRuntime:
+    return _runtime
+
+
 def submit(coro: Coroutine[Any, Any, T]) -> Future[T]:
     return _runtime.submit(coro)
 
@@ -75,4 +79,4 @@ def submit(coro: Coroutine[Any, Any, T]) -> Future[T]:
 atexit.register(_runtime.shutdown)
 
 
-__all__ = ["AsyncRuntime", "submit"]
+__all__ = ["AsyncRuntime", "get_async_runtime", "submit"]

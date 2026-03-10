@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 _MISSING = object()
@@ -148,6 +148,7 @@ class DictRow(Row):
     """A `Row` backed by a plain mapping (e.g. from CSV parsing)."""
 
     data: Mapping[str, Any]
+    metadata: Mapping[str, Any] = field(default_factory=dict)
     shard_id: str | None = None
 
     def __post_init__(self) -> None:

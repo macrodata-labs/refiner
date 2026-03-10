@@ -3,6 +3,7 @@ from .readers import (
     BaseReader,
     CsvReader,
     JsonlReader,
+    LeRobotEpisodeReader,
     ParquetReader,
 )
 
@@ -11,5 +12,6 @@ __all__ = [
     "BaseReader",
     "CsvReader",
     "JsonlReader",
+    "LeRobotEpisodeReader",
     "ParquetReader",
 ]
