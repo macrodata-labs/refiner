@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeAlias
+from typing import Any, TypeAlias
 
 from refiner.pipeline.expressions import Expr
 from refiner.pipeline.data.row import DictRow, Row
@@ -18,17 +18,12 @@ class RefinerStep(ABC):
 
 MapResult: TypeAlias = Row | Mapping[str, Any]
 MapFn: TypeAlias = Callable[[Row], MapResult]
+AsyncMapFn: TypeAlias = Callable[[Row], Awaitable[MapResult] | MapResult]
 PredicateFn: TypeAlias = Callable[[Row], bool]
 BatchItem: TypeAlias = Row | Mapping[str, Any] | None
 BatchFn: TypeAlias = Callable[[list[Row]], Iterable[BatchItem]]
 FlatMapFn: TypeAlias = Callable[[Row], Iterable[BatchItem]]
 AsyncMapFn: TypeAlias = Callable[[Row], Awaitable[MapResult] | MapResult]
-
-
-class FlushableFlatMapFn(Protocol):
-    def __call__(self, row: Row) -> Iterable[BatchItem]: ...
-
-    def flush(self) -> Iterable[BatchItem]: ...
 
 
 class RowStep(RefinerStep, ABC):
@@ -102,12 +97,6 @@ class FlatMapStep(RefinerStep, ABC):
         raise NotImplementedError
 
 
-class FlushableFlatMapStep(FlatMapStep, ABC):
-    @abstractmethod
-    def flush_many(self) -> Iterable[BatchItem]:
-        raise NotImplementedError
-
-
 @dataclass(frozen=True, slots=True)
 class FnFlatMapStep(FlatMapStep):
     fn: FlatMapFn
@@ -116,19 +105,6 @@ class FnFlatMapStep(FlatMapStep):
 
     def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
         return self.fn(row)
-
-
-@dataclass(frozen=True, slots=True)
-class FnFlushableFlatMapStep(FlushableFlatMapStep):
-    fn: FlushableFlatMapFn
-    index: int
-    op_name: str | None = None
-
-    def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
-        return self.fn(row)
-
-    def flush_many(self) -> Iterable[BatchItem]:
-        return self.fn.flush()
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,18 +199,18 @@ def normalize_batch_item(item: BatchItem) -> Row | None:
 __all__ = [
     "RefinerStep",
     "RowStep",
+    "AsyncRowStep",
     "BatchStep",
     "FlatMapStep",
-    "FlushableFlatMapStep",
     "FnRowStep",
     "AsyncRowStep",
     "FnAsyncRowStep",
     "FnBatchStep",
     "FnFlatMapStep",
-    "FnFlushableFlatMapStep",
     "FilterRowStep",
     "MapResult",
     "MapFn",
+    "AsyncMapFn",
     "PredicateFn",
     "BatchItem",
     "BatchFn",

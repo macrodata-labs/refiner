@@ -15,8 +15,8 @@ from refiner.pipeline.steps import (
     FilterRowStep,
     FlatMapFn,
     FlushableFlatMapFn,
-    FnBatchStep,
     FnAsyncRowStep,
+    FnBatchStep,
     FnFlatMapStep,
     FnFlushableFlatMapStep,
     FnRowStep,
@@ -155,14 +155,6 @@ class RefinerPipeline:
         )
 
     def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
-        if callable(getattr(fn, "flush", None)):
-            return self.add_step(
-                FnFlushableFlatMapStep(
-                    fn=cast(FlushableFlatMapFn, fn),
-                    op_name="flat_map",
-                    index=len(self.pipeline_steps) + 1,
-                )
-            )
         return self.add_step(
             FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
         )

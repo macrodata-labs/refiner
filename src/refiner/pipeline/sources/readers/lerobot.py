@@ -11,12 +11,11 @@ from typing import Any
 from fsspec import AbstractFileSystem, url_to_fs
 import pyarrow.parquet as pq
 
-<<<<<<< HEAD:src/refiner/pipeline/sources/readers/lerobot.py
 from refiner.pipeline.data.row import ArrowRowView, Row
 from refiner.pipeline.data.shard import Shard
+from refiner.media import MediaFile, Video
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.parquet import ParquetReader
-from refiner.video import Video
 
 
 _DEFAULT_DATA_PATH = "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet"
@@ -59,12 +58,16 @@ class LeRobotEpisodeReader(ParquetReader):
         else:
             self._fs = fs
             self._root_path = fs._strip_protocol(root)  # type: ignore[attr-defined]
-        self._root_uri = self._fs.unstrip_protocol(self._root_path).removeprefix("file://")
+        self._root_uri = self._fs.unstrip_protocol(self._root_path).removeprefix(
+            "file://"
+        )
 
         self._fps = self._load_fps()
         self._stats_metadata = self._load_stats_metadata()
         super().__init__(
-            inputs=posixpath.join(self._root_path.rstrip("/"), _DEFAULT_EPISODES_GLOB_ROOT),
+            inputs=posixpath.join(
+                self._root_path.rstrip("/"), _DEFAULT_EPISODES_GLOB_ROOT
+            ),
             fs=self._fs,
             recursive=True,
             arrow_batch_size=arrow_batch_size,
@@ -179,7 +182,7 @@ class LeRobotEpisodeReader(ParquetReader):
         to_timestamp = _as_float(to_ts_raw)
 
         return Video(
-            uri=uri,
+            media=MediaFile(uri),
             video_key=video_key,
             relative_path=rel,
             episode_index=episode_index,
@@ -190,7 +193,6 @@ class LeRobotEpisodeReader(ParquetReader):
             chunk_index=chunk,
             file_index=file_idx,
             fps=self._fps,
-            bytes=None,
             decode=self._decode,
         )
 

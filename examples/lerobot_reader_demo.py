@@ -28,9 +28,11 @@ def _summarize_episode(row: mdr.Row) -> dict[str, Any]:
         if isinstance(video, mdr.Video):
             summary["first_video_key"] = first_key
             summary["first_video_uri"] = video.uri
-            summary["first_video_has_file_handle"] = video.file is not None
+            summary["first_video_has_local_path"] = video.media.local_path is not None
             summary["first_video_bytes"] = (
-                None if video.bytes is None else len(video.bytes)
+                None
+                if video.media.bytes_cache is None
+                else len(video.media.bytes_cache)
             )
 
     return summary
@@ -57,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hydrate-columns",
         nargs="*",
-        default=("observation.images.cam_left_wrist"),
+        default=("observation.images.cam_left_wrist",),
         help=(
             "Optional columns to hydrate into bytes (for example "
             "'observation.images.top')."
@@ -74,9 +76,11 @@ def main() -> None:
     )
 
     if args.hydrate_columns:
-        pipeline = pipeline.flat_map(
-            mdr.hydrate_file(columns=tuple(args.hydrate_columns))
-        )
+        for column in args.hydrate_columns:
+            pipeline = pipeline.map_async(
+                mdr.hydrate_media(column, mode="file"),
+                max_in_flight=16,
+            )
 
     pipeline = pipeline.map(_summarize_episode)
     rows = pipeline.take(args.take)

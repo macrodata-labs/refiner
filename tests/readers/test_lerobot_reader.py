@@ -14,7 +14,7 @@ from refiner.sources.readers.lerobot import (
     LEROBOT_RAW_EPISODE_KEY,
     LeRobotEpisodeReader,
 )
-from refiner.video import Video
+from refiner.media import Video
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -158,7 +158,10 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert isinstance(first["metadata"]["x"], dict)
     assert isinstance(first["metadata"]["x"][LEROBOT_RAW_EPISODE_KEY], Mapping)
     assert isinstance(first["metadata"]["x"][LEROBOT_CONTEXT_KEY], dict)
-    assert first["metadata"]["observation.state"] == second["metadata"]["observation.state"]
+    assert (
+        first["metadata"]["observation.state"]
+        == second["metadata"]["observation.state"]
+    )
 
     first_frames = first["frames"]
     assert isinstance(first_frames, list)

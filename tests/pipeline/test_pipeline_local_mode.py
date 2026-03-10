@@ -4,12 +4,13 @@ import asyncio
 from collections.abc import Iterator
 from pathlib import Path
 
-from refiner import hydrate_file, submit
+from refiner import hydrate_media, submit
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.execution.asyncio.runtime import get_async_runtime
+from refiner.media import MediaFile
 
 
 class _LocalFakeReader(BaseReader):
@@ -166,7 +167,7 @@ def test_sync_map_can_offload_to_shared_runtime() -> None:
     assert set(seen_loop_ids) == {runtime_loop_id}
 
 
-def test_flat_map_can_use_row_buffered_hydration_with_flush(tmp_path: Path) -> None:
+def test_map_async_can_hydrate_media_rows(tmp_path: Path) -> None:
     s = Shard(path="a", start=0, end=1)
     rows: list[Row] = []
     payloads: dict[int, bytes] = {}
@@ -177,11 +178,14 @@ def test_flat_map_can_use_row_buffered_hydration_with_flush(tmp_path: Path) -> N
         payloads[i] = payload
         rows.append(DictRow({"id": i, "blob_uri": str(p)}))
 
-    pipeline = RefinerPipeline(source=_LocalFakeReader([s], {s.id: rows})).flat_map(
-        hydrate_file(columns="blob_uri", max_in_flight=2)
+    pipeline = RefinerPipeline(source=_LocalFakeReader([s], {s.id: rows})).map_async(
+        hydrate_media("blob_uri", mode="bytes"),
+        max_in_flight=2,
     )
     out = list(pipeline.iter_rows())
     assert [int(r["id"]) for r in out] == [0, 1, 2, 3, 4]
     for row in out:
         idx = int(row["id"])
-        assert row["blob_uri"] == payloads[idx]
+        media = row["blob_uri"]
+        assert isinstance(media, MediaFile)
+        assert media.bytes_cache == payloads[idx]
