@@ -6,6 +6,7 @@ from refiner.processors.step import (
     BatchStep,
     FilterRowStep,
     FlatMapStep,
+    FlushableFlatMapStep,
     RefinerStep,
     RowStep,
     normalize_batch_item,
@@ -34,34 +35,60 @@ def execute_row_steps(
     def _run_step(i: int, *, flush_all: bool) -> None:
         step = ordered[i]
         inp = queues[i]
-        if not inp:
-            return
         out = queues[i + 1]
 
         if isinstance(step, RowStep):
+            if not inp:
+                return
             for row in inp.take_all():
                 normalized = normalize_row_result(row, step.apply_row(row))
                 out.append(normalized)
             return
 
         if isinstance(step, FilterRowStep):
+            if not inp:
+                return
             for row in inp.take_all():
                 if step.apply_predicate(row):
                     out.append(row)
             return
 
-        if isinstance(step, FlatMapStep):
+        if isinstance(step, FlushableFlatMapStep):
             tmp = scratch[i]
             tmp.clear()
-            for row in inp.take_all():
-                for item in step.apply_row_many(row):
+            if inp:
+                for row in inp.take_all():
+                    for item in step.apply_row_many(row):
+                        normalized = normalize_batch_item(item)
+                        if normalized is not None:
+                            tmp.append(normalized)
+
+            if flush_all:
+                for item in step.flush_many():
                     normalized = normalize_batch_item(item)
                     if normalized is not None:
                         tmp.append(normalized)
-            out.extend(tmp)
+
+            if tmp:
+                out.extend(tmp)
+            return
+
+        if isinstance(step, FlatMapStep):
+            tmp = scratch[i]
+            tmp.clear()
+            if inp:
+                for row in inp.take_all():
+                    for item in step.apply_row_many(row):
+                        normalized = normalize_batch_item(item)
+                        if normalized is not None:
+                            tmp.append(normalized)
+            if tmp:
+                out.extend(tmp)
             return
 
         if isinstance(step, BatchStep):
+            if not inp:
+                return
             if flush_all:
                 batch_in = inp.take_all()
             else:

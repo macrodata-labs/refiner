@@ -3,7 +3,7 @@ title: "Refiner Docs"
 description: "User-facing guide and roadmap for building batch data pipelines with Refiner"
 ---
 
-Refiner is a Python pipeline framework for row-oriented data processing across CSV, JSONL, and Parquet inputs.
+Refiner is a Python pipeline framework for row-oriented data processing across CSV, JSONL, Parquet, and LeRobot episode inputs.
 
 ## Long-Term Direction
 
@@ -18,8 +18,9 @@ Refiner is being built as a batch-first processing engine with:
 
 ## What You Can Use Now
 
-- Build pipelines with `read_csv(...)`, `read_jsonl(...)`, or `read_parquet(...)`.
+- Build pipelines with `read_csv(...)`, `read_jsonl(...)`, `read_parquet(...)`, or `read_lerobot(...)`.
 - Add row-level transforms with `.map(...)`, batch transforms with `.batch_map(...)`, and expansion with `.flat_map(...)`.
+- Keep binary payloads lazy using `Video` handles and hydrate explicitly with `hydrate_file(...)`.
 - Run locally with lazy iteration (`for row in pipeline`) or eager collection (`pipeline.materialize()`).
 - Run worker-driven execution with `Worker.run()` for shard-claiming and ledger updates.
 

@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 from fsspec import AbstractFileSystem
 
@@ -12,8 +12,10 @@ from refiner.processors.step import (
     FilterExprStep,
     FilterRowStep,
     FlatMapFn,
+    FlushableFlatMapFn,
     FnBatchStep,
     FnFlatMapStep,
+    FnFlushableFlatMapStep,
     FnRowStep,
     MapFn,
     RenameStep,
@@ -28,6 +30,7 @@ from refiner.sources import (
     CsvReader,
     ItemsSource,
     JsonlReader,
+    LeRobotEpisodeReader,
     ParquetReader,
     TaskSource,
 )
@@ -121,6 +124,14 @@ class RefinerPipeline:
         )
 
     def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
+        if callable(getattr(fn, "flush", None)):
+            return self.add_step(
+                FnFlushableFlatMapStep(
+                    fn=cast(FlushableFlatMapFn, fn),
+                    op_name="flat_map",
+                    index=len(self.pipeline_steps) + 1,
+                )
+            )
         return self.add_step(
             FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
         )
@@ -339,6 +350,24 @@ def read_parquet(
             arrow_batch_size=arrow_batch_size,
             columns_to_read=columns_to_read,
             sharding_mode=sharding_mode,
+        )
+    )
+
+
+def read_lerobot(
+    root: str,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    decode: bool = False,
+) -> RefinerPipeline:
+    """Create a pipeline with an episode-granular LeRobot reader source."""
+    return RefinerPipeline(
+        source=LeRobotEpisodeReader(
+            root,
+            fs=fs,
+            storage_options=storage_options,
+            decode=decode,
         )
     )
 

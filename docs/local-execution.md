@@ -46,8 +46,13 @@ When set, Refiner shrinks row-to-Arrow chunk sizes during that run if an Arrow a
 
 Local iteration consumes the source stream continuously, so downstream batch steps can consume data that spans multiple shards.
 
+## Async Offload From Sync Steps
+
+If a sync step needs async I/O, use `refiner.submit(...)` to offload onto the shared async runtime and resolve the returned `Future`.
+
 ## Internal Notes
 
 - Local execution compiles pipeline steps into row/vector segments once per pipeline instance and reuses that plan across repeated runs.
 - Row/UDF segments emit row blocks; when a vectorized segment follows, those rows are converted back to Arrow blocks at the segment boundary.
+- The async runtime is process-local and shared across islands within the same worker process.
 - `take(n)` stops early without forcing full-stream materialization.

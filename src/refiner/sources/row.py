@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 _MISSING = object()
@@ -113,6 +113,7 @@ class DictRow(Row):
     """A `Row` backed by a plain mapping (e.g. from CSV parsing)."""
 
     data: Mapping[str, Any]
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __getitem__(self, key: str) -> Any:
         return self.data[key]

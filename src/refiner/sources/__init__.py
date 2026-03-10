@@ -6,6 +6,7 @@ from .readers import (
     BaseReader,
     CsvReader,
     JsonlReader,
+    LeRobotEpisodeReader,
     ParquetReader,
 )
 
@@ -17,6 +18,7 @@ __all__ = [
     "ArrowRowView",
     "CsvReader",
     "JsonlReader",
+    "LeRobotEpisodeReader",
     "ParquetReader",
     "ItemsSource",
     "TaskSource",

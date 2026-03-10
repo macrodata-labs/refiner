@@ -3,6 +3,7 @@ from ..row import ArrowRowView, DictRow, Row
 from .base import BaseReader
 from .csv import CsvReader
 from .jsonl import JsonlReader
+from .lerobot import LeRobotEpisodeReader
 from .parquet import ParquetReader
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "ArrowRowView",
     "CsvReader",
     "JsonlReader",
+    "LeRobotEpisodeReader",
     "ParquetReader",
 ]

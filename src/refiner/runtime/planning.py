@@ -28,6 +28,7 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         FilterRowStep,
         FnBatchStep,
         FnFlatMapStep,
+        FnFlushableFlatMapStep,
         FnRowStep,
         RenameStep,
         SelectStep,
@@ -60,7 +61,7 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             else _explicit_callable_name(step.predicate)
         )
         return (inferred_name or "filter"), "filter", {"fn": step.predicate}
-    if isinstance(step, FnFlatMapStep):
+    if isinstance(step, (FnFlatMapStep, FnFlushableFlatMapStep)):
         inferred_name = (
             explicit_name
             if explicit_name and explicit_name != "flat_map"

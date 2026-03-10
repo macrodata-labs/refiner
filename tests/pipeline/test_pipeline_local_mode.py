@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
+from pathlib import Path
 
+from refiner import hydrate_file, submit
 from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
+from refiner.runtime.execution import get_async_island_runtime
 from refiner.sources.readers.base import BaseReader
 from refiner.sources.row import DictRow, Row
 
@@ -137,3 +141,47 @@ def test_filter_primitive_keeps_matching_rows() -> None:
 
     out = list(pipeline.iter_rows())
     assert [r["y"] for r in out] == [100, 102, 104]
+
+
+def test_sync_map_can_offload_to_shared_runtime() -> None:
+    s = Shard(path="a", start=0, end=1)
+    rows = {s.id: [DictRow({"x": 1}), DictRow({"x": 2}), DictRow({"x": 3})]}
+    seen_loop_ids: list[int] = []
+
+    async def plus_one(v: int) -> int:
+        seen_loop_ids.append(id(asyncio.get_running_loop()))
+        await asyncio.sleep(0.001)
+        return v + 1
+
+    pipeline = RefinerPipeline(source=_LocalFakeReader([s], rows)).map(
+        lambda row: {"x": submit(plus_one(int(row["x"]))).result()}
+    )
+    out = list(pipeline.iter_rows())
+    assert [int(row["x"]) for row in out] == [2, 3, 4]
+
+    async def _loop_id() -> int:
+        return id(asyncio.get_running_loop())
+
+    runtime_loop_id = get_async_island_runtime().submit(_loop_id()).result(timeout=1.0)
+    assert set(seen_loop_ids) == {runtime_loop_id}
+
+
+def test_flat_map_can_use_row_buffered_hydration_with_flush(tmp_path: Path) -> None:
+    s = Shard(path="a", start=0, end=1)
+    rows: list[Row] = []
+    payloads: dict[int, bytes] = {}
+    for i in range(5):
+        payload = f"row-{i}".encode()
+        p = tmp_path / f"flat-{i}.bin"
+        p.write_bytes(payload)
+        payloads[i] = payload
+        rows.append(DictRow({"id": i, "blob_uri": str(p)}))
+
+    pipeline = RefinerPipeline(source=_LocalFakeReader([s], {s.id: rows})).flat_map(
+        hydrate_file(columns="blob_uri", max_in_flight=2)
+    )
+    out = list(pipeline.iter_rows())
+    assert [int(r["id"]) for r in out] == [0, 1, 2, 3, 4]
+    for row in out:
+        idx = int(row["id"])
+        assert row["blob_uri"] == payloads[idx]
