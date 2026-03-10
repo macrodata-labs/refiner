@@ -86,7 +86,7 @@ def to_lerobot_episode(row: Row) -> dict[str, Any]:
             "Row is missing LeRobot raw metadata. Use this on rows from read_lerobot(...)."
         )
 
-    episode = dict(deepcopy(raw))
+    episode = {key: deepcopy(value) for key, value in raw.items()}
 
     frames = row.get("frames")
     if isinstance(frames, list):
@@ -97,10 +97,13 @@ def to_lerobot_episode(row: Row) -> dict[str, Any]:
     if "task" in row:
         episode["task"] = row["task"]
     if "metadata" in row:
-        metadata = deepcopy(row["metadata"])
-        if isinstance(metadata, dict):
-            metadata.pop("x", None)
-        episode["metadata"] = metadata
+        metadata = row["metadata"]
+        if isinstance(metadata, Mapping):
+            episode["metadata"] = {
+                key: deepcopy(value) for key, value in metadata.items() if key != "x"
+            }
+        else:
+            episode["metadata"] = deepcopy(metadata)
 
     return episode
 
@@ -117,18 +120,18 @@ def from_lerobot_episode(base_row: Row, episode: Mapping[str, Any]) -> Row:
     out = base_row.to_dict()
 
     raw_episode = {
-        k: deepcopy(v)
-        for k, v in episode.items()
-        if k not in _LEROBOT_NON_EPISODE_KEYS
+        key: deepcopy(value)
+        for key, value in episode.items()
+        if key not in _LEROBOT_NON_EPISODE_KEYS
     }
 
     prev_raw = _get_internal_metadata(base_row, LEROBOT_RAW_EPISODE_KEY)
     old_public = (
-        {k for k in prev_raw.keys() if _is_public_episode_key(k)}
+        {key for key in prev_raw.keys() if _is_public_episode_key(key)}
         if isinstance(prev_raw, Mapping)
         else set()
     )
-    new_public = {k for k in raw_episode.keys() if _is_public_episode_key(k)}
+    new_public = {key for key in raw_episode if _is_public_episode_key(key)}
 
     for key in old_public - new_public:
         out.pop(key, None)
@@ -244,13 +247,13 @@ def _get_internal_metadata(row: Row, key: str) -> Any:
 def _set_internal_metadata(row: dict[str, Any], key: str, value: Any) -> None:
     metadata = row.get("metadata")
     if isinstance(metadata, Mapping):
-        out_metadata = dict(deepcopy(metadata))
+        out_metadata = dict(metadata)
     else:
         out_metadata = {}
 
     extra = out_metadata.get("x")
     if isinstance(extra, Mapping):
-        out_extra = dict(deepcopy(extra))
+        out_extra = dict(extra)
     else:
         out_extra = {}
 
