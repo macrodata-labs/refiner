@@ -11,10 +11,11 @@ from typing import Any
 from fsspec import AbstractFileSystem, url_to_fs
 import pyarrow.parquet as pq
 
+<<<<<<< HEAD:src/refiner/pipeline/sources/readers/lerobot.py
+from refiner.pipeline.data.row import ArrowRowView, Row
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.parquet import ParquetReader
-from refiner.pipeline.data.row import DictRow
 from refiner.video import Video
 
 
@@ -73,8 +74,17 @@ class LeRobotEpisodeReader(ParquetReader):
         if shard.path not in self.files:
             raise ValueError(f"Unknown LeRobot shard path: {shard.path!r}")
         for batch in super().read_shard(shard):
-            for episode in batch.to_pylist():
-                yield self._build_episode_row(dict(episode))
+            names = tuple(str(name) for name in batch.schema.names)
+            columns = tuple(batch.column(i) for i in range(batch.num_columns))
+            index_by_name = {name: i for i, name in enumerate(names)}
+            for idx in range(batch.num_rows):
+                episode = ArrowRowView(
+                    names=names,
+                    columns=columns,
+                    index_by_name=index_by_name,
+                    row_idx=idx,
+                )
+                yield self._build_episode_row(episode)
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -83,7 +93,7 @@ class LeRobotEpisodeReader(ParquetReader):
             "fps": self._fps,
         }
 
-    def _build_episode_row(self, episode: dict[str, Any]) -> DictRow:
+    def _build_episode_row(self, episode: Row) -> Row:
         video_keys = sorted(
             {
                 key.removeprefix("videos/").split("/", 1)[0]
@@ -92,12 +102,13 @@ class LeRobotEpisodeReader(ParquetReader):
             }
         )
 
-        row = {
-            k: v
-            for k, v in episode.items()
-            if k not in _ROW_DROP_KEYS
-            and not any(k.startswith(prefix) for prefix in _ROW_DROP_PREFIXES)
-        }
+        drop_keys = [
+            key
+            for key in episode
+            if key in _ROW_DROP_KEYS
+            or any(key.startswith(prefix) for prefix in _ROW_DROP_PREFIXES)
+        ]
+        row = episode.drop(*drop_keys) if drop_keys else episode
 
         row_metadata: dict[str, Any] = (
             dict(self._stats_metadata)
@@ -105,7 +116,7 @@ class LeRobotEpisodeReader(ParquetReader):
             else {}
         )
         row_metadata["x"] = {
-            LEROBOT_RAW_EPISODE_KEY: dict(episode),
+            LEROBOT_RAW_EPISODE_KEY: episode,
             LEROBOT_CONTEXT_KEY: {
                 "root_uri": self._root_uri,
                 "video_path_template": _DEFAULT_VIDEO_PATH,
@@ -114,27 +125,28 @@ class LeRobotEpisodeReader(ParquetReader):
                 "decode": self._decode,
             },
         }
-        row["metadata"] = row_metadata
+        patch: dict[str, Any] = {"metadata": row_metadata}
 
         frames = self._load_episode_frames(episode)
-        row["frames"] = frames
+        patch["frames"] = frames
 
-        if isinstance(row.get("tasks"), list) and row.get("tasks"):
-            row["task"] = row["tasks"][0]
+        tasks = row.get("tasks")
+        if isinstance(tasks, list) and tasks:
+            patch["task"] = tasks[0]
 
         for video_key in video_keys:
             video = self._build_video(
                 episode=episode, frames=frames, video_key=video_key
             )
             if video is not None:
-                row[video_key] = video
+                patch[video_key] = video
 
-        return DictRow(row, metadata={})
+        return row.update(patch)
 
     def _build_video(
         self,
         *,
-        episode: dict[str, Any],
+        episode: Mapping[str, Any],
         frames: list[dict[str, Any]],
         video_key: str,
     ) -> Video | None:
@@ -182,7 +194,7 @@ class LeRobotEpisodeReader(ParquetReader):
             decode=self._decode,
         )
 
-    def _load_episode_frames(self, episode: dict[str, Any]) -> list[dict[str, Any]]:
+    def _load_episode_frames(self, episode: Mapping[str, Any]) -> list[dict[str, Any]]:
         chunk_raw = episode.get("data/chunk_index")
         file_idx_raw = episode.get("data/file_index")
         if chunk_raw is None or file_idx_raw is None:

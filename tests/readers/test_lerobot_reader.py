@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 
@@ -155,7 +156,7 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert "meta/episodes/chunk_index" not in first
     assert isinstance(first["metadata"], dict)
     assert isinstance(first["metadata"]["x"], dict)
-    assert isinstance(first["metadata"]["x"][LEROBOT_RAW_EPISODE_KEY], dict)
+    assert isinstance(first["metadata"]["x"][LEROBOT_RAW_EPISODE_KEY], Mapping)
     assert isinstance(first["metadata"]["x"][LEROBOT_CONTEXT_KEY], dict)
     assert first["metadata"]["observation.state"] == second["metadata"]["observation.state"]
 
