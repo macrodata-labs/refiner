@@ -16,7 +16,6 @@ class AsyncIslandRuntime:
     def __init__(self) -> None:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
-        self._thread_id: int | None = None
         self._ready = threading.Event()
         self._lock = threading.Lock()
 
@@ -31,7 +30,6 @@ class AsyncIslandRuntime:
             def _run() -> None:
                 loop = asyncio.new_event_loop()
                 self._loop = loop
-                self._thread_id = threading.get_ident()
                 asyncio.set_event_loop(loop)
                 self._ready.set()
                 try:
@@ -47,17 +45,15 @@ class AsyncIslandRuntime:
             )
             self._thread = thread
             thread.start()
-            self._ready.wait()
+            if not self._ready.wait(10):
+                raise RuntimeError("async island runtime failed to initialize")
 
     def submit(self, coro: Coroutine[Any, Any, T]) -> Future[T]:
         self._ensure_started()
         loop = self._loop
         if loop is None:
-            raise RuntimeError("async island runtime failed to initialize")
+            raise RuntimeError("async island runtime loop is not initialized")
         return asyncio.run_coroutine_threadsafe(coro, loop)
-
-    def in_runtime_thread(self) -> bool:
-        return threading.get_ident() == self._thread_id
 
     def shutdown(self) -> None:
         loop = self._loop
@@ -70,7 +66,6 @@ class AsyncIslandRuntime:
         thread.join(timeout=1.0)
         self._loop = None
         self._thread = None
-        self._thread_id = None
 
 
 _runtime = AsyncIslandRuntime()

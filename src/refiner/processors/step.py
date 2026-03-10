@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeAlias
+from typing import Any, TypeAlias
 
 from refiner.expressions import Expr
 from refiner.sources.row import DictRow, Row
@@ -18,16 +18,11 @@ class RefinerStep(ABC):
 
 MapResult: TypeAlias = Row | Mapping[str, Any]
 MapFn: TypeAlias = Callable[[Row], MapResult]
+AsyncMapFn: TypeAlias = Callable[[Row], Awaitable[MapResult] | MapResult]
 PredicateFn: TypeAlias = Callable[[Row], bool]
 BatchItem: TypeAlias = Row | Mapping[str, Any] | None
 BatchFn: TypeAlias = Callable[[list[Row]], Iterable[BatchItem]]
 FlatMapFn: TypeAlias = Callable[[Row], Iterable[BatchItem]]
-
-
-class FlushableFlatMapFn(Protocol):
-    def __call__(self, row: Row) -> Iterable[BatchItem]: ...
-
-    def flush(self) -> Iterable[BatchItem]: ...
 
 
 class RowStep(RefinerStep, ABC):
@@ -43,6 +38,31 @@ class FnRowStep(RowStep):
     op_name: str | None = None
 
     def apply_row(self, row: Row) -> MapResult:
+        return self.fn(row)
+
+
+class AsyncRowStep(RefinerStep, ABC):
+    max_in_flight: int
+    preserve_order: bool
+
+    @abstractmethod
+    def apply_row_async(self, row: Row) -> Awaitable[MapResult] | MapResult:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class FnAsyncRowStep(AsyncRowStep):
+    fn: AsyncMapFn
+    index: int
+    max_in_flight: int = 16
+    preserve_order: bool = True
+    op_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_in_flight <= 0:
+            raise ValueError("max_in_flight for async row steps must be > 0")
+
+    def apply_row_async(self, row: Row) -> Awaitable[MapResult] | MapResult:
         return self.fn(row)
 
 
@@ -76,12 +96,6 @@ class FlatMapStep(RefinerStep, ABC):
         raise NotImplementedError
 
 
-class FlushableFlatMapStep(FlatMapStep, ABC):
-    @abstractmethod
-    def flush_many(self) -> Iterable[BatchItem]:
-        raise NotImplementedError
-
-
 @dataclass(frozen=True, slots=True)
 class FnFlatMapStep(FlatMapStep):
     fn: FlatMapFn
@@ -90,19 +104,6 @@ class FnFlatMapStep(FlatMapStep):
 
     def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
         return self.fn(row)
-
-
-@dataclass(frozen=True, slots=True)
-class FnFlushableFlatMapStep(FlushableFlatMapStep):
-    fn: FlushableFlatMapFn
-    index: int
-    op_name: str | None = None
-
-    def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
-        return self.fn(row)
-
-    def flush_many(self) -> Iterable[BatchItem]:
-        return self.fn.flush()
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,21 +198,21 @@ def normalize_batch_item(item: BatchItem) -> Row | None:
 __all__ = [
     "RefinerStep",
     "RowStep",
+    "AsyncRowStep",
     "BatchStep",
     "FlatMapStep",
-    "FlushableFlatMapStep",
     "FnRowStep",
+    "FnAsyncRowStep",
     "FnBatchStep",
     "FnFlatMapStep",
-    "FnFlushableFlatMapStep",
     "FilterRowStep",
     "MapResult",
     "MapFn",
+    "AsyncMapFn",
     "PredicateFn",
     "BatchItem",
     "BatchFn",
     "FlatMapFn",
-    "FlushableFlatMapFn",
     "SelectStep",
     "WithColumnsStep",
     "DropStep",

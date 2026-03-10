@@ -1,21 +1,21 @@
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, Literal, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from fsspec import AbstractFileSystem
 
 from refiner.expressions import Expr, col as col_expr, lit
 from refiner.io.fileset import DataFileSetLike
 from refiner.processors.step import (
+    AsyncMapFn,
     BatchFn,
     CastStep,
     DropStep,
     FilterExprStep,
     FilterRowStep,
     FlatMapFn,
-    FlushableFlatMapFn,
+    FnAsyncRowStep,
     FnBatchStep,
     FnFlatMapStep,
-    FnFlushableFlatMapStep,
     FnRowStep,
     MapFn,
     RenameStep,
@@ -111,6 +111,23 @@ class RefinerPipeline:
             FnRowStep(fn=fn, op_name="map", index=len(self.pipeline_steps) + 1)
         )
 
+    def map_async(
+        self,
+        fn: AsyncMapFn,
+        *,
+        max_in_flight: int = 16,
+        preserve_order: bool = True,
+    ) -> "RefinerPipeline":
+        return self.add_step(
+            FnAsyncRowStep(
+                fn=fn,
+                max_in_flight=max_in_flight,
+                preserve_order=preserve_order,
+                op_name="map_async",
+                index=len(self.pipeline_steps) + 1,
+            )
+        )
+
     def batch_map(self, fn: BatchFn, *, batch_size: int) -> "RefinerPipeline":
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")
@@ -124,14 +141,6 @@ class RefinerPipeline:
         )
 
     def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
-        if callable(getattr(fn, "flush", None)):
-            return self.add_step(
-                FnFlushableFlatMapStep(
-                    fn=cast(FlushableFlatMapFn, fn),
-                    op_name="flat_map",
-                    index=len(self.pipeline_steps) + 1,
-                )
-            )
         return self.add_step(
             FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
         )

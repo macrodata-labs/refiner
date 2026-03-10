@@ -26,9 +26,9 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         DropStep,
         FilterExprStep,
         FilterRowStep,
+        FnAsyncRowStep,
         FnBatchStep,
         FnFlatMapStep,
-        FnFlushableFlatMapStep,
         FnRowStep,
         RenameStep,
         SelectStep,
@@ -43,6 +43,21 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             else _explicit_callable_name(step.fn)
         )
         return (inferred_name or "map"), "row_map", {"fn": step.fn}
+    if isinstance(step, FnAsyncRowStep):
+        inferred_name = (
+            explicit_name
+            if explicit_name and explicit_name != "map_async"
+            else _explicit_callable_name(step.fn)
+        )
+        return (
+            (inferred_name or "map_async"),
+            "async_map",
+            {
+                "fn": step.fn,
+                "max_in_flight": step.max_in_flight,
+                "preserve_order": step.preserve_order,
+            },
+        )
     if isinstance(step, FnBatchStep):
         inferred_name = (
             explicit_name
@@ -61,7 +76,7 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             else _explicit_callable_name(step.predicate)
         )
         return (inferred_name or "filter"), "filter", {"fn": step.predicate}
-    if isinstance(step, (FnFlatMapStep, FnFlushableFlatMapStep)):
+    if isinstance(step, FnFlatMapStep):
         inferred_name = (
             explicit_name
             if explicit_name and explicit_name != "flat_map"

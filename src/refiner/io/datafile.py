@@ -61,6 +61,10 @@ class DataFile:
     def exists(self) -> bool:
         return self.fs.exists(self.path)
 
+    def abs_path(self) -> str:
+        """Return a fully resolved path string."""
+        return self.fs.unstrip_protocol(self.path).removeprefix("file://")
+
     @property
     def is_local(self) -> bool:
         return isinstance(self.fs, LocalFileSystem)
