@@ -6,9 +6,11 @@ from typing import Any, cast
 import pytest
 
 from refiner.ledger.backend.base import BaseLedger, LedgerConfig
+from refiner.ledger.shard_tracking import count_block_by_shard
 from refiner.ledger.shard import Shard
 from refiner.pipeline import RefinerPipeline
 from refiner.runtime.execution.engine import iter_rows
+from refiner.runtime.sinks import BaseSink
 from refiner.sources.readers.base import BaseReader
 from refiner.sources.row import DictRow, Row
 from refiner.runtime.worker import Worker, WorkerLifecycleContext
@@ -118,6 +120,29 @@ class _LifecycleClientWithFailingTelemetry:
         return _FlushFailingTelemetryEmitter()
 
 
+class _CountingSink(BaseSink):
+    def write_block(self, block):
+        return count_block_by_shard(block)
+
+
+class _FailingSink(BaseSink):
+    def write_block(self, block):
+        del block
+        raise RuntimeError("sink write failed")
+
+
+class _CompletionProbeSink(BaseSink):
+    def __init__(self, ledger: _FakeLedger):
+        self.ledger = ledger
+        self.seen_before_complete: list[bool] = []
+
+    def write_block(self, block):
+        return count_block_by_shard(block)
+
+    def on_shard_complete(self, shard_id: str) -> None:
+        self.seen_before_complete.append(shard_id not in self.ledger.completed_ids)
+
+
 def test_pipeline_executes_row_and_batch_steps() -> None:
     source_rows = [
         DictRow({"x": 1}),
@@ -186,7 +211,7 @@ def test_worker_runs_fused_pipeline_and_updates_ledger() -> None:
     assert emitted == [(shard1.id, 3), (shard1.id, 2), (shard2.id, 11)]
 
 
-def test_worker_fails_entire_claimed_group_on_exception() -> None:
+def test_worker_fails_only_uncompleted_inflight_shards_on_exception() -> None:
     shard1 = Shard(path="ok", start=0, end=1)
     shard2 = Shard(path="boom", start=0, end=1)
     ledger = _FakeLedger([shard1, shard2])
@@ -212,10 +237,10 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     stats = worker.run()
 
     assert stats.claimed == 2
-    assert stats.completed == 0
-    assert stats.failed == 2
-    assert ledger.completed_ids == []
-    assert ledger.failed_ids == [shard1.id, shard2.id]
+    assert stats.completed == 1
+    assert stats.failed == 1
+    assert ledger.completed_ids == [shard1.id]
+    assert ledger.failed_ids == [shard2.id]
 
 
 def test_worker_can_batch_across_shards() -> None:
@@ -251,6 +276,88 @@ def test_worker_can_batch_across_shards() -> None:
     assert stats.completed == 2
     # batch reverse should cross shard boundary and invert shard emission order.
     assert emitted == [shard2.id, shard1.id]
+
+
+def test_worker_completes_shards_after_sink_ack() -> None:
+    shard1 = Shard(path="s1", start=0, end=2)
+    shard2 = Shard(path="s2", start=0, end=1)
+    ledger = _FakeLedger([shard1, shard2])
+
+    rows_by_shard = {
+        shard1.id: [
+            DictRow({"sid": shard1.id, "x": 1}),
+            DictRow({"sid": shard1.id, "x": 2}),
+        ],
+        shard2.id: [DictRow({"sid": shard2.id, "x": 3})],
+    }
+    saw_shard2_with_shard1_done = False
+
+    def tap(row: Row) -> Row:
+        nonlocal saw_shard2_with_shard1_done
+        if row["sid"] == shard2.id:
+            saw_shard2_with_shard1_done = shard1.id in ledger.completed_ids
+        return row
+
+    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map(tap)
+    pipeline = pipeline.with_sink(_CountingSink())
+    worker = Worker(
+        rank=0,
+        ledger=ledger,
+        pipeline=pipeline,
+        lifecycle_context=_lifecycle_context(),
+    )
+
+    stats = worker.run()
+
+    assert stats.claimed == 2
+    assert stats.completed == 2
+    assert saw_shard2_with_shard1_done is False
+
+
+def test_worker_does_not_complete_before_sink_write() -> None:
+    shard1 = Shard(path="s1", start=0, end=1)
+    shard2 = Shard(path="s2", start=0, end=1)
+    ledger = _FakeLedger([shard1, shard2])
+    rows_by_shard = {
+        shard1.id: [DictRow({"x": 1})],
+        shard2.id: [DictRow({"x": 2})],
+    }
+    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).with_sink(
+        _FailingSink()
+    )
+    worker = Worker(
+        rank=0,
+        ledger=ledger,
+        pipeline=pipeline,
+        lifecycle_context=_lifecycle_context(),
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 0
+    assert stats.failed == 2
+    assert stats.output_rows == 0
+    assert ledger.completed_ids == []
+    assert set(ledger.failed_ids) == {shard1.id, shard2.id}
+
+
+def test_worker_calls_shard_completion_listener_before_ledger_complete() -> None:
+    shard = Shard(path="s1", start=0, end=1)
+    ledger = _FakeLedger([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 1})]}
+    sink = _CompletionProbeSink(ledger)
+    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).with_sink(sink)
+    worker = Worker(
+        rank=0,
+        ledger=ledger,
+        pipeline=pipeline,
+        lifecycle_context=_lifecycle_context(),
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert sink.seen_before_complete == [True]
 
 
 def test_worker_shard_finish_reporting_errors_are_not_swallowed() -> None:

@@ -6,6 +6,7 @@ from .media import MediaFile, Video, hydrate_media
 from .pipeline import (
     RefinerPipeline,
     from_items,
+    from_source,
     read_csv,
     read_jsonl,
     read_lerobot,
@@ -37,6 +38,7 @@ from .sources import (
 )
 from .runtime.launchers import BaseLauncher, LaunchStats, LocalLauncher
 from .runtime.async_runtime import submit
+from .runtime.sinks import BaseSink, JsonlSink, ParquetSink
 from .runtime.worker import Worker, WorkerRunStats
 
 __all__ = [
@@ -69,11 +71,15 @@ __all__ = [
     "ParquetReader",
     "Worker",
     "WorkerRunStats",
+    "BaseSink",
+    "JsonlSink",
+    "ParquetSink",
     "read_csv",
     "read_jsonl",
     "read_lerobot",
     "read_parquet",
     "from_items",
+    "from_source",
     "task",
     "log_throughput",
     "log_gauge",

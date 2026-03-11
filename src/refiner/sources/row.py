@@ -5,6 +5,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 _MISSING = object()
+_SHARD_ID_KEY = "__shard_id"
+
+
+def _next_shard_id(current: str | None, patch: Mapping[str, Any]) -> str | None:
+    if _SHARD_ID_KEY not in patch:
+        return current
+    value = patch[_SHARD_ID_KEY]
+    if value is None:
+        return None
+    return value if isinstance(value, str) else str(value)
 
 
 class Row(Mapping[str, Any]):
@@ -17,6 +27,65 @@ class Row(Mapping[str, Any]):
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.items())
+
+    @property
+    def shard_id(self) -> str | None:
+        return None
+
+    def require_shard_id(self) -> str:
+        if self.shard_id is None:
+            raise ValueError("row is missing shard_id")
+        return self.shard_id
+
+    def log_throughput(
+        self, label: str, value: float | int, *, unit: str | None = None
+    ) -> None:
+        from refiner.metrics import log_throughput
+
+        log_throughput(label, value, shard_id=self.require_shard_id(), unit=unit)
+
+    def log_histogram(
+        self,
+        label: str,
+        value: float | int,
+        *,
+        per: str = "row",
+        unit: str | None = None,
+    ) -> None:
+        from refiner.metrics import log_histogram
+
+        log_histogram(
+            label,
+            value,
+            shard_id=self.require_shard_id(),
+            per=per,
+            unit=unit,
+        )
+
+    @classmethod
+    def from_row(
+        cls,
+        row: Mapping[str, Any],
+        patch: Mapping[str, Any] | None = None,
+        /,
+        **kwargs: Any,
+    ) -> "Row":
+        """Create a new Row derived from an existing row-like mapping.
+
+        If `row` is already a Row, this preserves internal fields by deriving from it.
+        """
+        base: Row = row if isinstance(row, Row) else DictRow(row)
+        return base.copy(patch, **kwargs)
+
+    def copy(self, patch: Mapping[str, Any] | None = None, /, **kwargs: Any) -> "Row":
+        """Return a derived immutable Row.
+
+        This is an alias for `update(...)` with a copy-oriented name for user map/flat_map code.
+        """
+        return self.update(patch, **kwargs)
+
+    def with_shard_id(self, shard_id: str) -> "Row":
+        return self.update({_SHARD_ID_KEY: shard_id})
 
     def update(self, patch: Mapping[str, Any] | None = None, /, **kwargs: Any) -> "Row":
         """Return a new Row with the given updates applied (immutable).
@@ -32,7 +101,9 @@ class Row(Mapping[str, Any]):
         if kwargs:
             merged.update(kwargs)
 
-        if not merged:
+        shard_id = _next_shard_id(self.shard_id, merged)
+        merged.pop(_SHARD_ID_KEY, None)
+        if not merged and shard_id == self.shard_id:
             return self
 
         if isinstance(self, _OverlayRow):
@@ -40,9 +111,16 @@ class Row(Mapping[str, Any]):
             deleted = self.deleted.difference(merged.keys())
             combined_patch = dict(self.patch)
             combined_patch.update(merged)
-            return _OverlayRow(base=self.base, patch=combined_patch, deleted=deleted)
+            return _OverlayRow(
+                base=self.base,
+                patch=combined_patch,
+                deleted=deleted,
+                shard_id=shard_id,
+            )
 
-        return _OverlayRow(base=self, patch=merged, deleted=frozenset())
+        return _OverlayRow(
+            base=self, patch=merged, deleted=frozenset(), shard_id=shard_id
+        )
 
     def drop(self, *keys: str) -> "Row":
         """Return a new Row with the given keys hidden (immutable).
@@ -50,18 +128,26 @@ class Row(Mapping[str, Any]):
         Notes:
             - Dropping a missing key is a no-op.
         """
-        if not keys:
+        public_keys = tuple(k for k in keys if k != _SHARD_ID_KEY)
+        if not public_keys:
             return self
 
         if isinstance(self, _OverlayRow):
-            deleted = self.deleted.union(keys)
+            deleted = self.deleted.union(public_keys)
             # If a key is dropped, it should not be present in the patch either.
             patch = dict(self.patch)
-            for k in keys:
+            for k in public_keys:
                 patch.pop(k, None)
-            return _OverlayRow(base=self.base, patch=patch, deleted=deleted)
+            return _OverlayRow(
+                base=self.base,
+                patch=patch,
+                deleted=deleted,
+                shard_id=self.shard_id,
+            )
 
-        return _OverlayRow(base=self, patch={}, deleted=frozenset(keys))
+        return _OverlayRow(
+            base=self, patch={}, deleted=frozenset(public_keys), shard_id=self.shard_id
+        )
 
     def pop(self, key: str, default: Any = _MISSING) -> tuple["Row", Any]:
         """Persistent pop: returns (new_row, value) without mutating the base row."""
@@ -81,8 +167,11 @@ class _OverlayRow(Row):
     base: Row
     patch: Mapping[str, Any]
     deleted: frozenset[str]
+    shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:
+        if key == _SHARD_ID_KEY:
+            raise KeyError(key)
         if key in self.deleted:
             raise KeyError(key)
         if key in self.patch:
@@ -99,12 +188,15 @@ class _OverlayRow(Row):
         for k in self.patch:
             if k in self.deleted or k in seen:
                 continue
+            if k == _SHARD_ID_KEY:
+                continue
             yield k
 
     def __len__(self) -> int:
         keys: set[str] = set(self.base)
         keys.update(self.patch.keys())
         keys.difference_update(self.deleted)
+        keys.discard(_SHARD_ID_KEY)
         return len(keys)
 
 
@@ -114,15 +206,31 @@ class DictRow(Row):
 
     data: Mapping[str, Any]
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    shard_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.shard_id is not None:
+            return
+        value = self.data.get(_SHARD_ID_KEY)
+        if value is None:
+            return
+        object.__setattr__(
+            self, "shard_id", value if isinstance(value, str) else str(value)
+        )
 
     def __getitem__(self, key: str) -> Any:
+        if key == _SHARD_ID_KEY:
+            raise KeyError(key)
         return self.data[key]
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.data)
+        for key in self.data:
+            if key == _SHARD_ID_KEY:
+                continue
+            yield key
 
     def __len__(self) -> int:
-        return len(self.data)
+        return len(self.data) - (1 if _SHARD_ID_KEY in self.data else 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,8 +246,11 @@ class ArrowRowView(Row):
     columns: tuple[Any, ...]
     index_by_name: Mapping[str, int]
     row_idx: int
+    shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:
+        if key == _SHARD_ID_KEY:
+            raise KeyError(key)
         try:
             j = self.index_by_name[key]
         except KeyError as e:
@@ -147,10 +258,13 @@ class ArrowRowView(Row):
         return self.columns[j][self.row_idx].as_py()
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.names)
+        for key in self.names:
+            if key == _SHARD_ID_KEY:
+                continue
+            yield key
 
     def __len__(self) -> int:
-        return len(self.names)
+        return len(self.names) - (1 if _SHARD_ID_KEY in self.index_by_name else 0)
 
 
 __all__ = ["Row", "DictRow", "ArrowRowView"]

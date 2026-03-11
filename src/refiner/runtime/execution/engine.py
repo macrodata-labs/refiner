@@ -6,9 +6,18 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from refiner.processors.step import RefinerStep, VectorizedOp, VectorizedSegmentStep
+from refiner.ledger.shard_tracking import (
+    count_tabular_by_shard,
+    counts_delta,
+)
+from refiner.processors.step import (
+    FilterExprStep,
+    RefinerStep,
+    VectorizedOp,
+    VectorizedSegmentStep,
+)
 from refiner.runtime.execution.row_queue import RowQueue
-from refiner.runtime.execution.row_steps import execute_row_steps
+from refiner.runtime.execution.row_steps import ShardDeltaFn, execute_row_steps
 from refiner.runtime.execution.vectorized import (
     apply_vectorized_op,
     iter_record_batch_rows,
@@ -60,7 +69,12 @@ def execute_segments(
     *,
     vectorized_chunk_rows: int = _DEFAULT_VECTORIZED_CHUNK_ROWS,
     max_vectorized_block_bytes: int | None = None,
+    on_shard_delta: ShardDeltaFn | None = None,
 ) -> Iterator[Block]:
+    # Shard tracking model:
+    # - Row steps emit cardinality deltas as they execute.
+    # - Vectorized filter emits delta from before/after counts.
+    # - Terminal sink decrement happens in Worker after sink write/ack.
     current: Iterable[Block] = _normalize_blocks(
         stream,
         block_rows=vectorized_chunk_rows,
@@ -73,6 +87,7 @@ def execute_segments(
                 segment.ops,
                 vectorized_chunk_rows=vectorized_chunk_rows,
                 max_vectorized_block_bytes=max_vectorized_block_bytes,
+                on_shard_delta=on_shard_delta,
             )
         else:
             current = _execute_row_segment(
@@ -81,6 +96,7 @@ def execute_segments(
                 output_block_rows=vectorized_chunk_rows,
                 output_tabular=isinstance(next_segment, VectorSegment),
                 max_vectorized_block_bytes=max_vectorized_block_bytes,
+                on_shard_delta=on_shard_delta,
             )
     yield from current
 
@@ -165,12 +181,16 @@ def _execute_row_segment(
     output_block_rows: int,
     output_tabular: bool,
     max_vectorized_block_bytes: int | None,
+    on_shard_delta: ShardDeltaFn | None,
 ) -> Iterator[Block]:
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
     rows = iter_rows(stream)
-    step_out = execute_row_steps(rows, steps)
-    if not output_tabular or max_vectorized_block_bytes is not None:
+    step_out = execute_row_steps(rows, steps, on_shard_delta=on_shard_delta)
+    if not output_tabular:
+        yield from _chunk_output_rows(step_out, output_block_rows)
+        return
+    if max_vectorized_block_bytes is not None:
         yield from _chunk_output_rows(step_out, output_block_rows)
         return
     for batch in _chunk_output_rows(step_out, output_block_rows):
@@ -185,14 +205,29 @@ def _execute_vector_segment(
     *,
     vectorized_chunk_rows: int,
     max_vectorized_block_bytes: int | None,
+    on_shard_delta: ShardDeltaFn | None,
 ) -> Iterator[TabularBlock]:
     pending_rows = RowQueue()
     current_chunk_rows = max(1, int(vectorized_chunk_rows))
     estimated_row_bytes: float | None = None
 
+    def _emit_filter_delta(
+        *, before: TabularBlock, after: TabularBlock, emit: ShardDeltaFn
+    ) -> None:
+        consumed = count_tabular_by_shard(before)
+        produced = count_tabular_by_shard(after)
+        delta = counts_delta(produced=produced, consumed=consumed)
+        if delta:
+            emit(delta)
+
     def _run_block(block: TabularBlock) -> TabularBlock:
         out = block
         for op in ops:
+            if on_shard_delta is not None and isinstance(op, FilterExprStep):
+                next_out = apply_vectorized_op(out, op)
+                _emit_filter_delta(before=out, after=next_out, emit=on_shard_delta)
+                out = next_out
+                continue
             out = apply_vectorized_op(out, op)
         return out
 
@@ -310,12 +345,17 @@ def _execute_vector_segment(
 
 def _chunk_output_rows(rows: Iterable[Row], block_rows: int) -> Iterator[list[Row]]:
     pending: list[Row] = []
-    for row in rows:
-        pending.append(row)
-        if len(pending) >= block_rows:
-            out = pending
-            pending = []
-            yield out
+    try:
+        for row in rows:
+            pending.append(row)
+            if len(pending) >= block_rows:
+                out = pending
+                pending = []
+                yield out
+    except Exception:
+        if pending:
+            yield pending
+        raise
     if pending:
         yield pending
 
