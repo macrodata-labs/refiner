@@ -3,9 +3,12 @@ from __future__ import annotations
 from typing import cast
 
 from refiner.pipeline import read_jsonl
-from refiner.ledger.shard import Shard
-from refiner.platform.cloud.models import CloudPipelinePayload
-from refiner.platform.cloud.models import CloudRunCreateRequest
+from refiner.pipeline.data.shard import Shard
+from refiner.platform.client import (
+    CloudPipelinePayload,
+    CloudRunCreateRequest,
+    ShardDescriptor,
+)
 
 
 def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
@@ -26,11 +29,9 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
 
             return _Resp()
 
+    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.MacrodataClient", FakeMacrodataClient
-    )
-    monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.serialize_pipeline_inline",
+        "refiner.launchers.cloud.serialize_pipeline_inline",
         lambda pipeline: CloudPipelinePayload(
             format="cloudpickle",
             bytes_b64="AQID",
@@ -39,15 +40,15 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.compile_pipeline_plan",
+        "refiner.launchers.base.compile_pipeline_plan",
         lambda pipeline: {"stages": [{"name": "stage_0", "steps": []}]},
     )
     monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.compile_shard_descriptors",
-        lambda shards: [s.to_dict() for s in shards],
+        "refiner.launchers.cloud.compile_shard_descriptors",
+        lambda shards: [ShardDescriptor.from_shard(s) for s in shards],
     )
     monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.build_run_manifest",
+        "refiner.launchers.base.build_run_manifest",
         lambda: {
             "version": 1,
             "environment": {"refiner_ref": "abc123def456"},
@@ -64,7 +65,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     result = pipeline.launch_cloud(
         name="demo cloud",
         num_workers=3,
-        heartbeat_every_rows=2048,
+        heartbeat_interval_seconds=12,
         cpus_per_worker=2,
         mem_mb_per_worker=8192,
     )
@@ -77,11 +78,11 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     request = cast(CloudRunCreateRequest, captured["request"])
     assert request.name == "demo cloud"
     assert request.runtime.num_workers == 3
-    assert request.runtime.heartbeat_every_rows == 2048
+    assert request.runtime.heartbeat_interval_seconds == 12
     assert request.runtime.cpus_per_worker == 2
     assert request.runtime.mem_mb_per_worker == 8192
     assert request.sync_local_dependencies is True
-    assert request.shards[0]["path"] == "input.jsonl"
+    assert request.shards[0].path == "input.jsonl"
     assert request.plan["stages"][0]["name"] == "stage_0"
     assert request.manifest == {
         "version": 1,
@@ -107,11 +108,9 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
 
             return _Resp()
 
+    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.MacrodataClient", FakeMacrodataClient
-    )
-    monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.serialize_pipeline_inline",
+        "refiner.launchers.cloud.serialize_pipeline_inline",
         lambda pipeline: CloudPipelinePayload(
             format="cloudpickle",
             bytes_b64="AQID",
@@ -120,15 +119,15 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
         ),
     )
     monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.compile_pipeline_plan",
+        "refiner.launchers.base.compile_pipeline_plan",
         lambda pipeline: {"stages": [{"name": "stage_0", "steps": []}]},
     )
     monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.compile_shard_descriptors",
-        lambda shards: [s.to_dict() for s in shards],
+        "refiner.launchers.cloud.compile_shard_descriptors",
+        lambda shards: [ShardDescriptor.from_shard(s) for s in shards],
     )
     monkeypatch.setattr(
-        "refiner.runtime.launchers.cloud.build_run_manifest",
+        "refiner.launchers.base.build_run_manifest",
         lambda: {"version": 1},
     )
 

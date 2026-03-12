@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 import pyarrow as pa
 import pytest
 
-import refiner.pipeline as pipeline_module
-import refiner.runtime.execution.engine as engine_module
+import refiner.pipeline.pipeline as pipeline_module
+import refiner.execution.engine as engine_module
 from refiner.pipeline import from_items
 from refiner import col, if_else
 

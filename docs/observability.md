@@ -66,7 +66,7 @@ If telemetry is unavailable (for example local iteration via `pipeline.iter_rows
 
 ## Logging API
 
-Refiner forwards Loguru records to Observer OTLP logs when observability is enabled.
+Refiner forwards Loguru records to platform OTLP logs when observability is enabled.
 
 ```python
 from loguru import logger

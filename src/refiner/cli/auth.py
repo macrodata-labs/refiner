@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import getpass
 import sys
-from typing import Any
 
 from ..platform.auth import (
     CredentialsError,
@@ -12,8 +11,13 @@ from ..platform.auth import (
     current_api_key,
     save_api_key,
 )
-from ..platform.config import resolve_platform_base_url
-from ..platform.http import MacrodataApiError, sanitize_terminal_text, verify_api_key
+from ..platform.client import (
+    MacrodataApiError,
+    VerifyApiKeyResponse,
+    resolve_platform_base_url,
+    sanitize_terminal_text,
+    verify_api_key,
+)
 from .ui import display_identity, print_banner
 
 _TOKEN_SETTINGS_SUFFIX = "/settings/api-keys"
@@ -52,18 +56,12 @@ def _read_token(args: argparse.Namespace) -> str:
     return token
 
 
-def _extract_user(payload: dict[str, Any]) -> dict[str, object]:
-    user = payload.get("user")
-    return user if isinstance(user, dict) else {}
-
-
-def _workspace_display(payload: dict[str, Any]) -> str | None:
-    workspace = payload.get("workspace")
-    if not isinstance(workspace, dict):
+def _workspace_display(identity: VerifyApiKeyResponse) -> str | None:
+    workspace = identity.workspace
+    if workspace is None:
         return None
-
-    name = sanitize_terminal_text(str(workspace.get("name") or "")).strip()
-    slug = sanitize_terminal_text(str(workspace.get("slug") or "")).strip()
+    name = sanitize_terminal_text(workspace.name).strip()
+    slug = sanitize_terminal_text(workspace.slug).strip()
     if not name and not slug:
         return None
     if name and slug:
@@ -71,9 +69,8 @@ def _workspace_display(payload: dict[str, Any]) -> str | None:
     return name or slug
 
 
-def _api_key_name_display(payload: dict[str, Any]) -> str:
-    name = payload.get("name")
-    return sanitize_terminal_text(str(name)).strip()
+def _api_key_name_display(identity: VerifyApiKeyResponse) -> str:
+    return sanitize_terminal_text(identity.name).strip()
 
 
 def cmd_login(args: argparse.Namespace) -> int:
@@ -81,7 +78,6 @@ def cmd_login(args: argparse.Namespace) -> int:
     try:
         token = _read_token(args)
         payload = verify_api_key(base_url=base_url, api_key=token)
-        user = _extract_user(payload)
         path = save_api_key(token)
     except CredentialsError as err:
         print(f"Credential storage error: {err}", file=sys.stderr)
@@ -102,7 +98,7 @@ def cmd_login(args: argparse.Namespace) -> int:
         print(str(err), file=sys.stderr)
         return 1
 
-    print(f"Logged in as {display_identity(user)}")
+    print(f"Logged in as {display_identity(payload.user)}")
     print(f"API key name: {_api_key_name_display(payload)}")
     workspace = _workspace_display(payload)
     if workspace:
@@ -129,8 +125,7 @@ def cmd_whoami(_: argparse.Namespace) -> int:
         print(f"Failed to verify API key via {base_url}/api/me: {err}", file=sys.stderr)
         return 1
 
-    user = _extract_user(payload)
-    print(f"Logged in as {display_identity(user)}")
+    print(f"Logged in as {display_identity(payload.user)}")
     print(f"API key name: {_api_key_name_display(payload)}")
     workspace = _workspace_display(payload)
     if workspace:

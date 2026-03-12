@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+from refiner.pipeline.data.shard import Shard
+from refiner.platform.client import RunHandle
+
+
+class PlatformRuntimeLifecycle:
+    def __init__(
+        self,
+        *,
+        run: RunHandle,
+    ) -> None:
+        if not run.job_id:
+            raise ValueError("job_id must be non-empty")
+        if not run.stage_id:
+            raise ValueError("stage_id must be non-empty")
+        self.run = run
+
+    def _require_worker_id(self) -> str:
+        if not self.run.worker_id:
+            raise ValueError("worker_id is required for runtime shard operations")
+        return self.run.worker_id
+
+    def seed_shards(self, shards: Iterable[Shard]) -> None:
+        if self.run.client is None:
+            raise ValueError("platform runtime requires a client")
+        self.run.client.shard_register(
+            job_id=self.run.job_id,
+            stage_id=self.run.stage_id,
+            shards=list(shards),
+        )
+
+    def claim(self, previous: Shard | None = None) -> Shard | None:
+        if self.run.client is None:
+            raise ValueError("platform runtime requires a client")
+        claim = self.run.client.shard_claim(
+            job_id=self.run.job_id,
+            stage_id=self.run.stage_id,
+            worker_id=self._require_worker_id(),
+            previous_shard_id=previous.id if previous is not None else None,
+        )
+        if claim.shard is None:
+            return None
+        return Shard(
+            path=claim.shard.path, start=claim.shard.start, end=claim.shard.end
+        )
+
+    def heartbeat(self, shards: Iterable[Shard]) -> None:
+        shard_ids = [shard.id for shard in shards]
+        if self.run.client is None:
+            raise ValueError("platform runtime requires a client")
+        self.run.client.shard_heartbeat(
+            job_id=self.run.job_id,
+            stage_id=self.run.stage_id,
+            worker_id=self._require_worker_id(),
+            shard_ids=shard_ids,
+        )
+
+    def complete(self, shard: Shard) -> None:
+        if self.run.client is None:
+            raise ValueError("platform runtime requires a client")
+        self.run.client.shard_finish(
+            job_id=self.run.job_id,
+            stage_id=self.run.stage_id,
+            worker_id=self._require_worker_id(),
+            shard_id=shard.id,
+            status="completed",
+        )
+
+    def fail(self, shard: Shard, error: str | None = None) -> None:
+        if self.run.client is None:
+            raise ValueError("platform runtime requires a client")
+        self.run.client.shard_finish(
+            job_id=self.run.job_id,
+            stage_id=self.run.stage_id,
+            worker_id=self._require_worker_id(),
+            shard_id=shard.id,
+            status="failed",
+            error=error,
+        )

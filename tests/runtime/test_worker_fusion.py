@@ -1,21 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
 
-from refiner.ledger.backend.base import BaseLedger, LedgerConfig
-from refiner.ledger.shard import Shard
+from refiner.pipeline.data.shard import Shard
 from refiner.pipeline import RefinerPipeline
-from refiner.runtime.execution.engine import iter_rows
-from refiner.sources.readers.base import BaseReader
-from refiner.sources.row import DictRow, Row
-from refiner.runtime.worker import Worker, WorkerLifecycleContext
-
-
-def _lifecycle_context() -> WorkerLifecycleContext:
-    return WorkerLifecycleContext(job_id="job", stage_id="", worker_id="")
+from refiner.execution.engine import iter_rows
+from refiner.platform.client import (
+    OkResponse,
+    RunHandle,
+    ShardClaimResponse,
+    ShardDescriptor,
+    WorkerStartedResponse,
+)
+from refiner.worker.runner import Worker
+from refiner.pipeline.sources.readers.base import BaseReader
+from refiner.pipeline.data.row import DictRow, Row
 
 
 class _FakeReader(BaseReader):
@@ -23,7 +25,6 @@ class _FakeReader(BaseReader):
         self.rows_by_shard_id = rows_by_shard_id
 
     def list_shards(self) -> list[Shard]:
-        # Not needed by worker tests, but required by BaseReader contract.
         return []
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
@@ -31,17 +32,13 @@ class _FakeReader(BaseReader):
             yield row
 
 
-class _FakeLedger(BaseLedger):
+class _FakeRuntimeLifecycle:
     def __init__(self, shards: list[Shard]):
-        super().__init__(job_id="job", worker_id=1, config=LedgerConfig())
         self._remaining = list(shards)
         self.claim_previous: list[Shard | None] = []
         self.completed_ids: list[str] = []
         self.failed_ids: list[str] = []
-        self.heartbeat_ids: list[str] = []
-
-    def seed_shards(self, shards: Iterable[Shard]) -> None:
-        self._remaining = list(shards)
+        self.heartbeat_batches: list[list[str]] = []
 
     def claim(self, previous: Shard | None = None) -> Shard | None:
         self.claim_previous.append(previous)
@@ -49,13 +46,14 @@ class _FakeLedger(BaseLedger):
             return None
         return self._remaining.pop(0)
 
-    def heartbeat(self, shard: Shard) -> None:
-        self.heartbeat_ids.append(shard.id)
+    def heartbeat(self, shards: list[Shard]) -> None:
+        self.heartbeat_batches.append([shard.id for shard in shards])
 
     def complete(self, shard: Shard) -> None:
         self.completed_ids.append(shard.id)
 
     def fail(self, shard: Shard, error: str | None = None) -> None:
+        del error
         self.failed_ids.append(shard.id)
 
 
@@ -87,35 +85,41 @@ class _FlushFailingTelemetryEmitter(_NoopTelemetryEmitter):
         raise RuntimeError("flush failed")
 
 
-class _ShardFinishFailingLifecycleClient:
-    def report_shard_started(self, **kwargs) -> None:
-        del kwargs
-
-    def report_shard_finished(self, **kwargs) -> None:
-        del kwargs
-        raise RuntimeError("observer unavailable")
-
-    def report_worker_finished(self, **kwargs) -> None:
-        del kwargs
-
-    def worker_telemetry(self, **kwargs):
-        del kwargs
-        return _NoopTelemetryEmitter()
-
-
 class _LifecycleClientWithFailingTelemetry:
-    def report_shard_started(self, **kwargs) -> None:
-        del kwargs
+    def __init__(self, shard: Shard):
+        self._next_shard = shard
+        self.base_url = "https://example.com"
+        self.api_key = "md_test"
 
-    def report_shard_finished(self, **kwargs) -> None:
+    def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
         del kwargs
+        return WorkerStartedResponse(worker_id="worker-0")
 
     def report_worker_finished(self, **kwargs) -> None:
         del kwargs
 
-    def worker_telemetry(self, **kwargs):
+    def shard_claim(self, **kwargs):
         del kwargs
-        return _FlushFailingTelemetryEmitter()
+        if self._next_shard is None:
+            return ShardClaimResponse(shard=None)
+        shard = self._next_shard
+        self._next_shard = None
+        return ShardClaimResponse(
+            shard=ShardDescriptor(
+                shard_id=shard.id,
+                path=shard.path,
+                start=shard.start,
+                end=shard.end,
+            )
+        )
+
+    def shard_heartbeat(self, **kwargs):
+        del kwargs
+        return OkResponse()
+
+    def shard_finish(self, **kwargs):
+        del kwargs
+        return OkResponse()
 
 
 def test_pipeline_executes_row_and_batch_steps() -> None:
@@ -139,10 +143,10 @@ def test_pipeline_executes_row_and_batch_steps() -> None:
     assert [r["y"] for r in out] == [30, 50]
 
 
-def test_worker_runs_fused_pipeline_and_updates_ledger() -> None:
+def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     shard1 = Shard(path="p1", start=0, end=10)
     shard2 = Shard(path="p2", start=0, end=10)
-    ledger = _FakeLedger([shard1, shard2])
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard1, shard2])
 
     rows_by_shard = {
         shard1.id: [
@@ -166,10 +170,9 @@ def test_worker_runs_fused_pipeline_and_updates_ledger() -> None:
 
     worker = Worker(
         rank=0,
-        ledger=ledger,
+        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
-        heartbeat_every_rows=1,
-        lifecycle_context=_lifecycle_context(),
+        heartbeat_interval_seconds=1,
     )
 
     stats = worker.run()
@@ -178,18 +181,18 @@ def test_worker_runs_fused_pipeline_and_updates_ledger() -> None:
     assert stats.completed == 2
     assert stats.failed == 0
     assert stats.output_rows == 3
-    assert ledger.completed_ids == [shard1.id, shard2.id]
-    assert ledger.failed_ids == []
-    # Previous hint should be used in claims after first completion.
-    assert ledger.claim_previous[0] is None
-    assert ledger.claim_previous[1] == shard1
+    assert runtime_lifecycle.completed_ids == [shard1.id, shard2.id]
+    assert runtime_lifecycle.failed_ids == []
+    assert runtime_lifecycle.claim_previous[0] is None
+    assert runtime_lifecycle.claim_previous[1] == shard1
+    assert runtime_lifecycle.heartbeat_batches[-1] == [shard1.id, shard2.id]
     assert emitted == [(shard1.id, 3), (shard1.id, 2), (shard2.id, 11)]
 
 
 def test_worker_fails_entire_claimed_group_on_exception() -> None:
     shard1 = Shard(path="ok", start=0, end=1)
     shard2 = Shard(path="boom", start=0, end=1)
-    ledger = _FakeLedger([shard1, shard2])
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard1, shard2])
 
     rows_by_shard = {
         shard1.id: [DictRow({"x": 1})],
@@ -204,9 +207,8 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail)
     worker = Worker(
         rank=0,
-        ledger=ledger,
+        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
-        lifecycle_context=_lifecycle_context(),
     )
 
     stats = worker.run()
@@ -214,14 +216,14 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     assert stats.claimed == 2
     assert stats.completed == 0
     assert stats.failed == 2
-    assert ledger.completed_ids == []
-    assert ledger.failed_ids == [shard1.id, shard2.id]
+    assert runtime_lifecycle.completed_ids == []
+    assert runtime_lifecycle.failed_ids == [shard1.id, shard2.id]
 
 
 def test_worker_can_batch_across_shards() -> None:
     shard1 = Shard(path="s1", start=0, end=1)
     shard2 = Shard(path="s2", start=0, end=1)
-    ledger = _FakeLedger([shard1, shard2])
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard1, shard2])
 
     rows_by_shard = {
         shard1.id: [DictRow({"sid": shard1.id, "x": 1})],
@@ -241,65 +243,58 @@ def test_worker_can_batch_across_shards() -> None:
 
     worker = Worker(
         rank=0,
-        ledger=ledger,
+        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
-        lifecycle_context=_lifecycle_context(),
     )
     stats = worker.run()
 
     assert stats.claimed == 2
     assert stats.completed == 2
-    # batch reverse should cross shard boundary and invert shard emission order.
     assert emitted == [shard2.id, shard1.id]
 
 
-def test_worker_shard_finish_reporting_errors_are_not_swallowed() -> None:
+def test_worker_runtime_complete_errors_are_not_swallowed() -> None:
     shard = Shard(path="p", start=0, end=1)
-    ledger = _FakeLedger([shard])
     rows_by_shard = {shard.id: [DictRow({"x": 1})]}
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
 
+    class _FailingCompleteRuntimeLifecycle(_FakeRuntimeLifecycle):
+        def complete(self, shard: Shard) -> None:
+            del shard
+            raise RuntimeError("complete failed")
+
+    runtime_lifecycle = _FailingCompleteRuntimeLifecycle([shard])
     worker = Worker(
         rank=0,
-        ledger=ledger,
+        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
-        lifecycle_client=cast(Any, _ShardFinishFailingLifecycleClient()),
-        lifecycle_context=WorkerLifecycleContext(
-            job_id="job",
-            stage_id="0",
-            worker_id="worker-0",
-        ),
     )
-    with pytest.raises(RuntimeError, match="observer unavailable"):
+    with pytest.raises(RuntimeError, match="complete failed"):
         worker.run()
 
-    assert ledger.completed_ids == []
-    assert ledger.failed_ids == []
 
-
-def test_worker_shard_flush_errors_are_not_swallowed() -> None:
+def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
     shard = Shard(path="p", start=0, end=1)
-    ledger = _FakeLedger([shard])
     rows_by_shard = {shard.id: [DictRow({"x": 1})]}
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
+    monkeypatch.setattr(
+        "refiner.worker.runner.OtelTelemetryEmitter",
+        lambda **_: _FlushFailingTelemetryEmitter(),
+    )
 
     worker = Worker(
         rank=0,
-        ledger=ledger,
+        runtime_lifecycle=None,
         pipeline=pipeline,
-        lifecycle_client=cast(Any, _LifecycleClientWithFailingTelemetry()),
-        lifecycle_context=WorkerLifecycleContext(
+        run_handle=RunHandle(
             job_id="job",
             stage_id="0",
-            worker_id="worker-0",
+            client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
+            worker_name="worker-0",
         ),
     )
     with pytest.raises(RuntimeError, match="flush failed"):
         worker.run()
 
-    assert ledger.completed_ids == []
-    assert ledger.failed_ids == []
 
-
-# Keep pytest from treating imported typing names as tests on some plugins.
 __all__: list[str] = []

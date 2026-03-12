@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from refiner.platform.client import UserIdentity
+
 ASCII_BANNER = r"""
 
 ███╗   ███╗ █████╗  ██████╗██████╗  ██████╗ ██████╗  █████╗ ████████╗ █████╗     ██╗      █████╗ ██████╗ ███████╗
@@ -15,10 +17,10 @@ def print_banner() -> None:
     print(ASCII_BANNER.strip("\n"))
 
 
-def display_identity(user: dict[str, object]) -> str:
-    name = str(user.get("name") or "").strip()
-    username = str(user.get("username") or "").strip()
-    email = str(user.get("email") or "").strip()
+def display_identity(user: UserIdentity) -> str:
+    name = (user.name or "").strip()
+    username = (user.username or "").strip()
+    email = (user.email or "").strip()
 
     label = username or name or "unknown user"
     if email:

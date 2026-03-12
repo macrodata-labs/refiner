@@ -4,7 +4,7 @@ from typing import cast
 
 from refiner.platform.client import MacrodataClient
 from refiner.pipeline import RefinerPipeline
-from refiner.runtime.launchers.base import BaseLauncher
+from refiner.launchers.base import BaseLauncher
 
 
 class _DummyLauncher(BaseLauncher):

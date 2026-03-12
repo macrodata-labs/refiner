@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import cast
 
-from refiner.pipeline import read_jsonl
 from refiner.platform.client import MacrodataClient
 
 
@@ -22,18 +21,15 @@ def test_create_job_includes_manifest_refiner_ref(monkeypatch) -> None:
         captured.update(kwargs)
         return _job_submit_response()
 
-    monkeypatch.setattr("refiner.platform.client.request_json", fake_request_json)
-    monkeypatch.setattr(
-        "refiner.platform.client.compile_pipeline_plan",
-        lambda _pipeline: {"stages": [{"name": "stage_0", "steps": []}]},
-    )
-    monkeypatch.setattr(
-        "refiner.platform.client.build_run_manifest",
-        lambda: {"version": 1, "environment": {"refiner_ref": "abc123def456"}},
-    )
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
 
     client = MacrodataClient(api_key="ing_test", base_url="https://example.com")
-    ctx = client.create_job(name="local job", pipeline=read_jsonl("input.jsonl"))
+    ctx = client.create_job(
+        name="local job",
+        executor={"type": "refiner-local"},
+        plan={"stages": [{"name": "stage_0", "steps": []}]},
+        manifest={"version": 1, "environment": {"refiner_ref": "abc123def456"}},
+    )
     assert ctx.job_id == "job-1"
     assert ctx.stage_id == "0"
 

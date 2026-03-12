@@ -1,7 +1,7 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from refiner.sources.readers import ParquetReader
+from refiner.pipeline.sources.readers import ParquetReader
 
 
 def _write_parquet(tmp_path):

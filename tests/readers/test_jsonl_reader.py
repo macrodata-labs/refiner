@@ -1,7 +1,7 @@
 import orjson
 import pyarrow as pa
 
-from refiner.sources.readers import JsonlReader
+from refiner.pipeline.sources.readers import JsonlReader
 
 
 def _rows_from_shard_units(units):

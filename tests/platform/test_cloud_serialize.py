@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 
-from refiner.platform.cloud.serialize import serialize_pipeline_inline
+from refiner.platform.client import serialize_pipeline_inline
 
 
 def test_serialize_pipeline_inline_returns_base64_and_sha() -> None:

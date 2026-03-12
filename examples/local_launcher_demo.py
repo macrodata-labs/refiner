@@ -4,6 +4,7 @@ import time
 from collections.abc import Iterator
 
 import refiner as mdr
+from refiner.pipeline import BaseSource, Row, Shard
 
 SAMPLE_PARQUET = (
     "hf://datasets/OpenResearcher/OpenResearcher-Dataset/"
@@ -12,19 +13,19 @@ SAMPLE_PARQUET = (
 SLEEP_SECONDS_PER_SHARD = 1
 
 
-class SlowPerShardReader(mdr.BaseSource):
+class SlowPerShardReader(BaseSource):
     """Reader wrapper that sleeps once before each shard is read.
     simulate longer processing
     """
 
-    def __init__(self, inner: mdr.BaseSource, *, sleep_seconds: int):
+    def __init__(self, inner: BaseSource, *, sleep_seconds: int):
         self.inner = inner
         self.sleep_seconds = sleep_seconds
 
-    def list_shards(self) -> list[mdr.Shard]:
+    def list_shards(self) -> list[Shard]:
         return self.inner.list_shards()
 
-    def read_shard(self, shard: mdr.Shard) -> Iterator[mdr.Row]:
+    def read_shard(self, shard: Shard) -> Iterator[Row]:
         print(
             f"[demo] sleeping {self.sleep_seconds}s before shard "
             f"path={shard.path} start={shard.start} end={shard.end}",
@@ -64,7 +65,7 @@ def duplicate_short_rows(row):
 def main() -> None:
     base_pipeline = mdr.read_parquet(
         SAMPLE_PARQUET,
-        # Keep shards small so the demo exercises multi-shard scheduling/observer updates.
+        # Keep shards small so the demo exercises multi-shard scheduling/platform updates.
         target_shard_bytes=1,
     )
     slow_reader = SlowPerShardReader(

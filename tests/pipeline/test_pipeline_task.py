@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from refiner.pipeline import task
-from refiner.runtime.planning import compile_pipeline_plan
+from refiner.pipeline.planning import compile_pipeline_plan
 
 
 def test_task_invokes_fn_with_rank_and_world_size() -> None:

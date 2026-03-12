@@ -4,11 +4,12 @@ from collections.abc import Iterator
 
 import pytest
 
-from refiner.ledger.shard import Shard
+from refiner.pipeline.data.shard import Shard
 from refiner.pipeline import RefinerPipeline, read_jsonl
-from refiner.sources.readers.base import BaseReader
-from refiner.sources.row import DictRow, Row
-from refiner.runtime.resources.cpu import build_cpu_sets
+from refiner.launchers.local import LocalLauncher
+from refiner.pipeline.sources.readers.base import BaseReader
+from refiner.pipeline.data.row import DictRow, Row
+from refiner.worker.resources.cpu import build_cpu_sets
 
 
 class _FakeReader(BaseReader):
@@ -23,21 +24,23 @@ class _FakeReader(BaseReader):
         yield from self._rows_by_shard_id.get(shard.id, [])
 
 
-def test_launch_local_single_worker() -> None:
-    s1 = Shard(path="a", start=0, end=1)
-    s2 = Shard(path="b", start=0, end=1)
-    rows = {
-        s1.id: [DictRow({"x": 1}), DictRow({"x": 2})],
-        s2.id: [DictRow({"x": 3})],
-    }
+def test_launch_local_single_worker(tmp_path) -> None:
+    p1 = tmp_path / "a.jsonl"
+    p2 = tmp_path / "b.jsonl"
+    p1.write_text('{"x": 1}\n{"x": 2}\n')
+    p2.write_text('{"x": 3}\n')
 
     pipeline = (
-        RefinerPipeline(source=_FakeReader([s1, s2], rows))
+        read_jsonl([str(p1), str(p2)])
         .map(lambda r: {"x": int(r["x"]) + 1})
         .filter(lambda r: int(r["x"]) % 2 == 0)
     )
 
-    stats = pipeline.launch_local(name="unit-test-local", num_workers=1)
+    stats = pipeline.launch_local(
+        name="unit-test-local",
+        num_workers=1,
+        workdir=str(tmp_path),
+    )
 
     assert stats.workers == 1
     assert stats.claimed == 2
@@ -48,7 +51,7 @@ def test_launch_local_single_worker() -> None:
 
 def test_build_cpu_sets_partitions_cpus(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "refiner.runtime.resources.cpu.available_cpu_ids",
+        "refiner.worker.resources.cpu.available_cpu_ids",
         lambda: [0, 1, 2, 3, 4, 5],
     )
     sets = build_cpu_sets(num_workers=3, cpus_per_worker=2)
@@ -59,7 +62,7 @@ def test_build_cpu_sets_raises_when_insufficient(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "refiner.runtime.resources.cpu.available_cpu_ids",
+        "refiner.worker.resources.cpu.available_cpu_ids",
         lambda: [0, 1, 2],
     )
     with pytest.raises(ValueError):
@@ -83,3 +86,44 @@ def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
     assert stats.completed == 2
     assert stats.failed == 0
     assert stats.output_rows == 2
+
+
+def test_local_launcher_file_backend_skips_platform_setup(tmp_path) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="file-backend-no-platform",
+        num_workers=1,
+        workdir=str(tmp_path),
+        runtime_backend="file",
+    )
+
+    def _unexpected_setup(**kwargs):  # noqa: ANN003
+        del kwargs
+        raise AssertionError("_setup_platform should not be called in file mode")
+
+    launcher._setup_platform = _unexpected_setup  # type: ignore[method-assign]
+    stats = launcher.launch()
+    assert stats.completed == 1
+
+
+def test_local_launcher_platform_backend_requires_platform_client(monkeypatch) -> None:
+    shard = Shard(path="a", start=0, end=1)
+    rows = {shard.id: [DictRow({"x": 1})]}
+    pipeline = RefinerPipeline(source=_FakeReader([shard], rows))
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="platform-backend-required",
+        num_workers=1,
+        runtime_backend="platform",
+    )
+
+    monkeypatch.setattr(launcher, "_platform_client_or_none", lambda: None)
+    with pytest.raises(
+        RuntimeError, match="platform runtime requires Macrodata authentication"
+    ):
+        launcher.launch()

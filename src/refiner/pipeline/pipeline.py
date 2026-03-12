@@ -1,0 +1,381 @@
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Literal
+
+from fsspec import AbstractFileSystem
+
+from refiner.pipeline.expressions import Expr, lit
+from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.steps import (
+    BatchFn,
+    CastStep,
+    DropStep,
+    FilterExprStep,
+    FilterRowStep,
+    FlatMapFn,
+    FnBatchStep,
+    FnFlatMapStep,
+    FnRowStep,
+    MapFn,
+    RenameStep,
+    RefinerStep,
+    SelectStep,
+    VectorizedOp,
+    VectorizedSegmentStep,
+    WithColumnsStep,
+)
+from refiner.pipeline.sources import (
+    BaseSource,
+    CsvReader,
+    JsonlReader,
+    ParquetReader,
+)
+from refiner.pipeline.sources.items import ItemsSource
+from refiner.pipeline.sources.task import TaskSource
+from refiner.pipeline.data.row import Row
+from refiner.execution.engine import (
+    Block,
+    Segment,
+    compile_segments,
+    execute_segments,
+    iter_rows,
+)
+from refiner.pipeline.sources.base import SourceUnit
+from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+
+if TYPE_CHECKING:
+    from refiner.launchers.cloud import CloudLaunchResult
+    from refiner.launchers.local import LaunchStats
+
+
+class RefinerPipeline:
+    source: BaseSource
+    pipeline_steps: tuple[RefinerStep, ...]
+    _compiled_segments: tuple[Segment, ...] | None
+    max_vectorized_block_bytes: int | None
+
+    def __init__(
+        self,
+        source: BaseSource,
+        pipeline_steps: Sequence[RefinerStep] | None = None,
+        *,
+        max_vectorized_block_bytes: int | None = None,
+    ):
+        if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
+            raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
+        self.source = source
+        self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
+        self._compiled_segments = None
+        self.max_vectorized_block_bytes = max_vectorized_block_bytes
+
+    def add_step(self, step: RefinerStep) -> "RefinerPipeline":
+        return self.__class__(
+            self.source,
+            self.pipeline_steps + (step,),
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+        )
+
+    def _add_vectorized_op(self, op: VectorizedOp) -> "RefinerPipeline":
+        # Fuse adjacent expression-backed operations so each fused segment does
+        # one row->Arrow and Arrow->row conversion boundary.
+        if self.pipeline_steps and isinstance(
+            self.pipeline_steps[-1], VectorizedSegmentStep
+        ):
+            prev = self.pipeline_steps[-1]
+            merged = VectorizedSegmentStep(ops=prev.ops + (op,))
+            return self.__class__(
+                self.source,
+                self.pipeline_steps[:-1] + (merged,),
+                max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            )
+        return self.add_step(VectorizedSegmentStep(ops=(op,)))
+
+    def with_max_vectorized_block_bytes(
+        self, max_vectorized_block_bytes: int | None
+    ) -> "RefinerPipeline":
+        return self.__class__(
+            self.source,
+            self.pipeline_steps,
+            max_vectorized_block_bytes=max_vectorized_block_bytes,
+        )
+
+    def _get_compiled_segments(self) -> tuple[Segment, ...]:
+        if self._compiled_segments is None:
+            self._compiled_segments = compile_segments(self.pipeline_steps)
+        return self._compiled_segments
+
+    def map(self, fn: MapFn) -> "RefinerPipeline":
+        return self.add_step(
+            FnRowStep(fn=fn, op_name="map", index=len(self.pipeline_steps) + 1)
+        )
+
+    def batch_map(self, fn: BatchFn, *, batch_size: int) -> "RefinerPipeline":
+        if batch_size <= 1:
+            raise ValueError("batch_size for batch_map must be > 1")
+        return self.add_step(
+            FnBatchStep(
+                fn=fn,
+                batch_size=batch_size,
+                op_name="batch_map",
+                index=len(self.pipeline_steps) + 1,
+            )
+        )
+
+    def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
+        return self.add_step(
+            FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
+        )
+
+    def filter(self, predicate: Callable[[Row], bool] | Expr) -> "RefinerPipeline":
+        if isinstance(predicate, Expr):
+            return self._add_vectorized_op(FilterExprStep(predicate=predicate))
+        return self.add_step(
+            FilterRowStep(
+                predicate=predicate,
+                op_name="filter",
+                index=len(self.pipeline_steps) + 1,
+            )
+        )
+
+    def select(self, *columns: str) -> "RefinerPipeline":
+        if not columns:
+            raise ValueError("select requires at least one column")
+        return self._add_vectorized_op(SelectStep(columns=tuple(columns)))
+
+    def with_columns(self, **assignments: Expr | Any) -> "RefinerPipeline":
+        if not assignments:
+            raise ValueError("with_columns requires at least one assignment")
+        exprs = {
+            name: value if isinstance(value, Expr) else lit(value)
+            for name, value in assignments.items()
+        }
+        return self._add_vectorized_op(WithColumnsStep(assignments=exprs))
+
+    def with_column(self, name: str, value: Expr | Any) -> "RefinerPipeline":
+        expr = value if isinstance(value, Expr) else lit(value)
+        return self._add_vectorized_op(WithColumnsStep(assignments={name: expr}))
+
+    def drop(self, *columns: str) -> "RefinerPipeline":
+        if not columns:
+            raise ValueError("drop requires at least one column")
+        return self._add_vectorized_op(DropStep(columns=tuple(columns)))
+
+    def rename(self, **mapping: str) -> "RefinerPipeline":
+        if not mapping:
+            raise ValueError("rename requires at least one mapping")
+        return self._add_vectorized_op(RenameStep(mapping=mapping))
+
+    def cast(self, **dtypes: str) -> "RefinerPipeline":
+        if not dtypes:
+            raise ValueError("cast requires at least one dtype mapping")
+        return self._add_vectorized_op(CastStep(dtypes=dtypes))
+
+    def execute(self, rows: Iterable[SourceUnit]) -> Iterable[Block]:
+        """Execute source stream through compiled segments.
+
+        Returns internal execution blocks (row blocks or Arrow blocks).
+        Use `iter_rows()` to force row iteration.
+        """
+        yield from execute_segments(
+            rows,
+            self._get_compiled_segments(),
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+        )
+
+    def iter_rows(self) -> Iterable[Row]:
+        """Local execution mode: lazily process all shards and yield output rows."""
+        return iter_rows(self.execute(self.source.read()))
+
+    def materialize(self) -> list[Row]:
+        """Compute all output rows into memory (local/dev utility)."""
+        return list(self.iter_rows())
+
+    def take(self, n: int) -> list[Row]:
+        """Return up to the first `n` rows from local execution."""
+        if n < 0:
+            raise ValueError("n must be >= 0")
+        out: list[Row] = []
+        for row in self.iter_rows():
+            out.append(row)
+            if len(out) >= n:
+                break
+        return out
+
+    def __iter__(self):
+        return iter(self.iter_rows())
+
+    def launch_local(
+        self,
+        *,
+        name: str,
+        num_workers: int = 1,
+        workdir: str | None = None,
+        heartbeat_interval_seconds: int = 30,
+        cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
+        runtime_backend: str = "auto",
+    ) -> "LaunchStats":
+        """Launch the pipeline locally.
+
+        Args:
+            name: Human-readable run name.
+            num_workers: Number of local worker processes.
+            workdir: Optional working directory for runtime lifecycle and run artifacts.
+            heartbeat_interval_seconds: Heartbeat cadence for worker progress reporting.
+            cpus_per_worker: Optional CPU cores pinned per worker.
+            mem_mb_per_worker: Optional per-worker soft memory limit in MB.
+            runtime_backend: Runtime lifecycle backend selection (`auto`, `platform`, or `file`).
+        """
+        from refiner.launchers.local import LocalLauncher
+
+        launcher = LocalLauncher(
+            pipeline=self,
+            name=name,
+            num_workers=num_workers,
+            workdir=workdir,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
+            runtime_backend=runtime_backend,
+        )
+        return launcher.launch()
+
+    def launch_cloud(
+        self,
+        *,
+        name: str,
+        num_workers: int = 1,
+        heartbeat_interval_seconds: int = 30,
+        cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
+        sync_local_dependencies: bool = True,
+    ) -> "CloudLaunchResult":
+        """Launch the pipeline on Macrodata Cloud.
+
+        Args:
+            name: Human-readable run name.
+            num_workers: Requested logical worker count.
+            heartbeat_interval_seconds: Worker heartbeat cadence.
+            cpus_per_worker: Optional requested CPU cores per worker.
+            mem_mb_per_worker: Optional requested memory per worker in MB.
+            sync_local_dependencies: Sync submitting environment dependencies in cloud image.
+        """
+        from refiner.launchers.cloud import CloudLauncher
+
+        launcher = CloudLauncher(
+            pipeline=self,
+            name=name,
+            num_workers=num_workers,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
+            sync_local_dependencies=sync_local_dependencies,
+        )
+        return launcher.launch()
+
+
+## readers
+def read_csv(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    multiline_rows: bool = False,
+    encoding: str = "utf-8",
+    sharding_mode: Literal["bytes_lazy", "scan"] = "bytes_lazy",
+) -> RefinerPipeline:
+    """Create a pipeline with a CSV reader source."""
+    return RefinerPipeline(
+        source=CsvReader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            multiline_rows=multiline_rows,
+            encoding=encoding,
+            sharding_mode=sharding_mode,
+        )
+    )
+
+
+def read_jsonl(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+) -> RefinerPipeline:
+    """Create a pipeline with a JSONL reader source."""
+    return RefinerPipeline(
+        source=JsonlReader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+        )
+    )
+
+
+def read_parquet(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    arrow_batch_size: int = 65536,
+    columns_to_read: Sequence[str] | None = None,
+    sharding_mode: Literal["rowgroups", "bytes_lazy"] = "rowgroups",
+) -> RefinerPipeline:
+    """Create a pipeline with a Parquet reader source."""
+    return RefinerPipeline(
+        source=ParquetReader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            arrow_batch_size=arrow_batch_size,
+            columns_to_read=columns_to_read,
+            sharding_mode=sharding_mode,
+        )
+    )
+
+
+def from_items(
+    items: Sequence[Any],
+    *,
+    shard_size_rows: int = 1_000,
+) -> RefinerPipeline:
+    """Create a pipeline from in-memory rows.
+
+    Intended for small/medium inline datasets; large datasets should use file-backed
+    readers (`read_parquet`/`read_jsonl`/`read_csv`). Primitive items are wrapped
+    as ``{"item": value}``.
+    """
+    return RefinerPipeline(
+        source=ItemsSource(
+            items=items,
+            shard_size_rows=shard_size_rows,
+        )
+    )
+
+
+def task(
+    fn: Callable[[int, int], Any],
+    *,
+    num_tasks: int,
+) -> RefinerPipeline:
+    """Create a task-style pipeline with one callback invocation per rank."""
+    source = TaskSource(num_tasks=num_tasks)
+    return RefinerPipeline(source=source).add_step(
+        FnRowStep(
+            fn=lambda row: fn(row["task_rank"], num_tasks),
+            index=1,
+            op_name="task",
+        )
+    )

@@ -3,12 +3,13 @@ from __future__ import annotations
 from typing import cast
 
 from refiner.platform.client import MacrodataClient
-from refiner.platform.cloud.models import (
+from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
     CloudRuntimeConfig,
+    ShardDescriptor,
 )
-from refiner.platform.http import MacrodataApiError
+from refiner.platform.client import MacrodataApiError
 
 
 def _request() -> CloudRunCreateRequest:
@@ -17,7 +18,7 @@ def _request() -> CloudRunCreateRequest:
         plan={"stages": [{"name": "stage_0", "steps": []}]},
         runtime=CloudRuntimeConfig(
             num_workers=2,
-            heartbeat_every_rows=4096,
+            heartbeat_interval_seconds=30,
             cpus_per_worker=4,
             mem_mb_per_worker=16384,
         ),
@@ -28,12 +29,12 @@ def _request() -> CloudRunCreateRequest:
             size_bytes=3,
         ),
         shards=[
-            {
-                "shard_id": "s1",
-                "path": "hf://dataset/file.parquet",
-                "start": 0,
-                "end": 10,
-            }
+            ShardDescriptor(
+                shard_id="s1",
+                path="hf://dataset/file.parquet",
+                start=0,
+                end=10,
+            )
         ],
     )
 
@@ -45,7 +46,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
         captured.update(kwargs)
         return {"job_id": "job-1", "stage_id": "stage-1", "status": "queued"}
 
-    monkeypatch.setattr("refiner.platform.client.request_json", fake_request_json)
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     resp = client.cloud_submit_job(request=_request())
@@ -71,7 +72,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
 
 def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -> None:
     monkeypatch.setattr(
-        "refiner.platform.client.request_json",
+        "refiner.platform.client.api.request_json",
         lambda **_: {"status": "queued"},
     )
 

@@ -1,6 +1,6 @@
 import pyarrow as pa
 
-from refiner.sources.readers import CsvReader
+from refiner.pipeline.sources.readers import CsvReader
 
 
 def _rows_from_shard_units(units):

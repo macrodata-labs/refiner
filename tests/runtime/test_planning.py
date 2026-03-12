@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from refiner.ledger.shard import Shard
+from refiner.pipeline.data.shard import Shard
 from refiner import col
 from refiner.pipeline import RefinerPipeline, from_items
-from refiner.sources.readers.base import BaseReader
-from refiner.sources.row import DictRow, Row
-from refiner.runtime.planning import _extract_lambda_source, compile_pipeline_plan
+from refiner.pipeline.sources.readers.base import BaseReader
+from refiner.pipeline.data.row import DictRow, Row
+from refiner.pipeline.planning import _extract_lambda_source, compile_pipeline_plan
 
 
 class _FakeReader(BaseReader):
