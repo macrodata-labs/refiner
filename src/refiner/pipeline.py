@@ -382,6 +382,9 @@ class RefinerPipeline:
         video_pix_fmt: str = "yuv420p",
         video_encoder_threads: int | None = None,
         video_encoder_options: Mapping[str, str] | None = None,
+        enable_video_stats: bool = True,
+        video_stats_sample_stride: int = 1,
+        video_stats_quantile_bins: int = 500,
     ) -> "RefinerPipeline":
         """Append a deferred LeRobot writer sink and return a pipeline."""
         config = LeRobotWriterConfig(
@@ -396,6 +399,9 @@ class RefinerPipeline:
             video_pix_fmt=video_pix_fmt,
             video_encoder_threads=video_encoder_threads,
             video_encoder_options=video_encoder_options,
+            enable_video_stats=enable_video_stats,
+            video_stats_sample_stride=video_stats_sample_stride,
+            video_stats_quantile_bins=video_stats_quantile_bins,
         )
 
         return self.with_sink(LeRobotWriterSink(config=config))

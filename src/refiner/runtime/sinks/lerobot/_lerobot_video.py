@@ -180,7 +180,14 @@ def _append_video_segment(
     clip_to: float,
     video_config: Mapping[str, Any],
 ) -> tuple[float, dict[str, np.ndarray] | None]:
-    tracker = _RunningQuantileStats([0.01, 0.10, 0.50, 0.90, 0.99])
+    enable_video_stats = bool(video_config.get("enable_video_stats", True))
+    sample_stride = int(video_config.get("video_stats_sample_stride", 1))
+    tracker: _RunningQuantileStats | None = None
+    if enable_video_stats:
+        tracker = _RunningQuantileStats(
+            [0.01, 0.10, 0.50, 0.90, 0.99],
+            num_quantile_bins=int(video_config.get("video_stats_quantile_bins", 500)),
+        )
 
     if isinstance(video.media, DecodedVideo):
         duration_s = _append_video_segment_from_frames(
@@ -192,6 +199,7 @@ def _append_video_segment(
         return duration_s, _video_stats_from_tracker(tracker)
 
     selected_frames = 0
+    frame_index = 0
     epsilon = 1e-6
     with video.media.cached_path(suffix=".mp4") as local_path:
         with av.open(local_path) as input_container:
@@ -228,12 +236,14 @@ def _append_video_segment(
 
                 state.frames_written += 1
                 selected_frames += 1
-                rgb = frame.to_ndarray(format="rgb24")
-                chw = np.transpose(rgb, (2, 0, 1))
-                _update_video_stats_tracker(
-                    tracker=tracker,
-                    image_chw=_auto_downsample_height_width(chw),
-                )
+                if tracker is not None and frame_index % sample_stride == 0:
+                    rgb = frame.to_ndarray(format="rgb24")
+                    chw = np.transpose(rgb, (2, 0, 1))
+                    _update_video_stats_tracker(
+                        tracker=tracker,
+                        image_chw=_auto_downsample_height_width(chw),
+                    )
+                frame_index += 1
 
     if selected_frames <= 0:
         raise ValueError(
@@ -241,7 +251,10 @@ def _append_video_segment(
             f"[{clip_from:.6f}, {clip_to if clip_to is not None else 'end'})."
         )
 
-    return (selected_frames / float(state.fps), _video_stats_from_tracker(tracker))
+    return (
+        selected_frames / float(state.fps),
+        _video_stats_from_tracker(tracker),
+    )
 
 
 def _append_video_segment_from_frames(
@@ -249,7 +262,7 @@ def _append_video_segment_from_frames(
     state: _VideoWriterState,
     video: DecodedVideo,
     video_config: Mapping[str, Any],
-    tracker: _RunningQuantileStats,
+    tracker: _RunningQuantileStats | None,
 ) -> float:
     if video.frame_count <= 0:
         raise ValueError(
@@ -257,6 +270,8 @@ def _append_video_segment_from_frames(
         )
 
     frames_written = 0
+    sample_stride = int(video_config.get("video_stats_sample_stride", 1))
+    frame_index = 0
     width = video.width
     height = video.height
     for frame_data in video.frames:
@@ -293,12 +308,14 @@ def _append_video_segment_from_frames(
 
         state.frames_written += 1
         frames_written += 1
-        if isinstance(frame_data, np.ndarray) and frame_data.ndim == 3:
-            chw = np.transpose(frame_data, (2, 0, 1))
-            _update_video_stats_tracker(
-                tracker=tracker,
-                image_chw=_auto_downsample_height_width(chw),
-            )
+        if tracker is not None and frame_index % sample_stride == 0:
+            if isinstance(frame_data, np.ndarray) and frame_data.ndim == 3:
+                chw = np.transpose(frame_data, (2, 0, 1))
+                _update_video_stats_tracker(
+                    tracker=tracker,
+                    image_chw=_auto_downsample_height_width(chw),
+                )
+        frame_index += 1
 
     return float(frames_written) / float(state.fps)
 
@@ -330,8 +347,10 @@ def _update_video_stats_tracker(
 
 
 def _video_stats_from_tracker(
-    tracker: _RunningQuantileStats,
+    tracker: _RunningQuantileStats | None,
 ) -> dict[str, np.ndarray] | None:
+    if tracker is None:
+        return None
     if tracker.count <= 0:
         return None
 

@@ -324,8 +324,12 @@ class _LeRobotShardWriter:
         if self._data_writer is None:
             raise RuntimeError("data writer is not initialized")
 
+        data_writer_file = self._data_writer_file
+        if data_writer_file is None:
+            raise RuntimeError("data writer file is not initialized")
+
         self._data_writer.write_table(table)
-        self._data_bytes_written = self._data_writer_file.tell()
+        self._data_bytes_written = data_writer_file.tell()
 
         self._global_frame_index += int(table.num_rows)
         return {
@@ -381,6 +385,9 @@ class _LeRobotShardWriter:
             "video_pix_fmt": self.config.video_pix_fmt,
             "video_encoder_threads": self.config.video_encoder_threads,
             "video_encoder_options": self.config.video_encoder_options,
+            "enable_video_stats": self.config.enable_video_stats,
+            "video_stats_sample_stride": self.config.video_stats_sample_stride,
+            "video_stats_quantile_bins": self.config.video_stats_quantile_bins,
         }
 
         for key, value in row.items():
