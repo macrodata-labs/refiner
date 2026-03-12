@@ -182,6 +182,27 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert video.to_timestamp_s == 1.0
 
 
+def test_lerobot_reader_supports_legacy_chunk_key_video_path_template(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    info["video_path"] = (
+        "videos/{video_key}/chunk-{chunk_key}/file-{file_index:03d}.mp4"
+    )
+    info_path.write_text(json.dumps(info), encoding="utf-8")
+
+    reader = LeRobotEpisodeReader(str(root), decode=False)
+    rows = list(reader.read_shard(reader.list_shards()[0]))
+
+    assert len(rows) == 2
+    video = rows[0]["observation.images.main"]
+    assert video.uri.endswith("/videos/observation.images.main/chunk-0/file-000.mp4")
+    assert video.from_timestamp_s == 0.0
+    assert video.to_timestamp_s == 1.0
+
+
 def test_lerobot_reader_does_not_eagerly_load_parquet_rows_at_init(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -61,8 +61,8 @@ class Shard:
 
 _RE_SHARD_FILENAME = re.compile(
     r"^(?P<pathhash>[0-9a-f]+)__"
-    r"(?P<start>\d{20})__"
-    r"(?P<end>\d{20})__"
+    r"(?P<start>-?\d+)__"
+    r"(?P<end>-?\d+)__"
     r"(?P<shardid>[0-9a-f]+)"
     r"(?:__w(?P<workerid>\d+))?"
     r"\.json$"

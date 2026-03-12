@@ -6,10 +6,14 @@ import re
 
 import av
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 import refiner as mdr
+from refiner.sinks import LeRobotMetaReduceSink, LeRobotWriterConfig, LeRobotWriterSink
 from refiner.media import hydrate_media
+from refiner.sources.row import DictRow
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -253,3 +257,129 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
     chunk_index = rows["videos/observation.images.main/chunk_index"][0].as_py()
     assert isinstance(chunk_index, str)
     assert re.match(r"\d+-[0-9a-f]{12}", chunk_index)
+
+
+def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> None:
+    out_root = tmp_path / "task-index"
+    pipeline = mdr.from_items(
+        [
+            {
+                "episode_index": 0,
+                "task": "place",
+                "tasks": ["place"],
+                "frames": [
+                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
+                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
+                ],
+                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+            },
+            {
+                "episode_index": 1,
+                "task": "pick",
+                "tasks": ["pick"],
+                "frames": [
+                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [3.0]},
+                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [4.0]},
+                ],
+                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+            },
+        ],
+        shard_size_rows=10,
+    ).write_lerobot(str(out_root), overwrite=True)
+
+    stats = pipeline.launch_local(
+        name="lerobot-task-index-stable",
+        num_workers=1,
+        workdir=str(tmp_path / "workdir"),
+    )
+    assert stats.failed == 0
+
+    tasks = pq.read_table(out_root / "meta" / "tasks.parquet")
+    assert tasks.column("task").to_pylist() == ["place", "pick"]
+    assert tasks.column("task_index").to_pylist() == [0, 1]
+
+    data_files = sorted((out_root / "data").glob("chunk-*/file-*.parquet"))
+    assert data_files
+    data = pq.read_table(data_files[0])
+    assert data.column("task_index").to_pylist() == [0, 0, 1, 1]
+
+
+def test_lerobot_writer_sink_raises_for_missing_required_row_fields(tmp_path: Path) -> None:
+    sink = LeRobotWriterSink(
+        config=LeRobotWriterConfig(root=str(tmp_path / "out"), overwrite=True)
+    )
+    row = DictRow(
+        {
+            "episode_index": 0,
+            "task": "pick",
+            "tasks": ["pick"],
+            "metadata": {
+                "lerobot_info": {
+                    "fps": 10,
+                    "robot_type": "mockbot",
+                }
+            },
+        }
+    ).with_shard_id("0")
+
+    with pytest.raises(KeyError, match="frames"):
+        sink.write_block([row])
+
+
+def test_lerobot_writer_sink_raises_when_video_to_timestamp_is_missing(tmp_path: Path) -> None:
+    source_video = tmp_path / "source" / "episode.mp4"
+    _write_video(source_video)
+
+    sink = LeRobotWriterSink(
+        config=LeRobotWriterConfig(root=str(tmp_path / "out"), overwrite=True)
+    )
+    row = DictRow(
+        {
+            "episode_index": 0,
+            "task": "pick",
+            "tasks": ["pick"],
+            "frames": [{"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]}],
+            "observation.images.main": mdr.Video(
+                media=mdr.MediaFile(str(source_video)),
+                video_key="observation.images.main",
+                from_timestamp_s=0.0,
+                to_timestamp_s=None,
+                fps=10,
+            ),
+            "metadata": {
+                "lerobot_info": {
+                    "fps": 10,
+                    "robot_type": "mockbot",
+                }
+            },
+        }
+    ).with_shard_id("0")
+
+    with pytest.raises((TypeError, ValueError)):
+        sink.write_block([row])
+
+
+def test_lerobot_meta_reduce_raises_when_stage1_rows_are_malformed(tmp_path: Path) -> None:
+    root = tmp_path / "bad-stage1"
+    episodes = pa.Table.from_pylist(
+        [
+            {
+                "episode_index": 0,
+                "data/chunk_index": 0,
+                "data/file_index": 0,
+                "tasks": ["pick"],
+            }
+        ]
+    )
+
+    chunk_dir = root / "meta" / "chunk-000" / "episodes"
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(episodes, chunk_dir / "file-000.parquet")
+    (root / "meta" / "chunk-000" / "tasks.jsonl").write_text(
+        '{"task": "pick"}\n',
+        encoding="utf-8",
+    )
+
+    sink = LeRobotMetaReduceSink(config=LeRobotWriterConfig(root=str(root)))
+    with pytest.raises(KeyError, match="dataset_(from|to)_index"):
+        sink.close()

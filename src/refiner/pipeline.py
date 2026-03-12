@@ -46,7 +46,7 @@ from refiner.runtime.execution.engine import (
 from refiner.runtime.execution.row_steps import ShardDeltaFn
 from refiner.runtime.types import SourceUnit
 from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
-from refiner.sinks import (
+from refiner.runtime.sinks.lerobot import (
     LeRobotWriterConfig,
     LeRobotWriterSink,
 )
@@ -378,6 +378,10 @@ class RefinerPipeline:
         chunk_size: int = 1000,
         data_files_size_in_mb: int = 100,
         video_files_size_in_mb: int = 200,
+        video_codec: str = "mpeg4",
+        video_pix_fmt: str = "yuv420p",
+        video_encoder_threads: int | None = None,
+        video_encoder_options: Mapping[str, str] | None = None,
     ) -> "RefinerPipeline":
         """Append a deferred LeRobot writer sink and return a pipeline."""
         config = LeRobotWriterConfig(
@@ -388,6 +392,10 @@ class RefinerPipeline:
             chunk_size=chunk_size,
             data_files_size_in_mb=data_files_size_in_mb,
             video_files_size_in_mb=video_files_size_in_mb,
+            video_codec=video_codec,
+            video_pix_fmt=video_pix_fmt,
+            video_encoder_threads=video_encoder_threads,
+            video_encoder_options=video_encoder_options,
         )
 
         return self.with_sink(LeRobotWriterSink(config=config))

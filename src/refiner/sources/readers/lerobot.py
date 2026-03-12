@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
-import numbers
 import posixpath
-import re
 from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 import pyarrow.compute as pc
@@ -34,8 +31,6 @@ LEROBOT_INFO = "lerobot_info"
 _ROW_DROP_PREFIXES = ("stats/", "videos/", "meta/episodes/", "data/")
 _ROW_DROP_KEYS = {"dataset_from_index", "dataset_to_index"}
 _DATA_FILE_CACHE_NAME = "lerobot:data_files"
-_INT_RE = re.compile(r"^[+-]?\d+$")
-_FLOAT_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
 
 class LeRobotEpisodeReader(ParquetReader):
@@ -69,7 +64,7 @@ class LeRobotEpisodeReader(ParquetReader):
         self._decode = decode
         info = self._load_info(fs=fs, storage_options=storage_options)
         self._stats_metadata = self._load_stats(fs=fs, storage_options=storage_options)
-        self._fps = _as_int(info.get("fps")) if isinstance(info, Mapping) else None
+        self._fps = int(info["fps"]) if isinstance(info, Mapping) and info.get("fps") is not None else None
         self._video_path_template = (
             str(info.get("video_path"))
             if isinstance(info, Mapping) and isinstance(info.get("video_path"), str)
@@ -158,14 +153,10 @@ class LeRobotEpisodeReader(ParquetReader):
         frames: list[Row],
         video_key: str,
     ) -> Video | None:
-        chunk_raw = episode.get(f"videos/{video_key}/chunk_index")
-        file_idx_raw = episode.get(f"videos/{video_key}/file_index")
-        if chunk_raw is None or file_idx_raw is None:
-            return None
-        chunk = _as_chunk_id(chunk_raw)
-        file_idx = _as_int(file_idx_raw)
-        if chunk is None or file_idx is None:
-            return None
+        chunk_key = f"videos/{video_key}/chunk_index"
+        file_key = f"videos/{video_key}/file_index"
+        chunk = episode[chunk_key]
+        file_idx = episode[file_key]
 
         rel = _format_chunked_path(
             self._video_path_template,
@@ -175,17 +166,24 @@ class LeRobotEpisodeReader(ParquetReader):
         )
         uri = posixpath.join(self.root, rel)
         first = frames[0] if frames else {}
-        episode_index_raw = episode.get("episode_index")
-        frame_index_raw = first.get("frame_index")
-        timestamp_raw = first.get("timestamp")
-        from_ts_raw = episode.get(f"videos/{video_key}/from_timestamp")
-        to_ts_raw = episode.get(f"videos/{video_key}/to_timestamp")
+        from_timestamp = episode[f"videos/{video_key}/from_timestamp"]
+        to_timestamp = episode[f"videos/{video_key}/to_timestamp"]
+        episode_index = episode.get("episode_index")
+        frame_index = first.get("frame_index") if isinstance(first, Mapping) else None
+        timestamp = first.get("timestamp") if isinstance(first, Mapping) else None
+        try:
+            episode_index = int(episode_index) if episode_index is not None else None
+        except (TypeError, ValueError):
+            episode_index = None
+        try:
+            frame_index = int(frame_index) if frame_index is not None else None
+        except (TypeError, ValueError):
+            frame_index = None
+        try:
+            timestamp = float(timestamp) if timestamp is not None else None
+        except (TypeError, ValueError):
+            timestamp = None
 
-        episode_index = _as_int(episode_index_raw)
-        frame_index = _as_int(frame_index_raw)
-        timestamp = _as_float(timestamp_raw)
-        from_timestamp = _as_float(from_ts_raw)
-        to_timestamp = _as_float(to_ts_raw)
         if self._decode is None and (
             from_timestamp is not None or to_timestamp is not None
         ):
@@ -209,28 +207,17 @@ class LeRobotEpisodeReader(ParquetReader):
         )
 
     def _load_episode_frames(self, episode: Mapping[str, Any]) -> list[Row]:
-        chunk_raw = episode.get("data/chunk_index")
-        file_idx_raw = episode.get("data/file_index")
-        if chunk_raw is None or file_idx_raw is None:
-            return []
-        chunk = _as_chunk_id(chunk_raw)
-        file_idx = _as_int(file_idx_raw)
+        chunk = episode["data/chunk_index"]
+        file_idx = episode["data/file_index"]
         if chunk is None or file_idx is None:
             return []
 
-        from_idx_raw = episode.get("dataset_from_index")
-        to_idx_raw = episode.get("dataset_to_index")
-        from_idx = _as_int(from_idx_raw)
-        to_idx = _as_int(to_idx_raw)
-        if from_idx is None or to_idx is None:
+        if "dataset_from_index" not in episode or "dataset_to_index" not in episode:
             raise ValueError(
                 "LeRobot episode row is missing required dataset_from_index/dataset_to_index"
             )
-        if to_idx < from_idx:
-            raise ValueError(
-                "LeRobot episode row has invalid bounds: "
-                f"dataset_from_index={from_idx}, dataset_to_index={to_idx}"
-            )
+        from_idx = episode["dataset_from_index"]
+        to_idx = episode["dataset_to_index"]
 
         rel = _format_chunked_path(
             self._data_path_template,
@@ -319,61 +306,6 @@ class LeRobotEpisodeReader(ParquetReader):
         return out
 
 
-def _filter_index_range(
-    table: pq.Table,
-    *,
-    from_idx: int,
-    to_idx: int,
-) -> pq.Table:
-    if table.num_rows == 0:
-        return table
-    return table.filter(
-        (pc.greater_equal(pc.field("index"), from_idx)) & (pc.less(pc.field("index"), to_idx))
-    )
-
-
-def _as_int(value: Any) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, numbers.Integral):
-        return int(value)
-    if isinstance(value, numbers.Real):
-        float_value = float(value)
-        if math.isfinite(float_value) and float_value.is_integer():
-            return int(float_value)
-    if isinstance(value, str):
-        stripped = value.strip()
-        return int(stripped) if _INT_RE.match(stripped) else None
-    return None
-
-
-def _as_float(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, numbers.Real):
-        float_value = float(value)
-        return float_value if math.isfinite(float_value) else None
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not _FLOAT_RE.match(stripped):
-            return None
-        float_value = float(stripped)
-        return float_value if math.isfinite(float_value) else None
-    return None
-
-
-def _as_chunk_id(value: Any) -> str | int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    numeric = _as_int(value)
-    if numeric is not None:
-        return numeric
-    if isinstance(value, str):
-        text = value.strip()
-        return text if text else None
-    return str(value)
-
-
 def _format_chunked_path(
     template: str,
     *,
@@ -381,18 +313,16 @@ def _format_chunked_path(
     chunk: str | int,
     file_idx: int,
 ) -> str:
-    kwargs = {
-        "video_key": video_key if video_key is not None else "",
-        "chunk": chunk,
-        "chunk_key": chunk,
-        "chunk_index": chunk,
-        "file": file_idx,
-        "file_index": file_idx,
-    }
-    try:
-        return str(template.format(**kwargs))
-    except Exception as e:
-        raise ValueError(f"Invalid LeRobot path template {template!r}: {e}") from e
+    return str(
+        template.format(
+            video_key=video_key if video_key is not None else "",
+            chunk=chunk,
+            chunk_key=chunk,
+            chunk_index=chunk,
+            file=file_idx,
+            file_index=file_idx,
+        )
+    )
 
 
 __all__ = [

@@ -35,6 +35,24 @@ def test_fs_ledger_claim_complete(tmp_path: Path) -> None:
     assert got2.id != got1.id
 
 
+def test_fs_ledger_claim_supports_negative_end_bounds(tmp_path: Path) -> None:
+    cfg = LedgerConfig(lease_seconds=600, heartbeat_seconds=120)
+    ledger = FsLedger(
+        job_id="job-negative-end",
+        worker_id=1,
+        workdir=str(tmp_path),
+        config=cfg,
+    )
+    shard = Shard(path="parquet-file", start=0, end=-1)
+    ledger.seed_shards([shard])
+
+    got = ledger.claim()
+    assert got is not None
+    assert got.path == "parquet-file"
+    assert got.start == 0
+    assert got.end == -1
+
+
 def test_fs_ledger_enqueue_without_worker_id(tmp_path: Path) -> None:
     cfg = LedgerConfig(lease_seconds=600, heartbeat_seconds=120)
     ledger = FsLedger(job_id="job3", worker_id=None, workdir=str(tmp_path), config=cfg)
