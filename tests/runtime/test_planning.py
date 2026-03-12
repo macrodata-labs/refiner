@@ -134,3 +134,25 @@ def test_extract_lambda_source_matches_exact_lambda_when_multiple_present() -> N
         'lambda row: int(row["score"]) >= 15)'
     )
     assert _extract_lambda_source(source, fn) == 'lambda row: int(row["score"]) >= 15'
+
+
+def test_compile_pipeline_plan_includes_lerobot_stages() -> None:
+    pipeline = from_items(
+        [
+            {
+                "episode_index": 0,
+                "task": "pick",
+                "tasks": ["pick"],
+                "frames": [{"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]}],
+            }
+        ]
+    ).write_lerobot("/tmp/lerobot-plan", overwrite=True)
+
+    payload = compile_pipeline_plan(pipeline)
+    stages = payload["stages"]
+    assert [stage["name"] for stage in stages] == [
+        "write_lerobot_stage_1",
+        "write_lerobot_stage_2",
+    ]
+    assert len(stages[0]["steps"]) == 2
+    assert stages[1]["steps"][0]["name"] == "task"

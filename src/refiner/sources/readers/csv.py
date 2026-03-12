@@ -6,7 +6,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any, Literal, Optional
 
 import pyarrow.csv as pa_csv
-from fsspec import AbstractFileSystem
+from fsspec.spec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
 from refiner.runtime.types import SourceUnit

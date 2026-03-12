@@ -4,7 +4,7 @@ import io
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-from fsspec import AbstractFileSystem
+from fsspec.spec import AbstractFileSystem
 import pyarrow.json as pa_json
 
 from refiner.io.fileset import DataFileSetLike

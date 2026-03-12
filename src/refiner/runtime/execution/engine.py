@@ -18,7 +18,7 @@ from refiner.runtime.execution.vectorized import (
 from refiner.runtime.types import TabularBlock
 from refiner.sources.row import Row
 
-_DEFAULT_VECTORIZED_CHUNK_ROWS = 2048
+_DEFAULT_VECTORIZED_CHUNK_ROWS = 1
 
 
 @dataclass(frozen=True, slots=True)

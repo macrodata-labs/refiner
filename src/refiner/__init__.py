@@ -2,7 +2,14 @@ from .io import DataFile, DataFileSet, DataFolder
 from .ledger.shard import Shard
 from .metrics import log_gauge, log_gauges, log_histogram, log_throughput
 from .expressions import coalesce, col, if_else, lit
-from .media import MediaFile, Video, hydrate_media
+from .media import (
+    DecodedVideo,
+    MediaFile,
+    Video,
+    get_media_cache,
+    hydrate_media,
+    reset_media_cache,
+)
 from .pipeline import (
     RefinerPipeline,
     from_items,
@@ -29,7 +36,6 @@ from .processors import (
 from .sources import (
     BaseReader,
     BaseSource,
-    CsvReader,
     JsonlReader,
     LeRobotEpisodeReader,
     ParquetReader,
@@ -85,6 +91,9 @@ __all__ = [
     "if_else",
     "submit",
     "hydrate_media",
+    "get_media_cache",
+    "reset_media_cache",
     "MediaFile",
     "Video",
+    "DecodedVideo",
 ]

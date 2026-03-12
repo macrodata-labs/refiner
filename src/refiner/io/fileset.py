@@ -5,7 +5,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeAlias, Union
 
-from fsspec import AbstractFileSystem, url_to_fs
+from fsspec.core import url_to_fs
+from fsspec.spec import AbstractFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from .datafile import DataFile

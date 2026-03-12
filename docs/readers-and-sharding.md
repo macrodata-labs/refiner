@@ -27,11 +27,11 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 - CSV and JSONL readers yield dict-backed rows.
 - Parquet reader yields row views that are converted on access.
 - LeRobot reader emits one row per episode with:
-  - `frames`: list of frame dicts for the episode slice.
+  - `frames`: list of frame row views for the episode slice (mapping-like `Row` values).
   - video feature columns as `Video` handles (opaque URI + metadata, bytes unset by default).
-  - `metadata`: dict loaded from `meta/stats.json` (when present).
-  - raw transport metadata keys under `stats/*`, `videos/*`, and `meta/episodes/*` are omitted from emitted rows.
-  - private round-trip fields are stored in `metadata["x"]` (`__lerobot_episode` and `__lerobot_context`) so LeRobot-style episode transforms can reconstruct full metadata.
+  - if a video has timestamp bounds, you must set `decode` explicitly (`True` for clipped bytes, `False` for full-file bytes). `decode=None` raises.
+  - `metadata`: dict containing `lerobot_info` (root/fps/robot_type) and `lerobot_stats` (from `meta/stats.json` when present).
+  - raw transport metadata keys under `stats/*`, `videos/*`, `meta/episodes/*`, `data/*`, plus `dataset_from_index`/`dataset_to_index`, are omitted from emitted rows.
 - Use `target_shard_bytes` to control shard granularity.
 
 ## Hydrating External Files
@@ -42,7 +42,7 @@ Use `refiner.hydrate_file(...)` in `.flat_map(...)` for buffered row-level hydra
 import refiner as mdr
 
 pipeline = (
-    mdr.read_lerobot("s3://bucket/dataset")
+    mdr.read_lerobot("s3://bucket/dataset", decode=False)
     .flat_map(mdr.hydrate_file(columns="observation.images.main"))
 )
 ```

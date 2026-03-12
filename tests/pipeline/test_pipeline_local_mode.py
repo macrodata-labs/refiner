@@ -179,7 +179,7 @@ def test_map_async_can_hydrate_media_rows(tmp_path: Path) -> None:
         rows.append(DictRow({"id": i, "blob_uri": str(p)}))
 
     pipeline = RefinerPipeline(source=_LocalFakeReader([s], {s.id: rows})).map_async(
-        hydrate_media("blob_uri", mode="bytes"),
+        hydrate_media("blob_uri"),
         max_in_flight=2,
     )
     out = list(pipeline.iter_rows())

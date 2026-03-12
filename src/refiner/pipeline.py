@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
-from fsspec import AbstractFileSystem
+from fsspec.spec import AbstractFileSystem
 
 from refiner.expressions import Expr, col as col_expr, lit
 from refiner.io.fileset import DataFileSetLike
@@ -44,6 +44,11 @@ from refiner.runtime.execution.engine import (
 )
 from refiner.runtime.types import SourceUnit
 from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.sinks import (
+    LeRobotWriterConfig,
+    LeRobotWriterSinkStep,
+)
+from refiner.processors.step import SinkStep
 
 if TYPE_CHECKING:
     from refiner.runtime.launchers.cloud import CloudLaunchResult
@@ -201,9 +206,29 @@ class RefinerPipeline:
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
         )
 
+    def _iter_single_stage_rows(self) -> Iterable[Row]:
+        return iter_rows(self.execute(self.source.read()))
+
     def iter_rows(self) -> Iterable[Row]:
         """Local execution mode: lazily process all shards and yield output rows."""
-        return iter_rows(self.execute(self.source.read()))
+        from refiner.runtime.planning import execution_stages_for_pipeline
+
+        stages = execution_stages_for_pipeline(self)
+        if len(stages) == 1:
+            return self._iter_single_stage_rows()
+
+        def _run_stages() -> Iterable[Row]:
+            for idx, stage in enumerate(stages):
+                stage_pipeline = stage.pipeline
+                stage_pipeline.prepare_sinks_for_launch()
+                rows = stage_pipeline._iter_single_stage_rows()
+                if idx + 1 < len(stages):
+                    for _ in rows:
+                        pass
+                else:
+                    yield from rows
+
+        return _run_stages()
 
     def materialize(self) -> list[Row]:
         """Compute all output rows into memory (local/dev utility)."""
@@ -222,6 +247,19 @@ class RefinerPipeline:
 
     def __iter__(self):
         return iter(self.iter_rows())
+
+    def _sink_steps(self) -> tuple[SinkStep, ...]:
+        return tuple(
+            step for step in self.pipeline_steps if isinstance(step, SinkStep)
+        )
+
+    def prepare_sinks_for_launch(self) -> None:
+        for step in self._sink_steps():
+            step.launch_prepare()
+
+    def launch_finalize_sinks(self) -> None:
+        for step in self._sink_steps():
+            step.launch_finalize()
 
     def launch_local(
         self,
@@ -276,6 +314,13 @@ class RefinerPipeline:
             mem_mb_per_worker: Optional requested memory per worker in MB.
             sync_local_dependencies: Sync submitting environment dependencies in cloud image.
         """
+        from refiner.runtime.planning import execution_stages_for_pipeline
+
+        if len(execution_stages_for_pipeline(self)) > 1:
+            raise NotImplementedError(
+                "launch_cloud with multi-stage pipelines is not supported yet; "
+                "run this pipeline via launch_local() or local iteration/materialize."
+            )
         from refiner.runtime.launchers.cloud import CloudLauncher
 
         launcher = CloudLauncher(
@@ -288,6 +333,35 @@ class RefinerPipeline:
             sync_local_dependencies=sync_local_dependencies,
         )
         return launcher.launch()
+
+    def write_lerobot(
+        self,
+        root: str,
+        *,
+        fs: AbstractFileSystem | None = None,
+        storage_options: Mapping[str, Any] | None = None,
+        overwrite: bool = False,
+        chunk_size: int = 1000,
+        data_files_size_in_mb: int = 100,
+        video_files_size_in_mb: int = 200,
+    ) -> "RefinerPipeline":
+        """Append a deferred LeRobot writer sink and return a pipeline."""
+        config = LeRobotWriterConfig(
+            root=root,
+            fs=fs,
+            storage_options=storage_options,
+            overwrite=overwrite,
+            chunk_size=chunk_size,
+            data_files_size_in_mb=data_files_size_in_mb,
+            video_files_size_in_mb=video_files_size_in_mb,
+        )
+
+        return self.add_step(
+            LeRobotWriterSinkStep(
+                config=config,
+                index=len(self.pipeline_steps) + 1,
+            )
+        )
 
 
 ## readers
@@ -368,7 +442,7 @@ def read_lerobot(
     *,
     fs: AbstractFileSystem | None = None,
     storage_options: Mapping[str, Any] | None = None,
-    decode: bool = False,
+    decode: Literal[True, False, None] = None,
 ) -> RefinerPipeline:
     """Create a pipeline with an episode-granular LeRobot reader source."""
     return RefinerPipeline(

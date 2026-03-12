@@ -9,9 +9,10 @@ import pyarrow.parquet as pq
 import pytest
 
 import refiner as mdr
+from refiner.sources.row import Row
 from refiner.sources.readers.lerobot import (
-    LEROBOT_CONTEXT_KEY,
-    LEROBOT_RAW_EPISODE_KEY,
+    LEROBOT_INFO,
+    LEROBOT_STATS,
     LeRobotEpisodeReader,
 )
 from refiner.media import Video
@@ -27,6 +28,11 @@ def _write_info(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     info = {
         "fps": 30,
+        "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
+        "features": {
+            "observation.images.main": {"dtype": "video"},
+            "episode_index": {"dtype": "int64"},
+        },
     }
     path.write_text(json.dumps(info), encoding="utf-8")
 
@@ -129,7 +135,7 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     root = tmp_path / "lerobot"
     _build_sample_dataset(root)
 
-    reader = LeRobotEpisodeReader(str(root))
+    reader = LeRobotEpisodeReader(str(root), decode=False)
     shards = reader.list_shards()
     assert len(shards) == 1
     assert shards[0].start == 0
@@ -146,26 +152,24 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert first["task"] == "pick"
     assert second["task"] == "place"
     assert isinstance(first["metadata"], dict)
-    assert first["metadata"]["observation.state"]["min"] == [-1.0]
-    assert first["metadata"]["observation.state"]["max"] == [1.0]
-    assert first["metadata"]["observation.state"]["mean"] == [0.0]
-    assert first["metadata"]["observation.state"]["std"] == [0.5]
-    assert first["metadata"]["observation.state"]["count"] == 2
+    assert first["metadata"][LEROBOT_STATS]["observation.state"]["min"] == [-1.0]
+    assert first["metadata"][LEROBOT_STATS]["observation.state"]["max"] == [1.0]
+    assert first["metadata"][LEROBOT_STATS]["observation.state"]["mean"] == [0.0]
+    assert first["metadata"][LEROBOT_STATS]["observation.state"]["std"] == [0.5]
+    assert first["metadata"][LEROBOT_STATS]["observation.state"]["count"] == 2
+    assert first["metadata"][LEROBOT_INFO]["fps"] == 30
     assert "stats/observation.state/min" not in first
     assert "videos/observation.images.main/chunk_index" not in first
     assert "meta/episodes/chunk_index" not in first
-    assert isinstance(first["metadata"], dict)
-    assert isinstance(first["metadata"]["x"], dict)
-    assert isinstance(first["metadata"]["x"][LEROBOT_RAW_EPISODE_KEY], Mapping)
-    assert isinstance(first["metadata"]["x"][LEROBOT_CONTEXT_KEY], dict)
-    assert (
-        first["metadata"]["observation.state"]
-        == second["metadata"]["observation.state"]
-    )
+    assert "data/chunk_index" not in first
+    assert isinstance(first["metadata"][LEROBOT_STATS], Mapping)
+    assert isinstance(first["metadata"][LEROBOT_INFO], dict)
+    assert first["metadata"][LEROBOT_STATS] == second["metadata"][LEROBOT_STATS]
 
     first_frames = first["frames"]
     assert isinstance(first_frames, list)
     assert len(first_frames) == 2
+    assert isinstance(first_frames[0], Row)
     assert int(first_frames[0]["frame_index"]) == 0
     assert int(first_frames[1]["frame_index"]) == 1
 
@@ -184,7 +188,7 @@ def test_lerobot_reader_does_not_eagerly_load_parquet_rows_at_init(
     root = tmp_path / "lerobot"
     _build_sample_dataset(root)
 
-    reader = LeRobotEpisodeReader(str(root))
+    reader = LeRobotEpisodeReader(str(root), decode=False)
 
     def _fail(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
         raise AssertionError("unexpected eager parquet table read")
@@ -202,10 +206,68 @@ def test_lerobot_reader_requires_episode_parquet_metadata(tmp_path: Path) -> Non
         mdr.read_lerobot(str(root)).materialize()
 
 
-def test_lerobot_decode_true_raises_not_implemented(tmp_path: Path) -> None:
+def test_lerobot_decode_none_raises_for_timestamped_videos(tmp_path: Path) -> None:
     root = tmp_path / "lerobot"
     _build_sample_dataset(root)
 
-    pipeline = mdr.read_lerobot(str(root), decode=True)
-    with pytest.raises(NotImplementedError):
+    pipeline = mdr.read_lerobot(str(root))
+    with pytest.raises(ValueError, match="decode is None"):
         pipeline.materialize()
+
+
+def test_lerobot_reader_requires_dataset_bounds(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _write_info(root / "meta" / "info.json")
+    _write_stats(root / "meta" / "stats.json")
+    _write_parquet(
+        root / "meta" / "episodes" / "part-000.parquet",
+        [
+            {
+                "episode_index": 0,
+                "data/chunk_index": 0,
+                "data/file_index": 0,
+                "tasks": ["pick"],
+            }
+        ],
+    )
+    _write_parquet(
+        root / "data" / "chunk-000" / "file-000.parquet",
+        [{"index": 0, "episode_index": 0, "frame_index": 0, "timestamp": 0.0}],
+    )
+
+    reader = LeRobotEpisodeReader(str(root), decode=False)
+    with pytest.raises(
+        ValueError,
+        match="missing required dataset_from_index/dataset_to_index",
+    ):
+        list(reader.read_shard(reader.list_shards()[0]))
+
+
+def test_lerobot_reader_raises_when_bounds_outside_data_file(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _write_info(root / "meta" / "info.json")
+    _write_stats(root / "meta" / "stats.json")
+    _write_parquet(
+        root / "meta" / "episodes" / "part-000.parquet",
+        [
+            {
+                "episode_index": 0,
+                "dataset_from_index": 10,
+                "dataset_to_index": 12,
+                "data/chunk_index": 0,
+                "data/file_index": 0,
+                "tasks": ["pick"],
+            }
+        ],
+    )
+    _write_parquet(
+        root / "data" / "chunk-000" / "file-000.parquet",
+        [{"index": 0, "episode_index": 0, "frame_index": 0, "timestamp": 0.0}],
+    )
+
+    reader = LeRobotEpisodeReader(str(root), decode=False)
+    with pytest.raises(
+        ValueError,
+        match="dataset bounds are out of range for data parquet file",
+    ):
+        list(reader.read_shard(reader.list_shards()[0]))

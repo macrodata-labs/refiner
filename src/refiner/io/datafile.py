@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any, TypeAlias, Union, cast
 
-from fsspec import AbstractFileSystem, url_to_fs
+from fsspec.core import url_to_fs
+from fsspec.spec import AbstractFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 DataFileLike: TypeAlias = Union[str, "DataFile"]
@@ -22,6 +24,7 @@ class DataFile:
 
     fs: AbstractFileSystem
     path: str
+    _lock: Lock = field(default_factory=Lock)
 
     @classmethod
     def resolve(

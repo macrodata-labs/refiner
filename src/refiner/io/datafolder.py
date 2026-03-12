@@ -1,7 +1,8 @@
 from collections.abc import Iterable, Mapping
 from typing import IO, Any, TypeAlias, Union
 
-from fsspec import AbstractFileSystem, url_to_fs
+from fsspec.core import url_to_fs
+from fsspec.spec import AbstractFileSystem
 from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 

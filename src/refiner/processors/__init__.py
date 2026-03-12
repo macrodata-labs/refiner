@@ -11,6 +11,7 @@ from .step import (
     MapFn,
     RefinerStep,
     RowStep,
+    SinkStep,
 )
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "AsyncRowStep",
     "BatchStep",
     "FlatMapStep",
+    "SinkStep",
     "FnRowStep",
     "FnAsyncRowStep",
     "FnBatchStep",

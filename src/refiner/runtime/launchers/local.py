@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 import cloudpickle
 
 from refiner.ledger import FsLedger
+from refiner.runtime.planning import execution_stages_for_pipeline
 from refiner.runtime.resources.cpu import build_cpu_sets, set_cpu_affinity
 from refiner.runtime.resources.memory import (
     restore_memory_soft_limit,
@@ -58,6 +59,7 @@ class LocalLauncher(BaseLauncher):
         heartbeat_every_rows: int = 4096,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
+        expand_stages: bool = True,
     ):
         super().__init__(
             pipeline=pipeline,
@@ -68,6 +70,7 @@ class LocalLauncher(BaseLauncher):
             mem_mb_per_worker=mem_mb_per_worker,
         )
         self.workdir = workdir
+        self.expand_stages = bool(expand_stages)
         self.ledger = FsLedger(job_id=self.job_id, worker_id=None, workdir=self.workdir)
 
     def _launcher_run_dir(self) -> Path:
@@ -120,6 +123,43 @@ class LocalLauncher(BaseLauncher):
             )
 
     def launch(self) -> LaunchStats:
+        stage_specs = execution_stages_for_pipeline(self.pipeline)
+        if self.expand_stages and len(stage_specs) > 1:
+            claimed = 0
+            completed = 0
+            failed = 0
+            output_rows = 0
+            for stage in stage_specs:
+                stage_workers = (
+                    int(stage.num_workers)
+                    if stage.num_workers is not None
+                    else self.num_workers
+                )
+                stage_launcher = LocalLauncher(
+                    pipeline=stage.pipeline,
+                    name=f"{self.name}:{stage.name}",
+                    num_workers=stage_workers,
+                    workdir=self.workdir,
+                    heartbeat_every_rows=self.heartbeat_every_rows,
+                    cpus_per_worker=self.cpus_per_worker,
+                    mem_mb_per_worker=self.mem_mb_per_worker,
+                    expand_stages=False,
+                )
+                stage_stats = stage_launcher.launch()
+                claimed += stage_stats.claimed
+                completed += stage_stats.completed
+                failed += stage_stats.failed
+                output_rows += stage_stats.output_rows
+            return LaunchStats(
+                job_id=self.job_id,
+                workers=self.num_workers,
+                claimed=claimed,
+                completed=completed,
+                failed=failed,
+                output_rows=output_rows,
+            )
+
+        self.pipeline.prepare_sinks_for_launch()
         cpu_sets = (
             build_cpu_sets(
                 num_workers=self.num_workers,

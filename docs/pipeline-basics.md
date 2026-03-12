@@ -13,7 +13,7 @@ Use one of the reader entry points:
 import refiner as mdr
 
 pipeline = mdr.read_parquet("data/*.parquet")
-# or: mdr.read_lerobot("s3://bucket/lerobot-dataset")
+# or: mdr.read_lerobot("s3://bucket/lerobot-dataset", decode=False)
 ```
 
 ## Add Processing Steps
@@ -84,6 +84,29 @@ pipeline = pipeline.map(
 )
 ```
 
+## Write LeRobot Datasets
+
+Use `.write_lerobot(...)` as a deferred terminal sink. It returns a new pipeline and performs writes only when executed.
+
+```python
+pipeline = (
+    mdr.read_lerobot("s3://bucket/src", decode=False)
+    .write_lerobot(
+        "s3://bucket/dst",
+        overwrite=True,
+        chunk_size=1000,
+        data_files_size_in_mb=100,
+        video_files_size_in_mb=200,
+    )
+)
+pipeline.materialize()
+```
+
+Execution is always two-stage:
+
+1. Stage 1 writes chunked `data/`, `videos/`, and `meta/chunk-*` partial metadata/statistics.
+2. Stage 2 reduces `meta/chunk-*` into final `meta/info.json`, `meta/stats.json`, `meta/tasks.parquet`, and `meta/episodes/**`, then removes chunk metadata.
+
 ## Step Output Contract
 
 `map` can return:
@@ -97,3 +120,4 @@ Use `.filter(...)` or `.flat_map(...)` for row dropping/expansion.
 
 - Batch steps are triggered when enough rows are available for that step’s `batch_size`; tail rows are flushed at end-of-stream.
 - `mdr.submit(...)` targets a shared per-worker async runtime and returns a `Future`.
+- LeRobot writer execution stays on Refiner's native runtime. Spark, Beam/Dataflow, Daft, Hugging Face Datasets runtime, and Ray/Ray Data were not adopted as the primary executor because they add orchestration/runtime complexity beyond the current local/cloud worker model needs.

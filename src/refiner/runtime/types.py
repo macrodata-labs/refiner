@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from refiner.sources.row import Row
 
 TabularBlock: TypeAlias = pa.Table | pa.RecordBatch
-SourceUnit: TypeAlias = "Row | TabularBlock"
+SourceUnit: TypeAlias = TabularBlock
 
 __all__ = [
     "TabularBlock",

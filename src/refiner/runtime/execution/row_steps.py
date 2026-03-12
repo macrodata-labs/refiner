@@ -10,6 +10,7 @@ from refiner.processors.step import (
     FlatMapStep,
     RefinerStep,
     RowStep,
+    SinkStep,
     normalize_batch_item,
     normalize_row_result,
 )
@@ -30,6 +31,10 @@ def execute_row_steps(
     if not ordered:
         yield from rows
         return
+
+    for step in ordered:
+        if isinstance(step, SinkStep):
+            step.start_run()
 
     queues: list[RowQueue] = [RowQueue() for _ in range(len(ordered) + 1)]
     scratch: list[list[Row]] = [[] for _ in ordered]
@@ -101,6 +106,16 @@ def execute_row_steps(
                             tmp.append(normalized)
             if tmp:
                 out.extend(tmp)
+            return
+
+        if isinstance(step, SinkStep):
+            if inp:
+                for row in inp.take_all():
+                    step.consume_row(row)
+                    if step.passthrough:
+                        out.append(row)
+            if flush_all:
+                step.finalize()
             return
 
         if isinstance(step, BatchStep):

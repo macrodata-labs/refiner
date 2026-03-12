@@ -106,6 +106,28 @@ class FnFlatMapStep(FlatMapStep):
         return self.fn(row)
 
 
+class SinkStep(RefinerStep, ABC):
+    """Terminal or side-effect step that consumes rows."""
+
+    passthrough: bool = False
+
+    def start_run(self) -> None:
+        """Initialize per-run state before the first input row."""
+
+    @abstractmethod
+    def consume_row(self, row: Row) -> None:
+        raise NotImplementedError
+
+    def finalize(self) -> None:
+        """Finalize side effects after all rows are consumed."""
+
+    def launch_prepare(self) -> None:
+        """Optional launcher-level prepare hook executed once before launch."""
+
+    def launch_finalize(self) -> None:
+        """Optional launcher-level finalize hook executed once per launch."""
+
+
 @dataclass(frozen=True, slots=True)
 class FilterRowStep(RefinerStep):
     predicate: PredicateFn
@@ -205,6 +227,7 @@ __all__ = [
     "FnAsyncRowStep",
     "FnBatchStep",
     "FnFlatMapStep",
+    "SinkStep",
     "FilterRowStep",
     "MapResult",
     "MapFn",

@@ -5,7 +5,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from fsspec import AbstractFileSystem
+from fsspec.spec import AbstractFileSystem
 
 from refiner.io import DataFileSet
 from refiner.io.fileset import DataFileSetLike

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 from loguru import logger
 
@@ -125,6 +126,8 @@ class Worker:
 
         with set_active_user_metrics_emitter(user_metrics_emitter):
             run_exception: Exception | None = None
+            previous_worker_rank = os.environ.get("REFINER_WORKER_RANK")
+            os.environ["REFINER_WORKER_RANK"] = str(self.rank)
             try:
                 try:
                     for block in self.pipeline.execute(_source_rows()):
@@ -195,6 +198,10 @@ class Worker:
                 run_exception = e
                 raise
             finally:
+                if previous_worker_rank is None:
+                    os.environ.pop("REFINER_WORKER_RANK", None)
+                else:
+                    os.environ["REFINER_WORKER_RANK"] = previous_worker_rank
                 if lifecycle_client is not None:
                     status = (
                         "failed"

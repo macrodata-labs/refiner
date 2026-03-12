@@ -3,10 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import Any
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import refiner as mdr
 
@@ -78,13 +75,22 @@ def main() -> None:
     if args.hydrate_columns:
         for column in args.hydrate_columns:
             pipeline = pipeline.map_async(
-                mdr.hydrate_media(column, mode="file"),
-                max_in_flight=16,
+                mdr.hydrate_media(column, decode=True, decode_backend="pyav"),
+                max_in_flight=2,
             )
 
-    pipeline = pipeline.map(_summarize_episode)
-    rows = pipeline.take(args.take)
-    print(json.dumps(rows, indent=2, default=str))
+    if args.take > 0:
+        preview = pipeline.take(args.take)
+        for row in preview:
+            summarized = _summarize_episode(row)
+            sys.stdout.write(json.dumps(summarized, sort_keys=True, default=str))
+            sys.stdout.write("\n")
+
+    writer = pipeline.write_lerobot(root="tmp/lerobot-demo", overwrite=True)
+    write_stats = writer.launch_local(name="aa")
+    sys.stdout.write(
+        f"write rows claimed={write_stats.claimed} failed={write_stats.failed}\\n"
+    )
 
 
 if __name__ == "__main__":

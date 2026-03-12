@@ -5,7 +5,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, Literal, Optional
 
 import pyarrow.parquet as pq
-from fsspec import AbstractFileSystem
+from fsspec.spec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
 from refiner.runtime.types import SourceUnit

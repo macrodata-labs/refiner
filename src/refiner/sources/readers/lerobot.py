@@ -1,21 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import numbers
 import posixpath
 import re
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import Any, Literal
+import pyarrow.compute as pc
 
-from fsspec import AbstractFileSystem, url_to_fs
+from fsspec.spec import AbstractFileSystem
 import pyarrow.parquet as pq
 
+from refiner.io import DataFile
 from refiner.ledger.shard import Shard
-from refiner.media import MediaFile, Video
+from refiner.media import MediaFile, Video, get_media_cache
 from refiner.runtime.types import SourceUnit
 from refiner.sources.readers.parquet import ParquetReader
-from refiner.sources.row import ArrowRowView, Row
+from refiner.sources.row import ArrowRowView, DictRow, Row
+from refiner.runtime.execution.async_window import AsyncWindow
 
 
 _DEFAULT_DATA_PATH = "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet"
@@ -25,10 +29,11 @@ _DEFAULT_VIDEO_PATH = (
 _DEFAULT_EPISODES_GLOB_ROOT = "meta/episodes"
 _INFO_JSON = "meta/info.json"
 _STATS_JSON = "meta/stats.json"
-LEROBOT_RAW_EPISODE_KEY = "__lerobot_episode"
-LEROBOT_CONTEXT_KEY = "__lerobot_context"
+LEROBOT_STATS = "lerobot_stats"
+LEROBOT_INFO = "lerobot_info"
 _ROW_DROP_PREFIXES = ("stats/", "videos/", "meta/episodes/", "data/")
 _ROW_DROP_KEYS = {"dataset_from_index", "dataset_to_index"}
+_DATA_FILE_CACHE_NAME = "lerobot:data_files"
 _INT_RE = re.compile(r"^[+-]?\d+$")
 _FLOAT_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
@@ -48,109 +53,109 @@ class LeRobotEpisodeReader(ParquetReader):
         *,
         fs: AbstractFileSystem | None = None,
         storage_options: Mapping[str, Any] | None = None,
-        decode: bool = False,
-        arrow_batch_size: int = 4096,
+        decode: Literal[True, False, None] = None,
+        arrow_batch_size: int = 65536,
     ) -> None:
-        self._decode = bool(decode)
-
-        if fs is None:
-            self._fs, self._root_path = url_to_fs(root, **dict(storage_options or {}))
-        else:
-            self._fs = fs
-            self._root_path = fs._strip_protocol(root)  # type: ignore[attr-defined]
-        self._root_uri = self._fs.unstrip_protocol(self._root_path).removeprefix(
-            "file://"
-        )
-
-        self._fps = self._load_fps()
-        self._stats_metadata = self._load_stats_metadata()
+        if decode is not None and decode not in (True, False):
+            raise ValueError("decode must be True, False, or None")
+        self.root = root.rstrip("/")
         super().__init__(
-            inputs=posixpath.join(
-                self._root_path.rstrip("/"), _DEFAULT_EPISODES_GLOB_ROOT
-            ),
-            fs=self._fs,
+            inputs=posixpath.join(self.root, _DEFAULT_EPISODES_GLOB_ROOT),
+            fs=fs,
+            storage_options=storage_options,
             recursive=True,
             arrow_batch_size=arrow_batch_size,
+        )
+        self._decode = decode
+        info = self._load_info(fs=fs, storage_options=storage_options)
+        self._stats_metadata = self._load_stats(fs=fs, storage_options=storage_options)
+        self._fps = _as_int(info.get("fps")) if isinstance(info, Mapping) else None
+        self._video_path_template = (
+            str(info.get("video_path"))
+            if isinstance(info, Mapping) and isinstance(info.get("video_path"), str)
+            else _DEFAULT_VIDEO_PATH
+        )
+        self._data_path_template = (
+            str(info.get("data_path"))
+            if isinstance(info, Mapping) and isinstance(info.get("data_path"), str)
+            else _DEFAULT_DATA_PATH
+        )
+        features = info.get("features") if isinstance(info, Mapping) else {}
+        self._features = features if isinstance(features, Mapping) else {}
+        self._video_keys = self._load_video_keys()
+        self._robot_type = (
+            str(info.get("robot_type"))
+            if isinstance(info, Mapping) and info.get("robot_type") is not None
+            else None
         )
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         if shard.path not in self.files:
             raise ValueError(f"Unknown LeRobot shard path: {shard.path!r}")
+        async_window = AsyncWindow(max_in_flight=2, preserve_order=True)
         for batch in super().read_shard(shard):
             names = tuple(str(name) for name in batch.schema.names)
             columns = tuple(batch.column(i) for i in range(batch.num_columns))
             index_by_name = {name: i for i, name in enumerate(names)}
             for idx in range(batch.num_rows):
-                episode = ArrowRowView(
-                    names=names,
-                    columns=columns,
-                    index_by_name=index_by_name,
-                    row_idx=idx,
-                )
-                yield self._build_episode_row(episode)
+                async_window.submit(self._build_episode_row(
+                    ArrowRowView(
+                        names=names,
+                        columns=columns,
+                        index_by_name=index_by_name,
+                        row_idx=idx,
+                    )
+                ))
+                yield from async_window.drain(flush=False)
+
+        yield from async_window.drain(flush=True)
 
     def describe(self) -> dict[str, Any]:
         return {
-            "root": self._root_uri,
+            "root": self.root,
             "episode_files": len(self.files),
             "fps": self._fps,
         }
 
-    def _build_episode_row(self, episode: Row) -> Row:
-        video_keys = sorted(
-            {
-                key.removeprefix("videos/").split("/", 1)[0]
-                for key in episode
-                if key.startswith("videos/") and key.endswith("/chunk_index")
-            }
-        )
-
-        drop_keys = [
-            key
-            for key in episode
-            if key in _ROW_DROP_KEYS
-            or any(key.startswith(prefix) for prefix in _ROW_DROP_PREFIXES)
-        ]
-        row = episode.drop(*drop_keys) if drop_keys else episode
-
-        row_metadata: dict[str, Any] = (
-            dict(self._stats_metadata)
-            if isinstance(self._stats_metadata, Mapping)
-            else {}
-        )
-        row_metadata["x"] = {
-            LEROBOT_RAW_EPISODE_KEY: episode,
-            LEROBOT_CONTEXT_KEY: {
-                "root_uri": self._root_uri,
-                "video_path_template": _DEFAULT_VIDEO_PATH,
-                "video_keys": tuple(video_keys),
+    async def _build_episode_row(self, row: Row) -> Row:
+        metadata = {
+            LEROBOT_INFO: {
+                "root": self.root,
                 "fps": self._fps,
-                "decode": self._decode,
+                "robot_type": self._robot_type,
             },
+            LEROBOT_STATS: self._stats_metadata,
         }
-        patch: dict[str, Any] = {"metadata": row_metadata}
+        patch: dict[str, Any] = {"metadata": metadata}
 
-        frames = self._load_episode_frames(episode)
+        frames = await asyncio.get_running_loop().run_in_executor(None, self._load_episode_frames, row)
         patch["frames"] = frames
 
         tasks = row.get("tasks")
         if isinstance(tasks, list) and tasks:
             patch["task"] = tasks[0]
 
-        for video_key in video_keys:
-            video = self._build_video(
-                episode=episode, frames=frames, video_key=video_key
-            )
+        for video_key in self._video_keys:
+            video = self._build_video(episode=row, frames=frames, video_key=video_key)
             if video is not None:
                 patch[video_key] = video
 
-        return row.update(patch)
+        drop_keys = [
+            key
+            for key in row.keys()
+            if key in _ROW_DROP_KEYS
+            or any(key.startswith(prefix) for prefix in _ROW_DROP_PREFIXES)
+        ]
+        base = row.drop(*drop_keys)
+        data = base.to_dict()
+        data.update(patch)
+        return DictRow(data=data, metadata=metadata)
 
     def _build_video(
         self,
         *,
         episode: Mapping[str, Any],
-        frames: list[dict[str, Any]],
+        frames: list[Row],
         video_key: str,
     ) -> Video | None:
         chunk_raw = episode.get(f"videos/{video_key}/chunk_index")
@@ -163,11 +168,11 @@ class LeRobotEpisodeReader(ParquetReader):
             return None
 
         rel = str(
-            _DEFAULT_VIDEO_PATH.format(
+            self._video_path_template.format(
                 video_key=video_key, chunk_index=chunk, file_index=file_idx
             )
         )
-        uri = posixpath.join(self._root_uri.rstrip("/"), rel)
+        uri = posixpath.join(self.root, rel)
         first = frames[0] if frames else {}
         episode_index_raw = episode.get("episode_index")
         frame_index_raw = first.get("frame_index")
@@ -180,6 +185,13 @@ class LeRobotEpisodeReader(ParquetReader):
         timestamp = _as_float(timestamp_raw)
         from_timestamp = _as_float(from_ts_raw)
         to_timestamp = _as_float(to_ts_raw)
+        if self._decode is None and (
+            from_timestamp is not None or to_timestamp is not None
+        ):
+            raise ValueError(
+                "decode is None cannot read timestamped videos; pass decode=True"
+                " to materialize clip-aligned bytes."
+            )
 
         return Video(
             media=MediaFile(uri),
@@ -193,10 +205,9 @@ class LeRobotEpisodeReader(ParquetReader):
             chunk_index=chunk,
             file_index=file_idx,
             fps=self._fps,
-            decode=self._decode,
         )
 
-    def _load_episode_frames(self, episode: Mapping[str, Any]) -> list[dict[str, Any]]:
+    def _load_episode_frames(self, episode: Mapping[str, Any]) -> list[Row]:
         chunk_raw = episode.get("data/chunk_index")
         file_idx_raw = episode.get("data/file_index")
         if chunk_raw is None or file_idx_raw is None:
@@ -206,64 +217,108 @@ class LeRobotEpisodeReader(ParquetReader):
         if chunk is None or file_idx is None:
             return []
 
-        rel = str(_DEFAULT_DATA_PATH.format(chunk_index=chunk, file_index=file_idx))
-        data_path = posixpath.join(self._root_path.rstrip("/"), rel)
-        with self._fs.open(data_path, mode="rb") as f:
-            rows = pq.read_table(f).to_pylist()
-        if not rows:
-            return []
-
         from_idx_raw = episode.get("dataset_from_index")
         to_idx_raw = episode.get("dataset_to_index")
         from_idx = _as_int(from_idx_raw)
         to_idx = _as_int(to_idx_raw)
-        if from_idx is not None and to_idx is not None:
-            out_rows: list[dict[str, Any]] = []
-            for row in rows:
-                idx_raw = row.get("index")
-                idx = _as_int(idx_raw)
-                if idx is None:
-                    continue
-                if from_idx <= idx < to_idx:
-                    out_rows.append(dict(row))
-            return out_rows
+        if from_idx is None or to_idx is None:
+            raise ValueError(
+                "LeRobot episode row is missing required dataset_from_index/dataset_to_index"
+            )
+        if to_idx < from_idx:
+            raise ValueError(
+                "LeRobot episode row has invalid bounds: "
+                f"dataset_from_index={from_idx}, dataset_to_index={to_idx}"
+            )
 
-        episode_index_raw = episode.get("episode_index")
-        episode_index = _as_int(episode_index_raw)
-        if episode_index is None:
-            return []
+        rel = str(
+            self._data_path_template.format(chunk_index=chunk, file_index=file_idx)
+        )
+        data_file = DataFile.resolve(
+            posixpath.join(self.root, rel),
+            fs=self._fs,
+            storage_options=self._storage_options,
+        )
 
-        out = []
-        for row in rows:
-            value = row.get("episode_index")
-            row_episode_index = _as_int(value)
-            if row_episode_index is None:
-                continue
-            if row_episode_index == episode_index:
-                out.append(dict(row))
+        with get_media_cache(_DATA_FILE_CACHE_NAME).cached(
+            file=data_file,
+        ) as local_path, open(local_path, "rb") as f:
+            table = pq.read_table(f, filters=(
+                (pc.greater_equal(pc.field("index"), from_idx)) & (pc.less(pc.field("index"), to_idx))
+            ))
 
-        out.sort(key=lambda row: _as_int(row.get("index")) or 0)
-        return out
+        names = tuple(str(name) for name in table.column_names)
+        columns = tuple(table.column(i) for i in range(table.num_columns))
+        index_by_name = {name: i for i, name in enumerate(names)}
 
-    def _load_fps(self) -> int | None:
-        info_path = posixpath.join(self._root_path.rstrip("/"), _INFO_JSON)
-        if not self._fs.exists(info_path):
-            return None
-        with self._fs.open(info_path, mode="rb") as f:
+        return [
+            ArrowRowView(
+                names=names,
+                columns=columns,
+                index_by_name=index_by_name,
+                row_idx=row_idx,
+            )
+            for row_idx in range(table.num_rows)
+        ]
+
+    def _load_info(
+        self,
+        *,
+        fs: AbstractFileSystem | None,
+        storage_options: Mapping[str, Any] | None,
+    ) -> Mapping[str, Any]:
+        info_file = DataFile.resolve(
+            posixpath.join(self.root, _INFO_JSON),
+            fs=fs,
+            storage_options=storage_options,
+        )
+        with info_file.open("rb") as f:
             payload = json.loads(f.read())
         if not isinstance(payload, Mapping):
-            return None
+            raise ValueError("LeRobot info.json must contain a JSON object")
+        return dict(payload)
 
-        return _as_int(payload.get("fps"))
+    def _load_stats(
+        self,
+        *,
+        fs: AbstractFileSystem | None,
+        storage_options: Mapping[str, Any] | None,
+    ) -> Mapping[str, Any]:
+        stats_file = DataFile.resolve(
+            posixpath.join(self.root, _STATS_JSON),
+            fs=fs,
+            storage_options=storage_options,
+        )
+        if not stats_file.exists():
+            return {}
+        with stats_file.open("rb") as f:
+            payload = json.loads(f.read())
+        if not isinstance(payload, Mapping):
+            return {}
+        return dict(payload)
 
-    def _load_stats_metadata(self) -> Mapping[str, Any] | None:
-        stats_path = posixpath.join(self._root_path.rstrip("/"), _STATS_JSON)
-        if self._fs.exists(stats_path):
-            with self._fs.open(stats_path, mode="rb") as f:
-                payload = json.loads(f.read())
-            if isinstance(payload, Mapping):
-                return dict(payload)
-        return None
+    def _load_video_keys(self) -> list[str]:
+        out: list[str] = []
+        for key, feature in self._features.items():
+            if not isinstance(key, str) or not isinstance(feature, Mapping):
+                continue
+            if feature.get("dtype") == "video":
+                out.append(key)
+        out.sort()
+        return out
+
+
+def _filter_index_range(
+    table: pq.Table,
+    *,
+    from_idx: int,
+    to_idx: int,
+) -> pq.Table:
+    if table.num_rows == 0:
+        return table
+    return table.filter(
+        (pc.greater_equal(pc.field("index"), from_idx)) & (pc.less(pc.field("index"), to_idx))
+    )
 
 
 def _as_int(value: Any) -> int | None:
@@ -298,6 +353,6 @@ def _as_float(value: Any) -> float | None:
 
 __all__ = [
     "LeRobotEpisodeReader",
-    "LEROBOT_RAW_EPISODE_KEY",
-    "LEROBOT_CONTEXT_KEY",
+    "LEROBOT_STATS",
+    "LEROBOT_INFO",
 ]

@@ -15,6 +15,8 @@ class Row(Mapping[str, Any]):
     - Use `update(...)`/`drop(...)`/`pop(...)` to produce modified rows (no in-place mutation).
     """
 
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
     def to_dict(self) -> dict[str, Any]:
         return dict(self.items())
 
@@ -81,6 +83,10 @@ class _OverlayRow(Row):
     base: Row
     patch: Mapping[str, Any]
     deleted: frozenset[str]
+
+    @property
+    def metadata(self) -> Mapping[str, Any]:
+        return self.base.metadata
 
     def __getitem__(self, key: str) -> Any:
         if key in self.deleted:

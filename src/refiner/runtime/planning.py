@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 import inspect
 import textwrap
 from types import CodeType
@@ -242,11 +243,66 @@ def _serialize_args(args: dict[str, Any] | None) -> dict[str, Any] | None:
     return serialized
 
 
-def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
-    """Compile a transport-neutral plan description for a pipeline."""
+@dataclass(frozen=True, slots=True)
+class ExecutionStageSpec:
+    name: str
+    pipeline: "RefinerPipeline"
+    num_workers: int | None = None
+
+
+def execution_stages_for_pipeline(
+    pipeline: "RefinerPipeline",
+) -> tuple[ExecutionStageSpec, ...]:
+    from refiner.pipeline import RefinerPipeline
+    from refiner.sinks import LeRobotReduceSinkStep, LeRobotWriterSinkStep
+    from refiner.sources import TaskSource
+
+    writer_indices = [
+        idx
+        for idx, step in enumerate(pipeline.pipeline_steps)
+        if isinstance(step, LeRobotWriterSinkStep)
+    ]
+    if not writer_indices:
+        return (ExecutionStageSpec(name="stage_0", pipeline=pipeline),)
+    if len(writer_indices) > 1:
+        raise ValueError("Multiple write_lerobot sinks in one pipeline are not supported")
+
+    writer_idx = writer_indices[0]
+    if writer_idx != len(pipeline.pipeline_steps) - 1:
+        raise ValueError("write_lerobot must be the terminal step in the pipeline")
+
+    sink = pipeline.pipeline_steps[writer_idx]
+    if not isinstance(sink, LeRobotWriterSinkStep):
+        raise TypeError("Expected LeRobotWriterSinkStep as terminal sink")
+
+    reducer_stage = RefinerPipeline(
+        source=TaskSource(num_tasks=1),
+        pipeline_steps=(
+            LeRobotReduceSinkStep(
+                config=sink.config,
+                index=1,
+            ),
+        ),
+        max_vectorized_block_bytes=pipeline.max_vectorized_block_bytes,
+    )
+    return (
+        ExecutionStageSpec(name="write_lerobot_stage_1", pipeline=pipeline),
+        ExecutionStageSpec(
+            name="write_lerobot_stage_2",
+            pipeline=reducer_stage,
+            num_workers=1,
+        ),
+    )
+
+
+def _compile_stage_plan(
+    *,
+    pipeline: "RefinerPipeline",
+    stage_name: str,
+    stage_index: int,
+) -> dict[str, Any]:
     source_step_name = str(getattr(pipeline.source, "name", "source"))
     source_args: dict[str, Any] = dict(pipeline.source.describe())
-
     steps: list[dict[str, Any]] = []
     used_names: dict[str, int] = {}
 
@@ -292,14 +348,27 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
         )
 
     return {
-        "stages": [
-            {
-                "name": "stage_0",
-                "index": 0,
-                "steps": steps,
-            }
-        ]
+        "name": stage_name,
+        "index": stage_index,
+        "steps": steps,
     }
 
 
-__all__ = ["compile_pipeline_plan"]
+def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
+    """Compile a transport-neutral plan description for a pipeline."""
+    stages = [
+        _compile_stage_plan(
+            pipeline=stage.pipeline,
+            stage_name=stage.name,
+            stage_index=idx,
+        )
+        for idx, stage in enumerate(execution_stages_for_pipeline(pipeline))
+    ]
+    return {"stages": stages}
+
+
+__all__ = [
+    "ExecutionStageSpec",
+    "execution_stages_for_pipeline",
+    "compile_pipeline_plan",
+]

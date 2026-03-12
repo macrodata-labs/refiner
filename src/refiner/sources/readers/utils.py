@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 from typing import Optional
 
-from fsspec import AbstractFileSystem
+from fsspec.spec import AbstractFileSystem
 
 DEFAULT_TARGET_SHARD_BYTES = 128 * 1024 * 1024
 MIN_TARGET_SHARD_BYTES = 16 * 1024 * 1024
