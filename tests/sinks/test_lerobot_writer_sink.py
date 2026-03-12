@@ -360,6 +360,42 @@ def test_lerobot_writer_sink_raises_when_video_to_timestamp_is_missing(tmp_path:
         sink.write_block([row])
 
 
+def test_lerobot_writer_allows_disabling_video_stats(tmp_path: Path) -> None:
+    src_video = tmp_path / "source" / "episode.mp4"
+    _write_video(src_video)
+
+    out_root = tmp_path / "out"
+    pipeline = mdr.from_items(
+        [
+            _episode(
+                episode_index=0,
+                task="pick",
+                video_path=src_video,
+                from_ts=0.0,
+                to_ts=0.3,
+                values=[0.0, 2.0],
+            )
+        ],
+        shard_size_rows=1,
+    ).write_lerobot(
+        str(out_root),
+        overwrite=True,
+        enable_video_stats=False,
+        video_stats_sample_stride=2,
+        video_stats_quantile_bins=64,
+    )
+
+    stats = pipeline.launch_local(
+        name="lerobot-fast-stats",
+        num_workers=1,
+    )
+    assert stats.failed == 0
+
+    with (out_root / "meta" / "stats.json").open("r", encoding="utf-8") as fh:
+        stats_json = json.load(fh)
+    assert "observation.state" in stats_json
+
+
 def test_lerobot_writer_config_defaults_video_encoder_threads_to_cpu_affinity(
     tmp_path: Path,
 ) -> None:

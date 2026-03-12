@@ -32,6 +32,9 @@ class LeRobotWriterConfig:
     video_pix_fmt: str = "yuv420p"
     video_encoder_threads: int | None = None
     video_encoder_options: Mapping[str, str] | None = None
+    enable_video_stats: bool = True
+    video_stats_sample_stride: int = 1
+    video_stats_quantile_bins: int = 500
 
     def __post_init__(self) -> None:
         if self.chunk_size <= 0:
@@ -48,11 +51,18 @@ class LeRobotWriterConfig:
             object.__setattr__(self, "video_encoder_threads", _cpu_thread_count())
         if self.video_encoder_threads is not None and self.video_encoder_threads <= 0:
             raise ValueError("video_encoder_threads must be > 0 when provided")
+        if self.video_stats_sample_stride <= 0:
+            raise ValueError("video_stats_sample_stride must be > 0")
+        if self.video_stats_quantile_bins <= 1:
+            raise ValueError("video_stats_quantile_bins must be > 1")
 
 
 def _cpu_thread_count() -> int:
     try:
-        return max(1, len(os.sched_getaffinity(0)))
+        sched_getaffinity = getattr(os, "sched_getaffinity", None)
+        if sched_getaffinity is None:
+            raise AttributeError
+        return max(1, len(sched_getaffinity(0)))
     except (AttributeError, OSError):
         return max(1, os.cpu_count() or 1)
 
