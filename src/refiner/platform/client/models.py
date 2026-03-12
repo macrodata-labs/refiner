@@ -111,6 +111,15 @@ class ShardClaimResponse(msgspec.Struct, frozen=True):
     shard: ShardDescriptor | None
 
 
+class FinalizedShardWorker(msgspec.Struct, frozen=True):
+    shard_id: str
+    worker_id: str
+
+
+class FinalizedShardWorkersResponse(msgspec.Struct, frozen=True):
+    shards: list[FinalizedShardWorker]
+
+
 class OkResponse(msgspec.Struct, frozen=True):
     ok: bool = True
 

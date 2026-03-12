@@ -10,6 +10,7 @@ from .models import (
     CloudRunCreateResponse,
     CreateJobEnvelope,
     CreateJobResponse,
+    FinalizedShardWorkersResponse,
     OkResponse,
     RunHandle,
     ShardClaimResponse,
@@ -213,6 +214,17 @@ class MacrodataClient:
             json_payload={"worker_id": worker_id, "shard_ids": shard_ids},
         )
         return parse_json_response(response_data, OkResponse)
+
+    def shard_finalized_workers(
+        self, *, job_id: str, stage_id: str
+    ) -> FinalizedShardWorkersResponse:
+        response_data = request_json(
+            method="GET",
+            path=f"/api/jobs/{job_id}/stages/{stage_id}/shards/finalized-workers",
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
+        return parse_json_response(response_data, FinalizedShardWorkersResponse)
 
     def shard_finish(
         self,
