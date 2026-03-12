@@ -108,6 +108,16 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
     return step.__class__.__name__, step.__class__.__name__.lower(), None
 
 
+def _sink_name_type(sink: Any) -> tuple[str, str, dict[str, Any] | None]:
+    from refiner.sinks import LeRobotMetaReduceSink, LeRobotWriterSink
+
+    if isinstance(sink, LeRobotWriterSink):
+        return ("write_lerobot", "sink", {"root": sink.config.root})
+    if isinstance(sink, LeRobotMetaReduceSink):
+        return ("reduce_lerobot_meta", "sink", {"root": sink.config.root})
+    return sink.__class__.__name__, "sink", None
+
+
 def _parse_lambda_segments(source: str) -> list[str]:
     attempts = [source]
     if source.startswith("."):
@@ -254,36 +264,20 @@ def execution_stages_for_pipeline(
     pipeline: "RefinerPipeline",
 ) -> tuple[ExecutionStageSpec, ...]:
     from refiner.pipeline import RefinerPipeline
-    from refiner.sinks import LeRobotReduceSinkStep, LeRobotWriterSinkStep
+    from refiner.sinks import LeRobotMetaReduceSink, LeRobotWriterSink
     from refiner.sources import TaskSource
 
-    writer_indices = [
-        idx
-        for idx, step in enumerate(pipeline.pipeline_steps)
-        if isinstance(step, LeRobotWriterSinkStep)
-    ]
-    if not writer_indices:
+    if pipeline.sink is None:
         return (ExecutionStageSpec(name="stage_0", pipeline=pipeline),)
-    if len(writer_indices) > 1:
-        raise ValueError("Multiple write_lerobot sinks in one pipeline are not supported")
-
-    writer_idx = writer_indices[0]
-    if writer_idx != len(pipeline.pipeline_steps) - 1:
-        raise ValueError("write_lerobot must be the terminal step in the pipeline")
-
-    sink = pipeline.pipeline_steps[writer_idx]
-    if not isinstance(sink, LeRobotWriterSinkStep):
-        raise TypeError("Expected LeRobotWriterSinkStep as terminal sink")
+    sink = pipeline.sink
+    if not isinstance(sink, LeRobotWriterSink):
+        return (ExecutionStageSpec(name="stage_0", pipeline=pipeline),)
 
     reducer_stage = RefinerPipeline(
         source=TaskSource(num_tasks=1),
-        pipeline_steps=(
-            LeRobotReduceSinkStep(
-                config=sink.config,
-                index=1,
-            ),
-        ),
+        pipeline_steps=(),
         max_vectorized_block_bytes=pipeline.max_vectorized_block_bytes,
+        sink=LeRobotMetaReduceSink(config=sink.config),
     )
     return (
         ExecutionStageSpec(name="write_lerobot_stage_1", pipeline=pipeline),
@@ -343,6 +337,17 @@ def _compile_stage_plan(
                 name=unique_name,
                 step_type=step_type,
                 index=step.index,
+                args=_serialize_args(args),
+            )
+        )
+    if pipeline.sink is not None:
+        base_name, step_type, args = _sink_name_type(pipeline.sink)
+        unique_name = _unique_name(base_name)
+        steps.append(
+            _step_payload(
+                name=unique_name,
+                step_type=step_type,
+                index=len(steps),
                 args=_serialize_args(args),
             )
         )

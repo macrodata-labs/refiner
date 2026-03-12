@@ -162,15 +162,16 @@ class LeRobotEpisodeReader(ParquetReader):
         file_idx_raw = episode.get(f"videos/{video_key}/file_index")
         if chunk_raw is None or file_idx_raw is None:
             return None
-        chunk = _as_int(chunk_raw)
+        chunk = _as_chunk_id(chunk_raw)
         file_idx = _as_int(file_idx_raw)
         if chunk is None or file_idx is None:
             return None
 
-        rel = str(
-            self._video_path_template.format(
-                video_key=video_key, chunk_index=chunk, file_index=file_idx
-            )
+        rel = _format_chunked_path(
+            self._video_path_template,
+            video_key=video_key,
+            chunk=chunk,
+            file_idx=file_idx,
         )
         uri = posixpath.join(self.root, rel)
         first = frames[0] if frames else {}
@@ -212,7 +213,7 @@ class LeRobotEpisodeReader(ParquetReader):
         file_idx_raw = episode.get("data/file_index")
         if chunk_raw is None or file_idx_raw is None:
             return []
-        chunk = _as_int(chunk_raw)
+        chunk = _as_chunk_id(chunk_raw)
         file_idx = _as_int(file_idx_raw)
         if chunk is None or file_idx is None:
             return []
@@ -231,8 +232,11 @@ class LeRobotEpisodeReader(ParquetReader):
                 f"dataset_from_index={from_idx}, dataset_to_index={to_idx}"
             )
 
-        rel = str(
-            self._data_path_template.format(chunk_index=chunk, file_index=file_idx)
+        rel = _format_chunked_path(
+            self._data_path_template,
+            video_key=None,
+            chunk=chunk,
+            file_idx=file_idx,
         )
         data_file = DataFile.resolve(
             posixpath.join(self.root, rel),
@@ -243,6 +247,13 @@ class LeRobotEpisodeReader(ParquetReader):
         with get_media_cache(_DATA_FILE_CACHE_NAME).cached(
             file=data_file,
         ) as local_path, open(local_path, "rb") as f:
+            file_num_rows = int(pq.ParquetFile(local_path).metadata.num_rows)
+            if from_idx < 0 or to_idx > file_num_rows:
+                raise ValueError(
+                    "LeRobot dataset bounds are out of range for data parquet file: "
+                    f"dataset_from_index={from_idx}, "
+                    f"dataset_to_index={to_idx}, file_num_rows={file_num_rows}"
+                )
             table = pq.read_table(f, filters=(
                 (pc.greater_equal(pc.field("index"), from_idx)) & (pc.less(pc.field("index"), to_idx))
             ))
@@ -349,6 +360,39 @@ def _as_float(value: Any) -> float | None:
         float_value = float(stripped)
         return float_value if math.isfinite(float_value) else None
     return None
+
+
+def _as_chunk_id(value: Any) -> str | int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    numeric = _as_int(value)
+    if numeric is not None:
+        return numeric
+    if isinstance(value, str):
+        text = value.strip()
+        return text if text else None
+    return str(value)
+
+
+def _format_chunked_path(
+    template: str,
+    *,
+    video_key: str | None,
+    chunk: str | int,
+    file_idx: int,
+) -> str:
+    kwargs = {
+        "video_key": video_key if video_key is not None else "",
+        "chunk": chunk,
+        "chunk_key": chunk,
+        "chunk_index": chunk,
+        "file": file_idx,
+        "file_index": file_idx,
+    }
+    try:
+        return str(template.format(**kwargs))
+    except Exception as e:
+        raise ValueError(f"Invalid LeRobot path template {template!r}: {e}") from e
 
 
 __all__ = [

@@ -156,3 +156,4 @@ def test_compile_pipeline_plan_includes_lerobot_stages() -> None:
     ]
     assert len(stages[0]["steps"]) == 2
     assert stages[1]["steps"][0]["name"] == "task"
+    assert stages[1]["steps"][1]["name"] == "reduce_lerobot_meta"

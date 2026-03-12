@@ -19,7 +19,7 @@ class Video:
     timestamp_s: float | None = None
     from_timestamp_s: float | None = None
     to_timestamp_s: float | None = None
-    chunk_index: int | None = None
+    chunk_index: int | str | None = None
     file_index: int | None = None
     fps: int | None = None
 
@@ -52,7 +52,7 @@ class DecodedVideo:
     timestamp_s: float | None = None
     from_timestamp_s: float | None = None
     to_timestamp_s: float | None = None
-    chunk_index: int | None = None
+    chunk_index: int | str | None = None
     file_index: int | None = None
     fps: int | None = None
     width: int | None = None

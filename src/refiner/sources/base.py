@@ -9,9 +9,10 @@ import pyarrow as pa
 from refiner.sources.row import Row
 from refiner.runtime.types import SourceUnit
 from refiner.ledger.shard import Shard
+from refiner.ledger.shard_tracking import SHARD_ID_COLUMN
 from refiner.metrics import log_throughput
 
-_INTERNAL_SHARD_ID_KEY = "__shard_id"
+_INTERNAL_SHARD_ID_KEY = SHARD_ID_COLUMN
 
 
 class BaseSource(ABC):
@@ -58,7 +59,7 @@ def _unit_num_rows(unit: SourceUnit) -> int:
 
 def _with_shard_id(unit: SourceUnit, shard_id: str) -> SourceUnit:
     if isinstance(unit, Row):
-        return unit.update(**{_INTERNAL_SHARD_ID_KEY: shard_id})
+        return unit.with_shard_id(shard_id)
 
     if isinstance(unit, (pa.RecordBatch, pa.Table)):
         if unit.num_rows == 0:

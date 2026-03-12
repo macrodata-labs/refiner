@@ -7,7 +7,7 @@ import os
 import shutil
 import tempfile
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,20 +18,21 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from refiner.io import DataFolder
+from refiner.ledger.shard_tracking import count_block_by_shard
 from refiner.media import DecodedVideo, Video
-from refiner.processors.step import SinkStep
+from refiner.runtime.execution.vectorized import iter_table_rows
+from refiner.runtime.sinks.base import BaseSink, Block, ShardCounts, split_block_by_shard
 from refiner.sources.readers.lerobot import LEROBOT_INFO
-from refiner.sources.row import Row
+from refiner.sources.row import ArrowRowView
 
 _DEFAULT_CHUNK_SIZE = 1000
 _DEFAULT_DATA_FILE_SIZE_IN_MB = 100
 _DEFAULT_VIDEO_FILE_SIZE_IN_MB = 200
-_DEFAULT_DATA_PATH = "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet"
+_DEFAULT_DATA_PATH = "data/chunk-{chunk_key}/file-{file_index:03d}.parquet"
 _DEFAULT_VIDEO_PATH = (
-    "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4"
+    "videos/{video_key}/chunk-{chunk_key}/file-{file_index:03d}.mp4"
 )
 _DEFAULT_STATS_QUANTILES = (0.01, 0.10, 0.50, 0.90, 0.99)
-_WORKER_CHUNK_STRIDE = 1_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,65 +54,58 @@ class LeRobotWriterConfig:
             raise ValueError("video_files_size_in_mb must be > 0")
 
 
-@dataclass(slots=True)
-class LeRobotWriterSinkStep(SinkStep):
+class LeRobotWriterSink(BaseSink):
     """Stage 1 sink: write chunked data/videos/meta/chunk-* artifacts."""
 
-    config: LeRobotWriterConfig
-    index: int
-    op_name: str | None = "write_lerobot"
-    passthrough: bool = False
-    _runtime: _LeRobotWriterRuntime | None = field(
-        default=None, init=False, repr=False, compare=False
-    )
-    _is_finalized: bool = field(default=False, init=False, repr=False, compare=False)
+    def __init__(self, config: LeRobotWriterConfig):
+        self.config = config
+        self._writers: dict[str, _LeRobotShardWriter] = {}
 
-    def launch_prepare(self) -> None:
-        _prepare_output_root(self.config)
+    def write_block(self, block: Block) -> ShardCounts:
+        blocks_by_shard, counts = split_block_by_shard(block)
+        rank_raw = os.environ.get("REFINER_WORKER_RANK")
+        rank = _as_int(rank_raw)
+        worker_id = "0" if rank is None or rank < 0 else str(rank)
+        for shard_id, shard_block in blocks_by_shard.items():
+            if isinstance(shard_block, pa.Table):
+                rows = iter_table_rows(shard_block)
+            else:
+                rows = shard_block
+            key = f"{worker_id}-{shard_id}"
+            writer = self._writers.get(shard_id)
+            if writer is None:
+                writer = _LeRobotShardWriter(config=self.config, chunk_key=key)
+                self._writers[shard_id] = writer
+            writer.consume_rows(rows)
+        return counts
 
-    def start_run(self) -> None:
-        self._runtime = _LeRobotWriterRuntime(self.config)
-        self._is_finalized = False
-
-    def consume_row(self, row: Row) -> None:
-        runtime = self._runtime
-        if runtime is None:
-            raise RuntimeError("LeRobot writer sink is not initialized")
-        runtime.consume_row(row)
-
-    def finalize(self) -> None:
-        if self._is_finalized:
+    def on_shard_complete(self, shard_id: str) -> None:
+        writer = self._writers.pop(shard_id, None)
+        if writer is None:
             return
-        self._is_finalized = True
-        runtime = self._runtime
-        if runtime is None:
-            return
-        runtime.finalize()
+        writer.finalize()
+
+    def close(self) -> None:
+        for writer in self._writers.values():
+            writer.finalize()
+        self._writers.clear()
 
 
-@dataclass(slots=True)
-class LeRobotReduceSinkStep(SinkStep):
+class LeRobotMetaReduceSink(BaseSink):
     """Stage 2 sink: reduce chunked metadata into final /meta and cleanup chunks."""
 
-    config: LeRobotWriterConfig
-    index: int
-    op_name: str | None = "reduce_lerobot_meta"
-    passthrough: bool = False
-    _reduced: bool = field(default=False, init=False, repr=False, compare=False)
-
-    def start_run(self) -> None:
+    def __init__(self, config: LeRobotWriterConfig):
+        self.config = config
         self._reduced = False
 
-    def consume_row(self, row: Row) -> None:
-        if self._reduced:
-            return
-        task_rank = _as_int(row.get("task_rank"))
-        if task_rank is not None and task_rank != 0:
-            return
-        _LeRobotMetaReducer(self.config).reduce()
-        self._reduced = True
+    def write_block(self, block: Block) -> ShardCounts:
+        counts = count_block_by_shard(block)
+        if not self._reduced:
+            _LeRobotMetaReducer(self.config).reduce()
+            self._reduced = True
+        return counts
 
-    def finalize(self) -> None:
+    def close(self) -> None:
         if self._reduced:
             return
         _LeRobotMetaReducer(self.config).reduce()
@@ -120,7 +114,7 @@ class LeRobotReduceSinkStep(SinkStep):
 
 @dataclass(slots=True)
 class _VideoWriterState:
-    chunk_idx: int
+    chunk_idx: str
     file_idx: int
     temp_path: str
     container: Any
@@ -132,34 +126,31 @@ class _VideoWriterState:
 
 
 @dataclass(slots=True)
-class _LeRobotWriterRuntime:
+class _LeRobotShardWriter:
     config: LeRobotWriterConfig
+    chunk_key: str
     folder: DataFolder = field(init=False)
-    _worker_chunk_base: int = field(init=False)
 
-    _episode_rows: list[dict[str, Any]] = field(default_factory=list, init=False)
-    _stats_records: list[dict[str, Any]] = field(default_factory=list, init=False)
     _tasks: set[str] = field(default_factory=set, init=False)
+    _episodes_writer: pq.ParquetWriter | None = field(default=None, init=False)
+    _episodes_writer_file: Any | None = field(default=None, init=False)
+    _episodes_schema: pa.Schema | None = field(default=None, init=False)
+    _stats_file: Any | None = field(default=None, init=False)
 
     _fps: int | None = field(default=None, init=False)
     _robot_type: str | None = field(default=None, init=False)
     _features: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
 
     _total_episodes: int = field(default=0, init=False)
-    _total_frames: int = field(default=0, init=False)
-
     _global_frame_index: int = field(default=0, init=False)
 
-    _data_chunk: int = field(default=0, init=False)
+    _data_chunk_key: str = field(init=False)
     _data_file_index: int = field(default=0, init=False)
     _data_estimated_bytes: int = field(default=0, init=False)
     _data_writer: pq.ParquetWriter | None = field(default=None, init=False)
     _data_writer_file: Any | None = field(default=None, init=False)
     _data_schema: pa.Schema | None = field(default=None, init=False)
 
-    _video_next_chunk: dict[str, int] = field(
-        default_factory=lambda: defaultdict(int), init=False
-    )
     _video_next_file_index: dict[str, int] = field(
         default_factory=lambda: defaultdict(int), init=False
     )
@@ -173,9 +164,11 @@ class _LeRobotWriterRuntime:
             fs=self.config.fs,
             storage_options=self.config.storage_options,
         )
-        self._worker_chunk_base = _worker_chunk_base()
-        self._data_chunk = self._worker_chunk_base
-        self._video_next_chunk = defaultdict(lambda: self._worker_chunk_base)
+        self._data_chunk_key = self.chunk_key
+
+    def consume_rows(self, rows: Iterable[Mapping[str, Any]]) -> None:
+        for row in rows:
+            self.consume_row(row)
 
     @property
     def _data_bytes_limit(self) -> int:
@@ -185,7 +178,7 @@ class _LeRobotWriterRuntime:
     def _video_bytes_limit(self) -> int:
         return int(self.config.video_files_size_in_mb) * 1024 * 1024
 
-    def consume_row(self, row: Row) -> None:
+    def consume_row(self, row: Mapping[str, Any]) -> None:
         episode_index = _as_int(row.get("episode_index"))
         if episode_index is None:
             raise ValueError("LeRobot writer requires episode_index on each row")
@@ -194,8 +187,18 @@ class _LeRobotWriterRuntime:
         if not isinstance(frames_raw, list):
             raise ValueError("LeRobot writer requires frames as a list on each row")
 
-        frames = [_row_to_dict(item) for item in frames_raw]
-        tasks = _extract_tasks(row)
+        if not all(isinstance(item, Mapping) for item in frames_raw):
+            raise ValueError("LeRobot writer requires each frame to be a mapping")
+        frames: list[Mapping[str, Any]] = list(frames_raw)
+        tasks_raw = row.get("tasks")
+        tasks: list[str] = []
+        if isinstance(tasks_raw, list):
+            for value in tasks_raw:
+                if isinstance(value, str) and value:
+                    tasks.append(value)
+        task_raw = row.get("task")
+        if isinstance(task_raw, str) and task_raw and task_raw not in tasks:
+            tasks.append(task_raw)
         self._tasks.update(tasks)
 
         self._initialize_info_from_row(row)
@@ -205,8 +208,8 @@ class _LeRobotWriterRuntime:
             tasks=tasks,
             frames=frames,
         )
-        video_meta = self._write_episode_videos(row)
-        episode_stats = _compute_episode_stats(row=row, frames=frames)
+        video_meta, video_stats = self._write_episode_videos(row)
+        episode_stats = _compute_episode_stats(frames=frames, video_stats=video_stats)
 
         episode_row: dict[str, Any] = {
             "episode_index": episode_index,
@@ -216,7 +219,7 @@ class _LeRobotWriterRuntime:
             "data/file_index": data_meta["file_index"],
             "dataset_from_index": data_meta["dataset_from_index"],
             "dataset_to_index": data_meta["dataset_to_index"],
-            "meta/episodes/chunk_index": self._worker_chunk_base,
+            "meta/episodes/chunk_index": self.chunk_key,
             "meta/episodes/file_index": 0,
         }
         if tasks:
@@ -244,30 +247,24 @@ class _LeRobotWriterRuntime:
         episode_row.update(video_meta)
         episode_row.update(_flatten_stats_for_episode(episode_stats))
 
-        self._episode_rows.append(episode_row)
-        self._stats_records.append(
+        self._append_episode_row(episode_row)
+        self._append_stats_record(
             {
                 "episode_index": episode_index,
                 "stats": _serialize_stats(episode_stats),
             }
         )
         self._total_episodes += 1
-        self._total_frames += len(frames)
 
     def finalize(self) -> None:
         self._flush_video_writers()
         self._close_data_writer()
+        self._close_episodes_writer()
+        self._close_stats_file()
 
-        chunk_dir = f"meta/chunk-{self._worker_chunk_base:06d}"
-        episodes_rel = f"{chunk_dir}/episodes/file-000.parquet"
+        chunk_dir = f"meta/chunk-{self.chunk_key}"
         tasks_rel = f"{chunk_dir}/tasks.jsonl"
-        stats_rel = f"{chunk_dir}/stats.jsonl"
         info_rel = f"{chunk_dir}/info.jsonl"
-
-        if self._episode_rows:
-            episodes_table = pa.Table.from_pylist(self._episode_rows)
-            with self.folder.open(episodes_rel, mode="wb") as out:
-                pq.write_table(episodes_table, out)
 
         task_lines = [
             json.dumps({"task": t}, sort_keys=True) for t in sorted(self._tasks)
@@ -276,12 +273,6 @@ class _LeRobotWriterRuntime:
             with self.folder.open(tasks_rel, mode="wt", encoding="utf-8") as out:
                 out.write("\n".join(task_lines))
                 out.write("\n")
-
-        if self._stats_records:
-            with self.folder.open(stats_rel, mode="wt", encoding="utf-8") as out:
-                for record in self._stats_records:
-                    out.write(json.dumps(record, sort_keys=True))
-                    out.write("\n")
 
         info_record = {
             "fps": self._fps,
@@ -297,11 +288,50 @@ class _LeRobotWriterRuntime:
                 else None
             ),
             "total_episodes": self._total_episodes,
-            "total_frames": self._total_frames,
+            "total_frames": self._global_frame_index,
         }
         with self.folder.open(info_rel, mode="wt", encoding="utf-8") as out:
             out.write(json.dumps(info_record, sort_keys=True))
             out.write("\n")
+
+    def _append_episode_row(self, row: dict[str, Any]) -> None:
+        table = pa.Table.from_pylist([row])
+        if self._episodes_writer is not None:
+            if self._episodes_schema != table.schema:
+                raise ValueError(
+                    "LeRobot writer requires a stable episode schema across rows"
+                )
+            self._episodes_writer.write_table(table)
+            return
+        chunk_dir = f"meta/chunk-{self.chunk_key}"
+        episodes_rel = f"{chunk_dir}/episodes/file-000.parquet"
+        self._episodes_schema = table.schema
+        self._episodes_writer_file = self.folder.open(episodes_rel, mode="wb")
+        self._episodes_writer = pq.ParquetWriter(
+            self._episodes_writer_file, schema=table.schema
+        )
+        self._episodes_writer.write_table(table)
+
+    def _append_stats_record(self, record: dict[str, Any]) -> None:
+        if self._stats_file is None:
+            chunk_dir = f"meta/chunk-{self.chunk_key}"
+            stats_rel = f"{chunk_dir}/stats.jsonl"
+            self._stats_file = self.folder.open(stats_rel, mode="wt", encoding="utf-8")
+        self._stats_file.write(json.dumps(record, sort_keys=True))
+        self._stats_file.write("\n")
+
+    def _close_episodes_writer(self) -> None:
+        if self._episodes_writer is not None:
+            self._episodes_writer.close()
+            self._episodes_writer = None
+        if self._episodes_writer_file is not None:
+            self._episodes_writer_file.close()
+            self._episodes_writer_file = None
+
+    def _close_stats_file(self) -> None:
+        if self._stats_file is not None:
+            self._stats_file.close()
+            self._stats_file = None
 
     def _initialize_info_from_row(self, row: Mapping[str, Any]) -> None:
         if self._features:
@@ -326,12 +356,16 @@ class _LeRobotWriterRuntime:
                     "shape": [3, 1, 1],
                     "names": None,
                 }
-            elif _is_number(value):
+            elif (not isinstance(value, bool)) and isinstance(
+                value, (int, float, np.number)
+            ):
                 self._features[key] = {"dtype": "float64", "shape": [1], "names": None}
 
         frames_raw = row.get("frames")
         if isinstance(frames_raw, list) and frames_raw:
-            sample = _row_to_dict(frames_raw[0])
+            sample = frames_raw[0]
+            if not isinstance(sample, Mapping):
+                raise ValueError("LeRobot writer requires each frame to be a mapping")
             for key, value in sample.items():
                 if key in {"index", "episode_index", "task_index"}:
                     self._features.setdefault(
@@ -339,12 +373,27 @@ class _LeRobotWriterRuntime:
                         {"dtype": "int64", "shape": [1], "names": None},
                     )
                     continue
-                dtype = _dtype_for_value(value)
+                if isinstance(value, bool):
+                    dtype = "bool"
+                elif isinstance(value, int):
+                    dtype = "int64"
+                elif isinstance(value, float):
+                    dtype = "float64"
+                else:
+                    arr = np.asarray(value)
+                    if arr.dtype.kind in {"i", "u"}:
+                        dtype = "int64"
+                    elif arr.dtype.kind == "f":
+                        dtype = "float64"
+                    else:
+                        dtype = None
                 if dtype is None:
                     continue
+                arr = np.asarray(value)
+                shape = [1] if arr.ndim == 0 else [int(x) for x in arr.shape]
                 self._features.setdefault(
                     key,
-                    {"dtype": dtype, "shape": _shape_for_value(value), "names": None},
+                    {"dtype": dtype, "shape": shape, "names": None},
                 )
 
         self._features.setdefault(
@@ -368,10 +417,10 @@ class _LeRobotWriterRuntime:
         *,
         episode_index: int,
         tasks: list[str],
-        frames: list[dict[str, Any]],
-    ) -> dict[str, int]:
+        frames: list[Mapping[str, Any]],
+    ) -> dict[str, Any]:
         start_index = self._global_frame_index
-        current_chunk = self._data_chunk
+        current_chunk = self._data_chunk_key
         current_file = self._data_file_index
 
         if not frames:
@@ -382,34 +431,35 @@ class _LeRobotWriterRuntime:
                 "dataset_to_index": start_index,
             }
 
-        frame_rows: list[dict[str, Any]] = []
         task_to_index = {task: idx for idx, task in enumerate(sorted(self._tasks))}
         default_task_idx = task_to_index[tasks[0]] if tasks else None
-
-        for local_idx, frame in enumerate(frames):
-            out = dict(frame)
-            out["episode_index"] = episode_index
-            out["index"] = start_index + local_idx
-            if "frame_index" not in out:
-                out["frame_index"] = local_idx
-            if "task_index" not in out and default_task_idx is not None:
-                out["task_index"] = default_task_idx
-            frame_rows.append(out)
-
-        table = pa.Table.from_pylist(frame_rows)
+        table = _arrow_frame_table(
+            frames=frames,
+            episode_index=episode_index,
+            start_index=start_index,
+            default_task_idx=default_task_idx,
+        )
+        if table is None:
+            frame_rows: list[dict[str, Any]] = []
+            for local_idx, frame in enumerate(frames):
+                out = dict(frame)
+                out["episode_index"] = episode_index
+                out["index"] = start_index + local_idx
+                if "frame_index" not in out:
+                    out["frame_index"] = local_idx
+                if "task_index" not in out and default_task_idx is not None:
+                    out["task_index"] = default_task_idx
+                frame_rows.append(out)
+            table = pa.Table.from_pylist(frame_rows)
         estimated_bytes = max(1, int(table.nbytes))
         if (
             self._data_writer is not None
             and self._data_estimated_bytes + estimated_bytes >= self._data_bytes_limit
         ):
             self._close_data_writer()
-            self._data_chunk, self._data_file_index = _update_chunk_file_indices(
-                self._data_chunk,
-                self._data_file_index,
-                self.config.chunk_size,
-            )
+            self._data_file_index += 1
             self._data_estimated_bytes = 0
-            current_chunk = self._data_chunk
+            current_chunk = self._data_chunk_key
             current_file = self._data_file_index
 
         self._ensure_data_writer(table.schema)
@@ -418,7 +468,7 @@ class _LeRobotWriterRuntime:
         self._data_writer.write_table(table)
         self._data_estimated_bytes += estimated_bytes
 
-        self._global_frame_index += len(frame_rows)
+        self._global_frame_index += int(table.num_rows)
         return {
             "chunk_index": current_chunk,
             "file_index": current_file,
@@ -439,7 +489,7 @@ class _LeRobotWriterRuntime:
 
         self._data_schema = schema
         rel = _DEFAULT_DATA_PATH.format(
-            chunk_index=self._data_chunk,
+            chunk_key=self._data_chunk_key,
             file_index=self._data_file_index,
         )
         self._data_writer_file = self.folder.open(rel, mode="wb")
@@ -453,8 +503,11 @@ class _LeRobotWriterRuntime:
             self._data_writer_file.close()
             self._data_writer_file = None
 
-    def _write_episode_videos(self, row: Mapping[str, Any]) -> dict[str, Any]:
+    def _write_episode_videos(
+        self, row: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, dict[str, np.ndarray]]]:
         out: dict[str, Any] = {}
+        out_stats: dict[str, dict[str, np.ndarray]] = {}
         for key, value in row.items():
             if not isinstance(value, Video):
                 continue
@@ -473,7 +526,7 @@ class _LeRobotWriterRuntime:
             if state is None:
                 state = self._open_video_writer(
                     video_key=key,
-                    chunk_idx=self._video_next_chunk[key],
+                    chunk_idx=self.chunk_key,
                     file_idx=self._video_next_file_index[key],
                     fps=fps,
                 )
@@ -491,18 +544,20 @@ class _LeRobotWriterRuntime:
                 self._flush_video_writer(key)
                 state = self._open_video_writer(
                     video_key=key,
-                    chunk_idx=self._video_next_chunk[key],
+                    chunk_idx=self.chunk_key,
                     file_idx=self._video_next_file_index[key],
                     fps=fps,
                 )
 
             from_ts = float(state.duration_s)
-            clip_duration_s = self._append_video_segment(
+            clip_duration_s, clip_stats = self._append_video_segment(
                 state=state,
                 video=value,
                 clip_from=clip_from,
                 clip_to=clip_to,
             )
+            if clip_stats is not None:
+                out_stats[key] = clip_stats
             to_ts = float(from_ts + clip_duration_s)
             state.duration_s = to_ts
             try:
@@ -518,13 +573,13 @@ class _LeRobotWriterRuntime:
             out[f"videos/{key}/from_timestamp"] = from_ts
             out[f"videos/{key}/to_timestamp"] = to_ts
 
-        return out
+        return out, out_stats
 
     def _open_video_writer(
         self,
         *,
         video_key: str,
-        chunk_idx: int,
+        chunk_idx: str,
         file_idx: int,
         fps: int,
     ) -> _VideoWriterState:
@@ -564,7 +619,7 @@ class _LeRobotWriterRuntime:
             state.container.close()
             rel = _DEFAULT_VIDEO_PATH.format(
                 video_key=video_key,
-                chunk_index=state.chunk_idx,
+                chunk_key=state.chunk_idx,
                 file_index=state.file_idx,
             )
             with (
@@ -578,14 +633,7 @@ class _LeRobotWriterRuntime:
             except FileNotFoundError:
                 pass
 
-        (
-            self._video_next_chunk[video_key],
-            self._video_next_file_index[video_key],
-        ) = _update_chunk_file_indices(
-            state.chunk_idx,
-            state.file_idx,
-            self.config.chunk_size,
-        )
+        self._video_next_file_index[video_key] = state.file_idx + 1
 
     def _append_video_segment(
         self,
@@ -594,15 +642,15 @@ class _LeRobotWriterRuntime:
         video: Video,
         clip_from: float,
         clip_to: float | None,
-    ) -> float:
-        decoded = _decoded_video_payload(video)
-        if decoded is not None:
+    ) -> tuple[float, dict[str, np.ndarray] | None]:
+        if isinstance(video.media, DecodedVideo):
             return self._append_video_segment_from_frames(
                 state=state,
-                video=decoded,
+                video=video.media,
             )
         selected_frames = 0
         epsilon = 1e-6
+        tracker = _RunningQuantileStats(_DEFAULT_STATS_QUANTILES)
 
         with video.media.cached_path(suffix=".mp4") as local_path:
             with av.open(local_path) as input_container:
@@ -638,13 +686,22 @@ class _LeRobotWriterRuntime:
                         state.container.mux(packet)
                     state.frames_written += 1
                     selected_frames += 1
+                    rgb = frame.to_ndarray(format="rgb24")
+                    chw = np.transpose(rgb, (2, 0, 1))
+                    _update_video_stats_tracker(
+                        tracker=tracker,
+                        image_chw=_auto_downsample_height_width(chw),
+                    )
 
         if selected_frames <= 0:
             raise ValueError(
                 f"Video segment for {video.uri!r} contains no decodable frames in "
                 f"[{clip_from:.6f}, {clip_to if clip_to is not None else 'end'})."
             )
-        return selected_frames / float(state.fps)
+        return (
+            selected_frames / float(state.fps),
+            _video_stats_from_tracker(tracker),
+        )
 
     def _estimate_video_segment_size_bytes(
         self,
@@ -653,8 +710,8 @@ class _LeRobotWriterRuntime:
         clip_from: float,
         clip_to: float | None,
     ) -> int:
-        decoded = _decoded_video_payload(video)
-        if decoded is not None:
+        if isinstance(video.media, DecodedVideo):
+            decoded = video.media
             if decoded.frame_count <= 0:
                 return 0
             if decoded.width is not None and decoded.height is not None:
@@ -687,7 +744,7 @@ class _LeRobotWriterRuntime:
         *,
         state: _VideoWriterState,
         video: DecodedVideo,
-    ) -> float:
+    ) -> tuple[float, dict[str, np.ndarray] | None]:
         if video.frame_count <= 0:
             raise ValueError(
                 f"Decoded video segment for {video.uri!r} contains no decodable frames."
@@ -695,6 +752,7 @@ class _LeRobotWriterRuntime:
         frames_written = 0
         width = video.width
         height = video.height
+        tracker = _RunningQuantileStats(_DEFAULT_STATS_QUANTILES)
         for frame_data in video.frames:
             if state.stream is None:
                 if width is None or height is None:
@@ -727,15 +785,17 @@ class _LeRobotWriterRuntime:
                 state.container.mux(packet)
             state.frames_written += 1
             frames_written += 1
+            if isinstance(frame_data, np.ndarray) and frame_data.ndim == 3:
+                chw = np.transpose(frame_data, (2, 0, 1))
+                _update_video_stats_tracker(
+                    tracker=tracker,
+                    image_chw=_auto_downsample_height_width(chw),
+                )
 
-        return float(frames_written) / float(state.fps)
-
-
-def _decoded_video_payload(video: Video) -> DecodedVideo | None:
-    media = video.media
-    if isinstance(media, DecodedVideo):
-        return media
-    return None
+        return (
+            float(frames_written) / float(state.fps),
+            _video_stats_from_tracker(tracker),
+        )
 
 
 @dataclass(slots=True)
@@ -910,71 +970,67 @@ class _LeRobotMetaReducer:
         return matches
 
 
-def _prepare_output_root(config: LeRobotWriterConfig) -> None:
-    folder = DataFolder.resolve(
-        config.root,
-        fs=config.fs,
-        storage_options=config.storage_options,
+def _arrow_frame_table(
+    *,
+    frames: list[Mapping[str, Any]],
+    episode_index: int,
+    start_index: int,
+    default_task_idx: int | None,
+) -> pa.Table | None:
+    if not frames or not all(isinstance(frame, ArrowRowView) for frame in frames):
+        return None
+
+    first = frames[0]
+    names = tuple(name for name in first.names if name != "__shard_id")
+    index_by_name = first.index_by_name
+    columns = first.columns
+    row_indices = [frame.row_idx for frame in frames if isinstance(frame, ArrowRowView)]
+    if len(row_indices) != len(frames):
+        return None
+    if any(
+        not isinstance(frame, ArrowRowView)
+        or frame.names != first.names
+        or frame.columns != columns
+        for frame in frames
+    ):
+        return None
+
+    take_idx = pa.array(row_indices, type=pa.int64())
+    data = {
+        name: columns[index_by_name[name]].take(take_idx)  # type: ignore[call-arg]
+        for name in names
+    }
+    table = pa.table(data)
+    row_count = len(frames)
+
+    episode_col = pa.array([episode_index] * row_count, type=pa.int64())
+    if "episode_index" in table.schema.names:
+        idx = table.schema.get_field_index("episode_index")
+        table = table.set_column(idx, "episode_index", episode_col)
+    else:
+        table = table.append_column("episode_index", episode_col)
+
+    index_col = pa.array(
+        [start_index + i for i in range(row_count)],
+        type=pa.int64(),
     )
-    paths = [
-        folder.file("data").path,
-        folder.file("videos").path,
-        folder.file("meta").path,
-    ]
-    already_exists = any(folder.fs.exists(path) for path in paths)
-    if already_exists and not config.overwrite:
-        raise FileExistsError(
-            f"Output root already contains LeRobot data under {config.root!r}; set overwrite=True to replace it."
+    if "index" in table.schema.names:
+        idx = table.schema.get_field_index("index")
+        table = table.set_column(idx, "index", index_col)
+    else:
+        table = table.append_column("index", index_col)
+
+    if "frame_index" not in table.schema.names:
+        table = table.append_column(
+            "frame_index",
+            pa.array(list(range(row_count)), type=pa.int64()),
         )
-    if already_exists and config.overwrite:
-        for path in paths:
-            if folder.fs.exists(path):
-                folder.fs.rm(path, recursive=True)
-
-
-def _update_chunk_file_indices(
-    chunk_idx: int,
-    file_idx: int,
-    chunk_size: int,
-) -> tuple[int, int]:
-    if file_idx >= chunk_size - 1:
-        return (chunk_idx + 1, 0)
-    return (chunk_idx, file_idx + 1)
-
-
-def _worker_chunk_base() -> int:
-    rank_raw = os.environ.get("REFINER_WORKER_RANK")
-    rank = _as_int(rank_raw)
-    if rank is None or rank < 0:
-        return 0
-    return rank * _WORKER_CHUNK_STRIDE
-
-
-def _extract_tasks(row: Mapping[str, Any]) -> list[str]:
-    tasks_raw = row.get("tasks")
-    out: list[str] = []
-    if isinstance(tasks_raw, list):
-        for value in tasks_raw:
-            if isinstance(value, str) and value:
-                out.append(value)
-    task_raw = row.get("task")
-    if isinstance(task_raw, str) and task_raw and task_raw not in out:
-        out.append(task_raw)
-    return out
-
-
-def _row_to_dict(row: Any) -> dict[str, Any]:
-    if isinstance(row, Row):
-        return row.to_dict()
-    if isinstance(row, Mapping):
-        return dict(row)
-    raise ValueError(f"Unsupported frame row type: {type(row)!r}")
-
-
-def _is_number(value: Any) -> bool:
-    if isinstance(value, bool):
-        return False
-    return isinstance(value, (int, float, np.number))
+    if default_task_idx is not None and "task_index" not in table.schema.names:
+        table = table.append_column(
+            "task_index",
+            pa.array([default_task_idx] * row_count, type=pa.int64()),
+        )
+    return table
 
 
 def _as_numeric_array(value: Any) -> np.ndarray | None:
@@ -992,39 +1048,49 @@ def _as_numeric_array(value: Any) -> np.ndarray | None:
 
 def _compute_episode_stats(
     *,
-    row: Mapping[str, Any],
-    frames: list[dict[str, Any]],
+    frames: list[Mapping[str, Any]],
+    video_stats: Mapping[str, dict[str, np.ndarray]] | None = None,
 ) -> dict[str, dict[str, np.ndarray]]:
     stats = _compute_frame_stats(frames)
-    for key, value in row.items():
-        if not isinstance(value, Video):
-            continue
-        video_stats = _compute_video_stats(value)
-        if video_stats is not None:
-            stats[key] = video_stats
+    if video_stats:
+        for key, vstats in video_stats.items():
+            stats[key] = vstats
     return stats
 
 
 def _compute_frame_stats(
-    frames: list[dict[str, Any]],
+    frames: list[Mapping[str, Any]],
 ) -> dict[str, dict[str, np.ndarray]]:
     if not frames:
         return {}
 
-    excluded = {"index", "episode_index", "task_index"}
-    by_feature: dict[str, list[np.ndarray]] = defaultdict(list)
+    table = _frames_to_table(frames)
+    if table.num_rows <= 0:
+        return {}
 
-    for frame in frames:
-        for key, value in frame.items():
-            if key in excluded:
+    excluded = {"index", "episode_index", "task_index"}
+    out: dict[str, dict[str, np.ndarray]] = {}
+    for key in table.column_names:
+        if key in excluded:
+            continue
+
+        column = table.column(key)
+        if (
+            (pa.types.is_integer(column.type) or pa.types.is_floating(column.type))
+            and column.null_count == 0
+        ):
+            numeric = np.asarray(column.to_numpy(zero_copy_only=False), dtype=np.float64)
+            if numeric.size == 0 or not np.isfinite(numeric).all():
                 continue
+            out[key] = _feature_stats(numeric, keepdims=True)
+            continue
+
+        values: list[np.ndarray] = []
+        for value in column.to_pylist():
             arr = _as_numeric_array(value)
             if arr is None:
                 continue
-            by_feature[key].append(arr)
-
-    out: dict[str, dict[str, np.ndarray]] = {}
-    for key, values in by_feature.items():
+            values.append(arr)
         if not values:
             continue
         first_shape = values[0].shape
@@ -1036,12 +1102,181 @@ def _compute_frame_stats(
     return out
 
 
-def _compute_video_stats(video: Video) -> dict[str, np.ndarray] | None:
-    pixels = _sample_video_pixels(video)
-    if pixels is None or len(pixels) < 2:
-        return None
+def _frames_to_table(frames: list[Mapping[str, Any]]) -> pa.Table:
+    if not frames:
+        return pa.table({})
+    first = frames[0]
+    if isinstance(first, ArrowRowView) and all(
+        isinstance(frame, ArrowRowView)
+        and frame.names == first.names
+        and frame.columns == first.columns
+        for frame in frames
+    ):
+        names = tuple(name for name in first.names if name != "__shard_id")
+        row_indices = [frame.row_idx for frame in frames if isinstance(frame, ArrowRowView)]
+        index_by_name = first.index_by_name
+        columns = first.columns
+        take_idx = pa.array(row_indices, type=pa.int64())
+        data = {
+            name: columns[index_by_name[name]].take(take_idx)  # type: ignore[call-arg]
+            for name in names
+        }
+        return pa.table(data)
+    return pa.Table.from_pylist([dict(frame) for frame in frames])
 
-    ft_stats = _feature_stats(pixels, keepdims=False)
+
+@dataclass(slots=True)
+class _RunningQuantileStats:
+    quantile_list: list[float]
+    num_quantile_bins: int = 5000
+    _count: int = 0
+    _mean: np.ndarray | None = None
+    _mean_of_squares: np.ndarray | None = None
+    _min: np.ndarray | None = None
+    _max: np.ndarray | None = None
+    _histograms: list[np.ndarray] | None = None
+    _bin_edges: list[np.ndarray] | None = None
+
+    @property
+    def count(self) -> int:
+        return int(self._count)
+
+    def update(self, batch: np.ndarray) -> None:
+        if batch.ndim != 2:
+            raise ValueError("batch must be 2D (N, C)")
+        if batch.shape[0] == 0:
+            return
+
+        batch = batch.astype(np.float64, copy=False)
+        num_elements, vector_length = batch.shape
+
+        if self._count == 0:
+            self._mean = np.mean(batch, axis=0)
+            self._mean_of_squares = np.mean(batch**2, axis=0)
+            self._min = np.min(batch, axis=0)
+            self._max = np.max(batch, axis=0)
+            self._histograms = [np.zeros(self.num_quantile_bins) for _ in range(vector_length)]
+            self._bin_edges = [
+                np.linspace(self._min[i] - 1e-10, self._max[i] + 1e-10, self.num_quantile_bins + 1)
+                for i in range(vector_length)
+            ]
+        else:
+            if self._mean is None or self._mean_of_squares is None or self._min is None or self._max is None:
+                raise RuntimeError("RunningQuantileStats state is not initialized")
+            if vector_length != self._mean.size:
+                raise ValueError("batch channel dimension mismatch")
+            new_max = np.max(batch, axis=0)
+            new_min = np.min(batch, axis=0)
+            max_changed = np.any(new_max > self._max)
+            min_changed = np.any(new_min < self._min)
+            self._max = np.maximum(self._max, new_max)
+            self._min = np.minimum(self._min, new_min)
+            if max_changed or min_changed:
+                self._adjust_histograms()
+
+        prev_count = self._count
+        self._count += num_elements
+        if self._mean is None or self._mean_of_squares is None:
+            raise RuntimeError("RunningQuantileStats state is not initialized")
+        batch_mean = np.mean(batch, axis=0)
+        batch_mean_of_squares = np.mean(batch**2, axis=0)
+        self._mean += (batch_mean - self._mean) * (num_elements / max(self._count, 1))
+        self._mean_of_squares += (batch_mean_of_squares - self._mean_of_squares) * (
+            num_elements / max(self._count, 1)
+        )
+        if prev_count == 0 and self._histograms is None:
+            return
+        self._update_histograms(batch)
+
+    def get_statistics(self) -> dict[str, np.ndarray]:
+        if self._count <= 0 or self._mean is None or self._min is None or self._max is None:
+            raise ValueError("Cannot compute stats without samples")
+        variance = (
+            self._mean_of_squares - self._mean**2
+            if self._mean_of_squares is not None
+            else np.zeros_like(self._mean)
+        )
+        stats: dict[str, np.ndarray] = {
+            "min": self._min.copy(),
+            "max": self._max.copy(),
+            "mean": self._mean.copy(),
+            "std": np.sqrt(np.maximum(0, variance)),
+            "count": np.array([self._count], dtype=np.int64),
+        }
+        if self._count < 2:
+            for q in self.quantile_list:
+                stats[f"q{int(q * 100):02d}"] = self._mean.copy()
+            return stats
+        quantiles = self._compute_quantiles()
+        for i, q in enumerate(self.quantile_list):
+            stats[f"q{int(q * 100):02d}"] = quantiles[i]
+        return stats
+
+    def _adjust_histograms(self) -> None:
+        if self._histograms is None or self._bin_edges is None or self._min is None or self._max is None:
+            return
+        for i in range(len(self._histograms)):
+            old_edges = self._bin_edges[i]
+            old_hist = self._histograms[i]
+            padding = (self._max[i] - self._min[i]) * 1e-10
+            new_edges = np.linspace(self._min[i] - padding, self._max[i] + padding, self.num_quantile_bins + 1)
+            old_centers = (old_edges[:-1] + old_edges[1:]) / 2
+            new_hist = np.zeros(self.num_quantile_bins)
+            for old_center, count in zip(old_centers, old_hist, strict=False):
+                if count <= 0:
+                    continue
+                bin_idx = np.searchsorted(new_edges, old_center) - 1
+                bin_idx = max(0, min(bin_idx, self.num_quantile_bins - 1))
+                new_hist[bin_idx] += count
+            self._histograms[i] = new_hist
+            self._bin_edges[i] = new_edges
+
+    def _update_histograms(self, batch: np.ndarray) -> None:
+        if self._histograms is None or self._bin_edges is None:
+            return
+        for i in range(batch.shape[1]):
+            hist, _ = np.histogram(batch[:, i], bins=self._bin_edges[i])
+            self._histograms[i] += hist
+
+    def _compute_quantiles(self) -> list[np.ndarray]:
+        if self._histograms is None or self._bin_edges is None:
+            return [np.array([]) for _ in self.quantile_list]
+        results = []
+        for q in self.quantile_list:
+            target_count = q * self._count
+            q_values = []
+            for hist, edges in zip(self._histograms, self._bin_edges, strict=True):
+                q_values.append(self._compute_single_quantile(hist, edges, target_count))
+            results.append(np.array(q_values))
+        return results
+
+    @staticmethod
+    def _compute_single_quantile(hist: np.ndarray, edges: np.ndarray, target_count: float) -> float:
+        cumsum = np.cumsum(hist)
+        idx = np.searchsorted(cumsum, target_count)
+        if idx == 0:
+            return float(edges[0])
+        if idx >= len(cumsum):
+            return float(edges[-1])
+        count_before = cumsum[idx - 1]
+        count_in_bin = cumsum[idx] - count_before
+        if count_in_bin == 0:
+            return float(edges[idx])
+        fraction = (target_count - count_before) / count_in_bin
+        return float(edges[idx] + fraction * (edges[idx + 1] - edges[idx]))
+
+
+def _update_video_stats_tracker(*, tracker: _RunningQuantileStats, image_chw: np.ndarray) -> None:
+    if image_chw.ndim != 3:
+        return
+    pixels = np.transpose(image_chw, (1, 2, 0)).reshape(-1, image_chw.shape[0])
+    tracker.update(pixels)
+
+
+def _video_stats_from_tracker(tracker: _RunningQuantileStats) -> dict[str, np.ndarray] | None:
+    if tracker.count <= 0:
+        return None
+    ft_stats = tracker.get_statistics()
     normalized: dict[str, np.ndarray] = {}
     for key, value in ft_stats.items():
         if key == "count":
@@ -1049,54 +1284,6 @@ def _compute_video_stats(video: Video) -> dict[str, np.ndarray] | None:
             continue
         normalized[key] = np.asarray(value, dtype=np.float64).reshape(3, 1, 1) / 255.0
     return normalized
-
-
-def _sample_video_pixels(video: Video) -> np.ndarray | None:
-    decoded = _decoded_video_payload(video)
-    if decoded is not None:
-        if not decoded.frames:
-            return None
-        samples = []
-        for frame in decoded.frames:
-            if not isinstance(frame, np.ndarray):
-                continue
-            if frame.ndim != 3:
-                continue
-            chw = np.transpose(frame, (2, 0, 1))
-            down = _auto_downsample_height_width(chw)
-            pixels = np.transpose(down, (1, 2, 0)).reshape(-1, down.shape[0])
-            samples.append(pixels.astype(np.float64, copy=False))
-        if not samples:
-            return None
-        return np.concatenate(samples, axis=0)
-
-    start_ts = float(video.from_timestamp_s or 0.0)
-    end_ts = float(video.to_timestamp_s) if video.to_timestamp_s is not None else None
-
-    samples: list[np.ndarray] = []
-    with video.media.cached_path(suffix=".mp4") as local_path:
-        with av.open(local_path) as container:
-            stream = container.streams.video[0]
-            for frame in container.decode(stream):
-                ts = None
-                if frame.pts is not None and frame.time_base is not None:
-                    ts = float(frame.pts * frame.time_base)
-                if ts is None:
-                    continue
-                if ts + 1e-6 < start_ts:
-                    continue
-                if end_ts is not None and ts - 1e-6 >= end_ts:
-                    break
-
-                arr = frame.to_ndarray(format="rgb24")
-                chw = np.transpose(arr, (2, 0, 1))
-                down = _auto_downsample_height_width(chw)
-                pixels = np.transpose(down, (1, 2, 0)).reshape(-1, down.shape[0])
-                samples.append(pixels.astype(np.float64, copy=False))
-
-    if not samples:
-        return None
-    return np.concatenate(samples, axis=0)
 
 
 def _auto_downsample_height_width(
@@ -1271,9 +1458,8 @@ def _as_int(value: Any) -> int | None:
 
 
 def _probe_video_duration_s(video: Video) -> float | None:
-    decoded = _decoded_video_payload(video)
-    if decoded is not None:
-        return decoded.duration_s
+    if isinstance(video.media, DecodedVideo):
+        return video.media.duration_s
 
     with video.media.cached_path(suffix=".mp4") as local_path:
         return _probe_video_duration_local_path(local_path)
@@ -1293,7 +1479,7 @@ def _resolve_video_fps(video: Video, default_fps: int | None) -> int:
     if default_fps is not None and int(default_fps) > 0:
         return int(default_fps)
 
-    if _decoded_video_payload(video) is not None:
+    if isinstance(video.media, DecodedVideo):
         return 30
 
     with video.media.cached_path(suffix=".mp4") as local_path:
@@ -1318,28 +1504,6 @@ def _resolve_video_fps(video: Video, default_fps: int | None) -> int:
     return 30
 
 
-def _dtype_for_value(value: Any) -> str | None:
-    if isinstance(value, bool):
-        return "bool"
-    if isinstance(value, int):
-        return "int64"
-    if isinstance(value, float):
-        return "float64"
-    arr = np.asarray(value)
-    if arr.dtype.kind in {"i", "u"}:
-        return "int64"
-    if arr.dtype.kind == "f":
-        return "float64"
-    return None
-
-
-def _shape_for_value(value: Any) -> list[int]:
-    arr = np.asarray(value)
-    if arr.ndim == 0:
-        return [1]
-    return [int(x) for x in arr.shape]
-
-
 def _to_rel(folder: DataFolder, abs_path: str) -> str:
     root = folder.path.rstrip("/")
     prefix = f"{root}/"
@@ -1350,6 +1514,6 @@ def _to_rel(folder: DataFolder, abs_path: str) -> str:
 
 __all__ = [
     "LeRobotWriterConfig",
-    "LeRobotWriterSinkStep",
-    "LeRobotReduceSinkStep",
+    "LeRobotWriterSink",
+    "LeRobotMetaReduceSink",
 ]

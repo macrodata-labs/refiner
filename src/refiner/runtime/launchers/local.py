@@ -159,7 +159,6 @@ class LocalLauncher(BaseLauncher):
                 output_rows=output_rows,
             )
 
-        self.pipeline.prepare_sinks_for_launch()
         cpu_sets = (
             build_cpu_sets(
                 num_workers=self.num_workers,

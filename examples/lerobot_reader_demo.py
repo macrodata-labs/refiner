@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Any
+from typing import Any, Iterable
 
 import refiner as mdr
 
@@ -72,21 +72,26 @@ def main() -> None:
         decode=False,
     )
 
-    if args.hydrate_columns:
-        for column in args.hydrate_columns:
-            pipeline = pipeline.map_async(
-                mdr.hydrate_media(column, decode=True, decode_backend="pyav"),
-                max_in_flight=2,
-            )
+    # if args.hydrate_columns:
+    #     for column in args.hydrate_columns:
+    #         pipeline = pipeline.map_async(
+    #             mdr.hydrate_media(column, decode=True, decode_backend="pyav"),
+    #             max_in_flight=2,
+    #         )
 
-    if args.take > 0:
-        preview = pipeline.take(args.take)
-        for row in preview:
-            summarized = _summarize_episode(row)
-            sys.stdout.write(json.dumps(summarized, sort_keys=True, default=str))
-            sys.stdout.write("\n")
 
-    writer = pipeline.write_lerobot(root="tmp/lerobot-demo", overwrite=True)
+    EP_READ = 0
+    def limit_episodes(row: mdr.Row) -> Iterable[mdr.Row]:
+        nonlocal EP_READ
+        EP_READ += 1
+        if EP_READ > 10:
+            print(f"read {EP_READ} episodes, stopping")
+            return []
+        return [row]
+    pipeline = pipeline.flat_map(limit_episodes)
+    
+
+    writer = pipeline.write_lerobot(root="./tmp/lerobot-demo", overwrite=True)
     write_stats = writer.launch_local(name="aa")
     sys.stdout.write(
         f"write rows claimed={write_stats.claimed} failed={write_stats.failed}\\n"

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from fsspec.spec import AbstractFileSystem
 
 from refiner.expressions import Expr, col as col_expr, lit
+from refiner.io.datafolder import DataFolderLike
 from refiner.io.fileset import DataFileSetLike
 from refiner.processors.step import (
     AsyncMapFn,
@@ -42,17 +43,18 @@ from refiner.runtime.execution.engine import (
     execute_segments,
     iter_rows,
 )
+from refiner.runtime.execution.row_steps import ShardDeltaFn
 from refiner.runtime.types import SourceUnit
 from refiner.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 from refiner.sinks import (
     LeRobotWriterConfig,
-    LeRobotWriterSinkStep,
+    LeRobotWriterSink,
 )
-from refiner.processors.step import SinkStep
 
 if TYPE_CHECKING:
     from refiner.runtime.launchers.cloud import CloudLaunchResult
     from refiner.runtime.launchers.local import LaunchStats
+    from refiner.runtime.sinks import BaseSink
 
 
 class RefinerPipeline:
@@ -60,6 +62,7 @@ class RefinerPipeline:
     pipeline_steps: tuple[RefinerStep, ...]
     _compiled_segments: tuple[Segment, ...] | None
     max_vectorized_block_bytes: int | None
+    sink: "BaseSink | None"
 
     def __init__(
         self,
@@ -67,6 +70,7 @@ class RefinerPipeline:
         pipeline_steps: Sequence[RefinerStep] | None = None,
         *,
         max_vectorized_block_bytes: int | None = None,
+        sink: "BaseSink | None" = None,
     ):
         if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
             raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
@@ -74,12 +78,14 @@ class RefinerPipeline:
         self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
         self._compiled_segments = None
         self.max_vectorized_block_bytes = max_vectorized_block_bytes
+        self.sink = sink
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
         return self.__class__(
             self.source,
             self.pipeline_steps + (step,),
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            sink=self.sink,
         )
 
     def _add_vectorized_op(self, op: VectorizedOp) -> "RefinerPipeline":
@@ -94,6 +100,7 @@ class RefinerPipeline:
                 self.source,
                 self.pipeline_steps[:-1] + (merged,),
                 max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+                sink=self.sink,
             )
         return self.add_step(VectorizedSegmentStep(ops=(op,)))
 
@@ -104,6 +111,44 @@ class RefinerPipeline:
             self.source,
             self.pipeline_steps,
             max_vectorized_block_bytes=max_vectorized_block_bytes,
+            sink=self.sink,
+        )
+
+    def with_sink(self, sink: "BaseSink | None") -> "RefinerPipeline":
+        return self.__class__(
+            self.source,
+            self.pipeline_steps,
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            sink=sink,
+        )
+
+    def write_jsonl(
+        self,
+        output: DataFolderLike,
+        *,
+        filename_template: str = "{shard_id}.jsonl",
+    ) -> "RefinerPipeline":
+        from refiner.runtime.sinks import JsonlSink
+
+        return self.with_sink(
+            JsonlSink(output=output, filename_template=filename_template)
+        )
+
+    def write_parquet(
+        self,
+        output: DataFolderLike,
+        *,
+        filename_template: str = "{shard_id}.parquet",
+        compression: str | None = None,
+    ) -> "RefinerPipeline":
+        from refiner.runtime.sinks import ParquetSink
+
+        return self.with_sink(
+            ParquetSink(
+                output=output,
+                filename_template=filename_template,
+                compression=compression,
+            )
         )
 
     def _get_compiled_segments(self) -> tuple[Segment, ...]:
@@ -194,48 +239,50 @@ class RefinerPipeline:
             raise ValueError("cast requires at least one dtype mapping")
         return self._add_vectorized_op(CastStep(dtypes=dtypes))
 
-    def execute(self, rows: Iterable[SourceUnit]) -> Iterable[Block]:
+    def execute(
+        self,
+        rows: Iterable[SourceUnit],
+        *,
+        on_shard_delta: ShardDeltaFn | None = None,
+    ) -> Iterable[Block]:
         """Execute source stream through compiled segments.
 
         Returns internal execution blocks (row blocks or Arrow blocks).
         Use `iter_rows()` to force row iteration.
+
+        Note:
+            This method is computation-only and does not write through `self.sink`.
+            Sink writes happen in worker runtime/launch paths.
         """
         yield from execute_segments(
             rows,
             self._get_compiled_segments(),
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            on_shard_delta=on_shard_delta,
         )
 
     def _iter_single_stage_rows(self) -> Iterable[Row]:
         return iter_rows(self.execute(self.source.read()))
 
     def iter_rows(self) -> Iterable[Row]:
-        """Local execution mode: lazily process all shards and yield output rows."""
-        from refiner.runtime.planning import execution_stages_for_pipeline
+        """Local execution mode: lazily process all shards and yield output rows.
 
-        stages = execution_stages_for_pipeline(self)
-        if len(stages) == 1:
-            return self._iter_single_stage_rows()
-
-        def _run_stages() -> Iterable[Row]:
-            for idx, stage in enumerate(stages):
-                stage_pipeline = stage.pipeline
-                stage_pipeline.prepare_sinks_for_launch()
-                rows = stage_pipeline._iter_single_stage_rows()
-                if idx + 1 < len(stages):
-                    for _ in rows:
-                        pass
-                else:
-                    yield from rows
-
-        return _run_stages()
+        This method ignores `self.sink` by design.
+        """
+        return iter_rows(self.execute(self.source.read()))
 
     def materialize(self) -> list[Row]:
-        """Compute all output rows into memory (local/dev utility)."""
+        """Compute all output rows into memory (local/dev utility).
+
+        This method ignores `self.sink` by design.
+        """
         return list(self.iter_rows())
 
     def take(self, n: int) -> list[Row]:
-        """Return up to the first `n` rows from local execution."""
+        """Return up to the first `n` rows from local execution.
+
+        This method ignores `self.sink` by design.
+        """
         if n < 0:
             raise ValueError("n must be >= 0")
         out: list[Row] = []
@@ -247,19 +294,6 @@ class RefinerPipeline:
 
     def __iter__(self):
         return iter(self.iter_rows())
-
-    def _sink_steps(self) -> tuple[SinkStep, ...]:
-        return tuple(
-            step for step in self.pipeline_steps if isinstance(step, SinkStep)
-        )
-
-    def prepare_sinks_for_launch(self) -> None:
-        for step in self._sink_steps():
-            step.launch_prepare()
-
-    def launch_finalize_sinks(self) -> None:
-        for step in self._sink_steps():
-            step.launch_finalize()
 
     def launch_local(
         self,
@@ -356,12 +390,7 @@ class RefinerPipeline:
             video_files_size_in_mb=video_files_size_in_mb,
         )
 
-        return self.add_step(
-            LeRobotWriterSinkStep(
-                config=config,
-                index=len(self.pipeline_steps) + 1,
-            )
-        )
+        return self.with_sink(LeRobotWriterSink(config=config))
 
 
 ## readers
@@ -472,6 +501,11 @@ def from_items(
             shard_size_rows=shard_size_rows,
         )
     )
+
+
+def from_source(source: BaseSource) -> RefinerPipeline:
+    """Create a pipeline from a custom source implementation."""
+    return RefinerPipeline(source=source)
 
 
 def task(

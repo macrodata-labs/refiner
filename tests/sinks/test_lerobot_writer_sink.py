@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
+import re
 
 import av
 import numpy as np
@@ -10,7 +10,6 @@ import pyarrow.parquet as pq
 
 import refiner as mdr
 from refiner.media import hydrate_media
-from refiner.runtime.planning import execution_stages_for_pipeline
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -99,8 +98,12 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     ).write_lerobot(str(out_root), overwrite=True)
     assert not (out_root / "meta" / "info.json").exists()
 
-    rows = pipeline.materialize()
-    assert rows == []
+    stats = pipeline.launch_local(
+        name="lerobot-deferred-roundtrip",
+        num_workers=1,
+        workdir=str(tmp_path / "workdir"),
+    )
+    assert stats.failed == 0
 
     assert (out_root / "meta" / "info.json").exists()
     assert (out_root / "meta" / "stats.json").exists()
@@ -127,63 +130,44 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
 
 
 def test_stage1_worker_chunk_namespaces_are_disjoint(tmp_path: Path) -> None:
-    src_video = tmp_path / "source" / "episode.mp4"
-    _write_video(src_video)
-
     out_root = tmp_path / "parallel"
 
-    pipeline_rank0 = mdr.from_items(
+    pipeline = mdr.from_items(
         [
-            _episode(
-                episode_index=0,
-                task="pick",
-                video_path=src_video,
-                from_ts=0.0,
-                to_ts=0.2,
-                values=[1.0, 2.0],
-            )
-        ]
-    ).write_lerobot(str(out_root), overwrite=True)
-
-    pipeline_rank1 = mdr.from_items(
-        [
-            _episode(
-                episode_index=1,
-                task="place",
-                video_path=src_video,
-                from_ts=0.2,
-                to_ts=0.4,
-                values=[3.0, 4.0],
-            )
-        ]
+            {
+                "episode_index": 0,
+                "task": "pick",
+                "tasks": ["pick"],
+                "frames": [
+                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
+                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
+                ],
+                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+            },
+            {
+                "episode_index": 1,
+                "task": "place",
+                "tasks": ["place"],
+                "frames": [
+                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [3.0]},
+                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [4.0]},
+                ],
+                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+            },
+        ],
+        shard_size_rows=1,
     ).write_lerobot(str(out_root), overwrite=False)
-
-    stage1_rank0 = execution_stages_for_pipeline(pipeline_rank0)[0].pipeline
-    stage1_rank1 = execution_stages_for_pipeline(pipeline_rank1)[0].pipeline
-    reducer = execution_stages_for_pipeline(pipeline_rank0)[1].pipeline
-
-    previous_worker_rank = os.environ.get("REFINER_WORKER_RANK")
-    try:
-        stage1_rank0.prepare_sinks_for_launch()
-
-        os.environ["REFINER_WORKER_RANK"] = "0"
-        list(stage1_rank0._iter_single_stage_rows())
-
-        os.environ["REFINER_WORKER_RANK"] = "1"
-        list(stage1_rank1._iter_single_stage_rows())
-
-        chunk_dirs = sorted(path.name for path in (out_root / "meta").glob("chunk-*"))
-        assert "chunk-000000" in chunk_dirs
-        assert "chunk-1000000" in chunk_dirs
-    finally:
-        if previous_worker_rank is None:
-            os.environ.pop("REFINER_WORKER_RANK", None)
-        else:
-            os.environ["REFINER_WORKER_RANK"] = previous_worker_rank
-
-    reducer.materialize()
+    stats = pipeline.launch_local(
+        name="lerobot-worker-shard-namespaces",
+        num_workers=2,
+        workdir=str(tmp_path / "workdir"),
+    )
+    assert stats.failed == 0
 
     assert not any((out_root / "meta").glob("chunk-*"))
+    chunk_dirs = sorted(path.name for path in (out_root / "data").glob("chunk-*"))
+    assert len(chunk_dirs) == 2
+    assert all(re.match(r"chunk-\d+-[0-9a-f]{12}$", name) for name in chunk_dirs)
     episodes = pq.read_table(
         out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
     )
@@ -254,12 +238,18 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
         .write_lerobot(str(out_root), overwrite=True)
     )
 
-    out = pipeline.materialize()
-    assert out == []
+    stats = pipeline.launch_local(
+        name="lerobot-decoded-videos",
+        num_workers=1,
+        workdir=str(tmp_path / "workdir"),
+    )
+    assert stats.failed == 0
 
     assert (out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet").exists()
     rows = pq.read_table(
         out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
     )
     assert len(rows) == 1
-    assert rows["videos/observation.images.main/chunk_index"][0].as_py() == 0
+    chunk_index = rows["videos/observation.images.main/chunk_index"][0].as_py()
+    assert isinstance(chunk_index, str)
+    assert re.match(r"\d+-[0-9a-f]{12}", chunk_index)

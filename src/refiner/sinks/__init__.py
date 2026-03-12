@@ -1,11 +1,11 @@
 from .lerobot import (
-    LeRobotReduceSinkStep,
+    LeRobotMetaReduceSink,
     LeRobotWriterConfig,
-    LeRobotWriterSinkStep,
+    LeRobotWriterSink,
 )
 
 __all__ = [
     "LeRobotWriterConfig",
-    "LeRobotWriterSinkStep",
-    "LeRobotReduceSinkStep",
+    "LeRobotWriterSink",
+    "LeRobotMetaReduceSink",
 ]
