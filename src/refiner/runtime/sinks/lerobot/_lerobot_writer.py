@@ -44,8 +44,17 @@ class LeRobotWriterConfig:
             raise ValueError("video_codec must be a non-empty string")
         if not isinstance(self.video_pix_fmt, str) or not self.video_pix_fmt.strip():
             raise ValueError("video_pix_fmt must be a non-empty string")
+        if self.video_encoder_threads is None:
+            object.__setattr__(self, "video_encoder_threads", _cpu_thread_count())
         if self.video_encoder_threads is not None and self.video_encoder_threads <= 0:
             raise ValueError("video_encoder_threads must be > 0 when provided")
+
+
+def _cpu_thread_count() -> int:
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
 
 
 class LeRobotWriterSink(BaseSink):

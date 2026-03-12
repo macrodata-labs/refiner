@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 
@@ -357,6 +358,18 @@ def test_lerobot_writer_sink_raises_when_video_to_timestamp_is_missing(tmp_path:
 
     with pytest.raises((TypeError, ValueError)):
         sink.write_block([row])
+
+
+def test_lerobot_writer_config_defaults_video_encoder_threads_to_cpu_affinity(
+    tmp_path: Path,
+) -> None:
+    config = LeRobotWriterConfig(root=str(tmp_path / "out"))
+    if hasattr(os, "sched_getaffinity"):
+        expected = max(1, len(os.sched_getaffinity(0)))
+    else:
+        expected = max(1, os.cpu_count() or 1)
+
+    assert config.video_encoder_threads == expected
 
 
 def test_lerobot_meta_reduce_raises_when_stage1_rows_are_malformed(tmp_path: Path) -> None:
