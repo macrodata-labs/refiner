@@ -7,7 +7,7 @@ import numpy as np
 import pyarrow as pa
 
 from refiner.pipeline.data.row import ArrowRowView
-from ._lerobot_stats import _feature_stats
+from refiner.pipeline.sinks.lerobot._lerobot_stats import _feature_stats
 
 
 def collect_episode_tasks(*, tasks_raw: Any, task_raw: Any) -> list[str]:

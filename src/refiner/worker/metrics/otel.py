@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .context import UserMetricsEmitter
+from refiner.worker.metrics.context import UserMetricsEmitter
 from refiner.worker.resources.cpu import cpu_observer_callback
 from refiner.worker.resources.memory import memory_observer_callback
 from refiner.worker.resources.network import (

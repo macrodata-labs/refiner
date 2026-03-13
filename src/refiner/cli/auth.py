@@ -4,21 +4,21 @@ import argparse
 import getpass
 import sys
 
-from ..platform.auth import (
+from refiner.platform.auth import (
     CredentialsError,
     clear_api_key,
     credentials_path,
     current_api_key,
     save_api_key,
 )
-from ..platform.client import (
+from refiner.platform.client import (
     MacrodataApiError,
     VerifyApiKeyResponse,
     resolve_platform_base_url,
     sanitize_terminal_text,
     verify_api_key,
 )
-from .ui import display_identity, print_banner
+from refiner.cli.ui import display_identity, print_banner
 
 _TOKEN_SETTINGS_SUFFIX = "/settings/api-keys"
 

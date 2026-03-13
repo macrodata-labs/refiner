@@ -1,10 +1,10 @@
-from .api import (
+from refiner.platform.client.api import (
     MacrodataClient,
     compile_shard_descriptors,
     resolve_platform_base_url,
     verify_api_key,
 )
-from .models import (
+from refiner.platform.client.models import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
     CloudRunCreateResponse,
@@ -22,8 +22,11 @@ from .models import (
     WorkspaceIdentity,
     WorkerStartedResponse,
 )
-from .http import MacrodataApiError, sanitize_terminal_text
-from .serialize import INLINE_PIPELINE_PAYLOAD_MAX_BYTES, serialize_pipeline_inline
+from refiner.platform.client.http import MacrodataApiError, sanitize_terminal_text
+from refiner.platform.client.serialize import (
+    INLINE_PIPELINE_PAYLOAD_MAX_BYTES,
+    serialize_pipeline_inline,
+)
 
 __all__ = [
     "CloudPipelinePayload",

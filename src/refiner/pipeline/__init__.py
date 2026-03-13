@@ -1,7 +1,7 @@
-from .data.row import Row
-from .data.shard import Shard
-from .expressions import col
-from .pipeline import (
+from refiner.pipeline.data.row import Row
+from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.expressions import col
+from refiner.pipeline.pipeline import (
     RefinerPipeline,
     from_source,
     from_items,
@@ -11,8 +11,8 @@ from .pipeline import (
     read_parquet,
     task,
 )
-from .sources.base import BaseSource
-from .sources.readers.base import BaseReader
+from refiner.pipeline.sources.base import BaseSource
+from refiner.pipeline.sources.readers.base import BaseReader
 
 __all__ = [
     "BaseSource",

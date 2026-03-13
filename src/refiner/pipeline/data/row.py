@@ -93,9 +93,19 @@ class Row(Mapping[str, Any]):
             patch = dict(self.patch)
             for k in keys:
                 patch.pop(k, None)
-            return _OverlayRow(base=self.base, patch=patch, deleted=deleted)
+            return _OverlayRow(
+                base=self.base,
+                patch=patch,
+                deleted=deleted,
+                shard_id=self.shard_id,
+            )
 
-        return _OverlayRow(base=self, patch={}, deleted=frozenset(keys))
+        return _OverlayRow(
+            base=self,
+            patch={},
+            deleted=frozenset(keys),
+            shard_id=self.shard_id,
+        )
 
     def pop(self, key: str, default: Any = _MISSING) -> tuple["Row", Any]:
         """Persistent pop: returns (new_row, value) without mutating the base row."""

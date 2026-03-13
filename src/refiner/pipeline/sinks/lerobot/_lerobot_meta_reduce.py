@@ -12,9 +12,14 @@ from refiner.execution.tracking.shards import count_block_by_shard
 from refiner.io import DataFolder
 from refiner.pipeline.sinks.base import BaseSink, Block, ShardCounts
 
-from ._lerobot_stats import _aggregate_stats, _cast_stats_to_numpy, _serialize_stats
-from ._lerobot_video import _to_rel_path
-from ._lerobot_writer_shard import _DEFAULT_CODEBASE_VERSION
+from refiner.pipeline.sinks.lerobot._lerobot_stats import (
+    _aggregate_stats,
+    _cast_stats_to_numpy,
+    _serialize_stats,
+)
+from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import (
+    _DEFAULT_CODEBASE_VERSION,
+)
 
 
 __all__ = ["LeRobotMetaReduceSink"]
@@ -239,12 +244,15 @@ class _LeRobotMetaReducer:
         if not self.folder.fs.exists(root_meta):
             return []
 
+        root = self.folder.path.rstrip("/")
+        prefix = f"{root}/"
         matches: list[str] = []
         for abs_path in self.folder.fs.find(root_meta):
             if "/chunk-" not in abs_path:
                 continue
             if not bool(predicate(abs_path)):
                 continue
-            matches.append(_to_rel_path(self.folder, abs_path))
+            rel_path = abs_path[len(prefix) :] if abs_path.startswith(prefix) else abs_path
+            matches.append(rel_path)
         matches.sort()
         return matches

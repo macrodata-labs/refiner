@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
-from ..auth import current_api_key
-from .http import parse_json_response, request_json
-from .models import (
+from refiner.platform.auth import current_api_key
+from refiner.platform.client.http import parse_json_response, request_json
+from refiner.platform.client.models import (
     CloudRunCreateRequest,
     CloudRunCreateResponse,
     CreateJobEnvelope,
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 PLATFORM_BASE_URL_ENV_VAR = "MACRODATA_BASE_URL"
 _PLATFORM_BASE_URL = "https://macrodata.co"
+_RUNTIME_CALLBACK_TIMEOUT_S = 60.0
 
 
 def resolve_platform_base_url() -> str:
@@ -101,6 +102,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"shards": [shard.to_dict() for shard in shard_descriptors]},
+            timeout_s=_RUNTIME_CALLBACK_TIMEOUT_S,
         )
         return parse_json_response(response_data, OkResponse)
 
@@ -124,6 +126,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=request_body,
+            timeout_s=_RUNTIME_CALLBACK_TIMEOUT_S,
         )
         return parse_json_response(response_data, WorkerStartedResponse)
 
@@ -145,6 +148,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=request_body,
+            timeout_s=_RUNTIME_CALLBACK_TIMEOUT_S,
         )
         return parse_json_response(response_data, OkResponse)
 
@@ -157,6 +161,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"status": status},
+            timeout_s=_RUNTIME_CALLBACK_TIMEOUT_S,
         )
         return parse_json_response(response_data, OkResponse)
 
@@ -167,6 +172,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"status": status},
+            timeout_s=_RUNTIME_CALLBACK_TIMEOUT_S,
         )
         return parse_json_response(response_data, OkResponse)
 
@@ -200,6 +206,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=request_body,
+            timeout_s=_RUNTIME_CALLBACK_TIMEOUT_S,
         )
         return parse_json_response(response_data, ShardClaimResponse)
 
@@ -212,6 +219,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"worker_id": worker_id, "shard_ids": shard_ids},
+            timeout_s=_RUNTIME_CALLBACK_TIMEOUT_S,
         )
         return parse_json_response(response_data, OkResponse)
 
@@ -223,6 +231,7 @@ class MacrodataClient:
             path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/finalized-workers",
             api_key=self.api_key,
             base_url=self.base_url,
+            timeout_s=_RUNTIME_CALLBACK_TIMEOUT_S,
         )
         return parse_json_response(response_data, FinalizedShardWorkersResponse)
 
@@ -245,6 +254,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=request_body,
+            timeout_s=_RUNTIME_CALLBACK_TIMEOUT_S,
         )
         return parse_json_response(response_data, OkResponse)
 

@@ -9,8 +9,8 @@ from typing import Any, TypeAlias, Union
 from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.local import LocalFileSystem
 
-from .datafile import DataFile
-from .datafolder import DataFolder
+from refiner.io.datafile import DataFile
+from refiner.io.datafolder import DataFolder
 
 DataFileSetInput: TypeAlias = Union[
     str, PathLike[str], DataFile, DataFolder, "DataFileSet"

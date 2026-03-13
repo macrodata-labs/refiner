@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 import json
 from pathlib import Path
 
@@ -9,11 +8,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import refiner as mdr
-from refiner.pipeline.sources.readers.lerobot import (
-    LEROBOT_CONTEXT_KEY,
-    LEROBOT_RAW_EPISODE_KEY,
-    LeRobotEpisodeReader,
-)
+from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.media import Video
 
 
@@ -27,6 +22,9 @@ def _write_info(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     info = {
         "fps": 30,
+        "features": {
+            "observation.images.main": {"dtype": "video"},
+        },
     }
     path.write_text(json.dumps(info), encoding="utf-8")
 
@@ -129,7 +127,7 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     root = tmp_path / "lerobot"
     _build_sample_dataset(root)
 
-    reader = LeRobotEpisodeReader(str(root))
+    reader = LeRobotEpisodeReader(str(root), decode=False)
     shards = reader.list_shards()
     assert len(shards) == 1
     assert shards[0].start == 0
@@ -146,21 +144,17 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert first["task"] == "pick"
     assert second["task"] == "place"
     assert isinstance(first["metadata"], dict)
-    assert first["metadata"]["observation.state"]["min"] == [-1.0]
-    assert first["metadata"]["observation.state"]["max"] == [1.0]
-    assert first["metadata"]["observation.state"]["mean"] == [0.0]
-    assert first["metadata"]["observation.state"]["std"] == [0.5]
-    assert first["metadata"]["observation.state"]["count"] == 2
+    assert first["metadata"]["lerobot_stats"]["observation.state"]["min"] == [-1.0]
+    assert first["metadata"]["lerobot_stats"]["observation.state"]["max"] == [1.0]
+    assert first["metadata"]["lerobot_stats"]["observation.state"]["mean"] == [0.0]
+    assert first["metadata"]["lerobot_stats"]["observation.state"]["std"] == [0.5]
+    assert first["metadata"]["lerobot_stats"]["observation.state"]["count"] == 2
     assert "stats/observation.state/min" not in first
     assert "videos/observation.images.main/chunk_index" not in first
     assert "meta/episodes/chunk_index" not in first
-    assert isinstance(first["metadata"], dict)
-    assert isinstance(first["metadata"]["x"], dict)
-    assert isinstance(first["metadata"]["x"][LEROBOT_RAW_EPISODE_KEY], Mapping)
-    assert isinstance(first["metadata"]["x"][LEROBOT_CONTEXT_KEY], dict)
     assert (
-        first["metadata"]["observation.state"]
-        == second["metadata"]["observation.state"]
+        first["metadata"]["lerobot_stats"]["observation.state"]
+        == second["metadata"]["lerobot_stats"]["observation.state"]
     )
 
     first_frames = first["frames"]
@@ -202,10 +196,10 @@ def test_lerobot_reader_requires_episode_parquet_metadata(tmp_path: Path) -> Non
         mdr.read_lerobot(str(root)).materialize()
 
 
-def test_lerobot_decode_true_raises_not_implemented(tmp_path: Path) -> None:
+def test_lerobot_decode_none_rejects_timestamped_video(tmp_path: Path) -> None:
     root = tmp_path / "lerobot"
     _build_sample_dataset(root)
 
-    pipeline = mdr.read_lerobot(str(root), decode=True)
-    with pytest.raises(NotImplementedError):
+    pipeline = mdr.read_lerobot(str(root), decode=None)
+    with pytest.raises(ValueError, match="decode is None cannot read timestamped videos"):
         pipeline.materialize()

@@ -456,7 +456,8 @@ def read_lerobot(
     *,
     fs: AbstractFileSystem | None = None,
     storage_options: Mapping[str, Any] | None = None,
-    decode: bool = False,
+    decode: Literal[True, False, None] = None,
+    limit: int | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with an episode-granular LeRobot reader source."""
     return RefinerPipeline(
@@ -465,6 +466,7 @@ def read_lerobot(
             fs=fs,
             storage_options=storage_options,
             decode=decode,
+            limit=limit,
         )
     )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .auth import cmd_login, cmd_logout, cmd_whoami
+from refiner.cli.auth import cmd_login, cmd_logout, cmd_whoami
 
 
 def build_parser() -> argparse.ArgumentParser:

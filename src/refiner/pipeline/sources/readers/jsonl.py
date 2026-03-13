@@ -8,9 +8,8 @@ from fsspec import AbstractFileSystem
 import pyarrow.json as pa_json
 
 from refiner.io.fileset import DataFileSetLike
-
-from .base import BaseReader, Shard, SourceUnit
-from .utils import (
+from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
+from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
     BoundedBinaryReader,
     align_byte_range_to_newlines,

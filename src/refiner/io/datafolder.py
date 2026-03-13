@@ -6,7 +6,7 @@ from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
-from .datafile import DataFile
+from refiner.io.datafile import DataFile
 
 DataFolderLike: TypeAlias = Union[str, PathLike[str], "DataFolder"]
 

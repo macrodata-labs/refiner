@@ -1,5 +1,5 @@
-from .base import BaseSource
-from .readers import (
+from refiner.pipeline.sources.base import BaseSource
+from refiner.pipeline.sources.readers import (
     BaseReader,
     CsvReader,
     JsonlReader,

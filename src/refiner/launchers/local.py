@@ -15,7 +15,7 @@ from refiner.worker.lifecycle import FileRuntimeLifecycle
 from refiner.worker.resources.cpu import build_cpu_sets
 from refiner.worker.workdir import resolve_workdir
 
-from .base import BaseLauncher
+from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline

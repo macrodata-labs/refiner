@@ -10,7 +10,7 @@ from refiner.platform.client import (
 )
 from refiner.platform.client import serialize_pipeline_inline
 
-from .base import BaseLauncher
+from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline

@@ -8,7 +8,7 @@ import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
 
-from .base import BaseSink, Block, ShardCounts, split_block_by_shard
+from refiner.pipeline.sinks.base import BaseSink, Block, ShardCounts, split_block_by_shard
 
 
 class JsonlSink(BaseSink):

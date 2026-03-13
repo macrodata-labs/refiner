@@ -44,6 +44,52 @@ def test_hydrate_media_hydrates_video_wrapper_bytes(tmp_path: Path) -> None:
     assert video.media.bytes_cache == payload
 
 
+def test_hydrate_media_file_mode_allows_timestamped_video_without_decode(
+    tmp_path: Path,
+) -> None:
+    payload_path = tmp_path / "segment.mp4"
+    payload_path.write_bytes(b"fake-video-bytes")
+    row = DictRow(
+        {
+            "video": Video(
+                media=MediaFile(str(payload_path)),
+                video_key="cam",
+                from_timestamp_s=0.1,
+                to_timestamp_s=0.3,
+            )
+        }
+    )
+
+    hydrated = asyncio.run(hydrate_media("video", mode="file")(row))
+    video = hydrated["video"]
+    assert isinstance(video, Video)
+    assert video.uri == str(payload_path)
+    assert video.media.bytes_cache is None
+
+
+def test_hydrate_media_bytes_mode_rejects_timestamped_video_without_decode(
+    tmp_path: Path,
+) -> None:
+    payload_path = tmp_path / "segment.mp4"
+    payload_path.write_bytes(b"fake-video-bytes")
+    row = DictRow(
+        {
+            "video": Video(
+                media=MediaFile(str(payload_path)),
+                video_key="cam",
+                from_timestamp_s=0.1,
+                to_timestamp_s=0.3,
+            )
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Cannot hydrate timestamped Video in bytes mode with decode=False",
+    ):
+        asyncio.run(hydrate_media("video", mode="bytes")(row))
+
+
 def test_hydrate_media_on_error_null(tmp_path: Path) -> None:
     missing_uri = str(tmp_path / "missing.bin")
     row = DictRow({"blob_uri": missing_uri})
@@ -89,7 +135,7 @@ def test_media_cache_dedupes_parallel_downloads(
         f.write(b"shared")
 
     calls = {"count": 0}
-    import refiner.media.cache as media_cache
+    import refiner.pipeline.utils.cache.file_cache as media_cache
 
     original = media_cache._download_data_file_to_temp
 
@@ -122,7 +168,7 @@ def test_media_cache_with_file_cache_context_is_download_once_and_valid() -> Non
     calls = {"count": 0}
     cache = get_media_cache("context-manager")
 
-    import refiner.media.cache as media_cache
+    import refiner.pipeline.utils.cache.file_cache as media_cache
 
     original = media_cache._download_data_file_to_temp
 

@@ -9,10 +9,9 @@ import pyarrow.csv as pa_csv
 from fsspec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
-
-from .base import BaseReader, Shard, SourceUnit
-from ...data.row import DictRow
-from .utils import (
+from refiner.pipeline.data.row import DictRow
+from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
+from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
     BoundedBinaryReader,
     align_byte_range_to_newlines,

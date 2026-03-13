@@ -5,7 +5,11 @@ import time
 from pathlib import Path
 
 from refiner.worker.lifecycle import FileRuntimeLifecycle
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import (
+    Shard,
+    format_pending_filename,
+    parse_shard_filename,
+)
 
 
 def test_shard_id_is_stable() -> None:
@@ -102,3 +106,29 @@ def test_file_runtime_stages_are_isolated(tmp_path: Path) -> None:
     assert claimed_zero.path == "p0"
     assert claimed_one is not None
     assert claimed_one.path == "p1"
+
+
+def test_parse_shard_filename_roundtrips_negative_end() -> None:
+    filename = format_pending_filename(
+        pathhash="abc123",
+        start=0,
+        end=-1,
+        shard_id="deadbeefcafe",
+    )
+    pathhash, start, end, shard_id, worker_id = parse_shard_filename(filename)
+    assert pathhash == "abc123"
+    assert start == 0
+    assert end == -1
+    assert shard_id == "deadbeefcafe"
+    assert worker_id is None
+
+
+def test_file_runtime_claim_supports_negative_end(tmp_path: Path) -> None:
+    lifecycle = FileRuntimeLifecycle(job_id="job6", worker_id=1, workdir=str(tmp_path))
+    shard = Shard(path="p-neg", start=0, end=-1)
+    lifecycle.seed_shards([shard])
+
+    claimed = lifecycle.claim()
+    assert claimed is not None
+    assert claimed.path == "p-neg"
+    assert claimed.end == -1

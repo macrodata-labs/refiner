@@ -28,10 +28,15 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 - Parquet reader yields row views that are converted on access.
 - LeRobot reader emits one row per episode with:
   - `frames`: list of frame dicts for the episode slice.
-  - video feature columns as `Video` handles (opaque URI + metadata, bytes unset by default).
-  - `metadata`: dict loaded from `meta/stats.json` (when present).
+  - video feature columns from `meta/info.json.features` where `dtype == "video"`, emitted as `Video` handles.
+  - `metadata`: dict with `lerobot_info` and `lerobot_stats`.
   - raw transport metadata keys under `stats/*`, `videos/*`, and `meta/episodes/*` are omitted from emitted rows.
-  - private round-trip fields are stored in `metadata["x"]` (`__lerobot_episode` and `__lerobot_context`) so LeRobot-style episode transforms can reconstruct full metadata.
+  - frame slicing requires `dataset_from_index`/`dataset_to_index` in each episode row.
+  - `decode` can be `True`, `False`, or `None`:
+    - `None` rejects timestamped video rows.
+    - `False` keeps timestamped `Video` references without decoding.
+    - `True` is reserved for clip-aligned materialization flows.
+  - optional `limit` bounds emitted episodes per reader instance.
 - Use `target_shard_bytes` to control shard granularity.
 
 ## Hydrating External Files
@@ -82,4 +87,4 @@ pipeline = mdr.read_lerobot("s3://bucket/dataset").map(
 - Parquet byte-lazy mode maps planned byte ranges to row groups at read time.
 - Parquet row access uses batch-level cached column-name indexing for faster key lookup.
 - LeRobot expects parquet metadata under `meta/episodes/**`; legacy JSONL metadata is not used.
-- LeRobot only reads `fps` from `meta/info.json`; data/video path templates use LeRobot defaults.
+- LeRobot reads `fps`, `robot_type`, `features`, `data_path`, and `video_path` from `meta/info.json` when present.

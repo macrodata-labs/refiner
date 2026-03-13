@@ -7,55 +7,14 @@ from typing import IO, Any, Mapping
 import av
 import numpy as np
 
-from refiner.io import DataFolder
 from refiner.io.datafile import DataFile
 from refiner.media import DecodedVideo, Video
-from refiner.media.cache import get_media_cache
-
-from ._lerobot_stats import _RunningQuantileStats
+from refiner.pipeline.sinks.lerobot._lerobot_stats import _RunningQuantileStats
+from refiner.pipeline.utils.cache.decoder_cache import get_video_decoder_cache
+from refiner.pipeline.utils.cache.file_cache import get_media_cache
 
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+empty_moov+default_base_moof"
-
-
-def _format_chunk_path(
-    template: str,
-    *,
-    chunk: str,
-    file_idx: int,
-    video_key: str | None = None,
-) -> str:
-    return template.format(
-        video_key="" if video_key is None else video_key,
-        chunk=chunk,
-        chunk_key=chunk,
-        chunk_index=chunk,
-        file=file_idx,
-        file_idx=file_idx,
-        file_index=file_idx,
-    )
-
-
-def _to_rel_path(folder: DataFolder, abs_path: str) -> str:
-    root = folder.path.rstrip("/")
-    prefix = f"{root}/"
-    if abs_path.startswith(prefix):
-        return abs_path[len(prefix) :]
-    return abs_path
-
-
-def _coerce_positive_fps(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    try:
-        fps = float(value)
-    except (TypeError, ValueError):
-        return None
-    if fps <= 0:
-        return None
-    return int(round(fps))
 
 
 class _TrackedOutputFile:
@@ -239,25 +198,27 @@ def _video_stats_from_tracker(
     return normalized
 
 
-def _resolve_video_fps(video: Video, default_fps: int | None) -> int:
-    resolved_video_fps = _coerce_positive_fps(video.fps)
-    if resolved_video_fps is not None:
-        return resolved_video_fps
-    default_resolved_fps = _coerce_positive_fps(default_fps)
-    if default_resolved_fps is not None:
-        return default_resolved_fps
+async def _resolve_video_fps(
+    *,
+    video: Video,
+    default_fps: int | None,
+    video_key: str,
+) -> int:
+    if video.fps is not None:
+        return int(round(float(video.fps)))
+    if default_fps is not None:
+        return int(round(float(default_fps)))
 
     if isinstance(video.media, DecodedVideo):
         return 30
 
     data_file = DataFile.resolve(video.media.uri)
-    with get_media_cache("lerobot_writer").cached(file=data_file) as local_path:
-        with av.open(local_path) as container:
-            stream = container.streams.video[0]
-            for rate in (stream.average_rate, stream.base_rate):
-                fps = _coerce_positive_fps(rate)
-                if fps is not None:
-                    return fps
+    cache_name = f"lerobot_writer:{video_key}"
+    media_cache = get_media_cache(name=cache_name)
+    decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
+    resolved_fps = await decoder_cache.resolve_fps(data_file=data_file)
+    if resolved_fps is not None:
+        return resolved_fps
     return 30
 
 
@@ -265,6 +226,7 @@ async def _append_video_segment(
     *,
     writer: VideoTrackWriter,
     video: Video,
+    video_key: str,
     clip_from: float,
     clip_to: float,
     video_config: Mapping[str, Any],
@@ -282,7 +244,6 @@ async def _append_video_segment(
         duration_s = _append_video_segment_from_frames(
             writer=writer,
             video=video.media,
-            video_config=video_config,
             tracker=tracker,
             sample_stride=sample_stride,
         )
@@ -291,9 +252,9 @@ async def _append_video_segment(
     duration_s = await _append_video_segment_from_media(
         writer=writer,
         video=video,
+        video_key=video_key,
         clip_from=clip_from,
         clip_to=clip_to,
-        video_config=video_config,
         tracker=tracker,
         sample_stride=sample_stride,
     )
@@ -306,44 +267,45 @@ async def _append_video_segment_from_media(
     video: Video,
     clip_from: float,
     clip_to: float,
-    video_config: Mapping[str, Any],
     tracker: _RunningQuantileStats | None,
     sample_stride: int,
+    video_key: str,
 ) -> float:
     selected_frames = 0
     frame_index = 0
-    epsilon = 1e-6
-    cache_name = f"lerobot_writer:{video.video_key}"
     data_file = DataFile.resolve(video.media.uri)
-    async with get_media_cache(cache_name).cached(file=data_file) as local_path:
-        with av.open(local_path) as input_container:
-            input_stream = input_container.streams.video[0]
-            for frame in input_container.decode(input_stream):
-                if frame.pts is None or frame.time_base is None:
-                    continue
+    cache_name = f"lerobot_writer:{video_key}"
+    media_cache = get_media_cache(name=cache_name)
+    decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
 
-                ts = float(frame.pts * frame.time_base)
-                if ts + epsilon < clip_from:
-                    continue
-                if ts - epsilon >= clip_to:
-                    break
+    def _on_frame(frame: av.VideoFrame) -> None:
+        nonlocal selected_frames, frame_index
+        rgb_frame = frame.to_ndarray(format="rgb24")
+        writer.ensure_stream(width=frame.width, height=frame.height)
+        writer.write_frame(av.VideoFrame.from_ndarray(rgb_frame, format="rgb24"))
+        _update_video_stats_if_due(
+            tracker=tracker,
+            frame_index=frame_index,
+            sample_stride=sample_stride,
+            rgb_frame=rgb_frame,
+        )
+        selected_frames += 1
+        frame_index += 1
 
-                writer.ensure_stream(width=frame.width, height=frame.height)
-                writer.write_frame(
-                    av.VideoFrame.from_ndarray(
-                        frame.to_ndarray(format="rgb24"),
-                        format="rgb24",
-                    )
-                )
-
-                selected_frames += 1
-                _update_video_stats_if_due(
-                    tracker=tracker,
-                    frame_index=frame_index,
-                    sample_stride=sample_stride,
-                    rgb_frame=frame.to_ndarray(format="rgb24"),
-                )
-                frame_index += 1
+    try:
+        await decoder_cache.decode_segment_with_callback_from_data_file(
+            data_file=data_file,
+            from_timestamp_s=clip_from,
+            to_timestamp_s=clip_to,
+            on_frame=_on_frame,
+        )
+    except ValueError as exc:
+        if "contains no decodable frames" not in str(exc):
+            raise
+        raise ValueError(
+            f"Video segment for {video.uri!r} contains no decodable frames in "
+            f"[{clip_from:.6f}, {clip_to if clip_to is not None else 'end'})."
+        ) from exc
 
     if selected_frames <= 0:
         raise ValueError(
@@ -358,7 +320,6 @@ def _append_video_segment_from_frames(
     *,
     writer: VideoTrackWriter,
     video: DecodedVideo,
-    video_config: Mapping[str, Any],
     tracker: _RunningQuantileStats | None,
     sample_stride: int,
 ) -> float:

@@ -19,8 +19,7 @@ from refiner.pipeline.sinks.base import (
     ShardCounts,
     split_block_by_shard,
 )
-
-from ._lerobot_writer_shard import _LeRobotShardWriter
+from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import _LeRobotShardWriter
 
 
 _DEFAULT_CHUNK_SIZE = 1000

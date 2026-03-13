@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import IO
 
 from refiner.io import DataFile
-from refiner.media.cache import _CacheFileLease, get_media_cache
+from refiner.pipeline.utils.cache.file_cache import _CacheFileLease, get_media_cache
 
 
 class MediaFile:

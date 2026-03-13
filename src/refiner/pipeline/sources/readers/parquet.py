@@ -8,9 +8,11 @@ import pyarrow.parquet as pq
 from fsspec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
-
-from .base import BaseReader, Shard, SourceUnit
-from .utils import DEFAULT_TARGET_SHARD_BYTES, clamp_target_bytes
+from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    clamp_target_bytes,
+)
 
 _LOG = logging.getLogger(__name__)
 

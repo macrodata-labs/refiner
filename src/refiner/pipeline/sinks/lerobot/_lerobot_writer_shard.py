@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+from concurrent.futures import wait
 import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -11,21 +11,24 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from refiner.execution.asyncio.runtime import submit
 from refiner.io import DataFolder
 from refiner.media import Video
 from refiner.pipeline.sources.readers.lerobot import LEROBOT_INFO
 
-from ._lerobot_frames import (
+from refiner.pipeline.sinks.lerobot._lerobot_frames import (
     compute_episode_stats,
     collect_episode_tasks,
     infer_features,
     _arrow_frame_table,
     resolve_task_index,
 )
-from ._lerobot_stats import _flatten_stats_for_episode, _serialize_stats
-from ._lerobot_video import (
+from refiner.pipeline.sinks.lerobot._lerobot_stats import (
+    _flatten_stats_for_episode,
+    _serialize_stats,
+)
+from refiner.pipeline.sinks.lerobot._lerobot_video import (
     _append_video_segment,
-    _format_chunk_path,
     _resolve_video_fps,
     VideoTrackWriter,
 )
@@ -34,6 +37,24 @@ from ._lerobot_video import (
 _DEFAULT_DATA_PATH = "data/chunk-{chunk_key}/file-{file_index:03d}.parquet"
 _DEFAULT_VIDEO_PATH = "videos/{video_key}/chunk-{chunk_index}/file-{file_index:03d}.mp4"
 _DEFAULT_CODEBASE_VERSION = "v3.0"
+
+
+def _format_chunk_path(
+    template: str,
+    *,
+    chunk: str,
+    file_idx: int,
+    video_key: str | None = None,
+) -> str:
+    return template.format(
+        video_key="" if video_key is None else video_key,
+        chunk=chunk,
+        chunk_key=chunk,
+        chunk_index=chunk,
+        file=file_idx,
+        file_idx=file_idx,
+        file_index=file_idx,
+    )
 
 
 @dataclass(slots=True)
@@ -404,6 +425,7 @@ class _LeRobotShardWriter:
         out: dict[str, Any] = {}
         out_stats: dict[str, dict[str, np.ndarray]] = {}
         video_config = self._video_append_config
+        futures = []
 
         for key, value in row.items():
             if not isinstance(value, Video):
@@ -415,19 +437,27 @@ class _LeRobotShardWriter:
                 else 0.0
             )
             clip_to = float(value.to_timestamp_s)
-            video_meta, video_stats = self._write_video_track(
-                video_key=key,
-                video=value,
-                clip_from=clip_from,
-                clip_to=clip_to,
-                video_config=video_config,
+            futures.append(
+                submit(
+                    self._write_video_track(
+                        video_key=key,
+                        video=value,
+                        clip_from=clip_from,
+                        clip_to=clip_to,
+                        video_config=video_config,
+                    )
+                )
             )
+
+        done, _ = wait(futures)
+        for future in done:
+            video_meta, video_stats = future.result()
             out.update(video_meta)
             out_stats.update(video_stats)
 
         return out, out_stats
 
-    def _write_video_track(
+    async def _write_video_track(
         self,
         *,
         video_key: str,
@@ -436,7 +466,11 @@ class _LeRobotShardWriter:
         clip_to: float,
         video_config: Mapping[str, Any],
     ) -> tuple[dict[str, Any], dict[str, dict[str, np.ndarray]]]:
-        fps = _resolve_video_fps(video=video, default_fps=self._fps)
+        fps = await _resolve_video_fps(
+            video=video,
+            default_fps=self._fps,
+            video_key=video_key,
+        )
         writer = self._get_or_create_video_writer(
             video_key=video_key,
             fps=fps,
@@ -450,14 +484,13 @@ class _LeRobotShardWriter:
             )
 
         from_ts = float(writer.duration_s)
-        clip_duration_s, clip_stats = asyncio.run(
-            _append_video_segment(
-                writer=writer,
-                video=video,
-                clip_from=clip_from,
-                clip_to=clip_to,
-                video_config=video_config,
-            )
+        clip_duration_s, clip_stats = await _append_video_segment(
+            writer=writer,
+            video=video,
+            video_key=video_key,
+            clip_from=clip_from,
+            clip_to=clip_to,
+            video_config=video_config,
         )
         to_ts = float(from_ts + clip_duration_s)
         writer.duration_s = to_ts
