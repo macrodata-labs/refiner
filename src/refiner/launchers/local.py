@@ -179,8 +179,13 @@ class LocalLauncher(BaseLauncher):
             )
 
         try:
-            stats = json.loads(stats_path.read_text())
-        except Exception as err:  # noqa: BLE001
+            stats_text = stats_path.read_text()
+        except OSError as err:
+            raise RuntimeError(f"worker {rank}: unreadable stats file ({err})") from err
+
+        try:
+            stats = json.loads(stats_text)
+        except json.JSONDecodeError as err:
             raise RuntimeError(f"worker {rank}: invalid stats file ({err})") from err
 
         if return_code != 0 or "error" in stats:

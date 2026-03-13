@@ -235,7 +235,7 @@ class FileRuntimeLifecycle:
     def _safe_unlink(path: str) -> None:
         try:
             os.unlink(path)
-        except Exception:
+        except FileNotFoundError:
             pass
 
     @staticmethod
@@ -243,9 +243,7 @@ class FileRuntimeLifecycle:
         try:
             os.replace(src, dst)
             return True
-        except FileNotFoundError:
-            return False
-        except Exception:
+        except OSError:
             return False
 
     @staticmethod
