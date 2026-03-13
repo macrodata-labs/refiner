@@ -10,6 +10,7 @@ from refiner.pipeline.data.shard import Shard
 from refiner.platform.client import RunHandle
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.execution.engine import block_num_rows
+from refiner.pipeline.sinks import NullSink
 from refiner.worker.lifecycle import PlatformRuntimeLifecycle, RuntimeLifecycle
 from refiner.worker.metrics.context import (
     NOOP_USER_METRICS_EMITTER,
@@ -74,9 +75,12 @@ class Worker:
         completed = 0
         failed = 0
         output_rows = 0
-        inflight: list[Shard] = []
+        inflight_by_id: dict[str, Shard] = {}
+        pending_rows_by_shard: dict[str, int] = {}
+        source_done_shards: set[str] = set()
         inflight_lock = threading.Lock()
         failed_error: str | None = None
+        completion_error: Exception | None = None
         run_handle = self.run_handle
         runtime_lifecycle = self.runtime_lifecycle
         active_run: RunHandle | None = None
@@ -111,10 +115,11 @@ class Worker:
                 user_metrics_emitter = telemetry_emitter
         if runtime_lifecycle is None:
             raise ValueError("runtime_lifecycle was not initialized")
+        sink = self.pipeline.sink or NullSink()
 
         def _heartbeat_once() -> None:
             with inflight_lock:
-                snapshot = list(inflight)
+                snapshot = list(inflight_by_id.values())
             if not snapshot:
                 return
             runtime_lifecycle.heartbeat(snapshot)
@@ -127,6 +132,42 @@ class Worker:
                 except Exception as e:  # noqa: BLE001
                     heartbeat_error = e
                     return
+
+        def _complete_shard(shard_id: str) -> None:
+            nonlocal completed, completion_error
+            with inflight_lock:
+                shard = inflight_by_id.pop(shard_id, None)
+                source_done_shards.discard(shard_id)
+                if shard is None:
+                    return
+            try:
+                sink.on_shard_complete(shard_id)
+                user_metrics_emitter.force_flush_user_metrics()
+                runtime_lifecycle.complete(shard)
+            except Exception as err:  # noqa: BLE001
+                completion_error = err
+                raise
+            completed += 1
+
+        def _maybe_complete_shard(shard_id: str) -> None:
+            with inflight_lock:
+                pending = pending_rows_by_shard.get(shard_id, 0)
+                source_done = shard_id in source_done_shards
+            if source_done and pending == 0:
+                _complete_shard(shard_id)
+
+        def _apply_row_delta(delta: dict[str, int]) -> None:
+            touched: list[str] = []
+            with inflight_lock:
+                for shard_id, amount in delta.items():
+                    next_value = pending_rows_by_shard.get(shard_id, 0) + amount
+                    if next_value <= 0:
+                        pending_rows_by_shard.pop(shard_id, None)
+                    else:
+                        pending_rows_by_shard[shard_id] = next_value
+                    touched.append(shard_id)
+            for shard_id in touched:
+                _maybe_complete_shard(shard_id)
 
         heartbeat_thread = threading.Thread(
             target=_heartbeat_loop,
@@ -145,26 +186,49 @@ class Worker:
                     break
                 claimed += 1
                 with inflight_lock:
-                    inflight.append(shard)
+                    inflight_by_id[shard.id] = shard
                 with set_active_step_index(0):
-                    yield from self.pipeline.source.iter_shard_units(shard)
+                    for unit in self.pipeline.source.iter_shard_units(shard):
+                        rows = block_num_rows(unit)
+                        if rows > 0:
+                            with inflight_lock:
+                                pending_rows_by_shard[shard.id] = (
+                                    pending_rows_by_shard.get(shard.id, 0) + rows
+                                )
+                        yield unit
+                with inflight_lock:
+                    source_done_shards.add(shard.id)
+                _maybe_complete_shard(shard.id)
                 previous = shard
 
         with set_active_user_metrics_emitter(user_metrics_emitter):
             run_exception: Exception | None = None
             try:
                 try:
-                    for block in self.pipeline.execute(_source_rows()):
+                    for block in self.pipeline.execute(
+                        _source_rows(),
+                        on_shard_delta=_apply_row_delta,
+                    ):
                         if heartbeat_error is not None:
                             raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
-                        produced = block_num_rows(block)
-                        if produced > 0:
-                            output_rows += produced
+                        written = sink.write_block(block)
+                        _apply_row_delta(
+                            {
+                                shard_id: -count
+                                for shard_id, count in written.items()
+                                if count
+                            }
+                        )
+                        output_rows += block_num_rows(block)
                 except Exception as e:
+                    if completion_error is e:
+                        raise
                     failed_error = str(e)
                     with inflight_lock:
-                        failed_shards = list(inflight)
-                        inflight.clear()
+                        failed_shards = list(inflight_by_id.values())
+                        inflight_by_id.clear()
+                        pending_rows_by_shard.clear()
+                        source_done_shards.clear()
                     for shard in failed_shards:
                         runtime_lifecycle.fail(shard, str(e))
                         user_metrics_emitter.force_flush_user_metrics()
@@ -172,12 +236,12 @@ class Worker:
                 else:
                     _heartbeat_once()
                     with inflight_lock:
-                        completed_shards = list(inflight)
-                        inflight.clear()
-                    for shard in completed_shards:
-                        user_metrics_emitter.force_flush_user_metrics()
-                        runtime_lifecycle.complete(shard)
-                        completed += 1
+                        remaining_shards = list(inflight_by_id.values())
+                    if remaining_shards:
+                        raise RuntimeError(
+                            "worker finished with unflushed shards: "
+                            + ", ".join(shard.id for shard in remaining_shards)
+                        )
 
                 return WorkerRunStats(
                     claimed=claimed,
@@ -191,6 +255,7 @@ class Worker:
             finally:
                 stop_heartbeat.set()
                 heartbeat_thread.join(timeout=1.0)
+                sink.close()
 
                 if active_run is not None and active_run.client is not None:
                     status = (

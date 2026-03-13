@@ -8,7 +8,7 @@ import pyarrow as pa
 
 from refiner.pipeline.steps import RefinerStep, VectorizedOp, VectorizedSegmentStep
 from refiner.execution.buffer import RowBuffer
-from refiner.execution.operators.row import execute_row_steps
+from refiner.execution.operators.row import ShardDeltaFn, execute_row_steps
 from refiner.execution.operators.vectorized import (
     TabularBlock,
     apply_vectorized_op,
@@ -16,6 +16,7 @@ from refiner.execution.operators.vectorized import (
     iter_table_rows,
     rows_to_table,
 )
+from refiner.execution.tracking.shards import count_tabular_by_shard, counts_delta
 from refiner.pipeline.data.row import Row
 
 _DEFAULT_VECTORIZED_CHUNK_ROWS = 2048
@@ -60,6 +61,7 @@ def execute_segments(
     *,
     vectorized_chunk_rows: int = _DEFAULT_VECTORIZED_CHUNK_ROWS,
     max_vectorized_block_bytes: int | None = None,
+    on_shard_delta: ShardDeltaFn | None = None,
 ) -> Iterator[Block]:
     current: Iterable[Block] = _normalize_blocks(
         stream,
@@ -73,6 +75,7 @@ def execute_segments(
                 segment.ops,
                 vectorized_chunk_rows=vectorized_chunk_rows,
                 max_vectorized_block_bytes=max_vectorized_block_bytes,
+                on_shard_delta=on_shard_delta,
             )
         else:
             current = _execute_row_segment(
@@ -81,6 +84,7 @@ def execute_segments(
                 output_block_rows=vectorized_chunk_rows,
                 output_tabular=isinstance(next_segment, VectorSegment),
                 max_vectorized_block_bytes=max_vectorized_block_bytes,
+                on_shard_delta=on_shard_delta,
             )
     yield from current
 
@@ -165,11 +169,12 @@ def _execute_row_segment(
     output_block_rows: int,
     output_tabular: bool,
     max_vectorized_block_bytes: int | None,
+    on_shard_delta: ShardDeltaFn | None,
 ) -> Iterator[Block]:
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
     rows = iter_rows(stream)
-    step_out = execute_row_steps(rows, steps)
+    step_out = execute_row_steps(rows, steps, on_shard_delta=on_shard_delta)
     if not output_tabular or max_vectorized_block_bytes is not None:
         yield from _chunk_output_rows(step_out, output_block_rows)
         return
@@ -185,6 +190,7 @@ def _execute_vector_segment(
     *,
     vectorized_chunk_rows: int,
     max_vectorized_block_bytes: int | None,
+    on_shard_delta: ShardDeltaFn | None,
 ) -> Iterator[TabularBlock]:
     pending_rows = RowBuffer()
     current_chunk_rows = max(1, int(vectorized_chunk_rows))
@@ -195,6 +201,16 @@ def _execute_vector_segment(
         for op in ops:
             out = apply_vectorized_op(out, op)
         return out
+
+    def _emit_tabular_delta(*, produced: TabularBlock, consumed: TabularBlock) -> None:
+        if on_shard_delta is None:
+            return
+        delta = counts_delta(
+            produced=count_tabular_by_shard(produced),
+            consumed=count_tabular_by_shard(consumed),
+        )
+        if delta:
+            on_shard_delta(delta)
 
     def _chunk_rows_for_budget() -> int:
         if (
@@ -246,6 +262,7 @@ def _execute_vector_segment(
                 continue
 
             pending_rows.discard(rows_for_try)
+            _emit_tabular_delta(produced=out, consumed=table)
             if out.num_rows > 0:
                 yield out
             return
@@ -293,6 +310,7 @@ def _execute_vector_segment(
                 continue
 
             estimated_row_bytes = chunk.nbytes / chunk_rows
+            _emit_tabular_delta(produced=out, consumed=chunk)
             if out.num_rows > 0:
                 yield out
 

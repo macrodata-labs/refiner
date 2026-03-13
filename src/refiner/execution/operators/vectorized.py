@@ -17,14 +17,16 @@ from refiner.pipeline.steps import (
     WithColumnsStep,
 )
 from refiner.pipeline.data.row import ArrowRowView, Row
+from refiner.execution.tracking.shards import SHARD_ID_COLUMN
 
 TabularBlock: TypeAlias = pa.Table | pa.RecordBatch
 
 
 def rows_to_table(rows: Iterable[Row]) -> pa.Table:
-    if isinstance(rows, list):
-        return pa.Table.from_pylist(rows)
-    return pa.Table.from_pylist(list(rows))
+    materialized = list(rows) if not isinstance(rows, list) else rows
+    return pa.Table.from_pylist(
+        [_row_to_record(row) for row in materialized],
+    )
 
 
 def iter_table_rows(table: pa.Table) -> Iterator[Row]:
@@ -32,11 +34,16 @@ def iter_table_rows(table: pa.Table) -> Iterator[Row]:
     columns = tuple(table.column(name) for name in names)
     index_by_name = {name: i for i, name in enumerate(names)}
     for idx in range(table.num_rows):
+        shard_id = None
+        if SHARD_ID_COLUMN in index_by_name:
+            shard = columns[index_by_name[SHARD_ID_COLUMN]][idx].as_py()
+            shard_id = shard if isinstance(shard, str) else None
         yield ArrowRowView(
             names=names,
             columns=columns,
             index_by_name=index_by_name,
             row_idx=idx,
+            shard_id=shard_id,
         )
 
 
@@ -46,11 +53,16 @@ def iter_record_batch_rows(batch: pa.RecordBatch) -> Iterator[Row]:
     columns = tuple(batch.column(i) for i in range(batch.num_columns))
     index_by_name = {name: i for i, name in enumerate(names)}
     for idx in range(batch.num_rows):
+        shard_id = None
+        if SHARD_ID_COLUMN in index_by_name:
+            shard = columns[index_by_name[SHARD_ID_COLUMN]][idx].as_py()
+            shard_id = shard if isinstance(shard, str) else None
         yield ArrowRowView(
             names=names,
             columns=columns,
             index_by_name=index_by_name,
             row_idx=idx,
+            shard_id=shard_id,
         )
 
 
@@ -105,6 +117,13 @@ def _broadcast_scalar(
     if num_rows <= 0:
         return pa.array([], type=values.type)
     return pa.repeat(values, num_rows)
+
+
+def _row_to_record(row: Row) -> dict[str, object]:
+    record = row.to_dict()
+    if row.shard_id is not None:
+        record[SHARD_ID_COLUMN] = row.shard_id
+    return record
 
 
 __all__ = [

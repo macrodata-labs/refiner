@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from os import PathLike
 from typing import Any, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.local import LocalFileSystem
 
-DataFileLike: TypeAlias = Union[str, "DataFile"]
+DataFileLike: TypeAlias = Union[str, PathLike[str], "DataFile"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,9 @@ class DataFile:
         if isinstance(data, cls):
             return data
 
+        if isinstance(data, PathLike):
+            data = str(data)
+
         # simple string url/path
         if isinstance(data, str):
             if fs is not None:
@@ -53,7 +57,7 @@ class DataFile:
             )
             return cls(fs=next_fs, path=path)
 
-        raise TypeError("DataFileLike must be: str | DataFile")
+        raise TypeError("DataFileLike must be: str | PathLike | DataFile")
 
     def open(self, mode: str = "rt", **kwargs):
         return self.fs.open(self.path, mode=mode, **kwargs)

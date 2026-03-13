@@ -3,6 +3,7 @@ from .worker.metrics.api import log_gauge, log_gauges, log_histogram, log_throug
 from .pipeline.expressions import coalesce, col, if_else, lit
 from .pipeline import (
     RefinerPipeline,
+    from_source,
     from_items,
     read_csv,
     read_jsonl,
@@ -25,6 +26,7 @@ __all__ = [
     "read_jsonl",
     "read_parquet",
     "from_items",
+    "from_source",
     "task",
     "log_throughput",
     "log_gauge",
