@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, TypeAlias
 
@@ -22,6 +22,7 @@ PredicateFn: TypeAlias = Callable[[Row], bool]
 BatchItem: TypeAlias = Row | Mapping[str, Any] | None
 BatchFn: TypeAlias = Callable[[list[Row]], Iterable[BatchItem]]
 FlatMapFn: TypeAlias = Callable[[Row], Iterable[BatchItem]]
+AsyncMapFn: TypeAlias = Callable[[Row], Awaitable[MapResult] | MapResult]
 
 
 class RowStep(RefinerStep, ABC):
@@ -37,6 +38,31 @@ class FnRowStep(RowStep):
     op_name: str | None = None
 
     def apply_row(self, row: Row) -> MapResult:
+        return self.fn(row)
+
+
+class AsyncRowStep(RefinerStep, ABC):
+    max_in_flight: int
+    preserve_order: bool
+
+    @abstractmethod
+    def apply_row_async(self, row: Row) -> Awaitable[MapResult] | MapResult:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class FnAsyncRowStep(AsyncRowStep):
+    fn: AsyncMapFn
+    index: int
+    max_in_flight: int = 16
+    preserve_order: bool = True
+    op_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_in_flight <= 0:
+            raise ValueError("max_in_flight must be > 0")
+
+    def apply_row_async(self, row: Row) -> Awaitable[MapResult] | MapResult:
         return self.fn(row)
 
 
@@ -175,6 +201,8 @@ __all__ = [
     "BatchStep",
     "FlatMapStep",
     "FnRowStep",
+    "AsyncRowStep",
+    "FnAsyncRowStep",
     "FnBatchStep",
     "FnFlatMapStep",
     "FilterRowStep",
@@ -184,6 +212,7 @@ __all__ = [
     "BatchItem",
     "BatchFn",
     "FlatMapFn",
+    "AsyncMapFn",
     "SelectStep",
     "WithColumnsStep",
     "DropStep",

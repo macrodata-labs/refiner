@@ -32,6 +32,12 @@ Use `.take(n)` for quick inspection:
 sample = pipeline.take(10)
 ```
 
+## Sinks Are Ignored By Local Iteration
+
+If a pipeline has a sink attached, `iter_rows()`, `materialize()`, and `take()` still behave as read/debug helpers and do not write output files.
+
+Sink writes happen only in launcher/worker execution such as `launch_local(...)`.
+
 ## Vectorized Memory Guardrail
 
 Use a max-bytes cap when running vectorized segments to reduce OOM risk:
@@ -50,4 +56,5 @@ Local iteration consumes the source stream continuously, so downstream batch ste
 
 - Local execution compiles pipeline steps into row/vector segments once per pipeline instance and reuses that plan across repeated runs.
 - Row/UDF segments emit row blocks; when a vectorized segment follows, those rows are converted back to Arrow blocks at the segment boundary.
+- Async row steps use the same execution engine and run through a shared process-local asyncio runtime.
 - `take(n)` stops early without forcing full-stream materialization.

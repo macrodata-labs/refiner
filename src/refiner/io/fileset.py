@@ -3,6 +3,7 @@ from __future__ import annotations
 import glob
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from os import PathLike
 from typing import Any, TypeAlias, Union
 
 from fsspec import AbstractFileSystem, url_to_fs
@@ -11,7 +12,9 @@ from fsspec.implementations.local import LocalFileSystem
 from .datafile import DataFile
 from .datafolder import DataFolder
 
-DataFileSetInput: TypeAlias = Union[str, DataFile, DataFolder, "DataFileSet"]
+DataFileSetInput: TypeAlias = Union[
+    str, PathLike[str], DataFile, DataFolder, "DataFileSet"
+]
 DataFileSetLike: TypeAlias = Union[DataFileSetInput, Sequence[DataFileSetInput]]
 
 
@@ -51,7 +54,7 @@ class DataFileSet:
         if isinstance(data, cls):
             return data
 
-        if isinstance(data, (str, DataFile, DataFolder, DataFileSet)):
+        if isinstance(data, (str, PathLike, DataFile, DataFolder, DataFileSet)):
             inputs = (data,)
         else:
             inputs = tuple(data)
@@ -122,9 +125,12 @@ class DataFileSet:
                 _add_files(_list_dir(item.path))  # type: ignore[attr-defined]
                 continue
 
+            if isinstance(item, PathLike):
+                item = str(item)
+
             if not isinstance(item, str):
                 raise TypeError(
-                    "DataFileSet inputs must be str | DataFile | DataFolder | DataFileSet"
+                    "DataFileSet inputs must be str | PathLike | DataFile | DataFolder | DataFileSet"
                 )
 
             if resolved_fs is not None:

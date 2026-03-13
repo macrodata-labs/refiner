@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Mapping
+from os import PathLike
 from typing import IO, Any, TypeAlias, Union
 
 from fsspec import AbstractFileSystem, url_to_fs
@@ -7,7 +8,7 @@ from fsspec.implementations.local import LocalFileSystem
 
 from .datafile import DataFile
 
-DataFolderLike: TypeAlias = Union[str, "DataFolder"]
+DataFolderLike: TypeAlias = Union[str, PathLike[str], "DataFolder"]
 
 
 class DataFolder(DirFileSystem):
@@ -70,13 +71,15 @@ class DataFolder(DirFileSystem):
         # fully initialized DataFolder object
         if isinstance(data, cls):
             return data
+        if isinstance(data, PathLike):
+            data = str(data)
         # simple string path
         if isinstance(data, str):
             if fs is not None:
                 path = fs._strip_protocol(data)  # type: ignore[attr-defined]
                 return cls(path, fs=fs)
             return cls(data, **dict(storage_options or {}))
-        raise TypeError("You must pass a DataFolder instance or a str path")
+        raise TypeError("You must pass a DataFolder instance, str path, or PathLike")
 
     def _abs_path(self, path: str) -> str:
         # make sure we strip file:// and similar

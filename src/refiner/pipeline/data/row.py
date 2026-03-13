@@ -5,6 +5,16 @@ from dataclasses import dataclass
 from typing import Any
 
 _MISSING = object()
+_SHARD_ID_KEY = "__shard_id"
+
+
+def _next_shard_id(current: str | None, patch: Mapping[str, Any]) -> str | None:
+    if _SHARD_ID_KEY not in patch:
+        return current
+    value = patch[_SHARD_ID_KEY]
+    if value is None:
+        return None
+    return value if isinstance(value, str) else str(value)
 
 
 class Row(Mapping[str, Any]):
@@ -17,6 +27,15 @@ class Row(Mapping[str, Any]):
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.items())
+
+    @property
+    def shard_id(self) -> str | None:
+        return None
+
+    def require_shard_id(self) -> str:
+        if self.shard_id is None:
+            raise ValueError("row is missing shard_id")
+        return self.shard_id
 
     def update(self, patch: Mapping[str, Any] | None = None, /, **kwargs: Any) -> "Row":
         """Return a new Row with the given updates applied (immutable).
@@ -32,7 +51,9 @@ class Row(Mapping[str, Any]):
         if kwargs:
             merged.update(kwargs)
 
-        if not merged:
+        shard_id = _next_shard_id(self.shard_id, merged)
+        merged.pop(_SHARD_ID_KEY, None)
+        if not merged and shard_id == self.shard_id:
             return self
 
         if isinstance(self, _OverlayRow):
@@ -40,9 +61,22 @@ class Row(Mapping[str, Any]):
             deleted = self.deleted.difference(merged.keys())
             combined_patch = dict(self.patch)
             combined_patch.update(merged)
-            return _OverlayRow(base=self.base, patch=combined_patch, deleted=deleted)
+            return _OverlayRow(
+                base=self.base,
+                patch=combined_patch,
+                deleted=deleted,
+                shard_id=shard_id,
+            )
 
-        return _OverlayRow(base=self, patch=merged, deleted=frozenset())
+        return _OverlayRow(
+            base=self,
+            patch=merged,
+            deleted=frozenset(),
+            shard_id=shard_id,
+        )
+
+    def with_shard_id(self, shard_id: str) -> "Row":
+        return self.update({_SHARD_ID_KEY: shard_id})
 
     def drop(self, *keys: str) -> "Row":
         """Return a new Row with the given keys hidden (immutable).
@@ -81,6 +115,7 @@ class _OverlayRow(Row):
     base: Row
     patch: Mapping[str, Any]
     deleted: frozenset[str]
+    shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:
         if key in self.deleted:
@@ -113,15 +148,31 @@ class DictRow(Row):
     """A `Row` backed by a plain mapping (e.g. from CSV parsing)."""
 
     data: Mapping[str, Any]
+    shard_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.shard_id is not None:
+            return
+        value = self.data.get(_SHARD_ID_KEY)
+        if value is None:
+            return
+        object.__setattr__(
+            self, "shard_id", value if isinstance(value, str) else str(value)
+        )
 
     def __getitem__(self, key: str) -> Any:
+        if key == _SHARD_ID_KEY:
+            raise KeyError(key)
         return self.data[key]
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.data)
+        for key in self.data:
+            if key == _SHARD_ID_KEY:
+                continue
+            yield key
 
     def __len__(self) -> int:
-        return len(self.data)
+        return len(self.data) - (1 if _SHARD_ID_KEY in self.data else 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,8 +188,11 @@ class ArrowRowView(Row):
     columns: tuple[Any, ...]
     index_by_name: Mapping[str, int]
     row_idx: int
+    shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:
+        if key == _SHARD_ID_KEY:
+            raise KeyError(key)
         try:
             j = self.index_by_name[key]
         except KeyError as e:
@@ -146,10 +200,13 @@ class ArrowRowView(Row):
         return self.columns[j][self.row_idx].as_py()
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.names)
+        for key in self.names:
+            if key == _SHARD_ID_KEY:
+                continue
+            yield key
 
     def __len__(self) -> int:
-        return len(self.names)
+        return len(self.names) - (1 if _SHARD_ID_KEY in self.index_by_name else 0)
 
 
 __all__ = ["Row", "DictRow", "ArrowRowView"]

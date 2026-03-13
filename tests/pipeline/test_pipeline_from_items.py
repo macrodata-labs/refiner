@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from refiner.pipeline import from_items
+from refiner.pipeline import from_source
+from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.row import DictRow, Row
+from refiner.pipeline.sources.base import BaseSource
 
 
 def test_from_items_yields_rows_across_shards() -> None:
@@ -23,3 +29,19 @@ def test_from_items_wraps_primitives_in_items_column() -> None:
     pipeline = from_items([1, "x", True]).map(lambda row: {"v": row["item"]})
     out = list(pipeline.iter_rows())
     assert [r["v"] for r in out] == [1, "x", True]
+
+
+class _CustomSource(BaseSource):
+    def list_shards(self) -> list[Shard]:
+        return [Shard(path="custom", start=0, end=2)]
+
+    def read_shard(self, shard: Shard) -> Iterator[Row]:
+        del shard
+        yield DictRow({"x": 1})
+        yield DictRow({"x": 2})
+
+
+def test_from_source_accepts_custom_source() -> None:
+    pipeline = from_source(_CustomSource()).map(lambda row: {"y": int(row["x"]) + 1})
+    out = list(pipeline.iter_rows())
+    assert [int(row["y"]) for row in out] == [2, 3]

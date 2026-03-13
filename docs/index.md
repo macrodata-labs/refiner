@@ -18,8 +18,9 @@ Refiner is being built as a batch-first processing engine with:
 
 ## What You Can Use Now
 
-- Build pipelines with `read_csv(...)`, `read_jsonl(...)`, or `read_parquet(...)`.
-- Add row-level transforms with `.map(...)`, batch transforms with `.batch_map(...)`, and expansion with `.flat_map(...)`.
+- Build pipelines with `read_csv(...)`, `read_jsonl(...)`, `read_parquet(...)`, or `from_source(...)`.
+- Add row-level transforms with `.map(...)`, `.map_async(...)`, batch transforms with `.batch_map(...)`, and expansion with `.flat_map(...)`.
+- Attach output sinks with `.write_jsonl(...)` or `.write_parquet(...)`.
 - Run locally with lazy iteration (`for row in pipeline`) or eager collection (`pipeline.materialize()`).
 - Run worker-driven execution with `Worker.run()` for shard-claiming and lifecycle updates.
 

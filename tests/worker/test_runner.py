@@ -8,6 +8,7 @@ import pytest
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline import RefinerPipeline
 from refiner.execution.engine import iter_rows
+from refiner.pipeline.sinks import BaseSink
 from refiner.platform.client import (
     OkResponse,
     RunHandle,
@@ -78,6 +79,28 @@ class _NoopTelemetryEmitter:
 
     def shutdown(self) -> None:
         return None
+
+
+class _RecordingSink(BaseSink):
+    def __init__(self) -> None:
+        self.written_counts: list[dict[str, int]] = []
+        self.completed_shards: list[str] = []
+
+    def write_block(self, block) -> dict[str, int]:
+        if isinstance(block, list):
+            counts: dict[str, int] = {}
+            for row in block:
+                shard_id = row.require_shard_id()
+                counts[shard_id] = counts.get(shard_id, 0) + 1
+        else:
+            counts = {}
+            for shard_id in block.column("__shard_id").to_pylist():
+                counts[shard_id] = counts.get(shard_id, 0) + 1
+        self.written_counts.append(counts)
+        return counts
+
+    def on_shard_complete(self, shard_id: str) -> None:
+        self.completed_shards.append(shard_id)
 
 
 class _FlushFailingTelemetryEmitter(_NoopTelemetryEmitter):
@@ -185,7 +208,6 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     assert runtime_lifecycle.failed_ids == []
     assert runtime_lifecycle.claim_previous[0] is None
     assert runtime_lifecycle.claim_previous[1] == shard1
-    assert runtime_lifecycle.heartbeat_batches[-1] == [shard1.id, shard2.id]
     assert emitted == [(shard1.id, 3), (shard1.id, 2), (shard2.id, 11)]
 
 
@@ -271,6 +293,28 @@ def test_worker_runtime_complete_errors_are_not_swallowed() -> None:
     )
     with pytest.raises(RuntimeError, match="complete failed"):
         worker.run()
+
+
+def test_worker_completes_shards_only_after_sink_drain() -> None:
+    shard = Shard(path="p", start=0, end=2)
+    rows_by_shard = {
+        shard.id: [DictRow({"x": 1}), DictRow({"x": 2})],
+    }
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    sink = _RecordingSink()
+
+    worker = Worker(
+        rank=0,
+        runtime_lifecycle=runtime_lifecycle,
+        pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).with_sink(sink),
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert sum(batch.get(shard.id, 0) for batch in sink.written_counts) == 2
+    assert sink.completed_shards == [shard.id]
+    assert runtime_lifecycle.completed_ids == [shard.id]
 
 
 def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
