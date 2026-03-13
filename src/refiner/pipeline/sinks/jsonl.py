@@ -30,7 +30,7 @@ class JsonlSink(BaseSink):
         file = self._files.get(shard_id)
         if file is not None:
             return file
-        file = self.output.open(self._relpath(shard_id), mode="at", encoding="utf-8")
+        file = self.output.open(self._relpath(shard_id), mode="wt", encoding="utf-8")
         self._files[shard_id] = file
         return file
 
