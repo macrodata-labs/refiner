@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import refiner as mdr
-from refiner.sources.row import Row
+from refiner.pipeline.data.row import Row
 
 
 def build_input(path: Path) -> None:
@@ -93,7 +93,7 @@ def main() -> None:
         stats = pipeline.launch_local(
             name="Example: UI Visibility Mixed Steps",
             num_workers=2,
-            heartbeat_every_rows=2,
+            heartbeat_interval_seconds=2,
             workdir=str(tmp_path / "workdir"),
         )
         print("Launch stats:", stats)

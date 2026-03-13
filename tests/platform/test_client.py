@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-from typing import cast
-
 from refiner.platform.client import MacrodataClient
-from refiner.pipeline import RefinerPipeline
 
 
 def test_create_job_treats_whitespace_workspace_slug_as_none(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "refiner.platform.client.compile_pipeline_plan",
-        lambda pipeline: [{"stage": "s1"}],
-    )
-    monkeypatch.setattr(
-        "refiner.platform.client.request_json",
+        "refiner.platform.client.api.request_json",
         lambda **_: {
             "job": {
                 "id": "job-1",
@@ -25,8 +18,13 @@ def test_create_job_treats_whitespace_workspace_slug_as_none(
     )
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
-    context = client.create_job(name="Job", pipeline=cast(RefinerPipeline, object()))
+    context = client.create_job(
+        name="Job",
+        executor={"type": "refiner-local"},
+        plan={"stages": [{"name": "stage_0", "steps": []}]},
+        manifest={"version": 1},
+    )
 
     assert context.job_id == "job-1"
-    assert context.stage_id == "0"
+    assert context.stage_index == 0
     assert context.workspace_slug is None

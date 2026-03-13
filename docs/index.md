@@ -21,27 +21,27 @@ Refiner is being built as a batch-first processing engine with:
 - Build pipelines with `read_csv(...)`, `read_jsonl(...)`, or `read_parquet(...)`.
 - Add row-level transforms with `.map(...)`, batch transforms with `.batch_map(...)`, and expansion with `.flat_map(...)`.
 - Run locally with lazy iteration (`for row in pipeline`) or eager collection (`pipeline.materialize()`).
-- Run worker-driven execution with `Worker.run()` for shard-claiming and ledger updates.
+- Run worker-driven execution with `Worker.run()` for shard-claiming and lifecycle updates.
 
 ## Start Here
 
 1. `docs/pipeline-basics.md` for core API usage.
 2. `docs/local-execution.md` for lazy local iteration and materialization.
 3. `docs/readers-and-sharding.md` for input readers and shard behavior.
-4. `docs/worker-runtime.md` for worker lifecycle and ledger interaction.
+4. `docs/worker-runtime.md` for worker lifecycle and runtime lifecycle interaction.
 5. `docs/launchers.md` for local launcher usage.
 6. `docs/expression-transforms.md` for expression-backed vectorized transforms.
 7. `docs/cli-auth.md` for `macrodata login`, `whoami`, and `logout`.
-8. `docs/observability.md` for Macrodata Observer lifecycle integration.
+8. `docs/observability.md` for Macrodata platform lifecycle integration.
 
 ## Planned Additions
 
-- `launch_local()` user API and launcher interfaces shared by future Slurm/Ray launchers.
+- Launcher interfaces shared by future Slurm/Ray backends.
 - Stage/materialization boundary operators (shuffle, dedup, sort, join).
 - Async-island execution model for model-based processing with pull-based completion.
 - Expanded observability docs for backend metric querying and cardinality guardrails.
 
 ## Internal Notes
 
-- These docs reflect current behavior in `src/refiner/pipeline.py`, `src/refiner/sources/readers/`, and `src/refiner/runtime/worker.py`.
+- These docs reflect current behavior in `src/refiner/pipeline/`, `src/refiner/execution/`, `src/refiner/worker/`, and `src/refiner/launchers/`.
 - Long-term goals are aligned with `OVERVIEW.md` and should remain consistent with architecture updates.

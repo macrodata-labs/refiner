@@ -26,6 +26,7 @@ dependencies = [
     "psutil",
     "orjson",
     "pyarrow",
+    "msgspec>=0.20.0",
 ]
 
 [project.scripts]

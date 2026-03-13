@@ -1,4 +1,4 @@
-from refiner.sources.readers.utils import align_byte_range_to_newlines
+from refiner.pipeline.sources.readers.utils import align_byte_range_to_newlines
 
 
 def test_align_byte_range_to_newlines_includes_line_starts(tmp_path):
