@@ -53,7 +53,7 @@ class Worker:
             host = None
         started_resp = self.run_handle.client.report_worker_started(
             job_id=self.run_handle.job_id,
-            stage_id=self.run_handle.stage_id,
+            stage_index=self.run_handle.stage_index,
             host=host,
             worker_name=self.run_handle.worker_name,
         )
@@ -88,9 +88,9 @@ class Worker:
         if run_handle is not None and run_handle.client is not None:
             runtime_lifecycle, active_run = self._start_platform_session()
             obs_logger.info(
-                "worker started job_id={} stage_id={} worker_id={}",
+                "worker started job_id={} stage_index={} worker_id={}",
                 active_run.job_id,
-                active_run.stage_id,
+                active_run.stage_index,
                 active_run.worker_id,
             )
             try:
@@ -98,7 +98,7 @@ class Worker:
                     base_url=run_handle.client.base_url,
                     api_key=run_handle.client.api_key,
                     job_id=active_run.job_id,
-                    stage_index=int(active_run.stage_id),
+                    stage_index=active_run.stage_index,
                     worker_id=active_run.worker_id or "",
                 )
             except Exception as e:  # noqa: BLE001
@@ -204,15 +204,15 @@ class Worker:
                     try:
                         active_run.client.report_worker_finished(
                             job_id=active_run.job_id,
-                            stage_id=active_run.stage_id,
+                            stage_index=active_run.stage_index,
                             worker_id=active_run.worker_id or "",
                             status=status,
                             error=error,
                         )
                         obs_logger.info(
-                            "worker finished job_id={} stage_id={} worker_id={} status={}",
+                            "worker finished job_id={} stage_index={} worker_id={} status={}",
                             active_run.job_id,
-                            active_run.stage_id,
+                            active_run.stage_index,
                             active_run.worker_id,
                             status,
                         )

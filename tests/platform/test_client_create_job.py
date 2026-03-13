@@ -31,7 +31,7 @@ def test_create_job_includes_manifest_refiner_ref(monkeypatch) -> None:
         manifest={"version": 1, "environment": {"refiner_ref": "abc123def456"}},
     )
     assert ctx.job_id == "job-1"
-    assert ctx.stage_id == "0"
+    assert ctx.stage_index == 0
 
     json_payload = cast(dict[str, object], captured["json_payload"])
     assert json_payload["executor"] == {"type": "refiner-local"}

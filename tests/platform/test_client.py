@@ -26,5 +26,5 @@ def test_create_job_treats_whitespace_workspace_slug_as_none(
     )
 
     assert context.job_id == "job-1"
-    assert context.stage_id == "0"
+    assert context.stage_index == 0
     assert context.workspace_slug is None

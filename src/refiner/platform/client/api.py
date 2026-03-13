@@ -76,7 +76,7 @@ class MacrodataClient:
         created_job = CreateJobResponse.from_envelope(job_envelope)
         return RunHandle(
             job_id=created_job.job_id,
-            stage_id=created_job.stage_id,
+            stage_index=created_job.stage_index,
             client=self,
             workspace_slug=created_job.workspace_slug,
         )
@@ -92,12 +92,12 @@ class MacrodataClient:
         return parse_json_response(response_data, VerifyApiKeyResponse)
 
     def shard_register(
-        self, *, job_id: str, stage_id: str, shards: list["Shard"]
+        self, *, job_id: str, stage_index: int, shards: list["Shard"]
     ) -> OkResponse:
         shard_descriptors = compile_shard_descriptors(shards)
         response_data = request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/shards/register",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/register",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"shards": [shard.to_dict() for shard in shard_descriptors]},
@@ -108,7 +108,7 @@ class MacrodataClient:
         self,
         *,
         job_id: str,
-        stage_id: str,
+        stage_index: int,
         host: str | None = None,
         worker_name: str | None = None,
     ) -> WorkerStartedResponse:
@@ -120,7 +120,7 @@ class MacrodataClient:
 
         response_data = request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/start",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/start",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=request_body,
@@ -131,7 +131,7 @@ class MacrodataClient:
         self,
         *,
         job_id: str,
-        stage_id: str,
+        stage_index: int,
         worker_id: str,
         status: str,
         error: str | None = None,
@@ -141,7 +141,7 @@ class MacrodataClient:
             request_body["error"] = error
         response_data = request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/workers/{worker_id}/finish",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/finish",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=request_body,
@@ -149,11 +149,11 @@ class MacrodataClient:
         return parse_json_response(response_data, OkResponse)
 
     def report_stage_finished(
-        self, *, job_id: str, stage_id: str, status: str
+        self, *, job_id: str, stage_index: int, status: str
     ) -> OkResponse:
         response_data = request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/finish",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"status": status},
@@ -187,7 +187,7 @@ class MacrodataClient:
         self,
         *,
         job_id: str,
-        stage_id: str,
+        stage_index: int,
         worker_id: str,
         previous_shard_id: str | None = None,
     ) -> ShardClaimResponse:
@@ -196,7 +196,7 @@ class MacrodataClient:
             request_body["previous_shard_id"] = previous_shard_id
         response_data = request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/shards/claim",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/claim",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=request_body,
@@ -204,11 +204,11 @@ class MacrodataClient:
         return parse_json_response(response_data, ShardClaimResponse)
 
     def shard_heartbeat(
-        self, *, job_id: str, stage_id: str, worker_id: str, shard_ids: list[str]
+        self, *, job_id: str, stage_index: int, worker_id: str, shard_ids: list[str]
     ) -> OkResponse:
         response_data = request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/shards/heartbeat",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/heartbeat",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"worker_id": worker_id, "shard_ids": shard_ids},
@@ -216,11 +216,11 @@ class MacrodataClient:
         return parse_json_response(response_data, OkResponse)
 
     def shard_finalized_workers(
-        self, *, job_id: str, stage_id: str
+        self, *, job_id: str, stage_index: int
     ) -> FinalizedShardWorkersResponse:
         response_data = request_json(
             method="GET",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/shards/finalized-workers",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/finalized-workers",
             api_key=self.api_key,
             base_url=self.base_url,
         )
@@ -230,7 +230,7 @@ class MacrodataClient:
         self,
         *,
         job_id: str,
-        stage_id: str,
+        stage_index: int,
         worker_id: str,
         shard_id: str,
         status: str,
@@ -241,7 +241,7 @@ class MacrodataClient:
             request_body["error"] = error
         response_data = request_json(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_id}/shards/{shard_id}/finish",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/{shard_id}/finish",
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload=request_body,

@@ -42,7 +42,7 @@ class CreateJobEnvelope(msgspec.Struct, frozen=True):
 
 class CreateJobResponse(msgspec.Struct, frozen=True):
     job_id: str
-    stage_id: str
+    stage_index: int
     workspace_slug: str | None = None
 
     @classmethod
@@ -52,7 +52,7 @@ class CreateJobResponse(msgspec.Struct, frozen=True):
         workspace_slug = envelope.job.workspace_slug
         return cls(
             job_id=envelope.job.id,
-            stage_id=str(envelope.job.stages[0].index),
+            stage_index=envelope.job.stages[0].index,
             workspace_slug=workspace_slug.strip()
             if workspace_slug and workspace_slug.strip()
             else None,
@@ -62,7 +62,7 @@ class CreateJobResponse(msgspec.Struct, frozen=True):
 @dataclass(frozen=True, slots=True)
 class RunHandle:
     job_id: str
-    stage_id: str
+    stage_index: int
     client: Any | None = None
     workspace_slug: str | None = None
     worker_name: str | None = None
@@ -76,7 +76,7 @@ class RunHandle:
     ) -> RunHandle:
         return RunHandle(
             job_id=self.job_id,
-            stage_id=self.stage_id,
+            stage_index=self.stage_index,
             client=self.client,
             workspace_slug=self.workspace_slug,
             worker_name=worker_name if worker_name is not None else self.worker_name,
@@ -160,11 +160,23 @@ class CloudPipelinePayload:
 
 
 @dataclass(frozen=True, slots=True)
+class StagePayload:
+    stage_index: int
+    pipeline_payload: CloudPipelinePayload
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stage_index": self.stage_index,
+            "pipeline_payload": self.pipeline_payload.to_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CloudRunCreateRequest:
     name: str
     plan: dict[str, Any]
     runtime: CloudRuntimeConfig
-    pipeline_payload: CloudPipelinePayload
+    stage_payloads: list[StagePayload]
     manifest: dict[str, Any] | None = None
     sync_local_dependencies: bool = True
 
@@ -177,7 +189,7 @@ class CloudRunCreateRequest:
             },
             "plan": self.plan,
             "runtime": self.runtime.to_dict(),
-            "pipeline_payload": self.pipeline_payload.to_dict(),
+            "stage_payloads": [payload.to_dict() for payload in self.stage_payloads],
         }
         if self.manifest is not None:
             payload["manifest"] = self.manifest
@@ -186,5 +198,5 @@ class CloudRunCreateRequest:
 
 class CloudRunCreateResponse(msgspec.Struct, frozen=True):
     job_id: str
-    stage_id: str
+    stage_index: int
     status: str

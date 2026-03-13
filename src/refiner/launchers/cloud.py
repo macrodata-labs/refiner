@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
-from refiner.platform.client import CloudRunCreateRequest, CloudRuntimeConfig
+from refiner.platform.client import (
+    CloudRunCreateRequest,
+    CloudRuntimeConfig,
+    StagePayload,
+)
 from refiner.platform.client import serialize_pipeline_inline
 
 from .base import BaseLauncher
@@ -15,7 +19,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class CloudLaunchResult:
     job_id: str
-    stage_id: str
+    stage_index: int
     status: str
 
 
@@ -57,16 +61,25 @@ class CloudLauncher(BaseLauncher):
             client = self._require_platform_client()
         except RuntimeError as err:
             raise SystemExit(str(err)) from err
+        compiled_plan = self._compiled_plan()
+        stage_definitions = cast(list[dict[str, Any]], compiled_plan.get("stages", []))
+        serialized_pipeline = serialize_pipeline_inline(self.pipeline)
         request = CloudRunCreateRequest(
             name=self.name,
-            plan=self._compiled_plan(),
+            plan=compiled_plan,
             runtime=CloudRuntimeConfig(
                 num_workers=self.num_workers,
                 heartbeat_interval_seconds=self.heartbeat_interval_seconds,
                 cpus_per_worker=self.cpus_per_worker,
                 mem_mb_per_worker=self.mem_mb_per_worker,
             ),
-            pipeline_payload=serialize_pipeline_inline(self.pipeline),
+            stage_payloads=[
+                StagePayload(
+                    stage_index=int(stage.get("index", position)),
+                    pipeline_payload=serialized_pipeline,
+                )
+                for position, stage in enumerate(stage_definitions)
+            ],
             manifest=self._run_manifest(),
             sync_local_dependencies=self.sync_local_dependencies,
         )
@@ -76,7 +89,7 @@ class CloudLauncher(BaseLauncher):
         )
         return CloudLaunchResult(
             job_id=resp.job_id,
-            stage_id=resp.stage_id,
+            stage_index=resp.stage_index,
             status=resp.status,
         )
 

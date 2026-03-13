@@ -29,7 +29,7 @@ def main() -> None:
 
     print("Cloud submission accepted")
     print(f"job_id  : {result.job_id}")
-    print(f"stage_id: {result.stage_id}")
+    print(f"stage_index: {result.stage_index}")
     print(f"status  : {result.status}")
 
 

@@ -288,7 +288,7 @@ def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
         pipeline=pipeline,
         run_handle=RunHandle(
             job_id="job",
-            stage_id="0",
+            stage_index=0,
             client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
             worker_name="worker-0",
         ),

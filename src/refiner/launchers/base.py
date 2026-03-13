@@ -126,7 +126,7 @@ class BaseLauncher(ABC):
             self.job_id = job.job_id
             client.shard_register(
                 job_id=job.job_id,
-                stage_id=job.stage_id,
+                stage_index=job.stage_index,
                 shards=shards,
             )
             return job
@@ -147,7 +147,7 @@ class BaseLauncher(ABC):
         try:
             platform_run.client.report_stage_finished(
                 job_id=platform_run.job_id,
-                stage_id=platform_run.stage_id,
+                stage_index=platform_run.stage_index,
                 status=status,
             )
         except Exception as e:  # noqa: BLE001

@@ -18,7 +18,7 @@ def test_shard_finalized_workers_returns_typed_rows(monkeypatch) -> None:
     monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
-    response = client.shard_finalized_workers(job_id="job-1", stage_id="0")
+    response = client.shard_finalized_workers(job_id="job-1", stage_index=0)
 
     assert captured["method"] == "GET"
     assert captured["path"] == "/api/jobs/job-1/stages/0/shards/finalized-workers"

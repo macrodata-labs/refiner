@@ -22,7 +22,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
 
             class _Resp:
                 job_id = "job-123"
-                stage_id = "stage-456"
+                stage_index = 0
                 status = "queued"
 
             return _Resp()
@@ -60,7 +60,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     )
 
     assert result.job_id == "job-123"
-    assert result.stage_id == "stage-456"
+    assert result.stage_index == 0
     assert result.status == "queued"
     assert captured["client_initialized"] is True
 
@@ -72,6 +72,9 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.runtime.mem_mb_per_worker == 8192
     assert request.sync_local_dependencies is True
     assert request.plan["stages"][0]["name"] == "stage_0"
+    assert len(request.stage_payloads) == 1
+    assert request.stage_payloads[0].stage_index == 0
+    assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
     assert request.manifest == {
         "version": 1,
         "environment": {"refiner_ref": "abc123def456"},
@@ -91,7 +94,7 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
 
             class _Resp:
                 job_id = "job-123"
-                stage_id = "stage-456"
+                stage_index = 0
                 status = "queued"
 
             return _Resp()

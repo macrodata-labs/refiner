@@ -38,7 +38,7 @@ def test_platform_runtime_register_and_lifecycle() -> None:
     lifecycle = PlatformRuntimeLifecycle(
         run=RunHandle(
             job_id="job-1",
-            stage_id="stage-1",
+            stage_index=1,
             client=cast(Any, FakeClient()),
             worker_id="worker-7",
         ),
@@ -60,7 +60,7 @@ def test_platform_runtime_register_and_lifecycle() -> None:
     ]
     register_kwargs = calls[0][1]
     assert register_kwargs["job_id"] == "job-1"
-    assert register_kwargs["stage_id"] == "stage-1"
+    assert register_kwargs["stage_index"] == 1
 
 
 def test_platform_runtime_claim_none_when_queue_empty() -> None:
@@ -71,7 +71,7 @@ def test_platform_runtime_claim_none_when_queue_empty() -> None:
     lifecycle = PlatformRuntimeLifecycle(
         run=RunHandle(
             job_id="job-1",
-            stage_id="stage-1",
+            stage_index=1,
             client=cast(Any, FakeClient()),
             worker_id="worker-1",
         ),

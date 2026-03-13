@@ -38,7 +38,7 @@ def main() -> int:
     parser.add_argument("--stats-path", type=str, required=True)
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--mem-mb-per-worker", type=int, default=0)
-    parser.add_argument("--stage-id", type=str, default="")
+    parser.add_argument("--stage-index", type=int, default=-1)
     parser.add_argument("--worker-name", type=str, default="")
     parser.add_argument(
         "--runtime-backend",
@@ -63,17 +63,17 @@ def main() -> int:
         runtime_lifecycle = None
 
         if args.runtime_backend != "file":
-            if not args.job_id or not args.stage_id:
+            if not args.job_id or args.stage_index < 0:
                 if args.runtime_backend == "platform":
                     raise ValueError(
-                        "platform runtime requires --job-id and --stage-id"
+                        "platform runtime requires --job-id and --stage-index"
                     )
             else:
                 try:
                     client = MacrodataClient()
                     run_handle = RunHandle(
                         job_id=args.job_id,
-                        stage_id=args.stage_id,
+                        stage_index=args.stage_index,
                         client=client,
                         worker_name=worker_name,
                     )

@@ -14,8 +14,8 @@ class PlatformRuntimeLifecycle:
     ) -> None:
         if not run.job_id:
             raise ValueError("job_id must be non-empty")
-        if not run.stage_id:
-            raise ValueError("stage_id must be non-empty")
+        if run.stage_index < 0:
+            raise ValueError("stage_index must be non-negative")
         self.run = run
 
     def _require_worker_id(self) -> str:
@@ -28,7 +28,7 @@ class PlatformRuntimeLifecycle:
             raise ValueError("platform runtime requires a client")
         self.run.client.shard_register(
             job_id=self.run.job_id,
-            stage_id=self.run.stage_id,
+            stage_index=self.run.stage_index,
             shards=list(shards),
         )
 
@@ -37,7 +37,7 @@ class PlatformRuntimeLifecycle:
             raise ValueError("platform runtime requires a client")
         claim = self.run.client.shard_claim(
             job_id=self.run.job_id,
-            stage_id=self.run.stage_id,
+            stage_index=self.run.stage_index,
             worker_id=self._require_worker_id(),
             previous_shard_id=previous.id if previous is not None else None,
         )
@@ -53,7 +53,7 @@ class PlatformRuntimeLifecycle:
             raise ValueError("platform runtime requires a client")
         self.run.client.shard_heartbeat(
             job_id=self.run.job_id,
-            stage_id=self.run.stage_id,
+            stage_index=self.run.stage_index,
             worker_id=self._require_worker_id(),
             shard_ids=shard_ids,
         )
@@ -63,7 +63,7 @@ class PlatformRuntimeLifecycle:
             raise ValueError("platform runtime requires a client")
         self.run.client.shard_finish(
             job_id=self.run.job_id,
-            stage_id=self.run.stage_id,
+            stage_index=self.run.stage_index,
             worker_id=self._require_worker_id(),
             shard_id=shard.id,
             status="completed",
@@ -74,7 +74,7 @@ class PlatformRuntimeLifecycle:
             raise ValueError("platform runtime requires a client")
         self.run.client.shard_finish(
             job_id=self.run.job_id,
-            stage_id=self.run.stage_id,
+            stage_index=self.run.stage_index,
             worker_id=self._require_worker_id(),
             shard_id=shard.id,
             status="failed",

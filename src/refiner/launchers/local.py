@@ -145,8 +145,8 @@ class LocalLauncher(BaseLauncher):
         if runtime_backend == "platform" and platform_run is not None:
             command.extend(
                 [
-                    "--stage-id",
-                    platform_run.stage_id,
+                    "--stage-index",
+                    str(platform_run.stage_index),
                     "--worker-name",
                     f"local-rank-{rank}",
                 ]
