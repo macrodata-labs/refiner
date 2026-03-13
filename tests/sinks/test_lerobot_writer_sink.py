@@ -37,6 +37,31 @@ def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
             container.mux(packet)
 
 
+def _write_large_video(
+    path: Path,
+    *,
+    fps: int = 15,
+    frames: int = 240,
+    width: int = 640,
+    height: int = 360,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with av.open(str(path), mode="w") as container:
+        stream = container.add_stream("mpeg4", rate=fps)
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+
+        for idx in range(frames):
+            image = np.full((height, width, 3), 64 + (idx % 192), dtype=np.uint8)
+            frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+
+        for packet in stream.encode(None):
+            container.mux(packet)
+
+
 def _episode(
     *,
     episode_index: int,
@@ -258,6 +283,61 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
     chunk_index = rows["videos/observation.images.main/chunk_index"][0].as_py()
     assert isinstance(chunk_index, str)
     assert re.match(r"\d+-[0-9a-f]{12}", chunk_index)
+
+
+def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) -> None:
+    src_video = tmp_path / "source" / "episode.mp4"
+    _write_large_video(
+        src_video,
+        fps=15,
+        frames=900,
+        width=1920,
+        height=1080,
+    )
+
+    out_root = tmp_path / "video-rotate"
+    pipeline = mdr.from_items(
+        [
+            _episode(
+                episode_index=0,
+                task="pick",
+                video_path=src_video,
+                from_ts=0.0,
+                to_ts=10.0,
+                values=[0.0, 2.0],
+            ),
+            _episode(
+                episode_index=1,
+                task="place",
+                video_path=src_video,
+                from_ts=0.0,
+                to_ts=10.0,
+                values=[4.0, 6.0],
+            ),
+        ],
+        shard_size_rows=2,
+    ).write_lerobot(
+        str(out_root),
+        overwrite=True,
+        video_files_size_in_mb=1,
+    )
+
+    stats = pipeline.launch_local(
+        name="lerobot-video-rotation",
+        num_workers=1,
+        workdir=str(tmp_path / "workdir"),
+    )
+    assert stats.failed == 0
+
+    video_dirs = list((out_root / "videos" / "observation.images.main").glob("chunk-*"))
+    assert video_dirs
+    video_files = [
+        path
+        for d in video_dirs
+        for path in sorted(d.glob("*.mp4"))
+    ]
+    assert any(path.name == "file-001.mp4" for path in video_files)
+    assert len(video_files) >= 2
 
 
 def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> None:

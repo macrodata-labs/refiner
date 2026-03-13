@@ -1,9 +1,6 @@
 from __future__ import annotations
-
-import asyncio
 import dataclasses
 from collections.abc import Callable
-from functools import partial
 from typing import TYPE_CHECKING, Any, Coroutine, Literal
 
 from .types import MediaFile
@@ -53,19 +50,20 @@ def hydrate_media(
     resolved_decoder_cache_name = decoder_cache_name or resolved_cache_name
 
     async def _map(row: Row) -> Row:
+
         try:
             hydrated_value = _coerce_media_value(row[column])
-            loop = asyncio.get_running_loop()
 
             if isinstance(hydrated_value, Video):
                 if decode:
                     if isinstance(hydrated_value.media, DecodedVideo):
                         return row.update({target_column: hydrated_value})
-                    def _decode_video_in_cache():
-                        with hydrated_value.media.cached_path(
-                            suffix=".mp4",
-                            cache_name=resolved_cache_name,
-                        ) as local_path:
+
+                    async def _decode_video_in_cache():
+                        local_path = await hydrated_value.media.cache_file(
+                            cache_name=resolved_decoder_cache_name,
+                        )
+                        try:
                             return decode_video_segment_frames(
                                 local_path=local_path,
                                 from_timestamp_s=float(
@@ -79,10 +77,11 @@ def hydrate_media(
                                 decoder_cache_name=resolved_decoder_cache_name,
                                 decode_backend=decode_backend,
                             )
+                        finally:
+                            hydrated_value.media.cleanup()
 
-                    frames, width, height, pix_fmt = await loop.run_in_executor(
-                        None, _decode_video_in_cache
-                    )
+                    frames, width, height, pix_fmt = await _decode_video_in_cache()
+
                     hydrated_value = dataclasses.replace(
                         hydrated_value,
                         media=DecodedVideo(
@@ -114,25 +113,11 @@ def hydrate_media(
                         )
                     media = hydrated_value.media
                     if isinstance(media, MediaFile) and media.bytes_cache is None:
-                        await loop.run_in_executor(
-                            None,
-                            partial(
-                                media.cache_bytes,
-                                suffix=suffix,
-                                cache_name=resolved_cache_name,
-                            ),
-                        )
+                        await media.cache_bytes(suffix=suffix, cache_name=resolved_cache_name)
             else:
                 media = _extract_media(hydrated_value)
                 if media.bytes_cache is None:
-                    await loop.run_in_executor(
-                        None,
-                        partial(
-                            media.cache_bytes,
-                            suffix=suffix,
-                            cache_name=resolved_cache_name,
-                        ),
-                    )
+                    await media.cache_bytes(suffix=suffix, cache_name=resolved_cache_name)
             return row.update({target_column: hydrated_value})
         except Exception:
             if on_error == "raise":

@@ -123,7 +123,7 @@ class LeRobotEpisodeReader(ParquetReader):
         }
         patch: dict[str, Any] = {"metadata": metadata}
 
-        frames = await asyncio.get_running_loop().run_in_executor(None, self._load_episode_frames, row)
+        frames = await self._load_episode_frames(row)
         patch["frames"] = frames
 
         tasks = row.get("tasks")
@@ -206,7 +206,7 @@ class LeRobotEpisodeReader(ParquetReader):
             fps=self._fps,
         )
 
-    def _load_episode_frames(self, episode: Mapping[str, Any]) -> list[Row]:
+    async def _load_episode_frames(self, episode: Mapping[str, Any]) -> list[Row]:
         chunk = episode["data/chunk_index"]
         file_idx = episode["data/file_index"]
         if chunk is None or file_idx is None:
@@ -218,6 +218,19 @@ class LeRobotEpisodeReader(ParquetReader):
             )
         from_idx = episode["dataset_from_index"]
         to_idx = episode["dataset_to_index"]
+
+        try:
+            from_idx = int(from_idx)
+            to_idx = int(to_idx)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "LeRobot episode row has invalid dataset_from_index/dataset_to_index"
+            ) from exc
+
+        if from_idx > to_idx:
+            raise ValueError(
+                "LeRobot episode row has invalid dataset_from_index/dataset_to_index"
+            )
 
         rel = _format_chunked_path(
             self._data_path_template,
@@ -231,19 +244,13 @@ class LeRobotEpisodeReader(ParquetReader):
             storage_options=self._storage_options,
         )
 
-        with get_media_cache(_DATA_FILE_CACHE_NAME).cached(
+        async with get_media_cache(_DATA_FILE_CACHE_NAME).cached(
             file=data_file,
-        ) as local_path, open(local_path, "rb") as f:
-            file_num_rows = int(pq.ParquetFile(local_path).metadata.num_rows)
-            if from_idx < 0 or to_idx > file_num_rows:
-                raise ValueError(
-                    "LeRobot dataset bounds are out of range for data parquet file: "
-                    f"dataset_from_index={from_idx}, "
-                    f"dataset_to_index={to_idx}, file_num_rows={file_num_rows}"
-                )
-            table = pq.read_table(f, filters=(
-                (pc.greater_equal(pc.field("index"), from_idx)) & (pc.less(pc.field("index"), to_idx))
-            ))
+        ) as local_path:
+            with open(local_path, "rb") as f:
+                table = pq.read_table(f, filters=(
+                    (pc.greater_equal(pc.field("index"), from_idx)) & (pc.less(pc.field("index"), to_idx))
+                ))
 
         names = tuple(str(name) for name in table.column_names)
         columns = tuple(table.column(i) for i in range(table.num_columns))

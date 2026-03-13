@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import shutil
 from pathlib import Path
+import threading
 import time
 from typing import Iterator
 
@@ -282,6 +283,161 @@ def test_media_cache_with_file_cache_context_is_download_once_and_valid() -> Non
             assert second_path == path
 
     assert calls["count"] == 1
+
+
+def test_media_cache_lease_can_be_acquired_and_released_without_cached() -> None:
+    cache = get_media_cache("lease-without-cache")
+
+    async def exercise() -> None:
+        await cache.get_lease()
+        cache.release_lease()
+
+    asyncio.run(exercise())
+
+
+def test_media_cache_lease_blocks_until_release() -> None:
+    cache = get_media_cache("lease-blocking", max_entries=1)
+    events: list[str] = []
+    unblock = asyncio.Event()
+
+    async def holder() -> None:
+        await cache.get_lease()
+        events.append("first-held")
+        await unblock.wait()
+        events.append("first-release")
+        cache.release_lease()
+
+    async def waiter() -> None:
+        await asyncio.sleep(0.05)
+        await cache.get_lease()
+        events.append("second-held")
+        cache.release_lease()
+
+    async def run() -> None:
+        holder_task = asyncio.create_task(holder())
+        waiter_task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.1)
+        assert events == ["first-held"]
+        unblock.set()
+        await asyncio.gather(holder_task, waiter_task)
+        assert events == ["first-held", "first-release", "second-held"]
+
+    asyncio.run(run())
+
+
+def test_media_cache_file_lease_can_be_acquired_and_released_twice() -> None:
+    uri = "memory://lease-same-file.bin"
+    with MediaFile(uri).open("wb") as f:
+        f.write(b"lease-reuse")
+
+    cache = get_media_cache("lease-same-file")
+
+    async def exercise() -> None:
+        file = DataFile.resolve(uri)
+        lease_a = await cache.acquire_file_lease(file)
+        lease_b = await cache.acquire_file_lease(file)
+        try:
+            assert lease_a.path == lease_b.path
+            assert os.path.exists(lease_a.path)
+        finally:
+            lease_b.release()
+            lease_a.release()
+
+    asyncio.run(exercise())
+
+
+def test_media_cache_file_lease_waits_for_inflight_download() -> None:
+    uri = "memory://lease-waiting.bin"
+    with MediaFile(uri).open("wb") as f:
+        f.write(b"lease-wait")
+
+    cache = get_media_cache("lease-waiting")
+    import refiner.media.cache as media_cache
+
+    original = media_cache._download_data_file_to_temp
+    started = threading.Event()
+    allow_download = threading.Event()
+
+    def delayed_download(file: DataFile, *, cache_name: str):
+        started.set()
+        allow_download.wait()
+        return original(file=file, cache_name=cache_name)
+
+    events: list[str] = []
+    paths: list[str] = []
+
+    async def first() -> None:
+        events.append("first-start")
+        lease = await cache.acquire_file_lease(DataFile.resolve(uri))
+        events.append("first-held")
+        paths.append(lease.path)
+        lease.release()
+        events.append("first-release")
+
+    async def second() -> None:
+        await asyncio.sleep(0.01)
+        events.append("second-start")
+        lease = await cache.acquire_file_lease(DataFile.resolve(uri))
+        events.append("second-held")
+        paths.append(lease.path)
+        lease.release()
+        events.append("second-release")
+
+    async def run() -> None:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(media_cache, "_download_data_file_to_temp", delayed_download)
+
+            first_task = asyncio.create_task(first())
+            await asyncio.sleep(0.02)
+            second_task = asyncio.create_task(second())
+
+            await asyncio.to_thread(started.wait)
+            assert events == ["first-start", "second-start"]
+            assert "first-held" not in events
+            allow_download.set()
+            await asyncio.gather(first_task, second_task)
+
+    asyncio.run(run())
+    assert events[:2] == ["first-start", "second-start"]
+    assert events.count("first-held") == 1
+    assert events.count("second-held") == 1
+    assert events.count("first-release") == 1
+    assert events.count("second-release") == 1
+    assert len(paths) == 2
+    assert paths[0] == paths[1]
+    assert os.path.exists(paths[0])
+
+
+def test_media_cache_leased_file_not_evictable_but_evictable_after_release() -> None:
+    cache = get_media_cache("lease-eviction", max_entries=1)
+
+    uri_a = "memory://lease-evict-a.bin"
+    uri_b = "memory://lease-evict-b.bin"
+    uri_c = "memory://lease-evict-c.bin"
+    with MediaFile(uri_a).open("wb") as f:
+        f.write(b"A")
+    with MediaFile(uri_b).open("wb") as f:
+        f.write(b"B")
+    with MediaFile(uri_c).open("wb") as f:
+        f.write(b"C")
+
+    async def exercise() -> None:
+        lease_a = await cache.acquire_file_lease(DataFile.resolve(uri_a))
+        assert os.path.exists(lease_a.path)
+
+        with cache.cached(file=DataFile.resolve(uri_b)) as path_b:
+            assert os.path.exists(path_b)
+
+        assert os.path.exists(lease_a.path)
+        lease_a.release()
+        assert os.path.exists(lease_a.path)
+
+        with cache.cached(file=DataFile.resolve(uri_c)) as path_c:
+            assert os.path.exists(path_c)
+
+        assert not os.path.exists(lease_a.path)
+
+    asyncio.run(exercise())
 
 
 def test_named_media_caches_are_isolated() -> None:

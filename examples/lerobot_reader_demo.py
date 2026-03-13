@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     pipeline = mdr.read_lerobot(
-        "./tmp/lerobot-5eps",
+        "hf://datasets/lerobot/aloha_static_battery",
         decode=False,
     )
 
