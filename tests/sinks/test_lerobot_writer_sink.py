@@ -440,7 +440,7 @@ def test_lerobot_writer_sink_raises_when_video_to_timestamp_is_missing(tmp_path:
         sink.write_block([row])
 
 
-def test_lerobot_writer_allows_disabling_video_stats(tmp_path: Path) -> None:
+def test_lerobot_writer_computes_video_stats(tmp_path: Path) -> None:
     src_video = tmp_path / "source" / "episode.mp4"
     _write_video(src_video)
 
@@ -460,9 +460,6 @@ def test_lerobot_writer_allows_disabling_video_stats(tmp_path: Path) -> None:
     ).write_lerobot(
         str(out_root),
         overwrite=True,
-        enable_video_stats=False,
-        video_stats_sample_stride=2,
-        video_stats_quantile_bins=64,
     )
 
     stats = pipeline.launch_local(

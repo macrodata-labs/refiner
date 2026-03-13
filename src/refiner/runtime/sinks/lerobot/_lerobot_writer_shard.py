@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from concurrent.futures import Future, wait
 from dataclasses import dataclass, field
 from typing import IO, Any
 
@@ -12,6 +13,7 @@ import pyarrow.parquet as pq
 
 from refiner.io import DataFolder
 from refiner.media import Video
+from refiner.runtime.async_runtime import submit
 from refiner.sources.readers.lerobot import LEROBOT_INFO
 
 from ._lerobot_frames import (
@@ -85,9 +87,6 @@ class _LeRobotShardWriter:
             "video_pix_fmt": self.config.video_pix_fmt,
             "video_encoder_threads": self.config.video_encoder_threads,
             "video_encoder_options": self.config.video_encoder_options,
-            "enable_video_stats": self.config.enable_video_stats,
-            "video_stats_sample_stride": self.config.video_stats_sample_stride,
-            "video_stats_quantile_bins": self.config.video_stats_quantile_bins,
         }
 
     @property
@@ -124,7 +123,6 @@ class _LeRobotShardWriter:
             frames=frames,
         )
         video_meta, video_stats = self._write_videos(row=row)
-        episode_stats = compute_episode_stats(frames=frames, video_stats=video_stats)
 
         episode_row: dict[str, Any] = {
             "episode_index": episode_index,
@@ -160,15 +158,19 @@ class _LeRobotShardWriter:
             episode_row[key] = value
 
         episode_row.update(video_meta)
+        episode_stats = compute_episode_stats(
+            frames=frames,
+            video_stats=video_stats,
+        )
         episode_row.update(_flatten_stats_for_episode(episode_stats))
-
-        self._append_episode_row(episode_row)
         self._append_stats_record(
             {
                 "episode_index": episode_index,
                 "stats": _serialize_stats(episode_stats),
             }
         )
+
+        self._append_episode_row(episode_row)
         self._total_episodes += 1
 
     def finalize(self) -> None:
@@ -402,6 +404,7 @@ class _LeRobotShardWriter:
         out: dict[str, Any] = {}
         out_stats: dict[str, dict[str, np.ndarray]] = {}
         video_config = self._video_append_config
+        pending: list[Future[tuple[dict[str, Any], dict[str, dict[str, np.ndarray]]]]] = []
 
         for key, value in row.items():
             if not isinstance(value, Video):
@@ -409,15 +412,23 @@ class _LeRobotShardWriter:
 
             clip_from = float(value.from_timestamp_s) if value.from_timestamp_s is not None else 0.0
             clip_to = float(value.to_timestamp_s)
-            video_meta, video_stats = self._write_video_track(
-                video_key=key,
-                video=value,
-                clip_from=clip_from,
-                clip_to=clip_to,
-                video_config=video_config,
+            pending.append(
+                submit(
+                    self._write_video_track(
+                        video_key=key,
+                        video=value,
+                        clip_from=clip_from,
+                        clip_to=clip_to,
+                        video_config=video_config,
+                    )
+                )
             )
-            out.update(video_meta)
-            out_stats.update(video_stats)
+        if pending:
+            done, _ = wait(pending)
+            for future in done:
+                video_meta, video_stats = future.result()
+                out.update(video_meta)
+                out_stats.update(video_stats)
 
         return out, out_stats
 

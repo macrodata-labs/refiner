@@ -35,9 +35,7 @@ class LeRobotWriterConfig:
     video_pix_fmt: str = "yuv420p"
     video_encoder_threads: int | None = None
     video_encoder_options: Mapping[str, str] | None = None
-    enable_video_stats: bool = True
-    video_stats_sample_stride: int = 1
-    video_stats_quantile_bins: int = 500
+    lease_max_in_flight: int = 16
 
     def __post_init__(self) -> None:
         if self.chunk_size <= 0:
@@ -54,10 +52,8 @@ class LeRobotWriterConfig:
             object.__setattr__(self, "video_encoder_threads", _cpu_thread_count())
         if self.video_encoder_threads is not None and self.video_encoder_threads <= 0:
             raise ValueError("video_encoder_threads must be > 0 when provided")
-        if self.video_stats_sample_stride <= 0:
-            raise ValueError("video_stats_sample_stride must be > 0")
-        if self.video_stats_quantile_bins <= 1:
-            raise ValueError("video_stats_quantile_bins must be > 1")
+        if self.lease_max_in_flight <= 0:
+            raise ValueError("lease_max_in_flight must be > 0")
 
 
 def _cpu_thread_count() -> int:
@@ -76,7 +72,21 @@ class LeRobotWriterSink(BaseSink):
     def __init__(self, config: LeRobotWriterConfig):
         self.config = config
         self._writers: dict[str, _LeRobotShardWriter] = {}
-        self._lease_window: AsyncWindow[tuple[Mapping[str, Any], str]] = AsyncWindow(max_in_flight=2)
+        self._lease_window: AsyncWindow[tuple[Mapping[str, Any], str]] = AsyncWindow(
+            max_in_flight=config.lease_max_in_flight,
+        )
+        self._worker_id = self._resolve_worker_id()
+
+    @staticmethod
+    def _resolve_worker_id() -> str:
+        rank_raw = os.environ.get("REFINER_WORKER_RANK")
+        if rank_raw is None:
+            return "0"
+        try:
+            rank = int(rank_raw)
+        except (TypeError, ValueError):
+            return "0"
+        return "0" if rank < 0 else str(rank)
 
     def cleanup_leases(self, row: Mapping[str, Any]) -> None:
         for key, value in row.items():
@@ -108,20 +118,16 @@ class LeRobotWriterSink(BaseSink):
         return row, shard_id
 
     def process_leased_rows(self, rows: Iterable[tuple[Mapping[str, Any], str]]) -> None:
-        rank_raw = os.environ.get("REFINER_WORKER_RANK")
-        rank = int(rank_raw) if rank_raw is not None else 0
-        worker_id = "0" if rank < 0 else str(rank)
         for row, shard_id in rows:
             try:
-                key = f"{worker_id}-{shard_id}"
+                key = f"{self._worker_id}-{shard_id}"
                 writer = self._writers.get(shard_id)
                 if writer is None:
                     writer = _LeRobotShardWriter(config=self.config, chunk_key=key)
                     self._writers[shard_id] = writer
                 writer.consume_row(row)
             finally:
-                for row, _ in rows:
-                    self.cleanup_leases(row)
+                self.cleanup_leases(row)
 
     def on_shard_complete(self, shard_id: str) -> None:
         # Ensure we have no in-flight leases for this shard.

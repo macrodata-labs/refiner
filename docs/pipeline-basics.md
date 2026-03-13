@@ -90,13 +90,14 @@ Use `.write_lerobot(...)` as a deferred terminal sink. It returns a new pipeline
 
 ```python
 pipeline = (
-    mdr.read_lerobot("s3://bucket/src", decode=False)
+    mdr.read_lerobot("s3://bucket/src", decode=False, limit=100)
     .write_lerobot(
         "s3://bucket/dst",
         overwrite=True,
         chunk_size=1000,
         data_files_size_in_mb=100,
         video_files_size_in_mb=200,
+        lease_max_in_flight=16,
     )
 )
 pipeline.materialize()

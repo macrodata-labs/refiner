@@ -16,6 +16,8 @@ from ._lerobot_stats import _RunningQuantileStats
 
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+empty_moov+default_base_moof"
+_VIDEO_STATS_SAMPLE_STRIDE = 1
+_VIDEO_STATS_QUANTILE_BINS = 500
 
 
 def _format_chunk_path(
@@ -269,14 +271,11 @@ async def _append_video_segment(
     clip_to: float,
     video_config: Mapping[str, Any],
 ) -> tuple[float, dict[str, np.ndarray] | None]:
-    enable_video_stats = bool(video_config.get("enable_video_stats", True))
-    sample_stride = int(video_config.get("video_stats_sample_stride", 1))
-    tracker: _RunningQuantileStats | None = None
-    if enable_video_stats:
-        tracker = _RunningQuantileStats(
-            [0.01, 0.10, 0.50, 0.90, 0.99],
-            num_quantile_bins=int(video_config.get("video_stats_quantile_bins", 500)),
-        )
+    sample_stride = _VIDEO_STATS_SAMPLE_STRIDE
+    tracker = _RunningQuantileStats(
+        [0.01, 0.10, 0.50, 0.90, 0.99],
+        num_quantile_bins=_VIDEO_STATS_QUANTILE_BINS,
+    )
 
     if isinstance(video.media, DecodedVideo):
         duration_s = _append_video_segment_from_frames(
@@ -330,19 +329,24 @@ async def _append_video_segment_from_media(
                     break
 
                 writer.ensure_stream(width=frame.width, height=frame.height)
-                writer.write_frame(
-                    av.VideoFrame.from_ndarray(
-                        frame.to_ndarray(format="rgb24"),
-                        format="rgb24",
+                rgb_frame = None
+                if tracker is not None:
+                    rgb_frame = frame.to_ndarray(format="rgb24")
+                    writer.write_frame(
+                        av.VideoFrame.from_ndarray(
+                            rgb_frame,
+                            format="rgb24",
+                        )
                     )
-                )
+                else:
+                    writer.write_frame(frame)
 
                 selected_frames += 1
                 _update_video_stats_if_due(
                     tracker=tracker,
                     frame_index=frame_index,
                     sample_stride=sample_stride,
-                    rgb_frame=frame.to_ndarray(format="rgb24"),
+                    rgb_frame=rgb_frame,
                 )
                 frame_index += 1
 

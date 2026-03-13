@@ -4,10 +4,12 @@ import asyncio
 import json
 import posixpath
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
-import pyarrow.compute as pc
 
 from fsspec.spec import AbstractFileSystem
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from refiner.io import DataFile
@@ -33,6 +35,12 @@ _ROW_DROP_KEYS = {"dataset_from_index", "dataset_to_index"}
 _DATA_FILE_CACHE_NAME = "lerobot:data_files"
 
 
+@dataclass(frozen=True, slots=True)
+class _FrameFileCacheEntry:
+    key: tuple[Any, Any]
+    table: pa.Table
+
+
 class LeRobotEpisodeReader(ParquetReader):
     """Episode-granular LeRobot source.
 
@@ -49,11 +57,16 @@ class LeRobotEpisodeReader(ParquetReader):
         fs: AbstractFileSystem | None = None,
         storage_options: Mapping[str, Any] | None = None,
         decode: Literal[True, False, None] = None,
+        limit: int | None = None,
         arrow_batch_size: int = 65536,
     ) -> None:
         if decode is not None and decode not in (True, False):
             raise ValueError("decode must be True, False, or None")
+        if limit is not None and limit <= 0:
+            raise ValueError("limit must be > 0 when provided")
         self.root = root.rstrip("/")
+        self._limit = int(limit) if limit is not None else None
+        self._submitted_episodes = 0
         super().__init__(
             inputs=posixpath.join(self.root, _DEFAULT_EPISODES_GLOB_ROOT),
             fs=fs,
@@ -83,24 +96,31 @@ class LeRobotEpisodeReader(ParquetReader):
             if isinstance(info, Mapping) and info.get("robot_type") is not None
             else None
         )
+        self._frames_cache_lock = asyncio.Lock()
+        self._frames_cache_entry: _FrameFileCacheEntry | None = None
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         if shard.path not in self.files:
             raise ValueError(f"Unknown LeRobot shard path: {shard.path!r}")
-        async_window = AsyncWindow(max_in_flight=2, preserve_order=True)
+        if self._limit is not None and self._submitted_episodes >= self._limit:
+            return
+        async_window = AsyncWindow(max_in_flight=8, preserve_order=True)
         for batch in super().read_shard(shard):
             names = tuple(str(name) for name in batch.schema.names)
             columns = tuple(batch.column(i) for i in range(batch.num_columns))
             index_by_name = {name: i for i, name in enumerate(names)}
             for idx in range(batch.num_rows):
-                async_window.submit(self._build_episode_row(
-                    ArrowRowView(
-                        names=names,
-                        columns=columns,
-                        index_by_name=index_by_name,
-                        row_idx=idx,
-                    )
-                ))
+                if self._limit is not None and self._submitted_episodes >= self._limit:
+                    yield from async_window.drain(flush=True)
+                    return
+                row = ArrowRowView(
+                    names=names,
+                    columns=columns,
+                    index_by_name=index_by_name,
+                    row_idx=idx,
+                )
+                async_window.submit(self._build_episode_row(row))
+                self._submitted_episodes += 1
                 yield from async_window.drain(flush=False)
 
         yield from async_window.drain(flush=True)
@@ -110,6 +130,7 @@ class LeRobotEpisodeReader(ParquetReader):
             "root": self.root,
             "episode_files": len(self.files),
             "fps": self._fps,
+            "limit": self._limit,
         }
 
     async def _build_episode_row(self, row: Row) -> Row:
@@ -155,9 +176,10 @@ class LeRobotEpisodeReader(ParquetReader):
     ) -> Video | None:
         chunk_key = f"videos/{video_key}/chunk_index"
         file_key = f"videos/{video_key}/file_index"
-        chunk = episode[chunk_key]
-        file_idx = episode[file_key]
-
+        chunk = episode.get(chunk_key)
+        file_idx = episode.get(file_key)
+        if chunk is None or file_idx is None:
+            return None
         rel = _format_chunked_path(
             self._video_path_template,
             video_key=video_key,
@@ -166,8 +188,10 @@ class LeRobotEpisodeReader(ParquetReader):
         )
         uri = posixpath.join(self.root, rel)
         first = frames[0] if frames else {}
-        from_timestamp = episode[f"videos/{video_key}/from_timestamp"]
-        to_timestamp = episode[f"videos/{video_key}/to_timestamp"]
+        from_timestamp = episode.get(f"videos/{video_key}/from_timestamp")
+        to_timestamp = episode.get(f"videos/{video_key}/to_timestamp")
+        if to_timestamp is None:
+            return None
         episode_index = episode.get("episode_index")
         frame_index = first.get("frame_index") if isinstance(first, Mapping) else None
         timestamp = first.get("timestamp") if isinstance(first, Mapping) else None
@@ -232,28 +256,20 @@ class LeRobotEpisodeReader(ParquetReader):
                 "LeRobot episode row has invalid dataset_from_index/dataset_to_index"
             )
 
-        rel = _format_chunked_path(
-            self._data_path_template,
-            video_key=None,
+        cache_entry = await self._get_cached_frame_table(
             chunk=chunk,
             file_idx=file_idx,
         )
-        data_file = DataFile.resolve(
-            posixpath.join(self.root, rel),
-            fs=self._fs,
-            storage_options=self._storage_options,
+        episode_table = self._slice_episode_table(
+            cache_entry=cache_entry,
+            from_idx=from_idx,
+            to_idx=to_idx,
         )
+        if episode_table.num_rows <= 0:
+            return []
 
-        async with get_media_cache(_DATA_FILE_CACHE_NAME).cached(
-            file=data_file,
-        ) as local_path:
-            with open(local_path, "rb") as f:
-                table = pq.read_table(f, filters=(
-                    (pc.greater_equal(pc.field("index"), from_idx)) & (pc.less(pc.field("index"), to_idx))
-                ))
-
-        names = tuple(str(name) for name in table.column_names)
-        columns = tuple(table.column(i) for i in range(table.num_columns))
+        names = tuple(str(name) for name in episode_table.column_names)
+        columns = tuple(episode_table.column(i) for i in range(episode_table.num_columns))
         index_by_name = {name: i for i, name in enumerate(names)}
 
         return [
@@ -263,8 +279,71 @@ class LeRobotEpisodeReader(ParquetReader):
                 index_by_name=index_by_name,
                 row_idx=row_idx,
             )
-            for row_idx in range(table.num_rows)
+            for row_idx in range(episode_table.num_rows)
         ]
+
+    def _slice_episode_table(
+        self,
+        *,
+        cache_entry: _FrameFileCacheEntry,
+        from_idx: int,
+        to_idx: int,
+    ) -> pa.Table:
+        table = cache_entry.table
+        if table.num_rows <= 0:
+            return table.slice(0, 0)
+        index_expr = pc.field("index")
+        mask = (index_expr >= pa.scalar(from_idx, type=pa.int64())) & (
+            index_expr < pa.scalar(to_idx, type=pa.int64())
+        )
+        return table.filter(mask)
+
+    async def _get_cached_frame_table(
+        self,
+        *,
+        chunk: Any,
+        file_idx: Any,
+    ) -> _FrameFileCacheEntry:
+        cache_key = (chunk, file_idx)
+        cached_entry = self._frames_cache_entry
+        if cached_entry is not None and cached_entry.key == cache_key:
+            return cached_entry
+
+        async with self._frames_cache_lock:
+            cached_entry = self._frames_cache_entry
+            if cached_entry is not None and cached_entry.key == cache_key:
+                return cached_entry
+
+            rel = _format_chunked_path(
+                self._data_path_template,
+                video_key=None,
+                chunk=chunk,
+                file_idx=file_idx,
+            )
+            data_file = DataFile.resolve(
+                posixpath.join(self.root, rel),
+                fs=self._fs,
+                storage_options=self._storage_options,
+            )
+
+            async with get_media_cache(_DATA_FILE_CACHE_NAME).cached(
+                file=data_file,
+            ) as local_path:
+                with open(local_path, "rb") as f:
+                    table = pq.read_table(f)
+
+            if "index" not in table.schema.names:
+                raise ValueError("LeRobot frame parquet is missing required 'index' column")
+            index_col = table.column("index")
+            if index_col.null_count > 0:
+                raise ValueError("LeRobot frame parquet contains null index values")
+
+            cache_entry = _FrameFileCacheEntry(
+                key=cache_key,
+                table=table,
+            )
+            self._frames_cache_entry = cache_entry
+            return cache_entry
 
     def _load_info(
         self,
