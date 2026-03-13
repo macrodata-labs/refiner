@@ -13,7 +13,11 @@ from refiner.platform.client.api import MacrodataClient
 from refiner.platform.client.http import sanitize_terminal_text
 from refiner.platform.client.models import RunHandle
 from refiner.platform.manifest import build_run_manifest
-from refiner.pipeline.planning import compile_pipeline_plan
+from refiner.pipeline.planning import (
+    PlannedStage,
+    compile_planned_stages,
+    plan_pipeline_stages,
+)
 
 if TYPE_CHECKING:
     from refiner.pipeline.data.shard import Shard
@@ -99,14 +103,26 @@ class BaseLauncher(ABC):
             )
         return client
 
-    def _compiled_plan(self) -> dict[str, object]:
-        return compile_pipeline_plan(self.pipeline)
+    def _planned_stages(self) -> list[PlannedStage]:
+        requested_workers = getattr(self, "num_workers", None)
+        default_num_workers = (
+            requested_workers if isinstance(requested_workers, int) else 1
+        )
+        return plan_pipeline_stages(
+            self.pipeline,
+            default_num_workers=default_num_workers,
+        )
+
+    def _compiled_plan(
+        self, stages: list[PlannedStage] | None = None
+    ) -> dict[str, object]:
+        return compile_planned_stages(stages or self._planned_stages())
 
     def _run_manifest(self) -> dict[str, object]:
         return build_run_manifest()
 
-    def _setup_platform(
-        self, *, shards: list["Shard"], fail_open: bool = True
+    def _create_platform_run(
+        self, *, plan: dict[str, object], fail_open: bool = True
     ) -> RunHandle | None:
         client = self._platform_client_or_none()
         if client is None:
@@ -120,15 +136,10 @@ class BaseLauncher(ABC):
             job = client.create_job(
                 name=self.name,
                 executor={"type": "refiner-local"},
-                plan=self._compiled_plan(),
+                plan=plan,
                 manifest=self._run_manifest(),
             )
             self.job_id = job.job_id
-            client.shard_register(
-                job_id=job.job_id,
-                stage_index=job.stage_index,
-                shards=shards,
-            )
             return job
         except Exception as e:  # noqa: BLE001
             if fail_open:
@@ -139,19 +150,48 @@ class BaseLauncher(ABC):
                 return None
             raise
 
-    def _finish_platform_terminal(
-        self, platform_run: RunHandle | None, *, status: str
+    def _stage_run(
+        self, platform_run: RunHandle | None, *, stage_index: int
+    ) -> RunHandle | None:
+        if platform_run is None:
+            return None
+        return platform_run.with_stage(stage_index)
+
+    def _seed_platform_stage(
+        self,
+        platform_run: RunHandle | None,
+        *,
+        stage_index: int,
+        shards: list["Shard"],
     ) -> None:
         if platform_run is None or platform_run.client is None:
             return
+        platform_run.client.shard_register(
+            job_id=platform_run.job_id,
+            stage_index=stage_index,
+            shards=shards,
+        )
+
+    def _finish_platform_stage(
+        self, platform_run: RunHandle | None, *, stage_index: int, status: str
+    ) -> None:
+        stage_run = self._stage_run(platform_run, stage_index=stage_index)
+        if stage_run is None or stage_run.client is None:
+            return
         try:
-            platform_run.client.report_stage_finished(
-                job_id=platform_run.job_id,
-                stage_index=platform_run.stage_index,
+            stage_run.client.report_stage_finished(
+                job_id=stage_run.job_id,
+                stage_index=stage_run.stage_index,
                 status=status,
             )
         except Exception as e:  # noqa: BLE001
             self._warn(f"platform finish_stage failed: {type(e).__name__}: {e}")
+
+    def _finish_platform_job(
+        self, platform_run: RunHandle | None, *, status: str
+    ) -> None:
+        if platform_run is None or platform_run.client is None:
+            return
         try:
             platform_run.client.report_job_finished(
                 job_id=platform_run.job_id, status=status

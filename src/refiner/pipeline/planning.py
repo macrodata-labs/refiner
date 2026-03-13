@@ -3,11 +3,25 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
+from dataclasses import dataclass
 from types import CodeType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+
+
+@dataclass(frozen=True, slots=True)
+class StageComputeRequirements:
+    num_workers: int
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedStage:
+    index: int
+    name: str
+    pipeline: "RefinerPipeline"
+    compute: StageComputeRequirements
 
 
 def _explicit_callable_name(fn: Any) -> str | None:
@@ -226,8 +240,7 @@ def _serialize_args(args: dict[str, Any] | None) -> dict[str, Any] | None:
     return serialized
 
 
-def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
-    """Compile a transport-neutral plan description for a pipeline."""
+def _compile_stage_steps(pipeline: "RefinerPipeline") -> list[dict[str, Any]]:
     source_step_name = str(getattr(pipeline.source, "name", "source"))
     source_args: dict[str, Any] = dict(pipeline.source.describe())
 
@@ -275,15 +288,51 @@ def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
             )
         )
 
+    return steps
+
+
+def plan_pipeline_stages(
+    pipeline: "RefinerPipeline", *, default_num_workers: int
+) -> list[PlannedStage]:
+    """Return the ordered execution stages for a pipeline.
+
+    This is currently a placeholder splitter that yields a single stage. Future
+    multi-stage planning logic should live here.
+    """
+    if default_num_workers <= 0:
+        raise ValueError("default_num_workers must be > 0")
+    return [
+        PlannedStage(
+            index=0,
+            name="stage_0",
+            pipeline=pipeline,
+            compute=StageComputeRequirements(num_workers=default_num_workers),
+        )
+    ]
+
+
+def compile_planned_stages(stages: list[PlannedStage]) -> dict[str, Any]:
     return {
         "stages": [
             {
-                "name": "stage_0",
-                "index": 0,
-                "steps": steps,
+                "name": stage.name,
+                "index": stage.index,
+                "steps": _compile_stage_steps(stage.pipeline),
             }
+            for stage in stages
         ]
     }
 
 
-__all__ = ["compile_pipeline_plan"]
+def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
+    """Compile a transport-neutral single-pipeline plan description."""
+    return compile_planned_stages(plan_pipeline_stages(pipeline, default_num_workers=1))
+
+
+__all__ = [
+    "PlannedStage",
+    "StageComputeRequirements",
+    "compile_pipeline_plan",
+    "compile_planned_stages",
+    "plan_pipeline_stages",
+]

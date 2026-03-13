@@ -7,7 +7,11 @@ from refiner import col
 from refiner.pipeline import RefinerPipeline, from_items
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
-from refiner.pipeline.planning import _extract_lambda_source, compile_pipeline_plan
+from refiner.pipeline.planning import (
+    _extract_lambda_source,
+    compile_pipeline_plan,
+    plan_pipeline_stages,
+)
 
 
 class _FakeReader(BaseReader):
@@ -134,3 +138,14 @@ def test_extract_lambda_source_matches_exact_lambda_when_multiple_present() -> N
         'lambda row: int(row["score"]) >= 15)'
     )
     assert _extract_lambda_source(source, fn) == 'lambda row: int(row["score"]) >= 15'
+
+
+def test_plan_pipeline_stages_returns_single_placeholder_stage() -> None:
+    pipeline = from_items([{"x": 1}])
+    stages = plan_pipeline_stages(pipeline, default_num_workers=3)
+
+    assert len(stages) == 1
+    assert stages[0].index == 0
+    assert stages[0].name == "stage_0"
+    assert stages[0].pipeline is pipeline
+    assert stages[0].compute.num_workers == 3

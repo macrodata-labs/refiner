@@ -165,18 +165,28 @@ class FileRuntimeLifecycle:
         self,
         *,
         job_id: str,
+        stage_index: int = 0,
         worker_id: int | str | None,
         workdir: str | None = None,
         lease_seconds: int | None = None,
     ):
         if not job_id:
             raise ValueError("job_id must be non-empty")
+        if stage_index < 0:
+            raise ValueError("stage_index must be >= 0")
         self.job_id = str(job_id)
+        self.stage_index = int(stage_index)
         self.worker_id = str(worker_id) if worker_id is not None else None
         self.workdir = resolve_workdir(workdir)
         self.lease_seconds = lease_seconds or _runtime_lease_seconds()
 
-        self._root = Path(self.workdir) / "runs" / self.job_id / "lifecycle"
+        self._root = (
+            Path(self.workdir)
+            / "runs"
+            / self.job_id
+            / "lifecycle"
+            / f"stage-{self.stage_index}"
+        )
         self._pending_dir = self._root / "pending"
         self._leased_dir = self._root / "leased"
         self._done_dir = self._root / "done"

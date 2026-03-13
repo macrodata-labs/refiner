@@ -72,7 +72,7 @@ def test_file_runtime_reclaims_stale_lease(tmp_path: Path) -> None:
     got = lifecycle1.claim()
     assert got is not None
 
-    leased_dir = tmp_path / "runs" / job_id / "lifecycle" / "leased"
+    leased_dir = tmp_path / "runs" / job_id / "lifecycle" / "stage-0" / "leased"
     leased_files = list(leased_dir.iterdir())
     assert len(leased_files) == 1
     lease_path = leased_files[0]
@@ -82,3 +82,23 @@ def test_file_runtime_reclaims_stale_lease(tmp_path: Path) -> None:
     got2 = lifecycle2.claim()
     assert got2 is not None
     assert got2.id == got.id
+
+
+def test_file_runtime_stages_are_isolated(tmp_path: Path) -> None:
+    stage_zero = FileRuntimeLifecycle(
+        job_id="job5", stage_index=0, worker_id=1, workdir=str(tmp_path)
+    )
+    stage_one = FileRuntimeLifecycle(
+        job_id="job5", stage_index=1, worker_id=1, workdir=str(tmp_path)
+    )
+
+    stage_zero.seed_shards([Shard(path="p0", start=0, end=1)])
+    stage_one.seed_shards([Shard(path="p1", start=0, end=1)])
+
+    claimed_zero = stage_zero.claim()
+    claimed_one = stage_one.claim()
+
+    assert claimed_zero is not None
+    assert claimed_zero.path == "p0"
+    assert claimed_one is not None
+    assert claimed_one.path == "p1"

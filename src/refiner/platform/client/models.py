@@ -83,6 +83,16 @@ class RunHandle:
             worker_id=worker_id if worker_id is not None else self.worker_id,
         )
 
+    def with_stage(self, stage_index: int) -> RunHandle:
+        return RunHandle(
+            job_id=self.job_id,
+            stage_index=stage_index,
+            client=self.client,
+            workspace_slug=self.workspace_slug,
+            worker_name=self.worker_name,
+            worker_id=self.worker_id,
+        )
+
 
 class WorkerStartedResponse(msgspec.Struct, frozen=True):
     worker_id: str
@@ -163,11 +173,13 @@ class CloudPipelinePayload:
 class StagePayload:
     stage_index: int
     pipeline_payload: CloudPipelinePayload
+    runtime: CloudRuntimeConfig
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "stage_index": self.stage_index,
             "pipeline_payload": self.pipeline_payload.to_dict(),
+            "runtime": self.runtime.to_dict(),
         }
 
 
@@ -175,7 +187,6 @@ class StagePayload:
 class CloudRunCreateRequest:
     name: str
     plan: dict[str, Any]
-    runtime: CloudRuntimeConfig
     stage_payloads: list[StagePayload]
     manifest: dict[str, Any] | None = None
     sync_local_dependencies: bool = True
@@ -188,7 +199,6 @@ class CloudRunCreateRequest:
                 "sync_local_dependencies": self.sync_local_dependencies,
             },
             "plan": self.plan,
-            "runtime": self.runtime.to_dict(),
             "stage_payloads": [payload.to_dict() for payload in self.stage_payloads],
         }
         if self.manifest is not None:

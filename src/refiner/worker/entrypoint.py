@@ -89,7 +89,10 @@ def main() -> int:
 
         if runtime_lifecycle is None and run_handle is None:
             runtime_lifecycle = FileRuntimeLifecycle(
-                job_id=args.job_id, worker_id=args.rank, workdir=args.workdir
+                job_id=args.job_id,
+                stage_index=max(args.stage_index, 0),
+                worker_id=args.rank,
+                workdir=args.workdir,
             )
 
         stats = Worker(

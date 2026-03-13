@@ -16,12 +16,6 @@ def _request() -> CloudRunCreateRequest:
     return CloudRunCreateRequest(
         name="demo-cloud-job",
         plan={"stages": [{"name": "stage_0", "steps": []}]},
-        runtime=CloudRuntimeConfig(
-            num_workers=2,
-            heartbeat_interval_seconds=30,
-            cpus_per_worker=4,
-            mem_mb_per_worker=16384,
-        ),
         stage_payloads=[
             StagePayload(
                 stage_index=0,
@@ -30,6 +24,12 @@ def _request() -> CloudRunCreateRequest:
                     bytes_b64="AQID",
                     sha256="abc123",
                     size_bytes=3,
+                ),
+                runtime=CloudRuntimeConfig(
+                    num_workers=2,
+                    heartbeat_interval_seconds=30,
+                    cpus_per_worker=4,
+                    mem_mb_per_worker=16384,
                 ),
             )
         ],
@@ -60,9 +60,6 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
         "type": "macrodata-cloud",
         "sync_local_dependencies": True,
     }
-    runtime = cast(dict[str, object], json_payload["runtime"])
-    assert runtime["cpus_per_worker"] == 4
-    assert runtime["mem_mb_per_worker"] == 16384
     stage_payloads = cast(list[dict[str, object]], json_payload["stage_payloads"])
     assert stage_payloads == [
         {
@@ -72,6 +69,12 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
                 "bytes_b64": "AQID",
                 "sha256": "abc123",
                 "size_bytes": 3,
+            },
+            "runtime": {
+                "num_workers": 2,
+                "heartbeat_interval_seconds": 30,
+                "cpus_per_worker": 4,
+                "mem_mb_per_worker": 16384,
             },
         }
     ]

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import cloudpickle
 
 from refiner.platform.client import RunHandle
+from refiner.pipeline.planning import PlannedStage
 from refiner.worker.lifecycle import FileRuntimeLifecycle
 from refiner.worker.resources.cpu import build_cpu_sets
 from refiner.worker.workdir import resolve_workdir
@@ -60,34 +61,44 @@ class LocalLauncher(BaseLauncher):
     def _launcher_run_dir(self) -> Path:
         return Path(self.workdir) / "runs" / self.job_id / "launcher"
 
-    def _pipeline_payload_path(self) -> Path:
-        return self._launcher_run_dir() / "pipeline.cloudpickle"
+    def _stage_run_dir(self, stage_index: int) -> Path:
+        return self._launcher_run_dir() / f"stage-{stage_index}"
 
-    def _stats_path(self, rank: int) -> Path:
-        return self._launcher_run_dir() / f"worker-{rank}.json"
+    def _pipeline_payload_path(self, stage_index: int) -> Path:
+        return self._stage_run_dir(stage_index) / "pipeline.cloudpickle"
 
-    def _serialize_pipeline_payload(self) -> bytes:
-        return cloudpickle.dumps(self.pipeline)
+    def _stats_path(self, stage_index: int, rank: int) -> Path:
+        return self._stage_run_dir(stage_index) / f"worker-{rank}.json"
 
-    def _write_pipeline_payload(self) -> Path:
-        run_dir = self._launcher_run_dir()
+    def _serialize_pipeline_payload(self, pipeline: RefinerPipeline) -> bytes:
+        return cloudpickle.dumps(pipeline)
+
+    def _write_pipeline_payload(
+        self, *, stage_index: int, pipeline: RefinerPipeline
+    ) -> Path:
+        run_dir = self._stage_run_dir(stage_index)
         run_dir.mkdir(parents=True, exist_ok=True)
-        payload_path = self._pipeline_payload_path()
-        payload_path.write_bytes(self._serialize_pipeline_payload())
+        payload_path = self._pipeline_payload_path(stage_index)
+        payload_path.write_bytes(self._serialize_pipeline_payload(pipeline))
         return payload_path
 
-    def _seed_file_runtime_shards(self, *, shards: list["Shard"]) -> None:
+    def _seed_file_runtime_shards(
+        self, *, stage_index: int, shards: list["Shard"]
+    ) -> None:
         FileRuntimeLifecycle(
             job_id=self.job_id,
+            stage_index=stage_index,
             worker_id=None,
             workdir=self.workdir,
         ).seed_shards(shards)
 
-    def _resolve_platform_context(self, *, shards: list["Shard"]) -> RunHandle | None:
+    def _resolve_platform_context(
+        self, *, stages: list[PlannedStage]
+    ) -> RunHandle | None:
         if self.runtime_backend == "file":
             return None
-        return self._setup_platform(
-            shards=shards,
+        return self._create_platform_run(
+            plan=self._compiled_plan(stages),
             fail_open=self.runtime_backend != "platform",
         )
 
@@ -112,6 +123,7 @@ class LocalLauncher(BaseLauncher):
     def _worker_command(
         self,
         *,
+        stage_index: int,
         rank: int,
         payload_path: Path,
         stats_path: Path,
@@ -142,13 +154,12 @@ class LocalLauncher(BaseLauncher):
         ]
         if self.mem_mb_per_worker is not None:
             command.extend(["--mem-mb-per-worker", str(self.mem_mb_per_worker)])
+        command.extend(["--stage-index", str(stage_index)])
         if runtime_backend == "platform" and platform_run is not None:
             command.extend(
                 [
-                    "--stage-index",
-                    str(platform_run.stage_index),
                     "--worker-name",
-                    f"local-rank-{rank}",
+                    f"stage-{stage_index}-rank-{rank}",
                 ]
             )
         return command
@@ -156,10 +167,11 @@ class LocalLauncher(BaseLauncher):
     def _read_worker_stats(
         self,
         *,
+        stage_index: int,
         rank: int,
         process: subprocess.Popen[str],
     ) -> tuple[int, int, int, int]:
-        stats_path = self._stats_path(rank)
+        stats_path = self._stats_path(stage_index, rank)
         return_code = process.wait()
         if not stats_path.exists():
             raise RuntimeError(
@@ -185,8 +197,10 @@ class LocalLauncher(BaseLauncher):
     def _collect_worker_stats(
         self,
         *,
+        stage_index: int,
+        stage_workers: int,
         processes: list[subprocess.Popen[str]],
-        platform_run: RunHandle | None,
+        stage_run: RunHandle | None,
     ) -> LaunchStats:
         claimed = 0
         completed = 0
@@ -197,7 +211,9 @@ class LocalLauncher(BaseLauncher):
         for rank, process in enumerate(processes):
             try:
                 worker_claimed, worker_completed, worker_failed, worker_output_rows = (
-                    self._read_worker_stats(rank=rank, process=process)
+                    self._read_worker_stats(
+                        stage_index=stage_index, rank=rank, process=process
+                    )
                 )
             except RuntimeError as err:
                 errors.append(str(err))
@@ -208,58 +224,107 @@ class LocalLauncher(BaseLauncher):
             output_rows += worker_output_rows
 
         final_status = "failed" if errors or failed > 0 else "completed"
-        self._finish_platform_terminal(platform_run, status=final_status)
+        self._finish_platform_stage(
+            stage_run, stage_index=stage_index, status=final_status
+        )
         if errors:
             raise RuntimeError("; ".join(errors))
 
         return LaunchStats(
             job_id=self.job_id,
-            workers=self.num_workers,
+            workers=stage_workers,
             claimed=claimed,
             completed=completed,
             failed=failed,
             output_rows=output_rows,
         )
 
-    def launch(self) -> LaunchStats:
+    def _launch_stage(
+        self,
+        *,
+        stage: PlannedStage,
+        runtime_backend: str,
+        platform_run: RunHandle | None,
+    ) -> LaunchStats:
         cpu_sets = (
             build_cpu_sets(
-                num_workers=self.num_workers,
+                num_workers=stage.compute.num_workers,
                 cpus_per_worker=self.cpus_per_worker,
             )
             if self.cpus_per_worker is not None
-            else [None] * self.num_workers
+            else [None] * stage.compute.num_workers
+        )
+        shards = list(stage.pipeline.source.list_shards())
+        stage_run = self._stage_run(platform_run, stage_index=stage.index)
+        if runtime_backend == "platform":
+            self._seed_platform_stage(stage_run, stage_index=stage.index, shards=shards)
+        else:
+            self._seed_file_runtime_shards(stage_index=stage.index, shards=shards)
+
+        payload_path = self._write_pipeline_payload(
+            stage_index=stage.index,
+            pipeline=stage.pipeline,
+        )
+        processes = [
+            subprocess.Popen(
+                self._worker_command(
+                    stage_index=stage.index,
+                    rank=rank,
+                    payload_path=payload_path,
+                    stats_path=self._stats_path(stage.index, rank),
+                    runtime_backend=runtime_backend,
+                    cpu_ids=cpu_sets[rank],
+                    platform_run=stage_run,
+                ),
+                text=True,
+            )
+            for rank in range(stage.compute.num_workers)
+        ]
+        return self._collect_worker_stats(
+            stage_index=stage.index,
+            stage_workers=stage.compute.num_workers,
+            processes=processes,
+            stage_run=stage_run,
         )
 
-        shards = list(self.pipeline.source.list_shards())
-        platform_run = self._resolve_platform_context(shards=shards)
+    def launch(self) -> LaunchStats:
+        stages = self._planned_stages()
+        platform_run = self._resolve_platform_context(stages=stages)
         runtime_backend = self._effective_runtime_backend(platform_run=platform_run)
         if runtime_backend == "platform" and platform_run is None:
             raise RuntimeError("runtime_backend=platform requires a platform context")
 
         self._log_tracking_url(platform_run)
-
-        if runtime_backend != "platform":
-            self._seed_file_runtime_shards(shards=shards)
-
-        payload_path = self._write_pipeline_payload()
-        processes = [
-            subprocess.Popen(
-                self._worker_command(
-                    rank=rank,
-                    payload_path=payload_path,
-                    stats_path=self._stats_path(rank),
-                    runtime_backend=runtime_backend,
-                    cpu_ids=cpu_sets[rank],
-                    platform_run=platform_run,
-                ),
-                text=True,
-            )
-            for rank in range(self.num_workers)
-        ]
-        return self._collect_worker_stats(
-            processes=processes, platform_run=platform_run
+        totals = LaunchStats(
+            job_id=self.job_id,
+            workers=0,
+            claimed=0,
+            completed=0,
+            failed=0,
+            output_rows=0,
         )
+        try:
+            for stage in stages:
+                stage_stats = self._launch_stage(
+                    stage=stage,
+                    runtime_backend=runtime_backend,
+                    platform_run=platform_run,
+                )
+                totals = LaunchStats(
+                    job_id=self.job_id,
+                    workers=totals.workers + stage_stats.workers,
+                    claimed=totals.claimed + stage_stats.claimed,
+                    completed=totals.completed + stage_stats.completed,
+                    failed=totals.failed + stage_stats.failed,
+                    output_rows=totals.output_rows + stage_stats.output_rows,
+                )
+        except Exception:
+            self._finish_platform_job(platform_run, status="failed")
+            raise
+
+        final_status = "failed" if totals.failed > 0 else "completed"
+        self._finish_platform_job(platform_run, status=final_status)
+        return totals
 
 
 __all__ = ["LocalLauncher", "LaunchStats"]

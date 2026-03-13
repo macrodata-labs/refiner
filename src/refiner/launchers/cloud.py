@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 from refiner.platform.client import (
     CloudRunCreateRequest,
@@ -61,24 +61,23 @@ class CloudLauncher(BaseLauncher):
             client = self._require_platform_client()
         except RuntimeError as err:
             raise SystemExit(str(err)) from err
-        compiled_plan = self._compiled_plan()
-        stage_definitions = cast(list[dict[str, Any]], compiled_plan.get("stages", []))
-        serialized_pipeline = serialize_pipeline_inline(self.pipeline)
+        stages = self._planned_stages()
+        compiled_plan = self._compiled_plan(stages)
         request = CloudRunCreateRequest(
             name=self.name,
             plan=compiled_plan,
-            runtime=CloudRuntimeConfig(
-                num_workers=self.num_workers,
-                heartbeat_interval_seconds=self.heartbeat_interval_seconds,
-                cpus_per_worker=self.cpus_per_worker,
-                mem_mb_per_worker=self.mem_mb_per_worker,
-            ),
             stage_payloads=[
                 StagePayload(
-                    stage_index=int(stage.get("index", position)),
-                    pipeline_payload=serialized_pipeline,
+                    stage_index=stage.index,
+                    pipeline_payload=serialize_pipeline_inline(stage.pipeline),
+                    runtime=CloudRuntimeConfig(
+                        num_workers=stage.compute.num_workers,
+                        heartbeat_interval_seconds=self.heartbeat_interval_seconds,
+                        cpus_per_worker=self.cpus_per_worker,
+                        mem_mb_per_worker=self.mem_mb_per_worker,
+                    ),
                 )
-                for position, stage in enumerate(stage_definitions)
+                for stage in stages
             ],
             manifest=self._run_manifest(),
             sync_local_dependencies=self.sync_local_dependencies,

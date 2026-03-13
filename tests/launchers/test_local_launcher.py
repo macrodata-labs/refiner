@@ -7,6 +7,7 @@ import pytest
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline import RefinerPipeline, read_jsonl
 from refiner.launchers.local import LocalLauncher
+from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.resources.cpu import build_cpu_sets
@@ -14,6 +15,7 @@ from refiner.worker.resources.cpu import build_cpu_sets
 
 class _FakeReader(BaseReader):
     def __init__(self, shards: list[Shard], rows_by_shard_id: dict[str, list[Row]]):
+        super().__init__(inputs=[])
         self._shards = shards
         self._rows_by_shard_id = rows_by_shard_id
 
@@ -127,3 +129,49 @@ def test_local_launcher_platform_backend_requires_platform_client(monkeypatch) -
         RuntimeError, match="platform runtime requires Macrodata authentication"
     ):
         launcher.launch()
+
+
+def test_launch_local_runs_planned_stages_sequentially(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_path = tmp_path / "stage0.jsonl"
+    second_path = tmp_path / "stage1.jsonl"
+    first_path.write_text('{"x": 1}\n{"x": 2}\n')
+    second_path.write_text('{"x": 3}\n')
+
+    pipeline = read_jsonl(str(first_path))
+    stage_zero = read_jsonl(str(first_path))
+    stage_one = read_jsonl(str(second_path)).map(lambda row: {"x": int(row["x"]) + 10})
+
+    monkeypatch.setattr(
+        "refiner.launchers.base.plan_pipeline_stages",
+        lambda pipeline, default_num_workers: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=stage_zero,
+                compute=StageComputeRequirements(num_workers=1),
+            ),
+            PlannedStage(
+                index=1,
+                name="stage_1",
+                pipeline=stage_one,
+                compute=StageComputeRequirements(num_workers=2),
+            ),
+        ],
+    )
+
+    stats = pipeline.launch_local(
+        name="unit-test-local-multi-stage",
+        num_workers=4,
+        workdir=str(tmp_path),
+        runtime_backend="file",
+    )
+
+    assert stats.workers == 3
+    assert stats.claimed == 2
+    assert stats.completed == 2
+    assert stats.failed == 0
+    assert stats.output_rows == 3
+    assert (tmp_path / "runs" / stats.job_id / "launcher" / "stage-0").exists()
+    assert (tmp_path / "runs" / stats.job_id / "launcher" / "stage-1").exists()
