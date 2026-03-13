@@ -32,55 +32,44 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
   - `metadata`: dict with `lerobot_info` and `lerobot_stats`.
   - raw transport metadata keys under `stats/*`, `videos/*`, and `meta/episodes/*` are omitted from emitted rows.
   - frame slicing requires `dataset_from_index`/`dataset_to_index` in each episode row.
-  - `decode` can be `True`, `False`, or `None`:
-    - `None` rejects timestamped video rows.
-    - `False` keeps timestamped `Video` references without decoding.
-    - `True` is reserved for clip-aligned materialization flows.
   - optional `limit` bounds emitted episodes per reader instance.
+  - `media_max_in_flight` controls concurrent episode materialization work inside the reader.
+  - `media_preserve_order` controls whether those async reader results are yielded in input order.
 - Use `target_shard_bytes` to control shard granularity.
 
 ## Hydrating External Files
 
-Use `refiner.hydrate_file(...)` in `.flat_map(...)` for buffered row-level hydration.
+Use `refiner.hydrate_media(...)` with `.map_async(...)` when you want decoded
+video clips materialized in-process.
 
 ```python
 import refiner as mdr
 
 pipeline = (
     mdr.read_lerobot("s3://bucket/dataset")
-    .flat_map(mdr.hydrate_file(columns="observation.images.main"))
-)
-```
-
-Hydration defaults to attaching a lazy `VideoFile` handle on `Video.file` (or replacing string URI fields with raw bytes).
-
-If you explicitly need full in-memory bytes for videos, use `video_hydration="bytes"`:
-
-```python
-pipeline = pipeline.flat_map(
-    mdr.hydrate_file(
-        columns="observation.images.main",
-        video_hydration="bytes",
+    .map_async(
+        mdr.hydrate_media("observation.images.main", decode=True),
+        max_in_flight=8,
     )
 )
 ```
-Set `max_in_flight` to control concurrency/backpressure. Rows are yielded in input order.
 
-## LeRobot Function Adapters
+`hydrate_media(...)` currently accepts `Video` values only. For LeRobot inputs,
+that means clip-aligned hydration is explicit and decode-backed:
 
-Use `convert_le_robot_fc(...)` to adapt a LeRobot-style episode dict function into a normal `.map(...)` step:
+- pass `decode=True`
+- use `.map_async(...)` to control concurrency
+- expect decoded frames in `video.media`
 
-```python
-import refiner as mdr
+Rows are yielded in input order unless you explicitly choose otherwise on the async step.
 
-def tweak_episode(ep: dict) -> dict:
-    ep["episode_index"] += 1000
-    return ep
+## LeRobot Writer Tuning
 
-pipeline = mdr.read_lerobot("s3://bucket/dataset").map(
-    mdr.convert_le_robot_fc(tweak_episode)
-)
-```
+`write_lerobot(...)` keeps video threading explicit:
+
+- `video_encoder_threads=<int>` and `video_decoder_threads=<int>` force exact FFmpeg thread counts.
+- `video_encoder_threads=None` and `video_decoder_threads=None` auto-resolve once per shard from the number of video features and the worker CPU budget.
+- More concurrent video tracks per row generally means fewer threads per track.
 
 ## Internal Notes
 
@@ -88,3 +77,4 @@ pipeline = mdr.read_lerobot("s3://bucket/dataset").map(
 - Parquet row access uses batch-level cached column-name indexing for faster key lookup.
 - LeRobot expects parquet metadata under `meta/episodes/**`; legacy JSONL metadata is not used.
 - LeRobot reads `fps`, `robot_type`, `features`, `data_path`, and `video_path` from `meta/info.json` when present.
+- `hydrate_media(...)` is intentionally narrow here; it is not a general file/bytes hydration helper.

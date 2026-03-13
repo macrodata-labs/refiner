@@ -127,7 +127,7 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     root = tmp_path / "lerobot"
     _build_sample_dataset(root)
 
-    reader = LeRobotEpisodeReader(str(root), decode=False)
+    reader = LeRobotEpisodeReader(str(root))
     shards = reader.list_shards()
     assert len(shards) == 1
     assert shards[0].start == 0
@@ -196,10 +196,34 @@ def test_lerobot_reader_requires_episode_parquet_metadata(tmp_path: Path) -> Non
         mdr.read_lerobot(str(root)).materialize()
 
 
-def test_lerobot_decode_none_rejects_timestamped_video(tmp_path: Path) -> None:
+def test_lerobot_reader_keeps_timestamped_video_references(tmp_path: Path) -> None:
     root = tmp_path / "lerobot"
     _build_sample_dataset(root)
 
-    pipeline = mdr.read_lerobot(str(root), decode=None)
-    with pytest.raises(ValueError, match="decode is None cannot read timestamped videos"):
-        pipeline.materialize()
+    rows = mdr.read_lerobot(str(root)).materialize()
+    assert len(rows) == 2
+    assert isinstance(rows[0]["observation.images.main"], Video)
+
+
+def test_lerobot_reader_exposes_media_async_window_settings(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    reader = LeRobotEpisodeReader(
+        str(root),
+        media_max_in_flight=3,
+        media_preserve_order=False,
+    )
+
+    assert reader.describe()["media_max_in_flight"] == 3
+    assert reader.describe()["media_preserve_order"] is False
+
+
+def test_lerobot_reader_rejects_non_positive_media_max_in_flight(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    with pytest.raises(ValueError, match="media_max_in_flight must be > 0"):
+        LeRobotEpisodeReader(str(root), media_max_in_flight=0)

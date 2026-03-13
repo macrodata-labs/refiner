@@ -137,24 +137,14 @@ class MediaLocalCache:
         name: str,
         max_entries: int = 128,
         max_bytes: int = 1_024 * 1_024 * 1_024,
-        max_inflight_downloads: int | None = None,
     ) -> None:
         if max_entries <= 0:
             raise ValueError("max_entries must be > 0")
         if max_bytes <= 0:
             raise ValueError("max_bytes must be > 0")
-        resolved_inflight = (
-            max_entries
-            if max_inflight_downloads is None
-            else int(max_inflight_downloads)
-        )
-        if resolved_inflight <= 0:
-            raise ValueError("max_inflight_downloads must be > 0")
         self.name = name
         self.max_entries = int(max_entries)
         self.max_bytes = int(max_bytes)
-        self.max_inflight_downloads = resolved_inflight
-        self._lease_slots = asyncio.BoundedSemaphore(self.max_inflight_downloads)
         self._cache = _FileLeaseCache(
             name=name,
             max_entries=self.max_entries,
@@ -167,12 +157,6 @@ class MediaLocalCache:
         file: DataFile,
     ) -> _CachedFileContext:
         return _CachedFileContext(cache=self, file=file)
-
-    async def get_lease(self) -> None:
-        await self._lease_slots.acquire()
-
-    def release_lease(self) -> None:
-        self._lease_slots.release()
 
     async def acquire_file_lease(self, file: DataFile) -> _CacheFileLease:
         key = _FileCacheKey(resolved=str(file), file=file)
@@ -194,7 +178,6 @@ def get_media_cache(
     *,
     max_entries: int | None = None,
     max_bytes: int | None = None,
-    max_inflight_downloads: int | None = None,
 ) -> MediaLocalCache:
     if not isinstance(name, str) or not name.strip():
         raise ValueError("cache name must be a non-empty string")
@@ -206,7 +189,6 @@ def get_media_cache(
             name=normalized,
             max_entries=max_entries if max_entries is not None else 128,
             max_bytes=max_bytes if max_bytes is not None else 1_024 * 1_024 * 1_024,
-            max_inflight_downloads=max_inflight_downloads,
         )
         _CACHE_REGISTRY[normalized] = cache
         return cache
@@ -218,14 +200,6 @@ def get_media_cache(
     if max_bytes is not None and cache.max_bytes != int(max_bytes):
         raise ValueError(
             f"Cache {normalized!r} already exists with max_bytes={cache.max_bytes}"
-        )
-    if (
-        max_inflight_downloads is not None
-        and cache.max_inflight_downloads != int(max_inflight_downloads)
-    ):
-        raise ValueError(
-            f"Cache {normalized!r} already exists with "
-            f"max_inflight_downloads={cache.max_inflight_downloads}"
         )
     return cache
 
@@ -275,11 +249,7 @@ def _download_data_file_to_temp(
 
 
 __all__ = [
-    "FileCache",
     "MediaLocalCache",
     "get_media_cache",
     "reset_media_cache",
 ]
-
-
-FileCache = MediaLocalCache

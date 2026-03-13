@@ -39,10 +39,13 @@ class LeRobotWriterConfig:
     video_codec: str = "mpeg4"
     video_pix_fmt: str = "yuv420p"
     video_encoder_threads: int | None = None
+    video_decoder_threads: int | None = None
     video_encoder_options: Mapping[str, str] | None = None
     enable_video_stats: bool = True
     video_stats_sample_stride: int = 1
     video_stats_quantile_bins: int = 500
+    media_prelease_max_in_flight: int = 10
+    media_prelease_preserve_order: bool = True
 
     def __post_init__(self) -> None:
         if self.chunk_size <= 0:
@@ -55,24 +58,16 @@ class LeRobotWriterConfig:
             raise ValueError("video_codec must be a non-empty string")
         if not isinstance(self.video_pix_fmt, str) or not self.video_pix_fmt.strip():
             raise ValueError("video_pix_fmt must be a non-empty string")
-        if self.video_encoder_threads is None:
-            object.__setattr__(self, "video_encoder_threads", _cpu_thread_count())
         if self.video_encoder_threads is not None and self.video_encoder_threads <= 0:
             raise ValueError("video_encoder_threads must be > 0 when provided")
+        if self.video_decoder_threads is not None and self.video_decoder_threads <= 0:
+            raise ValueError("video_decoder_threads must be > 0 when provided")
         if self.video_stats_sample_stride <= 0:
             raise ValueError("video_stats_sample_stride must be > 0")
         if self.video_stats_quantile_bins <= 1:
             raise ValueError("video_stats_quantile_bins must be > 1")
-
-
-def _cpu_thread_count() -> int:
-    try:
-        sched_getaffinity = getattr(os, "sched_getaffinity", None)
-        if sched_getaffinity is None:
-            raise AttributeError
-        return max(1, len(sched_getaffinity(0)))
-    except (AttributeError, OSError):
-        return max(1, os.cpu_count() or 1)
+        if self.media_prelease_max_in_flight <= 0:
+            raise ValueError("media_prelease_max_in_flight must be > 0")
 
 
 class LeRobotWriterSink(BaseSink):
@@ -82,7 +77,8 @@ class LeRobotWriterSink(BaseSink):
         self.config = config
         self._writers: dict[str, _LeRobotShardWriter] = {}
         self._lease_window: AsyncWindow[tuple[Mapping[str, Any], str]] = AsyncWindow(
-            max_in_flight=2
+            max_in_flight=self.config.media_prelease_max_in_flight,
+            preserve_order=self.config.media_prelease_preserve_order,
         )
 
     def cleanup_leases(self, row: Mapping[str, Any]) -> None:
@@ -138,8 +134,7 @@ class LeRobotWriterSink(BaseSink):
                     self._writers[shard_id] = writer
                 writer.consume_row(row)
             finally:
-                for row, _ in rows:
-                    self.cleanup_leases(row)
+                self.cleanup_leases(row)
 
     def on_shard_complete(self, shard_id: str) -> None:
         # Ensure we have no in-flight leases for this shard.

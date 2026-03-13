@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import wait
 import json
+import os
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -37,6 +38,58 @@ from refiner.pipeline.sinks.lerobot._lerobot_video import (
 _DEFAULT_DATA_PATH = "data/chunk-{chunk_key}/file-{file_index:03d}.parquet"
 _DEFAULT_VIDEO_PATH = "videos/{video_key}/chunk-{chunk_index}/file-{file_index:03d}.mp4"
 _DEFAULT_CODEBASE_VERSION = "v3.0"
+
+
+def _cpu_thread_count() -> int:
+    try:
+        sched_getaffinity = getattr(os, "sched_getaffinity", None)
+        if sched_getaffinity is None:
+            raise AttributeError
+        return max(1, len(sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
+
+
+def _resolve_video_threads(
+    *,
+    requested_threads: int | None,
+    videos_in_row: int,
+    available_cpus: int | None = None,
+) -> int | None:
+    if requested_threads is not None:
+        return int(requested_threads)
+    if videos_in_row <= 0:
+        return None
+    resolved_cpus = (
+        available_cpus if available_cpus is not None else _cpu_thread_count()
+    )
+    return max(1, int(resolved_cpus) // int(videos_in_row))
+
+
+def _resolve_video_encoder_threads(
+    *,
+    requested_threads: int | None,
+    videos_in_row: int,
+    available_cpus: int | None = None,
+) -> int | None:
+    return _resolve_video_threads(
+        requested_threads=requested_threads,
+        videos_in_row=videos_in_row,
+        available_cpus=available_cpus,
+    )
+
+
+def _resolve_video_decoder_threads(
+    *,
+    requested_threads: int | None,
+    videos_in_row: int,
+    available_cpus: int | None = None,
+) -> int | None:
+    return _resolve_video_threads(
+        requested_threads=requested_threads,
+        videos_in_row=videos_in_row,
+        available_cpus=available_cpus,
+    )
 
 
 def _format_chunk_path(
@@ -93,6 +146,8 @@ class _LeRobotShardWriter:
         init=False,
     )
     _video_append_config: dict[str, Any] = field(default_factory=dict, init=False)
+    _resolved_video_encoder_threads: int | None = field(default=None, init=False)
+    _resolved_video_decoder_threads: int | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.folder = DataFolder.resolve(
@@ -104,6 +159,7 @@ class _LeRobotShardWriter:
             "video_codec": self.config.video_codec,
             "video_pix_fmt": self.config.video_pix_fmt,
             "video_encoder_threads": self.config.video_encoder_threads,
+            "video_decoder_threads": self.config.video_decoder_threads,
             "video_encoder_options": self.config.video_encoder_options,
             "enable_video_stats": self.config.enable_video_stats,
             "video_stats_sample_stride": self.config.video_stats_sample_stride,
@@ -314,6 +370,23 @@ class _LeRobotShardWriter:
                 )
 
         infer_features(features=self._features, row=row, frames=frames)
+        video_features = sum(
+            1 for spec in self._features.values() if spec.get("dtype") == "video"
+        )
+        self._resolved_video_encoder_threads = _resolve_video_encoder_threads(
+            requested_threads=self.config.video_encoder_threads,
+            videos_in_row=video_features,
+        )
+        self._resolved_video_decoder_threads = _resolve_video_decoder_threads(
+            requested_threads=self.config.video_decoder_threads,
+            videos_in_row=video_features,
+        )
+        self._video_append_config["video_encoder_threads"] = (
+            self._resolved_video_encoder_threads
+        )
+        self._video_append_config["video_decoder_threads"] = (
+            self._resolved_video_decoder_threads
+        )
 
     def _write_frames_to_data(
         self,
@@ -424,13 +497,13 @@ class _LeRobotShardWriter:
     ) -> tuple[dict[str, Any], dict[str, dict[str, np.ndarray]]]:
         out: dict[str, Any] = {}
         out_stats: dict[str, dict[str, np.ndarray]] = {}
+        video_items = [
+            (key, value) for key, value in row.items() if isinstance(value, Video)
+        ]
         video_config = self._video_append_config
         futures = []
 
-        for key, value in row.items():
-            if not isinstance(value, Video):
-                continue
-
+        for key, value in video_items:
             clip_from = (
                 float(value.from_timestamp_s)
                 if value.from_timestamp_s is not None
@@ -449,8 +522,11 @@ class _LeRobotShardWriter:
                 )
             )
 
-        done, _ = wait(futures)
-        for future in done:
+        if not futures:
+            return out, out_stats
+
+        wait(futures)
+        for future in futures:
             video_meta, video_stats = future.result()
             out.update(video_meta)
             out_stats.update(video_stats)

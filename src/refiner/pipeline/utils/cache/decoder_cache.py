@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 
@@ -13,12 +13,14 @@ from refiner.pipeline.utils.cache.lease_cache import CacheLease, LeaseCache
 if TYPE_CHECKING:
     import av
 
+
 @dataclass(slots=True)
 class _DecoderResource:
-    container: "av.InputContainer"
+    container: Any
     stream_index: int
     decode_lock: asyncio.Lock
     file_lease: _CacheFileLease | None = None
+    configured_decoder_threads: int | None = None
     last_collect_window: tuple[float, float | None] | None = None
     last_collect_result: tuple[tuple[np.ndarray, ...], DecodeWindowMeta] | None = None
 
@@ -38,7 +40,7 @@ class _DecoderLeaseCache(LeaseCache[DataFile, _DecoderResource]):
         name: str,
         max_decoders: int,
         media_cache: MediaLocalCache,
-        av_module: object,
+        av_module: Any,
     ) -> None:
         super().__init__(max_entries=max_decoders)
         self.name = name
@@ -50,9 +52,7 @@ class _DecoderLeaseCache(LeaseCache[DataFile, _DecoderResource]):
         key: DataFile,
     ) -> tuple[_DecoderResource, int]:
         # Check if we have a valid lease of the media file
-        file_lease = await self._media_cache.acquire_file_lease(
-            key
-        )
+        file_lease = await self._media_cache.acquire_file_lease(key)
         try:
             container = self._av.open(file_lease.path)
             stream = container.streams.video[0]
@@ -92,6 +92,7 @@ class DecoderLease:
         from_timestamp_s: float,
         to_timestamp_s: float | None,
         on_frame: Callable[["av.VideoFrame"], None],
+        decoder_threads: int | None = None,
     ) -> DecodeWindowMeta:
         start_ts, end_ts = self._owner._validate_bounds(
             from_timestamp_s=from_timestamp_s,
@@ -99,6 +100,10 @@ class DecoderLease:
         )
         resource = self._cache_lease.resource
         async with resource.decode_lock:
+            self._owner._configure_decoder_threads(
+                resource=resource,
+                decoder_threads=decoder_threads,
+            )
             return self._owner._decode_with_decoder(
                 container=resource.container,
                 stream_index=resource.stream_index,
@@ -112,6 +117,7 @@ class DecoderLease:
         *,
         from_timestamp_s: float,
         to_timestamp_s: float | None,
+        decoder_threads: int | None = None,
     ) -> tuple[tuple[np.ndarray, ...], DecodeWindowMeta]:
         start_ts, end_ts = self._owner._validate_bounds(
             from_timestamp_s=from_timestamp_s,
@@ -119,6 +125,10 @@ class DecoderLease:
         )
         resource = self._cache_lease.resource
         async with resource.decode_lock:
+            self._owner._configure_decoder_threads(
+                resource=resource,
+                decoder_threads=decoder_threads,
+            )
             cached = resource.last_collect_result
             if (
                 resource.last_collect_window == (start_ts, end_ts)
@@ -198,12 +208,14 @@ class VideoDecoderCache:
         data_file: DataFile,
         from_timestamp_s: float,
         to_timestamp_s: float | None,
+        decoder_threads: int | None = None,
     ) -> tuple[tuple[np.ndarray, ...], int | None, int | None, str | None]:
         lease = await self.acquire(data_file=data_file)
         try:
             frames_tuple, meta = await lease.decode_window_collect_rgb24(
                 from_timestamp_s=from_timestamp_s,
                 to_timestamp_s=to_timestamp_s,
+                decoder_threads=decoder_threads,
             )
         finally:
             lease.release()
@@ -214,7 +226,6 @@ class VideoDecoderCache:
             )
         return frames_tuple, meta.width, meta.height, meta.pix_fmt
 
-
     async def decode_segment_with_callback_from_data_file(
         self,
         *,
@@ -222,6 +233,7 @@ class VideoDecoderCache:
         from_timestamp_s: float,
         to_timestamp_s: float | None,
         on_frame: Callable[["av.VideoFrame"], None],
+        decoder_threads: int | None = None,
     ) -> tuple[int, int | None, int | None]:
         lease = await self.acquire(
             data_file=data_file,
@@ -231,6 +243,7 @@ class VideoDecoderCache:
                 from_timestamp_s=from_timestamp_s,
                 to_timestamp_s=to_timestamp_s,
                 on_frame=on_frame,
+                decoder_threads=decoder_threads,
             )
         finally:
             lease.release()
@@ -269,7 +282,7 @@ class VideoDecoderCache:
     def _decode_with_decoder(
         self,
         *,
-        container: "av.InputContainer",
+        container: Any,
         stream_index: int,
         from_timestamp_s: float,
         to_timestamp_s: float | None,
@@ -316,6 +329,28 @@ class VideoDecoderCache:
             height=height,
             pix_fmt="rgb24",
         )
+
+    @staticmethod
+    def _configure_decoder_threads(
+        *,
+        resource: _DecoderResource,
+        decoder_threads: int | None,
+    ) -> None:
+        if decoder_threads is None:
+            return
+        requested_threads = int(decoder_threads)
+        if resource.configured_decoder_threads == requested_threads:
+            return
+        if resource.configured_decoder_threads is not None:
+            raise ValueError(
+                "Decoder cache resource was already configured with "
+                f"{resource.configured_decoder_threads} threads; use a distinct "
+                "cache name for a different decoder thread policy."
+            )
+        codec_context = resource.container.streams.video[resource.stream_index].codec_context
+        codec_context.thread_count = requested_threads
+        codec_context.thread_type = "AUTO"
+        resource.configured_decoder_threads = requested_threads
 
     def clear(self) -> None:
         self._cache.clear()
@@ -368,13 +403,9 @@ def reset_video_decoder_cache(name: str | None = None) -> None:
 
 
 __all__ = [
-    "DecoderCache",
     "DecoderLease",
     "DecodeWindowMeta",
     "VideoDecoderCache",
     "get_video_decoder_cache",
     "reset_video_decoder_cache",
 ]
-
-
-DecoderCache = VideoDecoderCache

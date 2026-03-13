@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import posixpath
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from fsspec.spec import AbstractFileSystem
 import pyarrow as pa
@@ -14,11 +14,12 @@ import pyarrow.parquet as pq
 
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io import DataFile
-from refiner.media import MediaFile, Video, get_media_cache
+from refiner.media import MediaFile, Video
 from refiner.pipeline.data.row import ArrowRowView, DictRow, Row
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.parquet import ParquetReader
+from refiner.pipeline.utils.cache.file_cache import get_media_cache
 
 
 _DEFAULT_DATA_PATH = "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet"
@@ -52,25 +53,24 @@ class LeRobotEpisodeReader(ParquetReader):
         *,
         fs: AbstractFileSystem | None = None,
         storage_options: Mapping[str, Any] | None = None,
-        decode: Literal[True, False, None] = None,
         limit: int | None = None,
         arrow_batch_size: int = 65536,
+        media_max_in_flight: int = 8,
+        media_preserve_order: bool = True,
     ) -> None:
-        if decode is not None and decode not in (True, False):
-            raise ValueError("decode must be True, False, or None")
         if limit is not None and limit <= 0:
             raise ValueError("limit must be > 0 when provided")
+        if media_max_in_flight <= 0:
+            raise ValueError("media_max_in_flight must be > 0")
 
-        # Keep both public `root` and private `_root` fields so cloud-submitted
-        # pickles remain readable by older worker images that still reference `_root`.
-        self.root = root.rstrip("/")
-        self._root = self.root
+        self._root = root
         self._limit = int(limit) if limit is not None else None
         self._submitted_episodes = 0
-        self._decode = decode
+        self._media_max_in_flight = int(media_max_in_flight)
+        self._media_preserve_order = bool(media_preserve_order)
 
         super().__init__(
-            inputs=posixpath.join(self.root, _DEFAULT_EPISODES_GLOB_ROOT),
+            inputs=posixpath.join(self._root, _DEFAULT_EPISODES_GLOB_ROOT),
             fs=fs,
             storage_options=storage_options,
             recursive=True,
@@ -111,7 +111,10 @@ class LeRobotEpisodeReader(ParquetReader):
         if self._limit is not None and self._submitted_episodes >= self._limit:
             return
 
-        async_window: AsyncWindow[Row] = AsyncWindow(max_in_flight=8, preserve_order=True)
+        async_window: AsyncWindow[Row] = AsyncWindow(
+            max_in_flight=self._media_max_in_flight,
+            preserve_order=self._media_preserve_order,
+        )
         for batch in super().read_shard(shard):
             if not isinstance(batch, (pa.RecordBatch, pa.Table)):
                 raise TypeError(
@@ -140,16 +143,18 @@ class LeRobotEpisodeReader(ParquetReader):
 
     def describe(self) -> dict[str, Any]:
         return {
-            "root": self.root,
+            "root": self._root,
             "episode_files": len(self.files),
             "fps": self._fps,
             "limit": self._limit,
+            "media_max_in_flight": self._media_max_in_flight,
+            "media_preserve_order": self._media_preserve_order,
         }
 
     async def _build_episode_row(self, row: Row) -> Row:
         metadata = {
             LEROBOT_INFO: {
-                "root": self.root,
+                "root": self._root,
                 "fps": self._fps,
                 "robot_type": self._robot_type,
             },
@@ -178,13 +183,13 @@ class LeRobotEpisodeReader(ParquetReader):
         base = row.drop(*drop_keys)
         data = base.to_dict()
         data.update(patch)
-        return DictRow(data=data, metadata=metadata)
+        return DictRow(data=data, metadata=metadata, shard_id=row.shard_id)
 
     def _build_video(
         self,
         *,
         episode: Mapping[str, Any],
-        frames: list[Row],
+        frames: Sequence[Row],
         video_key: str,
     ) -> Video | None:
         chunk_key = f"videos/{video_key}/chunk_index"
@@ -200,7 +205,7 @@ class LeRobotEpisodeReader(ParquetReader):
             chunk=chunk,
             file_idx=file_idx,
         )
-        uri = posixpath.join(self.root, rel)
+        uri = posixpath.join(self._root, rel)
         first = frames[0] if frames else {}
         from_timestamp = episode.get(f"videos/{video_key}/from_timestamp")
         to_timestamp = episode.get(f"videos/{video_key}/to_timestamp")
@@ -234,14 +239,6 @@ class LeRobotEpisodeReader(ParquetReader):
         except (TypeError, ValueError):
             to_timestamp = None
 
-        if self._decode is None and (
-            from_timestamp is not None or to_timestamp is not None
-        ):
-            raise ValueError(
-                "decode is None cannot read timestamped videos; "
-                "pass decode=True to materialize clip-aligned bytes."
-            )
-
         return Video(
             media=MediaFile(uri),
             video_key=video_key,
@@ -256,7 +253,9 @@ class LeRobotEpisodeReader(ParquetReader):
             fps=self._fps,
         )
 
-    async def _load_episode_frames(self, episode: Mapping[str, Any]) -> list[Row]:
+    async def _load_episode_frames(
+        self, episode: Mapping[str, Any]
+    ) -> list[Row]:
         chunk = episode["data/chunk_index"]
         file_idx = episode["data/file_index"]
         if chunk is None or file_idx is None:
@@ -275,14 +274,12 @@ class LeRobotEpisodeReader(ParquetReader):
             to_idx = int(to_idx)
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                "LeRobot episode row has invalid "
-                "dataset_from_index/dataset_to_index"
+                "LeRobot episode row has invalid dataset_from_index/dataset_to_index"
             ) from exc
 
         if from_idx > to_idx:
             raise ValueError(
-                "LeRobot episode row has invalid "
-                "dataset_from_index/dataset_to_index"
+                "LeRobot episode row has invalid dataset_from_index/dataset_to_index"
             )
 
         cache_entry = await self._get_cached_frame_table(chunk=chunk, file_idx=file_idx)
@@ -348,17 +345,21 @@ class LeRobotEpisodeReader(ParquetReader):
                 file_idx=file_idx,
             )
             data_file = DataFile.resolve(
-                posixpath.join(self.root, rel),
+                posixpath.join(self._root, rel),
                 fs=self._fs,
                 storage_options=self._storage_options,
             )
 
-            async with get_media_cache(_DATA_FILE_CACHE_NAME).cached(file=data_file) as local_path:
+            async with get_media_cache(_DATA_FILE_CACHE_NAME).cached(
+                file=data_file
+            ) as local_path:
                 with open(local_path, "rb") as handle:
                     table = pq.read_table(handle)
 
             if "index" not in table.schema.names:
-                raise ValueError("LeRobot frame parquet is missing required 'index' column")
+                raise ValueError(
+                    "LeRobot frame parquet is missing required 'index' column"
+                )
             index_col = table.column("index")
             if index_col.null_count > 0:
                 raise ValueError("LeRobot frame parquet contains null index values")
@@ -374,7 +375,7 @@ class LeRobotEpisodeReader(ParquetReader):
         storage_options: Mapping[str, Any] | None,
     ) -> Mapping[str, Any]:
         info_file = DataFile.resolve(
-            posixpath.join(self.root, _INFO_JSON),
+            posixpath.join(self._root, _INFO_JSON),
             fs=fs,
             storage_options=storage_options,
         )
@@ -391,7 +392,7 @@ class LeRobotEpisodeReader(ParquetReader):
         storage_options: Mapping[str, Any] | None,
     ) -> Mapping[str, Any]:
         stats_file = DataFile.resolve(
-            posixpath.join(self.root, _STATS_JSON),
+            posixpath.join(self._root, _STATS_JSON),
             fs=fs,
             storage_options=storage_options,
         )

@@ -8,7 +8,8 @@ import av
 import numpy as np
 
 from refiner.io.datafile import DataFile
-from refiner.media import DecodedVideo, Video
+from refiner.media import Video
+from refiner.media.video.types import DecodedVideo
 from refiner.pipeline.sinks.lerobot._lerobot_stats import _RunningQuantileStats
 from refiner.pipeline.utils.cache.decoder_cache import get_video_decoder_cache
 from refiner.pipeline.utils.cache.file_cache import get_media_cache
@@ -101,11 +102,18 @@ class VideoTrackWriter:
         if self.container is None or self.stream is None:
             raise RuntimeError("Video stream was not initialized")
 
-        out_frame = frame.reformat(
-            width=self.stream.width,
-            height=self.stream.height,
-            format=self.stream.pix_fmt,
-        )
+        if (
+            frame.width == self.stream.width
+            and frame.height == self.stream.height
+            and frame.format.name == self.stream.pix_fmt
+        ):
+            out_frame = frame
+        else:
+            out_frame = frame.reformat(
+                width=self.stream.width,
+                height=self.stream.height,
+                format=self.stream.pix_fmt,
+            )
         out_frame.pts = self.frames_written
         out_frame.time_base = Fraction(1, self.fps)
 
@@ -257,6 +265,7 @@ async def _append_video_segment(
         clip_to=clip_to,
         tracker=tracker,
         sample_stride=sample_stride,
+        video_config=video_config,
     )
     return duration_s, _video_stats_from_tracker(tracker)
 
@@ -270,6 +279,7 @@ async def _append_video_segment_from_media(
     tracker: _RunningQuantileStats | None,
     sample_stride: int,
     video_key: str,
+    video_config: Mapping[str, Any],
 ) -> float:
     selected_frames = 0
     frame_index = 0
@@ -277,18 +287,19 @@ async def _append_video_segment_from_media(
     cache_name = f"lerobot_writer:{video_key}"
     media_cache = get_media_cache(name=cache_name)
     decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
+    decoder_threads = video_config.get("video_decoder_threads")
 
     def _on_frame(frame: av.VideoFrame) -> None:
         nonlocal selected_frames, frame_index
-        rgb_frame = frame.to_ndarray(format="rgb24")
         writer.ensure_stream(width=frame.width, height=frame.height)
-        writer.write_frame(av.VideoFrame.from_ndarray(rgb_frame, format="rgb24"))
-        _update_video_stats_if_due(
-            tracker=tracker,
-            frame_index=frame_index,
-            sample_stride=sample_stride,
-            rgb_frame=rgb_frame,
-        )
+        writer.write_frame(frame)
+        if tracker is not None and frame_index % sample_stride == 0:
+            _update_video_stats_if_due(
+                tracker=tracker,
+                frame_index=frame_index,
+                sample_stride=sample_stride,
+                rgb_frame=frame.to_ndarray(format="rgb24"),
+            )
         selected_frames += 1
         frame_index += 1
 
@@ -298,6 +309,9 @@ async def _append_video_segment_from_media(
             from_timestamp_s=clip_from,
             to_timestamp_s=clip_to,
             on_frame=_on_frame,
+            decoder_threads=(
+                int(decoder_threads) if decoder_threads is not None else None
+            ),
         )
     except ValueError as exc:
         if "contains no decodable frames" not in str(exc):

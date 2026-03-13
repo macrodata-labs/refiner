@@ -4,13 +4,16 @@ import asyncio
 from collections.abc import Iterator
 from pathlib import Path
 
-from refiner import hydrate_media, submit
-from refiner.pipeline.data.shard import Shard
+import av
+import numpy as np
+
+from refiner import hydrate_media
+from refiner.execution.asyncio.runtime import get_async_runtime, submit
 from refiner.pipeline import RefinerPipeline
-from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
-from refiner.execution.asyncio.runtime import get_async_runtime
-from refiner.media import MediaFile
+from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.sources.readers.base import BaseReader
+from refiner.media import MediaFile, Video
 
 
 class _LocalFakeReader(BaseReader):
@@ -23,6 +26,26 @@ class _LocalFakeReader(BaseReader):
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
         yield from self._rows_by_shard_id.get(shard.id, [])
+
+
+def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with av.open(str(path), mode="w") as container:
+        stream = container.add_stream("mpeg4", rate=fps)
+        stream.width = 16
+        stream.height = 16
+        stream.pix_fmt = "yuv420p"
+
+        for idx in range(frames):
+            image = np.zeros((16, 16, 3), dtype=np.uint8)
+            image[..., 0] = idx * 10
+            image[..., 1] = 255 - idx * 10
+            frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+
+        for packet in stream.encode(None):
+            container.mux(packet)
 
 
 def test_iter_rows_is_lazy_and_crosses_shards() -> None:
@@ -170,22 +193,31 @@ def test_sync_map_can_offload_to_shared_runtime() -> None:
 def test_map_async_can_hydrate_media_rows(tmp_path: Path) -> None:
     s = Shard(path="a", start=0, end=1)
     rows: list[Row] = []
-    payloads: dict[int, bytes] = {}
     for i in range(5):
-        payload = f"row-{i}".encode()
-        p = tmp_path / f"flat-{i}.bin"
-        p.write_bytes(payload)
-        payloads[i] = payload
-        rows.append(DictRow({"id": i, "blob_uri": str(p)}))
+        video_path = tmp_path / f"episode-{i}.mp4"
+        _write_video(video_path)
+        rows.append(
+            DictRow(
+                {
+                    "id": i,
+                    "video": Video(
+                        media=MediaFile(str(video_path)),
+                        video_key="cam",
+                        from_timestamp_s=0.0,
+                        to_timestamp_s=0.3,
+                        fps=10,
+                    ),
+                }
+            )
+        )
 
     pipeline = RefinerPipeline(source=_LocalFakeReader([s], {s.id: rows})).map_async(
-        hydrate_media("blob_uri", mode="bytes"),
+        hydrate_media("video", decode=True),
         max_in_flight=2,
     )
     out = list(pipeline.iter_rows())
     assert [int(r["id"]) for r in out] == [0, 1, 2, 3, 4]
     for row in out:
-        idx = int(row["id"])
-        media = row["blob_uri"]
-        assert isinstance(media, MediaFile)
-        assert media.bytes_cache == payloads[idx]
+        video = row["video"]
+        assert isinstance(video, Video)
+        assert video.media.frame_count == 4

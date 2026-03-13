@@ -22,7 +22,6 @@ class Video:
     chunk_index: int | str | None = None
     file_index: int | None = None
     fps: int | None = None
-    decode: bool = False
 
     @property
     def uri(self) -> str:
@@ -31,19 +30,6 @@ class Video:
     @property
     def bytes_cache(self) -> bytes | None:
         return getattr(self.media, "bytes_cache", None)
-
-    def __post_init__(self) -> None:
-        if self.decode:
-            raise NotImplementedError(
-                "Video decoding is not implemented yet; set decode=False."
-            )
-
-
-@dataclass(frozen=True, slots=True)
-class VideoBytes:
-    video: Video
-    from_timestamp_s: float
-    to_timestamp_s: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,38 +65,6 @@ class DecodedVideo:
     @property
     def bytes_cache(self) -> bytes | None:
         return None
-
-    @classmethod
-    def from_video(
-        cls,
-        *,
-        video: Video,
-        frames: tuple[np.ndarray, ...],
-    ) -> "DecodedVideo":
-        first_frame = frames[0] if frames else None
-        height = None
-        width = None
-        if isinstance(first_frame, np.ndarray) and first_frame.ndim >= 2:
-            height = int(first_frame.shape[0])
-            width = int(first_frame.shape[1])
-
-        return cls(
-            video_key=video.video_key,
-            frames=frames,
-            uri=video.uri,
-            width=width,
-            height=height,
-            relative_path=video.relative_path,
-            episode_index=video.episode_index,
-            frame_index=video.frame_index,
-            timestamp_s=video.timestamp_s,
-            from_timestamp_s=video.from_timestamp_s,
-            to_timestamp_s=video.to_timestamp_s,
-            chunk_index=video.chunk_index,
-            file_index=video.file_index,
-            fps=video.fps,
-            pix_fmt="rgb24",
-        )
 
 
 __all__ = ["Video", "DecodedVideo"]

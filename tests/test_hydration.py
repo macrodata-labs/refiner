@@ -6,78 +6,55 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import av
+import numpy as np
 import pytest
 import refiner as mdr
 
 from refiner.io import DataFile
-from refiner.media import MediaFile, Video, get_media_cache, hydrate_media
+from refiner.media import MediaFile, Video, hydrate_media
 from refiner.pipeline.data.row import DictRow
+from refiner.pipeline.utils.cache.file_cache import get_media_cache
 
 
-def test_video_decode_true_is_not_supported() -> None:
-    with pytest.raises(NotImplementedError):
-        Video(media=MediaFile("memory://video.mp4"), video_key="cam", decode=True)
+def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with av.open(str(path), mode="w") as container:
+        stream = container.add_stream("mpeg4", rate=fps)
+        stream.width = 16
+        stream.height = 16
+        stream.pix_fmt = "yuv420p"
+
+        for idx in range(frames):
+            image = np.zeros((16, 16, 3), dtype=np.uint8)
+            image[..., 0] = idx * 10
+            image[..., 1] = 255 - idx * 10
+            frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+
+        for packet in stream.encode(None):
+            container.mux(packet)
 
 
-def test_hydrate_media_turns_string_into_media_file(tmp_path: Path) -> None:
+def test_hydrate_media_requires_video(tmp_path: Path) -> None:
     payload_path = tmp_path / "blob.bin"
-    payload = b"abc123"
-    payload_path.write_bytes(payload)
+    payload_path.write_bytes(b"abc123")
 
     row = DictRow({"blob_uri": str(payload_path)})
-    hydrated = asyncio.run(hydrate_media("blob_uri")(row))
-    value = hydrated["blob_uri"]
-
-    assert isinstance(value, MediaFile)
-    assert value.bytes_cache == payload
+    with pytest.raises(ValueError, match="hydrate_media expects a Video"):
+        asyncio.run(hydrate_media("blob_uri")(row))
 
 
-def test_hydrate_media_hydrates_video_wrapper_bytes(tmp_path: Path) -> None:
-    payload_path = tmp_path / "blob.bin"
-    payload = b"bytes-mode"
-    payload_path.write_bytes(payload)
-    row = DictRow({"video": Video(media=MediaFile(str(payload_path)), video_key="cam")})
-
-    hydrated = asyncio.run(hydrate_media("video")(row))
-    video = hydrated["video"]
-    assert isinstance(video, Video)
-    assert video.media.bytes_cache == payload
-
-
-def test_hydrate_media_file_mode_allows_timestamped_video_without_decode(
-    tmp_path: Path,
-) -> None:
-    payload_path = tmp_path / "segment.mp4"
-    payload_path.write_bytes(b"fake-video-bytes")
+def test_hydrate_media_requires_decode_true(tmp_path: Path) -> None:
+    video_path = tmp_path / "episode.mp4"
+    _write_video(video_path)
     row = DictRow(
         {
             "video": Video(
-                media=MediaFile(str(payload_path)),
+                media=MediaFile(str(video_path)),
                 video_key="cam",
-                from_timestamp_s=0.1,
-                to_timestamp_s=0.3,
-            )
-        }
-    )
-
-    hydrated = asyncio.run(hydrate_media("video", mode="file")(row))
-    video = hydrated["video"]
-    assert isinstance(video, Video)
-    assert video.uri == str(payload_path)
-    assert video.media.bytes_cache is None
-
-
-def test_hydrate_media_bytes_mode_rejects_timestamped_video_without_decode(
-    tmp_path: Path,
-) -> None:
-    payload_path = tmp_path / "segment.mp4"
-    payload_path.write_bytes(b"fake-video-bytes")
-    row = DictRow(
-        {
-            "video": Video(
-                media=MediaFile(str(payload_path)),
-                video_key="cam",
-                from_timestamp_s=0.1,
+                from_timestamp_s=0.0,
                 to_timestamp_s=0.3,
             )
         }
@@ -85,41 +62,72 @@ def test_hydrate_media_bytes_mode_rejects_timestamped_video_without_decode(
 
     with pytest.raises(
         ValueError,
-        match="Cannot hydrate timestamped Video in bytes mode with decode=False",
+        match="hydrate_media only supports decoded Video hydration",
     ):
-        asyncio.run(hydrate_media("video", mode="bytes")(row))
+        asyncio.run(hydrate_media("video")(row))
+
+
+def test_hydrate_media_decodes_video(tmp_path: Path) -> None:
+    video_path = tmp_path / "episode.mp4"
+    _write_video(video_path)
+    row = DictRow(
+        {
+            "video": Video(
+                media=MediaFile(str(video_path)),
+                video_key="cam",
+                from_timestamp_s=0.0,
+                to_timestamp_s=0.3,
+                fps=10,
+            )
+        }
+    )
+
+    hydrated = asyncio.run(hydrate_media("video", decode=True)(row))
+    video = hydrated["video"]
+    assert isinstance(video, Video)
+    assert video.media.frame_count == 4
+    assert video.media.width == 16
+    assert video.media.height == 16
 
 
 def test_hydrate_media_on_error_null(tmp_path: Path) -> None:
-    missing_uri = str(tmp_path / "missing.bin")
-    row = DictRow({"blob_uri": missing_uri})
+    payload_path = tmp_path / "blob.bin"
+    payload_path.write_bytes(b"abc123")
+    row = DictRow({"blob_uri": str(payload_path)})
 
     hydrated = asyncio.run(hydrate_media("blob_uri", on_error="null")(row))
     assert hydrated["blob_uri"] is None
 
 
 def test_map_async_hydration_preserves_row_order(tmp_path: Path) -> None:
-    payloads: dict[int, bytes] = {}
     rows: list[dict[str, object]] = []
     for i in range(5):
-        payload = f"row-{i}".encode()
-        p = tmp_path / f"item-{i}.bin"
-        p.write_bytes(payload)
-        payloads[i] = payload
-        rows.append({"id": i, "blob_uri": str(p)})
+        video_path = tmp_path / f"episode-{i}.mp4"
+        _write_video(video_path)
+        rows.append(
+            {
+                "id": i,
+                "video": Video(
+                    media=MediaFile(str(video_path)),
+                    video_key="cam",
+                    from_timestamp_s=0.0,
+                    to_timestamp_s=0.3,
+                    fps=10,
+                ),
+            }
+        )
 
     out = (
         mdr.from_items(rows)
-        .map_async(hydrate_media("blob_uri"), max_in_flight=2)
+        .map_async(hydrate_media("video", decode=True), max_in_flight=2)
         .materialize()
     )
 
     assert [int(r["id"]) for r in out] == [0, 1, 2, 3, 4]
     for row in out:
-        idx = int(row["id"])
-        media = row["blob_uri"]
-        assert isinstance(media, MediaFile)
-        assert media.bytes_cache == payloads[idx]
+        video = row["video"]
+        assert isinstance(video, Video)
+        assert video.media.frame_count == 4
 
 
 def _cached_path_once(handle: MediaFile, *, cache_name: str) -> str:
@@ -188,46 +196,6 @@ def test_media_cache_with_file_cache_context_is_download_once_and_valid() -> Non
             assert second_path == path
 
     assert calls["count"] == 1
-
-
-def test_media_cache_lease_can_be_acquired_and_released_without_cached() -> None:
-    cache = get_media_cache("lease-without-cache")
-
-    async def exercise() -> None:
-        await cache.get_lease()
-        cache.release_lease()
-
-    asyncio.run(exercise())
-
-
-def test_media_cache_lease_blocks_until_release() -> None:
-    cache = get_media_cache("lease-blocking", max_entries=1)
-    events: list[str] = []
-    unblock = asyncio.Event()
-
-    async def holder() -> None:
-        await cache.get_lease()
-        events.append("first-held")
-        await unblock.wait()
-        events.append("first-release")
-        cache.release_lease()
-
-    async def waiter() -> None:
-        await asyncio.sleep(0.05)
-        await cache.get_lease()
-        events.append("second-held")
-        cache.release_lease()
-
-    async def run() -> None:
-        holder_task = asyncio.create_task(holder())
-        waiter_task = asyncio.create_task(waiter())
-        await asyncio.sleep(0.1)
-        assert events == ["first-held"]
-        unblock.set()
-        await asyncio.gather(holder_task, waiter_task)
-        assert events == ["first-held", "first-release", "second-held"]
-
-    asyncio.run(run())
 
 
 def test_media_cache_file_lease_can_be_acquired_and_released_twice() -> None:

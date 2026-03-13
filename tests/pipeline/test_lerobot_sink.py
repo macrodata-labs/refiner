@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import re
 
@@ -18,6 +17,10 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotMetaReduceSink,
     LeRobotWriterConfig,
     LeRobotWriterSink,
+)
+from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import (
+    _resolve_video_decoder_threads,
+    _resolve_video_encoder_threads,
 )
 
 
@@ -157,7 +160,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     )
     assert "stats/observation.state/mean" in episodes.schema.names
 
-    out_rows = mdr.read_lerobot(str(out_root), decode=False).materialize()
+    out_rows = mdr.read_lerobot(str(out_root)).materialize()
     assert len(out_rows) == 2
     assert out_rows[0]["task"] == "pick"
     assert out_rows[1]["task"] == "place"
@@ -482,16 +485,95 @@ def test_lerobot_writer_allows_disabling_video_stats(tmp_path: Path) -> None:
     assert "observation.state" in stats_json
 
 
-def test_lerobot_writer_config_defaults_video_encoder_threads_to_cpu_affinity(
+def test_lerobot_writer_config_defaults_video_encoder_threads_to_none(
     tmp_path: Path,
 ) -> None:
     config = LeRobotWriterConfig(root=str(tmp_path / "out"))
-    if hasattr(os, "sched_getaffinity"):
-        expected = max(1, len(os.sched_getaffinity(0)))
-    else:
-        expected = max(1, os.cpu_count() or 1)
+    assert config.video_encoder_threads is None
+    assert config.video_decoder_threads is None
 
-    assert config.video_encoder_threads == expected
+
+def test_resolve_video_encoder_threads_auto_scales_with_videos_in_row() -> None:
+    assert (
+        _resolve_video_encoder_threads(
+            requested_threads=None,
+            videos_in_row=1,
+            available_cpus=8,
+        )
+        == 8
+    )
+    assert (
+        _resolve_video_encoder_threads(
+            requested_threads=None,
+            videos_in_row=2,
+            available_cpus=8,
+        )
+        == 4
+    )
+    assert (
+        _resolve_video_encoder_threads(
+            requested_threads=None,
+            videos_in_row=6,
+            available_cpus=8,
+        )
+        == 1
+    )
+    assert (
+        _resolve_video_encoder_threads(
+            requested_threads=3,
+            videos_in_row=6,
+            available_cpus=8,
+        )
+        == 3
+    )
+
+
+def test_resolve_video_decoder_threads_auto_scales_with_videos_in_row() -> None:
+    assert (
+        _resolve_video_decoder_threads(
+            requested_threads=None,
+            videos_in_row=1,
+            available_cpus=8,
+        )
+        == 8
+    )
+    assert (
+        _resolve_video_decoder_threads(
+            requested_threads=None,
+            videos_in_row=2,
+            available_cpus=8,
+        )
+        == 4
+    )
+    assert (
+        _resolve_video_decoder_threads(
+            requested_threads=None,
+            videos_in_row=6,
+            available_cpus=8,
+        )
+        == 1
+    )
+    assert (
+        _resolve_video_decoder_threads(
+            requested_threads=2,
+            videos_in_row=6,
+            available_cpus=8,
+        )
+        == 2
+    )
+
+
+def test_lerobot_writer_config_exposes_media_prelease_settings(tmp_path: Path) -> None:
+    config = LeRobotWriterConfig(
+        root=str(tmp_path / "out"),
+        video_decoder_threads=5,
+        media_prelease_max_in_flight=4,
+        media_prelease_preserve_order=False,
+    )
+
+    assert config.video_decoder_threads == 5
+    assert config.media_prelease_max_in_flight == 4
+    assert config.media_prelease_preserve_order is False
 
 
 def test_lerobot_meta_reduce_raises_when_stage1_rows_are_malformed(

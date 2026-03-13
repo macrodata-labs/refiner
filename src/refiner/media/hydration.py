@@ -4,10 +4,9 @@ import dataclasses
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Coroutine, Literal
 
+from refiner.media.video.types import DecodedVideo, Video
 from refiner.pipeline.utils.cache.decoder_cache import get_video_decoder_cache
 from refiner.pipeline.utils.cache.file_cache import get_media_cache
-
-from refiner.media.video import DecodedVideo, Video
 
 if TYPE_CHECKING:
     from refiner.pipeline.data.row import Row
@@ -23,14 +22,15 @@ async def _decode_video(
     if isinstance(video.media, DecodedVideo):
         return video
 
-    decoder_cache = get_video_decoder_cache(name=f"decode_video:{cache_name}", media_cache=get_media_cache(name=f"decode_video:{cache_name}"))
+    decoder_cache = get_video_decoder_cache(
+        name=f"decode_video:{cache_name}",
+        media_cache=get_media_cache(name=f"decode_video:{cache_name}"),
+    )
     frames, width, height, pix_fmt = await decoder_cache.decode_segment(
         data_file=video.media._data_file,
         from_timestamp_s=float(video.from_timestamp_s or 0.0),
         to_timestamp_s=(
-            float(video.to_timestamp_s)
-            if video.to_timestamp_s is not None
-            else None
+            float(video.to_timestamp_s) if video.to_timestamp_s is not None else None
         ),
     )
 
@@ -81,12 +81,11 @@ def hydrate_media(
                     )
                 else:
                     raise ValueError(
-                        "Cannot hydrate timestamped Video in bytes mode with decode=False. Pass decode=True, or use mode='file'."
+                        "hydrate_media only supports decoded Video hydration. "
+                        "Pass decode=True."
                     )
             else:
-                raise ValueError(
-                    "hydrate_media expects a Video, or object with a `media: Video` attribute"
-                )
+                raise ValueError("hydrate_media expects a Video")
             return row.update({target_column: hydrated_value})
         except Exception:
             if on_error == "raise":
