@@ -3,6 +3,4 @@ from ._lerobot_meta_reduce import (
 )
 from ._lerobot_writer import LeRobotWriterConfig, LeRobotWriterSink
 
-__all__ = [
-    "LeRobotWriterConfig", "LeRobotWriterSink", "LeRobotMetaReduceSink"
-]
+__all__ = ["LeRobotWriterConfig", "LeRobotWriterSink", "LeRobotMetaReduceSink"]

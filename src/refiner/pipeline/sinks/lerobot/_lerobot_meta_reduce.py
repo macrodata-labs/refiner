@@ -8,9 +8,9 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from refiner.execution.tracking.shards import count_block_by_shard
 from refiner.io import DataFolder
-from refiner.ledger.shard_tracking import count_block_by_shard
-from refiner.runtime.sinks.base import BaseSink, Block, ShardCounts
+from refiner.pipeline.sinks.base import BaseSink, Block, ShardCounts
 
 from ._lerobot_stats import _aggregate_stats, _cast_stats_to_numpy, _serialize_stats
 from ._lerobot_video import _to_rel_path
@@ -68,7 +68,9 @@ class _LeRobotMetaReducer:
             row["meta/episodes/file_index"] = 0
 
         episodes_table = pa.Table.from_pylist(episodes_rows)
-        with self.folder.open("meta/episodes/chunk-000/file-000.parquet", mode="wb") as out:
+        with self.folder.open(
+            "meta/episodes/chunk-000/file-000.parquet", mode="wb"
+        ) as out:
             pq.write_table(
                 episodes_table,
                 out,
@@ -187,12 +189,20 @@ class _LeRobotMetaReducer:
                 if infos and first.get("codebase_version") is not None
                 else _DEFAULT_CODEBASE_VERSION
             ),
-            "chunks_size": int(first["chunks_size"]) if infos else self.config.chunk_size,
-            "data_files_size_in_mb": int(first["data_files_size_in_mb"]) if infos else self.config.data_files_size_in_mb,
-            "video_files_size_in_mb": int(first["video_files_size_in_mb"]) if infos else self.config.video_files_size_in_mb,
+            "chunks_size": int(first["chunks_size"])
+            if infos
+            else self.config.chunk_size,
+            "data_files_size_in_mb": int(first["data_files_size_in_mb"])
+            if infos
+            else self.config.data_files_size_in_mb,
+            "video_files_size_in_mb": int(first["video_files_size_in_mb"])
+            if infos
+            else self.config.video_files_size_in_mb,
             "data_path": str(first["data_path"]) if infos else None,
             "video_path": first["video_path"] if infos else None,
-            "fps": int(first["fps"]) if infos and first.get("fps") is not None else None,
+            "fps": int(first["fps"])
+            if infos and first.get("fps") is not None
+            else None,
             "robot_type": first["robot_type"] if infos else None,
             "features": first["features"] if infos else {},
             "total_episodes": total_episodes,

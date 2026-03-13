@@ -22,6 +22,7 @@ class Video:
     chunk_index: int | str | None = None
     file_index: int | None = None
     fps: int | None = None
+    decode: bool = False
 
     @property
     def uri(self) -> str:
@@ -30,6 +31,12 @@ class Video:
     @property
     def bytes_cache(self) -> bytes | None:
         return getattr(self.media, "bytes_cache", None)
+
+    def __post_init__(self) -> None:
+        if self.decode:
+            raise NotImplementedError(
+                "Video decoding is not implemented yet; set decode=False."
+            )
 
 
 @dataclass(frozen=True, slots=True)

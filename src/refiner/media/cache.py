@@ -21,7 +21,7 @@ class _CacheEntry:
     status: CacheEntryStatus
     path: str | None
     size_bytes: int
-    event: asyncio.Event
+    event: threading.Event
     error: BaseException | None = None
     ref_count: int = 0
 
@@ -112,7 +112,7 @@ class MediaLocalCache:
         self._lock = threading.Lock()
         self._entries: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._total_bytes = 0
-        self._lease_slots = asyncio.BoundedSemaphore(self.max_inflight_downloads)
+        self._lease_slots = threading.BoundedSemaphore(self.max_inflight_downloads)
 
     def cached(
         self,
@@ -122,7 +122,7 @@ class MediaLocalCache:
         return _CachedFileContext(cache=self, file=file)
 
     async def get_lease(self) -> None:
-        await self._lease_slots.acquire()
+        await asyncio.to_thread(self._lease_slots.acquire)
 
     def release_lease(self) -> None:
         self._lease_slots.release()
@@ -130,7 +130,7 @@ class MediaLocalCache:
     async def acquire_file_lease(self, file: DataFile) -> _CacheFileLease:
         resolved_key = str(file)
         while True:
-            wait_event: asyncio.Event | None = None
+            wait_event: threading.Event | None = None
             should_download = False
 
             with self._lock:
@@ -140,7 +140,7 @@ class MediaLocalCache:
                         status="loading",
                         path=None,
                         size_bytes=0,
-                        event=asyncio.Event(),
+                        event=threading.Event(),
                     )
                     self._entries[resolved_key] = entry
                     self._entries.move_to_end(resolved_key)
@@ -173,7 +173,7 @@ class MediaLocalCache:
                     )
 
             if wait_event is not None:
-                await wait_event.wait()
+                await asyncio.to_thread(wait_event.wait)
                 continue
 
             if not should_download:
@@ -239,7 +239,9 @@ class MediaLocalCache:
         with self._lock:
             for entry in self._entries.values():
                 if entry.status == "loading":
-                    entry.error = RuntimeError("media cache was cleared while download was in-flight")
+                    entry.error = RuntimeError(
+                        "media cache was cleared while download was in-flight"
+                    )
                     entry.event.set()
                 elif entry.status == "ready" and entry.path is not None:
                     _safe_delete(entry.path)
@@ -317,9 +319,8 @@ def get_media_cache(
             raise ValueError(
                 f"Cache {normalized!r} already exists with max_bytes={cache.max_bytes}"
             )
-        if (
-            max_inflight_downloads is not None
-            and cache.max_inflight_downloads != int(max_inflight_downloads)
+        if max_inflight_downloads is not None and cache.max_inflight_downloads != int(
+            max_inflight_downloads
         ):
             raise ValueError(
                 f"Cache {normalized!r} already exists with "
@@ -347,7 +348,7 @@ def reset_media_cache(name: str | None = None) -> None:
 def _safe_delete(path: str) -> None:
     try:
         Path(path).unlink(missing_ok=True)
-    except Exception:
+    except OSError:
         try:
             os.remove(path)
         except FileNotFoundError:
@@ -366,7 +367,7 @@ def _download_data_file_to_temp(
     try:
         with file.open("rb") as src, open(temp_path, "wb") as dst:
             shutil.copyfileobj(fsrc=src, fdst=dst, length=8 * 1024 * 1024)
-    except Exception:
+    except OSError:
         _safe_delete(temp_path)
         raise
     return temp_path, os.path.getsize(temp_path)

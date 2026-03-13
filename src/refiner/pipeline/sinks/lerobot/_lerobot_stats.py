@@ -44,8 +44,7 @@ class _RunningQuantileStats:
             self._min = np.min(batch, axis=0)
             self._max = np.max(batch, axis=0)
             self._histograms = [
-                np.zeros(self.num_quantile_bins)
-                for _ in range(vector_length)
+                np.zeros(self.num_quantile_bins) for _ in range(vector_length)
             ]
             self._bin_edges = [
                 np.linspace(
@@ -56,7 +55,12 @@ class _RunningQuantileStats:
                 for i in range(vector_length)
             ]
         else:
-            if self._mean is None or self._mean_of_squares is None or self._min is None or self._max is None:
+            if (
+                self._mean is None
+                or self._mean_of_squares is None
+                or self._min is None
+                or self._max is None
+            ):
                 raise RuntimeError("RunningQuantileStats state is not initialized")
             if vector_length != self._mean.size:
                 raise ValueError("batch channel dimension mismatch")
@@ -78,9 +82,9 @@ class _RunningQuantileStats:
         batch_mean = np.mean(batch, axis=0)
         batch_mean_of_squares = np.mean(batch**2, axis=0)
         self._mean += (batch_mean - self._mean) * (batch_rows / max(self._count, 1))
-        self._mean_of_squares += (
-            batch_mean_of_squares - self._mean_of_squares
-        ) * (batch_rows / max(self._count, 1))
+        self._mean_of_squares += (batch_mean_of_squares - self._mean_of_squares) * (
+            batch_rows / max(self._count, 1)
+        )
 
         if prev_count == 0 and self._histograms is None:
             return
@@ -162,7 +166,9 @@ class _RunningQuantileStats:
             target_count = q * self._count
             q_values = []
             for hist, edges in zip(self._histograms, self._bin_edges, strict=True):
-                q_values.append(self._compute_single_quantile(hist, edges, target_count))
+                q_values.append(
+                    self._compute_single_quantile(hist, edges, target_count)
+                )
             results.append(np.array(q_values))
         return results
 
@@ -242,7 +248,9 @@ def _aggregate_stats(
         items = [stats[feature] for stats in stats_list if feature in stats]
         means = np.stack([np.asarray(item["mean"], dtype=np.float64) for item in items])
         stds = np.stack([np.asarray(item["std"], dtype=np.float64) for item in items])
-        counts = np.stack([np.asarray(item["count"], dtype=np.float64) for item in items])
+        counts = np.stack(
+            [np.asarray(item["count"], dtype=np.float64) for item in items]
+        )
         mins = np.stack([np.asarray(item["min"], dtype=np.float64) for item in items])
         maxs = np.stack([np.asarray(item["max"], dtype=np.float64) for item in items])
 
@@ -267,7 +275,9 @@ def _aggregate_stats(
             "count": total_count,
         }
 
-        quantile_keys = [k for k in items[0].keys() if k.startswith("q") and k[1:].isdigit()]
+        quantile_keys = [
+            k for k in items[0].keys() if k.startswith("q") and k[1:].isdigit()
+        ]
         for q_key in quantile_keys:
             if not all(q_key in item for item in items):
                 continue

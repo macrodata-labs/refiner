@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import IO
 
 from refiner.io import DataFile
@@ -11,13 +10,10 @@ class MediaFile:
     def __init__(self, uri: str) -> None:
         self.uri = uri
         self._data_file = DataFile.resolve(uri)
-        self._local_path: str | None = None
         self._lease: _CacheFileLease | None = None
         self._bytes_cache: bytes | None = None
 
     def open(self, mode: str = "rb") -> IO[bytes]:
-        if self._local_path is not None and os.path.exists(self._local_path):
-            return open(self._local_path, mode=mode)
         if self._lease is not None:
             return open(self._lease.path, mode=mode)
         return self._data_file.open(mode=mode)
@@ -58,19 +54,11 @@ class MediaFile:
         if self._lease is not None:
             self._lease.release()
         self._lease = None
-        self._local_path = None
         self._bytes_cache = None
-
-    @property
-    def local_path(self) -> str | None:
-        return self._local_path
 
     @property
     def bytes_cache(self) -> bytes | None:
         return self._bytes_cache
-
-    def is_hydrated(self) -> bool:
-        return self._bytes_cache is not None
 
 
 __all__ = ["MediaFile"]

@@ -91,7 +91,7 @@ class VideoTrackWriter:
 
     container: Any | None = None
     stream: Any | None = None
-    output_file: IO[bytes] | None = None
+    output_file: Any | None = None
     frames_written: int = 0
     duration_s: float = 0.0
     size_bytes: int = 0
@@ -313,7 +313,6 @@ async def _append_video_segment_from_media(
     selected_frames = 0
     frame_index = 0
     epsilon = 1e-6
-    # TODO: Fix the cache here
     cache_name = f"lerobot_writer:{video.video_key}"
     data_file = DataFile.resolve(video.media.uri)
     async with get_media_cache(cache_name).cached(file=data_file) as local_path:
@@ -377,7 +376,9 @@ def _append_video_segment_from_frames(
                 height = int(frame_data.shape[0])
                 width = int(frame_data.shape[1])
         if width is None or height is None:
-            raise RuntimeError("Decoded video frame shape missing width/height metadata.")
+            raise RuntimeError(
+                "Decoded video frame shape missing width/height metadata."
+            )
 
         writer.ensure_stream(width=width, height=height)
         frame = av.VideoFrame.from_ndarray(

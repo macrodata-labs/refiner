@@ -3,12 +3,9 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Any, Literal
 
 import numpy as np
-
-if TYPE_CHECKING:
-    import av
 
 
 CacheEntryStatus = Literal["loading", "ready", "error"]
@@ -17,7 +14,7 @@ CacheEntryStatus = Literal["loading", "ready", "error"]
 @dataclass(slots=True)
 class _DecoderEntry:
     status: CacheEntryStatus
-    container: "av.InputContainer | None"
+    container: Any | None
     stream_index: int | None
     lock: threading.Lock
     event: threading.Event
@@ -152,7 +149,7 @@ class VideoDecoderCache:
     def _decode_with_decoder(
         self,
         *,
-        container: "av.InputContainer",
+        container: Any,
         stream_index: int,
         from_timestamp_s: float,
         to_timestamp_s: float | None,
@@ -209,7 +206,9 @@ class VideoDecoderCache:
 
     def _evict_unlocked(self) -> None:
         while len(self._entries) > self.max_decoders:
-            keys = [key for key, entry in self._entries.items() if entry.status == "ready"]
+            keys = [
+                key for key, entry in self._entries.items() if entry.status == "ready"
+            ]
             if not keys:
                 return
             for key in keys[:1]:

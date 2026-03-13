@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, Literal, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from fsspec import AbstractFileSystem
 
@@ -14,11 +14,9 @@ from refiner.pipeline.steps import (
     FilterExprStep,
     FilterRowStep,
     FlatMapFn,
-    FlushableFlatMapFn,
     FnAsyncRowStep,
     FnBatchStep,
     FnFlatMapStep,
-    FnFlushableFlatMapStep,
     FnRowStep,
     MapFn,
     RenameStep,
@@ -31,7 +29,7 @@ from refiner.pipeline.steps import (
 from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
 from refiner.pipeline.sources import BaseSource, CsvReader, JsonlReader, ParquetReader
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
-from refiner.runtime.sinks.lerobot import LeRobotWriterConfig, LeRobotWriterSink
+from refiner.pipeline.sinks.lerobot import LeRobotWriterConfig, LeRobotWriterSink
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data.row import Row
@@ -378,6 +376,7 @@ class RefinerPipeline:
         )
 
         return self.with_sink(LeRobotWriterSink(config=config))
+
 
 ## readers
 def read_csv(

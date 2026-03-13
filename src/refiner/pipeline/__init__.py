@@ -7,6 +7,7 @@ from .pipeline import (
     from_items,
     read_csv,
     read_jsonl,
+    read_lerobot,
     read_parquet,
     task,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "Shard",
     "read_csv",
     "read_jsonl",
+    "read_lerobot",
     "read_parquet",
     "from_items",
     "from_source",

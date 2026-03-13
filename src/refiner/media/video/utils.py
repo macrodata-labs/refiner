@@ -65,9 +65,9 @@ def _slice_video_to_mp4_bytes_pyav(
                         ts = float(frame.pts * frame.time_base)
                     if ts is None:
                         continue
-                    if ts + 1e-6 < start_ts:
+                    if ts + 1e-6 < from_timestamp_s:
                         continue
-                    if end_ts is not None and ts - 1e-6 >= end_ts:
+                    if to_timestamp_s is not None and ts - 1e-6 >= to_timestamp_s:
                         break
 
                     if output_stream is None:
@@ -188,7 +188,7 @@ def _decode_video_segment_frames_with_ffmpeg_segment(
     local_path: str,
     from_timestamp_s: float,
     to_timestamp_s: float | None,
-) -> tuple[tuple[np.ndarray, ...], int | None, int | None, str | None] | None:
+) -> tuple[tuple[np.ndarray, ...], int | None, int | None, str | None]:
     segment_bytes = _slice_video_to_mp4_bytes_ffmpeg(
         local_path=local_path,
         from_timestamp_s=from_timestamp_s,

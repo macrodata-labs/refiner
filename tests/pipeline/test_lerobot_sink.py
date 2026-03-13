@@ -12,9 +12,13 @@ import pyarrow.parquet as pq
 import pytest
 
 import refiner as mdr
-from refiner.sinks import LeRobotMetaReduceSink, LeRobotWriterConfig, LeRobotWriterSink
 from refiner.media import hydrate_media
-from refiner.sources.row import DictRow
+from refiner.pipeline.data.row import DictRow
+from refiner.pipeline.sinks.lerobot import (
+    LeRobotMetaReduceSink,
+    LeRobotWriterConfig,
+    LeRobotWriterSink,
+)
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -331,11 +335,7 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
 
     video_dirs = list((out_root / "videos" / "observation.images.main").glob("chunk-*"))
     assert video_dirs
-    video_files = [
-        path
-        for d in video_dirs
-        for path in sorted(d.glob("*.mp4"))
-    ]
+    video_files = [path for d in video_dirs for path in sorted(d.glob("*.mp4"))]
     assert any(path.name == "file-001.mp4" for path in video_files)
     assert len(video_files) >= 2
 
@@ -385,7 +385,9 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
     assert data.column("task_index").to_pylist() == [0, 0, 1, 1]
 
 
-def test_lerobot_writer_sink_raises_for_missing_required_row_fields(tmp_path: Path) -> None:
+def test_lerobot_writer_sink_raises_for_missing_required_row_fields(
+    tmp_path: Path,
+) -> None:
     sink = LeRobotWriterSink(
         config=LeRobotWriterConfig(root=str(tmp_path / "out"), overwrite=True)
     )
@@ -407,7 +409,9 @@ def test_lerobot_writer_sink_raises_for_missing_required_row_fields(tmp_path: Pa
         sink.write_block([row])
 
 
-def test_lerobot_writer_sink_raises_when_video_to_timestamp_is_missing(tmp_path: Path) -> None:
+def test_lerobot_writer_sink_raises_when_video_to_timestamp_is_missing(
+    tmp_path: Path,
+) -> None:
     source_video = tmp_path / "source" / "episode.mp4"
     _write_video(source_video)
 
@@ -419,7 +423,9 @@ def test_lerobot_writer_sink_raises_when_video_to_timestamp_is_missing(tmp_path:
             "episode_index": 0,
             "task": "pick",
             "tasks": ["pick"],
-            "frames": [{"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]}],
+            "frames": [
+                {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]}
+            ],
             "observation.images.main": mdr.Video(
                 media=mdr.MediaFile(str(source_video)),
                 video_key="observation.images.main",
@@ -488,7 +494,9 @@ def test_lerobot_writer_config_defaults_video_encoder_threads_to_cpu_affinity(
     assert config.video_encoder_threads == expected
 
 
-def test_lerobot_meta_reduce_raises_when_stage1_rows_are_malformed(tmp_path: Path) -> None:
+def test_lerobot_meta_reduce_raises_when_stage1_rows_are_malformed(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "bad-stage1"
     episodes = pa.Table.from_pylist(
         [

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -81,7 +80,9 @@ def _cached_path_once(handle: MediaFile, *, cache_name: str) -> str:
     return asyncio.run(handle.cache_file(cache_name=cache_name))
 
 
-def test_media_cache_dedupes_parallel_downloads(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_media_cache_dedupes_parallel_downloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     uri = "memory://shared-video.bin"
     seed = MediaFile(uri)
     with seed.open("wb") as f:

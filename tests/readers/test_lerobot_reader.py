@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import refiner as mdr
-from refiner.sources.readers.lerobot import (
+from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_CONTEXT_KEY,
     LEROBOT_RAW_EPISODE_KEY,
     LeRobotEpisodeReader,

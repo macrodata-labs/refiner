@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 
-from refiner.sources.row import ArrowRowView
+from refiner.pipeline.data.row import ArrowRowView
 from ._lerobot_stats import _feature_stats
 
 
@@ -52,7 +52,14 @@ def infer_features(
     """Populate feature specs for row-level and first-frame observation data."""
 
     for key, value in row.items():
-        if key in {"frames", "task", "tasks", "metadata", "episode_index", "__shard_id"}:
+        if key in {
+            "frames",
+            "task",
+            "tasks",
+            "metadata",
+            "episode_index",
+            "__shard_id",
+        }:
             continue
         if hasattr(value, "media"):
             features.setdefault(
@@ -231,10 +238,11 @@ def _compute_frame_stats(
 
         column = table.column(key)
         if (
-            (pa.types.is_integer(column.type) or pa.types.is_floating(column.type))
-            and column.null_count == 0
-        ):
-            numeric = np.asarray(column.to_numpy(zero_copy_only=False), dtype=np.float64)
+            pa.types.is_integer(column.type) or pa.types.is_floating(column.type)
+        ) and column.null_count == 0:
+            numeric = np.asarray(
+                column.to_numpy(zero_copy_only=False), dtype=np.float64
+            )
             if numeric.size == 0 or not np.isfinite(numeric).all():
                 continue
             out[key] = _feature_stats(numeric, keepdims=True)
@@ -310,7 +318,9 @@ def _column_list_numeric_array(
             return None
         return values.reshape(row_count, fixed_size)
 
-    offsets = np.asarray(combined.offsets.to_numpy(zero_copy_only=False), dtype=np.int64)
+    offsets = np.asarray(
+        combined.offsets.to_numpy(zero_copy_only=False), dtype=np.int64
+    )
     if offsets.size != row_count + 1:
         return None
     lengths = np.diff(offsets)

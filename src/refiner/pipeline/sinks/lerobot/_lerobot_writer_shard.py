@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -12,7 +13,7 @@ import pyarrow.parquet as pq
 
 from refiner.io import DataFolder
 from refiner.media import Video
-from refiner.sources.readers.lerobot import LEROBOT_INFO
+from refiner.pipeline.sources.readers.lerobot import LEROBOT_INFO
 
 from ._lerobot_frames import (
     compute_episode_stats,
@@ -31,9 +32,7 @@ from ._lerobot_video import (
 
 
 _DEFAULT_DATA_PATH = "data/chunk-{chunk_key}/file-{file_index:03d}.parquet"
-_DEFAULT_VIDEO_PATH = (
-    "videos/{video_key}/chunk-{chunk_index}/file-{file_index:03d}.mp4"
-)
+_DEFAULT_VIDEO_PATH = "videos/{video_key}/chunk-{chunk_index}/file-{file_index:03d}.mp4"
 _DEFAULT_CODEBASE_VERSION = "v3.0"
 
 
@@ -334,7 +333,10 @@ class _LeRobotShardWriter:
                 frame_rows.append(out)
             table = pa.Table.from_pylist(frame_rows)
 
-        if self._data_writer is not None and self._data_bytes_written >= self._data_bytes_limit:
+        if (
+            self._data_writer is not None
+            and self._data_bytes_written >= self._data_bytes_limit
+        ):
             self._close_data()
             self._data_file_index += 1
             self._data_bytes_written = 0
@@ -407,7 +409,11 @@ class _LeRobotShardWriter:
             if not isinstance(value, Video):
                 continue
 
-            clip_from = float(value.from_timestamp_s) if value.from_timestamp_s is not None else 0.0
+            clip_from = (
+                float(value.from_timestamp_s)
+                if value.from_timestamp_s is not None
+                else 0.0
+            )
             clip_to = float(value.to_timestamp_s)
             video_meta, video_stats = self._write_video_track(
                 video_key=key,
@@ -421,7 +427,7 @@ class _LeRobotShardWriter:
 
         return out, out_stats
 
-    async def _write_video_track(
+    def _write_video_track(
         self,
         *,
         video_key: str,
@@ -444,12 +450,14 @@ class _LeRobotShardWriter:
             )
 
         from_ts = float(writer.duration_s)
-        clip_duration_s, clip_stats = await _append_video_segment(
-            writer=writer,
-            video=video,
-            clip_from=clip_from,
-            clip_to=clip_to,
-            video_config=video_config,
+        clip_duration_s, clip_stats = asyncio.run(
+            _append_video_segment(
+                writer=writer,
+                video=video,
+                clip_from=clip_from,
+                clip_to=clip_to,
+                video_config=video_config,
+            )
         )
         to_ts = float(from_ts + clip_duration_s)
         writer.duration_s = to_ts

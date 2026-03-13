@@ -216,7 +216,6 @@ __all__ = [
     "BatchFn",
     "FlatMapFn",
     "AsyncMapFn",
-    "FlushableFlatMapFn",
     "SelectStep",
     "WithColumnsStep",
     "DropStep",
