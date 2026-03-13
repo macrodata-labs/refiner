@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from refiner.platform.client import compile_shard_descriptors
 from refiner.platform.client import CloudRunCreateRequest, CloudRuntimeConfig
 from refiner.platform.client import serialize_pipeline_inline
 
@@ -68,7 +67,6 @@ class CloudLauncher(BaseLauncher):
                 mem_mb_per_worker=self.mem_mb_per_worker,
             ),
             pipeline_payload=serialize_pipeline_inline(self.pipeline),
-            shards=compile_shard_descriptors(list(self.pipeline.source.list_shards())),
             manifest=self._run_manifest(),
             sync_local_dependencies=self.sync_local_dependencies,
         )

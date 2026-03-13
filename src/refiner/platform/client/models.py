@@ -165,7 +165,6 @@ class CloudRunCreateRequest:
     plan: dict[str, Any]
     runtime: CloudRuntimeConfig
     pipeline_payload: CloudPipelinePayload
-    shards: list[ShardDescriptor]
     manifest: dict[str, Any] | None = None
     sync_local_dependencies: bool = True
 
@@ -179,7 +178,6 @@ class CloudRunCreateRequest:
             "plan": self.plan,
             "runtime": self.runtime.to_dict(),
             "pipeline_payload": self.pipeline_payload.to_dict(),
-            "shards": [shard.to_dict() for shard in self.shards],
         }
         if self.manifest is not None:
             payload["manifest"] = self.manifest

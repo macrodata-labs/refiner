@@ -3,11 +3,9 @@ from __future__ import annotations
 from typing import cast
 
 from refiner.pipeline import read_jsonl
-from refiner.pipeline.data.shard import Shard
 from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
-    ShardDescriptor,
 )
 
 
@@ -44,10 +42,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         lambda pipeline: {"stages": [{"name": "stage_0", "steps": []}]},
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.compile_shard_descriptors",
-        lambda shards: [ShardDescriptor.from_shard(s) for s in shards],
-    )
-    monkeypatch.setattr(
         "refiner.launchers.base.build_run_manifest",
         lambda: {
             "version": 1,
@@ -57,11 +51,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     )
 
     pipeline = read_jsonl("input.jsonl")
-    monkeypatch.setattr(
-        pipeline.source,
-        "list_shards",
-        lambda: [Shard(path="input.jsonl", start=0, end=1)],
-    )
     result = pipeline.launch_cloud(
         name="demo cloud",
         num_workers=3,
@@ -82,7 +71,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.runtime.cpus_per_worker == 2
     assert request.runtime.mem_mb_per_worker == 8192
     assert request.sync_local_dependencies is True
-    assert request.shards[0].path == "input.jsonl"
     assert request.plan["stages"][0]["name"] == "stage_0"
     assert request.manifest == {
         "version": 1,
@@ -123,20 +111,11 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
         lambda pipeline: {"stages": [{"name": "stage_0", "steps": []}]},
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.compile_shard_descriptors",
-        lambda shards: [ShardDescriptor.from_shard(s) for s in shards],
-    )
-    monkeypatch.setattr(
         "refiner.launchers.base.build_run_manifest",
         lambda: {"version": 1},
     )
 
     pipeline = read_jsonl("input.jsonl")
-    monkeypatch.setattr(
-        pipeline.source,
-        "list_shards",
-        lambda: [Shard(path="input.jsonl", start=0, end=1)],
-    )
     pipeline.launch_cloud(name="demo cloud", sync_local_dependencies=False)
 
     request = cast(CloudRunCreateRequest, captured["request"])
