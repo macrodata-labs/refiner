@@ -261,12 +261,39 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
 
 def test_pipeline_launch_cloud_requires_missing_env_secret(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    class FakeMacrodataClient:
+        def __init__(self):
+            self.base_url = "https://example.com"
+
+        def cloud_submit_job(self, *, request):  # pragma: no cover
+            raise AssertionError("cloud_submit_job should not be called")
+
+    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
     pipeline = read_jsonl("input.jsonl")
 
     try:
         pipeline.launch_cloud(name="demo cloud", secrets={"OPENAI_API_KEY": None})
     except SystemExit as err:
         assert "OPENAI_API_KEY" in str(err)
+    else:  # pragma: no cover
+        raise AssertionError("expected SystemExit")
+
+
+def test_pipeline_launch_cloud_requires_platform_auth_before_secret_resolution(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "refiner.launchers.base.BaseLauncher._platform_client_or_none",
+        lambda self: None,
+    )
+    pipeline = read_jsonl("input.jsonl")
+
+    try:
+        pipeline.launch_cloud(name="demo cloud", secrets={"OPENAI_API_KEY": None})
+    except SystemExit as err:
+        assert "MACRODATA_API_KEY" in str(err)
     else:  # pragma: no cover
         raise AssertionError("expected SystemExit")
 
