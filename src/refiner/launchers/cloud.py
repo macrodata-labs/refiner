@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -7,8 +8,9 @@ from refiner.platform.client import (
     CloudRunCreateRequest,
     CloudRuntimeConfig,
     StagePayload,
+    serialize_pipeline_inline,
 )
-from refiner.platform.client import serialize_pipeline_inline
+from refiner.platform.manifest import _redact_captured_strings
 
 from refiner.launchers.base import BaseLauncher
 
@@ -45,6 +47,7 @@ class CloudLauncher(BaseLauncher):
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         sync_local_dependencies: bool = True,
+        secrets: dict[str, object | None] | None = None,
     ):
         super().__init__(
             pipeline=pipeline,
@@ -55,17 +58,37 @@ class CloudLauncher(BaseLauncher):
             mem_mb_per_worker=mem_mb_per_worker,
         )
         self.sync_local_dependencies = sync_local_dependencies
+        self.secrets = secrets
+
+    def _resolved_secrets(self) -> dict[str, str] | None:
+        if not self.secrets:
+            return None
+        resolved: dict[str, str] = {}
+        for name, value in self.secrets.items():
+            if value is None:
+                env_value = os.environ.get(name)
+                if env_value is None:
+                    raise SystemExit(
+                        f"cloud secret {name!r} was set to None but is not present in the environment. Make sure it is being exported."
+                    )
+                resolved[name] = env_value
+                continue
+            resolved[name] = str(value)
+        return resolved
 
     def launch(self) -> CloudLaunchResult:
         try:
             client = self._require_platform_client()
         except RuntimeError as err:
             raise SystemExit(str(err)) from err
+        resolved_secrets = self._resolved_secrets()
+        secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
         stages = self._planned_stages()
-        compiled_plan = self._compiled_plan(stages)
         request = CloudRunCreateRequest(
             name=self.name,
-            plan=compiled_plan,
+            plan=_redact_captured_strings(
+                self._compiled_plan(stages), secret_values=secret_values
+            ),
             stage_payloads=[
                 StagePayload(
                     stage_index=stage.index,
@@ -79,8 +102,11 @@ class CloudLauncher(BaseLauncher):
                 )
                 for stage in stages
             ],
-            manifest=self._run_manifest(),
+            manifest=_redact_captured_strings(
+                self._run_manifest(), secret_values=secret_values
+            ),
             sync_local_dependencies=self.sync_local_dependencies,
+            secrets=resolved_secrets,
         )
         resp = client.cloud_submit_job(request=request)
         self._info(

@@ -1,15 +1,52 @@
 from __future__ import annotations
 
-from functools import lru_cache
 import hashlib
 import inspect
 import json
 import platform
 import subprocess
 import sys
+from collections.abc import Sequence
+from functools import lru_cache
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
+
+_REDACTION_PLACEHOLDER = "REDACTED_SECRET"
+
+
+def _redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
+    redacted = text
+    # Replace longer secrets first so substring overlaps do not leak suffixes.
+    for secret_value in sorted(
+        secret_values, key=lambda value: len(value), reverse=True
+    ):
+        if secret_value != "":
+            redacted = redacted.replace(secret_value, _REDACTION_PLACEHOLDER)
+    return redacted
+
+
+def _redact_captured_strings(value: Any, *, secret_values: Sequence[str]) -> Any:
+    if not secret_values:
+        return value
+    if isinstance(value, str):
+        return _redact_captured_text(value, secret_values=secret_values)
+    if isinstance(value, list):
+        return [
+            _redact_captured_strings(item, secret_values=secret_values)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _redact_captured_strings(item, secret_values=secret_values)
+            for item in value
+        )
+    if isinstance(value, dict):
+        return {
+            key: _redact_captured_strings(item, secret_values=secret_values)
+            for key, item in value.items()
+        }
+    return value
 
 
 def _is_external_script(path: Path) -> bool:
@@ -148,7 +185,7 @@ def build_run_manifest() -> dict[str, Any]:
     path, text, sha256 = _read_script(script_path)
     refiner_ref = _resolve_refiner_ref()
 
-    return {
+    manifest = {
         "version": 1,
         "script": {
             "path": path,
@@ -162,6 +199,7 @@ def build_run_manifest() -> dict[str, Any]:
         },
         "dependencies": _collect_dependencies(),
     }
+    return manifest
 
 
 __all__ = ["build_run_manifest"]

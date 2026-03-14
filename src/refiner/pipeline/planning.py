@@ -355,7 +355,7 @@ def plan_pipeline_stages(
 
 
 def compile_planned_stages(stages: list[PlannedStage]) -> dict[str, Any]:
-    return {
+    plan = {
         "stages": [
             {
                 "name": stage.name,
@@ -365,6 +365,7 @@ def compile_planned_stages(stages: list[PlannedStage]) -> dict[str, Any]:
             for stage in stages
         ]
     }
+    return plan
 
 
 def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
