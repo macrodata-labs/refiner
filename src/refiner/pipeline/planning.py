@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from types import CodeType
 from typing import TYPE_CHECKING, Any
 
-from refiner.redaction import redact_captured_strings
-
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
 
@@ -327,15 +325,6 @@ def compile_planned_stages(stages: list[PlannedStage]) -> dict[str, Any]:
     return plan
 
 
-def compile_planned_stages_redacted(
-    stages: list[PlannedStage], *, secret_values: tuple[str, ...] = ()
-) -> dict[str, Any]:
-    return redact_captured_strings(
-        compile_planned_stages(stages),
-        secret_values=secret_values,
-    )
-
-
 def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
     """Compile a transport-neutral single-pipeline plan description."""
     return compile_planned_stages(plan_pipeline_stages(pipeline, default_num_workers=1))
@@ -346,6 +335,5 @@ __all__ = [
     "StageComputeRequirements",
     "compile_pipeline_plan",
     "compile_planned_stages",
-    "compile_planned_stages_redacted",
     "plan_pipeline_stages",
 ]

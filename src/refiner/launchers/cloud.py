@@ -68,7 +68,7 @@ class CloudLauncher(BaseLauncher):
                 env_value = os.environ.get(name)
                 if env_value is None:
                     raise SystemExit(
-                        f"cloud secret {name!r} was set to None but is not present in the environment"
+                        f"cloud secret {name!r} was set to None but is not present in the environment. Make sure it is being exported."
                     )
                 resolved[name] = env_value
                 continue

@@ -12,10 +12,10 @@ from refiner.platform.auth import CredentialsError
 from refiner.platform.client.api import MacrodataClient
 from refiner.platform.client.http import sanitize_terminal_text
 from refiner.platform.client.models import RunHandle
-from refiner.platform.manifest import build_run_manifest
+from refiner.platform.manifest import build_run_manifest, redact_captured_strings
 from refiner.pipeline.planning import (
     PlannedStage,
-    compile_planned_stages_redacted,
+    compile_planned_stages,
     plan_pipeline_stages,
 )
 
@@ -119,8 +119,8 @@ class BaseLauncher(ABC):
         *,
         secret_values: tuple[str, ...] = (),
     ) -> dict[str, object]:
-        return compile_planned_stages_redacted(
-            stages or self._planned_stages(),
+        return redact_captured_strings(
+            compile_planned_stages(stages or self._planned_stages()),
             secret_values=secret_values,
         )
 

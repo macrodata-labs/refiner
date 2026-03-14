@@ -10,9 +10,10 @@ from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.planning import (
     _extract_lambda_source,
     compile_pipeline_plan,
-    compile_planned_stages_redacted,
+    compile_planned_stages,
     plan_pipeline_stages,
 )
+from refiner.platform.manifest import redact_captured_strings
 
 
 class _FakeReader(BaseReader):
@@ -158,8 +159,8 @@ def test_compile_planned_stages_redacts_secret_values_from_captured_code() -> No
         lambda row: {"token": "super-secret-value", "x": row["x"]}
     )
 
-    payload = compile_planned_stages_redacted(
-        plan_pipeline_stages(pipeline, default_num_workers=1),
+    payload = redact_captured_strings(
+        compile_planned_stages(plan_pipeline_stages(pipeline, default_num_workers=1)),
         secret_values=(secret,),
     )
     fn_source = payload["stages"][0]["steps"][1]["args"]["fn"]
