@@ -86,34 +86,32 @@ class ClaimPolicy:
                 for candidate in pending_list:
                     if (
                         candidate.global_ordinal is not None
-                        and candidate.global_ordinal > previous_ordinal
+                        and candidate.global_ordinal == previous_ordinal + 1
                         and try_claim(candidate)
                     ):
                         return candidate
 
+            all_list = by_key_all[start_key]
+            total = len(all_list)
+            if total >= ClaimPolicy.BLOCK_SIZE * 2:
+                num_blocks = (
+                    total + ClaimPolicy.BLOCK_SIZE - 1
+                ) // ClaimPolicy.BLOCK_SIZE
+                offset = _h_int(self.job_id, str(self.worker_id), start_key) % max(
+                    1, num_blocks
+                )
+                for block_index in range(num_blocks):
+                    block = (offset + block_index) % num_blocks
+                    target_ordinal = block * ClaimPolicy.BLOCK_SIZE
+                    for candidate in pending_list:
+                        if candidate.global_ordinal == target_ordinal and try_claim(
+                            candidate
+                        ):
+                            return candidate
+
             for candidate in pending_list:
                 if try_claim(candidate):
                     return candidate
-
-            all_list = by_key_all[start_key]
-            total = len(all_list)
-            if total <= 0:
-                return None
-            if total < ClaimPolicy.BLOCK_SIZE * 2:
-                return None
-
-            num_blocks = (total + ClaimPolicy.BLOCK_SIZE - 1) // ClaimPolicy.BLOCK_SIZE
-            offset = _h_int(self.job_id, str(self.worker_id), start_key) % max(
-                1, num_blocks
-            )
-            for block_index in range(num_blocks):
-                block = (offset + block_index) % num_blocks
-                target_ordinal = block * ClaimPolicy.BLOCK_SIZE
-                for candidate in pending_list:
-                    if candidate.global_ordinal == target_ordinal and try_claim(
-                        candidate
-                    ):
-                        return candidate
 
             return None
 
