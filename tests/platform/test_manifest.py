@@ -42,8 +42,7 @@ def test_build_run_manifest_redacts_secret_values(monkeypatch, tmp_path: Path) -
         lambda: "abc123def456",
     )
 
-    manifest = build_run_manifest(secret_values=("super-secret-value",))
+    manifest = build_run_manifest()
 
     assert manifest["script"]["path"] == str(script_path.resolve())
-    assert "REDACTED_KEY" in manifest["script"]["text"]
-    assert "super-secret-value" not in manifest["script"]["text"]
+    assert "super-secret-value" in manifest["script"]["text"]

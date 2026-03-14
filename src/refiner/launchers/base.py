@@ -12,7 +12,7 @@ from refiner.platform.auth import CredentialsError
 from refiner.platform.client.api import MacrodataClient
 from refiner.platform.client.http import sanitize_terminal_text
 from refiner.platform.client.models import RunHandle
-from refiner.platform.manifest import build_run_manifest, redact_captured_strings
+from refiner.platform.manifest import build_run_manifest
 from refiner.pipeline.planning import (
     PlannedStage,
     compile_planned_stages,
@@ -113,21 +113,11 @@ class BaseLauncher(ABC):
             default_num_workers=default_num_workers,
         )
 
-    def _compiled_plan(
-        self,
-        stages: list[PlannedStage] | None = None,
-        *,
-        secret_values: tuple[str, ...] = (),
-    ) -> dict[str, object]:
-        return redact_captured_strings(
-            compile_planned_stages(stages or self._planned_stages()),
-            secret_values=secret_values,
-        )
+    def _compiled_plan(self, stages: list[PlannedStage] | None = None) -> dict[str, object]:
+        return compile_planned_stages(stages or self._planned_stages())
 
-    def _run_manifest(
-        self, *, secret_values: tuple[str, ...] = ()
-    ) -> dict[str, object]:
-        return build_run_manifest(secret_values=secret_values)
+    def _run_manifest(self) -> dict[str, object]:
+        return build_run_manifest()
 
     def _create_platform_run(
         self, *, plan: dict[str, object], fail_open: bool = True

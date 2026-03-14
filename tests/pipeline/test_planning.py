@@ -10,10 +10,8 @@ from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.planning import (
     _extract_lambda_source,
     compile_pipeline_plan,
-    compile_planned_stages,
     plan_pipeline_stages,
 )
-from refiner.platform.manifest import redact_captured_strings
 
 
 class _FakeReader(BaseReader):
@@ -151,18 +149,3 @@ def test_plan_pipeline_stages_returns_single_placeholder_stage() -> None:
     assert stages[0].name == "stage_0"
     assert stages[0].pipeline is pipeline
     assert stages[0].compute.num_workers == 3
-
-
-def test_compile_planned_stages_redacts_secret_values_from_captured_code() -> None:
-    secret = "super-secret-value"
-    pipeline = RefinerPipeline(_FakeReader()).map(
-        lambda row: {"token": "super-secret-value", "x": row["x"]}
-    )
-
-    payload = redact_captured_strings(
-        compile_planned_stages(plan_pipeline_stages(pipeline, default_num_workers=1)),
-        secret_values=(secret,),
-    )
-    fn_source = payload["stages"][0]["steps"][1]["args"]["fn"]
-    assert "REDACTED_KEY" in fn_source
-    assert secret not in fn_source

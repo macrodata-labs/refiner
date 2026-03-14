@@ -1,45 +1,45 @@
 from __future__ import annotations
 
-from functools import lru_cache
 import hashlib
 import inspect
 import json
 import platform
 import subprocess
 import sys
+from collections.abc import Sequence
+from functools import lru_cache
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from collections.abc import Sequence
 from typing import Any
 
-REDACTION_PLACEHOLDER = "REDACTED_KEY"
+_REDACTION_PLACEHOLDER = "REDACTED_SECRET"
 
 
-def redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
+def _redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
     redacted = text
-    ordered_secrets: list[str] = [value for value in secret_values if value]
-    ordered_secrets.sort(key=len, reverse=True)
-    for secret_value in ordered_secrets:
-        redacted = redacted.replace(secret_value, REDACTION_PLACEHOLDER)
+    # Replace longer secrets first so substring overlaps do not leak suffixes.
+    for secret_value in sorted(secret_values, key=lambda value: len(value), reverse=True):
+        if secret_value != "":
+            redacted = redacted.replace(secret_value, _REDACTION_PLACEHOLDER)
     return redacted
 
 
-def redact_captured_strings(value: Any, *, secret_values: Sequence[str]) -> Any:
+def _redact_captured_strings(value: Any, *, secret_values: Sequence[str]) -> Any:
     if not secret_values:
         return value
     if isinstance(value, str):
-        return redact_captured_text(value, secret_values=secret_values)
+        return _redact_captured_text(value, secret_values=secret_values)
     if isinstance(value, list):
         return [
-            redact_captured_strings(item, secret_values=secret_values) for item in value
+            _redact_captured_strings(item, secret_values=secret_values) for item in value
         ]
     if isinstance(value, tuple):
         return tuple(
-            redact_captured_strings(item, secret_values=secret_values) for item in value
+            _redact_captured_strings(item, secret_values=secret_values) for item in value
         )
     if isinstance(value, dict):
         return {
-            key: redact_captured_strings(item, secret_values=secret_values)
+            key: _redact_captured_strings(item, secret_values=secret_values)
             for key, item in value.items()
         }
     return value
@@ -176,7 +176,7 @@ def _resolve_refiner_ref() -> str | None:
     )
 
 
-def build_run_manifest(*, secret_values: tuple[str, ...] = ()) -> dict[str, Any]:
+def build_run_manifest() -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
     refiner_ref = _resolve_refiner_ref()
@@ -195,12 +195,7 @@ def build_run_manifest(*, secret_values: tuple[str, ...] = ()) -> dict[str, Any]
         },
         "dependencies": _collect_dependencies(),
     }
-    return redact_captured_strings(manifest, secret_values=secret_values)
+    return manifest
 
 
-__all__ = [
-    "REDACTION_PLACEHOLDER",
-    "build_run_manifest",
-    "redact_captured_strings",
-    "redact_captured_text",
-]
+__all__ = ["build_run_manifest"]

@@ -197,6 +197,66 @@ def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
     }
 
 
+def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    secret = "super-secret-value"
+
+    class FakeMacrodataClient:
+        def __init__(self):
+            self.base_url = "https://example.com"
+
+        def cloud_submit_job(self, *, request):
+            captured["request"] = request
+
+            class _Resp:
+                job_id = "job-123"
+                stage_index = 0
+                status = "queued"
+
+            return _Resp()
+
+    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.serialize_pipeline_inline",
+        lambda pipeline: CloudPipelinePayload(
+            format="cloudpickle",
+            bytes_b64="AQID",
+            sha256="abc123",
+            size_bytes=3,
+        ),
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.base.plan_pipeline_stages",
+        lambda pipeline, default_num_workers: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=default_num_workers),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.base.build_run_manifest",
+        lambda: {
+            "version": 1,
+            "script": {"text": "API_KEY = 'super-secret-value'"},
+        },
+    )
+
+    pipeline = read_jsonl("input.jsonl").map(
+        lambda row: {"token": "super-secret-value", "x": row["x"]}
+    )
+    pipeline.launch_cloud(name="demo cloud", secrets={"OPENAI_API_KEY": secret})
+
+    request = cast(CloudRunCreateRequest, captured["request"])
+    assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
+    assert secret not in request.plan["stages"][0]["steps"][1]["args"]["fn"]
+    assert request.manifest is not None
+    assert "REDACTED_SECRET" in request.manifest["script"]["text"]
+    assert secret not in request.manifest["script"]["text"]
+
+
 def test_pipeline_launch_cloud_requires_missing_env_secret(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     pipeline = read_jsonl("input.jsonl")
