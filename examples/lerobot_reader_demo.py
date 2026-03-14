@@ -100,7 +100,7 @@ def main() -> None:
             )
 
     if args.output_root:
-        output_root = str(Path(args.output_root).expanduser().resolve())
+        output_root = args.output_root
         stats = pipeline.write_lerobot(output_root, overwrite=True).launch_local(
             name="lerobot-reader-demo",
             num_workers=1,
