@@ -98,11 +98,11 @@ class CloudLauncher(BaseLauncher):
         )
 
     def launch(self) -> CloudLaunchResult:
+        resolved_secrets = self._resolved_secrets()
         try:
             client = self._require_platform_client()
         except RuntimeError as err:
             raise SystemExit(str(err)) from err
-        resolved_secrets = self._resolved_secrets()
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
         stages = self._planned_stages()
         request = CloudRunCreateRequest(
