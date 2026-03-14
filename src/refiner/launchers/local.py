@@ -259,7 +259,7 @@ class LocalLauncher(BaseLauncher):
             if self.cpus_per_worker is not None
             else [None] * stage.compute.num_workers
         )
-        shards = list(stage.pipeline.source.list_shards())
+        shards = list(stage.pipeline.list_shards())
         stage_run = self._stage_run(platform_run, stage_index=stage.index)
         if runtime_backend == "platform":
             self._seed_platform_stage(stage_run, stage_index=stage.index, shards=shards)

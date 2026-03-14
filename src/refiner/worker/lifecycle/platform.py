@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import Shard, ShardPart
 from refiner.platform.client import RunHandle
 
 
@@ -43,8 +43,36 @@ class PlatformRuntimeLifecycle:
         )
         if claim.shard is None:
             return None
+        descriptor = claim.shard.descriptor or {
+            "parts": [
+                {
+                    "path": claim.shard.path,
+                    "start": claim.shard.start,
+                    "end": claim.shard.end,
+                    "source_index": claim.shard.source_index,
+                    "unit": "bytes",
+                }
+            ]
+        }
+        parts = tuple(
+            ShardPart(
+                path=part["path"],
+                start=int(part["start"]),
+                end=int(part["end"]),
+                source_index=int(part.get("source_index", 0)),
+                unit=str(part.get("unit", "bytes")),
+            )
+            for part in descriptor["parts"]
+        )
         return Shard(
-            path=claim.shard.path, start=claim.shard.start, end=claim.shard.end
+            path=claim.shard.path,
+            start=claim.shard.start,
+            end=claim.shard.end,
+            source_index=claim.shard.source_index,
+            parts=parts,
+            global_ordinal=claim.shard.global_ordinal,
+            start_key=claim.shard.start_key,
+            end_key=claim.shard.end_key,
         )
 
     def heartbeat(self, shards: Iterable[Shard]) -> None:

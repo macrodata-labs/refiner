@@ -21,7 +21,13 @@ class TaskSource(BaseSource):
 
     def list_shards(self) -> list[Shard]:
         return [
-            Shard(path=_TASK_SOURCE_PATH, start=rank, end=rank + 1)
+            Shard(
+                path=_TASK_SOURCE_PATH,
+                start=rank,
+                end=rank + 1,
+                unit="rows",
+                global_ordinal=rank,
+            )
             for rank in range(self._num_tasks)
         ]
 

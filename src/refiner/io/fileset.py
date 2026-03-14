@@ -1,45 +1,55 @@
 from __future__ import annotations
 
 import glob
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from os import PathLike
-from typing import Any, TypeAlias, Union
+from typing import Any, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
-from fsspec.implementations.local import LocalFileSystem
 
-from refiner.io.datafile import DataFile
-from refiner.io.datafolder import DataFolder
+from refiner.io.datafile import DataFile, DataFileSpec
+from refiner.io.datafolder import DataFolder, DataFolderSpec
 
 DataFileSetInput: TypeAlias = Union[
-    str, PathLike[str], DataFile, DataFolder, "DataFileSet"
+    str, PathLike[str], DataFileSpec, DataFolderSpec, DataFile, DataFolder
 ]
 DataFileSetLike: TypeAlias = Union[DataFileSetInput, Sequence[DataFileSetInput]]
 
 
 @dataclass(frozen=True, slots=True)
+class _PathSource:
+    raw: str
+    fs: AbstractFileSystem | None = None
+    storage_options: Mapping[str, Any] | None = None
+
+    def resolve(self) -> tuple[AbstractFileSystem, str]:
+        if self.fs is not None:
+            return self.fs, self.fs._strip_protocol(self.raw)
+        return url_to_fs(self.raw, **dict(self.storage_options or {}))
+
+
+@dataclass(frozen=True, slots=True)
 class DataFileSet:
-    """A deterministic set of input files on a single fsspec filesystem.
+    """A deterministic set of normalized input sources.
 
     Notes:
-        - This object is the resolved result: it only holds `(fs, files)`.
-        - File paths are stored in the form expected by `fs.open/fs.exists` (no protocol required).
+        - This object preserves user input order without eagerly listing or globbing.
+        - Source entries are normalized to `DataFile`, `DataFolder`, or a deferred string path.
+        - `(path, fs)` inputs are accepted and kept lazy like plain string paths.
+        - Nested `DataFileSet` inputs are not supported.
+        - Concrete files are expanded lazily when `files`, `expand_sources()`, or `size()` is used.
     """
 
-    fs: AbstractFileSystem
-    files: tuple[str, ...]
-    _sizes: dict[str, int] = field(
+    entries: tuple[DataFile | DataFolder | _PathSource, ...]
+    recursive: bool = False
+    extensions: tuple[str, ...] = ()
+    _expanded_sources: tuple[tuple[DataFile, ...], ...] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _sizes: dict[int, int] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
-
-    def open(self, path: str, mode: str = "rb", **kwargs):
-        """Open a file path using this fileset's filesystem."""
-        return self.fs.open(path, mode=mode, **kwargs)
-
-    @property
-    def is_local(self) -> bool:
-        return isinstance(self.fs, LocalFileSystem)
 
     @classmethod
     def resolve(
@@ -51,78 +61,46 @@ class DataFileSet:
         recursive: bool = False,
         extensions: Sequence[str] | None = None,
     ) -> "DataFileSet":
+        """Normalize input specs into a lazy file set without listing them yet."""
         if isinstance(data, cls):
             return data
 
-        if isinstance(data, (str, PathLike, DataFile, DataFolder, DataFileSet)):
+        if (
+            isinstance(data, tuple)
+            and len(data) == 2
+            and isinstance(data[1], AbstractFileSystem)
+        ):
+            inputs = (data,)
+        elif isinstance(data, (str, PathLike, DataFile, DataFolder)):
             inputs = (data,)
         else:
             inputs = tuple(data)
 
         storage_options_d = dict(storage_options or {})
-        exts = tuple(e.lower() for e in (extensions or ()))
-
-        resolved_fs: AbstractFileSystem | None = fs
-        collected: list[str] = []
-        sizes: dict[str, int] = {}
-
-        def _check_fs(next_fs: AbstractFileSystem) -> None:
-            nonlocal resolved_fs
-            if resolved_fs is None:
-                resolved_fs = next_fs
-                return
-            if (
-                type(next_fs) is not type(resolved_fs)
-                or next_fs.protocol != resolved_fs.protocol
-            ):
-                raise ValueError(
-                    "All inputs must resolve to the same fsspec filesystem/protocol"
-                )
-
-        def _add_files(paths: Iterable[str]) -> None:
-            assert resolved_fs is not None
-            for p in paths:
-                if exts and not p.lower().endswith(exts):
-                    continue
-                if resolved_fs.exists(p) and not resolved_fs.isdir(p):
-                    collected.append(p)
-
-        def _list_dir(dir_path: str) -> Iterable[str]:
-            assert resolved_fs is not None
-            if recursive:
-                # fsspec find() returns file paths (best-effort across backends)
-                return resolved_fs.find(dir_path)
-
-            entries = resolved_fs.ls(dir_path, detail=True)
-            files: list[str] = []
-            for e in entries:
-                if isinstance(e, dict):
-                    name = e.get("name")
-                    typ = e.get("type")
-                    if isinstance(name, str) and typ == "file":
-                        files.append(name)
-                        sz = e.get("size")
-                        if isinstance(sz, int) and sz >= 0:
-                            sizes.setdefault(name, sz)
-                elif isinstance(e, str):
-                    files.append(e)
-            return files
+        normalized_entries: list[DataFile | DataFolder | _PathSource] = []
 
         for item in inputs:
-            if isinstance(item, DataFileSet):
-                _check_fs(item.fs)
-                _add_files(item.files)
-                continue
-
             if isinstance(item, DataFile):
-                _check_fs(item.fs)
-                _add_files([item.path])
+                normalized_entries.append(item)
                 continue
 
             if isinstance(item, DataFolder):
-                # Treat as a directory spec.
-                _check_fs(item.fs)
-                _add_files(_list_dir(item.path))
+                normalized_entries.append(item)
+                continue
+
+            if (
+                isinstance(item, tuple)
+                and len(item) == 2
+                and isinstance(item[1], AbstractFileSystem)
+            ):
+                path, item_fs = cast(DataFileSpec | DataFolderSpec, item)
+                if isinstance(path, PathLike):
+                    path = str(path)
+                if not isinstance(path, str):
+                    raise TypeError(
+                        "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
+                    )
+                normalized_entries.append(_PathSource(raw=path, fs=item_fs))
                 continue
 
             if isinstance(item, PathLike):
@@ -130,48 +108,118 @@ class DataFileSet:
 
             if not isinstance(item, str):
                 raise TypeError(
-                    "DataFileSet inputs must be str | PathLike | DataFile | DataFolder | DataFileSet"
+                    "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                 )
 
-            if resolved_fs is not None:
-                p = resolved_fs._strip_protocol(item)
+            normalized_entries.append(
+                _PathSource(
+                    raw=item,
+                    fs=fs,
+                    storage_options=storage_options_d if fs is None else None,
+                )
+            )
+
+        return cls(
+            entries=tuple(normalized_entries),
+            recursive=recursive,
+            extensions=tuple(extensions or ()),
+        )
+
+    @property
+    def files(self) -> tuple[DataFile, ...]:
+        """Flatten the lazily expanded source groups into one deterministic file list."""
+        return tuple(file for group in self.expand_sources() for file in group)
+
+    def expand_sources(self) -> tuple[tuple[DataFile, ...], ...]:
+        """Expand each source entry into its concrete files, preserving source grouping."""
+        cached = self._expanded_sources
+        if cached is not None:
+            return cached
+
+        exts = tuple(e.lower() for e in self.extensions)
+        seen: set[tuple[int, str]] = set()
+        expanded: list[tuple[DataFile, ...]] = []
+
+        def _append_file(out: list[DataFile], file: DataFile) -> None:
+            if exts and not file.path.lower().endswith(exts):
+                return
+            key = (id(file.fs), file.path)
+            if key in seen:
+                return
+            seen.add(key)
+            out.append(file)
+
+        for entry in self.entries:
+            files: list[DataFile] = []
+            if isinstance(entry, DataFile):
+                _append_file(files, entry)
+            elif isinstance(entry, DataFolder):
+                paths = (
+                    sorted(entry.find(""))
+                    if self.recursive
+                    else sorted(
+                        e["name"] if isinstance(e, dict) else e
+                        for e in entry.ls("", detail=True)
+                        if not isinstance(e, dict) or e.get("type") == "file"
+                    )
+                )
+                for path in paths:
+                    _append_file(files, entry.file(path))
             else:
-                next_fs, p = url_to_fs(item, **storage_options_d)
-                _check_fs(next_fs)
-
-            assert resolved_fs is not None
-            if glob.has_magic(p):
-                _add_files(resolved_fs.glob(p))
-                continue
-
-            if resolved_fs.exists(p):
-                if resolved_fs.isdir(p):
-                    _add_files(_list_dir(p))
+                next_fs, path = entry.resolve()
+                if glob.has_magic(path):
+                    for expanded_path in sorted(next_fs.glob(path)):
+                        _append_file(files, DataFile(fs=next_fs, path=expanded_path))
+                elif next_fs.exists(path):
+                    if next_fs.isdir(path):
+                        paths = (
+                            sorted(next_fs.find(path))
+                            if self.recursive
+                            else sorted(
+                                e["name"] if isinstance(e, dict) else e
+                                for e in next_fs.ls(path, detail=True)
+                                if not isinstance(e, dict) or e.get("type") == "file"
+                            )
+                        )
+                        for expanded_path in paths:
+                            _append_file(
+                                files, DataFile(fs=next_fs, path=expanded_path)
+                            )
+                    else:
+                        _append_file(files, DataFile(fs=next_fs, path=path))
                 else:
-                    _add_files([p])
-                continue
+                    raise FileNotFoundError(f"Could not resolve input: {entry.raw!r}")
+            expanded.append(tuple(files))
 
-            raise FileNotFoundError(f"Could not resolve input: {item!r}")
-
-        # Deterministic sort + de-dup
-        files = sorted(set(collected))
-
-        assert resolved_fs is not None
-        out = cls(fs=resolved_fs, files=tuple(files))
-        # Best-effort: sizes are only available for some backends and some discovery modes.
-        out._sizes.update(sizes)
+        out = tuple(expanded)
+        object.__setattr__(self, "_expanded_sources", out)
         return out
 
-    def size(self, path: str) -> int:
-        """Return the size for a known file path, caching results.
+    def resolve_file(self, source_index: int, path: str) -> DataFile:
+        """Resolve an absolute shard path back onto the source entry's filesystem."""
+        entry = self.entries[source_index]
+        if isinstance(entry, DataFile):
+            file = DataFile.resolve(path, fs=entry.fs)
+            if (
+                file.path != entry.path
+                and str(entry) != path
+                and entry.abs_path() != path
+            ):
+                raise FileNotFoundError(path)
+            return file
+        if isinstance(entry, DataFolder):
+            return DataFile.resolve(path, fs=entry.fs)
+        fs, _ = entry.resolve()
+        return DataFile.resolve(path, fs=fs)
 
-        - Uses sizes discovered during `resolve()` when available.
-        - Falls back to `fs.size(path)` otherwise.
-        """
-        if path in self._sizes:
-            return self._sizes[path]
-        sz = int(self.fs.size(path))
-        self._sizes[path] = sz
+    def size(self, source_index: int, path: str) -> int:
+        """Return the size for a resolved shard path, caching by source entry and absolute path."""
+        key = hash((source_index, path))
+        if key in self._sizes:
+            return self._sizes[key]
+        target = self.resolve_file(source_index, path)
+        sz = int(target.fs.size(target.path))
+        self._sizes[key] = sz
         return sz
 
 

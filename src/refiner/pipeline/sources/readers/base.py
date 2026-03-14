@@ -7,6 +7,7 @@ from typing import Any
 
 from fsspec import AbstractFileSystem
 
+from refiner.io import DataFile
 from refiner.io import DataFileSet
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.shard import Shard
@@ -17,7 +18,8 @@ class BaseReader(BaseSource):
     """Base class for file-backed readers.
 
     Responsibilities:
-        - Resolve an input fsspec path into a deterministic list of file paths.
+        - Normalize input sources without eagerly listing them.
+        - Lazily expand those sources into a deterministic list of concrete input files.
         - Provide shard listing and shard reading.
 
     Note:
@@ -51,7 +53,7 @@ class BaseReader(BaseSource):
         self._extensions = tuple(extensions)
         self._fileset: DataFileSet | None = None
         # Single-open-file cache for readers that do byte-based seeks or stream reads.
-        self._open_path: str | None = None
+        self._open_file: DataFile | None = None
         self._open_fh: Any | None = None
 
         if not self.name:
@@ -60,7 +62,7 @@ class BaseReader(BaseSource):
 
     @property
     def fileset(self) -> DataFileSet:
-        """Resolved input files and filesystem (cached)."""
+        """Normalized input sources (cached)."""
         if self._fileset is None:
             self._fileset = DataFileSet.resolve(
                 self._inputs,
@@ -72,14 +74,14 @@ class BaseReader(BaseSource):
         return self._fileset
 
     @property
-    def fs(self) -> AbstractFileSystem:
-        """Filesystem used to open/read input files."""
-        return self.fileset.fs
+    def files(self) -> list[str]:
+        """Deterministic list of resolved input file paths."""
+        return [file.path for file in self.source_files]
 
     @property
-    def files(self) -> list[str]:
-        """Deterministic list of resolved input file paths (fs-native, protocol-stripped)."""
-        return list(self.fileset.files)
+    def source_files(self) -> tuple[DataFile, ...]:
+        """Deterministic list of lazily expanded concrete input files."""
+        return self.fileset.files
 
     def describe(self) -> dict[str, Any]:
         # Keep planning metadata cheap: do not resolve/list inputs here.
@@ -97,14 +99,14 @@ class BaseReader(BaseSource):
         return {}
 
     def _get_file_handle(
-        self, path: str, *, mode: str = "rb", force_reopen: bool = False
+        self, file: DataFile, *, mode: str = "rb", force_reopen: bool = False
     ):
-        """Get a cached fsspec file handle for `path`
+        """Get a cached file handle for a resolved input file.
 
         Returns:
             (fh, opened_new): `opened_new` is True if a new file handle was opened.
         """
-        if not force_reopen and self._open_path == path and self._open_fh is not None:
+        if not force_reopen and self._open_file == file and self._open_fh is not None:
             return self._open_fh, False
 
         if self._open_fh is not None:
@@ -113,20 +115,23 @@ class BaseReader(BaseSource):
             except Exception:
                 pass
             self._open_fh = None
-            self._open_path = None
+            self._open_file = None
 
-        self._open_fh = self.fs.open(path, mode=mode)
-        self._open_path = path
+        self._open_fh = file.open(mode=mode)
+        self._open_file = file
         return self._open_fh, True
+
+    def _source_file(self, source_index: int, path: str) -> DataFile:
+        return self.fileset.resolve_file(source_index, path)
 
     @abstractmethod
     def list_shards(self) -> list[Shard]:
         """Return the deterministic list of shards for this reader.
 
         Contract:
-            - Shards must only reference paths in `self.files`.
-            - Shards must not span multiple files.
-            - `start/end` are reader-specific offsets (e.g. bytes or row-group indices).
+            - Shards must only reference resolved input files.
+            - Each shard part must carry the resolved `source_index` it belongs to.
+            - `start/end` are reader-specific offsets (e.g. bytes, row groups, or rows).
         """
         raise NotImplementedError
 

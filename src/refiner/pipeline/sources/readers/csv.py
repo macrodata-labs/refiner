@@ -60,9 +60,9 @@ class CsvReader(BaseReader):
             raise ValueError("sharding_mode must be 'bytes_lazy' or 'scan'")
         self.sharding_mode = sharding_mode
 
-    def _get_handle_and_header(self, path: str):
-        """Get a cached handle for `path` and parse/cache its header row."""
-        fh, opened_new = self._get_file_handle(path, mode="rb")
+    def _get_handle_and_header(self, source_file):
+        """Get a cached handle for a resolved file and parse/cache its header row."""
+        fh, opened_new = self._get_file_handle(source_file, mode="rb")
         if opened_new:
             self._open_header = None
         if self._open_header is not None:
@@ -97,92 +97,128 @@ class CsvReader(BaseReader):
             - `end == -1` is used as a sentinel meaning \"read the whole file\" (non-splittable inputs).
         """
         shards: list[Shard] = []
-        for path in self.files:
-            if not is_splittable_by_bytes(self.fs, path):
-                # one shard per file
-                shards.append(Shard(path=path, start=0, end=-1))
-                continue
+        global_ordinal = 0
+        for source_index, files in enumerate(self.fileset.expand_sources()):
+            for file in files:
+                path = file.abs_path()
+                if not is_splittable_by_bytes(file.fs, file.path):
+                    shards.append(
+                        Shard(
+                            path=path,
+                            start=0,
+                            end=-1,
+                            source_index=source_index,
+                            global_ordinal=global_ordinal,
+                        )
+                    )
+                    global_ordinal += 1
+                    continue
 
-            size = self.fileset.size(path)
-            if size <= self.target_shard_bytes:
-                shards.append(Shard(path=path, start=0, end=size))
-                continue
+                size = self.fileset.size(source_index, path)
+                if size <= self.target_shard_bytes:
+                    shards.append(
+                        Shard(
+                            path=path,
+                            start=0,
+                            end=size,
+                            source_index=source_index,
+                            global_ordinal=global_ordinal,
+                        )
+                    )
+                    global_ordinal += 1
+                    continue
 
-            mode = self.sharding_mode
-            if self.multiline_rows and mode == "bytes_lazy":
-                mode = "scan"
+                mode = self.sharding_mode
+                if self.multiline_rows and mode == "bytes_lazy":
+                    mode = "scan"
 
-            if mode == "bytes_lazy":
-                start = 0
-                while start < size:
-                    end = min(size, start + self.target_shard_bytes)
-                    shards.append(Shard(path=path, start=start, end=end))
-                    start = end
-            else:
-                # Streaming scan to find cut points.
-                with self.fs.open(path, mode="rb") as f:
-                    shard_start = 0
-                    pos = 0
-                    next_cut_at = self.target_shard_bytes
-
-                    in_quotes = False
-                    buf = f.read(1024 * 1024)
-                    while buf:
-                        i = 0
-                        n = len(buf)
-                        while i < n:
-                            b = buf[i]
-                            if self.multiline_rows:
-                                if b == 34:  # ord('"')
-                                    if in_quotes and i + 1 < n and buf[i + 1] == 34:
-                                        i += 2
-                                        pos += 2
-                                        continue
-                                    in_quotes = not in_quotes
-                            if b == 10 and (
-                                not self.multiline_rows or not in_quotes
-                            ):  # '\n'
-                                # newline ends a record in non-multiline mode, or ends a record when not in quotes.
-                                if pos + 1 >= next_cut_at:
-                                    cut = pos + 1  # start next shard after newline
-                                    shards.append(
-                                        Shard(
-                                            path=path,
-                                            start=shard_start,
-                                            end=cut,
-                                        )
-                                    )
-                                    shard_start = cut
-                                    next_cut_at = shard_start + self.target_shard_bytes
-                            i += 1
-                            pos += 1
-                        buf = f.read(1024 * 1024)
-
-                    if shard_start < size:
+                if mode == "bytes_lazy":
+                    start = 0
+                    while start < size:
+                        end = min(size, start + self.target_shard_bytes)
                         shards.append(
                             Shard(
                                 path=path,
-                                start=shard_start,
-                                end=size,
+                                start=start,
+                                end=end,
+                                source_index=source_index,
+                                global_ordinal=global_ordinal,
                             )
                         )
+                        global_ordinal += 1
+                        start = end
+                else:
+                    with file.open(mode="rb") as f:
+                        shard_start = 0
+                        pos = 0
+                        next_cut_at = self.target_shard_bytes
+
+                        in_quotes = False
+                        buf = f.read(1024 * 1024)
+                        while buf:
+                            i = 0
+                            n = len(buf)
+                            while i < n:
+                                b = buf[i]
+                                if self.multiline_rows:
+                                    if b == 34:
+                                        if in_quotes and i + 1 < n and buf[i + 1] == 34:
+                                            i += 2
+                                            pos += 2
+                                            continue
+                                        in_quotes = not in_quotes
+                                if b == 10 and (
+                                    not self.multiline_rows or not in_quotes
+                                ):
+                                    if pos + 1 >= next_cut_at:
+                                        cut = pos + 1
+                                        shards.append(
+                                            Shard(
+                                                path=path,
+                                                start=shard_start,
+                                                end=cut,
+                                                source_index=source_index,
+                                                global_ordinal=global_ordinal,
+                                            )
+                                        )
+                                        global_ordinal += 1
+                                        shard_start = cut
+                                        next_cut_at = (
+                                            shard_start + self.target_shard_bytes
+                                        )
+                                i += 1
+                                pos += 1
+                            buf = f.read(1024 * 1024)
+
+                        if shard_start < size:
+                            shards.append(
+                                Shard(
+                                    path=path,
+                                    start=shard_start,
+                                    end=size,
+                                    source_index=source_index,
+                                    global_ordinal=global_ordinal,
+                                )
+                            )
+                            global_ordinal += 1
 
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         # Arrow path is the fast/default path. Multiline CSV needs the Python
         # parser because byte-range splitting + quotes/newlines is trickier.
-        if self.multiline_rows:
-            yield from self._read_shard_python(shard)
-            return
-        yield from self._read_shard_arrow(shard)
+        for part in shard.parts:
+            if self.multiline_rows:
+                yield from self._read_shard_python(part)
+                continue
+            yield from self._read_shard_arrow(part)
 
-    def _read_shard_arrow(self, shard: Shard) -> Iterator[SourceUnit]:
+    def _read_shard_arrow(self, shard) -> Iterator[SourceUnit]:
+        source = self._source_file(shard.source_index, shard.path)
         if shard.end == -1:
             # Whole-file read (e.g. compressed/non-splittable): let Arrow parse
             # directly and stream RecordBatch objects downstream.
-            with self.fs.open(
-                shard.path,
+            with source.open(
                 mode="rb",
                 compression="infer",
             ) as raw:
@@ -200,8 +236,8 @@ class CsvReader(BaseReader):
                     yield batch
             return
 
-        fh, header = self._get_handle_and_header(shard.path)
-        size = self.fileset.size(shard.path)
+        fh, header = self._get_handle_and_header(source)
+        size = self.fileset.size(shard.source_index, shard.path)
 
         mode = self.sharding_mode
         if self.multiline_rows and mode == "bytes_lazy":
@@ -220,7 +256,7 @@ class CsvReader(BaseReader):
             fh.seek(start)
         except Exception:
             self._open_header = None
-            fh, _ = self._get_file_handle(shard.path, mode="rb", force_reopen=True)
+            fh, _ = self._get_file_handle(source, mode="rb", force_reopen=True)
             fh.seek(start)
 
         raw = io.BufferedReader(BoundedBinaryReader(fh, end - start))
@@ -247,10 +283,10 @@ class CsvReader(BaseReader):
         for batch in reader:
             yield batch
 
-    def _read_shard_python(self, shard: Shard) -> Iterator[SourceUnit]:
+    def _read_shard_python(self, shard) -> Iterator[SourceUnit]:
+        source = self._source_file(shard.source_index, shard.path)
         if shard.end == -1:
-            with self.fs.open(
-                shard.path,
+            with source.open(
                 mode="rt",
                 compression="infer",
                 encoding=self.encoding,
@@ -261,8 +297,8 @@ class CsvReader(BaseReader):
                     yield DictRow(row)
             return
 
-        fh, header = self._get_handle_and_header(shard.path)
-        size = self.fileset.size(shard.path)
+        fh, header = self._get_handle_and_header(source)
+        size = self.fileset.size(shard.source_index, shard.path)
         mode = self.sharding_mode
         if self.multiline_rows and mode == "bytes_lazy":
             mode = "scan"
@@ -279,7 +315,7 @@ class CsvReader(BaseReader):
             fh.seek(start)
         except Exception:
             self._open_header = None
-            fh, _ = self._get_file_handle(shard.path, mode="rb", force_reopen=True)
+            fh, _ = self._get_file_handle(source, mode="rb", force_reopen=True)
             fh.seek(start)
 
         # Python fallback preserves behavior for multiline quoted records.
