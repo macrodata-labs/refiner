@@ -101,10 +101,6 @@ class Shard:
         )
         return h.hexdigest()
 
-    @property
-    def file_key(self) -> str:
-        return self.start_key or self.parts[0].locality_key
-
     def pending_filename(self) -> str:
         return format_pending_filename(shard_id=self.id)
 
@@ -154,11 +150,6 @@ def parse_shard_filename(filename: str) -> tuple[str, int | None]:
     return m.group("shardid"), int(worker_id) if worker_id is not None else None
 
 
-def strip_worker_suffix(filename: str) -> str:
-    shard_id, _ = parse_shard_filename(filename)
-    return format_pending_filename(shard_id=shard_id)
-
-
 def coalesce_shards(shards: list[Shard], num_shards: int | None) -> list[Shard]:
     if num_shards is None or num_shards <= 0 or num_shards >= len(shards):
         return shards
@@ -190,5 +181,4 @@ __all__ = [
     "format_pending_filename",
     "format_leased_filename",
     "parse_shard_filename",
-    "strip_worker_suffix",
 ]

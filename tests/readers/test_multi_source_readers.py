@@ -47,6 +47,7 @@ def test_datafileset_resolve_accepts_mixed_filesystems() -> None:
             [str(local_path), DataFile(fs=memfs, path="remote.jsonl")]
         )
 
+        assert len(fileset.entries) == 2
         assert len(fileset.files) == 2
         assert fileset.files[0].path == str(local_path)
         assert fileset.files[1].path == "remote.jsonl"

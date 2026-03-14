@@ -18,7 +18,8 @@ class BaseReader(BaseSource):
     """Base class for file-backed readers.
 
     Responsibilities:
-        - Resolve an input fsspec path into a deterministic list of file paths.
+        - Normalize input sources without eagerly listing them.
+        - Lazily expand those sources into a deterministic list of concrete input files.
         - Provide shard listing and shard reading.
 
     Note:
@@ -61,7 +62,7 @@ class BaseReader(BaseSource):
 
     @property
     def fileset(self) -> DataFileSet:
-        """Resolved input files and filesystem (cached)."""
+        """Normalized input sources (cached)."""
         if self._fileset is None:
             self._fileset = DataFileSet.resolve(
                 self._inputs,
@@ -79,7 +80,7 @@ class BaseReader(BaseSource):
 
     @property
     def source_files(self) -> tuple[DataFile, ...]:
-        """Deterministic list of fully resolved input files."""
+        """Deterministic list of lazily expanded concrete input files."""
         return self.fileset.files
 
     def describe(self) -> dict[str, Any]:

@@ -17,6 +17,7 @@ class DataFile:
 
     Notes:
         - `path` is stored in the form expected by `fs.open/fs.exists` (no protocol required).
+        - `resolve()` only normalizes `(fs, path)`; it does not check existence or list anything.
         - `resolve()` accepts `str` URL/path or `DataFile` (pass-through).
         - If `fs` is provided to `resolve()`, it wins and `storage_options` is ignored.
     """

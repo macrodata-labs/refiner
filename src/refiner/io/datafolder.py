@@ -68,6 +68,7 @@ class DataFolder(DirFileSystem):
         Returns:
             `DataFolder` instance
         """
+        # Like DataFile.resolve(), this normalizes a folder handle but does not list it.
         # fully initialized DataFolder object
         if isinstance(data, cls):
             return data

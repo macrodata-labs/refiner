@@ -75,6 +75,15 @@ class ClaimPolicy:
         if not by_key_pending:
             return None
 
+        # Claim order:
+        # 1. exact next global ordinal after the previous shard
+        # 2. block-based spreading in the previous shard's end locality
+        # 3. block-based spreading in other localities
+        # 4. greedy claim in the previous shard's end locality
+        # 5. greedy claim anywhere
+        #
+        # This preserves sequential reads when possible, but still spreads
+        # workers across blocks so they do not alternate every shard.
         def _try_exact_next(previous_ordinal: int) -> ClaimPolicy._ShardKey | None:
             for pending_list in by_key_pending.values():
                 for candidate in pending_list:
