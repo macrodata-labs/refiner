@@ -89,7 +89,7 @@ class DecoderLease:
     async def decode_window(
         self,
         *,
-        from_timestamp_s: float,
+        from_timestamp_s: float | None = None,
         to_timestamp_s: float | None,
         on_frame: Callable[["av.VideoFrame"], None],
         decoder_threads: int | None = None,
@@ -115,7 +115,7 @@ class DecoderLease:
     async def decode_window_collect_rgb24(
         self,
         *,
-        from_timestamp_s: float,
+        from_timestamp_s: float | None = None,
         to_timestamp_s: float | None,
         decoder_threads: int | None = None,
     ) -> tuple[tuple[np.ndarray, ...], DecodeWindowMeta]:
@@ -206,7 +206,7 @@ class VideoDecoderCache:
         self,
         *,
         data_file: DataFile,
-        from_timestamp_s: float,
+        from_timestamp_s: float | None = None,
         to_timestamp_s: float | None,
         decoder_threads: int | None = None,
     ) -> tuple[tuple[np.ndarray, ...], int | None, int | None, str | None]:
@@ -230,7 +230,7 @@ class VideoDecoderCache:
         self,
         *,
         data_file: DataFile,
-        from_timestamp_s: float,
+        from_timestamp_s: float | None = None,
         to_timestamp_s: float | None,
         on_frame: Callable[["av.VideoFrame"], None],
         decoder_threads: int | None = None,
@@ -264,13 +264,15 @@ class VideoDecoderCache:
     @staticmethod
     def _validate_bounds(
         *,
-        from_timestamp_s: float,
+        from_timestamp_s: float | None,
         to_timestamp_s: float | None,
     ) -> tuple[float, float | None]:
-        if not isinstance(from_timestamp_s, (int, float)) or from_timestamp_s < 0:
+        if from_timestamp_s is None:
+            start_ts = 0.0
+        elif not isinstance(from_timestamp_s, (int, float)) or from_timestamp_s < 0:
             raise ValueError("from_timestamp_s must be a non-negative number")
-
-        start_ts = max(0.0, float(from_timestamp_s))
+        else:
+            start_ts = max(0.0, float(from_timestamp_s))
         end_ts = float(to_timestamp_s) if to_timestamp_s is not None else None
         if end_ts is not None and end_ts <= start_ts:
             raise ValueError(
@@ -347,7 +349,9 @@ class VideoDecoderCache:
                 f"{resource.configured_decoder_threads} threads; use a distinct "
                 "cache name for a different decoder thread policy."
             )
-        codec_context = resource.container.streams.video[resource.stream_index].codec_context
+        codec_context = resource.container.streams.video[
+            resource.stream_index
+        ].codec_context
         codec_context.thread_count = requested_threads
         codec_context.thread_type = "AUTO"
         resource.configured_decoder_threads = requested_threads

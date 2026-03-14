@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 
 import pytest
 
@@ -14,7 +14,11 @@ from refiner.worker.resources.cpu import build_cpu_sets
 
 
 class _FakeReader(BaseReader):
-    def __init__(self, shards: list[Shard], rows_by_shard_id: dict[str, list[Row]]):
+    def __init__(
+        self,
+        shards: list[Shard],
+        rows_by_shard_id: Mapping[str, Sequence[Row]],
+    ):
         super().__init__(inputs=[])
         self._shards = shards
         self._rows_by_shard_id = rows_by_shard_id

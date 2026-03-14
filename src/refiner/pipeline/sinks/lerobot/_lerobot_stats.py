@@ -9,12 +9,6 @@ import numpy as np
 
 @dataclass(slots=True)
 class _RunningQuantileStats:
-    """Running statistics helper used for per-channel image quantiles.
-
-    The structure keeps lightweight summaries that support incremental updates without
-    storing all samples.
-    """
-
     quantile_list: list[float]
     num_quantile_bins: int = 5000
     _count: int = 0
@@ -67,27 +61,23 @@ class _RunningQuantileStats:
 
             new_max = np.max(batch, axis=0)
             new_min = np.min(batch, axis=0)
-            max_changed = np.any(new_max > self._max)
-            min_changed = np.any(new_min < self._min)
+            needs_rebucket = np.any(new_max > self._max) or np.any(new_min < self._min)
             self._max = np.maximum(self._max, new_max)
             self._min = np.minimum(self._min, new_min)
-            if max_changed or min_changed:
+            if needs_rebucket:
                 self._adjust_histograms()
 
-        prev_count = self._count
         self._count += batch_rows
         if self._mean is None or self._mean_of_squares is None:
             raise RuntimeError("RunningQuantileStats state is not initialized")
 
+        weight = batch_rows / self._count
         batch_mean = np.mean(batch, axis=0)
         batch_mean_of_squares = np.mean(batch**2, axis=0)
-        self._mean += (batch_mean - self._mean) * (batch_rows / max(self._count, 1))
+        self._mean += (batch_mean - self._mean) * weight
         self._mean_of_squares += (batch_mean_of_squares - self._mean_of_squares) * (
-            batch_rows / max(self._count, 1)
+            weight
         )
-
-        if prev_count == 0 and self._histograms is None:
-            return
         self._update_histograms(batch)
 
     def get_statistics(self) -> dict[str, np.ndarray]:
@@ -159,18 +149,22 @@ class _RunningQuantileStats:
 
     def _compute_quantiles(self) -> list[np.ndarray]:
         if self._histograms is None or self._bin_edges is None:
-            return [np.array([]) for _ in self.quantile_list]
+            raise RuntimeError("RunningQuantileStats histograms are not initialized")
 
-        results: list[np.ndarray] = []
+        out: list[np.ndarray] = []
         for q in self.quantile_list:
             target_count = q * self._count
-            q_values = []
-            for hist, edges in zip(self._histograms, self._bin_edges, strict=True):
-                q_values.append(
-                    self._compute_single_quantile(hist, edges, target_count)
+            out.append(
+                np.asarray(
+                    [
+                        self._compute_single_quantile(hist, edges, target_count)
+                        for hist, edges in zip(
+                            self._histograms, self._bin_edges, strict=True
+                        )
+                    ]
                 )
-            results.append(np.array(q_values))
-        return results
+            )
+        return out
 
     @staticmethod
     def _compute_single_quantile(
@@ -196,31 +190,16 @@ class _RunningQuantileStats:
 
 def _feature_stats(
     array: np.ndarray,
-    *,
-    keepdims: bool,
 ) -> dict[str, np.ndarray]:
     if array.ndim == 0:
         array = array.reshape(1)
 
     count = int(array.shape[0])
-    axis = 0
-
-    min_v = np.min(array, axis=axis)
-    max_v = np.max(array, axis=axis)
-    mean_v = np.mean(array, axis=axis)
-    std_v = np.std(array, axis=axis)
-
-    if keepdims:
-        min_v = np.atleast_1d(min_v)
-        max_v = np.atleast_1d(max_v)
-        mean_v = np.atleast_1d(mean_v)
-        std_v = np.atleast_1d(std_v)
-
     return {
-        "min": np.asarray(min_v),
-        "max": np.asarray(max_v),
-        "mean": np.asarray(mean_v),
-        "std": np.asarray(std_v),
+        "min": np.atleast_1d(np.min(array, axis=0)),
+        "max": np.atleast_1d(np.max(array, axis=0)),
+        "mean": np.atleast_1d(np.mean(array, axis=0)),
+        "std": np.atleast_1d(np.std(array, axis=0)),
         "count": np.array([count], dtype=np.int64),
     }
 
@@ -255,14 +234,12 @@ def _aggregate_stats(
         maxs = np.stack([np.asarray(item["max"], dtype=np.float64) for item in items])
 
         total_count = counts.sum(axis=0)
-        counts_b = counts
-        while counts_b.ndim < means.ndim:
-            counts_b = np.expand_dims(counts_b, axis=-1)
+        weights = counts.reshape(counts.shape + (1,) * (means.ndim - counts.ndim))
 
-        total_mean = (means * counts_b).sum(axis=0) / np.maximum(total_count, 1e-12)
+        total_mean = (means * weights).sum(axis=0) / np.maximum(total_count, 1e-12)
         variances = stds**2
         delta = means - total_mean
-        total_var = ((variances + delta**2) * counts_b).sum(axis=0) / np.maximum(
+        total_var = ((variances + delta**2) * weights).sum(axis=0) / np.maximum(
             total_count,
             1e-12,
         )
@@ -284,7 +261,7 @@ def _aggregate_stats(
             q_vals = np.stack(
                 [np.asarray(item[q_key], dtype=np.float64) for item in items]
             )
-            agg[q_key] = (q_vals * counts_b).sum(axis=0) / np.maximum(
+            agg[q_key] = (q_vals * weights).sum(axis=0) / np.maximum(
                 total_count,
                 1e-12,
             )

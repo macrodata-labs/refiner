@@ -1,6 +1,5 @@
-from refiner.media.video.types import DecodedVideo, Video
+from refiner.media.video.types import Video
 
 __all__ = [
     "Video",
-    "DecodedVideo",
 ]

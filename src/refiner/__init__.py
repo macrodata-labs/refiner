@@ -14,6 +14,7 @@ from refiner.pipeline import (
     task,
 )
 from refiner.pipeline.expressions import coalesce, col, if_else, lit
+from refiner.pipeline.sinks.lerobot import LeRobotStatsConfig, LeRobotVideoConfig
 from refiner.worker.metrics.api import (
     log_gauge,
     log_gauges,
@@ -51,4 +52,6 @@ __all__ = [
     "hydrate_media",
     "MediaFile",
     "Video",
+    "LeRobotVideoConfig",
+    "LeRobotStatsConfig",
 ]

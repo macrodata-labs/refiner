@@ -73,7 +73,7 @@ class DataFileSet:
                 return
             if (
                 type(next_fs) is not type(resolved_fs)
-                or next_fs.protocol != resolved_fs.protocol  # type: ignore[attr-defined]
+                or next_fs.protocol != resolved_fs.protocol
             ):
                 raise ValueError(
                     "All inputs must resolve to the same fsspec filesystem/protocol"
@@ -122,7 +122,7 @@ class DataFileSet:
             if isinstance(item, DataFolder):
                 # Treat as a directory spec.
                 _check_fs(item.fs)
-                _add_files(_list_dir(item.path))  # type: ignore[attr-defined]
+                _add_files(_list_dir(item.path))
                 continue
 
             if isinstance(item, PathLike):
@@ -134,7 +134,7 @@ class DataFileSet:
                 )
 
             if resolved_fs is not None:
-                p = resolved_fs._strip_protocol(item)  # type: ignore[attr-defined]
+                p = resolved_fs._strip_protocol(item)
             else:
                 next_fs, p = url_to_fs(item, **storage_options_d)
                 _check_fs(next_fs)

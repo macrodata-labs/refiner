@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import IO, Any, Mapping
+from typing import TYPE_CHECKING, IO, Any
 
 import av
 import numpy as np
@@ -14,31 +14,14 @@ from refiner.pipeline.sinks.lerobot._lerobot_stats import _RunningQuantileStats
 from refiner.pipeline.utils.cache.decoder_cache import get_video_decoder_cache
 from refiner.pipeline.utils.cache.file_cache import get_media_cache
 
+if TYPE_CHECKING:
+    from refiner.pipeline.sinks.lerobot._lerobot_writer import (
+        LeRobotStatsConfig,
+        LeRobotVideoConfig,
+    )
+
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+empty_moov+default_base_moof"
-
-
-class _TrackedOutputFile:
-    def __init__(self, wrapped: IO[bytes], owner: "VideoTrackWriter") -> None:
-        self._wrapped = wrapped
-        self._owner = owner
-
-    def write(self, data: bytes) -> int:
-        written = self._wrapped.write(data)
-        if written is None:
-            written = len(data)
-        self._owner.size_bytes += int(written)
-        return int(written)
-
-    def flush(self) -> None:
-        if hasattr(self._wrapped, "flush"):
-            self._wrapped.flush()
-
-    def close(self) -> None:
-        self._wrapped.close()
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._wrapped, name)
 
 
 @dataclass(slots=True)
@@ -47,26 +30,30 @@ class VideoTrackWriter:
     video_key: str
     file_idx: int
     fps: int
-    config: Mapping[str, Any]
+    config: "LeRobotVideoConfig"
 
     container: Any | None = None
     stream: Any | None = None
-    output_file: Any | None = None
+    output_file: IO[bytes] | None = None
     frames_written: int = 0
     duration_s: float = 0.0
-    size_bytes: int = 0
 
     def __post_init__(self) -> None:
         self.fps = int(self.fps)
+
+    @property
+    def size_bytes(self) -> int:
+        if self.output_file is None:
+            return 0
+        return int(self.output_file.tell())
 
     def open(self, output: IO[bytes]) -> None:
         if self.container is not None:
             return
 
-        tracked_output = _TrackedOutputFile(output, self)
-        self.output_file = tracked_output
+        self.output_file = output
         self.container = av.open(
-            tracked_output,
+            output,
             mode="w",
             format="mp4",
             options={"movflags": _SEGMENTED_MP4_MOVFLAGS},
@@ -79,23 +66,23 @@ class VideoTrackWriter:
             raise RuntimeError("Video writer is not opened")
 
         stream_options: dict[str, str] = {}
-        video_encoder_options = self.config.get("video_encoder_options")
+        video_encoder_options = self.config.encoder_options
         if video_encoder_options:
             for key, value in video_encoder_options.items():
                 stream_options[str(key)] = str(value)
 
-        threads = self.config.get("video_encoder_threads")
+        threads = self.config.encoder_threads
         if threads is not None:
             stream_options.setdefault("threads", str(int(threads)))
 
         stream = self.container.add_stream(
-            str(self.config["video_codec"]),
+            self.config.codec,
             rate=self.fps,
             options=stream_options or None,
         )
         stream.width = int(width)
         stream.height = int(height)
-        stream.pix_fmt = str(self.config["video_pix_fmt"])
+        stream.pix_fmt = self.config.pix_fmt
         self.stream = stream
 
     def write_frame(self, frame: av.VideoFrame) -> None:
@@ -171,12 +158,12 @@ def _update_video_stats_tracker(
 
 def _update_video_stats_if_due(
     *,
-    tracker: _RunningQuantileStats | None,
+    tracker: _RunningQuantileStats,
     frame_index: int,
     sample_stride: int,
     rgb_frame: np.ndarray | None,
 ) -> None:
-    if tracker is None or frame_index % sample_stride != 0:
+    if frame_index % sample_stride != 0:
         return
     if rgb_frame is None:
         return
@@ -189,12 +176,10 @@ def _update_video_stats_if_due(
 
 
 def _video_stats_from_tracker(
-    tracker: _RunningQuantileStats | None,
-) -> dict[str, np.ndarray] | None:
-    if tracker is None:
-        return None
+    tracker: _RunningQuantileStats,
+) -> dict[str, np.ndarray]:
     if tracker.count <= 0:
-        return None
+        return {}
 
     ft_stats = tracker.get_statistics()
     normalized: dict[str, np.ndarray] = {}
@@ -212,8 +197,6 @@ async def _resolve_video_fps(
     default_fps: int | None,
     video_key: str,
 ) -> int:
-    if video.fps is not None:
-        return int(round(float(video.fps)))
     if default_fps is not None:
         return int(round(float(default_fps)))
 
@@ -234,19 +217,16 @@ async def _append_video_segment(
     *,
     writer: VideoTrackWriter,
     video: Video,
-    video_key: str,
     clip_from: float,
     clip_to: float,
-    video_config: Mapping[str, Any],
-) -> tuple[float, dict[str, np.ndarray] | None]:
-    enable_video_stats = bool(video_config.get("enable_video_stats", True))
-    sample_stride = int(video_config.get("video_stats_sample_stride", 1))
-    tracker: _RunningQuantileStats | None = None
-    if enable_video_stats:
-        tracker = _RunningQuantileStats(
-            [0.01, 0.10, 0.50, 0.90, 0.99],
-            num_quantile_bins=int(video_config.get("video_stats_quantile_bins", 500)),
-        )
+    video_config: "LeRobotVideoConfig",
+    stats_config: "LeRobotStatsConfig",
+) -> tuple[float, dict[str, np.ndarray]]:
+    sample_stride = stats_config.sample_stride
+    tracker = _RunningQuantileStats(
+        [0.01, 0.10, 0.50, 0.90, 0.99],
+        num_quantile_bins=stats_config.quantile_bins,
+    )
 
     if isinstance(video.media, DecodedVideo):
         duration_s = _append_video_segment_from_frames(
@@ -260,7 +240,6 @@ async def _append_video_segment(
     duration_s = await _append_video_segment_from_media(
         writer=writer,
         video=video,
-        video_key=video_key,
         clip_from=clip_from,
         clip_to=clip_to,
         tracker=tracker,
@@ -276,18 +255,17 @@ async def _append_video_segment_from_media(
     video: Video,
     clip_from: float,
     clip_to: float,
-    tracker: _RunningQuantileStats | None,
+    tracker: _RunningQuantileStats,
     sample_stride: int,
-    video_key: str,
-    video_config: Mapping[str, Any],
+    video_config: "LeRobotVideoConfig",
 ) -> float:
     selected_frames = 0
     frame_index = 0
     data_file = DataFile.resolve(video.media.uri)
-    cache_name = f"lerobot_writer:{video_key}"
+    cache_name = f"lerobot_writer:{writer.video_key}"
     media_cache = get_media_cache(name=cache_name)
     decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
-    decoder_threads = video_config.get("video_decoder_threads")
+    decoder_threads = video_config.decoder_threads
 
     def _on_frame(frame: av.VideoFrame) -> None:
         nonlocal selected_frames, frame_index
@@ -334,10 +312,10 @@ def _append_video_segment_from_frames(
     *,
     writer: VideoTrackWriter,
     video: DecodedVideo,
-    tracker: _RunningQuantileStats | None,
+    tracker: _RunningQuantileStats,
     sample_stride: int,
 ) -> float:
-    if video.frame_count <= 0:
+    if not video.frames:
         raise ValueError(
             f"Decoded video segment for {video.uri!r} contains no decodable frames."
         )

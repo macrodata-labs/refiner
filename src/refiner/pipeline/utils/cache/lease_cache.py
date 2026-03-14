@@ -122,7 +122,9 @@ class LeaseCache(Generic[K, R]):
 
         for entry in entries:
             if entry.status == "loading":
-                entry.error = RuntimeError("cache was cleared while resource load was in-flight")
+                entry.error = RuntimeError(
+                    "cache was cleared while resource load was in-flight"
+                )
                 continue
             if entry.status == "ready" and entry.resource is not None:
                 self._close_resource(entry.resource)
@@ -161,7 +163,9 @@ class LeaseCache(Generic[K, R]):
             self._close_resource(entry.resource)
 
     def _over_limit_unlocked(self) -> bool:
-        ready_count = sum(1 for entry in self._entries.values() if entry.status == "ready")
+        ready_count = sum(
+            1 for entry in self._entries.values() if entry.status == "ready"
+        )
         if ready_count > self.max_entries:
             return True
         if self.max_weight is not None and self._total_weight > self.max_weight:

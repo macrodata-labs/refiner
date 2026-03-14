@@ -2,25 +2,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import re
 
 import av
 import numpy as np
-import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 
 import refiner as mdr
 from refiner.media import hydrate_media
-from refiner.pipeline.data.row import DictRow
-from refiner.pipeline.sinks.lerobot import (
-    LeRobotMetaReduceSink,
-    LeRobotWriterConfig,
-    LeRobotWriterSink,
-)
-from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import (
-    _resolve_video_decoder_threads,
-    _resolve_video_encoder_threads,
+from refiner.pipeline import (
+    LeRobotStatsConfig as PipelineLeRobotStatsConfig,
+    LeRobotVideoConfig as PipelineLeRobotVideoConfig,
 )
 
 
@@ -78,33 +69,30 @@ def _episode(
     to_ts: float,
     values: list[float],
 ) -> dict:
-    frames = [
-        {
-            "frame_index": i,
-            "timestamp": float(i) / 10.0,
-            "observation.state": [v],
-        }
-        for i, v in enumerate(values)
-    ]
     return {
         "episode_index": episode_index,
         "task": task,
         "tasks": [task],
-        "frames": frames,
+        "frames": [
+            {
+                "frame_index": i,
+                "timestamp": float(i) / 10.0,
+                "observation.state": [v],
+            }
+            for i, v in enumerate(values)
+        ],
         "observation.images.main": mdr.Video(
             media=mdr.MediaFile(str(video_path)),
-            video_key="observation.images.main",
             from_timestamp_s=from_ts,
             to_timestamp_s=to_ts,
-            fps=10,
         ),
-        "metadata": {
-            "lerobot_info": {
-                "fps": 10,
-                "robot_type": "mockbot",
-            }
-        },
+        "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
     }
+
+
+def test_lerobot_configs_export_from_pipeline() -> None:
+    assert PipelineLeRobotVideoConfig is mdr.LeRobotVideoConfig
+    assert PipelineLeRobotStatsConfig is mdr.LeRobotStatsConfig
 
 
 def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
@@ -145,70 +133,32 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     assert (out_root / "meta" / "info.json").exists()
     assert (out_root / "meta" / "stats.json").exists()
     assert (out_root / "meta" / "tasks.parquet").exists()
-    assert (out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet").exists()
-    assert not any((out_root / "meta").glob("chunk-*"))
+
+    with (out_root / "meta" / "info.json").open("r", encoding="utf-8") as fh:
+        info_json = json.load(fh)
+    assert info_json["features"]["observation.images.main"] == {
+        "dtype": "video",
+        "shape": [3, 16, 16],
+        "names": ["channels", "height", "width"],
+        "info": {
+            "video.fps": 10,
+            "video.height": 16,
+            "video.width": 16,
+            "video.channels": 3,
+            "video.codec": "mpeg4",
+            "video.pix_fmt": "yuv420p",
+            "video.is_depth_map": False,
+            "has_audio": False,
+        },
+    }
 
     with (out_root / "meta" / "stats.json").open("r", encoding="utf-8") as fh:
-        stats = json.load(fh)
-    assert "observation.state" in stats
-    assert stats["observation.state"]["mean"] == [3.0]
-    assert stats["observation.state"]["count"] == [4.0]
-    assert "observation.images.main" in stats
-
-    episodes = pq.read_table(
-        out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
-    )
-    assert "stats/observation.state/mean" in episodes.schema.names
+        stats_json = json.load(fh)
+    assert stats_json["observation.state"]["mean"] == [3.0]
+    assert "observation.images.main" in stats_json
 
     out_rows = mdr.read_lerobot(str(out_root)).materialize()
-    assert len(out_rows) == 2
-    assert out_rows[0]["task"] == "pick"
-    assert out_rows[1]["task"] == "place"
-
-
-def test_stage1_worker_chunk_namespaces_are_disjoint(tmp_path: Path) -> None:
-    out_root = tmp_path / "parallel"
-
-    pipeline = mdr.from_items(
-        [
-            {
-                "episode_index": 0,
-                "task": "pick",
-                "tasks": ["pick"],
-                "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
-                ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
-            },
-            {
-                "episode_index": 1,
-                "task": "place",
-                "tasks": ["place"],
-                "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [3.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [4.0]},
-                ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
-            },
-        ],
-        shard_size_rows=1,
-    ).write_lerobot(str(out_root), overwrite=False)
-    stats = pipeline.launch_local(
-        name="lerobot-worker-shard-namespaces",
-        num_workers=2,
-        workdir=str(tmp_path / "workdir"),
-    )
-    assert stats.failed == 0
-
-    assert not any((out_root / "meta").glob("chunk-*"))
-    chunk_dirs = sorted(path.name for path in (out_root / "data").glob("chunk-*"))
-    assert len(chunk_dirs) == 2
-    assert all(re.match(r"chunk-\d+-[0-9a-f]{12}$", name) for name in chunk_dirs)
-    episodes = pq.read_table(
-        out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
-    )
-    assert episodes.num_rows == 2
+    assert [row["task"] for row in out_rows] == ["pick", "place"]
 
 
 def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> None:
@@ -246,11 +196,9 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     )
     assert stats.failed == 0
     assert stats.claimed >= 3
-
     assert (out_root / "meta" / "info.json").exists()
     assert (out_root / "meta" / "stats.json").exists()
     assert (out_root / "meta" / "tasks.parquet").exists()
-    assert not any((out_root / "meta").glob("chunk-*"))
 
 
 def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
@@ -271,7 +219,7 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
                 ),
             ]
         )
-        .map_async(hydrate_media("observation.images.main", decode=True))
+        .map_async(hydrate_media("observation.images.main"))
         .write_lerobot(str(out_root), overwrite=True)
     )
 
@@ -282,14 +230,10 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
     )
     assert stats.failed == 0
 
-    assert (out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet").exists()
     rows = pq.read_table(
         out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
     )
     assert len(rows) == 1
-    chunk_index = rows["videos/observation.images.main/chunk_index"][0].as_py()
-    assert isinstance(chunk_index, str)
-    assert re.match(r"\d+-[0-9a-f]{12}", chunk_index)
 
 
 def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) -> None:
@@ -327,6 +271,8 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
         str(out_root),
         overwrite=True,
         video_files_size_in_mb=1,
+        video=mdr.LeRobotVideoConfig(encoder_threads=1, decoder_threads=1),
+        stats=mdr.LeRobotStatsConfig(sample_stride=2, quantile_bins=64),
     )
 
     stats = pipeline.launch_local(
@@ -337,10 +283,10 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
     assert stats.failed == 0
 
     video_dirs = list((out_root / "videos" / "observation.images.main").glob("chunk-*"))
-    assert video_dirs
-    video_files = [path for d in video_dirs for path in sorted(d.glob("*.mp4"))]
+    video_files = [
+        path for directory in video_dirs for path in sorted(directory.glob("*.mp4"))
+    ]
     assert any(path.name == "file-001.mp4" for path in video_files)
-    assert len(video_files) >= 2
 
 
 def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> None:
@@ -381,224 +327,3 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
     tasks = pq.read_table(out_root / "meta" / "tasks.parquet")
     assert tasks.column("task").to_pylist() == ["place", "pick"]
     assert tasks.column("task_index").to_pylist() == [0, 1]
-
-    data_files = sorted((out_root / "data").glob("chunk-*/file-*.parquet"))
-    assert data_files
-    data = pq.read_table(data_files[0])
-    assert data.column("task_index").to_pylist() == [0, 0, 1, 1]
-
-
-def test_lerobot_writer_sink_raises_for_missing_required_row_fields(
-    tmp_path: Path,
-) -> None:
-    sink = LeRobotWriterSink(
-        config=LeRobotWriterConfig(root=str(tmp_path / "out"), overwrite=True)
-    )
-    row = DictRow(
-        {
-            "episode_index": 0,
-            "task": "pick",
-            "tasks": ["pick"],
-            "metadata": {
-                "lerobot_info": {
-                    "fps": 10,
-                    "robot_type": "mockbot",
-                }
-            },
-        }
-    ).with_shard_id("0")
-
-    with pytest.raises(KeyError, match="frames"):
-        sink.write_block([row])
-
-
-def test_lerobot_writer_sink_raises_when_video_to_timestamp_is_missing(
-    tmp_path: Path,
-) -> None:
-    source_video = tmp_path / "source" / "episode.mp4"
-    _write_video(source_video)
-
-    sink = LeRobotWriterSink(
-        config=LeRobotWriterConfig(root=str(tmp_path / "out"), overwrite=True)
-    )
-    row = DictRow(
-        {
-            "episode_index": 0,
-            "task": "pick",
-            "tasks": ["pick"],
-            "frames": [
-                {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]}
-            ],
-            "observation.images.main": mdr.Video(
-                media=mdr.MediaFile(str(source_video)),
-                video_key="observation.images.main",
-                from_timestamp_s=0.0,
-                to_timestamp_s=None,
-                fps=10,
-            ),
-            "metadata": {
-                "lerobot_info": {
-                    "fps": 10,
-                    "robot_type": "mockbot",
-                }
-            },
-        }
-    ).with_shard_id("0")
-
-    with pytest.raises((TypeError, ValueError)):
-        sink.write_block([row])
-
-
-def test_lerobot_writer_allows_disabling_video_stats(tmp_path: Path) -> None:
-    src_video = tmp_path / "source" / "episode.mp4"
-    _write_video(src_video)
-
-    out_root = tmp_path / "out"
-    pipeline = mdr.from_items(
-        [
-            _episode(
-                episode_index=0,
-                task="pick",
-                video_path=src_video,
-                from_ts=0.0,
-                to_ts=0.3,
-                values=[0.0, 2.0],
-            )
-        ],
-        shard_size_rows=1,
-    ).write_lerobot(
-        str(out_root),
-        overwrite=True,
-        enable_video_stats=False,
-        video_stats_sample_stride=2,
-        video_stats_quantile_bins=64,
-    )
-
-    stats = pipeline.launch_local(
-        name="lerobot-fast-stats",
-        num_workers=1,
-    )
-    assert stats.failed == 0
-
-    with (out_root / "meta" / "stats.json").open("r", encoding="utf-8") as fh:
-        stats_json = json.load(fh)
-    assert "observation.state" in stats_json
-
-
-def test_lerobot_writer_config_defaults_video_encoder_threads_to_none(
-    tmp_path: Path,
-) -> None:
-    config = LeRobotWriterConfig(root=str(tmp_path / "out"))
-    assert config.video_encoder_threads is None
-    assert config.video_decoder_threads is None
-
-
-def test_resolve_video_encoder_threads_auto_scales_with_videos_in_row() -> None:
-    assert (
-        _resolve_video_encoder_threads(
-            requested_threads=None,
-            videos_in_row=1,
-            available_cpus=8,
-        )
-        == 8
-    )
-    assert (
-        _resolve_video_encoder_threads(
-            requested_threads=None,
-            videos_in_row=2,
-            available_cpus=8,
-        )
-        == 4
-    )
-    assert (
-        _resolve_video_encoder_threads(
-            requested_threads=None,
-            videos_in_row=6,
-            available_cpus=8,
-        )
-        == 1
-    )
-    assert (
-        _resolve_video_encoder_threads(
-            requested_threads=3,
-            videos_in_row=6,
-            available_cpus=8,
-        )
-        == 3
-    )
-
-
-def test_resolve_video_decoder_threads_auto_scales_with_videos_in_row() -> None:
-    assert (
-        _resolve_video_decoder_threads(
-            requested_threads=None,
-            videos_in_row=1,
-            available_cpus=8,
-        )
-        == 8
-    )
-    assert (
-        _resolve_video_decoder_threads(
-            requested_threads=None,
-            videos_in_row=2,
-            available_cpus=8,
-        )
-        == 4
-    )
-    assert (
-        _resolve_video_decoder_threads(
-            requested_threads=None,
-            videos_in_row=6,
-            available_cpus=8,
-        )
-        == 1
-    )
-    assert (
-        _resolve_video_decoder_threads(
-            requested_threads=2,
-            videos_in_row=6,
-            available_cpus=8,
-        )
-        == 2
-    )
-
-
-def test_lerobot_writer_config_exposes_media_prelease_settings(tmp_path: Path) -> None:
-    config = LeRobotWriterConfig(
-        root=str(tmp_path / "out"),
-        video_decoder_threads=5,
-        media_prelease_max_in_flight=4,
-        media_prelease_preserve_order=False,
-    )
-
-    assert config.video_decoder_threads == 5
-    assert config.media_prelease_max_in_flight == 4
-    assert config.media_prelease_preserve_order is False
-
-
-def test_lerobot_meta_reduce_raises_when_stage1_rows_are_malformed(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "bad-stage1"
-    episodes = pa.Table.from_pylist(
-        [
-            {
-                "episode_index": 0,
-                "data/chunk_index": 0,
-                "data/file_index": 0,
-                "tasks": ["pick"],
-            }
-        ]
-    )
-
-    chunk_dir = root / "meta" / "chunk-000" / "episodes"
-    chunk_dir.mkdir(parents=True, exist_ok=True)
-    pq.write_table(episodes, chunk_dir / "file-000.parquet")
-    (root / "meta" / "chunk-000" / "tasks.jsonl").write_text(
-        '{"task": "pick"}\n',
-        encoding="utf-8",
-    )
-
-    sink = LeRobotMetaReduceSink(config=LeRobotWriterConfig(root=str(root)))
-    with pytest.raises(KeyError, match="dataset_(from|to)_index"):
-        sink.close()

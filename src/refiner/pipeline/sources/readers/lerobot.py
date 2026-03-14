@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import posixpath
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -170,7 +170,7 @@ class LeRobotEpisodeReader(ParquetReader):
             patch["task"] = tasks[0]
 
         for video_key in self._video_keys:
-            video = self._build_video(episode=row, frames=frames, video_key=video_key)
+            video = self._build_video(episode=row, video_key=video_key)
             if video is not None:
                 patch[video_key] = video
 
@@ -189,7 +189,6 @@ class LeRobotEpisodeReader(ParquetReader):
         self,
         *,
         episode: Mapping[str, Any],
-        frames: Sequence[Row],
         video_key: str,
     ) -> Video | None:
         chunk_key = f"videos/{video_key}/chunk_index"
@@ -206,56 +205,29 @@ class LeRobotEpisodeReader(ParquetReader):
             file_idx=file_idx,
         )
         uri = posixpath.join(self._root, rel)
-        first = frames[0] if frames else {}
         from_timestamp = episode.get(f"videos/{video_key}/from_timestamp")
         to_timestamp = episode.get(f"videos/{video_key}/to_timestamp")
         if to_timestamp is None:
             return None
 
-        episode_index = episode.get("episode_index")
-        frame_index = first.get("frame_index") if isinstance(first, Mapping) else None
-        timestamp = first.get("timestamp") if isinstance(first, Mapping) else None
         try:
-            episode_index = int(episode_index) if episode_index is not None else None
-        except (TypeError, ValueError):
-            episode_index = None
-        try:
-            frame_index = int(frame_index) if frame_index is not None else None
-        except (TypeError, ValueError):
-            frame_index = None
-        try:
-            timestamp = float(timestamp) if timestamp is not None else None
-        except (TypeError, ValueError):
-            timestamp = None
-
-        try:
-            from_timestamp = (
-                float(from_timestamp) if from_timestamp is not None else None
+            from_timestamp_s = (
+                float(from_timestamp) if from_timestamp is not None else 0.0
             )
         except (TypeError, ValueError):
-            from_timestamp = None
+            from_timestamp_s = 0.0
         try:
-            to_timestamp = float(to_timestamp) if to_timestamp is not None else None
+            to_timestamp_s = float(to_timestamp)
         except (TypeError, ValueError):
-            to_timestamp = None
+            return None
 
         return Video(
             media=MediaFile(uri),
-            video_key=video_key,
-            relative_path=rel,
-            episode_index=episode_index,
-            frame_index=frame_index,
-            timestamp_s=timestamp,
-            from_timestamp_s=from_timestamp,
-            to_timestamp_s=to_timestamp,
-            chunk_index=chunk,
-            file_index=file_idx,
-            fps=self._fps,
+            from_timestamp_s=from_timestamp_s,
+            to_timestamp_s=to_timestamp_s,
         )
 
-    async def _load_episode_frames(
-        self, episode: Mapping[str, Any]
-    ) -> list[Row]:
+    async def _load_episode_frames(self, episode: Mapping[str, Any]) -> list[Row]:
         chunk = episode["data/chunk_index"]
         file_idx = episode["data/file_index"]
         if chunk is None or file_idx is None:
@@ -292,7 +264,9 @@ class LeRobotEpisodeReader(ParquetReader):
             return []
 
         names = tuple(str(name) for name in episode_table.column_names)
-        columns = tuple(episode_table.column(i) for i in range(episode_table.num_columns))
+        columns = tuple(
+            episode_table.column(i) for i in range(episode_table.num_columns)
+        )
         index_by_name = {name: i for i, name in enumerate(names)}
 
         return [

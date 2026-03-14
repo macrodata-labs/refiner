@@ -105,28 +105,6 @@ class _CachedFileContext:
             self._lease.release()
             self._lease = None
 
-    def __enter__(self) -> str:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            self._lease = asyncio.run(self._cache.acquire_file_lease(self._file))
-            return self._lease.path
-
-        raise RuntimeError(
-            "Cannot use sync cache context manager while an event loop is running. "
-            "Use 'async with cache.cached(...)' instead."
-        )
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: object | None,
-    ) -> None:
-        if self._lease is not None:
-            self._lease.release()
-            self._lease = None
-
 
 class MediaLocalCache:
     """Named local file cache with in-flight download dedupe and LRU eviction."""

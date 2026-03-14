@@ -48,7 +48,7 @@ import refiner as mdr
 pipeline = (
     mdr.read_lerobot("s3://bucket/dataset")
     .map_async(
-        mdr.hydrate_media("observation.images.main", decode=True),
+        mdr.hydrate_media("observation.images.main"),
         max_in_flight=8,
     )
 )
@@ -57,7 +57,6 @@ pipeline = (
 `hydrate_media(...)` currently accepts `Video` values only. For LeRobot inputs,
 that means clip-aligned hydration is explicit and decode-backed:
 
-- pass `decode=True`
 - use `.map_async(...)` to control concurrency
 - expect decoded frames in `video.media`
 
@@ -65,11 +64,12 @@ Rows are yielded in input order unless you explicitly choose otherwise on the as
 
 ## LeRobot Writer Tuning
 
-`write_lerobot(...)` keeps video threading explicit:
+`write_lerobot(...)` keeps video tuning grouped:
 
-- `video_encoder_threads=<int>` and `video_decoder_threads=<int>` force exact FFmpeg thread counts.
-- `video_encoder_threads=None` and `video_decoder_threads=None` auto-resolve once per shard from the number of video features and the worker CPU budget.
-- More concurrent video tracks per row generally means fewer threads per track.
+- `video=mdr.LeRobotVideoConfig(...)` groups codec, pixel format, encoder threads, decoder threads, and encoder options.
+- `stats=mdr.LeRobotStatsConfig(...)` groups clip sampling stride and quantile bin count.
+- Video stats are always written; use a larger `stats.sample_stride` when you want cheaper sampling.
+- Video entries in `meta/info.json.features` are written in LeRobot-style channel-first form with an `info` block for fps, size, channels, codec, and pixel format.
 
 ## Internal Notes
 

@@ -29,7 +29,12 @@ from refiner.pipeline.steps import (
 from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
 from refiner.pipeline.sources import BaseSource, CsvReader, JsonlReader, ParquetReader
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
-from refiner.pipeline.sinks.lerobot import LeRobotWriterConfig, LeRobotWriterSink
+from refiner.pipeline.sinks.lerobot import (
+    LeRobotStatsConfig,
+    LeRobotVideoConfig,
+    LeRobotWriterConfig,
+    LeRobotWriterSink,
+)
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data.row import Row
@@ -349,14 +354,8 @@ class RefinerPipeline:
         chunk_size: int = 1000,
         data_files_size_in_mb: int = 100,
         video_files_size_in_mb: int = 200,
-        video_codec: str = "mpeg4",
-        video_pix_fmt: str = "yuv420p",
-        video_encoder_threads: int | None = None,
-        video_decoder_threads: int | None = None,
-        video_encoder_options: Mapping[str, str] | None = None,
-        enable_video_stats: bool = True,
-        video_stats_sample_stride: int = 1,
-        video_stats_quantile_bins: int = 500,
+        video: LeRobotVideoConfig | None = None,
+        stats: LeRobotStatsConfig | None = None,
         media_prelease_max_in_flight: int = 10,
         media_prelease_preserve_order: bool = True,
     ) -> "RefinerPipeline":
@@ -369,14 +368,8 @@ class RefinerPipeline:
             chunk_size=chunk_size,
             data_files_size_in_mb=data_files_size_in_mb,
             video_files_size_in_mb=video_files_size_in_mb,
-            video_codec=video_codec,
-            video_pix_fmt=video_pix_fmt,
-            video_encoder_threads=video_encoder_threads,
-            video_decoder_threads=video_decoder_threads,
-            video_encoder_options=video_encoder_options,
-            enable_video_stats=enable_video_stats,
-            video_stats_sample_stride=video_stats_sample_stride,
-            video_stats_quantile_bins=video_stats_quantile_bins,
+            video=video if video is not None else LeRobotVideoConfig(),
+            stats=stats if stats is not None else LeRobotStatsConfig(),
             media_prelease_max_in_flight=media_prelease_max_in_flight,
             media_prelease_preserve_order=media_prelease_preserve_order,
         )

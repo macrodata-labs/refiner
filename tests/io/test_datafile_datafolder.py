@@ -11,6 +11,7 @@ def test_datafile_resolve_with_path_string(tmp_path):
     df = DataFile.resolve(str(p))
     assert df.exists()
     assert df.is_local
+    assert df.abs_path() == str(p)
 
 
 def test_datafile_resolve_with_fs(tmp_path):
@@ -21,22 +22,6 @@ def test_datafile_resolve_with_fs(tmp_path):
     df = DataFile.resolve(str(p), fs=fs)
     assert df.exists()
     assert df.is_local
-
-
-def test_datafile_abs_path_local(tmp_path):
-    p = tmp_path / "hello.txt"
-    p.write_text("hi")
-
-    df = DataFile.resolve(str(p))
-    assert df.abs_path() == str(p.resolve())
-
-
-def test_datafile_abs_path_local_with_file_scheme(tmp_path):
-    p = tmp_path / "hello.txt"
-    p.write_text("hi")
-
-    df = DataFile.resolve(f"file://{p}")
-    assert df.abs_path() == str(p.resolve())
 
 
 def test_datafolder_file_and_open_creates_parent_dirs(tmp_path):

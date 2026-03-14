@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 import pyarrow as pa
@@ -28,6 +28,37 @@ _DEFAULT_VIDEO_FILE_SIZE_IN_MB = 200
 
 
 @dataclass(frozen=True, slots=True)
+class LeRobotVideoConfig:
+    codec: str = "mpeg4"
+    pix_fmt: str = "yuv420p"
+    encoder_threads: int | None = None
+    decoder_threads: int | None = None
+    encoder_options: Mapping[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.codec, str) or not self.codec.strip():
+            raise ValueError("video.codec must be a non-empty string")
+        if not isinstance(self.pix_fmt, str) or not self.pix_fmt.strip():
+            raise ValueError("video.pix_fmt must be a non-empty string")
+        if self.encoder_threads is not None and self.encoder_threads <= 0:
+            raise ValueError("video.encoder_threads must be > 0 when provided")
+        if self.decoder_threads is not None and self.decoder_threads <= 0:
+            raise ValueError("video.decoder_threads must be > 0 when provided")
+
+
+@dataclass(frozen=True, slots=True)
+class LeRobotStatsConfig:
+    sample_stride: int = 1
+    quantile_bins: int = 500
+
+    def __post_init__(self) -> None:
+        if self.sample_stride <= 0:
+            raise ValueError("stats.sample_stride must be > 0")
+        if self.quantile_bins <= 1:
+            raise ValueError("stats.quantile_bins must be > 1")
+
+
+@dataclass(frozen=True, slots=True)
 class LeRobotWriterConfig:
     root: str
     fs: AbstractFileSystem | None = None
@@ -36,14 +67,8 @@ class LeRobotWriterConfig:
     chunk_size: int = _DEFAULT_CHUNK_SIZE
     data_files_size_in_mb: int = _DEFAULT_DATA_FILE_SIZE_IN_MB
     video_files_size_in_mb: int = _DEFAULT_VIDEO_FILE_SIZE_IN_MB
-    video_codec: str = "mpeg4"
-    video_pix_fmt: str = "yuv420p"
-    video_encoder_threads: int | None = None
-    video_decoder_threads: int | None = None
-    video_encoder_options: Mapping[str, str] | None = None
-    enable_video_stats: bool = True
-    video_stats_sample_stride: int = 1
-    video_stats_quantile_bins: int = 500
+    video: LeRobotVideoConfig = field(default_factory=LeRobotVideoConfig)
+    stats: LeRobotStatsConfig = field(default_factory=LeRobotStatsConfig)
     media_prelease_max_in_flight: int = 10
     media_prelease_preserve_order: bool = True
 
@@ -54,18 +79,6 @@ class LeRobotWriterConfig:
             raise ValueError("data_files_size_in_mb must be > 0")
         if self.video_files_size_in_mb <= 0:
             raise ValueError("video_files_size_in_mb must be > 0")
-        if not isinstance(self.video_codec, str) or not self.video_codec.strip():
-            raise ValueError("video_codec must be a non-empty string")
-        if not isinstance(self.video_pix_fmt, str) or not self.video_pix_fmt.strip():
-            raise ValueError("video_pix_fmt must be a non-empty string")
-        if self.video_encoder_threads is not None and self.video_encoder_threads <= 0:
-            raise ValueError("video_encoder_threads must be > 0 when provided")
-        if self.video_decoder_threads is not None and self.video_decoder_threads <= 0:
-            raise ValueError("video_decoder_threads must be > 0 when provided")
-        if self.video_stats_sample_stride <= 0:
-            raise ValueError("video_stats_sample_stride must be > 0")
-        if self.video_stats_quantile_bins <= 1:
-            raise ValueError("video_stats_quantile_bins must be > 1")
         if self.media_prelease_max_in_flight <= 0:
             raise ValueError("media_prelease_max_in_flight must be > 0")
 
@@ -153,6 +166,8 @@ class LeRobotWriterSink(BaseSink):
 
 
 __all__ = [
+    "LeRobotStatsConfig",
+    "LeRobotVideoConfig",
     "LeRobotWriterConfig",
     "LeRobotWriterSink",
 ]

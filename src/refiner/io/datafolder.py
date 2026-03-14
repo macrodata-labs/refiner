@@ -76,7 +76,7 @@ class DataFolder(DirFileSystem):
         # simple string path
         if isinstance(data, str):
             if fs is not None:
-                path = fs._strip_protocol(data)  # type: ignore[attr-defined]
+                path = fs._strip_protocol(data)
                 return cls(path, fs=fs)
             return cls(data, **dict(storage_options or {}))
         raise TypeError("You must pass a DataFolder instance, str path, or PathLike")

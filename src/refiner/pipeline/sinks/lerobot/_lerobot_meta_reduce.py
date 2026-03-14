@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -217,42 +217,22 @@ class _LeRobotMetaReducer:
         }
 
     def _cleanup_stage1_chunks(self) -> None:
-        root_meta = self.folder.file("meta").path
-        for abs_path in self.folder.fs.glob(f"{root_meta}/chunk-*"):
+        for rel_path in self._stage1_matches("meta/chunk-*"):
             try:
-                self.folder.fs.rm(abs_path, recursive=True)
+                self.folder.rm(rel_path, recursive=True)
             except FileNotFoundError:
                 continue
 
     def _iter_stage1_episode_files(self) -> list[str]:
-        return self._iter_stage1_files(
-            predicate=lambda abs_path: "/episodes/file-" in abs_path
-            and abs_path.endswith(".parquet"),
-        )
+        return self._stage1_matches("meta/chunk-*/episodes/file-*.parquet")
 
     def _iter_stage1_jsonl_files(self, *, filename: str) -> list[str]:
-        return self._iter_stage1_files(
-            predicate=lambda abs_path: abs_path.endswith(f"/{filename}"),
-        )
+        return self._stage1_matches(f"meta/chunk-*/{filename}")
 
-    def _iter_stage1_files(
-        self,
-        *,
-        predicate: Callable[[str], bool],
-    ) -> list[str]:
-        root_meta = self.folder.file("meta").path
-        if not self.folder.fs.exists(root_meta):
-            return []
-
+    def _stage1_matches(self, pattern: str) -> list[str]:
         root = self.folder.path.rstrip("/")
         prefix = f"{root}/"
-        matches: list[str] = []
-        for abs_path in self.folder.fs.find(root_meta):
-            if "/chunk-" not in abs_path:
-                continue
-            if not bool(predicate(abs_path)):
-                continue
-            rel_path = abs_path[len(prefix) :] if abs_path.startswith(prefix) else abs_path
-            matches.append(rel_path)
-        matches.sort()
-        return matches
+        return sorted(
+            path[len(prefix) :] if path.startswith(prefix) else path
+            for path in self.folder.fs.glob(self.folder._join(pattern))
+        )

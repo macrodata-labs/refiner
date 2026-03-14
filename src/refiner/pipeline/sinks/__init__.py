@@ -2,6 +2,8 @@ from refiner.pipeline.sinks.base import BaseSink, NullSink
 from refiner.pipeline.sinks.jsonl import JsonlSink
 from refiner.pipeline.sinks.lerobot import (
     LeRobotMetaReduceSink,
+    LeRobotStatsConfig,
+    LeRobotVideoConfig,
     LeRobotWriterConfig,
     LeRobotWriterSink,
 )
@@ -12,6 +14,8 @@ __all__ = [
     "NullSink",
     "JsonlSink",
     "LeRobotMetaReduceSink",
+    "LeRobotStatsConfig",
+    "LeRobotVideoConfig",
     "LeRobotWriterConfig",
     "LeRobotWriterSink",
     "ParquetSink",
