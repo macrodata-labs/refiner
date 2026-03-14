@@ -197,7 +197,9 @@ def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
     }
 
 
-def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(monkeypatch) -> None:
+def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
+    monkeypatch,
+) -> None:
     captured: dict[str, object] = {}
     secret = "super-secret-value"
 

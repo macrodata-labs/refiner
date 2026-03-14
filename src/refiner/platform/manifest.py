@@ -18,7 +18,9 @@ _REDACTION_PLACEHOLDER = "REDACTED_SECRET"
 def _redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
     redacted = text
     # Replace longer secrets first so substring overlaps do not leak suffixes.
-    for secret_value in sorted(secret_values, key=lambda value: len(value), reverse=True):
+    for secret_value in sorted(
+        secret_values, key=lambda value: len(value), reverse=True
+    ):
         if secret_value != "":
             redacted = redacted.replace(secret_value, _REDACTION_PLACEHOLDER)
     return redacted
@@ -31,11 +33,13 @@ def _redact_captured_strings(value: Any, *, secret_values: Sequence[str]) -> Any
         return _redact_captured_text(value, secret_values=secret_values)
     if isinstance(value, list):
         return [
-            _redact_captured_strings(item, secret_values=secret_values) for item in value
+            _redact_captured_strings(item, secret_values=secret_values)
+            for item in value
         ]
     if isinstance(value, tuple):
         return tuple(
-            _redact_captured_strings(item, secret_values=secret_values) for item in value
+            _redact_captured_strings(item, secret_values=secret_values)
+            for item in value
         )
     if isinstance(value, dict):
         return {

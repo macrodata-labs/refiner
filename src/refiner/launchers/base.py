@@ -113,7 +113,9 @@ class BaseLauncher(ABC):
             default_num_workers=default_num_workers,
         )
 
-    def _compiled_plan(self, stages: list[PlannedStage] | None = None) -> dict[str, object]:
+    def _compiled_plan(
+        self, stages: list[PlannedStage] | None = None
+    ) -> dict[str, object]:
         return compile_planned_stages(stages or self._planned_stages())
 
     def _run_manifest(self) -> dict[str, object]:
