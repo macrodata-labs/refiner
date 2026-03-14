@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from refiner.platform.client import (
     CloudRunCreateRequest,
     CloudRuntimeConfig,
     StagePayload,
+    serialize_pipeline_inline,
 )
-from refiner.platform.client import serialize_pipeline_inline
 from refiner.platform.manifest import _redact_captured_strings
 
 from .base import BaseLauncher
@@ -76,27 +76,6 @@ class CloudLauncher(BaseLauncher):
             resolved[name] = str(value)
         return resolved
 
-    def _redact_request(
-        self,
-        request: CloudRunCreateRequest,
-        *,
-        secret_values: tuple[str, ...],
-    ) -> CloudRunCreateRequest:
-        if not secret_values:
-            return request
-        return CloudRunCreateRequest(
-            name=request.name,
-            plan=_redact_captured_strings(request.plan, secret_values=secret_values),
-            stage_payloads=request.stage_payloads,
-            manifest=(
-                _redact_captured_strings(request.manifest, secret_values=secret_values)
-                if request.manifest is not None
-                else None
-            ),
-            sync_local_dependencies=request.sync_local_dependencies,
-            secrets=request.secrets,
-        )
-
     def launch(self) -> CloudLaunchResult:
         try:
             client = self._require_platform_client()
@@ -107,7 +86,9 @@ class CloudLauncher(BaseLauncher):
         stages = self._planned_stages()
         request = CloudRunCreateRequest(
             name=self.name,
-            plan=self._compiled_plan(stages),
+            plan=_redact_captured_strings(
+                self._compiled_plan(stages), secret_values=secret_values
+            ),
             stage_payloads=[
                 StagePayload(
                     stage_index=stage.index,
@@ -121,11 +102,12 @@ class CloudLauncher(BaseLauncher):
                 )
                 for stage in stages
             ],
-            manifest=self._run_manifest(),
+            manifest=_redact_captured_strings(
+                self._run_manifest(), secret_values=secret_values
+            ),
             sync_local_dependencies=self.sync_local_dependencies,
             secrets=resolved_secrets,
         )
-        request = self._redact_request(request, secret_values=secret_values)
         resp = client.cloud_submit_job(request=request)
         self._info(
             f"Track job here: {self._job_tracking_url(client=client, job_id=resp.job_id)}"
