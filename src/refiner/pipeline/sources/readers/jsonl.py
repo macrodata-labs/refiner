@@ -47,54 +47,56 @@ class JsonlReader(BaseReader):
     def list_shards(self) -> list[Shard]:
         shards: list[Shard] = []
         global_ordinal = 0
-        for source_index, file in enumerate(self.source_files):
-            if not is_splittable_by_bytes(file.fs, file.path):
-                shards.append(
-                    Shard(
-                        path=file.path,
-                        start=0,
-                        end=-1,
-                        source_index=source_index,
-                        global_ordinal=global_ordinal,
+        for source_index, files in enumerate(self.fileset.expand_sources()):
+            for file in files:
+                path = file.abs_path()
+                if not is_splittable_by_bytes(file.fs, file.path):
+                    shards.append(
+                        Shard(
+                            path=path,
+                            start=0,
+                            end=-1,
+                            source_index=source_index,
+                            global_ordinal=global_ordinal,
+                        )
                     )
-                )
-                global_ordinal += 1
-                continue
+                    global_ordinal += 1
+                    continue
 
-            size = self.fileset.size(source_index)
-            if size <= self.target_shard_bytes:
-                shards.append(
-                    Shard(
-                        path=file.path,
-                        start=0,
-                        end=size,
-                        source_index=source_index,
-                        global_ordinal=global_ordinal,
+                size = self.fileset.size(source_index, path)
+                if size <= self.target_shard_bytes:
+                    shards.append(
+                        Shard(
+                            path=path,
+                            start=0,
+                            end=size,
+                            source_index=source_index,
+                            global_ordinal=global_ordinal,
+                        )
                     )
-                )
-                global_ordinal += 1
-                continue
+                    global_ordinal += 1
+                    continue
 
-            start = 0
-            while start < size:
-                end = min(size, start + self.target_shard_bytes)
-                shards.append(
-                    Shard(
-                        path=file.path,
-                        start=start,
-                        end=end,
-                        source_index=source_index,
-                        global_ordinal=global_ordinal,
+                start = 0
+                while start < size:
+                    end = min(size, start + self.target_shard_bytes)
+                    shards.append(
+                        Shard(
+                            path=path,
+                            start=start,
+                            end=end,
+                            source_index=source_index,
+                            global_ordinal=global_ordinal,
+                        )
                     )
-                )
-                global_ordinal += 1
-                start = end
+                    global_ordinal += 1
+                    start = end
 
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         for part in shard.parts:
-            source = self.source_files[part.source_index]
+            source = self._source_file(part.source_index, part.path)
             if part.end == -1:
                 with source.open(
                     mode="rb",
@@ -109,7 +111,7 @@ class JsonlReader(BaseReader):
                 continue
 
             fh, _ = self._get_file_handle(source, mode="rb")
-            size = self.fileset.size(part.source_index)
+            size = self.fileset.size(part.source_index, part.path)
             aligned = align_byte_range_to_newlines(
                 fh, start=part.start, end=part.end, size=size
             )

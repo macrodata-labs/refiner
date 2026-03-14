@@ -98,108 +98,109 @@ class CsvReader(BaseReader):
         """
         shards: list[Shard] = []
         global_ordinal = 0
-        for source_index, file in enumerate(self.source_files):
-            if not is_splittable_by_bytes(file.fs, file.path):
-                # one shard per file
-                shards.append(
-                    Shard(
-                        path=file.path,
-                        start=0,
-                        end=-1,
-                        source_index=source_index,
-                        global_ordinal=global_ordinal,
-                    )
-                )
-                global_ordinal += 1
-                continue
-
-            size = self.fileset.size(source_index)
-            if size <= self.target_shard_bytes:
-                shards.append(
-                    Shard(
-                        path=file.path,
-                        start=0,
-                        end=size,
-                        source_index=source_index,
-                        global_ordinal=global_ordinal,
-                    )
-                )
-                global_ordinal += 1
-                continue
-
-            mode = self.sharding_mode
-            if self.multiline_rows and mode == "bytes_lazy":
-                mode = "scan"
-
-            if mode == "bytes_lazy":
-                start = 0
-                while start < size:
-                    end = min(size, start + self.target_shard_bytes)
+        for source_index, files in enumerate(self.fileset.expand_sources()):
+            for file in files:
+                path = file.abs_path()
+                if not is_splittable_by_bytes(file.fs, file.path):
                     shards.append(
                         Shard(
-                            path=file.path,
-                            start=start,
-                            end=end,
+                            path=path,
+                            start=0,
+                            end=-1,
                             source_index=source_index,
                             global_ordinal=global_ordinal,
                         )
                     )
                     global_ordinal += 1
-                    start = end
-            else:
-                # Streaming scan to find cut points.
-                with file.open(mode="rb") as f:
-                    shard_start = 0
-                    pos = 0
-                    next_cut_at = self.target_shard_bytes
+                    continue
 
-                    in_quotes = False
-                    buf = f.read(1024 * 1024)
-                    while buf:
-                        i = 0
-                        n = len(buf)
-                        while i < n:
-                            b = buf[i]
-                            if self.multiline_rows:
-                                if b == 34:  # ord('"')
-                                    if in_quotes and i + 1 < n and buf[i + 1] == 34:
-                                        i += 2
-                                        pos += 2
-                                        continue
-                                    in_quotes = not in_quotes
-                            if b == 10 and (
-                                not self.multiline_rows or not in_quotes
-                            ):  # '\n'
-                                # newline ends a record in non-multiline mode, or ends a record when not in quotes.
-                                if pos + 1 >= next_cut_at:
-                                    cut = pos + 1  # start next shard after newline
-                                    shards.append(
-                                        Shard(
-                                            path=file.path,
-                                            start=shard_start,
-                                            end=cut,
-                                            source_index=source_index,
-                                            global_ordinal=global_ordinal,
-                                        )
-                                    )
-                                    global_ordinal += 1
-                                    shard_start = cut
-                                    next_cut_at = shard_start + self.target_shard_bytes
-                            i += 1
-                            pos += 1
-                        buf = f.read(1024 * 1024)
+                size = self.fileset.size(source_index, path)
+                if size <= self.target_shard_bytes:
+                    shards.append(
+                        Shard(
+                            path=path,
+                            start=0,
+                            end=size,
+                            source_index=source_index,
+                            global_ordinal=global_ordinal,
+                        )
+                    )
+                    global_ordinal += 1
+                    continue
 
-                    if shard_start < size:
+                mode = self.sharding_mode
+                if self.multiline_rows and mode == "bytes_lazy":
+                    mode = "scan"
+
+                if mode == "bytes_lazy":
+                    start = 0
+                    while start < size:
+                        end = min(size, start + self.target_shard_bytes)
                         shards.append(
                             Shard(
-                                path=file.path,
-                                start=shard_start,
-                                end=size,
+                                path=path,
+                                start=start,
+                                end=end,
                                 source_index=source_index,
                                 global_ordinal=global_ordinal,
                             )
                         )
                         global_ordinal += 1
+                        start = end
+                else:
+                    with file.open(mode="rb") as f:
+                        shard_start = 0
+                        pos = 0
+                        next_cut_at = self.target_shard_bytes
+
+                        in_quotes = False
+                        buf = f.read(1024 * 1024)
+                        while buf:
+                            i = 0
+                            n = len(buf)
+                            while i < n:
+                                b = buf[i]
+                                if self.multiline_rows:
+                                    if b == 34:
+                                        if in_quotes and i + 1 < n and buf[i + 1] == 34:
+                                            i += 2
+                                            pos += 2
+                                            continue
+                                        in_quotes = not in_quotes
+                                if b == 10 and (
+                                    not self.multiline_rows or not in_quotes
+                                ):
+                                    if pos + 1 >= next_cut_at:
+                                        cut = pos + 1
+                                        shards.append(
+                                            Shard(
+                                                path=path,
+                                                start=shard_start,
+                                                end=cut,
+                                                source_index=source_index,
+                                                global_ordinal=global_ordinal,
+                                            )
+                                        )
+                                        global_ordinal += 1
+                                        shard_start = cut
+                                        next_cut_at = (
+                                            shard_start + self.target_shard_bytes
+                                        )
+                                i += 1
+                                pos += 1
+                            buf = f.read(1024 * 1024)
+
+                        if shard_start < size:
+                            shards.append(
+                                Shard(
+                                    path=path,
+                                    start=shard_start,
+                                    end=size,
+                                    source_index=source_index,
+                                    global_ordinal=global_ordinal,
+                                )
+                            )
+                            global_ordinal += 1
 
         return shards
 
@@ -213,7 +214,7 @@ class CsvReader(BaseReader):
             yield from self._read_shard_arrow(part)
 
     def _read_shard_arrow(self, shard) -> Iterator[SourceUnit]:
-        source = self.source_files[shard.source_index]
+        source = self._source_file(shard.source_index, shard.path)
         if shard.end == -1:
             # Whole-file read (e.g. compressed/non-splittable): let Arrow parse
             # directly and stream RecordBatch objects downstream.
@@ -236,7 +237,7 @@ class CsvReader(BaseReader):
             return
 
         fh, header = self._get_handle_and_header(source)
-        size = self.fileset.size(shard.source_index)
+        size = self.fileset.size(shard.source_index, shard.path)
 
         mode = self.sharding_mode
         if self.multiline_rows and mode == "bytes_lazy":
@@ -283,7 +284,7 @@ class CsvReader(BaseReader):
             yield batch
 
     def _read_shard_python(self, shard) -> Iterator[SourceUnit]:
-        source = self.source_files[shard.source_index]
+        source = self._source_file(shard.source_index, shard.path)
         if shard.end == -1:
             with source.open(
                 mode="rt",
@@ -297,7 +298,7 @@ class CsvReader(BaseReader):
             return
 
         fh, header = self._get_handle_and_header(source)
-        size = self.fileset.size(shard.source_index)
+        size = self.fileset.size(shard.source_index, shard.path)
         mode = self.sharding_mode
         if self.multiline_rows and mode == "bytes_lazy":
             mode = "scan"

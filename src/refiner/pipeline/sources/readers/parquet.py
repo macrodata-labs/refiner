@@ -91,144 +91,140 @@ class ParquetReader(BaseReader):
         """
         shards: list[Shard] = []
         global_ordinal = 0
-        for source_index, file in enumerate(self.source_files):
-            size = self.fileset.size(source_index)
+        for source_index, files in enumerate(self.fileset.expand_sources()):
+            for file in files:
+                path = file.abs_path()
+                size = self.fileset.size(source_index, path)
 
-            # Fast path: if the whole file is smaller than the target, keep it as a single shard.
-            if size <= self.target_shard_bytes and (
-                self.sharding_mode != "rowgroups" or not self.split_row_groups
-            ):
-                shards.append(
-                    Shard(
-                        path=file.path,
-                        start=0,
-                        end=-1,
-                        source_index=source_index,
-                        global_ordinal=global_ordinal,
-                    )
-                )
-                global_ordinal += 1
-                continue
-
-            if self.sharding_mode == "bytes_lazy":
-                # Plan byte-range shards without reading parquet metadata; map to row groups at runtime.
-                start = 0
-                while start < size:
-                    end = min(size, start + self.target_shard_bytes)
+                if size <= self.target_shard_bytes and (
+                    self.sharding_mode != "rowgroups" or not self.split_row_groups
+                ):
                     shards.append(
                         Shard(
-                            path=file.path,
-                            start=start,
-                            end=end,
+                            path=path,
+                            start=0,
+                            end=-1,
                             source_index=source_index,
                             global_ordinal=global_ordinal,
                         )
                     )
                     global_ordinal += 1
-                    start = end
-                continue
+                    continue
 
-            pf = self._get_parquet_file(file)
-            md = pf.metadata
-            if md is None:
-                # no metadata? treat as 1 shard (best-effort)
-                shards.append(
-                    Shard(
-                        path=file.path,
-                        start=0,
-                        end=-1,
-                        source_index=source_index,
-                        global_ordinal=global_ordinal,
-                    )
-                )
-                global_ordinal += 1
-                continue
-
-            n = md.num_row_groups
-            if n <= 0:
-                # empty file? no shards
-                continue
-
-            start = 0
-            acc = 0
-            for rg in range(n):
-                rg_bytes = md.row_group(rg).total_byte_size
-                rg_bytes = int(rg_bytes) if rg_bytes is not None else 0
-                rg_rows = md.row_group(rg).num_rows
-                rg_rows = int(rg_rows) if rg_rows is not None else 0
-
-                if (
-                    self.split_row_groups
-                    and rg == start
-                    and rg_rows > 1
-                    and (rg_bytes <= 0 or rg_bytes > self.target_shard_bytes)
-                ):
-                    rows_per_shard = max(
-                        1,
-                        int(rg_rows * (self.target_shard_bytes / max(1, rg_bytes))),
-                    )
-                    row_start = 0
-                    while row_start < rg_rows:
-                        row_end = min(rg_rows, row_start + rows_per_shard)
+                if self.sharding_mode == "bytes_lazy":
+                    start = 0
+                    while start < size:
+                        end = min(size, start + self.target_shard_bytes)
                         shards.append(
                             Shard(
-                                path=file.path,
-                                start=row_start,
-                                end=row_end,
+                                path=path,
+                                start=start,
+                                end=end,
                                 source_index=source_index,
-                                unit=f"rows:{rg}",
                                 global_ordinal=global_ordinal,
                             )
                         )
                         global_ordinal += 1
-                        row_start = row_end
-                    start = rg + 1
-                    acc = 0
+                        start = end
                     continue
 
-                # always include at least one row group per shard
-                if rg == start:
-                    acc = rg_bytes
-                    continue
-
-                if acc >= self.target_shard_bytes:
-                    end = rg
+                pf = self._get_parquet_file(file)
+                md = pf.metadata
+                if md is None:
                     shards.append(
                         Shard(
-                            path=file.path,
+                            path=path,
+                            start=0,
+                            end=-1,
+                            source_index=source_index,
+                            global_ordinal=global_ordinal,
+                        )
+                    )
+                    global_ordinal += 1
+                    continue
+
+                n = md.num_row_groups
+                if n <= 0:
+                    continue
+
+                start = 0
+                acc = 0
+                for rg in range(n):
+                    rg_bytes = md.row_group(rg).total_byte_size
+                    rg_bytes = int(rg_bytes) if rg_bytes is not None else 0
+                    rg_rows = md.row_group(rg).num_rows
+                    rg_rows = int(rg_rows) if rg_rows is not None else 0
+
+                    if (
+                        self.split_row_groups
+                        and rg == start
+                        and rg_rows > 1
+                        and (rg_bytes <= 0 or rg_bytes > self.target_shard_bytes)
+                    ):
+                        rows_per_shard = max(
+                            1,
+                            int(rg_rows * (self.target_shard_bytes / max(1, rg_bytes))),
+                        )
+                        row_start = 0
+                        while row_start < rg_rows:
+                            row_end = min(rg_rows, row_start + rows_per_shard)
+                            shards.append(
+                                Shard(
+                                    path=path,
+                                    start=row_start,
+                                    end=row_end,
+                                    source_index=source_index,
+                                    unit=f"rows:{rg}",
+                                    global_ordinal=global_ordinal,
+                                )
+                            )
+                            global_ordinal += 1
+                            row_start = row_end
+                        start = rg + 1
+                        acc = 0
+                        continue
+
+                    if rg == start:
+                        acc = rg_bytes
+                        continue
+
+                    if acc >= self.target_shard_bytes:
+                        end = rg
+                        shards.append(
+                            Shard(
+                                path=path,
+                                start=start,
+                                end=end,
+                                source_index=source_index,
+                                global_ordinal=global_ordinal,
+                                unit="row_groups",
+                            )
+                        )
+                        global_ordinal += 1
+                        start = rg
+                        acc = rg_bytes
+                    else:
+                        acc += rg_bytes
+
+                if start < n:
+                    shards.append(
+                        Shard(
+                            path=path,
                             start=start,
-                            end=end,
+                            end=n,
                             source_index=source_index,
                             global_ordinal=global_ordinal,
                             unit="row_groups",
                         )
                     )
                     global_ordinal += 1
-                    start = rg
-                    acc = rg_bytes
-                else:
-                    acc += rg_bytes
-
-            # tail shard
-            if start < n:
-                shards.append(
-                    Shard(
-                        path=file.path,
-                        start=start,
-                        end=n,
-                        source_index=source_index,
-                        global_ordinal=global_ordinal,
-                        unit="row_groups",
-                    )
-                )
-                global_ordinal += 1
 
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read a parquet shard and yield Arrow RecordBatches."""
         for part in shard.parts:
-            source = self.source_files[part.source_index]
+            source = self._source_file(part.source_index, part.path)
             pf = self._get_parquet_file(source)
             if part.end == -1:
                 rg_indices = None
@@ -274,7 +270,7 @@ class ParquetReader(BaseReader):
                     if n <= 0:
                         continue
 
-                    file_size = self.fileset.size(part.source_index)
+                    file_size = self.fileset.size(part.source_index, part.path)
                     if file_size <= 0:
                         continue
 

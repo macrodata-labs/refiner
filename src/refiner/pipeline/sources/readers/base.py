@@ -121,8 +121,8 @@ class BaseReader(BaseSource):
         self._open_file = file
         return self._open_fh, True
 
-    def _source_file(self, shard: Shard) -> DataFile:
-        return self.fileset.files[shard.source_index]
+    def _source_file(self, source_index: int, path: str) -> DataFile:
+        return self.fileset.resolve_file(source_index, path)
 
     @abstractmethod
     def list_shards(self) -> list[Shard]:

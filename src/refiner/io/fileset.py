@@ -177,24 +177,30 @@ class DataFileSet:
         return out
 
     def resolve_file(self, source_index: int, path: str) -> DataFile:
-        """Recreate a concrete file for a shard part using that source entry's filesystem."""
+        """Resolve an absolute shard path back onto the source entry's filesystem."""
         entry = self.entries[source_index]
         if isinstance(entry, DataFile):
-            if entry.path != path:
+            file = DataFile.resolve(path, fs=entry.fs)
+            if (
+                file.path != entry.path
+                and str(entry) != path
+                and entry.abs_path() != path
+            ):
                 raise FileNotFoundError(path)
-            return entry
+            return file
         if isinstance(entry, DataFolder):
-            return DataFile(fs=entry.fs, path=path)
-        next_fs, _ = entry.resolve()
-        return DataFile(fs=next_fs, path=path)
+            return DataFile.resolve(path, fs=entry.fs)
+        fs, _ = entry.resolve()
+        return DataFile.resolve(path, fs=fs)
 
-    def size(self, index: int) -> int:
-        """Return the size for a resolved file entry, caching results."""
-        target = self.files[index]
-        if index in self._sizes:
-            return self._sizes[index]
+    def size(self, source_index: int, path: str) -> int:
+        """Return the size for a resolved shard path, caching by source entry and absolute path."""
+        key = hash((source_index, path))
+        if key in self._sizes:
+            return self._sizes[key]
+        target = self.resolve_file(source_index, path)
         sz = int(target.fs.size(target.path))
-        self._sizes[index] = sz
+        self._sizes[key] = sz
         return sz
 
 
