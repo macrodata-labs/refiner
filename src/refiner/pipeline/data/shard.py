@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from typing import Any
+from typing import Protocol
+
+
+class _HashWriter(Protocol):
+    def update(self, data: bytes, /) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +41,18 @@ class FilePart:
             unit=str(payload.get("unit", "bytes")),
         )
 
+    def update_hash(self, h: _HashWriter) -> None:
+        h.update(self.path.encode("utf-8"))
+        h.update(b"\0")
+        h.update(str(self.start).encode("ascii"))
+        h.update(b"\0")
+        h.update(str(self.end).encode("ascii"))
+        h.update(b"\0")
+        h.update(str(self.source_index).encode("ascii"))
+        h.update(b"\0")
+        h.update(self.unit.encode("utf-8"))
+        h.update(b"\0")
+
 
 @dataclass(frozen=True, slots=True)
 class FilePartsDescriptor:
@@ -57,6 +73,11 @@ class FilePartsDescriptor:
         return cls(
             tuple(FilePart.from_dict(part) for part in parts if isinstance(part, dict))
         )
+
+    def update_hash(self, h: _HashWriter) -> None:
+        h.update(b"file_parts\0")
+        for part in self.parts:
+            part.update_hash(h)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,18 +114,12 @@ class Shard:
     @property
     def id(self) -> str:
         h = hashlib.blake2b(digest_size=6)
-        h.update(
-            json.dumps(
-                {
-                    "descriptor": self.descriptor.to_dict(),
-                    "global_ordinal": self.global_ordinal,
-                    "start_key": self.start_key,
-                    "end_key": self.end_key,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        )
+        self.descriptor.update_hash(h)
+        h.update(str(self.global_ordinal).encode("utf-8"))
+        h.update(b"\0")
+        h.update((self.start_key or "").encode("utf-8"))
+        h.update(b"\0")
+        h.update((self.end_key or "").encode("utf-8"))
         return h.hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
