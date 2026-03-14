@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping, Sequence
 
 import pytest
 
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_jsonl
 from refiner.launchers.local import LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
@@ -137,7 +137,7 @@ def test_local_launcher_file_backend_skips_platform_setup(tmp_path) -> None:
 
 
 def test_local_launcher_platform_backend_requires_platform_client(monkeypatch) -> None:
-    shard = Shard(path="a", start=0, end=1)
+    shard = Shard.from_file_parts([FilePart(path="a", start=0, end=1)])
     rows = {shard.id: [DictRow({"x": 1})]}
     pipeline = RefinerPipeline(source=_FakeReader([shard], rows))
 

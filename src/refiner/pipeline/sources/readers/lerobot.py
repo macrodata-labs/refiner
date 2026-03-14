@@ -106,8 +106,9 @@ class LeRobotEpisodeReader(ParquetReader):
         self._frames_cache_entry: _FrameFileCacheEntry | None = None
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
-        if shard.path not in self.files:
-            raise ValueError(f"Unknown LeRobot shard path: {shard.path!r}")
+        part = shard.descriptor.parts[0]
+        if part.path not in self.files:
+            raise ValueError(f"Unknown LeRobot shard path: {part.path!r}")
         if self._limit is not None and self._submitted_episodes >= self._limit:
             return
 

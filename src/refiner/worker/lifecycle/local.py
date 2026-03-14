@@ -1,22 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import time
-import hashlib
 from collections import defaultdict
 from collections.abc import Callable
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from refiner.pipeline.data.shard import (
-    Shard,
-    ShardPart,
-    format_leased_filename,
-    format_pending_filename,
-    parse_shard_filename,
-)
+from refiner.pipeline.data.shard import Shard
 from refiner.worker.workdir import resolve_workdir
 
 
@@ -26,6 +21,27 @@ def _h_int(*parts: str) -> int:
         h.update(p.encode("utf-8"))
         h.update(b"\0")
     return int.from_bytes(h.digest(), "big", signed=False)
+
+
+_RE_SHARD_FILENAME = re.compile(
+    r"^(?P<shardid>[0-9a-f]+)(?:__w(?P<workerid>\d+))?\.json$"
+)
+
+
+def _pending_filename(shard_id: str) -> str:
+    return f"{shard_id}.json"
+
+
+def _leased_filename(shard_id: str, worker_id: int) -> str:
+    return f"{shard_id}__w{int(worker_id)}.json"
+
+
+def _parse_shard_filename(filename: str) -> tuple[str, int | None]:
+    match = _RE_SHARD_FILENAME.match(filename)
+    if not match:
+        raise ValueError(f"Unrecognized shard filename: {filename!r}")
+    worker_id = match.group("workerid")
+    return match.group("shardid"), int(worker_id) if worker_id is not None else None
 
 
 class ClaimPolicy:
@@ -68,9 +84,8 @@ class ClaimPolicy:
 
         for start_key, all_list in by_key_all.items():
             pending_for_key = [key for key in all_list if key.shard_id in pending_ids]
-            if not pending_for_key:
-                continue
-            by_key_pending[start_key] = pending_for_key
+            if pending_for_key:
+                by_key_pending[start_key] = pending_for_key
 
         if not by_key_pending:
             return None
@@ -84,7 +99,7 @@ class ClaimPolicy:
         #
         # This preserves sequential reads when possible, but still spreads
         # workers across blocks so they do not alternate every shard.
-        def _try_exact_next(previous_ordinal: int) -> ClaimPolicy._ShardKey | None:
+        def try_exact_next(previous_ordinal: int) -> ClaimPolicy._ShardKey | None:
             for pending_list in by_key_pending.values():
                 for candidate in pending_list:
                     if (
@@ -95,7 +110,7 @@ class ClaimPolicy:
                         return candidate
             return None
 
-        def _try_blocks(start_keys: Iterable[str]) -> ClaimPolicy._ShardKey | None:
+        def try_blocks(start_keys: Iterable[str]) -> ClaimPolicy._ShardKey | None:
             for start_key in start_keys:
                 pending_list = by_key_pending.get(start_key, [])
                 if not pending_list:
@@ -120,7 +135,7 @@ class ClaimPolicy:
                             return candidate
             return None
 
-        def _try_greedy(start_keys: Iterable[str]) -> ClaimPolicy._ShardKey | None:
+        def try_greedy(start_keys: Iterable[str]) -> ClaimPolicy._ShardKey | None:
             for start_key in start_keys:
                 for candidate in by_key_pending.get(start_key, []):
                     if try_claim(candidate):
@@ -131,12 +146,12 @@ class ClaimPolicy:
         if previous is not None:
             previous_key = previous.end_key or previous.start_key
             if previous.global_ordinal is not None:
-                picked = _try_exact_next(previous.global_ordinal)
+                picked = try_exact_next(previous.global_ordinal)
                 if picked is not None:
                     return picked
             if previous_key and previous_key in by_key_pending:
                 tried.add(previous_key)
-                picked = _try_blocks((previous_key,))
+                picked = try_blocks((previous_key,))
                 if picked is not None:
                     return picked
 
@@ -145,16 +160,14 @@ class ClaimPolicy:
             key=lambda start_key: _h_int(self.job_id, str(self.worker_id), start_key),
         )
 
-        picked = _try_blocks(start_keys)
+        picked = try_blocks(start_keys)
         if picked is not None:
             return picked
-
         if tried:
-            picked = _try_greedy(tried)
+            picked = try_greedy(tried)
             if picked is not None:
                 return picked
-
-        return _try_greedy(start_keys)
+        return try_greedy(start_keys)
 
 
 def _runtime_lease_seconds() -> int:
@@ -172,7 +185,7 @@ def _runtime_lease_seconds() -> int:
     return value
 
 
-class FileRuntimeLifecycle:
+class LocalRuntimeLifecycle:
     """Filesystem-backed runtime shard lifecycle.
 
     Layout (under `<workdir>/runs/<job_id>/lifecycle/`):
@@ -225,7 +238,7 @@ class FileRuntimeLifecycle:
         try:
             return int(self.worker_id)
         except ValueError as exc:
-            raise ValueError("file runtime worker_id must be an integer") from exc
+            raise ValueError("local runtime worker_id must be an integer") from exc
 
     def seed_shards(self, shards: Iterable[Shard]) -> None:
         for directory in (
@@ -235,17 +248,15 @@ class FileRuntimeLifecycle:
             self._failed_dir,
         ):
             for path in directory.iterdir():
-                if not path.is_file():
-                    continue
-                try:
-                    path.unlink()
-                except Exception:
-                    pass
+                if path.is_file():
+                    try:
+                        path.unlink()
+                    except Exception:
+                        pass
 
         for shard in shards:
-            payload = shard.to_dict()
-            (self._pending_dir / shard.pending_filename()).write_text(
-                json.dumps(payload, sort_keys=True)
+            (self._pending_dir / _pending_filename(shard.id)).write_text(
+                json.dumps(shard.to_dict(), sort_keys=True)
             )
 
     @staticmethod
@@ -279,14 +290,6 @@ class FileRuntimeLifecycle:
             shard_id=shard_id,
         )
 
-    @staticmethod
-    def _pending_name_from_key(key: ClaimPolicy._ShardKey) -> str:
-        return format_pending_filename(shard_id=key.shard_id)
-
-    @staticmethod
-    def _leased_name_from_key(key: ClaimPolicy._ShardKey, worker_id: int) -> str:
-        return format_leased_filename(shard_id=key.shard_id, worker_id=worker_id)
-
     def claim(self, previous: Shard | None = None) -> Shard | None:
         worker_id = self._require_worker_id()
         now = int(time.time())
@@ -311,13 +314,12 @@ class FileRuntimeLifecycle:
                 leased_names_effective.add(name)
                 continue
 
-            age = now - int(st.st_mtime)
-            if age <= self.lease_seconds:
+            if now - int(st.st_mtime) <= self.lease_seconds:
                 leased_names_effective.add(name)
                 continue
 
             try:
-                base = format_pending_filename(shard_id=parse_shard_filename(name)[0])
+                base = _pending_filename(_parse_shard_filename(name)[0])
             except Exception:
                 self._safe_unlink(entry.path)
                 continue
@@ -333,15 +335,13 @@ class FileRuntimeLifecycle:
             if not self._safe_replace(entry.path, str(dst)):
                 self._safe_unlink(entry.path)
 
-        pending_names = [
-            path.name for path in self._pending_dir.iterdir() if path.is_file()
-        ]
-
         pending_ids: set[str] = set()
         all_keys: set[ClaimPolicy._ShardKey] = set()
 
-        for name in pending_names:
-            payload = json.loads((self._pending_dir / name).read_text())
+        for path in self._pending_dir.iterdir():
+            if not path.is_file():
+                continue
+            payload = json.loads(path.read_text())
             key = self._key_from_payload(payload)
             if key is None:
                 continue
@@ -356,7 +356,7 @@ class FileRuntimeLifecycle:
 
         for name in leased_names_effective:
             try:
-                parse_shard_filename(name)
+                _parse_shard_filename(name)
             except Exception:
                 continue
             key = self._key_from_payload(
@@ -367,69 +367,32 @@ class FileRuntimeLifecycle:
 
         policy = ClaimPolicy(job_id=self.job_id, worker_id=worker_id)
 
-        def _try_claim(key: ClaimPolicy._ShardKey) -> bool:
-            base = self._pending_name_from_key(key)
-            src = self._pending_dir / base
-            dst = self._leased_dir / self._leased_name_from_key(key, worker_id)
-            if dst.exists():
-                return False
-            return self._safe_replace(str(src), str(dst))
+        def try_claim(key: ClaimPolicy._ShardKey) -> bool:
+            src = self._pending_dir / _pending_filename(key.shard_id)
+            dst = self._leased_dir / _leased_filename(key.shard_id, worker_id)
+            return not dst.exists() and self._safe_replace(str(src), str(dst))
 
         picked = policy.claim_key(
             previous=previous,
             all_keys=all_keys,
             pending_ids=pending_ids,
-            try_claim=_try_claim,
+            try_claim=try_claim,
         )
         if picked is None:
             return None
-
-        leased_name = self._leased_name_from_key(picked, worker_id)
-        leased_path = self._leased_dir / leased_name
-        payload = json.loads(leased_path.read_text())
-        descriptor = payload.get("descriptor") or {
-            "parts": [
-                {
-                    "path": payload["path"],
-                    "start": payload["start"],
-                    "end": payload["end"],
-                    "source_index": payload.get("source_index", 0),
-                    "unit": payload.get("unit", "bytes"),
-                }
-            ]
-        }
-        return Shard(
-            path=payload["path"],
-            start=int(payload["start"]),
-            end=int(payload["end"]),
-            parts=tuple(
-                ShardPart(
-                    path=part["path"],
-                    start=int(part["start"]),
-                    end=int(part["end"]),
-                    source_index=int(part.get("source_index", 0)),
-                    unit=str(part.get("unit", "bytes")),
-                )
-                for part in descriptor["parts"]
-            ),
-            source_index=int(payload.get("source_index", 0)),
-            unit=str(payload.get("unit", "bytes")),
-            global_ordinal=payload.get("global_ordinal")
-            if isinstance(payload.get("global_ordinal"), int)
-            else None,
-            start_key=payload.get("start_key")
-            if isinstance(payload.get("start_key"), str)
-            else None,
-            end_key=payload.get("end_key")
-            if isinstance(payload.get("end_key"), str)
-            else None,
+        return Shard.from_dict(
+            json.loads(
+                (
+                    self._leased_dir / _leased_filename(picked.shard_id, worker_id)
+                ).read_text()
+            )
         )
 
     def heartbeat(self, shards: Iterable[Shard]) -> None:
         worker_id = self._require_worker_id()
         now = int(time.time())
         for shard in shards:
-            lease_path = self._leased_dir / shard.leased_filename(worker_id)
+            lease_path = self._leased_dir / _leased_filename(shard.id, worker_id)
             try:
                 os.utime(lease_path, (now, now))
             except Exception:
@@ -437,8 +400,8 @@ class FileRuntimeLifecycle:
 
     def complete(self, shard: Shard) -> None:
         worker_id = self._require_worker_id()
-        leased_path = self._leased_dir / shard.leased_filename(worker_id)
-        done_path = self._done_dir / shard.pending_filename()
+        leased_path = self._leased_dir / _leased_filename(shard.id, worker_id)
+        done_path = self._done_dir / _pending_filename(shard.id)
         try:
             os.replace(leased_path, done_path)
         except Exception:
@@ -446,8 +409,8 @@ class FileRuntimeLifecycle:
 
     def fail(self, shard: Shard, error: str | None = None) -> None:
         worker_id = self._require_worker_id()
-        leased_path = self._leased_dir / shard.leased_filename(worker_id)
-        failed_base = shard.pending_filename()
+        leased_path = self._leased_dir / _leased_filename(shard.id, worker_id)
+        failed_base = _pending_filename(shard.id)
         failed_path = self._failed_dir / failed_base
         try:
             os.replace(leased_path, failed_path)

@@ -26,9 +26,13 @@ class SlowPerShardReader(BaseSource):
         return self.inner.list_shards()
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
+        first_part = shard.descriptor.parts[0]
+        last_part = shard.descriptor.parts[-1]
         print(
             f"[demo] sleeping {self.sleep_seconds}s before shard "
-            f"path={shard.path} start={shard.start} end={shard.end}",
+            f"parts={len(shard.descriptor.parts)} "
+            f"start={first_part.path}:{first_part.start} "
+            f"end={last_part.path}:{last_part.end}",
             flush=True,
         )
         time.sleep(self.sleep_seconds)

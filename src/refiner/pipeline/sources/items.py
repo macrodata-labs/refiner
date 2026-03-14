@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource
 from refiner.pipeline.data.row import DictRow, Row
 
@@ -36,20 +36,27 @@ class ItemsSource(BaseSource):
             end = min(self._row_count, start + self._shard_size_rows)
             shards.append(
                 Shard(
-                    path=self._source_path,
-                    start=start,
-                    end=end,
-                    unit="rows",
+                    descriptor=FilePartsDescriptor(
+                        (
+                            FilePart(
+                                path=self._source_path,
+                                start=start,
+                                end=end,
+                                unit="rows",
+                            ),
+                        )
+                    ),
                     global_ordinal=len(shards),
                 )
             )
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
-        if shard.path != self._source_path:
-            raise ValueError(f"Unknown items shard path: {shard.path!r}")
-        start = int(shard.start)
-        end = int(shard.end)
+        part = shard.descriptor.parts[0]
+        if part.path != self._source_path:
+            raise ValueError(f"Unknown items shard path: {part.path!r}")
+        start = int(part.start)
+        end = int(part.end)
         if start < 0 or end < start or end > self._row_count:
             raise ValueError(
                 f"Invalid items shard range [{start}, {end}) for {self._row_count} rows"

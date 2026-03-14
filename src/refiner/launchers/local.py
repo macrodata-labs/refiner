@@ -11,7 +11,7 @@ import cloudpickle
 
 from refiner.platform.client import RunHandle
 from refiner.pipeline.planning import PlannedStage
-from refiner.worker.lifecycle import FileRuntimeLifecycle
+from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.resources.cpu import build_cpu_sets
 from refiner.worker.workdir import resolve_workdir
 
@@ -85,7 +85,7 @@ class LocalLauncher(BaseLauncher):
     def _seed_file_runtime_shards(
         self, *, stage_index: int, shards: list["Shard"]
     ) -> None:
-        FileRuntimeLifecycle(
+        LocalRuntimeLifecycle(
             job_id=self.job_id,
             stage_index=stage_index,
             worker_id=None,

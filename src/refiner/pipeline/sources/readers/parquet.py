@@ -8,6 +8,7 @@ from fsspec import AbstractFileSystem
 from loguru import logger
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.data.shard import FilePart
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -82,10 +83,10 @@ class ParquetReader(BaseReader):
 
         For Parquet:
             - If `sharding_mode == "rowgroups"`:
-                - `Shard.start` / `Shard.end` are **row-group indices**.
+                - file-part `start` / `end` are **row-group indices**.
                 - Row-group ranges are half-open: `[start, end)`.
             - If `sharding_mode == "bytes_lazy"`:
-                - `Shard.start` / `Shard.end` are **byte offsets** for planning only.
+                - file-part `start` / `end` are **byte offsets** for planning only.
                 - `read_shard()` will load metadata and map the byte-range deterministically onto row groups.
             - `end == -1` is used as a sentinel meaning \"read the whole file\".
         """
@@ -100,11 +101,15 @@ class ParquetReader(BaseReader):
                     self.sharding_mode != "rowgroups" or not self.split_row_groups
                 ):
                     shards.append(
-                        Shard(
-                            path=path,
-                            start=0,
-                            end=-1,
-                            source_index=source_index,
+                        Shard.from_file_parts(
+                            [
+                                FilePart(
+                                    path=path,
+                                    start=0,
+                                    end=-1,
+                                    source_index=source_index,
+                                )
+                            ],
                             global_ordinal=global_ordinal,
                         )
                     )
@@ -116,11 +121,15 @@ class ParquetReader(BaseReader):
                     while start < size:
                         end = min(size, start + self.target_shard_bytes)
                         shards.append(
-                            Shard(
-                                path=path,
-                                start=start,
-                                end=end,
-                                source_index=source_index,
+                            Shard.from_file_parts(
+                                [
+                                    FilePart(
+                                        path=path,
+                                        start=start,
+                                        end=end,
+                                        source_index=source_index,
+                                    )
+                                ],
                                 global_ordinal=global_ordinal,
                             )
                         )
@@ -132,11 +141,15 @@ class ParquetReader(BaseReader):
                 md = pf.metadata
                 if md is None:
                     shards.append(
-                        Shard(
-                            path=path,
-                            start=0,
-                            end=-1,
-                            source_index=source_index,
+                        Shard.from_file_parts(
+                            [
+                                FilePart(
+                                    path=path,
+                                    start=0,
+                                    end=-1,
+                                    source_index=source_index,
+                                )
+                            ],
                             global_ordinal=global_ordinal,
                         )
                     )
@@ -169,12 +182,16 @@ class ParquetReader(BaseReader):
                         while row_start < rg_rows:
                             row_end = min(rg_rows, row_start + rows_per_shard)
                             shards.append(
-                                Shard(
-                                    path=path,
-                                    start=row_start,
-                                    end=row_end,
-                                    source_index=source_index,
-                                    unit=f"rows:{rg}",
+                                Shard.from_file_parts(
+                                    [
+                                        FilePart(
+                                            path=path,
+                                            start=row_start,
+                                            end=row_end,
+                                            source_index=source_index,
+                                            unit=f"rows:{rg}",
+                                        )
+                                    ],
                                     global_ordinal=global_ordinal,
                                 )
                             )
@@ -191,13 +208,17 @@ class ParquetReader(BaseReader):
                     if acc >= self.target_shard_bytes:
                         end = rg
                         shards.append(
-                            Shard(
-                                path=path,
-                                start=start,
-                                end=end,
-                                source_index=source_index,
+                            Shard.from_file_parts(
+                                [
+                                    FilePart(
+                                        path=path,
+                                        start=start,
+                                        end=end,
+                                        source_index=source_index,
+                                        unit="row_groups",
+                                    )
+                                ],
                                 global_ordinal=global_ordinal,
-                                unit="row_groups",
                             )
                         )
                         global_ordinal += 1
@@ -208,13 +229,17 @@ class ParquetReader(BaseReader):
 
                 if start < n:
                     shards.append(
-                        Shard(
-                            path=path,
-                            start=start,
-                            end=n,
-                            source_index=source_index,
+                        Shard.from_file_parts(
+                            [
+                                FilePart(
+                                    path=path,
+                                    start=start,
+                                    end=n,
+                                    source_index=source_index,
+                                    unit="row_groups",
+                                )
+                            ],
                             global_ordinal=global_ordinal,
-                            unit="row_groups",
                         )
                     )
                     global_ordinal += 1
@@ -223,7 +248,7 @@ class ParquetReader(BaseReader):
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read a parquet shard and yield Arrow RecordBatches."""
-        for part in shard.parts:
+        for part in shard.descriptor.parts:
             source = self._source_file(part.source_index, part.path)
             pf = self._get_parquet_file(source)
             if part.end == -1:
@@ -251,7 +276,7 @@ class ParquetReader(BaseReader):
                         break
                 continue
             elif self.sharding_mode == "bytes_lazy":
-                # Interpret shard.start/end as byte-range planning hints and map to row groups deterministically.
+                # Interpret file-part start/end as byte-range planning hints and map to row groups deterministically.
                 md = pf.metadata
                 if md is None:
                     # If metadata isn't available, we cannot safely map byte-ranges to row groups.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import FilePart, Shard
 from refiner import col
 from refiner.pipeline import RefinerPipeline, from_items
 from refiner.pipeline.sources.readers.base import BaseReader
@@ -23,7 +23,9 @@ class _FakeReader(BaseReader):
         return ["data/a.parquet"]
 
     def list_shards(self) -> list[Shard]:
-        return [Shard(path="data/a.parquet", start=0, end=10)]
+        return [
+            Shard.from_file_parts([FilePart(path="data/a.parquet", start=0, end=10)])
+        ]
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
         del shard

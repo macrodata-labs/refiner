@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
-class ShardPart:
+class FilePart:
     path: str
     start: int
     end: int
@@ -28,57 +27,64 @@ class ShardPart:
             "unit": self.unit,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> FilePart:
+        return cls(
+            path=str(payload["path"]),
+            start=int(payload["start"]),
+            end=int(payload["end"]),
+            source_index=int(payload.get("source_index", 0)),
+            unit=str(payload.get("unit", "bytes")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FilePartsDescriptor:
+    parts: tuple[FilePart, ...]
+
+    def __post_init__(self) -> None:
+        if not self.parts:
+            raise ValueError("shard parts must be non-empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"parts": [part.to_dict() for part in self.parts]}
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> FilePartsDescriptor:
+        parts = payload["parts"]
+        if not isinstance(parts, list):
+            raise ValueError("file-parts descriptor must contain a parts list")
+        return cls(
+            tuple(FilePart.from_dict(part) for part in parts if isinstance(part, dict))
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class Shard:
-    path: str
-    start: int
-    end: int
-    source_index: int = 0
-    unit: str = "bytes"
-    parts: tuple[ShardPart, ...] = field(default_factory=tuple)
+    descriptor: FilePartsDescriptor  # will later allow other descriptors
     global_ordinal: int | None = None
     start_key: str | None = None
     end_key: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.parts:
-            parts = (
-                ShardPart(
-                    path=self.path,
-                    start=self.start,
-                    end=self.end,
-                    source_index=self.source_index,
-                    unit=self.unit,
-                ),
-            )
-            object.__setattr__(self, "parts", parts)
-
         if self.start_key is None:
-            object.__setattr__(self, "start_key", self.parts[0].locality_key)
+            object.__setattr__(self, "start_key", self.descriptor.parts[0].locality_key)
         if self.end_key is None:
-            object.__setattr__(self, "end_key", self.parts[-1].locality_key)
+            object.__setattr__(self, "end_key", self.descriptor.parts[-1].locality_key)
 
     @classmethod
-    def from_parts(
+    def from_file_parts(
         cls,
-        parts: list[ShardPart] | tuple[ShardPart, ...],
+        file_parts: list[FilePart] | tuple[FilePart, ...],
         *,
         global_ordinal: int | None = None,
         start_key: str | None = None,
         end_key: str | None = None,
     ) -> Shard:
-        if not parts:
-            raise ValueError("shard parts must be non-empty")
-        first = parts[0]
-        last = parts[-1]
+        if not file_parts:
+            raise ValueError("file parts must be non-empty")
         return cls(
-            path=first.path,
-            start=first.start,
-            end=last.end,
-            source_index=first.source_index,
-            unit=first.unit,
-            parts=tuple(parts),
+            descriptor=FilePartsDescriptor(tuple(file_parts)),
             global_ordinal=global_ordinal,
             start_key=start_key,
             end_key=end_key,
@@ -90,7 +96,7 @@ class Shard:
         h.update(
             json.dumps(
                 {
-                    "parts": [part.to_dict() for part in self.parts],
+                    "descriptor": self.descriptor.to_dict(),
                     "global_ordinal": self.global_ordinal,
                     "start_key": self.start_key,
                     "end_key": self.end_key,
@@ -101,29 +107,29 @@ class Shard:
         )
         return h.hexdigest()
 
-    def pending_filename(self) -> str:
-        return format_pending_filename(shard_id=self.id)
-
-    def leased_filename(self, worker_id: int) -> str:
-        return format_leased_filename(shard_id=self.id, worker_id=worker_id)
-
     def to_dict(self) -> dict[str, Any]:
         return {
             "shard_id": self.id,
-            "path": self.path,
-            "start": int(self.start),
-            "end": int(self.end),
-            "source_index": int(self.source_index),
             "global_ordinal": self.global_ordinal,
             "start_key": self.start_key,
             "end_key": self.end_key,
-            "descriptor": {"parts": [part.to_dict() for part in self.parts]},
+            "descriptor": self.descriptor.to_dict(),
         }
 
-
-_RE_SHARD_FILENAME = re.compile(
-    r"^(?P<shardid>[0-9a-f]+)(?:__w(?P<workerid>\d+))?\.json$"
-)
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> Shard:
+        descriptor = payload["descriptor"]
+        if not isinstance(descriptor, dict):
+            raise ValueError("shard descriptor must be an object")
+        global_ordinal = payload.get("global_ordinal")
+        start_key = payload.get("start_key")
+        end_key = payload.get("end_key")
+        return cls(
+            descriptor=FilePartsDescriptor.from_dict(descriptor),
+            global_ordinal=global_ordinal if isinstance(global_ordinal, int) else None,
+            start_key=start_key if isinstance(start_key, str) else None,
+            end_key=end_key if isinstance(end_key, str) else None,
+        )
 
 
 def path_hash(path: str, *, source_index: int = 0) -> str:
@@ -132,22 +138,6 @@ def path_hash(path: str, *, source_index: int = 0) -> str:
     h.update(b"\0")
     h.update(str(int(source_index)).encode("ascii"))
     return h.hexdigest()
-
-
-def format_pending_filename(*, shard_id: str) -> str:
-    return f"{shard_id}.json"
-
-
-def format_leased_filename(*, shard_id: str, worker_id: int) -> str:
-    return f"{shard_id}__w{int(worker_id)}.json"
-
-
-def parse_shard_filename(filename: str) -> tuple[str, int | None]:
-    m = _RE_SHARD_FILENAME.match(filename)
-    if not m:
-        raise ValueError(f"Unrecognized shard filename: {filename!r}")
-    worker_id = m.group("workerid")
-    return m.group("shardid"), int(worker_id) if worker_id is not None else None
 
 
 def coalesce_shards(shards: list[Shard], num_shards: int | None) -> list[Shard]:
@@ -163,8 +153,8 @@ def coalesce_shards(shards: list[Shard], num_shards: int | None) -> list[Shard]:
         if not group:
             continue
         out.append(
-            Shard.from_parts(
-                [part for shard in group for part in shard.parts],
+            Shard.from_file_parts(
+                [part for shard in group for part in shard.descriptor.parts],
                 global_ordinal=index,
                 start_key=group[0].start_key,
                 end_key=group[-1].end_key,
@@ -174,11 +164,9 @@ def coalesce_shards(shards: list[Shard], num_shards: int | None) -> list[Shard]:
 
 
 __all__ = [
-    "ShardPart",
+    "FilePart",
+    "FilePartsDescriptor",
     "Shard",
     "coalesce_shards",
     "path_hash",
-    "format_pending_filename",
-    "format_leased_filename",
-    "parse_shard_filename",
 ]

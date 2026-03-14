@@ -19,14 +19,8 @@ DataFileSetLike: TypeAlias = Union[DataFileSetInput, Sequence[DataFileSetInput]]
 
 @dataclass(frozen=True, slots=True)
 class _PathSource:
-    raw: str
-    fs: AbstractFileSystem | None = None
-    storage_options: Mapping[str, Any] | None = None
-
-    def resolve(self) -> tuple[AbstractFileSystem, str]:
-        if self.fs is not None:
-            return self.fs, self.fs._strip_protocol(self.raw)
-        return url_to_fs(self.raw, **dict(self.storage_options or {}))
+    path: str
+    fs: AbstractFileSystem
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +70,6 @@ class DataFileSet:
         else:
             inputs = tuple(data)
 
-        storage_options_d = dict(storage_options or {})
         normalized_entries: list[DataFile | DataFolder | _PathSource] = []
 
         for item in inputs:
@@ -100,7 +93,9 @@ class DataFileSet:
                     raise TypeError(
                         "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                     )
-                normalized_entries.append(_PathSource(raw=path, fs=item_fs))
+                normalized_entries.append(
+                    _PathSource(path=item_fs._strip_protocol(path), fs=item_fs)
+                )
                 continue
 
             if isinstance(item, PathLike):
@@ -111,13 +106,13 @@ class DataFileSet:
                     "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                 )
 
-            normalized_entries.append(
-                _PathSource(
-                    raw=item,
-                    fs=fs,
-                    storage_options=storage_options_d if fs is None else None,
+            if fs is not None:
+                normalized_entries.append(
+                    _PathSource(path=fs._strip_protocol(item), fs=fs)
                 )
-            )
+            else:
+                item_fs, path = url_to_fs(item, **dict(storage_options or {}))
+                normalized_entries.append(_PathSource(path=path, fs=item_fs))
 
         return cls(
             entries=tuple(normalized_entries),
@@ -166,7 +161,7 @@ class DataFileSet:
                 for path in paths:
                     _append_file(files, entry.file(path))
             else:
-                next_fs, path = entry.resolve()
+                next_fs, path = entry.fs, entry.path
                 if glob.has_magic(path):
                     for expanded_path in sorted(next_fs.glob(path)):
                         _append_file(files, DataFile(fs=next_fs, path=expanded_path))
@@ -188,7 +183,9 @@ class DataFileSet:
                     else:
                         _append_file(files, DataFile(fs=next_fs, path=path))
                 else:
-                    raise FileNotFoundError(f"Could not resolve input: {entry.raw!r}")
+                    raise FileNotFoundError(
+                        f"Could not resolve input: {next_fs.unstrip_protocol(path)!r}"
+                    )
             expanded.append(tuple(files))
 
         out = tuple(expanded)
@@ -209,8 +206,7 @@ class DataFileSet:
             return file
         if isinstance(entry, DataFolder):
             return DataFile.resolve(path, fs=entry.fs)
-        fs, _ = entry.resolve()
-        return DataFile.resolve(path, fs=fs)
+        return DataFile.resolve(path, fs=entry.fs)
 
     def size(self, source_index: int, path: str) -> int:
         """Return the size for a resolved shard path, caching by source entry and absolute path."""

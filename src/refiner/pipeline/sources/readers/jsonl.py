@@ -8,6 +8,7 @@ from fsspec import AbstractFileSystem
 import pyarrow.json as pa_json
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -53,10 +54,16 @@ class JsonlReader(BaseReader):
                 if not is_splittable_by_bytes(file.fs, file.path):
                     shards.append(
                         Shard(
-                            path=path,
-                            start=0,
-                            end=-1,
-                            source_index=source_index,
+                            descriptor=FilePartsDescriptor(
+                                (
+                                    FilePart(
+                                        path=path,
+                                        start=0,
+                                        end=-1,
+                                        source_index=source_index,
+                                    ),
+                                )
+                            ),
                             global_ordinal=global_ordinal,
                         )
                     )
@@ -67,10 +74,16 @@ class JsonlReader(BaseReader):
                 if size <= self.target_shard_bytes:
                     shards.append(
                         Shard(
-                            path=path,
-                            start=0,
-                            end=size,
-                            source_index=source_index,
+                            descriptor=FilePartsDescriptor(
+                                (
+                                    FilePart(
+                                        path=path,
+                                        start=0,
+                                        end=size,
+                                        source_index=source_index,
+                                    ),
+                                )
+                            ),
                             global_ordinal=global_ordinal,
                         )
                     )
@@ -82,10 +95,16 @@ class JsonlReader(BaseReader):
                     end = min(size, start + self.target_shard_bytes)
                     shards.append(
                         Shard(
-                            path=path,
-                            start=start,
-                            end=end,
-                            source_index=source_index,
+                            descriptor=FilePartsDescriptor(
+                                (
+                                    FilePart(
+                                        path=path,
+                                        start=start,
+                                        end=end,
+                                        source_index=source_index,
+                                    ),
+                                )
+                            ),
                             global_ordinal=global_ordinal,
                         )
                     )
@@ -95,7 +114,7 @@ class JsonlReader(BaseReader):
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
-        for part in shard.parts:
+        for part in shard.descriptor.parts:
             source = self._source_file(part.source_index, part.path)
             if part.end == -1:
                 with source.open(

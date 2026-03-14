@@ -9,6 +9,7 @@ import pyarrow.csv as pa_csv
 from fsspec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
@@ -104,10 +105,16 @@ class CsvReader(BaseReader):
                 if not is_splittable_by_bytes(file.fs, file.path):
                     shards.append(
                         Shard(
-                            path=path,
-                            start=0,
-                            end=-1,
-                            source_index=source_index,
+                            descriptor=FilePartsDescriptor(
+                                (
+                                    FilePart(
+                                        path=path,
+                                        start=0,
+                                        end=-1,
+                                        source_index=source_index,
+                                    ),
+                                )
+                            ),
                             global_ordinal=global_ordinal,
                         )
                     )
@@ -118,10 +125,16 @@ class CsvReader(BaseReader):
                 if size <= self.target_shard_bytes:
                     shards.append(
                         Shard(
-                            path=path,
-                            start=0,
-                            end=size,
-                            source_index=source_index,
+                            descriptor=FilePartsDescriptor(
+                                (
+                                    FilePart(
+                                        path=path,
+                                        start=0,
+                                        end=size,
+                                        source_index=source_index,
+                                    ),
+                                )
+                            ),
                             global_ordinal=global_ordinal,
                         )
                     )
@@ -138,10 +151,16 @@ class CsvReader(BaseReader):
                         end = min(size, start + self.target_shard_bytes)
                         shards.append(
                             Shard(
-                                path=path,
-                                start=start,
-                                end=end,
-                                source_index=source_index,
+                                descriptor=FilePartsDescriptor(
+                                    (
+                                        FilePart(
+                                            path=path,
+                                            start=start,
+                                            end=end,
+                                            source_index=source_index,
+                                        ),
+                                    )
+                                ),
                                 global_ordinal=global_ordinal,
                             )
                         )
@@ -174,10 +193,16 @@ class CsvReader(BaseReader):
                                         cut = pos + 1
                                         shards.append(
                                             Shard(
-                                                path=path,
-                                                start=shard_start,
-                                                end=cut,
-                                                source_index=source_index,
+                                                descriptor=FilePartsDescriptor(
+                                                    (
+                                                        FilePart(
+                                                            path=path,
+                                                            start=shard_start,
+                                                            end=cut,
+                                                            source_index=source_index,
+                                                        ),
+                                                    )
+                                                ),
                                                 global_ordinal=global_ordinal,
                                             )
                                         )
@@ -193,10 +218,16 @@ class CsvReader(BaseReader):
                         if shard_start < size:
                             shards.append(
                                 Shard(
-                                    path=path,
-                                    start=shard_start,
-                                    end=size,
-                                    source_index=source_index,
+                                    descriptor=FilePartsDescriptor(
+                                        (
+                                            FilePart(
+                                                path=path,
+                                                start=shard_start,
+                                                end=size,
+                                                source_index=source_index,
+                                            ),
+                                        )
+                                    ),
                                     global_ordinal=global_ordinal,
                                 )
                             )
@@ -207,15 +238,15 @@ class CsvReader(BaseReader):
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         # Arrow path is the fast/default path. Multiline CSV needs the Python
         # parser because byte-range splitting + quotes/newlines is trickier.
-        for part in shard.parts:
+        for part in shard.descriptor.parts:
             if self.multiline_rows:
                 yield from self._read_shard_python(part)
                 continue
             yield from self._read_shard_arrow(part)
 
-    def _read_shard_arrow(self, shard) -> Iterator[SourceUnit]:
-        source = self._source_file(shard.source_index, shard.path)
-        if shard.end == -1:
+    def _read_shard_arrow(self, part: FilePart) -> Iterator[SourceUnit]:
+        source = self._source_file(part.source_index, part.path)
+        if part.end == -1:
             # Whole-file read (e.g. compressed/non-splittable): let Arrow parse
             # directly and stream RecordBatch objects downstream.
             with source.open(
@@ -237,14 +268,14 @@ class CsvReader(BaseReader):
             return
 
         fh, header = self._get_handle_and_header(source)
-        size = self.fileset.size(shard.source_index, shard.path)
+        size = self.fileset.size(part.source_index, part.path)
 
         mode = self.sharding_mode
         if self.multiline_rows and mode == "bytes_lazy":
             mode = "scan"
 
-        start = shard.start
-        end = shard.end
+        start = part.start
+        end = part.end
         if mode == "bytes_lazy":
             # Keep only records whose start offsets belong to the planned range.
             aligned = align_byte_range_to_newlines(fh, start=start, end=end, size=size)
@@ -283,9 +314,9 @@ class CsvReader(BaseReader):
         for batch in reader:
             yield batch
 
-    def _read_shard_python(self, shard) -> Iterator[SourceUnit]:
-        source = self._source_file(shard.source_index, shard.path)
-        if shard.end == -1:
+    def _read_shard_python(self, part: FilePart) -> Iterator[SourceUnit]:
+        source = self._source_file(part.source_index, part.path)
+        if part.end == -1:
             with source.open(
                 mode="rt",
                 compression="infer",
@@ -298,13 +329,13 @@ class CsvReader(BaseReader):
             return
 
         fh, header = self._get_handle_and_header(source)
-        size = self.fileset.size(shard.source_index, shard.path)
+        size = self.fileset.size(part.source_index, part.path)
         mode = self.sharding_mode
         if self.multiline_rows and mode == "bytes_lazy":
             mode = "scan"
 
-        start = shard.start
-        end = shard.end
+        start = part.start
+        end = part.end
         if mode == "bytes_lazy":
             aligned = align_byte_range_to_newlines(fh, start=start, end=end, size=size)
             if aligned is None:
