@@ -11,6 +11,7 @@ def test_datafile_resolve_with_path_string(tmp_path):
     df = DataFile.resolve(str(p))
     assert df.exists()
     assert df.is_local
+    assert df.abs_path() == str(p)
 
 
 def test_datafile_resolve_with_fs(tmp_path):

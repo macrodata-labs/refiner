@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, cast
 
 import pytest
@@ -22,7 +22,7 @@ from refiner.pipeline.data.row import DictRow, Row
 
 
 class _FakeReader(BaseReader):
-    def __init__(self, rows_by_shard_id: dict[str, list[Row]]):
+    def __init__(self, rows_by_shard_id: Mapping[str, Sequence[Row]]):
         self.rows_by_shard_id = rows_by_shard_id
 
     def list_shards(self) -> list[Shard]:

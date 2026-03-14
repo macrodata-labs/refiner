@@ -1,11 +1,13 @@
-from .base import BaseReader
-from .csv import CsvReader
-from .jsonl import JsonlReader
-from .parquet import ParquetReader
+from refiner.pipeline.sources.readers.base import BaseReader
+from refiner.pipeline.sources.readers.csv import CsvReader
+from refiner.pipeline.sources.readers.jsonl import JsonlReader
+from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.pipeline.sources.readers.parquet import ParquetReader
 
 __all__ = [
     "BaseReader",
     "CsvReader",
     "JsonlReader",
+    "LeRobotEpisodeReader",
     "ParquetReader",
 ]

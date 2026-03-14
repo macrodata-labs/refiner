@@ -57,4 +57,5 @@ Local iteration consumes the source stream continuously, so downstream batch ste
 - Local execution compiles pipeline steps into row/vector segments once per pipeline instance and reuses that plan across repeated runs.
 - Row/UDF segments emit row blocks; when a vectorized segment follows, those rows are converted back to Arrow blocks at the segment boundary.
 - Async row steps use the same execution engine and run through a shared process-local asyncio runtime.
+- Media file and video decoder caching are implemented under `refiner.pipeline.utils.cache`.
 - `take(n)` stops early without forcing full-stream materialization.

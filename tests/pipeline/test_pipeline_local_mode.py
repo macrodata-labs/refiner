@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 
-from refiner.pipeline.data.shard import Shard
 from refiner.pipeline import RefinerPipeline
-from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
+from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.sources.readers.base import BaseReader
 
 
 class _LocalFakeReader(BaseReader):
-    def __init__(self, shards: list[Shard], rows_by_shard_id: dict[str, list[Row]]):
+    def __init__(
+        self,
+        shards: list[Shard],
+        rows_by_shard_id: Mapping[str, Sequence[Row]],
+    ):
         self._shards = shards
         self._rows_by_shard_id = rows_by_shard_id
 

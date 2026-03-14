@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from typing import cast
 
 from refiner.pipeline.steps import (
     AsyncRowStep,
@@ -52,7 +53,8 @@ def execute_row_steps(
         result = step.apply_row_async(row)
         if inspect.isawaitable(result):
             result = await result
-        return normalize_row_result(row, result)
+        # TODO (Hynek): Resolve the typing properly.
+        return normalize_row_result(row, cast("Row | dict[str, object]", result))
 
     def _delta_add(delta: dict[str, int], shard_id: str, amount: int) -> None:
         if amount == 0:

@@ -7,7 +7,12 @@ from refiner.execution.operators.vectorized import rows_to_table
 from refiner.execution.tracking.shards import SHARD_ID_COLUMN
 from refiner.io.datafolder import DataFolder, DataFolderLike
 
-from .base import BaseSink, Block, ShardCounts, split_block_by_shard
+from refiner.pipeline.sinks.base import (
+    BaseSink,
+    Block,
+    ShardCounts,
+    split_block_by_shard,
+)
 
 
 class ParquetSink(BaseSink):

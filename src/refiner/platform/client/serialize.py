@@ -5,7 +5,7 @@ import hashlib
 
 import cloudpickle
 
-from .models import CloudPipelinePayload
+from refiner.platform.client.models import CloudPipelinePayload
 
 INLINE_PIPELINE_PAYLOAD_MAX_BYTES = 1_000_000
 

@@ -18,6 +18,7 @@ class RefinerStep(ABC):
 
 MapResult: TypeAlias = Row | Mapping[str, Any]
 MapFn: TypeAlias = Callable[[Row], MapResult]
+AsyncMapFn: TypeAlias = Callable[[Row], Awaitable[MapResult] | MapResult]
 PredicateFn: TypeAlias = Callable[[Row], bool]
 BatchItem: TypeAlias = Row | Mapping[str, Any] | None
 BatchFn: TypeAlias = Callable[[list[Row]], Iterable[BatchItem]]
@@ -198,6 +199,7 @@ def normalize_batch_item(item: BatchItem) -> Row | None:
 __all__ = [
     "RefinerStep",
     "RowStep",
+    "AsyncRowStep",
     "BatchStep",
     "FlatMapStep",
     "FnRowStep",
@@ -208,6 +210,7 @@ __all__ = [
     "FilterRowStep",
     "MapResult",
     "MapFn",
+    "AsyncMapFn",
     "PredicateFn",
     "BatchItem",
     "BatchFn",

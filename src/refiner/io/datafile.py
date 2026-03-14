@@ -49,7 +49,7 @@ class DataFile:
         if isinstance(data, str):
             if fs is not None:
                 # Best-effort strip protocol so `.path` is in the form expected by `fs.open/fs.exists`.
-                path = fs._strip_protocol(data)  # type: ignore[attr-defined]
+                path = fs._strip_protocol(data)
                 return cls(fs=fs, path=path)
 
             next_fs, path = url_to_fs(
@@ -64,6 +64,9 @@ class DataFile:
 
     def exists(self) -> bool:
         return self.fs.exists(self.path)
+
+    def abs_path(self) -> str:
+        return self.fs.unstrip_protocol(self.path).removeprefix("file://")
 
     @property
     def is_local(self) -> bool:

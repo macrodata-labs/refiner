@@ -89,7 +89,7 @@ class BoundedBinaryReader(io.RawIOBase):
     def readable(self) -> bool:
         return True
 
-    def readinto(self, b) -> int:  # type: ignore[override]
+    def readinto(self, b) -> int:
         if self._remaining <= 0:
             return 0
         max_n = len(b)

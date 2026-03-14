@@ -5,11 +5,14 @@ from typing import Any, Literal, Optional
 
 import pyarrow.parquet as pq
 from fsspec import AbstractFileSystem
+from loguru import logger
 
 from refiner.io.fileset import DataFileSetLike
-
-from .base import BaseReader, Shard, SourceUnit
-from .utils import DEFAULT_TARGET_SHARD_BYTES, clamp_target_bytes
+from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    clamp_target_bytes,
+)
 
 
 class ParquetReader(BaseReader):
@@ -164,8 +167,12 @@ class ParquetReader(BaseReader):
             if md is None:
                 # If metadata isn't available, we cannot safely map byte-ranges to row groups.
                 # Only allow read-all for the first shard; otherwise we'd duplicate work.
-                # TODO: when we have logging, warn that we're falling back to \"first shard reads all\".
                 if shard.start == 0:
+                    logger.warning(
+                        "Parquet metadata unavailable in bytes_lazy mode for {}; "
+                        "falling back to reading full file for first shard only.",
+                        shard.path,
+                    )
                     rg_indices = None
                 else:
                     return
@@ -203,8 +210,12 @@ class ParquetReader(BaseReader):
                 if start_rg is None:
                     # If weights are unavailable (all 0/None), we cannot safely map byte-ranges to row groups.
                     # Only allow read-all for the first shard; otherwise we'd duplicate work.
-                    # TODO: when we have logging, warn that we're falling back to \"first shard reads all\".
                     if a == 0:
+                        logger.warning(
+                            "Parquet row-group byte sizes unavailable in bytes_lazy mode for {}; "
+                            "falling back to reading full file for first shard only.",
+                            shard.path,
+                        )
                         rg_indices = None
                     else:
                         return

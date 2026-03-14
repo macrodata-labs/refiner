@@ -19,7 +19,7 @@ class _FakeReader(BaseReader):
         super().__init__(inputs=[])
 
     @property
-    def files(self) -> list[str]:  # type: ignore[override]
+    def files(self) -> list[str]:
         return ["data/a.parquet"]
 
     def list_shards(self) -> list[Shard]:

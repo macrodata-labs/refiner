@@ -14,8 +14,8 @@ from refiner.pipeline.steps import (
     FilterExprStep,
     FilterRowStep,
     FlatMapFn,
-    FnBatchStep,
     FnAsyncRowStep,
+    FnBatchStep,
     FnFlatMapStep,
     FnRowStep,
     MapFn,
@@ -27,11 +27,13 @@ from refiner.pipeline.steps import (
     WithColumnsStep,
 )
 from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
-from refiner.pipeline.sources import (
-    BaseSource,
-    CsvReader,
-    JsonlReader,
-    ParquetReader,
+from refiner.pipeline.sources import BaseSource, CsvReader, JsonlReader, ParquetReader
+from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.pipeline.sinks.lerobot import (
+    LeRobotStatsConfig,
+    LeRobotVideoConfig,
+    LeRobotWriterConfig,
+    LeRobotWriterSink,
 )
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
@@ -342,6 +344,38 @@ class RefinerPipeline:
         )
         return launcher.launch()
 
+    def write_lerobot(
+        self,
+        root: str,
+        *,
+        fs: AbstractFileSystem | None = None,
+        storage_options: Mapping[str, Any] | None = None,
+        overwrite: bool = False,
+        chunk_size: int = 1000,
+        data_files_size_in_mb: int = 100,
+        video_files_size_in_mb: int = 200,
+        video: LeRobotVideoConfig | None = None,
+        stats: LeRobotStatsConfig | None = None,
+        media_prelease_max_in_flight: int = 10,
+        media_prelease_preserve_order: bool = True,
+    ) -> "RefinerPipeline":
+        """Append a deferred LeRobot writer sink and return a pipeline."""
+        config = LeRobotWriterConfig(
+            root=root,
+            fs=fs,
+            storage_options=storage_options,
+            overwrite=overwrite,
+            chunk_size=chunk_size,
+            data_files_size_in_mb=data_files_size_in_mb,
+            video_files_size_in_mb=video_files_size_in_mb,
+            video=video if video is not None else LeRobotVideoConfig(),
+            stats=stats if stats is not None else LeRobotStatsConfig(),
+            media_prelease_max_in_flight=media_prelease_max_in_flight,
+            media_prelease_preserve_order=media_prelease_preserve_order,
+        )
+
+        return self.with_sink(LeRobotWriterSink(config=config))
+
 
 ## readers
 def read_csv(
@@ -412,6 +446,28 @@ def read_parquet(
             arrow_batch_size=arrow_batch_size,
             columns_to_read=columns_to_read,
             sharding_mode=sharding_mode,
+        )
+    )
+
+
+def read_lerobot(
+    root: str,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    limit: int | None = None,
+    media_max_in_flight: int = 8,
+    media_preserve_order: bool = True,
+) -> RefinerPipeline:
+    """Create a pipeline with an episode-granular LeRobot reader source."""
+    return RefinerPipeline(
+        source=LeRobotEpisodeReader(
+            root,
+            fs=fs,
+            storage_options=storage_options,
+            limit=limit,
+            media_max_in_flight=media_max_in_flight,
+            media_preserve_order=media_preserve_order,
         )
     )
 
