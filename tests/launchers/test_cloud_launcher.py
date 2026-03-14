@@ -51,7 +51,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "refiner.launchers.base.build_run_manifest",
-        lambda: {
+        lambda **_: {
             "version": 1,
             "environment": {"refiner_ref": "abc123def456"},
             "script": {"text": "print('hi')"},
@@ -130,7 +130,7 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
     )
     monkeypatch.setattr(
         "refiner.launchers.base.build_run_manifest",
-        lambda: {"version": 1},
+        lambda **_: {"version": 1},
     )
 
     pipeline = read_jsonl("input.jsonl")
@@ -138,6 +138,75 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
 
     request = cast(CloudRunCreateRequest, captured["request"])
     assert request.sync_local_dependencies is False
+
+
+def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeMacrodataClient:
+        def __init__(self):
+            self.base_url = "https://example.com"
+
+        def cloud_submit_job(self, *, request):
+            captured["request"] = request
+
+            class _Resp:
+                job_id = "job-123"
+                stage_index = 0
+                status = "queued"
+
+            return _Resp()
+
+    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.serialize_pipeline_inline",
+        lambda pipeline: CloudPipelinePayload(
+            format="cloudpickle",
+            bytes_b64="AQID",
+            sha256="abc123",
+            size_bytes=3,
+        ),
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.base.plan_pipeline_stages",
+        lambda pipeline, default_num_workers: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=default_num_workers),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.base.build_run_manifest",
+        lambda **_: {"version": 1},
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
+
+    pipeline = read_jsonl("input.jsonl")
+    pipeline.launch_cloud(
+        name="demo cloud",
+        secrets={"OPENAI_API_KEY": None, "MODEL_NAME": "gpt-5"},
+    )
+
+    request = cast(CloudRunCreateRequest, captured["request"])
+    assert request.secrets == {
+        "OPENAI_API_KEY": "env-secret",
+        "MODEL_NAME": "gpt-5",
+    }
+
+
+def test_pipeline_launch_cloud_requires_missing_env_secret(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    pipeline = read_jsonl("input.jsonl")
+
+    try:
+        pipeline.launch_cloud(name="demo cloud", secrets={"OPENAI_API_KEY": None})
+    except SystemExit as err:
+        assert "OPENAI_API_KEY" in str(err)
+    else:  # pragma: no cover
+        raise AssertionError("expected SystemExit")
 
 
 def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
@@ -190,7 +259,7 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
     )
     monkeypatch.setattr(
         "refiner.launchers.base.build_run_manifest",
-        lambda: {"version": 1},
+        lambda **_: {"version": 1},
     )
 
     pipeline = read_jsonl("input.jsonl")

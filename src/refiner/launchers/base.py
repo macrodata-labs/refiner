@@ -15,7 +15,7 @@ from refiner.platform.client.models import RunHandle
 from refiner.platform.manifest import build_run_manifest
 from refiner.pipeline.planning import (
     PlannedStage,
-    compile_planned_stages,
+    compile_planned_stages_redacted,
     plan_pipeline_stages,
 )
 
@@ -114,12 +114,20 @@ class BaseLauncher(ABC):
         )
 
     def _compiled_plan(
-        self, stages: list[PlannedStage] | None = None
+        self,
+        stages: list[PlannedStage] | None = None,
+        *,
+        secret_values: tuple[str, ...] = (),
     ) -> dict[str, object]:
-        return compile_planned_stages(stages or self._planned_stages())
+        return compile_planned_stages_redacted(
+            stages or self._planned_stages(),
+            secret_values=secret_values,
+        )
 
-    def _run_manifest(self) -> dict[str, object]:
-        return build_run_manifest()
+    def _run_manifest(
+        self, *, secret_values: tuple[str, ...] = ()
+    ) -> dict[str, object]:
+        return build_run_manifest(secret_values=secret_values)
 
     def _create_platform_run(
         self, *, plan: dict[str, object], fail_open: bool = True

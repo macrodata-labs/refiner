@@ -11,6 +11,8 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
+from refiner.redaction import redact_captured_strings
+
 
 def _is_external_script(path: Path) -> bool:
     resolved_str = str(path)
@@ -143,12 +145,12 @@ def _resolve_refiner_ref() -> str | None:
     )
 
 
-def build_run_manifest() -> dict[str, Any]:
+def build_run_manifest(*, secret_values: tuple[str, ...] = ()) -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
     refiner_ref = _resolve_refiner_ref()
 
-    return {
+    manifest = {
         "version": 1,
         "script": {
             "path": path,
@@ -162,6 +164,7 @@ def build_run_manifest() -> dict[str, Any]:
         },
         "dependencies": _collect_dependencies(),
     }
+    return redact_captured_strings(manifest, secret_values=secret_values)
 
 
 __all__ = ["build_run_manifest"]

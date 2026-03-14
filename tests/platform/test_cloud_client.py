@@ -33,6 +33,7 @@ def _request() -> CloudRunCreateRequest:
                 ),
             )
         ],
+        secrets={"OPENAI_API_KEY": "test-secret"},
     )
 
 
@@ -78,6 +79,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
             },
         }
     ]
+    assert json_payload["secrets"] == {"OPENAI_API_KEY": "test-secret"}
 
 
 def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -> None:

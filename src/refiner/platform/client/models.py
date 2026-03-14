@@ -190,6 +190,7 @@ class CloudRunCreateRequest:
     stage_payloads: list[StagePayload]
     manifest: dict[str, Any] | None = None
     sync_local_dependencies: bool = True
+    secrets: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -203,6 +204,8 @@ class CloudRunCreateRequest:
         }
         if self.manifest is not None:
             payload["manifest"] = self.manifest
+        if self.secrets:
+            payload["secrets"] = self.secrets
         return payload
 
 
