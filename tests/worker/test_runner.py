@@ -13,7 +13,7 @@ from refiner.platform.client import (
     OkResponse,
     RunHandle,
     ShardClaimResponse,
-    ShardDescriptor,
+    SerializedShard,
     WorkerStartedResponse,
 )
 from refiner.pipeline.data.shard import FilePart
@@ -133,7 +133,7 @@ class _LifecycleClientWithFailingTelemetry:
         shard = self._next_shard
         self._next_shard = None
         return ShardClaimResponse(
-            shard=ShardDescriptor(
+            shard=SerializedShard(
                 shard_id=shard.id,
                 descriptor=shard.descriptor.to_dict(),
             )

@@ -98,7 +98,7 @@ class WorkerStartedResponse(msgspec.Struct, frozen=True):
     worker_id: str
 
 
-class ShardDescriptor(msgspec.Struct, frozen=True):
+class SerializedShard(msgspec.Struct, frozen=True):
     shard_id: str = msgspec.field(name="shard_id")
     descriptor: dict[str, Any]
     global_ordinal: int | None = None
@@ -106,7 +106,7 @@ class ShardDescriptor(msgspec.Struct, frozen=True):
     end_key: str | None = None
 
     @classmethod
-    def from_shard(cls, shard: Shard) -> ShardDescriptor:
+    def from_shard(cls, shard: Shard) -> SerializedShard:
         return cls(
             shard_id=shard.id,
             global_ordinal=shard.global_ordinal,
@@ -126,7 +126,7 @@ class ShardDescriptor(msgspec.Struct, frozen=True):
 
 
 class ShardClaimResponse(msgspec.Struct, frozen=True):
-    shard: ShardDescriptor | None
+    shard: SerializedShard | None
 
 
 class FinalizedShardWorker(msgspec.Struct, frozen=True):

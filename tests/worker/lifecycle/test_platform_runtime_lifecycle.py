@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from refiner.platform.client import OkResponse, RunHandle, ShardClaimResponse
-from refiner.platform.client import ShardDescriptor
+from refiner.platform.client import SerializedShard
 from refiner.worker.lifecycle.platform import PlatformRuntimeLifecycle
 from refiner.pipeline.data.shard import FilePart, Shard
 
@@ -19,7 +19,7 @@ def test_platform_runtime_register_and_lifecycle() -> None:
         def shard_claim(self, **kwargs):
             calls.append(("claim", kwargs))
             return ShardClaimResponse(
-                shard=ShardDescriptor(
+                shard=SerializedShard(
                     shard_id=Shard.from_file_parts(
                         [FilePart(path="p0", start=0, end=1)]
                     ).id,

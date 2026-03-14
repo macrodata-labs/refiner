@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor, Shard
 from refiner.platform.client import compile_shard_descriptors
-from refiner.platform.client import ShardDescriptor
+from refiner.platform.client import SerializedShard
 
 
 def test_compile_shard_descriptors_uses_stable_shard_id() -> None:
@@ -13,7 +13,7 @@ def test_compile_shard_descriptors_uses_stable_shard_id() -> None:
     )
     descriptors = compile_shard_descriptors([shard])
     assert descriptors == [
-        ShardDescriptor(
+        SerializedShard(
             shard_id=shard.id,
             global_ordinal=None,
             start_key=shard.start_key,
