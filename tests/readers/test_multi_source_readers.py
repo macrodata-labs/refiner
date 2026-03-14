@@ -53,6 +53,17 @@ def test_datafileset_resolve_accepts_mixed_filesystems() -> None:
         assert fileset.files[1].path == "remote.jsonl"
 
 
+def test_datafileset_resolve_accepts_path_fs_tuple() -> None:
+    memfs = MemoryFileSystem()
+    memfs.pipe("remote.jsonl", b'{"x": 1}\n')
+
+    fileset = DataFileSet.resolve([("remote.jsonl", memfs)])
+
+    assert len(fileset.entries) == 1
+    assert len(fileset.files) == 1
+    assert fileset.files[0].fs is memfs
+
+
 def test_jsonl_reader_reads_across_multiple_directories() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)

@@ -4,15 +4,15 @@ import glob
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from os import PathLike
-from typing import Any, TypeAlias, Union
+from typing import Any, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
 
-from refiner.io.datafile import DataFile
-from refiner.io.datafolder import DataFolder
+from refiner.io.datafile import DataFile, DataFileSpec
+from refiner.io.datafolder import DataFolder, DataFolderSpec
 
 DataFileSetInput: TypeAlias = Union[
-    str, PathLike[str], DataFile, DataFolder, "DataFileSet"
+    str, PathLike[str], DataFileSpec, DataFolderSpec, DataFile, DataFolder
 ]
 DataFileSetLike: TypeAlias = Union[DataFileSetInput, Sequence[DataFileSetInput]]
 
@@ -36,6 +36,8 @@ class DataFileSet:
     Notes:
         - This object preserves user input order without eagerly listing or globbing.
         - Source entries are normalized to `DataFile`, `DataFolder`, or a deferred string path.
+        - `(path, fs)` inputs are accepted and kept lazy like plain string paths.
+        - Nested `DataFileSet` inputs are not supported.
         - Concrete files are expanded lazily when `files`, `expand_sources()`, or `size()` is used.
     """
 
@@ -63,7 +65,13 @@ class DataFileSet:
         if isinstance(data, cls):
             return data
 
-        if isinstance(data, (str, PathLike, DataFile, DataFolder, DataFileSet)):
+        if (
+            isinstance(data, tuple)
+            and len(data) == 2
+            and isinstance(data[1], AbstractFileSystem)
+        ):
+            inputs = (data,)
+        elif isinstance(data, (str, PathLike, DataFile, DataFolder)):
             inputs = (data,)
         else:
             inputs = tuple(data)
@@ -72,10 +80,6 @@ class DataFileSet:
         normalized_entries: list[DataFile | DataFolder | _PathSource] = []
 
         for item in inputs:
-            if isinstance(item, DataFileSet):
-                normalized_entries.extend(item.entries)
-                continue
-
             if isinstance(item, DataFile):
                 normalized_entries.append(item)
                 continue
@@ -84,12 +88,27 @@ class DataFileSet:
                 normalized_entries.append(item)
                 continue
 
+            if (
+                isinstance(item, tuple)
+                and len(item) == 2
+                and isinstance(item[1], AbstractFileSystem)
+            ):
+                path, item_fs = cast(DataFileSpec | DataFolderSpec, item)
+                if isinstance(path, PathLike):
+                    path = str(path)
+                if not isinstance(path, str):
+                    raise TypeError(
+                        "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
+                    )
+                normalized_entries.append(_PathSource(raw=path, fs=item_fs))
+                continue
+
             if isinstance(item, PathLike):
                 item = str(item)
 
             if not isinstance(item, str):
                 raise TypeError(
-                    "DataFileSet inputs must be str | PathLike | DataFile | DataFolder | DataFileSet"
+                    "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                 )
 
             normalized_entries.append(

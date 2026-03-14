@@ -8,7 +8,9 @@ from typing import Any, TypeAlias, Union, cast
 from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.local import LocalFileSystem
 
-DataFileLike: TypeAlias = Union[str, PathLike[str], "DataFile"]
+DataFilePath: TypeAlias = str | PathLike[str]
+DataFileSpec: TypeAlias = tuple[DataFilePath, AbstractFileSystem]
+DataFileLike: TypeAlias = Union[DataFilePath, DataFileSpec, "DataFile"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +20,7 @@ class DataFile:
     Notes:
         - `path` is stored in the form expected by `fs.open/fs.exists` (no protocol required).
         - `resolve()` only normalizes `(fs, path)`; it does not check existence or list anything.
-        - `resolve()` accepts `str` URL/path or `DataFile` (pass-through).
+        - `resolve()` accepts `str` URL/path, `(path, fs)`, or `DataFile` (pass-through).
         - If `fs` is provided to `resolve()`, it wins and `storage_options` is ignored.
     """
 
@@ -33,15 +35,24 @@ class DataFile:
         fs: AbstractFileSystem | None = None,
         storage_options: Mapping[str, Any] | None = None,
     ) -> "DataFile":
-        """Resolve a string URL/path into a `DataFile`, or pass through an existing `DataFile`.
+        """Resolve a path into a `DataFile`, or pass through an existing `DataFile`.
 
         Args:
-            data: A `str` URL/path or an existing `DataFile`.
+            data: A URL/path, `(path, fs)` pair, or an existing `DataFile`.
             fs: Optional initialized filesystem to use. If provided, `storage_options` is ignored.
             storage_options: Optional fsspec filesystem init options (used only when `fs` is not provided).
         """
         if isinstance(data, cls):
             return data
+
+        if (
+            isinstance(data, tuple)
+            and len(data) == 2
+            and isinstance(data[1], AbstractFileSystem)
+        ):
+            spec = cast(DataFileSpec, data)
+            data = spec[0]
+            fs = spec[1]
 
         if isinstance(data, PathLike):
             data = str(data)
@@ -58,7 +69,7 @@ class DataFile:
             )
             return cls(fs=next_fs, path=path)
 
-        raise TypeError("DataFileLike must be: str | PathLike | DataFile")
+        raise TypeError("DataFileLike must be: str | PathLike | (path, fs) | DataFile")
 
     def open(self, mode: str = "rt", **kwargs):
         return self.fs.open(self.path, mode=mode, **kwargs)
