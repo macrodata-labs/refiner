@@ -8,9 +8,8 @@ REDACTION_PLACEHOLDER = "REDACTED_KEY"
 
 def redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
     redacted = text
-    for secret_value in secret_values:
-        if secret_value:
-            redacted = redacted.replace(secret_value, REDACTION_PLACEHOLDER)
+    for secret_value in sorted((value for value in secret_values if value), key=len, reverse=True):
+        redacted = redacted.replace(secret_value, REDACTION_PLACEHOLDER)
     return redacted
 
 
