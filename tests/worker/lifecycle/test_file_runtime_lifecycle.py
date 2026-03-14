@@ -102,3 +102,21 @@ def test_file_runtime_stages_are_isolated(tmp_path: Path) -> None:
     assert claimed_zero.path == "p0"
     assert claimed_one is not None
     assert claimed_one.path == "p1"
+
+
+def test_file_runtime_prefers_same_locality_without_exact_boundary(
+    tmp_path: Path,
+) -> None:
+    lifecycle = FileRuntimeLifecycle(job_id="job6", worker_id=1, workdir=str(tmp_path))
+    shard0 = Shard(path="p0", start=0, end=1, global_ordinal=0)
+    shard1 = Shard(path="p0", start=10, end=11, global_ordinal=1)
+    shard2 = Shard(path="p1", start=0, end=1, global_ordinal=2)
+    lifecycle.seed_shards([shard0, shard1, shard2])
+
+    first = lifecycle.claim()
+    assert first is not None
+    lifecycle.complete(first)
+
+    second = lifecycle.claim(previous=first)
+    assert second is not None
+    assert second.start_key == shard1.start_key

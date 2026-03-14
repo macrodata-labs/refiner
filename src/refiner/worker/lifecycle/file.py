@@ -12,10 +12,10 @@ from pathlib import Path
 
 from refiner.pipeline.data.shard import (
     Shard,
+    ShardPart,
     format_leased_filename,
     format_pending_filename,
     parse_shard_filename,
-    strip_worker_suffix,
 )
 from refiner.worker.workdir import resolve_workdir
 
@@ -37,9 +37,9 @@ class ClaimPolicy:
 
     @dataclass(frozen=True, slots=True)
     class _ShardKey:
-        file_key: str
-        start: int
-        end: int
+        start_key: str | None
+        end_key: str | None
+        global_ordinal: int | None
         shard_id: str
 
     def claim_key(
@@ -50,88 +50,90 @@ class ClaimPolicy:
         pending_ids: set[str],
         try_claim: Callable[[_ShardKey], bool],
     ) -> _ShardKey | None:
-        by_file_all: dict[str, list[ClaimPolicy._ShardKey]] = defaultdict(list)
-        by_file_pending: dict[str, list[ClaimPolicy._ShardKey]] = defaultdict(list)
-        by_file_pending_by_start: dict[tuple[str, int], ClaimPolicy._ShardKey] = {}
+        by_key_all: dict[str, list[ClaimPolicy._ShardKey]] = defaultdict(list)
+        by_key_pending: dict[str, list[ClaimPolicy._ShardKey]] = defaultdict(list)
 
-        for k in all_keys:
-            by_file_all[k.file_key].append(k)
-        for fk in by_file_all:
-            by_file_all[fk].sort(key=lambda r: (r.start, r.end, r.shard_id))
-
-        for fk, all_list in by_file_all.items():
-            pending_for_file = [k for k in all_list if k.shard_id in pending_ids]
-            if not pending_for_file:
+        for key in all_keys:
+            if key.start_key is None:
                 continue
-            by_file_pending[fk] = pending_for_file
-            for k in pending_for_file:
-                by_file_pending_by_start[(fk, int(k.start))] = k
-        for fk in by_file_pending:
-            by_file_pending[fk].sort(key=lambda r: (r.start, r.end, r.shard_id))
+            by_key_all[key.start_key].append(key)
+        for start_key in by_key_all:
+            by_key_all[start_key].sort(
+                key=lambda key: (
+                    key.global_ordinal is None,
+                    key.global_ordinal,
+                    key.shard_id,
+                )
+            )
 
-        if not by_file_pending:
+        for start_key, all_list in by_key_all.items():
+            pending_for_key = [key for key in all_list if key.shard_id in pending_ids]
+            if not pending_for_key:
+                continue
+            by_key_pending[start_key] = pending_for_key
+
+        if not by_key_pending:
             return None
 
-        def _try_file(
-            file_key: str, prev: Shard | None
+        def _try_key(
+            start_key: str, previous_key: str | None, previous_ordinal: int | None
         ) -> ClaimPolicy._ShardKey | None:
-            pending_list = by_file_pending.get(file_key, [])
+            pending_list = by_key_pending.get(start_key, [])
             if not pending_list:
                 return None
 
-            if prev is not None and prev.file_key == file_key:
-                cand = by_file_pending_by_start.get((file_key, int(prev.end)))
-                if cand is not None and try_claim(cand):
-                    return cand
+            if previous_key == start_key and previous_ordinal is not None:
+                for candidate in pending_list:
+                    if (
+                        candidate.global_ordinal is not None
+                        and candidate.global_ordinal > previous_ordinal
+                        and try_claim(candidate)
+                    ):
+                        return candidate
 
-            all_list = by_file_all[file_key]
-            n = len(all_list)
-            if n <= 0:
+            for candidate in pending_list:
+                if try_claim(candidate):
+                    return candidate
+
+            all_list = by_key_all[start_key]
+            total = len(all_list)
+            if total <= 0:
                 return None
-            bs = ClaimPolicy.BLOCK_SIZE
-            num_blocks = (n + bs - 1) // bs
-            offset = _h_int(self.job_id, str(self.worker_id), file_key) % max(
+            if total < ClaimPolicy.BLOCK_SIZE * 2:
+                return None
+
+            num_blocks = (total + ClaimPolicy.BLOCK_SIZE - 1) // ClaimPolicy.BLOCK_SIZE
+            offset = _h_int(self.job_id, str(self.worker_id), start_key) % max(
                 1, num_blocks
             )
-            for j in range(num_blocks):
-                k = (offset + j) % num_blocks
-                idx = k * bs
-                if idx >= n:
-                    continue
-                shard = all_list[idx]
-                if shard.shard_id not in pending_ids:
-                    continue
-                if try_claim(shard):
-                    return shard
+            for block_index in range(num_blocks):
+                block = (offset + block_index) % num_blocks
+                target_ordinal = block * ClaimPolicy.BLOCK_SIZE
+                for candidate in pending_list:
+                    if candidate.global_ordinal == target_ordinal and try_claim(
+                        candidate
+                    ):
+                        return candidate
 
-            ordered = sorted(
-                pending_list,
-                key=lambda s: _h_int(self.job_id, str(self.worker_id), s.shard_id),
-            )
-            for shard in ordered:
-                if try_claim(shard):
-                    return shard
             return None
-
-        file_keys = sorted(by_file_pending.keys())
 
         tried: set[str] = set()
         if previous is not None:
-            fk_prev = previous.file_key
-            if fk_prev in by_file_pending:
-                tried.add(fk_prev)
-                out = _try_file(fk_prev, previous)
-                if out is not None:
-                    return out
+            previous_key = previous.end_key or previous.start_key
+            if previous_key and previous_key in by_key_pending:
+                tried.add(previous_key)
+                picked = _try_key(previous_key, previous_key, previous.global_ordinal)
+                if picked is not None:
+                    return picked
 
-        file_keys_sorted = sorted(
-            (fk for fk in file_keys if fk not in tried),
-            key=lambda fk: _h_int(self.job_id, str(self.worker_id), fk),
+        start_keys = sorted(
+            (start_key for start_key in by_key_pending if start_key not in tried),
+            key=lambda start_key: _h_int(self.job_id, str(self.worker_id), start_key),
         )
-        for fk in file_keys_sorted:
-            out = _try_file(fk, None)
-            if out is not None:
-                return out
+        for start_key in start_keys:
+            picked = _try_key(start_key, None, None)
+            if picked is not None:
+                return picked
 
         return None
 
@@ -155,10 +157,10 @@ class FileRuntimeLifecycle:
     """Filesystem-backed runtime shard lifecycle.
 
     Layout (under `<workdir>/runs/<job_id>/lifecycle/`):
-      - pending/<pathhash>__<start>__<end>__<shardid>.json
-      - leased/<same>__w<workerid>.json          (mtime is lease freshness)
-      - done/<same>.json
-      - failed/<same>.json (+ optional `<same>.error`)
+      - pending/<shardid>.json
+      - leased/<shardid>__w<workerid>.json
+      - done/<shardid>.json
+      - failed/<shardid>.json (+ optional `<same>.error`)
     """
 
     def __init__(
@@ -222,11 +224,7 @@ class FileRuntimeLifecycle:
                     pass
 
         for shard in shards:
-            payload = {
-                "path": shard.path,
-                "start": int(shard.start),
-                "end": int(shard.end),
-            }
+            payload = shard.to_dict()
             (self._pending_dir / shard.pending_filename()).write_text(
                 json.dumps(payload, sort_keys=True)
             )
@@ -247,32 +245,28 @@ class FileRuntimeLifecycle:
             return False
 
     @staticmethod
-    def _key_from_filename(name: str) -> ClaimPolicy._ShardKey | None:
+    def _key_from_payload(payload: dict[str, object]) -> ClaimPolicy._ShardKey | None:
         try:
-            pathhash, start, end, shard_id, worker_id = parse_shard_filename(name)
+            shard_id = str(payload["shard_id"])
         except Exception:
             return None
-        if worker_id is not None:
-            return None
+        start_key = payload.get("start_key")
+        end_key = payload.get("end_key")
+        global_ordinal = payload.get("global_ordinal")
         return ClaimPolicy._ShardKey(
-            file_key=pathhash, start=int(start), end=int(end), shard_id=shard_id
+            start_key=start_key if isinstance(start_key, str) else None,
+            end_key=end_key if isinstance(end_key, str) else None,
+            global_ordinal=global_ordinal if isinstance(global_ordinal, int) else None,
+            shard_id=shard_id,
         )
 
     @staticmethod
     def _pending_name_from_key(key: ClaimPolicy._ShardKey) -> str:
-        return format_pending_filename(
-            pathhash=key.file_key, start=key.start, end=key.end, shard_id=key.shard_id
-        )
+        return format_pending_filename(shard_id=key.shard_id)
 
     @staticmethod
     def _leased_name_from_key(key: ClaimPolicy._ShardKey, worker_id: int) -> str:
-        return format_leased_filename(
-            pathhash=key.file_key,
-            start=key.start,
-            end=key.end,
-            shard_id=key.shard_id,
-            worker_id=worker_id,
-        )
+        return format_leased_filename(shard_id=key.shard_id, worker_id=worker_id)
 
     def claim(self, previous: Shard | None = None) -> Shard | None:
         worker_id = self._require_worker_id()
@@ -304,7 +298,7 @@ class FileRuntimeLifecycle:
                 continue
 
             try:
-                base = strip_worker_suffix(name)
+                base = format_pending_filename(shard_id=parse_shard_filename(name)[0])
             except Exception:
                 self._safe_unlink(entry.path)
                 continue
@@ -328,23 +322,27 @@ class FileRuntimeLifecycle:
         all_keys: set[ClaimPolicy._ShardKey] = set()
 
         for name in pending_names:
-            key = self._key_from_filename(name)
+            payload = json.loads((self._pending_dir / name).read_text())
+            key = self._key_from_payload(payload)
             if key is None:
                 continue
             pending_ids.add(key.shard_id)
             all_keys.add(key)
 
         for name in done_names | failed_names:
-            key = self._key_from_filename(name)
+            directory = self._done_dir if name in done_names else self._failed_dir
+            key = self._key_from_payload(json.loads((directory / name).read_text()))
             if key is not None:
                 all_keys.add(key)
 
         for name in leased_names_effective:
             try:
-                base = strip_worker_suffix(name)
+                parse_shard_filename(name)
             except Exception:
                 continue
-            key = self._key_from_filename(base)
+            key = self._key_from_payload(
+                json.loads((self._leased_dir / name).read_text())
+            )
             if key is not None:
                 all_keys.add(key)
 
@@ -370,8 +368,42 @@ class FileRuntimeLifecycle:
         leased_name = self._leased_name_from_key(picked, worker_id)
         leased_path = self._leased_dir / leased_name
         payload = json.loads(leased_path.read_text())
+        descriptor = payload.get("descriptor") or {
+            "parts": [
+                {
+                    "path": payload["path"],
+                    "start": payload["start"],
+                    "end": payload["end"],
+                    "source_index": payload.get("source_index", 0),
+                    "unit": payload.get("unit", "bytes"),
+                }
+            ]
+        }
         return Shard(
-            path=payload["path"], start=int(payload["start"]), end=int(payload["end"])
+            path=payload["path"],
+            start=int(payload["start"]),
+            end=int(payload["end"]),
+            parts=tuple(
+                ShardPart(
+                    path=part["path"],
+                    start=int(part["start"]),
+                    end=int(part["end"]),
+                    source_index=int(part.get("source_index", 0)),
+                    unit=str(part.get("unit", "bytes")),
+                )
+                for part in descriptor["parts"]
+            ),
+            source_index=int(payload.get("source_index", 0)),
+            unit=str(payload.get("unit", "bytes")),
+            global_ordinal=payload.get("global_ordinal")
+            if isinstance(payload.get("global_ordinal"), int)
+            else None,
+            start_key=payload.get("start_key")
+            if isinstance(payload.get("start_key"), str)
+            else None,
+            end_key=payload.get("end_key")
+            if isinstance(payload.get("end_key"), str)
+            else None,
         )
 
     def heartbeat(self, shards: Iterable[Shard]) -> None:

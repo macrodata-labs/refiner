@@ -38,6 +38,7 @@ from refiner.pipeline.sinks.lerobot import (
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data.row import Row
+from refiner.pipeline.data.shard import coalesce_shards
 from refiner.execution.engine import (
     Block,
     Segment,
@@ -229,6 +230,10 @@ class RefinerPipeline:
         """Local execution mode: lazily process all shards and yield output rows."""
         return iter_rows(self.execute(self.source.read()))
 
+    def list_shards(self):
+        shards = list(self.source.list_shards())
+        return coalesce_shards(shards, self.sink.num_shards if self.sink else None)
+
     def materialize(self) -> list[Row]:
         """Compute all output rows into memory (local/dev utility)."""
         return list(self.iter_rows())
@@ -249,11 +254,13 @@ class RefinerPipeline:
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}.jsonl",
+        num_shards: int | None = None,
     ) -> "RefinerPipeline":
         return self.with_sink(
             JsonlSink(
                 output=output,
                 filename_template=filename_template,
+                num_shards=num_shards,
             )
         )
 
@@ -263,12 +270,14 @@ class RefinerPipeline:
         *,
         filename_template: str = "{shard_id}.parquet",
         compression: str | None = None,
+        num_shards: int | None = None,
     ) -> "RefinerPipeline":
         return self.with_sink(
             ParquetSink(
                 output=output,
                 filename_template=filename_template,
                 compression=compression,
+                num_shards=num_shards,
             )
         )
 
@@ -438,6 +447,7 @@ def read_parquet(
     arrow_batch_size: int = 65536,
     columns_to_read: Sequence[str] | None = None,
     sharding_mode: Literal["rowgroups", "bytes_lazy"] = "rowgroups",
+    split_row_groups: bool = False,
 ) -> RefinerPipeline:
     """Create a pipeline with a Parquet reader source."""
     return RefinerPipeline(
@@ -450,6 +460,7 @@ def read_parquet(
             arrow_batch_size=arrow_batch_size,
             columns_to_read=columns_to_read,
             sharding_mode=sharding_mode,
+            split_row_groups=split_row_groups,
         )
     )
 

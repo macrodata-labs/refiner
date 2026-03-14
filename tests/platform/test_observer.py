@@ -14,5 +14,9 @@ def test_compile_shard_descriptors_uses_stable_shard_id() -> None:
             path="s3://bucket/file.parquet",
             start=10,
             end=20,
+            global_ordinal=None,
+            start_key=shard.start_key,
+            end_key=shard.end_key,
+            descriptor={"parts": [part.to_dict() for part in shard.parts]},
         )
     ]

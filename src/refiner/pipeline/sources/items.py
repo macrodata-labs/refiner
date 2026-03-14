@@ -34,7 +34,15 @@ class ItemsSource(BaseSource):
         shards: list[Shard] = []
         for start in range(0, self._row_count, self._shard_size_rows):
             end = min(self._row_count, start + self._shard_size_rows)
-            shards.append(Shard(path=self._source_path, start=start, end=end))
+            shards.append(
+                Shard(
+                    path=self._source_path,
+                    start=start,
+                    end=end,
+                    unit="rows",
+                    global_ordinal=len(shards),
+                )
+            )
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:

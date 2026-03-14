@@ -29,6 +29,7 @@ class ParquetReader(BaseReader):
         arrow_batch_size: int = 65536,
         columns_to_read: Sequence[str] | None = None,
         sharding_mode: Literal["rowgroups", "bytes_lazy"] = "rowgroups",
+        split_row_groups: bool = False,
     ):
         """Create a Parquet reader.
 
@@ -64,12 +65,13 @@ class ParquetReader(BaseReader):
         if sharding_mode not in ("rowgroups", "bytes_lazy"):
             raise ValueError("sharding_mode must be 'rowgroups' or 'bytes_lazy'")
         self.sharding_mode = sharding_mode
+        self.split_row_groups = split_row_groups
 
         self._open_pf: Optional[pq.ParquetFile] = None
 
-    def _get_parquet_file(self, path: str) -> pq.ParquetFile:
+    def _get_parquet_file(self, source_file) -> pq.ParquetFile:
         """Get or open a cached ParquetFile for the current path (single-open-file policy)."""
-        fh, opened_new = self._get_file_handle(path, mode="rb")
+        fh, opened_new = self._get_file_handle(source_file, mode="rb")
         if opened_new or self._open_pf is None:
             # fsspec file objects are usually seekable and acceptable for pyarrow.parquet
             self._open_pf = pq.ParquetFile(fh)
@@ -88,12 +90,24 @@ class ParquetReader(BaseReader):
             - `end == -1` is used as a sentinel meaning \"read the whole file\".
         """
         shards: list[Shard] = []
-        for path in self.files:
-            size = self.fileset.size(path)
+        global_ordinal = 0
+        for source_index, file in enumerate(self.source_files):
+            size = self.fileset.size(source_index)
 
             # Fast path: if the whole file is smaller than the target, keep it as a single shard.
-            if size <= self.target_shard_bytes:
-                shards.append(Shard(path=path, start=0, end=-1))
+            if size <= self.target_shard_bytes and (
+                self.sharding_mode != "rowgroups" or not self.split_row_groups
+            ):
+                shards.append(
+                    Shard(
+                        path=file.path,
+                        start=0,
+                        end=-1,
+                        source_index=source_index,
+                        global_ordinal=global_ordinal,
+                    )
+                )
+                global_ordinal += 1
                 continue
 
             if self.sharding_mode == "bytes_lazy":
@@ -101,15 +115,33 @@ class ParquetReader(BaseReader):
                 start = 0
                 while start < size:
                     end = min(size, start + self.target_shard_bytes)
-                    shards.append(Shard(path=path, start=start, end=end))
+                    shards.append(
+                        Shard(
+                            path=file.path,
+                            start=start,
+                            end=end,
+                            source_index=source_index,
+                            global_ordinal=global_ordinal,
+                        )
+                    )
+                    global_ordinal += 1
                     start = end
                 continue
 
-            pf = self._get_parquet_file(path)
+            pf = self._get_parquet_file(file)
             md = pf.metadata
             if md is None:
                 # no metadata? treat as 1 shard (best-effort)
-                shards.append(Shard(path=path, start=0, end=-1))
+                shards.append(
+                    Shard(
+                        path=file.path,
+                        start=0,
+                        end=-1,
+                        source_index=source_index,
+                        global_ordinal=global_ordinal,
+                    )
+                )
+                global_ordinal += 1
                 continue
 
             n = md.num_row_groups
@@ -120,9 +152,39 @@ class ParquetReader(BaseReader):
             start = 0
             acc = 0
             for rg in range(n):
-                # this doesn't perform extra I/O btw as its in the metadata
                 rg_bytes = md.row_group(rg).total_byte_size
                 rg_bytes = int(rg_bytes) if rg_bytes is not None else 0
+                rg_rows = md.row_group(rg).num_rows
+                rg_rows = int(rg_rows) if rg_rows is not None else 0
+
+                if (
+                    self.split_row_groups
+                    and rg == start
+                    and rg_rows > 1
+                    and (rg_bytes <= 0 or rg_bytes > self.target_shard_bytes)
+                ):
+                    rows_per_shard = max(
+                        1,
+                        int(rg_rows * (self.target_shard_bytes / max(1, rg_bytes))),
+                    )
+                    row_start = 0
+                    while row_start < rg_rows:
+                        row_end = min(rg_rows, row_start + rows_per_shard)
+                        shards.append(
+                            Shard(
+                                path=file.path,
+                                start=row_start,
+                                end=row_end,
+                                source_index=source_index,
+                                unit=f"rows:{rg}",
+                                global_ordinal=global_ordinal,
+                            )
+                        )
+                        global_ordinal += 1
+                        row_start = row_end
+                    start = rg + 1
+                    acc = 0
+                    continue
 
                 # always include at least one row group per shard
                 if rg == start:
@@ -133,106 +195,131 @@ class ParquetReader(BaseReader):
                     end = rg
                     shards.append(
                         Shard(
-                            path=path,
+                            path=file.path,
                             start=start,
                             end=end,
+                            source_index=source_index,
+                            global_ordinal=global_ordinal,
+                            unit="row_groups",
                         )
                     )
+                    global_ordinal += 1
                     start = rg
                     acc = rg_bytes
                 else:
                     acc += rg_bytes
 
             # tail shard
-            shards.append(
-                Shard(
-                    path=path,
-                    start=start,
-                    end=n,
+            if start < n:
+                shards.append(
+                    Shard(
+                        path=file.path,
+                        start=start,
+                        end=n,
+                        source_index=source_index,
+                        global_ordinal=global_ordinal,
+                        unit="row_groups",
+                    )
                 )
-            )
+                global_ordinal += 1
 
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read a parquet shard and yield Arrow RecordBatches."""
-        pf = self._get_parquet_file(shard.path)
-
-        # Determine row groups to read.
-        if shard.end == -1:
-            rg_indices = None
-        elif self.sharding_mode == "bytes_lazy":
-            # Interpret shard.start/end as byte-range planning hints and map to row groups deterministically.
-            md = pf.metadata
-            if md is None:
-                # If metadata isn't available, we cannot safely map byte-ranges to row groups.
-                # Only allow read-all for the first shard; otherwise we'd duplicate work.
-                if shard.start == 0:
-                    logger.warning(
-                        "Parquet metadata unavailable in bytes_lazy mode for {}; "
-                        "falling back to reading full file for first shard only.",
-                        shard.path,
-                    )
-                    rg_indices = None
-                else:
-                    return
-            else:
-                n = md.num_row_groups
-                if n <= 0:
-                    return
-
-                file_size = self.fileset.size(shard.path)
-                if file_size <= 0:
-                    return
-
-                a = max(0, shard.start)
-                b = min(file_size, shard.end)
-                if b <= a:
-                    return
-
-                # Map the planned byte range [a, b) to a contiguous row-group range using row-group byte sizes
-                # as weights. This is approximate (row-group bytes won't sum exactly to file_size), but it's
-                # deterministic and avoids planning-time metadata reads.
-                cum = 0
-                start_rg: Optional[int] = None
-                end_rg: Optional[int] = None
-                for i in range(n):
-                    w = md.row_group(i).total_byte_size
-                    w_i = int(w) if w is not None else 0
-                    # [!] Include row groups whose *start* offset is within [a, b).
-                    if a <= cum < b:
-                        if start_rg is None:
-                            start_rg = i
-                        end_rg = i + 1
-
-                    cum += w_i
-
-                if start_rg is None:
-                    # If weights are unavailable (all 0/None), we cannot safely map byte-ranges to row groups.
+        for part in shard.parts:
+            source = self.source_files[part.source_index]
+            pf = self._get_parquet_file(source)
+            if part.end == -1:
+                rg_indices = None
+            elif part.unit.startswith("rows:"):
+                row_group = int(part.unit.split(":", 1)[1])
+                offset = 0
+                remaining = part.end - part.start
+                for batch in pf.iter_batches(
+                    row_groups=[row_group],
+                    batch_size=self.arrow_batch_size,
+                    columns=self.columns_to_read,
+                ):
+                    batch_rows = int(batch.num_rows)
+                    if offset + batch_rows <= part.start:
+                        offset += batch_rows
+                        continue
+                    begin = max(0, part.start - offset)
+                    length = min(batch_rows - begin, remaining)
+                    if length > 0:
+                        yield batch.slice(begin, length)
+                        remaining -= length
+                    offset += batch_rows
+                    if remaining <= 0:
+                        break
+                continue
+            elif self.sharding_mode == "bytes_lazy":
+                # Interpret shard.start/end as byte-range planning hints and map to row groups deterministically.
+                md = pf.metadata
+                if md is None:
+                    # If metadata isn't available, we cannot safely map byte-ranges to row groups.
                     # Only allow read-all for the first shard; otherwise we'd duplicate work.
-                    if a == 0:
+                    if part.start == 0:
                         logger.warning(
-                            "Parquet row-group byte sizes unavailable in bytes_lazy mode for {}; "
+                            "Parquet metadata unavailable in bytes_lazy mode for {}; "
                             "falling back to reading full file for first shard only.",
-                            shard.path,
+                            part.path,
                         )
                         rg_indices = None
                     else:
-                        return
+                        continue
                 else:
-                    assert end_rg is not None
-                    rg_indices = list(range(start_rg, end_rg))
-        else:
-            # start and end are row-group indices
-            rg_indices = list(range(shard.start, shard.end))
+                    n = md.num_row_groups
+                    if n <= 0:
+                        continue
 
-        # Stream record batches so we don't load the whole shard into memory at once.
-        for batch in pf.iter_batches(
-            row_groups=rg_indices,
-            batch_size=self.arrow_batch_size,
-            columns=self.columns_to_read,
-        ):
-            yield batch
+                    file_size = self.fileset.size(part.source_index)
+                    if file_size <= 0:
+                        continue
+
+                    a = max(0, part.start)
+                    b = min(file_size, part.end)
+                    if b <= a:
+                        continue
+
+                    cum = 0
+                    start_rg: Optional[int] = None
+                    end_rg: Optional[int] = None
+                    for i in range(n):
+                        w = md.row_group(i).total_byte_size
+                        w_i = int(w) if w is not None else 0
+                        if a <= cum < b:
+                            if start_rg is None:
+                                start_rg = i
+                            end_rg = i + 1
+                        cum += w_i
+
+                    if start_rg is None:
+                        # If weights are unavailable (all 0/None), we cannot safely map byte-ranges to row groups.
+                        # Only allow read-all for the first shard; otherwise we'd duplicate work.
+                        if a == 0:
+                            logger.warning(
+                                "Parquet row-group byte sizes unavailable in bytes_lazy mode for {}; "
+                                "falling back to reading full file for first shard only.",
+                                part.path,
+                            )
+                            rg_indices = None
+                        else:
+                            continue
+                    else:
+                        assert end_rg is not None
+                        rg_indices = list(range(start_rg, end_rg))
+            else:
+                # start and end are row-group indices
+                rg_indices = list(range(part.start, part.end))
+
+            for batch in pf.iter_batches(
+                row_groups=rg_indices,
+                batch_size=self.arrow_batch_size,
+                columns=self.columns_to_read,
+            ):
+                yield batch
 
 
 __all__ = ["ParquetReader"]

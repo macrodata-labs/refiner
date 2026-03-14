@@ -103,10 +103,25 @@ class ShardDescriptor(msgspec.Struct, frozen=True):
     path: str
     start: int
     end: int
+    source_index: int = 0
+    global_ordinal: int | None = None
+    start_key: str | None = None
+    end_key: str | None = None
+    descriptor: dict[str, Any] | None = None
 
     @classmethod
     def from_shard(cls, shard: Shard) -> ShardDescriptor:
-        return cls(shard_id=shard.id, path=shard.path, start=shard.start, end=shard.end)
+        return cls(
+            shard_id=shard.id,
+            path=shard.path,
+            start=shard.start,
+            end=shard.end,
+            source_index=shard.source_index,
+            global_ordinal=shard.global_ordinal,
+            start_key=shard.start_key,
+            end_key=shard.end_key,
+            descriptor={"parts": [part.to_dict() for part in shard.parts]},
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -114,6 +129,11 @@ class ShardDescriptor(msgspec.Struct, frozen=True):
             "path": self.path,
             "start": self.start,
             "end": self.end,
+            "source_index": self.source_index,
+            "global_ordinal": self.global_ordinal,
+            "start_key": self.start_key,
+            "end_key": self.end_key,
+            "descriptor": self.descriptor,
         }
 
 
