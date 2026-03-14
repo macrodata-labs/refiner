@@ -75,14 +75,8 @@ class ClaimPolicy:
         if not by_key_pending:
             return None
 
-        def _try_key(
-            start_key: str, previous_key: str | None, previous_ordinal: int | None
-        ) -> ClaimPolicy._ShardKey | None:
-            pending_list = by_key_pending.get(start_key, [])
-            if not pending_list:
-                return None
-
-            if previous_key == start_key and previous_ordinal is not None:
+        def _try_exact_next(previous_ordinal: int) -> ClaimPolicy._ShardKey | None:
+            for pending_list in by_key_pending.values():
                 for candidate in pending_list:
                     if (
                         candidate.global_ordinal is not None
@@ -90,10 +84,16 @@ class ClaimPolicy:
                         and try_claim(candidate)
                     ):
                         return candidate
+            return None
 
-            all_list = by_key_all[start_key]
-            total = len(all_list)
-            if total >= ClaimPolicy.BLOCK_SIZE * 2:
+        def _try_blocks(start_keys: Iterable[str]) -> ClaimPolicy._ShardKey | None:
+            for start_key in start_keys:
+                pending_list = by_key_pending.get(start_key, [])
+                if not pending_list:
+                    continue
+                total = len(by_key_all[start_key])
+                if total < ClaimPolicy.BLOCK_SIZE * 2:
+                    continue
                 num_blocks = (
                     total + ClaimPolicy.BLOCK_SIZE - 1
                 ) // ClaimPolicy.BLOCK_SIZE
@@ -101,26 +101,33 @@ class ClaimPolicy:
                     1, num_blocks
                 )
                 for block_index in range(num_blocks):
-                    block = (offset + block_index) % num_blocks
-                    target_ordinal = block * ClaimPolicy.BLOCK_SIZE
+                    target_ordinal = (
+                        (offset + block_index) % num_blocks
+                    ) * ClaimPolicy.BLOCK_SIZE
                     for candidate in pending_list:
                         if candidate.global_ordinal == target_ordinal and try_claim(
                             candidate
                         ):
                             return candidate
+            return None
 
-            for candidate in pending_list:
-                if try_claim(candidate):
-                    return candidate
-
+        def _try_greedy(start_keys: Iterable[str]) -> ClaimPolicy._ShardKey | None:
+            for start_key in start_keys:
+                for candidate in by_key_pending.get(start_key, []):
+                    if try_claim(candidate):
+                        return candidate
             return None
 
         tried: set[str] = set()
         if previous is not None:
             previous_key = previous.end_key or previous.start_key
+            if previous.global_ordinal is not None:
+                picked = _try_exact_next(previous.global_ordinal)
+                if picked is not None:
+                    return picked
             if previous_key and previous_key in by_key_pending:
                 tried.add(previous_key)
-                picked = _try_key(previous_key, previous_key, previous.global_ordinal)
+                picked = _try_blocks((previous_key,))
                 if picked is not None:
                     return picked
 
@@ -128,12 +135,17 @@ class ClaimPolicy:
             (start_key for start_key in by_key_pending if start_key not in tried),
             key=lambda start_key: _h_int(self.job_id, str(self.worker_id), start_key),
         )
-        for start_key in start_keys:
-            picked = _try_key(start_key, None, None)
+
+        picked = _try_blocks(start_keys)
+        if picked is not None:
+            return picked
+
+        if tried:
+            picked = _try_greedy(tried)
             if picked is not None:
                 return picked
 
-        return None
+        return _try_greedy(start_keys)
 
 
 def _runtime_lease_seconds() -> int:
