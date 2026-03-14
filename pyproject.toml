@@ -29,6 +29,7 @@ dependencies = [
     "orjson",
     "pyarrow",
     "msgspec>=0.20.0",
+    "hf>=1.7.1",
 ]
 
 [project.scripts]
