@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import cloudpickle
 
-from refiner.run import RunHandle
+from refiner.worker.context import RunHandle
 from refiner.pipeline.planning import PlannedStage
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.resources.cpu import build_cpu_sets

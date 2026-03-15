@@ -17,7 +17,7 @@ from refiner.platform.client.models import (
     VerifyApiKeyResponse,
     WorkerStartedResponse,
 )
-from refiner.run import RunHandle
+from refiner.worker.context import RunHandle
 
 if TYPE_CHECKING:
     from refiner.pipeline.data.shard import Shard

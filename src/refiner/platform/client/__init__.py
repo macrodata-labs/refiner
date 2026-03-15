@@ -4,7 +4,7 @@ from refiner.platform.client.api import (
     resolve_platform_base_url,
     verify_api_key,
 )
-from refiner.run import RunHandle
+from refiner.worker.context import RunHandle
 from refiner.platform.client.models import (
     CloudPipelinePayload,
     CloudRunCreateRequest,

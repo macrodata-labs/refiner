@@ -23,7 +23,7 @@ from refiner.pipeline.sinks.lerobot import (
 from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.context import set_active_run_context
-from refiner.run import RunHandle
+from refiner.worker.context import RunHandle
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from refiner.pipeline.data.shard import Shard
-from refiner.run import RunHandle
+from refiner.worker.context import RunHandle
 from refiner.platform.client.models import FinalizedShardWorker
 
 

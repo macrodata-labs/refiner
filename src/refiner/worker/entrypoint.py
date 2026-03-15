@@ -9,7 +9,7 @@ import cloudpickle
 from loguru import logger
 
 from refiner.platform.client.api import MacrodataClient
-from refiner.run import RunHandle
+from refiner.worker.context import RunHandle
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
 from refiner.worker.resources.memory import set_memory_soft_limit_mb
 from refiner.worker.runner import Worker
@@ -63,8 +63,8 @@ def main() -> int:
                 run_handle = RunHandle(
                     job_id=args.job_id,
                     stage_index=args.stage_index,
-                    client=client,
                     worker_name=args.worker_name,
+                    client=client,
                 )
             except Exception as e:
                 if args.runtime_backend == "platform":
@@ -77,8 +77,8 @@ def main() -> int:
 
         stats = Worker(
             pipeline=pipeline,
-            heartbeat_interval_seconds=args.heartbeat_interval_seconds,
             run_handle=run_handle,
+            heartbeat_interval_seconds=args.heartbeat_interval_seconds,
         ).run()
         _write_stats(
             args.stats_path,

@@ -37,6 +37,7 @@ class _FakeReader(BaseReader):
 
 class _FakeRuntimeLifecycle:
     def __init__(self, shards: list[Shard]):
+        self.worker_id = "local"
         self._remaining = list(shards)
         self.claim_previous: list[Shard | None] = []
         self.completed_ids: list[str] = []
