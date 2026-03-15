@@ -22,9 +22,7 @@ def test_csv_bytes_lazy_reads_all_rows_exactly_once(tmp_path):
         for i in range(n):
             f.write(f"{i},{payload}\n")
 
-    r = CsvReader(
-        str(p), target_shard_bytes=16 * 1024 * 1024, sharding_mode="bytes_lazy"
-    )
+    r = CsvReader(str(p), target_shard_bytes=16 * 1024 * 1024)
     shards = r.list_shards()
     assert len(shards) > 1
 
@@ -39,15 +37,12 @@ def test_csv_bytes_lazy_reads_all_rows_exactly_once(tmp_path):
     assert ids == set(range(n))
 
 
-def test_csv_multiline_forces_scan_and_parses_embedded_newline(tmp_path):
+def test_csv_multiline_reads_embedded_newline(tmp_path):
     p = tmp_path / "multi.csv"
     # second row contains an embedded newline in a quoted field
     p.write_text('id,text\n0,"hello\nworld"\n1,"ok"\n')
 
-    r = CsvReader(
-        str(p), target_shard_bytes=8, multiline_rows=True, sharding_mode="bytes_lazy"
-    )
-    # bytes_lazy should auto-fallback to scan when multiline_rows=True
+    r = CsvReader(str(p), target_shard_bytes=8, multiline_rows=True)
     shards = r.list_shards()
     assert len(shards) >= 1
 
@@ -60,3 +55,15 @@ def test_csv_multiline_forces_scan_and_parses_embedded_newline(tmp_path):
     assert rows[0]["text"] == "hello\nworld"
     assert rows[1]["id"] == "1"
     assert rows[1]["text"] == "ok"
+
+
+def test_csv_can_enable_arrow_parse_threads(tmp_path):
+    p = tmp_path / "data.csv"
+    p.write_text("id,val\n0,a\n1,b\n")
+
+    reader = CsvReader(str(p), parse_use_threads=True)
+    rows = []
+    for shard in reader.list_shards():
+        rows.extend(list(_rows_from_shard_units(reader.read_shard(shard))))
+
+    assert [str(row["id"]) for row in rows] == ["0", "1"]

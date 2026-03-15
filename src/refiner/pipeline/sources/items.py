@@ -3,12 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
-from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor, Shard
+from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource
 from refiner.pipeline.data.row import DictRow, Row
 
-_DEFAULT_ITEMS_SHARD_SIZE_ROWS = 1_000
-_ITEMS_SOURCE_PATH = "memory://items"
+_DEFAULT_ITEMS_PER_SHARD = 1_000
 
 
 class ItemsSource(BaseSource):
@@ -20,31 +19,24 @@ class ItemsSource(BaseSource):
         self,
         items: Sequence[Any],
         *,
-        shard_size_rows: int = _DEFAULT_ITEMS_SHARD_SIZE_ROWS,
+        items_per_shard: int = _DEFAULT_ITEMS_PER_SHARD,
     ) -> None:
-        if shard_size_rows <= 0:
-            raise ValueError("shard_size_rows must be > 0")
+        if items_per_shard <= 0:
+            raise ValueError("items_per_shard must be > 0")
 
         self._rows = tuple(_normalize_item(item) for item in items)
         self._row_count = len(self._rows)
-        self._shard_size_rows = shard_size_rows
-        self._source_path = _ITEMS_SOURCE_PATH
+        self._items_per_shard = items_per_shard
 
     def list_shards(self) -> list[Shard]:
         shards: list[Shard] = []
-        for start in range(0, self._row_count, self._shard_size_rows):
-            end = min(self._row_count, start + self._shard_size_rows)
+        for start in range(0, self._row_count, self._items_per_shard):
+            end = min(self._row_count, start + self._items_per_shard)
             shards.append(
                 Shard(
-                    descriptor=FilePartsDescriptor(
-                        (
-                            FilePart(
-                                path=self._source_path,
-                                start=start,
-                                end=end,
-                                unit="rows",
-                            ),
-                        )
+                    descriptor=RowRangeDescriptor(
+                        start=start,
+                        end=end,
                     ),
                     global_ordinal=len(shards),
                 )
@@ -52,11 +44,11 @@ class ItemsSource(BaseSource):
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
-        part = shard.descriptor.parts[0]
-        if part.path != self._source_path:
-            raise ValueError(f"Unknown items shard path: {part.path!r}")
-        start = int(part.start)
-        end = int(part.end)
+        descriptor = shard.descriptor
+        if not isinstance(descriptor, RowRangeDescriptor):
+            raise TypeError("ItemsSource requires row-range shards")
+        start = int(descriptor.start)
+        end = int(descriptor.end)
         if start < 0 or end < start or end > self._row_count:
             raise ValueError(
                 f"Invalid items shard range [{start}, {end}) for {self._row_count} rows"
@@ -67,7 +59,7 @@ class ItemsSource(BaseSource):
     def describe(self) -> dict[str, Any]:
         return {
             "rows": self._row_count,
-            "shard_size_rows": self._shard_size_rows,
+            "items_per_shard": self._items_per_shard,
         }
 
 

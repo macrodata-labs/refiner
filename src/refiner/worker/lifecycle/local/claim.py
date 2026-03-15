@@ -31,12 +31,23 @@ class ClaimPolicy:
         pending_ids: set[str],
         try_claim: Callable[[Shard], bool],
     ) -> Shard | None:
+        pending_all: list[Shard] = []
         by_key_all: dict[str, list[Shard]] = defaultdict(list)
         by_key_pending: dict[str, list[Shard]] = defaultdict(list)
 
         for shard in all_shards:
+            if shard.id in pending_ids:
+                pending_all.append(shard)
             if shard.start_key is not None:
                 by_key_all[shard.start_key].append(shard)
+
+        pending_all.sort(
+            key=lambda shard: (
+                shard.global_ordinal is None,
+                shard.global_ordinal,
+                shard.id,
+            )
+        )
 
         for start_key, all_for_key in by_key_all.items():
             all_for_key.sort(
@@ -52,7 +63,7 @@ class ClaimPolicy:
             if pending_for_key:
                 by_key_pending[start_key] = pending_for_key
 
-        if not by_key_pending:
+        if not pending_all:
             return None
 
         # Claim order:
@@ -65,14 +76,13 @@ class ClaimPolicy:
         # This preserves sequential reads when possible, but still spreads
         # workers across blocks so they do not alternate every shard.
         def try_exact_next(previous_ordinal: int) -> Shard | None:
-            for pending_for_key in by_key_pending.values():
-                for shard in pending_for_key:
-                    if (
-                        shard.global_ordinal is not None
-                        and shard.global_ordinal == previous_ordinal + 1
-                        and try_claim(shard)
-                    ):
-                        return shard
+            for shard in pending_all:
+                if (
+                    shard.global_ordinal is not None
+                    and shard.global_ordinal == previous_ordinal + 1
+                    and try_claim(shard)
+                ):
+                    return shard
             return None
 
         def try_blocks(start_keys: Iterable[str]) -> Shard | None:
@@ -128,4 +138,10 @@ class ClaimPolicy:
             picked = try_greedy(tried)
             if picked is not None:
                 return picked
-        return try_greedy(start_keys)
+        picked = try_greedy(start_keys)
+        if picked is not None:
+            return picked
+        for shard in pending_all:
+            if try_claim(shard):
+                return shard
+        return None

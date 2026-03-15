@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from abc import abstractmethod
+import io
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from fsspec import AbstractFileSystem
 
-from refiner.io import DataFile
-from refiner.io import DataFileSet
+from refiner.io import DataFile, DataFileSet
 from refiner.io.fileset import DataFileSetLike
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
+from refiner.pipeline.sources.readers.utils import (
+    BoundedBinaryReader,
+    DEFAULT_TARGET_SHARD_BYTES,
+    align_byte_range_to_newlines,
+    is_splittable_by_bytes,
+)
 
 
 class BaseReader(BaseSource):
@@ -20,7 +25,8 @@ class BaseReader(BaseSource):
     Responsibilities:
         - Normalize input sources without eagerly listing them.
         - Lazily expand those sources into a deterministic list of concrete input files.
-        - Provide shard listing and shard reading.
+        - Plan file-backed shards as ordered byte spans across all resolved files.
+        - Leave final boundary decisions to concrete readers at `read_shard()` time.
 
     Note:
         This object is expected to be used by a single worker at a time (no concurrent read_shard calls).
@@ -36,6 +42,8 @@ class BaseReader(BaseSource):
         storage_options: Mapping[str, Any] | None = None,
         recursive: bool = False,
         extensions: Sequence[str] = (),
+        target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+        num_shards: int | None = None,
     ):
         """Create a reader over a set of input files.
 
@@ -45,13 +53,19 @@ class BaseReader(BaseSource):
             storage_options: Optional fsspec init options (used only when `fs` is not provided).
             recursive: If a directory input is provided, whether to list recursively.
             extensions: If a directory input is provided, filter by these suffixes (case-insensitive).
+            target_shard_bytes: Target approximate byte size for planned shards.
+            num_shards: Optional explicit number of planned shards.
         """
-        self._inputs = inputs
-        self._fs = fs
-        self._storage_options = storage_options
-        self._recursive = recursive
-        self._extensions = tuple(extensions)
-        self._fileset: DataFileSet | None = None
+        self.fileset = DataFileSet.resolve(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            extensions=extensions,
+        )
+        self.target_shard_bytes = max(1, target_shard_bytes)
+        self.num_shards = num_shards if num_shards is not None else None
+        self.split_by_bytes = True
         # Single-open-file cache for readers that do byte-based seeks or stream reads.
         self._open_file: DataFile | None = None
         self._open_fh: Any | None = None
@@ -61,41 +75,24 @@ class BaseReader(BaseSource):
             self.name = f"read_{reader_name}"
 
     @property
-    def fileset(self) -> DataFileSet:
-        """Normalized input sources (cached)."""
-        if self._fileset is None:
-            self._fileset = DataFileSet.resolve(
-                self._inputs,
-                fs=self._fs,
-                storage_options=self._storage_options,
-                recursive=self._recursive,
-                extensions=self._extensions,
-            )
-        return self._fileset
-
-    @property
     def files(self) -> list[str]:
         """Deterministic list of resolved input file paths."""
-        return [file.path for file in self.source_files]
-
-    @property
-    def source_files(self) -> tuple[DataFile, ...]:
-        """Deterministic list of lazily expanded concrete input files."""
-        return self.fileset.files
+        return [file.path for file in self.fileset.files]
 
     def describe(self) -> dict[str, Any]:
         # Keep planning metadata cheap: do not resolve/list inputs here.
-        raw = self._inputs
-        if isinstance(raw, (str, Path)):
-            return {"path": str(raw)}
-        if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
-            if not raw:
-                return {}
-            first = raw[0]
-            if isinstance(first, (str, Path)):
-                if len(raw) == 1:
-                    return {"path": str(first)}
-                return {"path": f"{first} (+{len(raw) - 1} more)"}
+        entries = self.fileset.entries
+        if not entries:
+            return {}
+        first = entries[0]
+        if isinstance(first, DataFile):
+            first_path = first.abs_path()
+        else:
+            first_path = str(first)
+        if len(entries) == 1:
+            return {"path": first_path}
+        if isinstance(first_path, (str, Path)):
+            return {"path": f"{first_path} (+{len(entries) - 1} more)"}
         return {}
 
     def _get_file_handle(
@@ -121,21 +118,113 @@ class BaseReader(BaseSource):
         self._open_file = file
         return self._open_fh, True
 
-    def _source_file(self, source_index: int, path: str) -> DataFile:
-        return self.fileset.resolve_file(source_index, path)
+    def _open_aligned_byte_span(
+        self, part: FilePart
+    ) -> tuple[DataFile, io.BufferedReader, int] | None:
+        """Open a planned byte span after snapping it to newline boundaries.
 
-    @abstractmethod
+        This is shared by line-oriented readers such as JSONL and CSV. Parquet does
+        not use it because parquet translates planned byte spans through metadata
+        instead of reading raw file bytes directly.
+        """
+        source = self.fileset.resolve_file(part.source_index, part.path)
+        fh, _ = self._get_file_handle(source, mode="rb")
+        size = self.fileset.size(part.source_index, part.path)
+        aligned = align_byte_range_to_newlines(
+            fh, start=part.start, end=part.end, size=size
+        )
+        if aligned is None:
+            return None
+        start, end = aligned
+
+        try:
+            fh.seek(start)
+        except Exception:
+            fh, _ = self._get_file_handle(source, mode="rb", force_reopen=True)
+            fh.seek(start)
+
+        return source, io.BufferedReader(BoundedBinaryReader(fh, end - start)), start
+
     def list_shards(self) -> list[Shard]:
         """Return the deterministic list of shards for this reader.
 
         Contract:
             - Shards must only reference resolved input files.
-            - Each shard part must carry the resolved `source_index` it belongs to.
-            - `start/end` are reader-specific offsets (e.g. bytes, row groups, or rows).
-        """
-        raise NotImplementedError
+            - File readers plan shards as byte/file spans only.
+            - Each shard part carries the source entry index it belongs to.
+            - Read-time boundary adaptation is handled by each concrete reader.
 
-    @abstractmethod
+        Notes:
+            - Splittable files contribute raw byte spans.
+            - Atomic files stay whole with `start=0, end=-1`.
+            - `num_shards` partitions total planned bytes; otherwise `target_shard_bytes`
+              controls shard size heuristically.
+        """
+        num_shards = self.num_shards
+        if num_shards is None or num_shards <= 0:
+            target_bytes = self.target_shard_bytes
+        else:
+            # `num_shards` partitions the total planned byte span across all resolved files.
+            total_size = 0
+            for source_index, files in enumerate(self.fileset.expand_sources()):
+                for file in files:
+                    total_size += self.fileset.size(source_index, file.abs_path())
+            target_bytes = 1 if total_size <= 0 else max(1, total_size // num_shards)
+        shards: list[Shard] = []
+        current_parts: list[FilePart] = []
+        current_size = 0
+
+        def flush() -> None:
+            nonlocal current_parts, current_size
+            if not current_parts:
+                return
+            shards.append(
+                Shard.from_file_parts(current_parts, global_ordinal=len(shards))
+            )
+            current_parts = []
+            current_size = 0
+
+        for source_index, files in enumerate(self.fileset.expand_sources()):
+            for file in files:
+                path = file.abs_path()
+                size = self.fileset.size(source_index, path)
+                # Atomic files stay whole: `end=-1` means "reader decides how to read the full file".
+                if not self.split_by_bytes or not is_splittable_by_bytes(
+                    file.fs, file.path
+                ):
+                    if current_parts and current_size + size > target_bytes:
+                        flush()
+                    current_parts.append(
+                        FilePart(
+                            path=path,
+                            start=0,
+                            end=-1,
+                            source_index=source_index,
+                        )
+                    )
+                    current_size += size
+                    continue
+
+                offset = 0
+                while offset < size:
+                    # Splittable files are planned as raw byte spans; readers snap these to real boundaries later.
+                    if current_size >= target_bytes:
+                        flush()
+                    span_size = min(size - offset, target_bytes - current_size)
+                    current_parts.append(
+                        FilePart(
+                            path=path,
+                            start=offset,
+                            end=offset + span_size,
+                            source_index=source_index,
+                        )
+                    )
+                    current_size += span_size
+                    offset += span_size
+
+        flush()
+        return shards
+
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read a shard and yield row units.
 

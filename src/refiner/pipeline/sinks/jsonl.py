@@ -22,11 +22,9 @@ class JsonlSink(BaseSink):
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}.jsonl",
-        num_shards: int | None = None,
     ):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
-        self.num_shards = num_shards
         self._files: dict[str, IO[str]] = {}
         self._encoder = json.JSONEncoder(ensure_ascii=True, separators=(",", ":"))
 

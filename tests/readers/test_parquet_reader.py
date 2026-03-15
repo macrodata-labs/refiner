@@ -26,24 +26,9 @@ def _rows_from_shard_units(units):
             yield unit
 
 
-def test_parquet_rowgroups_reads_all_rows(tmp_path):
+def test_parquet_reads_all_rows(tmp_path):
     p = _write_parquet(tmp_path)
-    r = ParquetReader(str(p), sharding_mode="rowgroups", target_shard_bytes=1)
-    shards = r.list_shards()
-    assert len(shards) >= 1
-
-    out = []
-    for s in shards:
-        out.extend(list(_rows_from_shard_units(r.read_shard(s))))
-
-    ids = sorted(int(row["id"]) for row in out)
-    assert ids == list(range(50))
-
-
-def test_parquet_bytes_lazy_reads_all_rows(tmp_path):
-    p = _write_parquet(tmp_path)
-    # Force multiple byte shards
-    r = ParquetReader(str(p), sharding_mode="bytes_lazy", target_shard_bytes=200)
+    r = ParquetReader(str(p), target_shard_bytes=200)
     shards = r.list_shards()
     assert len(shards) >= 1
 
@@ -67,11 +52,9 @@ def test_parquet_can_split_inside_large_row_group(tmp_path):
 
     reader = ParquetReader(
         str(p),
-        sharding_mode="rowgroups",
-        target_shard_bytes=16 * 1024 * 1024,
+        target_shard_bytes=64 * 1024,
         split_row_groups=True,
     )
-    reader.target_shard_bytes = 1
     shards = reader.list_shards()
 
     assert len(shards) > 1

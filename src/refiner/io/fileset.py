@@ -41,7 +41,7 @@ class DataFileSet:
     _expanded_sources: tuple[tuple[DataFile, ...], ...] | None = field(
         default=None, init=False, repr=False, compare=False
     )
-    _sizes: dict[int, int] = field(
+    _sizes: dict[tuple[int, str], int] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
 
@@ -210,7 +210,7 @@ class DataFileSet:
 
     def size(self, source_index: int, path: str) -> int:
         """Return the size for a resolved shard path, caching by source entry and absolute path."""
-        key = hash((source_index, path))
+        key = (source_index, path)
         if key in self._sizes:
             return self._sizes[key]
         target = self.resolve_file(source_index, path)

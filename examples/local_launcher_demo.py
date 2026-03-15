@@ -4,6 +4,7 @@ import time
 from collections.abc import Iterator
 
 import refiner as mdr
+from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline import BaseSource, Row, Shard
 
 SAMPLE_PARQUET = (
@@ -26,11 +27,13 @@ class SlowPerShardReader(BaseSource):
         return self.inner.list_shards()
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
-        first_part = shard.descriptor.parts[0]
-        last_part = shard.descriptor.parts[-1]
+        descriptor = shard.descriptor
+        assert isinstance(descriptor, FilePartsDescriptor)
+        first_part = descriptor.parts[0]
+        last_part = descriptor.parts[-1]
         print(
             f"[demo] sleeping {self.sleep_seconds}s before shard "
-            f"parts={len(shard.descriptor.parts)} "
+            f"parts={len(descriptor.parts)} "
             f"start={first_part.path}:{first_part.start} "
             f"end={last_part.path}:{last_part.end}",
             flush=True,

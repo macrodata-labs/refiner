@@ -77,7 +77,7 @@ def test_jsonl_reader_reads_across_multiple_directories() -> None:
         pipeline = read_jsonl([DataFolder(str(first_dir)), DataFolder(str(second_dir))])
 
         assert _pipeline_values(pipeline) == [1, 2, 3]
-        assert len(pipeline.source.list_shards()) == 2
+        assert len(pipeline.source.list_shards()) == 1
 
 
 def test_csv_reader_reads_across_mixed_local_and_memory_files() -> None:
@@ -91,7 +91,7 @@ def test_csv_reader_reads_across_mixed_local_and_memory_files() -> None:
         pipeline = read_csv([str(local_path), DataFile(fs=memfs, path="remote.csv")])
 
         assert _pipeline_values(pipeline) == [1, 2]
-        assert len(pipeline.source.list_shards()) == 2
+        assert len(pipeline.source.list_shards()) == 1
 
 
 def test_parquet_reader_reads_across_mixed_local_and_memory_files() -> None:
@@ -107,4 +107,4 @@ def test_parquet_reader_reads_across_mixed_local_and_memory_files() -> None:
         )
 
         assert _pipeline_values(pipeline) == [1, 2]
-        assert len(pipeline.source.list_shards()) == 2
+        assert len(pipeline.source.list_shards()) == 1

@@ -49,8 +49,8 @@ def test_launch_local_single_worker(tmp_path) -> None:
     )
 
     assert stats.workers == 1
-    assert stats.claimed == 2
-    assert stats.completed == 2
+    assert stats.claimed == 1
+    assert stats.completed == 1
     assert stats.failed == 0
     assert stats.output_rows == 2
 
@@ -61,8 +61,8 @@ def test_launch_local_coalesces_writer_shards(tmp_path) -> None:
     p1.write_text('{"x": 1}\n')
     p2.write_text('{"x": 2}\n')
 
-    pipeline = read_jsonl([str(p1), str(p2)]).write_jsonl(
-        tmp_path / "out", num_shards=1
+    pipeline = read_jsonl([str(p1), str(p2)], num_shards=1).write_jsonl(
+        tmp_path / "out"
     )
 
     stats = pipeline.launch_local(
@@ -108,8 +108,8 @@ def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
         workdir=str(tmp_path),
     )
     assert stats.workers == 2
-    assert stats.claimed == 2
-    assert stats.completed == 2
+    assert stats.claimed == 1
+    assert stats.completed == 1
     assert stats.failed == 0
     assert stats.output_rows == 2
 

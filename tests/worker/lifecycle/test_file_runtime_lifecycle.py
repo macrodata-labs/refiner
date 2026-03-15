@@ -4,7 +4,7 @@ import os
 import time
 from pathlib import Path
 
-from refiner.pipeline.data.shard import FilePart
+from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.pipeline.data.shard import Shard
 
@@ -58,6 +58,7 @@ def test_file_runtime_seed_overwrites_previous(tmp_path: Path) -> None:
     lifecycle.seed_shards([s2])
     got = lifecycle.claim()
     assert got is not None
+    assert isinstance(got.descriptor, FilePartsDescriptor)
     assert got.descriptor.parts[0].path == "p2"
 
 
@@ -109,8 +110,10 @@ def test_file_runtime_stages_are_isolated(tmp_path: Path) -> None:
     claimed_one = stage_one.claim()
 
     assert claimed_zero is not None
+    assert isinstance(claimed_zero.descriptor, FilePartsDescriptor)
     assert claimed_zero.descriptor.parts[0].path == "p0"
     assert claimed_one is not None
+    assert isinstance(claimed_one.descriptor, FilePartsDescriptor)
     assert claimed_one.descriptor.parts[0].path == "p1"
 
 

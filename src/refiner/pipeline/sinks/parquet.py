@@ -22,12 +22,10 @@ class ParquetSink(BaseSink):
         *,
         filename_template: str = "{shard_id}.parquet",
         compression: str | None = None,
-        num_shards: int | None = None,
     ):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
         self.compression = compression
-        self.num_shards = num_shards
         self._writers: dict[str, pq.ParquetWriter] = {}
 
     def _relpath(self, shard_id: str) -> str:

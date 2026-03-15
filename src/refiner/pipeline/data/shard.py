@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class _HashWriter(Protocol):
@@ -12,11 +11,18 @@ class _HashWriter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class FilePart:
+    """One planned file span inside a file-backed shard descriptor.
+
+    `start/end` are planning offsets only:
+        - `end == -1` means the file is atomic and should be read whole.
+        - Otherwise readers adapt the span to the boundary that makes sense for
+          that format at `read_shard()` time.
+    """
+
     path: str
     start: int
     end: int
     source_index: int = 0
-    unit: str = "bytes"
 
     @property
     def locality_key(self) -> str:
@@ -28,7 +34,6 @@ class FilePart:
             "start": int(self.start),
             "end": int(self.end),
             "source_index": int(self.source_index),
-            "unit": self.unit,
         }
 
     @classmethod
@@ -38,7 +43,6 @@ class FilePart:
             start=int(payload["start"]),
             end=int(payload["end"]),
             source_index=int(payload.get("source_index", 0)),
-            unit=str(payload.get("unit", "bytes")),
         )
 
     def update_hash(self, h: _HashWriter) -> None:
@@ -50,12 +54,12 @@ class FilePart:
         h.update(b"\0")
         h.update(str(self.source_index).encode("ascii"))
         h.update(b"\0")
-        h.update(self.unit.encode("utf-8"))
-        h.update(b"\0")
 
 
 @dataclass(frozen=True, slots=True)
 class FilePartsDescriptor:
+    """Descriptor for file-backed shards planned as one or more file spans."""
+
     parts: tuple[FilePart, ...]
 
     def __post_init__(self) -> None:
@@ -63,7 +67,7 @@ class FilePartsDescriptor:
             raise ValueError("shard parts must be non-empty")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"parts": [part.to_dict() for part in self.parts]}
+        return {"kind": "file_parts", "parts": [part.to_dict() for part in self.parts]}
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> FilePartsDescriptor:
@@ -79,19 +83,82 @@ class FilePartsDescriptor:
         for part in self.parts:
             part.update_hash(h)
 
+    @property
+    def descriptor_start_key(self) -> str:
+        return self.parts[0].locality_key
+
+    @property
+    def descriptor_end_key(self) -> str:
+        return self.parts[-1].locality_key
+
+
+@dataclass(frozen=True, slots=True)
+class RowRangeDescriptor:
+    """Descriptor for synthetic row-backed sources such as `from_items()`."""
+
+    start: int
+    end: int
+    unit: str = "rows"
+
+    def __post_init__(self) -> None:
+        if self.end < self.start:
+            raise ValueError("row-range end must be >= start")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "row_range",
+            "start": int(self.start),
+            "end": int(self.end),
+            "unit": self.unit,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> RowRangeDescriptor:
+        return cls(
+            start=int(payload["start"]),
+            end=int(payload["end"]),
+            unit=str(payload.get("unit", "rows")),
+        )
+
+    def update_hash(self, h: _HashWriter) -> None:
+        h.update(b"row_range\0")
+        h.update(str(self.start).encode("ascii"))
+        h.update(b"\0")
+        h.update(str(self.end).encode("ascii"))
+        h.update(b"\0")
+        h.update(self.unit.encode("utf-8"))
+        h.update(b"\0")
+
+    @property
+    def descriptor_start_key(self) -> str | None:
+        return None
+
+    @property
+    def descriptor_end_key(self) -> str | None:
+        return None
+
+
+ShardDescriptor = FilePartsDescriptor | RowRangeDescriptor
+
 
 @dataclass(frozen=True, slots=True)
 class Shard:
-    descriptor: FilePartsDescriptor  # will later allow other descriptors
+    """Logical unit of source work plus scheduling hints.
+
+    The descriptor says what to read. `global_ordinal`, `start_key`, and
+    `end_key` are planning hints used by the local/cloud claim logic.
+    """
+
+    descriptor: ShardDescriptor
     global_ordinal: int | None = None
     start_key: str | None = None
     end_key: str | None = None
 
     def __post_init__(self) -> None:
         if self.start_key is None:
-            object.__setattr__(self, "start_key", self.descriptor.parts[0].locality_key)
+            object.__setattr__(self, "start_key", self.descriptor.descriptor_start_key)
         if self.end_key is None:
-            object.__setattr__(self, "end_key", self.descriptor.parts[-1].locality_key)
+            object.__setattr__(self, "end_key", self.descriptor.descriptor_end_key)
 
     @classmethod
     def from_file_parts(
@@ -106,6 +173,28 @@ class Shard:
             raise ValueError("file parts must be non-empty")
         return cls(
             descriptor=FilePartsDescriptor(tuple(file_parts)),
+            global_ordinal=global_ordinal,
+            start_key=start_key,
+            end_key=end_key,
+        )
+
+    @classmethod
+    def from_row_range(
+        cls,
+        *,
+        start: int,
+        end: int,
+        unit: str = "rows",
+        global_ordinal: int | None = None,
+        start_key: str | None = None,
+        end_key: str | None = None,
+    ) -> Shard:
+        return cls(
+            descriptor=RowRangeDescriptor(
+                start=start,
+                end=end,
+                unit=unit,
+            ),
             global_ordinal=global_ordinal,
             start_key=start_key,
             end_key=end_key,
@@ -136,11 +225,20 @@ class Shard:
         descriptor = payload["descriptor"]
         if not isinstance(descriptor, dict):
             raise ValueError("shard descriptor must be an object")
+        kind = descriptor.get("kind")
+        if kind == "file_parts":
+            parsed_descriptor: ShardDescriptor = FilePartsDescriptor.from_dict(
+                descriptor
+            )
+        elif kind == "row_range":
+            parsed_descriptor = RowRangeDescriptor.from_dict(descriptor)
+        else:
+            raise ValueError(f"unsupported shard descriptor kind: {kind!r}")
         global_ordinal = payload.get("global_ordinal")
         start_key = payload.get("start_key")
         end_key = payload.get("end_key")
         return cls(
-            descriptor=FilePartsDescriptor.from_dict(descriptor),
+            descriptor=parsed_descriptor,
             global_ordinal=global_ordinal if isinstance(global_ordinal, int) else None,
             start_key=start_key if isinstance(start_key, str) else None,
             end_key=end_key if isinstance(end_key, str) else None,
@@ -155,33 +253,11 @@ def path_hash(path: str, *, source_index: int = 0) -> str:
     return h.hexdigest()
 
 
-def coalesce_shards(shards: list[Shard], num_shards: int | None) -> list[Shard]:
-    if num_shards is None or num_shards <= 0 or num_shards >= len(shards):
-        return shards
-
-    out: list[Shard] = []
-    total = len(shards)
-    for index in range(num_shards):
-        start = (index * total) // num_shards
-        end = ((index + 1) * total) // num_shards
-        group = shards[start:end]
-        if not group:
-            continue
-        out.append(
-            Shard.from_file_parts(
-                [part for shard in group for part in shard.descriptor.parts],
-                global_ordinal=index,
-                start_key=group[0].start_key,
-                end_key=group[-1].end_key,
-            )
-        )
-    return out
-
-
 __all__ = [
     "FilePart",
     "FilePartsDescriptor",
+    "RowRangeDescriptor",
     "Shard",
-    "coalesce_shards",
+    "ShardDescriptor",
     "path_hash",
 ]

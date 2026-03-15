@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable
 
 from fsspec import AbstractFileSystem
 
@@ -38,7 +38,6 @@ from refiner.pipeline.sinks.lerobot import (
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.data.shard import coalesce_shards
 from refiner.execution.engine import (
     Block,
     Segment,
@@ -231,8 +230,7 @@ class RefinerPipeline:
         return iter_rows(self.execute(self.source.read()))
 
     def list_shards(self):
-        shards = list(self.source.list_shards())
-        return coalesce_shards(shards, self.sink.num_shards if self.sink else None)
+        return list(self.source.list_shards())
 
     def materialize(self) -> list[Row]:
         """Compute all output rows into memory (local/dev utility)."""
@@ -254,13 +252,11 @@ class RefinerPipeline:
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}.jsonl",
-        num_shards: int | None = None,
     ) -> "RefinerPipeline":
         return self.with_sink(
             JsonlSink(
                 output=output,
                 filename_template=filename_template,
-                num_shards=num_shards,
             )
         )
 
@@ -270,14 +266,12 @@ class RefinerPipeline:
         *,
         filename_template: str = "{shard_id}.parquet",
         compression: str | None = None,
-        num_shards: int | None = None,
     ) -> "RefinerPipeline":
         return self.with_sink(
             ParquetSink(
                 output=output,
                 filename_template=filename_template,
                 compression=compression,
-                num_shards=num_shards,
             )
         )
 
@@ -398,11 +392,16 @@ def read_csv(
     storage_options: Mapping[str, Any] | None = None,
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
     multiline_rows: bool = False,
     encoding: str = "utf-8",
-    sharding_mode: Literal["bytes_lazy", "scan"] = "bytes_lazy",
+    parse_use_threads: bool = False,
 ) -> RefinerPipeline:
-    """Create a pipeline with a CSV reader source."""
+    """Create a pipeline with a CSV reader source.
+
+    `num_shards` and `target_shard_bytes` affect input shard planning on the
+    reader side. `parse_use_threads` controls Arrow's intra-shard CSV parsing.
+    """
     return RefinerPipeline(
         source=CsvReader(
             inputs,
@@ -410,9 +409,10 @@ def read_csv(
             storage_options=storage_options,
             recursive=recursive,
             target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
             multiline_rows=multiline_rows,
             encoding=encoding,
-            sharding_mode=sharding_mode,
+            parse_use_threads=parse_use_threads,
         )
     )
 
@@ -424,8 +424,14 @@ def read_jsonl(
     storage_options: Mapping[str, Any] | None = None,
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    parse_use_threads: bool = False,
 ) -> RefinerPipeline:
-    """Create a pipeline with a JSONL reader source."""
+    """Create a pipeline with a JSONL reader source.
+
+    `num_shards` and `target_shard_bytes` affect input shard planning on the
+    reader side. `parse_use_threads` controls Arrow's intra-shard JSON parsing.
+    """
     return RefinerPipeline(
         source=JsonlReader(
             inputs,
@@ -433,6 +439,8 @@ def read_jsonl(
             storage_options=storage_options,
             recursive=recursive,
             target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            parse_use_threads=parse_use_threads,
         )
     )
 
@@ -444,12 +452,17 @@ def read_parquet(
     storage_options: Mapping[str, Any] | None = None,
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
     arrow_batch_size: int = 65536,
     columns_to_read: Sequence[str] | None = None,
-    sharding_mode: Literal["rowgroups", "bytes_lazy"] = "rowgroups",
     split_row_groups: bool = False,
 ) -> RefinerPipeline:
-    """Create a pipeline with a Parquet reader source."""
+    """Create a pipeline with a Parquet reader source.
+
+    `num_shards` and `target_shard_bytes` affect input shard planning on the
+    reader side. Parquet always plans byte/file spans first and resolves them
+    to row groups or row ranges at read time.
+    """
     return RefinerPipeline(
         source=ParquetReader(
             inputs,
@@ -457,32 +470,45 @@ def read_parquet(
             storage_options=storage_options,
             recursive=recursive,
             target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
             arrow_batch_size=arrow_batch_size,
             columns_to_read=columns_to_read,
-            sharding_mode=sharding_mode,
             split_row_groups=split_row_groups,
         )
     )
 
 
 def read_lerobot(
-    root: str,
+    inputs: DataFolderLike | Sequence[DataFolderLike],
     *,
     fs: AbstractFileSystem | None = None,
     storage_options: Mapping[str, Any] | None = None,
     limit: int | None = None,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
     media_max_in_flight: int = 8,
     media_preserve_order: bool = True,
+    split_row_groups: bool = True,
 ) -> RefinerPipeline:
-    """Create a pipeline with an episode-granular LeRobot reader source."""
+    """Create a pipeline with an episode-granular LeRobot reader source.
+
+    `inputs` is the LeRobot dataset root.
+    `num_shards` and `target_shard_bytes` affect only episode parquet shard
+    planning. `split_row_groups` controls whether those planned spans are
+    refined to row ranges inside an episode parquet file. Media loading stays
+    unchanged.
+    """
     return RefinerPipeline(
         source=LeRobotEpisodeReader(
-            root,
+            inputs,
             fs=fs,
             storage_options=storage_options,
             limit=limit,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
             media_max_in_flight=media_max_in_flight,
             media_preserve_order=media_preserve_order,
+            split_row_groups=split_row_groups,
         )
     )
 
@@ -490,7 +516,7 @@ def read_lerobot(
 def from_items(
     items: Sequence[Any],
     *,
-    shard_size_rows: int = 1_000,
+    items_per_shard: int = 1_000,
 ) -> RefinerPipeline:
     """Create a pipeline from in-memory rows.
 
@@ -501,7 +527,7 @@ def from_items(
     return RefinerPipeline(
         source=ItemsSource(
             items=items,
-            shard_size_rows=shard_size_rows,
+            items_per_shard=items_per_shard,
         )
     )
 

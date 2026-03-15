@@ -84,12 +84,12 @@ def test_compile_pipeline_plan_dedupes_same_top_level_op_names() -> None:
 
 
 def test_compile_pipeline_plan_includes_from_items_metadata() -> None:
-    pipeline = from_items([{"x": 1}, {"x": 2}, {"x": 3}], shard_size_rows=2)
+    pipeline = from_items([{"x": 1}, {"x": 2}, {"x": 3}], items_per_shard=2)
     payload = compile_pipeline_plan(pipeline)
     source_step = payload["stages"][0]["steps"][0]
     assert source_step["name"] == "from_items"
     assert source_step["args"]["rows"] == 3
-    assert source_step["args"]["shard_size_rows"] == 2
+    assert source_step["args"]["items_per_shard"] == 2
 
 
 def test_compile_pipeline_plan_flattens_vectorized_segment_ops() -> None:

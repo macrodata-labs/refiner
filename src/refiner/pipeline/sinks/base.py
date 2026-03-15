@@ -14,8 +14,6 @@ ShardCounts = dict[str, int]
 
 
 class BaseSink(ABC):
-    num_shards: int | None = None
-
     @abstractmethod
     def write_block(self, block: Block) -> ShardCounts:
         raise NotImplementedError

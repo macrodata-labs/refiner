@@ -99,6 +99,8 @@ class WorkerStartedResponse(msgspec.Struct, frozen=True):
 
 
 class SerializedShard(msgspec.Struct, frozen=True):
+    """Wire form of a shard: scheduling hints plus a serialized descriptor."""
+
     shard_id: str = msgspec.field(name="shard_id")
     descriptor: dict[str, Any]
     global_ordinal: int | None = None

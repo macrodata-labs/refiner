@@ -24,6 +24,7 @@ def test_platform_runtime_register_and_lifecycle() -> None:
                         [FilePart(path="p0", start=0, end=1)]
                     ).id,
                     descriptor={
+                        "kind": "file_parts",
                         "parts": [
                             {
                                 "path": "p0",
@@ -32,7 +33,7 @@ def test_platform_runtime_register_and_lifecycle() -> None:
                                 "source_index": 0,
                                 "unit": "bytes",
                             }
-                        ]
+                        ],
                     },
                 )
             )
