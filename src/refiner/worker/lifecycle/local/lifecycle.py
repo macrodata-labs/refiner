@@ -47,7 +47,7 @@ class LocalRuntimeLifecycle:
         *,
         job_id: str,
         stage_index: int = 0,
-        worker_id: int | str | None,
+        worker_id: str | None,
         workdir: str | None = None,
         lease_seconds: int | None = None,
     ):
@@ -79,13 +79,10 @@ class LocalRuntimeLifecycle:
         self._done_dir.mkdir(parents=True, exist_ok=True)
         self._failed_dir.mkdir(parents=True, exist_ok=True)
 
-    def _require_worker_id(self) -> int:
+    def _require_worker_id(self) -> str:
         if self.worker_id is None:
             raise ValueError("worker_id is required for this operation")
-        try:
-            return int(self.worker_id)
-        except ValueError as exc:
-            raise ValueError("local runtime worker_id must be an integer") from exc
+        return self.worker_id
 
     def seed_shards(self, shards: Iterable[Shard]) -> None:
         for directory in (

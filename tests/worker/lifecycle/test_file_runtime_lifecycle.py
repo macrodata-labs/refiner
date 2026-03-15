@@ -28,7 +28,9 @@ def test_shard_id_is_stable() -> None:
 
 
 def test_file_runtime_claim_complete(tmp_path: Path) -> None:
-    lifecycle = LocalRuntimeLifecycle(job_id="job1", worker_id=1, workdir=str(tmp_path))
+    lifecycle = LocalRuntimeLifecycle(
+        job_id="job1", worker_id="1", workdir=str(tmp_path)
+    )
 
     s1 = _shard("p1", 0, 1)
     s2 = _shard("p2", 0, 2)
@@ -52,7 +54,9 @@ def test_file_runtime_seed_without_worker_id(tmp_path: Path) -> None:
 
 
 def test_file_runtime_seed_overwrites_previous(tmp_path: Path) -> None:
-    lifecycle = LocalRuntimeLifecycle(job_id="job4", worker_id=1, workdir=str(tmp_path))
+    lifecycle = LocalRuntimeLifecycle(
+        job_id="job4", worker_id="1", workdir=str(tmp_path)
+    )
     s1 = _shard("p1", 0, 1)
     s2 = _shard("p2", 0, 2)
     lifecycle.seed_shards([s1])
@@ -67,13 +71,13 @@ def test_file_runtime_reclaims_stale_lease(tmp_path: Path) -> None:
     job_id = "job2"
     lifecycle1 = LocalRuntimeLifecycle(
         job_id=job_id,
-        worker_id=1,
+        worker_id="1",
         workdir=str(tmp_path),
         lease_seconds=10,
     )
     lifecycle2 = LocalRuntimeLifecycle(
         job_id=job_id,
-        worker_id=2,
+        worker_id="2",
         workdir=str(tmp_path),
         lease_seconds=10,
     )
@@ -98,10 +102,10 @@ def test_file_runtime_reclaims_stale_lease(tmp_path: Path) -> None:
 
 def test_file_runtime_stages_are_isolated(tmp_path: Path) -> None:
     stage_zero = LocalRuntimeLifecycle(
-        job_id="job5", stage_index=0, worker_id=1, workdir=str(tmp_path)
+        job_id="job5", stage_index=0, worker_id="1", workdir=str(tmp_path)
     )
     stage_one = LocalRuntimeLifecycle(
-        job_id="job5", stage_index=1, worker_id=1, workdir=str(tmp_path)
+        job_id="job5", stage_index=1, worker_id="1", workdir=str(tmp_path)
     )
 
     stage_zero.seed_shards([_shard("p0", 0, 1)])
@@ -121,7 +125,9 @@ def test_file_runtime_stages_are_isolated(tmp_path: Path) -> None:
 def test_file_runtime_prefers_same_locality_without_exact_boundary(
     tmp_path: Path,
 ) -> None:
-    lifecycle = LocalRuntimeLifecycle(job_id="job6", worker_id=1, workdir=str(tmp_path))
+    lifecycle = LocalRuntimeLifecycle(
+        job_id="job6", worker_id="1", workdir=str(tmp_path)
+    )
     shard0 = _shard("p0", 0, 1, global_ordinal=0)
     shard1 = _shard("p0", 10, 11, global_ordinal=1)
     shard2 = _shard("p1", 0, 1, global_ordinal=2)
@@ -137,7 +143,9 @@ def test_file_runtime_prefers_same_locality_without_exact_boundary(
 
 
 def test_file_runtime_reports_finalized_workers(tmp_path: Path) -> None:
-    lifecycle = LocalRuntimeLifecycle(job_id="job7", worker_id=2, workdir=str(tmp_path))
+    lifecycle = LocalRuntimeLifecycle(
+        job_id="job7", worker_id="2", workdir=str(tmp_path)
+    )
     shard = _shard("p", 0, 1)
     lifecycle.seed_shards([shard])
     claimed = lifecycle.claim()

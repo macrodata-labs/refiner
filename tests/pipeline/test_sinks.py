@@ -32,7 +32,7 @@ def test_launch_local_writes_jsonl_per_shard(tmp_path) -> None:
     assert stats.completed == 2
     written = sorted(path.name for path in output_dir.iterdir())
     assert len(written) == 2
-    assert all("__w0" in name for name in written)
+    assert all("__w" in name for name in written)
     assert all(name.endswith(".jsonl") for name in written)
 
 
@@ -51,7 +51,7 @@ def test_launch_local_writes_parquet_per_shard(tmp_path) -> None:
     assert stats.completed == 2
     written = sorted(path for path in output_dir.iterdir() if path.suffix == ".parquet")
     assert len(written) == 2
-    assert all("__w0" in path.name for path in written)
+    assert all("__w" in path.name for path in written)
     values = []
     for path in written:
         table = pq.read_table(path)
@@ -76,7 +76,7 @@ def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> 
     assert stats.completed == 2
     written = sorted(path for path in output_dir.iterdir() if path.suffix == ".jsonl")
     assert len(written) == 2
-    assert all("__w0" in path.name for path in written)
+    assert all("__w" in path.name for path in written)
 
 
 def test_jsonl_sink_uses_local_worker_suffix_outside_runtime(tmp_path) -> None:

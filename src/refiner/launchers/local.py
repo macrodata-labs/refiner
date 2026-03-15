@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -135,12 +136,8 @@ class LocalLauncher(BaseLauncher):
             sys.executable,
             "-m",
             "refiner.worker.entrypoint",
-            "--rank",
-            str(rank),
             "--job-id",
             self.job_id,
-            "--workdir",
-            self.workdir,
             "--heartbeat-interval-seconds",
             str(self.heartbeat_interval_seconds),
             "--runtime-backend",
@@ -163,6 +160,16 @@ class LocalLauncher(BaseLauncher):
                 ]
             )
         return command
+
+    def _worker_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        env["REFINER_WORKDIR"] = self.workdir
+        src_root = str(Path(__file__).resolve().parents[2])
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            src_root if not existing else f"{src_root}{os.pathsep}{existing}"
+        )
+        return env
 
     def _read_worker_stats(
         self,
@@ -281,6 +288,7 @@ class LocalLauncher(BaseLauncher):
                     cpu_ids=cpu_sets[rank],
                     platform_run=stage_run,
                 ),
+                env=self._worker_env(),
                 text=True,
             )
             for rank in range(stage.compute.num_workers)

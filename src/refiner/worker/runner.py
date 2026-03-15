@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import socket
 import threading
+from uuid import uuid4
 
 from loguru import logger
 
@@ -36,18 +37,14 @@ class WorkerRunStats:
 class Worker:
     def __init__(
         self,
-        rank: int,
         pipeline: RefinerPipeline,
         *,
         heartbeat_interval_seconds: int = 30,
         run_handle: RunHandle,
-        local_workdir: str | None = None,
     ):
-        self.rank = rank
         self.pipeline = pipeline
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.run_handle = run_handle
-        self.local_workdir = local_workdir
 
     def _start_platform_session(self) -> tuple[RuntimeLifecycle, RunHandle]:
         if self.run_handle is None or self.run_handle.client is None:
@@ -72,8 +69,7 @@ class Worker:
         return LocalRuntimeLifecycle(
             job_id=self.run_handle.job_id,
             stage_index=self.run_handle.stage_index,
-            worker_id=self.rank,
-            workdir=self.local_workdir,
+            worker_id=uuid4().hex[:12],
         )
 
     def run(self) -> WorkerRunStats:
@@ -94,7 +90,7 @@ class Worker:
         run_handle = self.run_handle
         active_run: RunHandle | None = None
         user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
-        obs_logger = logger.bind(rank=self.rank)
+        obs_logger = logger.bind(worker_name=self.run_handle.worker_name)
         stop_heartbeat = threading.Event()
         heartbeat_error: Exception | None = None
 
@@ -180,7 +176,7 @@ class Worker:
 
         heartbeat_thread = threading.Thread(
             target=_heartbeat_loop,
-            name=f"refiner-heartbeat-{self.rank}",
+            name=f"refiner-heartbeat-{self.run_handle.worker_name or 'worker'}",
             daemon=True,
         )
         heartbeat_thread.start()
@@ -213,7 +209,9 @@ class Worker:
         bound_run = (
             active_run
             if active_run is not None
-            else self.run_handle.with_worker(worker_id=str(self.rank))
+            else self.run_handle.with_worker(
+                worker_id=getattr(runtime_lifecycle, "worker_id", "local")
+            )
         )
         with (
             set_active_user_metrics_emitter(user_metrics_emitter),
