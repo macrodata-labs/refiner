@@ -10,15 +10,9 @@ from loguru import logger
 
 from refiner.platform.client.api import MacrodataClient
 from refiner.run import RunHandle
-from refiner.worker.resources.cpu import set_cpu_affinity
+from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
 from refiner.worker.resources.memory import set_memory_soft_limit_mb
 from refiner.worker.runner import Worker
-
-
-def _parse_cpu_ids(raw: str) -> list[int]:
-    if not raw.strip():
-        return []
-    return [int(x) for x in raw.split(",") if x.strip()]
 
 
 def _write_stats(path: str, payload: dict[str, int | str]) -> None:
@@ -29,10 +23,10 @@ def _write_stats(path: str, payload: dict[str, int | str]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Refiner runtime worker entrypoint")
-    parser.add_argument("--rank", type=int, required=True)
+    parser.add_argument("--rank", type=int, default=0)
     parser.add_argument("--job-id", type=str, required=True)
-    parser.add_argument("--workdir", type=str, required=True)
-    parser.add_argument("--heartbeat-interval-seconds", type=int, required=True)
+    parser.add_argument("--workdir", type=str)
+    parser.add_argument("--heartbeat-interval-seconds", type=int, default=30)
     parser.add_argument("--pipeline-payload", type=str, required=True)
     parser.add_argument("--stats-path", type=str, required=True)
     parser.add_argument("--cpu-ids", type=str, default="")
@@ -48,7 +42,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        cpu_ids = _parse_cpu_ids(args.cpu_ids)
+        cpu_ids = parse_cpu_ids(args.cpu_ids)
         if cpu_ids:
             set_cpu_affinity(cpu_ids)
         if args.mem_mb_per_worker > 0:
