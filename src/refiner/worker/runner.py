@@ -11,7 +11,11 @@ from refiner.platform.client import RunHandle
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.sinks import NullSink
-from refiner.worker.lifecycle import PlatformRuntimeLifecycle, RuntimeLifecycle
+from refiner.worker.lifecycle import (
+    LocalRuntimeLifecycle,
+    PlatformRuntimeLifecycle,
+    RuntimeLifecycle,
+)
 from refiner.worker.metrics.context import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
@@ -39,12 +43,18 @@ class Worker:
         *,
         heartbeat_interval_seconds: int = 30,
         run_handle: RunHandle | None = None,
+        local_job_id: str | None = None,
+        local_stage_index: int = 0,
+        local_workdir: str | None = None,
     ):
         self.rank = rank
         self.runtime_lifecycle = runtime_lifecycle
         self.pipeline = pipeline
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.run_handle = run_handle
+        self.local_job_id = local_job_id
+        self.local_stage_index = local_stage_index
+        self.local_workdir = local_workdir
 
     def _start_platform_session(self) -> tuple[RuntimeLifecycle, RunHandle]:
         if self.run_handle is None or self.run_handle.client is None:
@@ -63,12 +73,26 @@ class Worker:
         runtime_lifecycle = PlatformRuntimeLifecycle(run=run)
         return runtime_lifecycle, run
 
+    def _start_local_session(self) -> RuntimeLifecycle:
+        if not self.local_job_id:
+            raise ValueError("local runtime requires a job_id")
+        return LocalRuntimeLifecycle(
+            job_id=self.local_job_id,
+            stage_index=self.local_stage_index,
+            worker_id=self.rank,
+            workdir=self.local_workdir,
+        )
+
     def run(self) -> WorkerRunStats:
         if self.heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be > 0")
-        if self.runtime_lifecycle is None and self.run_handle is None:
+        if (
+            self.runtime_lifecycle is None
+            and self.run_handle is None
+            and self.local_job_id is None
+        ):
             raise ValueError(
-                "runtime_lifecycle is required unless a platform run is provided"
+                "runtime_lifecycle is required unless a platform or local run is provided"
             )
 
         previous: Shard | None = None
@@ -114,6 +138,8 @@ class Worker:
                 )
             else:
                 user_metrics_emitter = telemetry_emitter
+        elif runtime_lifecycle is None:
+            runtime_lifecycle = self._start_local_session()
         if runtime_lifecycle is None:
             raise ValueError("runtime_lifecycle was not initialized")
         sink = self.pipeline.sink or NullSink()

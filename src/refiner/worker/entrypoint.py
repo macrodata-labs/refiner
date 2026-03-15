@@ -10,7 +10,6 @@ from loguru import logger
 
 from refiner.platform.client.api import MacrodataClient
 from refiner.platform.client.models import RunHandle
-from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.resources.cpu import set_cpu_affinity
 from refiner.worker.resources.memory import set_memory_soft_limit_mb
 from refiner.worker.runner import Worker
@@ -60,7 +59,6 @@ def main() -> int:
 
         worker_name = args.worker_name or f"worker-{args.rank}"
         run_handle: RunHandle | None = None
-        runtime_lifecycle = None
 
         if args.runtime_backend != "file":
             if not args.job_id or args.stage_index < 0:
@@ -87,20 +85,15 @@ def main() -> int:
                     )
                     run_handle = None
 
-        if runtime_lifecycle is None and run_handle is None:
-            runtime_lifecycle = LocalRuntimeLifecycle(
-                job_id=args.job_id,
-                stage_index=max(args.stage_index, 0),
-                worker_id=args.rank,
-                workdir=args.workdir,
-            )
-
         stats = Worker(
             rank=args.rank,
-            runtime_lifecycle=runtime_lifecycle,
+            runtime_lifecycle=None,
             pipeline=pipeline,
             heartbeat_interval_seconds=args.heartbeat_interval_seconds,
             run_handle=run_handle,
+            local_job_id=args.job_id,
+            local_stage_index=max(args.stage_index, 0),
+            local_workdir=args.workdir,
         ).run()
         _write_stats(
             args.stats_path,
