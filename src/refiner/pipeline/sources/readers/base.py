@@ -7,7 +7,7 @@ from typing import Any
 
 from fsspec import AbstractFileSystem
 
-from refiner.io import DataFile, DataFileSet
+from refiner.io import DataFile, DataFileSet, DataFolder
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
@@ -84,16 +84,17 @@ class BaseReader(BaseSource):
         entries = self.fileset.entries
         if not entries:
             return {}
-        first = entries[0]
-        if isinstance(first, DataFile):
-            first_path = first.abs_path()
-        else:
-            first_path = str(first)
-        if len(entries) == 1:
-            return {"path": first_path}
-        if isinstance(first_path, (str, Path)):
-            return {"path": f"{first_path} (+{len(entries) - 1} more)"}
-        return {}
+        inputs: list[str] = []
+        for entry in entries:
+            if isinstance(entry, DataFile):
+                inputs.append(entry.abs_path())
+            elif isinstance(entry, Path):
+                inputs.append(str(entry))
+            elif isinstance(entry, DataFolder):
+                inputs.append(str(entry.abs_paths("")))
+            else:
+                inputs.append(str(entry.fs.unstrip_protocol(entry.path)))
+        return {"path": ", ".join(inputs), "inputs": inputs}
 
     def _get_file_handle(
         self, file: DataFile, *, mode: str = "rb", force_reopen: bool = False

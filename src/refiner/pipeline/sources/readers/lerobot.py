@@ -167,11 +167,10 @@ class LeRobotEpisodeReader(ParquetReader):
         yield from async_window.drain(flush=True)
 
     def describe(self) -> dict[str, Any]:
-        first_path = self._roots[0].abs_paths("")
+        inputs = [cast(str, root.abs_paths("")) for root in self._roots]
         return {
-            "path": first_path
-            if len(self._roots) == 1
-            else f"{first_path} (+{len(self._roots) - 1} more)",
+            "path": ", ".join(inputs),
+            "inputs": inputs,
             "datasets": len(self._roots),
             "limit": self._limit,
             "media_max_in_flight": self._media_max_in_flight,
