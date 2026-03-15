@@ -18,7 +18,7 @@ def main() -> None:
         {"id": "r2", "text": "cloud demo"},
     ]
 
-    pipeline = mdr.from_items(items, shard_size_rows=1).map(
+    pipeline = mdr.from_items(items, items_per_shard=1).map(
         lambda row: {"id": row["id"], "text": row["text"], "text_len": len(row["text"])}
     )
 

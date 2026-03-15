@@ -14,7 +14,7 @@ from refiner.platform.client.models import (
     OkResponse,
     RunHandle,
     ShardClaimResponse,
-    ShardDescriptor,
+    SerializedShard,
     VerifyApiKeyResponse,
     WorkerStartedResponse,
 )
@@ -34,8 +34,8 @@ def resolve_platform_base_url() -> str:
     return _PLATFORM_BASE_URL
 
 
-def compile_shard_descriptors(shards: list["Shard"]) -> list[ShardDescriptor]:
-    return [ShardDescriptor.from_shard(shard) for shard in shards]
+def compile_shard_descriptors(shards: list["Shard"]) -> list[SerializedShard]:
+    return [SerializedShard.from_shard(shard) for shard in shards]
 
 
 def verify_api_key(

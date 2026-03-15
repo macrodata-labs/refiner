@@ -98,27 +98,37 @@ class WorkerStartedResponse(msgspec.Struct, frozen=True):
     worker_id: str
 
 
-class ShardDescriptor(msgspec.Struct, frozen=True):
+class SerializedShard(msgspec.Struct, frozen=True):
+    """Wire form of a shard: scheduling hints plus a serialized descriptor."""
+
     shard_id: str = msgspec.field(name="shard_id")
-    path: str
-    start: int
-    end: int
+    descriptor: dict[str, Any]
+    global_ordinal: int | None = None
+    start_key: str | None = None
+    end_key: str | None = None
 
     @classmethod
-    def from_shard(cls, shard: Shard) -> ShardDescriptor:
-        return cls(shard_id=shard.id, path=shard.path, start=shard.start, end=shard.end)
+    def from_shard(cls, shard: Shard) -> SerializedShard:
+        return cls(
+            shard_id=shard.id,
+            global_ordinal=shard.global_ordinal,
+            start_key=shard.start_key,
+            end_key=shard.end_key,
+            descriptor=shard.descriptor.to_dict(),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "shard_id": self.shard_id,
-            "path": self.path,
-            "start": self.start,
-            "end": self.end,
+            "global_ordinal": self.global_ordinal,
+            "start_key": self.start_key,
+            "end_key": self.end_key,
+            "descriptor": self.descriptor,
         }
 
 
 class ShardClaimResponse(msgspec.Struct, frozen=True):
-    shard: ShardDescriptor | None
+    shard: SerializedShard | None
 
 
 class FinalizedShardWorker(msgspec.Struct, frozen=True):

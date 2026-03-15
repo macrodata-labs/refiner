@@ -149,3 +149,13 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert video.uri.endswith("/videos/observation.images.main/chunk-000/file-000.mp4")
     assert video.from_timestamp_s == 0.0
     assert video.to_timestamp_s == 1.0
+
+
+def test_lerobot_reader_exposes_episode_shard_planning_knobs(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    reader = LeRobotEpisodeReader(str(root), num_shards=2)
+    shards = reader.list_shards()
+
+    assert len(shards) == 2

@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping, Sequence
 
 from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.data.row import DictRow, Row
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline.sources.readers.base import BaseReader
 
 
@@ -24,9 +24,13 @@ class _LocalFakeReader(BaseReader):
         yield from self._rows_by_shard_id.get(shard.id, [])
 
 
+def _shard(path: str, start: int, end: int) -> Shard:
+    return Shard.from_file_parts([FilePart(path=path, start=start, end=end)])
+
+
 def test_iter_rows_is_lazy_and_crosses_shards() -> None:
-    s1 = Shard(path="a", start=0, end=1)
-    s2 = Shard(path="b", start=0, end=1)
+    s1 = _shard("a", 0, 1)
+    s2 = _shard("b", 0, 1)
     rows = {
         s1.id: [DictRow({"x": 1}), DictRow({"x": 2})],
         s2.id: [DictRow({"x": 3}), DictRow({"x": 4})],
@@ -51,8 +55,8 @@ def test_iter_rows_is_lazy_and_crosses_shards() -> None:
 
 
 def test_materialize_and_take() -> None:
-    s1 = Shard(path="a", start=0, end=1)
-    s2 = Shard(path="b", start=0, end=1)
+    s1 = _shard("a", 0, 1)
+    s2 = _shard("b", 0, 1)
     rows = {
         s1.id: [DictRow({"x": 1}), DictRow({"x": 2})],
         s2.id: [DictRow({"x": 3})],
@@ -66,7 +70,7 @@ def test_materialize_and_take() -> None:
 
 
 def test_batch_groups_split_on_increasing_batch_size() -> None:
-    s = Shard(path="a", start=0, end=1)
+    s = _shard("a", 0, 1)
     rows = {s.id: [DictRow({"x": i}) for i in range(10)]}
     seen_4: list[int] = []
     seen_8: list[int] = []
@@ -92,7 +96,7 @@ def test_batch_groups_split_on_increasing_batch_size() -> None:
 
 
 def test_downstream_batch_waits_after_upstream_drop() -> None:
-    s = Shard(path="a", start=0, end=1)
+    s = _shard("a", 0, 1)
     rows = {s.id: [DictRow({"x": i}) for i in range(8)]}
     seen_b2: list[int] = []
 
@@ -118,7 +122,7 @@ def test_downstream_batch_waits_after_upstream_drop() -> None:
 
 
 def test_flat_map_can_expand_rows() -> None:
-    s = Shard(path="a", start=0, end=1)
+    s = _shard("a", 0, 1)
     rows = {s.id: [DictRow({"x": 1}), DictRow({"x": 2})]}
 
     pipeline = RefinerPipeline(source=_LocalFakeReader([s], rows)).flat_map(
@@ -130,7 +134,7 @@ def test_flat_map_can_expand_rows() -> None:
 
 
 def test_filter_primitive_keeps_matching_rows() -> None:
-    s = Shard(path="a", start=0, end=1)
+    s = _shard("a", 0, 1)
     rows = {s.id: [DictRow({"x": i}) for i in range(6)]}
 
     pipeline = (

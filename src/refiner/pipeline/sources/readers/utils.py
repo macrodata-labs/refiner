@@ -6,13 +6,6 @@ from typing import Optional
 from fsspec import AbstractFileSystem
 
 DEFAULT_TARGET_SHARD_BYTES = 128 * 1024 * 1024
-MIN_TARGET_SHARD_BYTES = 16 * 1024 * 1024
-MAX_TARGET_SHARD_BYTES = 512 * 1024 * 1024
-
-
-def clamp_target_bytes(target_bytes: int) -> int:
-    """Clamp target shard size to a reasonable range."""
-    return max(MIN_TARGET_SHARD_BYTES, min(MAX_TARGET_SHARD_BYTES, int(target_bytes)))
 
 
 # Extensions that generally imply whole-file/container compression (not safely splittable by byte offsets).
@@ -104,9 +97,6 @@ class BoundedBinaryReader(io.RawIOBase):
 
 __all__ = [
     "DEFAULT_TARGET_SHARD_BYTES",
-    "MIN_TARGET_SHARD_BYTES",
-    "MAX_TARGET_SHARD_BYTES",
-    "clamp_target_bytes",
     "NON_SPLITTABLE_WHOLEFILE_EXTS",
     "is_splittable_by_bytes",
     "align_byte_range_to_newlines",

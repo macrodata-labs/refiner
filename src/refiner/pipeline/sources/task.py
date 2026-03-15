@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource
 from refiner.pipeline.data.row import DictRow, Row
-
-_TASK_SOURCE_PATH = "memory://tasks"
 
 
 class TaskSource(BaseSource):
@@ -21,14 +19,15 @@ class TaskSource(BaseSource):
 
     def list_shards(self) -> list[Shard]:
         return [
-            Shard(path=_TASK_SOURCE_PATH, start=rank, end=rank + 1)
+            Shard.from_row_range(start=rank, end=rank + 1, global_ordinal=rank)
             for rank in range(self._num_tasks)
         ]
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
-        if shard.path != _TASK_SOURCE_PATH:
-            raise ValueError(f"Unknown task shard path: {shard.path!r}")
-        rank = int(shard.start)
+        descriptor = shard.descriptor
+        if not isinstance(descriptor, RowRangeDescriptor):
+            raise TypeError("TaskSource requires row-range shards")
+        rank = int(descriptor.start)
         if rank < 0 or rank >= self._num_tasks:
             raise ValueError(f"Invalid task rank {rank} for {self._num_tasks} tasks")
         yield DictRow({"task_rank": rank})

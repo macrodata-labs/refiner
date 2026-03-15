@@ -13,9 +13,10 @@ from refiner.platform.client import (
     OkResponse,
     RunHandle,
     ShardClaimResponse,
-    ShardDescriptor,
+    SerializedShard,
     WorkerStartedResponse,
 )
+from refiner.pipeline.data.shard import FilePart
 from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
@@ -56,6 +57,10 @@ class _FakeRuntimeLifecycle:
     def fail(self, shard: Shard, error: str | None = None) -> None:
         del error
         self.failed_ids.append(shard.id)
+
+
+def _shard(path: str, start: int, end: int) -> Shard:
+    return Shard.from_file_parts([FilePart(path=path, start=start, end=end)])
 
 
 class _NoopTelemetryEmitter:
@@ -128,11 +133,9 @@ class _LifecycleClientWithFailingTelemetry:
         shard = self._next_shard
         self._next_shard = None
         return ShardClaimResponse(
-            shard=ShardDescriptor(
+            shard=SerializedShard(
                 shard_id=shard.id,
-                path=shard.path,
-                start=shard.start,
-                end=shard.end,
+                descriptor=shard.descriptor.to_dict(),
             )
         )
 
@@ -167,8 +170,8 @@ def test_pipeline_executes_row_and_batch_steps() -> None:
 
 
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
-    shard1 = Shard(path="p1", start=0, end=10)
-    shard2 = Shard(path="p2", start=0, end=10)
+    shard1 = _shard("p1", 0, 10)
+    shard2 = _shard("p2", 0, 10)
     runtime_lifecycle = _FakeRuntimeLifecycle([shard1, shard2])
 
     rows_by_shard = {
@@ -212,8 +215,8 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
 
 
 def test_worker_fails_entire_claimed_group_on_exception() -> None:
-    shard1 = Shard(path="ok", start=0, end=1)
-    shard2 = Shard(path="boom", start=0, end=1)
+    shard1 = _shard("ok", 0, 1)
+    shard2 = _shard("boom", 0, 1)
     runtime_lifecycle = _FakeRuntimeLifecycle([shard1, shard2])
 
     rows_by_shard = {
@@ -243,8 +246,8 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
 
 
 def test_worker_can_batch_across_shards() -> None:
-    shard1 = Shard(path="s1", start=0, end=1)
-    shard2 = Shard(path="s2", start=0, end=1)
+    shard1 = _shard("s1", 0, 1)
+    shard2 = _shard("s2", 0, 1)
     runtime_lifecycle = _FakeRuntimeLifecycle([shard1, shard2])
 
     rows_by_shard = {
@@ -276,7 +279,7 @@ def test_worker_can_batch_across_shards() -> None:
 
 
 def test_worker_runtime_complete_errors_are_not_swallowed() -> None:
-    shard = Shard(path="p", start=0, end=1)
+    shard = _shard("p", 0, 1)
     rows_by_shard = {shard.id: [DictRow({"x": 1})]}
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
 
@@ -296,7 +299,7 @@ def test_worker_runtime_complete_errors_are_not_swallowed() -> None:
 
 
 def test_worker_completes_shards_only_after_sink_drain() -> None:
-    shard = Shard(path="p", start=0, end=2)
+    shard = _shard("p", 0, 2)
     rows_by_shard = {
         shard.id: [DictRow({"x": 1}), DictRow({"x": 2})],
     }
@@ -318,7 +321,7 @@ def test_worker_completes_shards_only_after_sink_drain() -> None:
 
 
 def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
-    shard = Shard(path="p", start=0, end=1)
+    shard = _shard("p", 0, 1)
     rows_by_shard = {shard.id: [DictRow({"x": 1})]}
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
     monkeypatch.setattr(

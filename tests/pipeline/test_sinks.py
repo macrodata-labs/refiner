@@ -7,7 +7,7 @@ from refiner.pipeline import from_items
 
 
 def test_iter_rows_ignores_sink(tmp_path) -> None:
-    pipeline = from_items([{"x": 1}, {"x": 2}], shard_size_rows=1).write_jsonl(tmp_path)
+    pipeline = from_items([{"x": 1}, {"x": 2}], items_per_shard=1).write_jsonl(tmp_path)
     out = list(pipeline.iter_rows())
     assert [int(row["x"]) for row in out] == [1, 2]
     assert list(tmp_path.iterdir()) == []
@@ -16,7 +16,7 @@ def test_iter_rows_ignores_sink(tmp_path) -> None:
 def test_launch_local_writes_jsonl_per_shard(tmp_path) -> None:
     output_dir = tmp_path / "jsonl-output"
     pipeline = (
-        from_items([{"x": 1}, {"x": 2}, {"x": 3}], shard_size_rows=2)
+        from_items([{"x": 1}, {"x": 2}, {"x": 3}], items_per_shard=2)
         .map(lambda row: {"x": int(row["x"]) * 10})
         .write_jsonl(output_dir)
     )
@@ -34,7 +34,7 @@ def test_launch_local_writes_jsonl_per_shard(tmp_path) -> None:
 def test_launch_local_writes_parquet_per_shard(tmp_path) -> None:
     output_dir = tmp_path / "parquet-output"
     pipeline = (
-        from_items([{"x": 1}, {"x": 2}, {"x": 3}], shard_size_rows=2)
+        from_items([{"x": 1}, {"x": 2}, {"x": 3}], items_per_shard=2)
         .map(lambda row: {"x": int(row["x"]) * 10})
         .write_parquet(output_dir)
     )
@@ -56,7 +56,7 @@ def test_launch_local_writes_parquet_per_shard(tmp_path) -> None:
 def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> None:
     output_dir = tmp_path / "vectorized-output"
     pipeline = (
-        from_items([{"x": 1}, {"x": 2}, {"x": 3}], shard_size_rows=2)
+        from_items([{"x": 1}, {"x": 2}, {"x": 3}], items_per_shard=2)
         .filter(col("x") > 1)
         .write_jsonl(output_dir)
     )

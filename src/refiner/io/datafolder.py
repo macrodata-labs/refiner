@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Mapping
 from os import PathLike
-from typing import IO, Any, TypeAlias, Union
+from typing import IO, Any, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.dirfs import DirFileSystem
@@ -8,7 +8,9 @@ from fsspec.implementations.local import LocalFileSystem
 
 from refiner.io.datafile import DataFile
 
-DataFolderLike: TypeAlias = Union[str, PathLike[str], "DataFolder"]
+DataFolderPath: TypeAlias = str | PathLike[str]
+DataFolderSpec: TypeAlias = tuple[DataFolderPath, AbstractFileSystem]
+DataFolderLike: TypeAlias = Union[DataFolderPath, DataFolderSpec, "DataFolder"]
 
 
 class DataFolder(DirFileSystem):
@@ -61,16 +63,25 @@ class DataFolder(DirFileSystem):
 
 
         Args:
-            data: `DataFolder` | `str`
+            data: `DataFolder` | `str` | `(path, fs)`
             fs: Optional initialized filesystem to use. If provided, `storage_options` is ignored.
             storage_options: Optional fsspec filesystem init options (used only when `fs` is not provided).
 
         Returns:
             `DataFolder` instance
         """
+        # Like DataFile.resolve(), this normalizes a folder handle but does not list it.
         # fully initialized DataFolder object
         if isinstance(data, cls):
             return data
+        if (
+            isinstance(data, tuple)
+            and len(data) == 2
+            and isinstance(data[1], AbstractFileSystem)
+        ):
+            spec = cast(DataFolderSpec, data)
+            data = spec[0]
+            fs = spec[1]
         if isinstance(data, PathLike):
             data = str(data)
         # simple string path
@@ -79,7 +90,9 @@ class DataFolder(DirFileSystem):
                 path = fs._strip_protocol(data)
                 return cls(path, fs=fs)
             return cls(data, **dict(storage_options or {}))
-        raise TypeError("You must pass a DataFolder instance, str path, or PathLike")
+        raise TypeError(
+            "You must pass a DataFolder instance, str path, PathLike, or (path, fs)"
+        )
 
     def _abs_path(self, path: str) -> str:
         # make sure we strip file:// and similar

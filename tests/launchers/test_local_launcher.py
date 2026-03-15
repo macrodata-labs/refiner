@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping, Sequence
 
 import pytest
 
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_jsonl
 from refiner.launchers.local import LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
@@ -49,10 +49,30 @@ def test_launch_local_single_worker(tmp_path) -> None:
     )
 
     assert stats.workers == 1
-    assert stats.claimed == 2
-    assert stats.completed == 2
+    assert stats.claimed == 1
+    assert stats.completed == 1
     assert stats.failed == 0
     assert stats.output_rows == 2
+
+
+def test_launch_local_coalesces_writer_shards(tmp_path) -> None:
+    p1 = tmp_path / "a.jsonl"
+    p2 = tmp_path / "b.jsonl"
+    p1.write_text('{"x": 1}\n')
+    p2.write_text('{"x": 2}\n')
+
+    pipeline = read_jsonl([str(p1), str(p2)], num_shards=1).write_jsonl(
+        tmp_path / "out"
+    )
+
+    stats = pipeline.launch_local(
+        name="unit-test-local-coalesced",
+        num_workers=1,
+        workdir=str(tmp_path),
+    )
+
+    assert stats.claimed == 1
+    assert stats.completed == 1
 
 
 def test_build_cpu_sets_partitions_cpus(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,8 +108,8 @@ def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
         workdir=str(tmp_path),
     )
     assert stats.workers == 2
-    assert stats.claimed == 2
-    assert stats.completed == 2
+    assert stats.claimed == 1
+    assert stats.completed == 1
     assert stats.failed == 0
     assert stats.output_rows == 2
 
@@ -117,7 +137,7 @@ def test_local_launcher_file_backend_skips_platform_setup(tmp_path) -> None:
 
 
 def test_local_launcher_platform_backend_requires_platform_client(monkeypatch) -> None:
-    shard = Shard(path="a", start=0, end=1)
+    shard = Shard.from_file_parts([FilePart(path="a", start=0, end=1)])
     rows = {shard.id: [DictRow({"x": 1})]}
     pipeline = RefinerPipeline(source=_FakeReader([shard], rows))
 

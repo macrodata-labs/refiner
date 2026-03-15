@@ -43,8 +43,13 @@ class PlatformRuntimeLifecycle:
         )
         if claim.shard is None:
             return None
-        return Shard(
-            path=claim.shard.path, start=claim.shard.start, end=claim.shard.end
+        return Shard.from_dict(
+            {
+                "descriptor": claim.shard.descriptor,
+                "global_ordinal": claim.shard.global_ordinal,
+                "start_key": claim.shard.start_key,
+                "end_key": claim.shard.end_key,
+            }
         )
 
     def heartbeat(self, shards: Iterable[Shard]) -> None:

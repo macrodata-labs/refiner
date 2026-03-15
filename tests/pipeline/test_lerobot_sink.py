@@ -119,7 +119,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
                 values=[4.0, 6.0],
             ),
         ],
-        shard_size_rows=1,
+        items_per_shard=1,
     ).write_lerobot(str(out_root), overwrite=True)
     assert not (out_root / "meta" / "info.json").exists()
 
@@ -186,7 +186,7 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
                 "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
             },
         ],
-        shard_size_rows=1,
+        items_per_shard=1,
     ).write_lerobot(str(out_root), overwrite=True)
 
     stats = pipeline.launch_local(
@@ -266,7 +266,7 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
                 values=[4.0, 6.0],
             ),
         ],
-        shard_size_rows=2,
+        items_per_shard=2,
     ).write_lerobot(
         str(out_root),
         overwrite=True,
@@ -314,7 +314,7 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
                 "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
             },
         ],
-        shard_size_rows=10,
+        items_per_shard=10,
     ).write_lerobot(str(out_root), overwrite=True)
 
     stats = pipeline.launch_local(

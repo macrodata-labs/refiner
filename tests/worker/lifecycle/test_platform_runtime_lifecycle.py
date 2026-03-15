@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any, cast
 
 from refiner.platform.client import OkResponse, RunHandle, ShardClaimResponse
-from refiner.platform.client import ShardDescriptor
+from refiner.platform.client import SerializedShard
 from refiner.worker.lifecycle.platform import PlatformRuntimeLifecycle
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import FilePart, Shard
 
 
 def test_platform_runtime_register_and_lifecycle() -> None:
@@ -19,11 +19,22 @@ def test_platform_runtime_register_and_lifecycle() -> None:
         def shard_claim(self, **kwargs):
             calls.append(("claim", kwargs))
             return ShardClaimResponse(
-                shard=ShardDescriptor(
-                    shard_id=Shard(path="p0", start=0, end=1).id,
-                    path="p0",
-                    start=0,
-                    end=1,
+                shard=SerializedShard(
+                    shard_id=Shard.from_file_parts(
+                        [FilePart(path="p0", start=0, end=1)]
+                    ).id,
+                    descriptor={
+                        "kind": "file_parts",
+                        "parts": [
+                            {
+                                "path": "p0",
+                                "start": 0,
+                                "end": 1,
+                                "source_index": 0,
+                                "unit": "bytes",
+                            }
+                        ],
+                    },
                 )
             )
 
@@ -43,7 +54,7 @@ def test_platform_runtime_register_and_lifecycle() -> None:
             worker_id="worker-7",
         ),
     )
-    shards = [Shard(path="p0", start=0, end=1)]
+    shards = [Shard.from_file_parts([FilePart(path="p0", start=0, end=1)])]
     lifecycle.seed_shards(shards)
     claimed = lifecycle.claim()
     assert claimed is not None
