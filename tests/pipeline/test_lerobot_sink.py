@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import av
 import numpy as np
@@ -20,6 +21,7 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotWriterSink,
 )
 from refiner.platform.client.models import FinalizedShardWorker
+from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.metrics.context import set_active_worker_runtime
 
 
@@ -366,6 +368,7 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
 
     for worker_id, values in [("1", [1.0, 2.0]), ("2", [9.0, 10.0])]:
         writer = LeRobotWriterSink(config)
+        runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
         worker_row = row.update(
             {
                 "frames": [
@@ -384,16 +387,17 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
         )
         with set_active_worker_runtime(
             worker_id=worker_id,
-            runtime_lifecycle=_FinalizedWorkersRuntime(),
+            runtime_lifecycle=runtime,
             stage_index=0,
         ):
             writer.write_block([worker_row])
             writer.on_shard_complete("shard-1")
 
     reducer = LeRobotMetaReduceSink(config=config)
+    runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
     with set_active_worker_runtime(
         worker_id="local",
-        runtime_lifecycle=_FinalizedWorkersRuntime(),
+        runtime_lifecycle=runtime,
         stage_index=1,
     ):
         reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])

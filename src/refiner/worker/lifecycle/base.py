@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from refiner.pipeline.data.shard import Shard
-from refiner.platform.client.models import FinalizedShardWorker
+
+if TYPE_CHECKING:
+    from refiner.platform.client.models import FinalizedShardWorker
 
 
 class RuntimeLifecycle(Protocol):

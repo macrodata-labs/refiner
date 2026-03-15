@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from typing import Any, Generator, Protocol
+from typing import TYPE_CHECKING, Generator, Protocol
+
+if TYPE_CHECKING:
+    from refiner.platform.client.models import FinalizedShardWorker
+
+
+class RuntimeLifecycleContext(Protocol):
+    def finalized_workers(
+        self, *, stage_index: int | None = None
+    ) -> list[FinalizedShardWorker]: ...
 
 
 class UserMetricsEmitter(Protocol):
@@ -107,7 +116,7 @@ _ACTIVE_WORKER_ID: ContextVar[str] = ContextVar(
     "refiner_active_worker_id",
     default="local",
 )
-_ACTIVE_RUNTIME_LIFECYCLE: ContextVar[Any | None] = ContextVar(
+_ACTIVE_RUNTIME_LIFECYCLE: ContextVar[RuntimeLifecycleContext | None] = ContextVar(
     "refiner_active_runtime_lifecycle",
     default=None,
 )
@@ -129,7 +138,7 @@ def get_active_worker_id() -> str:
     return _ACTIVE_WORKER_ID.get()
 
 
-def get_active_runtime_lifecycle() -> Any | None:
+def get_active_runtime_lifecycle() -> RuntimeLifecycleContext | None:
     return _ACTIVE_RUNTIME_LIFECYCLE.get()
 
 
@@ -161,12 +170,12 @@ def set_active_step_index(step_index: int | None) -> Generator[None, None, None]
 def set_active_worker_runtime(
     *,
     worker_id: str,
-    runtime_lifecycle: Any,
+    runtime_lifecycle: RuntimeLifecycleContext,
     stage_index: int | None,
 ) -> Generator[None, None, None]:
     worker_token: Token[str] = _ACTIVE_WORKER_ID.set(worker_id)
-    lifecycle_token: Token[Any | None] = _ACTIVE_RUNTIME_LIFECYCLE.set(
-        runtime_lifecycle
+    lifecycle_token: Token[RuntimeLifecycleContext | None] = (
+        _ACTIVE_RUNTIME_LIFECYCLE.set(runtime_lifecycle)
     )
     stage_token: Token[int | None] = _ACTIVE_RUNTIME_STAGE_INDEX.set(stage_index)
     try:
@@ -180,6 +189,7 @@ def set_active_worker_runtime(
 __all__ = [
     "UserMetricsEmitter",
     "NOOP_USER_METRICS_EMITTER",
+    "RuntimeLifecycleContext",
     "get_active_user_metrics_emitter",
     "get_active_step_index",
     "get_active_worker_id",
