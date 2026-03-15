@@ -98,7 +98,6 @@ class RowRangeDescriptor:
 
     start: int
     end: int
-    unit: str = "rows"
 
     def __post_init__(self) -> None:
         if self.end < self.start:
@@ -109,7 +108,6 @@ class RowRangeDescriptor:
             "kind": "row_range",
             "start": int(self.start),
             "end": int(self.end),
-            "unit": self.unit,
         }
 
     @classmethod
@@ -117,7 +115,6 @@ class RowRangeDescriptor:
         return cls(
             start=int(payload["start"]),
             end=int(payload["end"]),
-            unit=str(payload.get("unit", "rows")),
         )
 
     def update_hash(self, h: _HashWriter) -> None:
@@ -125,8 +122,6 @@ class RowRangeDescriptor:
         h.update(str(self.start).encode("ascii"))
         h.update(b"\0")
         h.update(str(self.end).encode("ascii"))
-        h.update(b"\0")
-        h.update(self.unit.encode("utf-8"))
         h.update(b"\0")
 
     @property
@@ -184,7 +179,6 @@ class Shard:
         *,
         start: int,
         end: int,
-        unit: str = "rows",
         global_ordinal: int | None = None,
         start_key: str | None = None,
         end_key: str | None = None,
@@ -193,7 +187,6 @@ class Shard:
             descriptor=RowRangeDescriptor(
                 start=start,
                 end=end,
-                unit=unit,
             ),
             global_ordinal=global_ordinal,
             start_key=start_key,
