@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from refiner.pipeline.data.shard import Shard
+from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.lifecycle.local.claim import ClaimPolicy
 from refiner.worker.lifecycle.local.files import leased_filename
 from refiner.worker.lifecycle.local.files import parse_shard_filename
@@ -216,7 +217,10 @@ class LocalRuntimeLifecycle:
         leased_path = self._leased_dir / leased_filename(shard.id, worker_id)
         done_path = self._done_dir / pending_filename(shard.id)
         try:
-            os.replace(leased_path, done_path)
+            payload = json.loads(leased_path.read_text())
+            payload["_finalized_worker_id"] = str(worker_id)
+            done_path.write_text(json.dumps(payload, sort_keys=True))
+            leased_path.unlink()
         except Exception:
             pass
 
@@ -234,3 +238,32 @@ class LocalRuntimeLifecycle:
                 (self._failed_dir / f"{failed_base}.error").write_text(error)
             except Exception:
                 pass
+
+    def finalized_workers(
+        self, *, stage_index: int | None = None
+    ) -> list[FinalizedShardWorker]:
+        done_dir = (
+            self._done_dir
+            if stage_index is None or stage_index == self.stage_index
+            else Path(self.workdir)
+            / "runs"
+            / self.job_id
+            / "lifecycle"
+            / f"stage-{stage_index}"
+            / "done"
+        )
+        out: list[FinalizedShardWorker] = []
+        if not done_dir.exists():
+            return out
+        for path in done_dir.iterdir():
+            if not path.is_file():
+                continue
+            try:
+                payload = json.loads(path.read_text())
+                shard_id = str(payload["shard_id"])
+                worker_id = str(payload["_finalized_worker_id"])
+            except Exception:
+                continue
+            out.append(FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id))
+        out.sort(key=lambda row: row.shard_id)
+        return out

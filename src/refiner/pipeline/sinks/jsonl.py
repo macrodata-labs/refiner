@@ -14,6 +14,7 @@ from refiner.pipeline.sinks.base import (
     ShardCounts,
     split_block_by_shard,
 )
+from refiner.worker.metrics.context import get_active_worker_id
 
 
 class JsonlSink(BaseSink):
@@ -21,7 +22,7 @@ class JsonlSink(BaseSink):
         self,
         output: DataFolderLike,
         *,
-        filename_template: str = "{shard_id}.jsonl",
+        filename_template: str = "{shard_id}__w{worker_id}.jsonl",
     ):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
@@ -29,7 +30,10 @@ class JsonlSink(BaseSink):
         self._encoder = json.JSONEncoder(ensure_ascii=True, separators=(",", ":"))
 
     def _relpath(self, shard_id: str) -> str:
-        return self.filename_template.format(shard_id=shard_id)
+        return self.filename_template.format(
+            shard_id=shard_id,
+            worker_id=get_active_worker_id(),
+        )
 
     def _file(self, shard_id: str) -> IO[str]:
         file = self._files.get(shard_id)

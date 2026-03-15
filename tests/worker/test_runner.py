@@ -20,6 +20,7 @@ from refiner.pipeline.data.shard import FilePart
 from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
+from refiner.platform.client.models import FinalizedShardWorker
 
 
 class _FakeReader(BaseReader):
@@ -57,6 +58,12 @@ class _FakeRuntimeLifecycle:
     def fail(self, shard: Shard, error: str | None = None) -> None:
         del error
         self.failed_ids.append(shard.id)
+
+    def finalized_workers(
+        self, *, stage_index: int | None = None
+    ) -> list[FinalizedShardWorker]:
+        del stage_index
+        return []
 
 
 def _shard(path: str, start: int, end: int) -> Shard:

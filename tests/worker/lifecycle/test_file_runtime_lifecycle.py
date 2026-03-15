@@ -7,6 +7,7 @@ from pathlib import Path
 from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.pipeline.data.shard import Shard
+from refiner.platform.client.models import FinalizedShardWorker
 
 
 def _shard(
@@ -133,3 +134,16 @@ def test_file_runtime_prefers_same_locality_without_exact_boundary(
     second = lifecycle.claim(previous=first)
     assert second is not None
     assert second.start_key == shard1.start_key
+
+
+def test_file_runtime_reports_finalized_workers(tmp_path: Path) -> None:
+    lifecycle = LocalRuntimeLifecycle(job_id="job7", worker_id=2, workdir=str(tmp_path))
+    shard = _shard("p", 0, 1)
+    lifecycle.seed_shards([shard])
+    claimed = lifecycle.claim()
+    assert claimed is not None
+    lifecycle.complete(claimed)
+
+    assert lifecycle.finalized_workers() == [
+        FinalizedShardWorker(shard_id=shard.id, worker_id="2")
+    ]

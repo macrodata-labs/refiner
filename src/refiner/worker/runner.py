@@ -15,6 +15,7 @@ from refiner.worker.lifecycle import PlatformRuntimeLifecycle, RuntimeLifecycle
 from refiner.worker.metrics.context import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
+    set_active_worker_runtime,
     set_active_step_index,
     set_active_user_metrics_emitter,
 )
@@ -201,7 +202,24 @@ class Worker:
                 _maybe_complete_shard(shard.id)
                 previous = shard
 
-        with set_active_user_metrics_emitter(user_metrics_emitter):
+        active_stage_index = (
+            active_run.stage_index
+            if active_run is not None
+            else getattr(runtime_lifecycle, "stage_index", None)
+        )
+        active_worker_id = (
+            active_run.worker_id
+            if active_run is not None and active_run.worker_id is not None
+            else str(self.rank)
+        )
+        with (
+            set_active_user_metrics_emitter(user_metrics_emitter),
+            set_active_worker_runtime(
+                worker_id=active_worker_id,
+                runtime_lifecycle=runtime_lifecycle,
+                stage_index=active_stage_index,
+            ),
+        ):
             run_exception: Exception | None = None
             try:
                 try:
