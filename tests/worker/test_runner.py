@@ -70,6 +70,10 @@ def _shard(path: str, start: int, end: int) -> Shard:
     return Shard.from_file_parts([FilePart(path=path, start=start, end=end)])
 
 
+def _local_run() -> RunHandle:
+    return RunHandle(job_id="job", stage_index=0)
+
+
 class _NoopTelemetryEmitter:
     def emit_user_counter(self, **kwargs) -> None:
         del kwargs
@@ -203,10 +207,11 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
 
     worker = Worker(
         rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
         heartbeat_interval_seconds=1,
+        run_handle=_local_run(),
     )
+    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
 
     stats = worker.run()
 
@@ -239,9 +244,10 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail)
     worker = Worker(
         rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
+        run_handle=_local_run(),
     )
+    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
 
     stats = worker.run()
 
@@ -275,9 +281,10 @@ def test_worker_can_batch_across_shards() -> None:
 
     worker = Worker(
         rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
+        run_handle=_local_run(),
     )
+    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
     stats = worker.run()
 
     assert stats.claimed == 2
@@ -298,9 +305,10 @@ def test_worker_runtime_complete_errors_are_not_swallowed() -> None:
     runtime_lifecycle = _FailingCompleteRuntimeLifecycle([shard])
     worker = Worker(
         rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
+        run_handle=_local_run(),
     )
+    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="complete failed"):
         worker.run()
 
@@ -315,9 +323,10 @@ def test_worker_completes_shards_only_after_sink_drain() -> None:
 
     worker = Worker(
         rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).with_sink(sink),
+        run_handle=_local_run(),
     )
+    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
 
     stats = worker.run()
 
@@ -338,7 +347,6 @@ def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
 
     worker = Worker(
         rank=0,
-        runtime_lifecycle=None,
         pipeline=pipeline,
         run_handle=RunHandle(
             job_id="job",

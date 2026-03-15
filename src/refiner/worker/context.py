@@ -2,25 +2,19 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING, Generator, Protocol
+from typing import TYPE_CHECKING, Generator
 
 from refiner.run import RunHandle
 
 if TYPE_CHECKING:
-    from refiner.platform.client.models import FinalizedShardWorker
-
-
-class RuntimeLifecycleContext(Protocol):
-    def finalized_workers(
-        self, *, stage_index: int | None = None
-    ) -> list[FinalizedShardWorker]: ...
+    from refiner.worker.lifecycle.base import RuntimeLifecycle
 
 
 _ACTIVE_RUN_HANDLE: ContextVar[RunHandle | None] = ContextVar(
     "refiner_active_run_handle",
     default=None,
 )
-_ACTIVE_RUNTIME_LIFECYCLE: ContextVar[RuntimeLifecycleContext | None] = ContextVar(
+_ACTIVE_RUNTIME_LIFECYCLE: ContextVar["RuntimeLifecycle" | None] = ContextVar(
     "refiner_active_runtime_lifecycle",
     default=None,
 )
@@ -37,7 +31,7 @@ def get_active_run_handle() -> RunHandle:
     return run_handle
 
 
-def get_active_runtime_lifecycle() -> RuntimeLifecycleContext | None:
+def get_active_runtime_lifecycle() -> RuntimeLifecycle | None:
     return _ACTIVE_RUNTIME_LIFECYCLE.get()
 
 
@@ -49,11 +43,11 @@ def get_active_step_index() -> int | None:
 def set_active_run_context(
     *,
     run_handle: RunHandle,
-    runtime_lifecycle: RuntimeLifecycleContext,
+    runtime_lifecycle: RuntimeLifecycle,
 ) -> Generator[None, None, None]:
     run_token: Token[RunHandle | None] = _ACTIVE_RUN_HANDLE.set(run_handle)
-    lifecycle_token: Token[RuntimeLifecycleContext | None] = (
-        _ACTIVE_RUNTIME_LIFECYCLE.set(runtime_lifecycle)
+    lifecycle_token: Token["RuntimeLifecycle" | None] = _ACTIVE_RUNTIME_LIFECYCLE.set(
+        runtime_lifecycle
     )
     try:
         yield
@@ -72,7 +66,6 @@ def set_active_step_index(step_index: int | None) -> Generator[None, None, None]
 
 
 __all__ = [
-    "RuntimeLifecycleContext",
     "get_active_run_handle",
     "get_active_runtime_lifecycle",
     "get_active_step_index",

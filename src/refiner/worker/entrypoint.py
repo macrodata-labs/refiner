@@ -37,7 +37,7 @@ def main() -> int:
     parser.add_argument("--stats-path", type=str, required=True)
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--mem-mb-per-worker", type=int, default=0)
-    parser.add_argument("--stage-index", type=int, default=-1)
+    parser.add_argument("--stage-index", type=int, required=True)
     parser.add_argument("--worker-name", type=str, default="")
     parser.add_argument(
         "--runtime-backend",
@@ -60,37 +60,30 @@ def main() -> int:
         worker_name = args.worker_name or f"worker-{args.rank}"
         run_handle = RunHandle(
             job_id=args.job_id,
-            stage_index=max(args.stage_index, 0),
+            stage_index=args.stage_index,
             worker_name=worker_name,
         )
 
         if args.runtime_backend != "file":
-            if not args.job_id or args.stage_index < 0:
+            try:
+                client = MacrodataClient()
+                run_handle = RunHandle(
+                    job_id=args.job_id,
+                    stage_index=args.stage_index,
+                    client=client,
+                    worker_name=worker_name,
+                )
+            except Exception as e:
                 if args.runtime_backend == "platform":
-                    raise ValueError(
-                        "platform runtime requires --job-id and --stage-index"
-                    )
-            else:
-                try:
-                    client = MacrodataClient()
-                    run_handle = RunHandle(
-                        job_id=args.job_id,
-                        stage_index=args.stage_index,
-                        client=client,
-                        worker_name=worker_name,
-                    )
-                except Exception as e:
-                    if args.runtime_backend == "platform":
-                        raise
-                    logger.warning(
-                        "platform runtime unavailable (falling back to file runtime): {}: {}",
-                        type(e).__name__,
-                        e,
-                    )
+                    raise
+                logger.warning(
+                    "platform runtime unavailable (falling back to file runtime): {}: {}",
+                    type(e).__name__,
+                    e,
+                )
 
         stats = Worker(
             rank=args.rank,
-            runtime_lifecycle=None,
             pipeline=pipeline,
             heartbeat_interval_seconds=args.heartbeat_interval_seconds,
             run_handle=run_handle,

@@ -37,15 +37,13 @@ class Worker:
     def __init__(
         self,
         rank: int,
-        runtime_lifecycle: RuntimeLifecycle | None,
         pipeline: RefinerPipeline,
         *,
         heartbeat_interval_seconds: int = 30,
-        run_handle: RunHandle | None = None,
+        run_handle: RunHandle,
         local_workdir: str | None = None,
     ):
         self.rank = rank
-        self.runtime_lifecycle = runtime_lifecycle
         self.pipeline = pipeline
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.run_handle = run_handle
@@ -81,8 +79,6 @@ class Worker:
     def run(self) -> WorkerRunStats:
         if self.heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be > 0")
-        if self.runtime_lifecycle is None and self.run_handle is None:
-            raise ValueError("runtime_lifecycle is required unless a run is provided")
 
         previous: Shard | None = None
         claimed = 0
@@ -96,14 +92,13 @@ class Worker:
         failed_error: str | None = None
         completion_error: Exception | None = None
         run_handle = self.run_handle
-        runtime_lifecycle = self.runtime_lifecycle
         active_run: RunHandle | None = None
         user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
         obs_logger = logger.bind(rank=self.rank)
         stop_heartbeat = threading.Event()
         heartbeat_error: Exception | None = None
 
-        if run_handle is not None and run_handle.client is not None:
+        if run_handle.client is not None:
             runtime_lifecycle, active_run = self._start_platform_session()
             obs_logger.info(
                 "worker started job_id={} stage_index={} worker_id={}",
@@ -127,10 +122,8 @@ class Worker:
                 )
             else:
                 user_metrics_emitter = telemetry_emitter
-        elif runtime_lifecycle is None:
+        else:
             runtime_lifecycle = self._start_local_session()
-        if runtime_lifecycle is None:
-            raise ValueError("runtime_lifecycle was not initialized")
         sink = self.pipeline.sink or NullSink()
 
         def _heartbeat_once() -> None:
@@ -220,11 +213,7 @@ class Worker:
         bound_run = (
             active_run
             if active_run is not None
-            else (
-                self.run_handle.with_worker(worker_id=str(self.rank))
-                if self.run_handle is not None
-                else RunHandle(job_id="local", stage_index=0, worker_id=str(self.rank))
-            )
+            else self.run_handle.with_worker(worker_id=str(self.rank))
         )
         with (
             set_active_user_metrics_emitter(user_metrics_emitter),
