@@ -33,13 +33,7 @@ class ItemsSource(BaseSource):
         for start in range(0, self._row_count, self._items_per_shard):
             end = min(self._row_count, start + self._items_per_shard)
             shards.append(
-                Shard(
-                    descriptor=RowRangeDescriptor(
-                        start=start,
-                        end=end,
-                    ),
-                    global_ordinal=len(shards),
-                )
+                Shard.from_row_range(start=start, end=end, global_ordinal=len(shards))
             )
         return shards
 

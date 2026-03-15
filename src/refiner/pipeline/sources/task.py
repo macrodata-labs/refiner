@@ -19,13 +19,7 @@ class TaskSource(BaseSource):
 
     def list_shards(self) -> list[Shard]:
         return [
-            Shard(
-                descriptor=RowRangeDescriptor(
-                    start=rank,
-                    end=rank + 1,
-                ),
-                global_ordinal=rank,
-            )
+            Shard.from_row_range(start=rank, end=rank + 1, global_ordinal=rank)
             for rank in range(self._num_tasks)
         ]
 

@@ -131,8 +131,6 @@ class LeRobotEpisodeReader(ParquetReader):
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
         part = descriptor.parts[0]
-        if part.path not in self.files:
-            raise ValueError(f"Unknown LeRobot shard path: {part.path!r}")
         if self._limit is not None and self._submitted_episodes >= self._limit:
             return
 

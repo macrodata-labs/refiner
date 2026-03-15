@@ -74,9 +74,9 @@ class FilePartsDescriptor:
         parts = payload["parts"]
         if not isinstance(parts, list):
             raise ValueError("file-parts descriptor must contain a parts list")
-        return cls(
-            tuple(FilePart.from_dict(part) for part in parts if isinstance(part, dict))
-        )
+        if any(not isinstance(part, dict) for part in parts):
+            raise ValueError("file-parts descriptor parts must be objects")
+        return cls(tuple(FilePart.from_dict(part) for part in parts))
 
     def update_hash(self, h: _HashWriter) -> None:
         h.update(b"file_parts\0")
@@ -230,11 +230,17 @@ class Shard:
         global_ordinal = payload.get("global_ordinal")
         start_key = payload.get("start_key")
         end_key = payload.get("end_key")
+        if global_ordinal is not None and not isinstance(global_ordinal, int):
+            raise ValueError("global_ordinal must be an integer or null")
+        if start_key is not None and not isinstance(start_key, str):
+            raise ValueError("start_key must be a string or null")
+        if end_key is not None and not isinstance(end_key, str):
+            raise ValueError("end_key must be a string or null")
         return cls(
             descriptor=parsed_descriptor,
-            global_ordinal=global_ordinal if isinstance(global_ordinal, int) else None,
-            start_key=start_key if isinstance(start_key, str) else None,
-            end_key=end_key if isinstance(end_key, str) else None,
+            global_ordinal=global_ordinal,
+            start_key=start_key,
+            end_key=end_key,
         )
 
 

@@ -196,16 +196,12 @@ class DataFileSet:
         """Resolve an absolute shard path back onto the source entry's filesystem."""
         entry = self.entries[source_index]
         if isinstance(entry, DataFile):
+            if path in {entry.path, str(entry), entry.abs_path()}:
+                return entry
             file = DataFile.resolve(path, fs=entry.fs)
-            if (
-                file.path != entry.path
-                and str(entry) != path
-                and entry.abs_path() != path
-            ):
+            if file.path.lstrip("/") != entry.path.lstrip("/"):
                 raise FileNotFoundError(path)
-            return file
-        if isinstance(entry, DataFolder):
-            return DataFile.resolve(path, fs=entry.fs)
+            return entry
         return DataFile.resolve(path, fs=entry.fs)
 
     def size(self, source_index: int, path: str) -> int:

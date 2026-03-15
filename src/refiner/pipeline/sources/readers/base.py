@@ -64,7 +64,7 @@ class BaseReader(BaseSource):
             extensions=extensions,
         )
         self.target_shard_bytes = max(1, target_shard_bytes)
-        self.num_shards = num_shards if num_shards is not None else None
+        self.num_shards = num_shards
         self.split_by_bytes = True
         # Single-open-file cache for readers that do byte-based seeks or stream reads.
         self._open_file: DataFile | None = None
