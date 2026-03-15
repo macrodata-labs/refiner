@@ -14,7 +14,7 @@ from refiner.pipeline.sinks.base import (
     ShardCounts,
     split_block_by_shard,
 )
-from refiner.worker.metrics.context import get_active_worker_id
+from refiner.worker.context import get_active_run_handle
 
 
 class JsonlSink(BaseSink):
@@ -32,7 +32,7 @@ class JsonlSink(BaseSink):
     def _relpath(self, shard_id: str) -> str:
         return self.filename_template.format(
             shard_id=shard_id,
-            worker_id=get_active_worker_id(),
+            worker_id=get_active_run_handle().worker_id,
         )
 
     def _file(self, shard_id: str) -> IO[str]:

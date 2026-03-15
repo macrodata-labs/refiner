@@ -12,12 +12,12 @@ from refiner.platform.client.models import (
     CreateJobResponse,
     FinalizedShardWorkersResponse,
     OkResponse,
-    RunHandle,
     ShardClaimResponse,
     SerializedShard,
     VerifyApiKeyResponse,
     WorkerStartedResponse,
 )
+from refiner.run import RunHandle
 
 if TYPE_CHECKING:
     from refiner.pipeline.data.shard import Shard

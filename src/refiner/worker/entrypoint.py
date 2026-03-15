@@ -9,7 +9,7 @@ import cloudpickle
 from loguru import logger
 
 from refiner.platform.client.api import MacrodataClient
-from refiner.platform.client.models import RunHandle
+from refiner.run import RunHandle
 from refiner.worker.resources.cpu import set_cpu_affinity
 from refiner.worker.resources.memory import set_memory_soft_limit_mb
 from refiner.worker.runner import Worker
@@ -58,7 +58,11 @@ def main() -> int:
             pipeline = cloudpickle.load(f)
 
         worker_name = args.worker_name or f"worker-{args.rank}"
-        run_handle: RunHandle | None = None
+        run_handle = RunHandle(
+            job_id=args.job_id,
+            stage_index=max(args.stage_index, 0),
+            worker_name=worker_name,
+        )
 
         if args.runtime_backend != "file":
             if not args.job_id or args.stage_index < 0:
@@ -83,7 +87,6 @@ def main() -> int:
                         type(e).__name__,
                         e,
                     )
-                    run_handle = None
 
         stats = Worker(
             rank=args.rank,
@@ -91,8 +94,6 @@ def main() -> int:
             pipeline=pipeline,
             heartbeat_interval_seconds=args.heartbeat_interval_seconds,
             run_handle=run_handle,
-            local_job_id=args.job_id,
-            local_stage_index=max(args.stage_index, 0),
             local_workdir=args.workdir,
         ).run()
         _write_stats(

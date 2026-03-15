@@ -22,7 +22,8 @@ from refiner.pipeline.sinks.lerobot import (
 )
 from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.lifecycle import RuntimeLifecycle
-from refiner.worker.metrics.context import set_active_worker_runtime
+from refiner.worker.context import set_active_run_context
+from refiner.run import RunHandle
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -385,20 +386,18 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
                 ]
             }
         )
-        with set_active_worker_runtime(
-            worker_id=worker_id,
+        with set_active_run_context(
+            run_handle=RunHandle(job_id="job", stage_index=0, worker_id=worker_id),
             runtime_lifecycle=runtime,
-            stage_index=0,
         ):
             writer.write_block([worker_row])
             writer.on_shard_complete("shard-1")
 
     reducer = LeRobotMetaReduceSink(config=config)
     runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
-    with set_active_worker_runtime(
-        worker_id="local",
+    with set_active_run_context(
+        run_handle=RunHandle(job_id="job", stage_index=1, worker_id="local"),
         runtime_lifecycle=runtime,
-        stage_index=1,
     ):
         reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 

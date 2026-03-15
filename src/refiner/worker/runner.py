@@ -7,7 +7,7 @@ import threading
 from loguru import logger
 
 from refiner.pipeline.data.shard import Shard
-from refiner.platform.client import RunHandle
+from refiner.run import RunHandle
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.sinks import NullSink
@@ -16,11 +16,10 @@ from refiner.worker.lifecycle import (
     PlatformRuntimeLifecycle,
     RuntimeLifecycle,
 )
+from refiner.worker.context import set_active_run_context, set_active_step_index
 from refiner.worker.metrics.context import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
-    set_active_worker_runtime,
-    set_active_step_index,
     set_active_user_metrics_emitter,
 )
 from refiner.worker.metrics.otel import OtelTelemetryEmitter
@@ -43,8 +42,6 @@ class Worker:
         *,
         heartbeat_interval_seconds: int = 30,
         run_handle: RunHandle | None = None,
-        local_job_id: str | None = None,
-        local_stage_index: int = 0,
         local_workdir: str | None = None,
     ):
         self.rank = rank
@@ -52,8 +49,6 @@ class Worker:
         self.pipeline = pipeline
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.run_handle = run_handle
-        self.local_job_id = local_job_id
-        self.local_stage_index = local_stage_index
         self.local_workdir = local_workdir
 
     def _start_platform_session(self) -> tuple[RuntimeLifecycle, RunHandle]:
@@ -74,11 +69,11 @@ class Worker:
         return runtime_lifecycle, run
 
     def _start_local_session(self) -> RuntimeLifecycle:
-        if not self.local_job_id:
+        if self.run_handle is None:
             raise ValueError("local runtime requires a job_id")
         return LocalRuntimeLifecycle(
-            job_id=self.local_job_id,
-            stage_index=self.local_stage_index,
+            job_id=self.run_handle.job_id,
+            stage_index=self.run_handle.stage_index,
             worker_id=self.rank,
             workdir=self.local_workdir,
         )
@@ -86,14 +81,8 @@ class Worker:
     def run(self) -> WorkerRunStats:
         if self.heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be > 0")
-        if (
-            self.runtime_lifecycle is None
-            and self.run_handle is None
-            and self.local_job_id is None
-        ):
-            raise ValueError(
-                "runtime_lifecycle is required unless a platform or local run is provided"
-            )
+        if self.runtime_lifecycle is None and self.run_handle is None:
+            raise ValueError("runtime_lifecycle is required unless a run is provided")
 
         previous: Shard | None = None
         claimed = 0
@@ -228,22 +217,20 @@ class Worker:
                 _maybe_complete_shard(shard.id)
                 previous = shard
 
-        active_stage_index = (
-            active_run.stage_index
+        bound_run = (
+            active_run
             if active_run is not None
-            else getattr(runtime_lifecycle, "stage_index", None)
-        )
-        active_worker_id = (
-            active_run.worker_id
-            if active_run is not None and active_run.worker_id is not None
-            else str(self.rank)
+            else (
+                self.run_handle.with_worker(worker_id=str(self.rank))
+                if self.run_handle is not None
+                else RunHandle(job_id="local", stage_index=0, worker_id=str(self.rank))
+            )
         )
         with (
             set_active_user_metrics_emitter(user_metrics_emitter),
-            set_active_worker_runtime(
-                worker_id=active_worker_id,
+            set_active_run_context(
+                run_handle=bound_run,
                 runtime_lifecycle=runtime_lifecycle,
-                stage_index=active_stage_index,
             ),
         ):
             run_exception: Exception | None = None

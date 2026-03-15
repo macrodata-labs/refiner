@@ -4,6 +4,7 @@ from refiner.platform.client.api import (
     resolve_platform_base_url,
     verify_api_key,
 )
+from refiner.run import RunHandle
 from refiner.platform.client.models import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
@@ -13,7 +14,6 @@ from refiner.platform.client.models import (
     FinalizedShardWorker,
     FinalizedShardWorkersResponse,
     OkResponse,
-    RunHandle,
     ShardClaimResponse,
     SerializedShard,
     StagePayload,

@@ -20,9 +20,9 @@ from refiner.pipeline.sinks.lerobot._lerobot_stats import (
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import (
     _DEFAULT_CODEBASE_VERSION,
 )
-from refiner.worker.metrics.context import (
+from refiner.worker.context import (
+    get_active_run_handle,
     get_active_runtime_lifecycle,
-    get_active_runtime_stage_index,
 )
 
 
@@ -293,7 +293,7 @@ class _LeRobotMetaReducer:
 
     def _finalized_chunk_keys(self) -> set[str]:
         runtime_lifecycle = get_active_runtime_lifecycle()
-        stage_index = get_active_runtime_stage_index()
+        stage_index = get_active_run_handle().stage_index
         if runtime_lifecycle is None or stage_index is None or stage_index <= 0:
             raise ValueError("LeRobot stage-2 reduce requires active runtime context")
         rows = runtime_lifecycle.finalized_workers(stage_index=stage_index - 1)

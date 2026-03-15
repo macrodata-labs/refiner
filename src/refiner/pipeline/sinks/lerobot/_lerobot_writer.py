@@ -19,7 +19,7 @@ from refiner.pipeline.sinks.base import (
     split_block_by_shard,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import _LeRobotShardWriter
-from refiner.worker.metrics.context import get_active_worker_id
+from refiner.worker.context import get_active_run_handle
 
 
 _DEFAULT_CHUNK_SIZE = 1000
@@ -135,7 +135,7 @@ class LeRobotWriterSink(BaseSink):
     def process_leased_rows(
         self, rows: Iterable[tuple[Mapping[str, Any], str]]
     ) -> None:
-        worker_id = get_active_worker_id()
+        worker_id = get_active_run_handle().worker_id
         for row, shard_id in rows:
             try:
                 key = f"{shard_id}__w{worker_id}"

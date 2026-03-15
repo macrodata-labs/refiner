@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from refiner.worker.metrics.context import (
-    get_active_step_index,
-    get_active_user_metrics_emitter,
-)
+from refiner.worker.context import get_active_step_index
+from refiner.worker.metrics.context import get_active_user_metrics_emitter
 
 
 def is_not_empty(value: str) -> bool:

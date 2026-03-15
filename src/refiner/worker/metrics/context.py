@@ -2,16 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING, Generator, Protocol
-
-if TYPE_CHECKING:
-    from refiner.platform.client.models import FinalizedShardWorker
-
-
-class RuntimeLifecycleContext(Protocol):
-    def finalized_workers(
-        self, *, stage_index: int | None = None
-    ) -> list[FinalizedShardWorker]: ...
+from typing import Generator, Protocol
 
 
 class UserMetricsEmitter(Protocol):
@@ -108,42 +99,10 @@ _ACTIVE_USER_METRICS_EMITTER: ContextVar[UserMetricsEmitter] = ContextVar(
     "refiner_active_user_metrics_emitter",
     default=NOOP_USER_METRICS_EMITTER,
 )
-_ACTIVE_STEP_INDEX: ContextVar[int | None] = ContextVar(
-    "refiner_active_step_index",
-    default=None,
-)
-_ACTIVE_WORKER_ID: ContextVar[str] = ContextVar(
-    "refiner_active_worker_id",
-    default="local",
-)
-_ACTIVE_RUNTIME_LIFECYCLE: ContextVar[RuntimeLifecycleContext | None] = ContextVar(
-    "refiner_active_runtime_lifecycle",
-    default=None,
-)
-_ACTIVE_RUNTIME_STAGE_INDEX: ContextVar[int | None] = ContextVar(
-    "refiner_active_runtime_stage_index",
-    default=None,
-)
 
 
 def get_active_user_metrics_emitter() -> UserMetricsEmitter:
     return _ACTIVE_USER_METRICS_EMITTER.get()
-
-
-def get_active_step_index() -> int | None:
-    return _ACTIVE_STEP_INDEX.get()
-
-
-def get_active_worker_id() -> str:
-    return _ACTIVE_WORKER_ID.get()
-
-
-def get_active_runtime_lifecycle() -> RuntimeLifecycleContext | None:
-    return _ACTIVE_RUNTIME_LIFECYCLE.get()
-
-
-def get_active_runtime_stage_index() -> int | None:
-    return _ACTIVE_RUNTIME_STAGE_INDEX.get()
 
 
 @contextmanager
@@ -157,45 +116,9 @@ def set_active_user_metrics_emitter(
         _ACTIVE_USER_METRICS_EMITTER.reset(token)
 
 
-@contextmanager
-def set_active_step_index(step_index: int | None) -> Generator[None, None, None]:
-    token: Token[int | None] = _ACTIVE_STEP_INDEX.set(step_index)
-    try:
-        yield
-    finally:
-        _ACTIVE_STEP_INDEX.reset(token)
-
-
-@contextmanager
-def set_active_worker_runtime(
-    *,
-    worker_id: str,
-    runtime_lifecycle: RuntimeLifecycleContext,
-    stage_index: int | None,
-) -> Generator[None, None, None]:
-    worker_token: Token[str] = _ACTIVE_WORKER_ID.set(worker_id)
-    lifecycle_token: Token[RuntimeLifecycleContext | None] = (
-        _ACTIVE_RUNTIME_LIFECYCLE.set(runtime_lifecycle)
-    )
-    stage_token: Token[int | None] = _ACTIVE_RUNTIME_STAGE_INDEX.set(stage_index)
-    try:
-        yield
-    finally:
-        _ACTIVE_RUNTIME_STAGE_INDEX.reset(stage_token)
-        _ACTIVE_RUNTIME_LIFECYCLE.reset(lifecycle_token)
-        _ACTIVE_WORKER_ID.reset(worker_token)
-
-
 __all__ = [
     "UserMetricsEmitter",
     "NOOP_USER_METRICS_EMITTER",
-    "RuntimeLifecycleContext",
     "get_active_user_metrics_emitter",
-    "get_active_step_index",
-    "get_active_worker_id",
-    "get_active_runtime_lifecycle",
-    "get_active_runtime_stage_index",
-    "set_active_step_index",
-    "set_active_worker_runtime",
     "set_active_user_metrics_emitter",
 ]

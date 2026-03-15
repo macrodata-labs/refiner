@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import cloudpickle
 
-from refiner.platform.client import RunHandle
+from refiner.run import RunHandle
 from refiner.pipeline.planning import PlannedStage
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.resources.cpu import build_cpu_sets
