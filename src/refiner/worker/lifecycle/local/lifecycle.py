@@ -7,6 +7,8 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from refiner.pipeline.data.shard import Shard
+from refiner.platform.client.models import FinalizedShardWorker
+from refiner.worker.context import RunHandle
 from refiner.worker.lifecycle.local.claim import ClaimPolicy
 from refiner.worker.lifecycle.local.files import leased_filename
 from refiner.worker.lifecycle.local.files import parse_shard_filename
@@ -44,19 +46,13 @@ class LocalRuntimeLifecycle:
     def __init__(
         self,
         *,
-        job_id: str,
-        stage_index: int = 0,
-        worker_id: int | str | None,
+        run: RunHandle,
         workdir: str | None = None,
         lease_seconds: int | None = None,
     ):
-        if not job_id:
-            raise ValueError("job_id must be non-empty")
-        if stage_index < 0:
-            raise ValueError("stage_index must be >= 0")
-        self.job_id = str(job_id)
-        self.stage_index = int(stage_index)
-        self.worker_id = str(worker_id) if worker_id is not None else None
+        self.job_id = str(run.job_id)
+        self.stage_index = int(run.stage_index)
+        self.worker_id = str(run.worker_id) if run.worker_id is not None else None
         self.workdir = resolve_workdir(workdir)
         self.lease_seconds = lease_seconds or _runtime_lease_seconds()
 
@@ -78,13 +74,10 @@ class LocalRuntimeLifecycle:
         self._done_dir.mkdir(parents=True, exist_ok=True)
         self._failed_dir.mkdir(parents=True, exist_ok=True)
 
-    def _require_worker_id(self) -> int:
+    def _require_worker_id(self) -> str:
         if self.worker_id is None:
             raise ValueError("worker_id is required for this operation")
-        try:
-            return int(self.worker_id)
-        except ValueError as exc:
-            raise ValueError("local runtime worker_id must be an integer") from exc
+        return self.worker_id
 
     def seed_shards(self, shards: Iterable[Shard]) -> None:
         for directory in (
@@ -216,7 +209,10 @@ class LocalRuntimeLifecycle:
         leased_path = self._leased_dir / leased_filename(shard.id, worker_id)
         done_path = self._done_dir / pending_filename(shard.id)
         try:
-            os.replace(leased_path, done_path)
+            payload = json.loads(leased_path.read_text())
+            payload["_finalized_worker_id"] = str(worker_id)
+            done_path.write_text(json.dumps(payload, sort_keys=True))
+            leased_path.unlink()
         except Exception:
             pass
 
@@ -234,3 +230,32 @@ class LocalRuntimeLifecycle:
                 (self._failed_dir / f"{failed_base}.error").write_text(error)
             except Exception:
                 pass
+
+    def finalized_workers(
+        self, *, stage_index: int | None = None
+    ) -> list[FinalizedShardWorker]:
+        done_dir = (
+            self._done_dir
+            if stage_index is None or stage_index == self.stage_index
+            else Path(self.workdir)
+            / "runs"
+            / self.job_id
+            / "lifecycle"
+            / f"stage-{stage_index}"
+            / "done"
+        )
+        out: list[FinalizedShardWorker] = []
+        if not done_dir.exists():
+            return out
+        for path in done_dir.iterdir():
+            if not path.is_file():
+                continue
+            try:
+                payload = json.loads(path.read_text())
+                shard_id = str(payload["shard_id"])
+                worker_id = str(payload["_finalized_worker_id"])
+            except Exception:
+                continue
+            out.append(FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id))
+        out.sort(key=lambda row: row.shard_id)
+        return out

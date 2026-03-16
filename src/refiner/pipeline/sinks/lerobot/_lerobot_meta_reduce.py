@@ -20,6 +20,11 @@ from refiner.pipeline.sinks.lerobot._lerobot_stats import (
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import (
     _DEFAULT_CODEBASE_VERSION,
 )
+from refiner.worker.context import (
+    RunHandle,
+    get_active_run_handle,
+    get_active_runtime_lifecycle,
+)
 
 
 __all__ = ["LeRobotMetaReduceSink"]
@@ -60,13 +65,14 @@ class _LeRobotMetaReducer:
         )
 
     def reduce(self) -> None:
-        episodes_rows = self._load_stage1_episode_rows()
+        finalized_chunk_keys = self._finalized_chunk_keys()
+        episodes_rows = self._load_stage1_episode_rows(finalized_chunk_keys)
         if not episodes_rows:
             return
 
-        tasks = self._load_stage1_tasks()
-        stats_list = self._load_stage1_stats()
-        infos = self._load_stage1_infos()
+        tasks = self._load_stage1_tasks(finalized_chunk_keys)
+        stats_list = self._load_stage1_stats(finalized_chunk_keys)
+        infos = self._load_stage1_infos(finalized_chunk_keys)
 
         for row in episodes_rows:
             row["meta/episodes/chunk_index"] = 0
@@ -105,20 +111,24 @@ class _LeRobotMetaReducer:
         with self.folder.open("meta/info.json", mode="wt", encoding="utf-8") as out:
             json.dump(info, out, indent=2, sort_keys=True)
 
-        self._cleanup_stage1_chunks()
+        self._cleanup_stage1_chunks(finalized_chunk_keys)
 
-    def _load_stage1_episode_rows(self) -> list[dict[str, Any]]:
+    def _load_stage1_episode_rows(
+        self, finalized_chunk_keys: set[str]
+    ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        for rel in self._iter_stage1_episode_files():
+        for rel in self._iter_stage1_episode_files(finalized_chunk_keys):
             with self.folder.open(rel, mode="rb") as src:
                 table = pq.read_table(src)
             rows.extend(table.to_pylist())
         rows.sort(key=lambda row: int(row["episode_index"]))
         return rows
 
-    def _load_stage1_tasks(self) -> list[str]:
+    def _load_stage1_tasks(self, finalized_chunk_keys: set[str]) -> list[str]:
         task_to_index: dict[str, int] = {}
-        for rel in self._iter_stage1_jsonl_files(filename="tasks.jsonl"):
+        for rel in self._iter_stage1_jsonl_files(
+            finalized_chunk_keys, filename="tasks.jsonl"
+        ):
             with self.folder.open(rel, mode="rt", encoding="utf-8") as src:
                 for line in src:
                     payload = line.strip()
@@ -143,9 +153,13 @@ class _LeRobotMetaReducer:
         ordered = sorted(task_to_index.items(), key=lambda kv: (kv[1], kv[0]))
         return [task for task, _ in ordered]
 
-    def _load_stage1_stats(self) -> list[dict[str, dict[str, Any]]]:
+    def _load_stage1_stats(
+        self, finalized_chunk_keys: set[str]
+    ) -> list[dict[str, dict[str, Any]]]:
         out: list[dict[str, dict[str, Any]]] = []
-        for rel in self._iter_stage1_jsonl_files(filename="stats.jsonl"):
+        for rel in self._iter_stage1_jsonl_files(
+            finalized_chunk_keys, filename="stats.jsonl"
+        ):
             with self.folder.open(rel, mode="rt", encoding="utf-8") as src:
                 for line in src:
                     payload = line.strip()
@@ -157,9 +171,13 @@ class _LeRobotMetaReducer:
                         out.append(_cast_stats_to_numpy(raw))
         return out
 
-    def _load_stage1_infos(self) -> list[dict[str, Any]]:
+    def _load_stage1_infos(
+        self, finalized_chunk_keys: set[str]
+    ) -> list[dict[str, Any]]:
         infos: list[dict[str, Any]] = []
-        for rel in self._iter_stage1_jsonl_files(filename="info.jsonl"):
+        for rel in self._iter_stage1_jsonl_files(
+            finalized_chunk_keys, filename="info.jsonl"
+        ):
             with self.folder.open(rel, mode="rt", encoding="utf-8") as src:
                 for line in src:
                     payload = line.strip()
@@ -216,23 +234,71 @@ class _LeRobotMetaReducer:
             "splits": {"train": f"0:{total_episodes}"},
         }
 
-    def _cleanup_stage1_chunks(self) -> None:
+    def _cleanup_stage1_chunks(self, finalized_chunk_keys: set[str]) -> None:
         for rel_path in self._stage1_matches("meta/chunk-*"):
             try:
                 self.folder.rm(rel_path, recursive=True)
             except FileNotFoundError:
                 continue
 
-    def _iter_stage1_episode_files(self) -> list[str]:
-        return self._stage1_matches("meta/chunk-*/episodes/file-*.parquet")
+        keep = {f"data/chunk-{chunk_key}" for chunk_key in finalized_chunk_keys}
+        for rel_path in self._stage1_matches("data/chunk-*"):
+            if rel_path in keep:
+                continue
+            try:
+                self.folder.rm(rel_path, recursive=True)
+            except FileNotFoundError:
+                continue
 
-    def _iter_stage1_jsonl_files(self, *, filename: str) -> list[str]:
-        return self._stage1_matches(f"meta/chunk-*/{filename}")
+        for rel_path in self._stage1_matches("videos/*/chunk-*"):
+            if self._chunk_key_from_path(rel_path) in finalized_chunk_keys:
+                continue
+            try:
+                self.folder.rm(rel_path, recursive=True)
+            except FileNotFoundError:
+                continue
 
-    def _stage1_matches(self, pattern: str) -> list[str]:
+    def _iter_stage1_episode_files(self, finalized_chunk_keys: set[str]) -> list[str]:
+        return self._stage1_matches(
+            "meta/chunk-*/episodes/file-*.parquet", finalized_chunk_keys
+        )
+
+    def _iter_stage1_jsonl_files(
+        self, finalized_chunk_keys: set[str], *, filename: str
+    ) -> list[str]:
+        return self._stage1_matches(f"meta/chunk-*/{filename}", finalized_chunk_keys)
+
+    def _stage1_matches(
+        self, pattern: str, finalized_chunk_keys: set[str] | None = None
+    ) -> list[str]:
         root = self.folder.path.rstrip("/")
         prefix = f"{root}/"
-        return sorted(
+        matches = sorted(
             path[len(prefix) :] if path.startswith(prefix) else path
             for path in self.folder.fs.glob(self.folder._join(pattern))
         )
+        if finalized_chunk_keys is None:
+            return matches
+        return [
+            rel_path
+            for rel_path in matches
+            if self._chunk_key_from_path(rel_path) in finalized_chunk_keys
+        ]
+
+    @staticmethod
+    def _chunk_key_from_path(rel_path: str) -> str | None:
+        for part in rel_path.split("/"):
+            if part.startswith("chunk-"):
+                return part[6:]
+        return None
+
+    def _finalized_chunk_keys(self) -> set[str]:
+        runtime_lifecycle = get_active_runtime_lifecycle()
+        stage_index = get_active_run_handle().stage_index
+        if runtime_lifecycle is None or stage_index is None or stage_index <= 0:
+            raise ValueError("LeRobot stage-2 reduce requires active runtime context")
+        rows = runtime_lifecycle.finalized_workers(stage_index=stage_index - 1)
+        return {
+            f"{row.shard_id}__w{RunHandle.worker_token_for(row.worker_id)}"
+            for row in rows
+        }

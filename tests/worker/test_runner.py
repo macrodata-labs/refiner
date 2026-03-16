@@ -20,6 +20,7 @@ from refiner.pipeline.data.shard import FilePart
 from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
+from refiner.platform.client.models import FinalizedShardWorker
 
 
 class _FakeReader(BaseReader):
@@ -36,6 +37,7 @@ class _FakeReader(BaseReader):
 
 class _FakeRuntimeLifecycle:
     def __init__(self, shards: list[Shard]):
+        self.worker_id = "local"
         self._remaining = list(shards)
         self.claim_previous: list[Shard | None] = []
         self.completed_ids: list[str] = []
@@ -58,9 +60,19 @@ class _FakeRuntimeLifecycle:
         del error
         self.failed_ids.append(shard.id)
 
+    def finalized_workers(
+        self, *, stage_index: int | None = None
+    ) -> list[FinalizedShardWorker]:
+        del stage_index
+        return []
+
 
 def _shard(path: str, start: int, end: int) -> Shard:
     return Shard.from_file_parts([FilePart(path=path, start=start, end=end)])
+
+
+def _local_run() -> RunHandle:
+    return RunHandle(job_id="job", stage_index=0)
 
 
 class _NoopTelemetryEmitter:
@@ -195,10 +207,13 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     )
 
     worker = Worker(
-        rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
         heartbeat_interval_seconds=1,
+        run_handle=_local_run(),
+    )
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
     )
 
     stats = worker.run()
@@ -231,9 +246,12 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
 
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail)
     worker = Worker(
-        rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
+        run_handle=_local_run(),
+    )
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
     )
 
     stats = worker.run()
@@ -267,9 +285,12 @@ def test_worker_can_batch_across_shards() -> None:
     )
 
     worker = Worker(
-        rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
+        run_handle=_local_run(),
+    )
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
     )
     stats = worker.run()
 
@@ -290,9 +311,12 @@ def test_worker_runtime_complete_errors_are_not_swallowed() -> None:
 
     runtime_lifecycle = _FailingCompleteRuntimeLifecycle([shard])
     worker = Worker(
-        rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=pipeline,
+        run_handle=_local_run(),
+    )
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
     )
     with pytest.raises(RuntimeError, match="complete failed"):
         worker.run()
@@ -307,9 +331,12 @@ def test_worker_completes_shards_only_after_sink_drain() -> None:
     sink = _RecordingSink()
 
     worker = Worker(
-        rank=0,
-        runtime_lifecycle=runtime_lifecycle,
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).with_sink(sink),
+        run_handle=_local_run(),
+    )
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
     )
 
     stats = worker.run()
@@ -330,8 +357,6 @@ def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
     )
 
     worker = Worker(
-        rank=0,
-        runtime_lifecycle=None,
         pipeline=pipeline,
         run_handle=RunHandle(
             job_id="job",

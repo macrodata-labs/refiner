@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cloudpickle
 
-from refiner.platform.client import RunHandle
+from refiner.worker.context import RunHandle
 from refiner.pipeline.planning import PlannedStage
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.resources.cpu import build_cpu_sets
@@ -67,9 +66,6 @@ class LocalLauncher(BaseLauncher):
     def _pipeline_payload_path(self, stage_index: int) -> Path:
         return self._stage_run_dir(stage_index) / "pipeline.cloudpickle"
 
-    def _stats_path(self, stage_index: int, rank: int) -> Path:
-        return self._stage_run_dir(stage_index) / f"worker-{rank}.json"
-
     def _serialize_pipeline_payload(self, pipeline: RefinerPipeline) -> bytes:
         return cloudpickle.dumps(pipeline)
 
@@ -86,9 +82,7 @@ class LocalLauncher(BaseLauncher):
         self, *, stage_index: int, shards: list["Shard"]
     ) -> None:
         LocalRuntimeLifecycle(
-            job_id=self.job_id,
-            stage_index=stage_index,
-            worker_id=None,
+            run=RunHandle(job_id=self.job_id, stage_index=stage_index),
             workdir=self.workdir,
         ).seed_shards(shards)
 
@@ -126,17 +120,18 @@ class LocalLauncher(BaseLauncher):
         stage_index: int,
         rank: int,
         payload_path: Path,
-        stats_path: Path,
         runtime_backend: str,
         cpu_ids: list[int] | None,
         platform_run: RunHandle | None,
     ) -> list[str]:
         command = [
-            sys.executable,
+            # Use `uv run` so worker subprocesses import the current checkout/worktree
+            # instead of an installed `refiner` package from some other environment.
+            "uv",
+            "run",
+            "python",
             "-m",
             "refiner.worker.entrypoint",
-            "--rank",
-            str(rank),
             "--job-id",
             self.job_id,
             "--workdir",
@@ -147,8 +142,6 @@ class LocalLauncher(BaseLauncher):
             runtime_backend,
             "--pipeline-payload",
             str(payload_path),
-            "--stats-path",
-            str(stats_path),
             "--cpu-ids",
             ",".join(str(cpu_id) for cpu_id in cpu_ids or []),
         ]
@@ -167,29 +160,28 @@ class LocalLauncher(BaseLauncher):
     def _read_worker_stats(
         self,
         *,
-        stage_index: int,
         rank: int,
         process: subprocess.Popen[str],
     ) -> tuple[int, int, int, int]:
-        stats_path = self._stats_path(stage_index, rank)
-        return_code = process.wait()
-        if not stats_path.exists():
-            raise RuntimeError(
-                f"worker {rank}: missing stats file (exit code {return_code})"
-            )
-
+        stdout_text, stderr_text = process.communicate()
+        return_code = process.returncode
+        stats_line = ""
+        for line in reversed(stdout_text.splitlines()):
+            if line.strip():
+                stats_line = line
+                break
+        if not stats_line:
+            message = stderr_text.strip() or f"exit code {return_code}"
+            raise RuntimeError(f"worker {rank}: missing stats output ({message})")
         try:
-            stats_text = stats_path.read_text()
-        except OSError as err:
-            raise RuntimeError(f"worker {rank}: unreadable stats file ({err})") from err
-
-        try:
-            stats = json.loads(stats_text)
+            stats = json.loads(stats_line)
         except json.JSONDecodeError as err:
-            raise RuntimeError(f"worker {rank}: invalid stats file ({err})") from err
+            raise RuntimeError(f"worker {rank}: invalid stats output ({err})") from err
 
         if return_code != 0 or "error" in stats:
-            message = str(stats.get("error") or f"exit code {return_code}")
+            message = str(
+                stats.get("error") or stderr_text.strip() or f"exit code {return_code}"
+            )
             raise RuntimeError(f"worker {rank}: {message}")
 
         return (
@@ -216,9 +208,7 @@ class LocalLauncher(BaseLauncher):
         for rank, process in enumerate(processes):
             try:
                 worker_claimed, worker_completed, worker_failed, worker_output_rows = (
-                    self._read_worker_stats(
-                        stage_index=stage_index, rank=rank, process=process
-                    )
+                    self._read_worker_stats(rank=rank, process=process)
                 )
             except RuntimeError as err:
                 errors.append(str(err))
@@ -276,11 +266,12 @@ class LocalLauncher(BaseLauncher):
                     stage_index=stage.index,
                     rank=rank,
                     payload_path=payload_path,
-                    stats_path=self._stats_path(stage.index, rank),
                     runtime_backend=runtime_backend,
                     cpu_ids=cpu_sets[rank],
                     platform_run=stage_run,
                 ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
             )
             for rank in range(stage.compute.num_workers)
