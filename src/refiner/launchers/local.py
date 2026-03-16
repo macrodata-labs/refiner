@@ -163,6 +163,10 @@ class LocalLauncher(BaseLauncher):
         rank: int,
         process: subprocess.Popen[str],
     ) -> tuple[int, int, int, int]:
+        def _tail(text: str, *, max_lines: int = 20) -> str:
+            lines = [line for line in text.splitlines() if line.strip()]
+            return "\n".join(lines[-max_lines:])
+
         stdout_text, stderr_text = process.communicate()
         return_code = process.returncode
         stats_line = ""
@@ -179,10 +183,16 @@ class LocalLauncher(BaseLauncher):
             raise RuntimeError(f"worker {rank}: invalid stats output ({err})") from err
 
         if return_code != 0 or "error" in stats:
-            message = str(
-                stats.get("error") or stderr_text.strip() or f"exit code {return_code}"
-            )
-            raise RuntimeError(f"worker {rank}: {message}")
+            parts: list[str] = []
+            stats_error = str(stats.get("error") or "").strip()
+            stderr_tail = _tail(stderr_text)
+            if stats_error:
+                parts.append(stats_error)
+            if stderr_tail and stderr_tail != stats_error:
+                parts.append(stderr_tail)
+            if not parts:
+                parts.append(f"exit code {return_code}")
+            raise RuntimeError(f"worker {rank}: {'; '.join(parts)}")
 
         return (
             int(stats["claimed"]),

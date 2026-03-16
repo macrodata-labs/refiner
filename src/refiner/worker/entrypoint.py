@@ -14,6 +14,11 @@ from refiner.worker.resources.memory import set_memory_soft_limit_mb
 from refiner.worker.runner import Worker
 
 
+def _error_message(error: BaseException) -> str:
+    message = str(error).strip()
+    return message or type(error).__name__
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Refiner runtime worker entrypoint")
     parser.add_argument("--pipeline-payload", type=str, required=True)
@@ -85,7 +90,8 @@ def main() -> int:
         )
         return 0
     except Exception as e:
-        print(json.dumps({"error": str(e)}, sort_keys=True))
+        logger.exception("worker entrypoint failed: {}", _error_message(e))
+        print(json.dumps({"error": _error_message(e)}, sort_keys=True))
         return 1
 
 

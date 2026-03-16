@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+from typing import Any, cast
 
 import pytest
 
@@ -28,6 +29,16 @@ class _FakeReader(BaseReader):
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
         yield from self._rows_by_shard_id.get(shard.id, [])
+
+
+class _FakeProcess:
+    def __init__(self, *, stdout: str, stderr: str, returncode: int) -> None:
+        self._stdout = stdout
+        self._stderr = stderr
+        self.returncode = returncode
+
+    def communicate(self) -> tuple[str, str]:
+        return self._stdout, self._stderr
 
 
 def test_launch_local_single_worker(tmp_path) -> None:
@@ -199,3 +210,23 @@ def test_launch_local_runs_planned_stages_sequentially(
     assert stats.output_rows == 3
     assert (tmp_path / "runs" / stats.job_id / "launcher" / "stage-0").exists()
     assert (tmp_path / "runs" / stats.job_id / "launcher" / "stage-1").exists()
+
+
+def test_read_worker_stats_includes_stderr_tail_on_failure(tmp_path) -> None:
+    launcher = LocalLauncher(
+        pipeline=read_jsonl(str(tmp_path / "missing.jsonl")),
+        name="worker-error-tail",
+        num_workers=1,
+        workdir=str(tmp_path),
+    )
+
+    process = _FakeProcess(
+        stdout='{"error":"RuntimeError"}\n',
+        stderr="line 1\nline 2\nroot cause\n",
+        returncode=1,
+    )
+
+    with pytest.raises(
+        RuntimeError, match=r"worker 0: RuntimeError; line 1\nline 2\nroot cause"
+    ):
+        launcher._read_worker_stats(rank=0, process=cast(Any, process))

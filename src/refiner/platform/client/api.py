@@ -27,6 +27,11 @@ PLATFORM_BASE_URL_ENV_VAR = "MACRODATA_BASE_URL"
 _PLATFORM_BASE_URL = "https://macrodata.co"
 
 
+def _failure_error(error: str | None) -> str:
+    message = (error or "").strip()
+    return message or "UnknownError"
+
+
 def resolve_platform_base_url() -> str:
     env_value = os.environ.get(PLATFORM_BASE_URL_ENV_VAR)
     if env_value:
@@ -139,7 +144,9 @@ class MacrodataClient:
         error: str | None = None,
     ) -> OkResponse:
         request_body: dict[str, Any] = {"status": status}
-        if error:
+        if status == "failed":
+            request_body["error"] = _failure_error(error)
+        elif error:
             request_body["error"] = error
         response_data = request_json(
             method="POST",
@@ -245,7 +252,9 @@ class MacrodataClient:
         error: str | None = None,
     ) -> OkResponse:
         request_body: dict[str, Any] = {"worker_id": worker_id, "status": status}
-        if error:
+        if status == "failed":
+            request_body["error"] = _failure_error(error)
+        elif error:
             request_body["error"] = error
         response_data = request_json(
             method="POST",
