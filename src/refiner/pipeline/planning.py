@@ -25,6 +25,9 @@ class PlannedStage:
 
 
 def _explicit_callable_name(fn: Any) -> str | None:
+    builtin_description = _builtin_description(fn)
+    if builtin_description is not None:
+        return builtin_description["name"]
     name = getattr(fn, "__name__", None)
     if not isinstance(name, str):
         return None
@@ -32,6 +35,24 @@ def _explicit_callable_name(fn: Any) -> str | None:
     if not normalized or normalized == "<lambda>":
         return None
     return normalized
+
+
+def _callable_step_args(
+    fn: Any,
+    *,
+    extra_args: dict[str, Any] | None = None,
+    builtin_extra_args: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    builtin_description = _builtin_description(fn)
+    if builtin_description is None:
+        args: dict[str, Any] = {"fn": fn}
+        if extra_args:
+            args.update(extra_args)
+    else:
+        args = dict(builtin_description["args"])
+        if builtin_extra_args:
+            args.update(builtin_extra_args)
+    return args
 
 
 def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
@@ -56,7 +77,11 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             if explicit_name and explicit_name != "map"
             else _explicit_callable_name(step.fn)
         )
-        return (inferred_name or "map"), "row_map", {"fn": step.fn}
+        return (
+            (inferred_name or "map"),
+            "row_map",
+            _callable_step_args(step.fn),
+        )
     if isinstance(step, FnAsyncRowStep):
         inferred_name = (
             explicit_name
@@ -66,11 +91,17 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         return (
             (inferred_name or "map_async"),
             "async_map",
-            {
-                "fn": step.fn,
-                "max_in_flight": step.max_in_flight,
-                "preserve_order": step.preserve_order,
-            },
+            _callable_step_args(
+                step.fn,
+                extra_args={
+                    "max_in_flight": step.max_in_flight,
+                    "preserve_order": step.preserve_order,
+                },
+                builtin_extra_args={
+                    "async_map.max_in_flight": step.max_in_flight,
+                    "async_map.preserve_order": step.preserve_order,
+                },
+            ),
         )
     if isinstance(step, FnBatchStep):
         inferred_name = (
@@ -81,7 +112,11 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         return (
             (inferred_name or "batch_map"),
             "batch_map",
-            {"fn": step.fn, "batch_size": step.batch_size},
+            _callable_step_args(
+                step.fn,
+                extra_args={"batch_size": step.batch_size},
+                builtin_extra_args={"batch_map.batch_size": step.batch_size},
+            ),
         )
     if isinstance(step, FilterRowStep):
         inferred_name = (
@@ -89,7 +124,11 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             if explicit_name and explicit_name != "filter"
             else _explicit_callable_name(step.predicate)
         )
-        return (inferred_name or "filter"), "filter", {"fn": step.predicate}
+        return (
+            (inferred_name or "filter"),
+            "filter",
+            _callable_step_args(step.predicate),
+        )
     if isinstance(step, FnFlatMapStep):
         inferred_name = (
             explicit_name
@@ -97,7 +136,7 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             else _explicit_callable_name(step.fn)
         )
         step_name = inferred_name or "flat_map"
-        return step_name, "flat_map", {"fn": step.fn}
+        return step_name, "flat_map", _callable_step_args(step.fn)
     if isinstance(step, SelectStep):
         return (explicit_name or "select"), "select", {"columns": list(step.columns)}
     if isinstance(step, WithColumnsStep):
@@ -221,6 +260,27 @@ def _callable_source(fn: Any) -> str:
     if isinstance(module, str) and isinstance(qualname, str):
         return f"{module}.{qualname}"
     return repr(fn)
+
+
+def _builtin_description(fn: Any) -> dict[str, Any] | None:
+    spec = getattr(fn, "__refiner_builtin_call__", None)
+    if not isinstance(spec, dict):
+        return None
+    name = spec.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    args = spec.get("args")
+    if not isinstance(args, dict):
+        return None
+    return {"name": name, "args": args}
+
+
+def describe_builtin(name: str, **args: Any) -> Any:
+    def _decorate(fn: Any) -> Any:
+        setattr(fn, "__refiner_builtin_call__", {"name": name, "args": args})
+        return fn
+
+    return _decorate
 
 
 def _step_payload(
