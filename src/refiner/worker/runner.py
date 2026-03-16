@@ -75,21 +75,32 @@ class Worker:
         )
 
     def run(self) -> WorkerRunStats:
+        # Source-claim state.
         previous: Shard | None = None
+
+        # Final worker stats.
         claimed = 0
         completed = 0
         failed = 0
         output_rows = 0
+
+        # In-flight shard bookkeeping shared with the heartbeat thread.
         inflight_by_id: dict[str, Shard] = {}
         pending_rows_by_shard: dict[str, int] = {}
         source_done_shards: set[str] = set()
         inflight_lock = threading.Lock()
-        failed_error: str | None = None
+
+        # Error state: completion failures are re-raised directly, execution
+        # failures are converted into shard failures, and heartbeat failures
+        # are surfaced from the background thread.
         completion_error: Exception | None = None
+        execution_error: Exception | None = None
+        heartbeat_error: Exception | None = None
+
+        # Runtime services.
         user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
         obs_logger = logger.bind(worker_name=self.run_handle.worker_name)
         stop_heartbeat = threading.Event()
-        heartbeat_error: Exception | None = None
 
         if self.run_handle.client is not None:
             runtime_lifecycle, self.run_handle = self._start_platform_session()
@@ -238,7 +249,7 @@ class Worker:
                 except Exception as e:
                     if completion_error is e:
                         raise
-                    failed_error = str(e)
+                    execution_error = e
                     with inflight_lock:
                         failed_shards = list(inflight_by_id.values())
                         inflight_by_id.clear()
@@ -275,12 +286,14 @@ class Worker:
                 if self.run_handle.client is not None:
                     status = (
                         "failed"
-                        if failed_error is not None or run_exception is not None
+                        if execution_error is not None or run_exception is not None
                         else "completed"
                     )
-                    error = failed_error
-                    if error is None and run_exception is not None:
-                        error = str(run_exception)
+                    error = (
+                        str(execution_error or run_exception)
+                        if (execution_error is not None or run_exception is not None)
+                        else None
+                    )
                     try:
                         self.run_handle.client.report_worker_finished(
                             job_id=self.run_handle.job_id,
@@ -303,7 +316,7 @@ class Worker:
                             e,
                         )
 
-                if failed_error is None and run_exception is None:
+                if execution_error is None and run_exception is None:
                     user_metrics_emitter.shutdown()
                 else:
                     try:
