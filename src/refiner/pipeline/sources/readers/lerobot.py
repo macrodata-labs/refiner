@@ -14,8 +14,7 @@ import pyarrow.parquet as pq
 from fsspec.spec import AbstractFileSystem
 
 from refiner.execution.asyncio.window import AsyncWindow
-from refiner.io import DataFolder
-from refiner.io.datafolder import DataFolderLike, DataFolderSpec
+from refiner.io.datafolder import DataFolder, DataFolderLike, DataFolderSpec
 from refiner.media import MediaFile, Video
 from refiner.pipeline.data.row import ArrowRowView, DictRow, Row
 from refiner.pipeline.data.shard import FilePartsDescriptor, Shard
@@ -33,6 +32,7 @@ _INFO_JSON = "meta/info.json"
 _STATS_JSON = "meta/stats.json"
 LEROBOT_STATS = "lerobot_stats"
 LEROBOT_INFO = "lerobot_info"
+LEROBOT_EPISODE_STATS = "lerobot_episode_stats"
 _ROW_DROP_PREFIXES = ("stats/", "videos/", "meta/episodes/", "data/")
 _ROW_DROP_KEYS = {"dataset_from_index", "dataset_to_index"}
 _DATA_FILE_CACHE_NAME = "lerobot:data_files"
@@ -40,7 +40,7 @@ _DATA_FILE_CACHE_NAME = "lerobot:data_files"
 
 @dataclass(frozen=True, slots=True)
 class _FrameFileCacheEntry:
-    key: tuple[Any, Any, Any]
+    key: tuple[int, Any, Any]
     table: pa.Table
 
 
@@ -53,6 +53,8 @@ class _DatasetState:
     data_path_template: str
     video_keys: tuple[str, ...]
     robot_type: str | None
+    episode_index_offset: int
+    episode_count: int
 
 
 class LeRobotEpisodeReader(ParquetReader):
@@ -106,7 +108,7 @@ class LeRobotEpisodeReader(ParquetReader):
         super().__init__(
             inputs=tuple(
                 (
-                    cast(str, root.abs_paths(_DEFAULT_EPISODES_GLOB_ROOT)),
+                    str(root.abs_paths(_DEFAULT_EPISODES_GLOB_ROOT)),
                     root.fs,
                 )
                 for root in roots
@@ -130,7 +132,6 @@ class LeRobotEpisodeReader(ParquetReader):
         """Read one episode-file shard and hydrate episode rows lazily."""
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
-        part = descriptor.parts[0]
         if self._limit is not None and self._submitted_episodes >= self._limit:
             return
 
@@ -138,7 +139,7 @@ class LeRobotEpisodeReader(ParquetReader):
             max_in_flight=self._media_max_in_flight,
             preserve_order=self._media_preserve_order,
         )
-        for batch in super().read_shard(shard):
+        for source_index, batch in self._iter_batches_with_source_index(shard):
             if not isinstance(batch, (pa.RecordBatch, pa.Table)):
                 raise TypeError(
                     "LeRobotEpisodeReader requires Arrow batches from ParquetReader"
@@ -149,7 +150,7 @@ class LeRobotEpisodeReader(ParquetReader):
             index_by_name = {name: i for i, name in enumerate(names)}
             for idx in range(batch.num_rows):
                 if self._limit is not None and self._submitted_episodes >= self._limit:
-                    yield from async_window.drain(flush=True)
+                    yield from async_window.flush()
                     return
 
                 row = ArrowRowView(
@@ -158,18 +159,36 @@ class LeRobotEpisodeReader(ParquetReader):
                     index_by_name=index_by_name,
                     row_idx=idx,
                 )
-                async_window.submit(self._build_episode_row(row, part.source_index))
+                yield from async_window.submit_blocking(
+                    self._build_episode_row(row, source_index)
+                )
                 self._submitted_episodes += 1
-                yield from async_window.drain(flush=False)
 
-        yield from async_window.drain(flush=True)
+        yield from async_window.flush()
+
+    def _iter_batches_with_source_index(
+        self,
+        shard: Shard,
+    ) -> Iterator[tuple[int, SourceUnit]]:
+        descriptor = shard.descriptor
+        assert isinstance(descriptor, FilePartsDescriptor)
+        for part in descriptor.parts:
+            part_shard = Shard.from_file_parts(
+                [part],
+                global_ordinal=shard.global_ordinal,
+                start_key=part.locality_key,
+                end_key=part.locality_key,
+            )
+            for batch in super().read_shard(part_shard):
+                yield part.source_index, batch
 
     def describe(self) -> dict[str, Any]:
-        inputs = [cast(str, root.abs_paths("")) for root in self._roots]
+        roots = [str(dataset_root.abs_paths("")) for dataset_root in self._roots]
         return {
-            "path": ", ".join(inputs),
-            "inputs": inputs,
-            "datasets": len(self._roots),
+            "input": roots[0] if len(roots) == 1 else None,
+            "inputs": roots,
+            "dataset_roots": roots,
+            "episode_files": len(self.files),
             "limit": self._limit,
             "media_max_in_flight": self._media_max_in_flight,
             "media_preserve_order": self._media_preserve_order,
@@ -177,15 +196,22 @@ class LeRobotEpisodeReader(ParquetReader):
 
     async def _build_episode_row(self, row: Row, source_index: int) -> Row:
         dataset = self._get_datasets()[source_index]
+        episode_index = int(row["episode_index"]) + int(dataset.episode_index_offset)
+        episode_stats = self._extract_episode_stats(row)
         metadata = {
             LEROBOT_INFO: {
-                "root": dataset.root.abs_paths(""),
+                "root": str(dataset.root.abs_paths("")),
                 "fps": dataset.fps,
                 "robot_type": dataset.robot_type,
             },
             LEROBOT_STATS: dataset.stats_metadata,
         }
-        patch: dict[str, Any] = {"metadata": metadata}
+        if episode_stats:
+            metadata[LEROBOT_EPISODE_STATS] = episode_stats
+        patch: dict[str, Any] = {
+            "episode_index": episode_index,
+            "metadata": metadata,
+        }
 
         frames = await self._load_episode_frames(row, source_index)
         patch["frames"] = frames
@@ -196,7 +222,9 @@ class LeRobotEpisodeReader(ParquetReader):
 
         for video_key in dataset.video_keys:
             video = self._build_video(
-                episode=row, video_key=video_key, source_index=source_index
+                episode=row,
+                video_key=video_key,
+                source_index=source_index,
             )
             if video is not None:
                 patch[video_key] = video
@@ -233,7 +261,7 @@ class LeRobotEpisodeReader(ParquetReader):
             chunk=chunk,
             file_idx=file_idx,
         )
-        uri = posixpath.join(cast(str, dataset.root.abs_paths("")), rel)
+        uri = posixpath.join(str(dataset.root.abs_paths("")), rel)
         from_timestamp = episode.get(f"videos/{video_key}/from_timestamp")
         to_timestamp = episode.get(f"videos/{video_key}/to_timestamp")
         if to_timestamp is None:
@@ -257,7 +285,9 @@ class LeRobotEpisodeReader(ParquetReader):
         )
 
     async def _load_episode_frames(
-        self, episode: Mapping[str, Any], source_index: int
+        self,
+        episode: Mapping[str, Any],
+        source_index: int,
     ) -> list[Row]:
         chunk = episode["data/chunk_index"]
         file_idx = episode["data/file_index"]
@@ -286,7 +316,9 @@ class LeRobotEpisodeReader(ParquetReader):
             )
 
         cache_entry = await self._get_cached_frame_table(
-            source_index=source_index, chunk=chunk, file_idx=file_idx
+            source_index=source_index,
+            chunk=chunk,
+            file_idx=file_idx,
         )
         episode_table = self._slice_episode_table(
             cache_entry=cache_entry,
@@ -402,7 +434,25 @@ class LeRobotEpisodeReader(ParquetReader):
     def _get_datasets(self) -> tuple[_DatasetState, ...]:
         datasets = self._datasets
         if datasets is None:
-            datasets = tuple(self._load_dataset_state(root) for root in self._roots)
+            loaded = [self._load_dataset_state(root) for root in self._roots]
+            next_offset = 0
+            datasets = []
+            for dataset in loaded:
+                datasets.append(
+                    _DatasetState(
+                        root=dataset.root,
+                        stats_metadata=dataset.stats_metadata,
+                        fps=dataset.fps,
+                        video_path_template=dataset.video_path_template,
+                        data_path_template=dataset.data_path_template,
+                        video_keys=dataset.video_keys,
+                        robot_type=dataset.robot_type,
+                        episode_index_offset=next_offset,
+                        episode_count=dataset.episode_count,
+                    )
+                )
+                next_offset += int(dataset.episode_count)
+            datasets = tuple(datasets)
             self._datasets = datasets
         return datasets
 
@@ -414,9 +464,6 @@ class LeRobotEpisodeReader(ParquetReader):
         info = self._load_info(root)
         stats_metadata = self._load_stats(root)
         features = info.get("features") if isinstance(info, Mapping) else {}
-        video_keys = self._load_video_keys(
-            features if isinstance(features, Mapping) else {}
-        )
         return _DatasetState(
             root=root,
             stats_metadata=stats_metadata,
@@ -435,13 +482,38 @@ class LeRobotEpisodeReader(ParquetReader):
                 if isinstance(info, Mapping) and isinstance(info.get("data_path"), str)
                 else _DEFAULT_DATA_PATH
             ),
-            video_keys=video_keys,
+            video_keys=self._load_video_keys(
+                features if isinstance(features, Mapping) else {}
+            ),
             robot_type=(
                 str(info.get("robot_type"))
                 if isinstance(info, Mapping) and info.get("robot_type") is not None
                 else None
             ),
+            episode_index_offset=0,
+            episode_count=self._load_episode_count(root=root, info=info),
         )
+
+    def _load_episode_count(
+        self,
+        *,
+        root: DataFolder,
+        info: Mapping[str, Any],
+    ) -> int:
+        total_episodes = info.get("total_episodes")
+        if total_episodes is not None:
+            return int(total_episodes)
+
+        episode_files = root.fs.glob(
+            root._join(f"{_DEFAULT_EPISODES_GLOB_ROOT}/**/*.parquet")
+        )
+        prefix = f"{root.path.rstrip('/')}/"
+        total = 0
+        for path in episode_files:
+            rel = path[len(prefix) :] if path.startswith(prefix) else path
+            with root.open(rel, mode="rb") as src:
+                total += int(pq.ParquetFile(src).metadata.num_rows)
+        return total
 
     def _load_info(self, root: DataFolder) -> Mapping[str, Any]:
         info_file = root.file(_INFO_JSON)
@@ -471,6 +543,18 @@ class LeRobotEpisodeReader(ParquetReader):
         out.sort()
         return tuple(out)
 
+    def _extract_episode_stats(
+        self,
+        row: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for key in row.keys():
+            if not isinstance(key, str) or not key.startswith("stats/"):
+                continue
+            _, feature, stat_name = key.split("/", 2)
+            out.setdefault(feature, {})[stat_name] = row.get(key)
+        return out
+
 
 def _format_chunked_path(
     template: str,
@@ -493,6 +577,7 @@ def _format_chunked_path(
 
 __all__ = [
     "LeRobotEpisodeReader",
+    "LEROBOT_EPISODE_STATS",
     "LEROBOT_STATS",
     "LEROBOT_INFO",
 ]

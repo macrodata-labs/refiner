@@ -24,11 +24,11 @@ class AsyncWindow(Generic[T]):
         if self.max_in_flight <= 0:
             raise ValueError("max_in_flight must be > 0")
 
-    @property
-    def capacity(self) -> int:
-        return max(0, self.max_in_flight - len(self._futures))
+    def submit_blocking(self, coro: Coroutine[object, object, T]) -> list[T]:
+        out: list[T] = []
+        if len(self._futures) >= self.max_in_flight:
+            out.extend(self._drain_until_available())
 
-    def submit(self, coro: Coroutine[object, object, T]) -> None:
         idx = self._next_submit
         self._next_submit += 1
 
@@ -36,26 +36,48 @@ class AsyncWindow(Generic[T]):
             return idx, await coro
 
         self._futures.add(submit(_tagged()))
+        return out
 
-    def drain(self, *, flush: bool) -> list[T]:
+    def poll(self) -> list[T]:
+        done = {future for future in self._futures if future.done()}
+        return self._consume_done(done)
+
+    def flush(self) -> list[T]:
         out: list[T] = []
-        while self._futures and (flush or len(self._futures) >= self.max_in_flight):
+        while self._futures:
             done, pending = wait(
                 self._futures,
-                return_when=ALL_COMPLETED if flush else FIRST_COMPLETED,
+                return_when=ALL_COMPLETED,
             )
             self._futures = set(pending)
-            if self.preserve_order:
-                for future in done:
-                    heapq.heappush(self._ready, future.result())
-                while self._ready and self._ready[0][0] == self._next_yield:
-                    _, value = heapq.heappop(self._ready)
-                    self._next_yield += 1
-                    out.append(value)
-            else:
-                for future in done:
-                    _, value = future.result()
-                    out.append(value)
+            out.extend(self._consume_done(done))
+        return out
+
+    def _consume_done(self, done: set[Future[tuple[int, T]]]) -> list[T]:
+        if not done:
+            return []
+        self._futures.difference_update(done)
+        out: list[T] = []
+        if self.preserve_order:
+            for future in done:
+                heapq.heappush(self._ready, future.result())
+            while self._ready and self._ready[0][0] == self._next_yield:
+                _, value = heapq.heappop(self._ready)
+                self._next_yield += 1
+                out.append(value)
+            return out
+
+        for future in done:
+            _, value = future.result()
+            out.append(value)
+        return out
+
+    def _drain_until_available(self) -> list[T]:
+        out: list[T] = []
+        while self._futures and len(self._futures) >= self.max_in_flight:
+            done, pending = wait(self._futures, return_when=FIRST_COMPLETED)
+            self._futures = set(pending)
+            out.extend(self._consume_done(done))
         return out
 
 

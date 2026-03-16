@@ -7,7 +7,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from refiner.media import Video
-from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.pipeline.sources.readers.lerobot import (
+    LEROBOT_EPISODE_STATS,
+    LeRobotEpisodeReader,
+)
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -134,6 +137,9 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert first["task"] == "pick"
     assert second["task"] == "place"
     assert first["metadata"]["lerobot_stats"]["observation.state"]["count"] == 2
+    assert first["metadata"][LEROBOT_EPISODE_STATS]["observation.state"]["min"] == [
+        -999.0
+    ]
     assert "stats/observation.state/min" not in first
     assert "videos/observation.images.main/chunk_index" not in first
     assert "meta/episodes/chunk_index" not in first
@@ -159,3 +165,24 @@ def test_lerobot_reader_exposes_episode_shard_planning_knobs(tmp_path: Path) -> 
     shards = reader.list_shards()
 
     assert len(shards) == 2
+
+
+def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(
+    tmp_path: Path,
+) -> None:
+    first_root = tmp_path / "lerobot-a"
+    second_root = tmp_path / "lerobot-b"
+    _build_sample_dataset(first_root)
+    _build_sample_dataset(second_root)
+
+    reader = LeRobotEpisodeReader([str(first_root), str(second_root)])
+    rows = [row for shard in reader.list_shards() for row in reader.read_shard(shard)]
+
+    assert len(rows) == 4
+    assert [int(row["episode_index"]) for row in rows] == [0, 1, 2, 3]
+    assert [str(row["metadata"]["lerobot_info"]["root"]) for row in rows] == [
+        str(first_root),
+        str(first_root),
+        str(second_root),
+        str(second_root),
+    ]

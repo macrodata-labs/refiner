@@ -21,7 +21,9 @@ if TYPE_CHECKING:
     )
 
 
-_SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+empty_moov+default_base_moof"
+# This creates fragmented mp4 files, but not empty moov atoms.
+# This is because we want to be able to append to the video files, and the empty moov atoms
+_SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
 
 @dataclass(slots=True)

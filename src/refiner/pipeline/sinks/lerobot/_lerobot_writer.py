@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 import pyarrow as pa
 
 from fsspec.spec import AbstractFileSystem
 
-from refiner.execution.asyncio.window import AsyncWindow
 from refiner.execution.operators.vectorized import iter_table_rows
-from refiner.media import MediaFile, Video
 from refiner.pipeline.sinks.base import (
     BaseSink,
     Block,
@@ -89,15 +86,6 @@ class LeRobotWriterSink(BaseSink):
     def __init__(self, config: LeRobotWriterConfig):
         self.config = config
         self._writers: dict[str, _LeRobotShardWriter] = {}
-        self._lease_window: AsyncWindow[tuple[Mapping[str, Any], str]] = AsyncWindow(
-            max_in_flight=self.config.media_prelease_max_in_flight,
-            preserve_order=self.config.media_prelease_preserve_order,
-        )
-
-    def cleanup_leases(self, row: Mapping[str, Any]) -> None:
-        for key, value in row.items():
-            if isinstance(value, Video) and isinstance(value.media, MediaFile):
-                value.media.cleanup()
 
     def write_block(self, block: Block) -> ShardCounts:
         blocks_by_shard, counts = split_block_by_shard(block)
@@ -109,51 +97,22 @@ class LeRobotWriterSink(BaseSink):
                 rows = shard_block
 
             for row in rows:
-                self._lease_window.submit(self.pre_lease_row(row, shard_id))
-                rows_leased = self._lease_window.drain(flush=False)
-                self.process_leased_rows(rows_leased)
-
-            # Non-video rows can otherwise stay deferred until shard completion,
-            # which hides validation failures from direct sink use.
-            rows_leased = self._lease_window.drain(flush=True)
-            self.process_leased_rows(rows_leased)
+                self.process_row(row, shard_id)
 
         return counts
 
-    async def pre_lease_row(
-        self, row: Mapping[str, Any], shard_id: str
-    ) -> tuple[Mapping[str, Any], str]:
-        lease_requests = []
-        for key, value in row.items():
-            if isinstance(value, Video) and isinstance(value.media, MediaFile):
-                lease_requests.append(
-                    value.media.cache_file(cache_name=f"lerobot_writer:{key}")
-                )
-        await asyncio.gather(*lease_requests)
-        return row, shard_id
-
-    def process_leased_rows(
-        self, rows: Iterable[tuple[Mapping[str, Any], str]]
-    ) -> None:
+    def process_row(self, row: Mapping[str, Any], shard_id: str) -> None:
         rank_raw = os.environ.get("REFINER_WORKER_RANK")
         rank = int(rank_raw) if rank_raw is not None else 0
         worker_id = "0" if rank < 0 else str(rank)
-        for row, shard_id in rows:
-            try:
-                key = f"{worker_id}-{shard_id}"
-                writer = self._writers.get(shard_id)
-                if writer is None:
-                    writer = _LeRobotShardWriter(config=self.config, chunk_key=key)
-                    self._writers[shard_id] = writer
-                writer.consume_row(row)
-            finally:
-                self.cleanup_leases(row)
+        key = f"{worker_id}-{shard_id}"
+        writer = self._writers.get(shard_id)
+        if writer is None:
+            writer = _LeRobotShardWriter(config=self.config, chunk_key=key)
+            self._writers[shard_id] = writer
+        writer.consume_row(row)
 
     def on_shard_complete(self, shard_id: str) -> None:
-        # Ensure we have no in-flight leases for this shard.
-        rows_leased = self._lease_window.drain(flush=True)
-        self.process_leased_rows(rows_leased)
-
         writer = self._writers.pop(shard_id, None)
         if writer is None:
             return

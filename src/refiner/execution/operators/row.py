@@ -95,13 +95,12 @@ def execute_row_steps(
             tmp = scratch[i]
             tmp.clear()
             while inp:
-                capacity = window.capacity
-                if capacity > 0:
-                    for row in inp.take(capacity):
-                        window.submit(_run_async_step(step=step, row=row))
-                tmp.extend(window.drain(flush=False))
+                for row in inp.take_all():
+                    tmp.extend(
+                        window.submit_blocking(_run_async_step(step=step, row=row))
+                    )
             if flush_all:
-                tmp.extend(window.drain(flush=True))
+                tmp.extend(window.flush())
             if tmp:
                 out.extend(tmp)
             return
