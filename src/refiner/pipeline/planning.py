@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
 
 
+_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
+
+
 @dataclass(frozen=True, slots=True)
 class StageComputeRequirements:
     num_workers: int
@@ -263,7 +266,7 @@ def _callable_source(fn: Any) -> str:
 
 
 def _builtin_description(fn: Any) -> dict[str, Any] | None:
-    spec = getattr(fn, "__refiner_builtin_call__", None)
+    spec = getattr(fn, _REFINER_BUILTIN_CALL_ATTR, None)
     if not isinstance(spec, dict):
         return None
     name = spec.get("name")
@@ -277,7 +280,7 @@ def _builtin_description(fn: Any) -> dict[str, Any] | None:
 
 def describe_builtin(name: str, **args: Any) -> Any:
     def _decorate(fn: Any) -> Any:
-        setattr(fn, "__refiner_builtin_call__", {"name": name, "args": args})
+        setattr(fn, _REFINER_BUILTIN_CALL_ATTR, {"name": name, "args": args})
         return fn
 
     return _decorate
