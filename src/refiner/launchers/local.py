@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -127,7 +125,9 @@ class LocalLauncher(BaseLauncher):
         platform_run: RunHandle | None,
     ) -> list[str]:
         command = [
-            sys.executable,
+            "uv",
+            "run",
+            "python",
             "-m",
             "refiner.worker.entrypoint",
             "--job-id",
@@ -154,15 +154,6 @@ class LocalLauncher(BaseLauncher):
                 ]
             )
         return command
-
-    def _worker_env(self) -> dict[str, str]:
-        env = dict(os.environ)
-        src_root = str(Path(__file__).resolve().parents[2])
-        existing = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = (
-            src_root if not existing else f"{src_root}{os.pathsep}{existing}"
-        )
-        return env
 
     def _read_worker_stats(
         self,
@@ -277,7 +268,6 @@ class LocalLauncher(BaseLauncher):
                     cpu_ids=cpu_sets[rank],
                     platform_run=stage_run,
                 ),
-                env=self._worker_env(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
