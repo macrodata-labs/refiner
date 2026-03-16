@@ -177,6 +177,8 @@ class BaseReader(BaseSource):
                 target_bytes = 1
             else:
                 base, remainder = divmod(total_size, num_shards)
+                # Spread the leftover bytes across the first shards instead of creating
+                # one oversized remainder shard at the end.
                 shard_sizes = [base + (i < remainder) for i in range(num_shards)]
                 target_bytes = max(1, shard_sizes[0])
         shards: list[Shard] = []
