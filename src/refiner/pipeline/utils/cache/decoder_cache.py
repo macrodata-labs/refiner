@@ -21,8 +21,6 @@ class _DecoderResource:
     decode_lock: asyncio.Lock
     file_lease: _CacheFileLease | None = None
     configured_decoder_threads: int | None = None
-    last_collect_window: tuple[float, float | None] | None = None
-    last_collect_result: tuple[tuple[np.ndarray, ...], DecodeWindowMeta] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,13 +127,6 @@ class DecoderLease:
                 resource=resource,
                 decoder_threads=decoder_threads,
             )
-            cached = resource.last_collect_result
-            if (
-                resource.last_collect_window == (start_ts, end_ts)
-                and cached is not None
-            ):
-                return cached
-
             frames: list[np.ndarray] = []
             meta = self._owner._decode_with_decoder(
                 container=resource.container,
@@ -145,8 +136,6 @@ class DecoderLease:
                 on_frame=lambda frame: frames.append(frame.to_ndarray(format="rgb24")),
             )
             frames_tuple = tuple(frames)
-            resource.last_collect_window = (start_ts, end_ts)
-            resource.last_collect_result = (frames_tuple, meta)
             return frames_tuple, meta
 
     def release(self) -> None:
