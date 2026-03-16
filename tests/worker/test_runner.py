@@ -211,7 +211,10 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
         heartbeat_interval_seconds=1,
         run_handle=_local_run(),
     )
-    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+    )
 
     stats = worker.run()
 
@@ -246,7 +249,10 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
         pipeline=pipeline,
         run_handle=_local_run(),
     )
-    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+    )
 
     stats = worker.run()
 
@@ -282,7 +288,10 @@ def test_worker_can_batch_across_shards() -> None:
         pipeline=pipeline,
         run_handle=_local_run(),
     )
-    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+    )
     stats = worker.run()
 
     assert stats.claimed == 2
@@ -305,7 +314,10 @@ def test_worker_runtime_complete_errors_are_not_swallowed() -> None:
         pipeline=pipeline,
         run_handle=_local_run(),
     )
-    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+    )
     with pytest.raises(RuntimeError, match="complete failed"):
         worker.run()
 
@@ -322,7 +334,10 @@ def test_worker_completes_shards_only_after_sink_drain() -> None:
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).with_sink(sink),
         run_handle=_local_run(),
     )
-    worker._start_local_session = lambda: runtime_lifecycle  # type: ignore[method-assign]
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+    )
 
     stats = worker.run()
 

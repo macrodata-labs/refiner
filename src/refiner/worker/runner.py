@@ -50,8 +50,8 @@ class Worker:
         if self.heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be > 0")
 
-    def _start_platform_session(self) -> tuple[RuntimeLifecycle, RunHandle]:
-        if self.run_handle is None or self.run_handle.client is None:
+    def _start_platform_session(self) -> tuple[PlatformRuntimeLifecycle, RunHandle]:
+        if self.run_handle.client is None:
             raise ValueError("platform runtime requires a run with a client")
         try:
             host = socket.gethostname()
@@ -67,13 +67,13 @@ class Worker:
         runtime_lifecycle = PlatformRuntimeLifecycle(run=run)
         return runtime_lifecycle, run
 
-    def _start_local_session(self) -> LocalRuntimeLifecycle:
-        if self.run_handle is None:
-            raise ValueError("local runtime requires a job_id")
-        return LocalRuntimeLifecycle(
-            run=self.run_handle.with_worker(worker_id=uuid4().hex[:12]),
+    def _start_local_session(self) -> tuple[LocalRuntimeLifecycle, RunHandle]:
+        run = self.run_handle.with_worker(worker_id=uuid4().hex[:12])
+        runtime_lifecycle = LocalRuntimeLifecycle(
+            run=run,
             workdir=self.local_workdir,
         )
+        return runtime_lifecycle, run
 
     def run(self) -> WorkerRunStats:
         # Source-claim state.
@@ -133,11 +133,7 @@ class Worker:
                 user_metrics_emitter = telemetry_emitter
         else:
             # local mode
-            local_runtime_lifecycle = self._start_local_session()
-            self.run_handle = self.run_handle.with_worker(
-                worker_id=local_runtime_lifecycle.worker_id
-            )
-            runtime_lifecycle = local_runtime_lifecycle
+            runtime_lifecycle, self.run_handle = self._start_local_session()
         sink = self.pipeline.sink or NullSink()
 
         def _heartbeat_once() -> None:
