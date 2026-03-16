@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 
 import cloudpickle
 from loguru import logger
@@ -13,14 +12,6 @@ from refiner.worker.context import RunHandle
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
 from refiner.worker.resources.memory import set_memory_soft_limit_mb
 from refiner.worker.runner import Worker
-
-
-def _write_stats(path: str | None, payload: dict[str, int | str]) -> None:
-    if not path:
-        return
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload))
 
 
 def main() -> int:
@@ -36,7 +27,6 @@ def main() -> int:
     )
     parser.add_argument("--worker-name", type=str, default="worker")
     parser.add_argument("--heartbeat-interval-seconds", type=int, default=30)
-    parser.add_argument("--stats-path", type=str, default="")
     parser.add_argument("--workdir", type=str, default=None)
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--mem-mb-per-worker", type=int, default=0)
@@ -82,18 +72,20 @@ def main() -> int:
             heartbeat_interval_seconds=args.heartbeat_interval_seconds,
             local_workdir=args.workdir,
         ).run()
-        _write_stats(
-            args.stats_path,
-            {
-                "claimed": stats.claimed,
-                "completed": stats.completed,
-                "failed": stats.failed,
-                "output_rows": stats.output_rows,
-            },
+        print(
+            json.dumps(
+                {
+                    "claimed": stats.claimed,
+                    "completed": stats.completed,
+                    "failed": stats.failed,
+                    "output_rows": stats.output_rows,
+                },
+                sort_keys=True,
+            )
         )
         return 0
     except Exception as e:
-        _write_stats(args.stats_path, {"error": str(e)})
+        print(json.dumps({"error": str(e)}, sort_keys=True))
         return 1
 
 
