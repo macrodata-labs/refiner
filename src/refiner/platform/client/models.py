@@ -188,3 +188,4 @@ class CloudRunCreateResponse(msgspec.Struct, frozen=True):
     job_id: str
     stage_index: int
     status: str
+    workspace_slug: str | None = msgspec.field(name="workspaceSlug", default=None)

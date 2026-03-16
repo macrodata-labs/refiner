@@ -110,7 +110,7 @@ class CloudLauncher(BaseLauncher):
         )
         resp = client.cloud_submit_job(request=request)
         self._info(
-            f"Track job here: {self._job_tracking_url(client=client, job_id=resp.job_id)}"
+            f"Track job here: {self._job_tracking_url(client=client, job_id=resp.job_id, workspace_slug=resp.workspace_slug)}"
         )
         return CloudLaunchResult(
             job_id=resp.job_id,

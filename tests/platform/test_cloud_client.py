@@ -42,7 +42,12 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
 
     def fake_request_json(**kwargs: object) -> dict[str, object]:
         captured.update(kwargs)
-        return {"job_id": "job-1", "stage_index": 0, "status": "queued"}
+        return {
+            "job_id": "job-1",
+            "stage_index": 0,
+            "status": "queued",
+            "workspaceSlug": "macrodata",
+        }
 
     monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
 
@@ -52,6 +57,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert resp.job_id == "job-1"
     assert resp.stage_index == 0
     assert resp.status == "queued"
+    assert resp.workspace_slug == "macrodata"
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/cloud/runs"
     assert captured["api_key"] == "md_test"
