@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 
 from refiner.execution.asyncio.runtime import submit
 from refiner.io import DataFolder
-from refiner.media import Video
+from refiner.media import DecodedVideo, Video, VideoFile
 from refiner.pipeline.sources.readers.lerobot import LEROBOT_INFO
 
 from refiner.pipeline.sinks.lerobot._lerobot_frames import (
@@ -189,7 +189,7 @@ class _LeRobotShardWriter:
                 "dataset_to_index",
             }:
                 continue
-            if isinstance(value, Video):
+            if isinstance(value, (VideoFile, DecodedVideo)):
                 continue
             episode_row[key] = value
 
@@ -363,7 +363,9 @@ class _LeRobotShardWriter:
         }.items():
             self.features.setdefault(key, spec)
 
-        video_count = sum(1 for value in row.values() if isinstance(value, Video))
+        video_count = sum(
+            1 for value in row.values() if isinstance(value, (VideoFile, DecodedVideo))
+        )
         self._video_config = replace(
             self.config.video,
             encoder_threads=_resolve_video_threads(
@@ -377,7 +379,7 @@ class _LeRobotShardWriter:
         )
 
     def _feature_spec(self, value: Any) -> dict[str, Any] | None:
-        if isinstance(value, Video):
+        if isinstance(value, (VideoFile, DecodedVideo)):
             return {"dtype": "video", "shape": None, "names": None, "info": None}
         if isinstance(value, bool):
             return {"dtype": "bool", "shape": [1], "names": None}
@@ -501,7 +503,9 @@ class _LeRobotShardWriter:
         out: dict[str, Any] = {}
         out_stats: dict[str, dict[str, np.ndarray]] = {}
         video_items = [
-            (key, value) for key, value in row.items() if isinstance(value, Video)
+            (key, value)
+            for key, value in row.items()
+            if isinstance(value, (VideoFile, DecodedVideo))
         ]
         futures = []
 
@@ -551,8 +555,12 @@ class _LeRobotShardWriter:
         clip_duration_s, clip_stats = await _append_video_segment(
             writer=writer,
             video=video,
-            clip_from=video.from_timestamp_s,
-            clip_to=video.to_timestamp_s,
+            clip_from=(
+                float(video.from_timestamp_s)
+                if isinstance(video, VideoFile) and video.from_timestamp_s is not None
+                else 0.0
+            ),
+            clip_to=video.to_timestamp_s if isinstance(video, VideoFile) else None,
             video_config=self._video_config,
             stats_config=self.config.stats,
         )

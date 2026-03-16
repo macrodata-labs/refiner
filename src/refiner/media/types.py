@@ -1,16 +1,23 @@
 from __future__ import annotations
 
-from typing import IO
+from typing import IO, TYPE_CHECKING
 
 from refiner.io import DataFile
-from refiner.pipeline.utils.cache.file_cache import _CacheFileLease, get_media_cache
+from refiner.pipeline.utils.cache.file_cache import get_media_cache
+
+if TYPE_CHECKING:
+    from refiner.pipeline.utils.cache.file_cache import _CacheFileLease
 
 
 class MediaFile:
+    uri: str
+    _data_file: DataFile
+    _lease: "_CacheFileLease | None"
+
     def __init__(self, uri: str) -> None:
-        self.uri = uri
-        self._data_file = DataFile.resolve(uri)
-        self._lease: _CacheFileLease | None = None
+        object.__setattr__(self, "uri", uri)
+        object.__setattr__(self, "_data_file", DataFile.resolve(uri))
+        object.__setattr__(self, "_lease", None)
 
     def open(self, mode: str = "rb") -> IO[bytes]:
         if self._lease is not None:
@@ -24,13 +31,14 @@ class MediaFile:
             return str(self._data_file)
 
         cache = get_media_cache(cache_name)
-        self._lease = await cache.acquire_file_lease(self._data_file)
-        return self._lease.path
+        lease = await cache.acquire_file_lease(self._data_file)
+        object.__setattr__(self, "_lease", lease)
+        return lease.path
 
     def cleanup(self) -> None:
         if self._lease is not None:
             self._lease.release()
-        self._lease = None
+        object.__setattr__(self, "_lease", None)
 
 
 __all__ = ["MediaFile"]

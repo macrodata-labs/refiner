@@ -1,9 +1,11 @@
-from refiner.media.hydration import hydrate_media
 from refiner.media.types import MediaFile
-from refiner.media.video.types import Video
+from refiner.media.video.hydration import hydrate_video
+from refiner.media.video.types import DecodedVideo, Video, VideoFile
 
 __all__ = [
     "MediaFile",
+    "VideoFile",
     "Video",
-    "hydrate_media",
+    "DecodedVideo",
+    "hydrate_video",
 ]
