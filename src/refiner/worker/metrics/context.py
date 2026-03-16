@@ -99,18 +99,10 @@ _ACTIVE_USER_METRICS_EMITTER: ContextVar[UserMetricsEmitter] = ContextVar(
     "refiner_active_user_metrics_emitter",
     default=NOOP_USER_METRICS_EMITTER,
 )
-_ACTIVE_STEP_INDEX: ContextVar[int | None] = ContextVar(
-    "refiner_active_step_index",
-    default=None,
-)
 
 
 def get_active_user_metrics_emitter() -> UserMetricsEmitter:
     return _ACTIVE_USER_METRICS_EMITTER.get()
-
-
-def get_active_step_index() -> int | None:
-    return _ACTIVE_STEP_INDEX.get()
 
 
 @contextmanager
@@ -124,20 +116,9 @@ def set_active_user_metrics_emitter(
         _ACTIVE_USER_METRICS_EMITTER.reset(token)
 
 
-@contextmanager
-def set_active_step_index(step_index: int | None) -> Generator[None, None, None]:
-    token: Token[int | None] = _ACTIVE_STEP_INDEX.set(step_index)
-    try:
-        yield
-    finally:
-        _ACTIVE_STEP_INDEX.reset(token)
-
-
 __all__ = [
     "UserMetricsEmitter",
     "NOOP_USER_METRICS_EMITTER",
     "get_active_user_metrics_emitter",
-    "get_active_step_index",
-    "set_active_step_index",
     "set_active_user_metrics_emitter",
 ]

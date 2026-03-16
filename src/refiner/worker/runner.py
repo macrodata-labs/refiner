@@ -1,21 +1,26 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import socket
 import threading
+from dataclasses import dataclass
+from uuid import uuid4
 
 from loguru import logger
 
-from refiner.pipeline.data.shard import Shard
-from refiner.platform.client import RunHandle
-from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.execution.engine import block_num_rows
+from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
-from refiner.worker.lifecycle import PlatformRuntimeLifecycle, RuntimeLifecycle
+from refiner.worker.context import RunHandle
+from refiner.worker.context import set_active_run_context, set_active_step_index
+from refiner.worker.lifecycle import (
+    LocalRuntimeLifecycle,
+    PlatformRuntimeLifecycle,
+    RuntimeLifecycle,
+)
 from refiner.worker.metrics.context import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
-    set_active_step_index,
     set_active_user_metrics_emitter,
 )
 from refiner.worker.metrics.otel import OtelTelemetryEmitter
@@ -32,21 +37,21 @@ class WorkerRunStats:
 class Worker:
     def __init__(
         self,
-        rank: int,
-        runtime_lifecycle: RuntimeLifecycle | None,
         pipeline: RefinerPipeline,
         *,
+        run_handle: RunHandle,
         heartbeat_interval_seconds: int = 30,
-        run_handle: RunHandle | None = None,
+        local_workdir: str | None = None,
     ):
-        self.rank = rank
-        self.runtime_lifecycle = runtime_lifecycle
         self.pipeline = pipeline
-        self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.run_handle = run_handle
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
+        self.local_workdir = local_workdir
+        if self.heartbeat_interval_seconds <= 0:
+            raise ValueError("heartbeat_interval_seconds must be > 0")
 
-    def _start_platform_session(self) -> tuple[RuntimeLifecycle, RunHandle]:
-        if self.run_handle is None or self.run_handle.client is None:
+    def _start_platform_session(self) -> tuple[PlatformRuntimeLifecycle, RunHandle]:
+        if self.run_handle.client is None:
             raise ValueError("platform runtime requires a run with a client")
         try:
             host = socket.gethostname()
@@ -62,48 +67,61 @@ class Worker:
         runtime_lifecycle = PlatformRuntimeLifecycle(run=run)
         return runtime_lifecycle, run
 
-    def run(self) -> WorkerRunStats:
-        if self.heartbeat_interval_seconds <= 0:
-            raise ValueError("heartbeat_interval_seconds must be > 0")
-        if self.runtime_lifecycle is None and self.run_handle is None:
-            raise ValueError(
-                "runtime_lifecycle is required unless a platform run is provided"
-            )
+    def _start_local_session(self) -> tuple[LocalRuntimeLifecycle, RunHandle]:
+        run = self.run_handle.with_worker(worker_id=uuid4().hex[:12])
+        runtime_lifecycle = LocalRuntimeLifecycle(
+            run=run,
+            workdir=self.local_workdir,
+        )
+        return runtime_lifecycle, run
 
+    def run(self) -> WorkerRunStats:
+        # Source-claim state.
         previous: Shard | None = None
+
+        # Final worker stats.
         claimed = 0
         completed = 0
         failed = 0
         output_rows = 0
+
+        # In-flight shard bookkeeping shared with the heartbeat thread.
         inflight_by_id: dict[str, Shard] = {}
         pending_rows_by_shard: dict[str, int] = {}
         source_done_shards: set[str] = set()
         inflight_lock = threading.Lock()
-        failed_error: str | None = None
+
+        # Error state: completion failures are re-raised directly, execution
+        # failures are converted into shard failures, and heartbeat failures
+        # are surfaced from the background thread.
         completion_error: Exception | None = None
-        run_handle = self.run_handle
-        runtime_lifecycle = self.runtime_lifecycle
-        active_run: RunHandle | None = None
-        user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
-        obs_logger = logger.bind(rank=self.rank)
-        stop_heartbeat = threading.Event()
+        execution_error: Exception | None = None
         heartbeat_error: Exception | None = None
 
-        if run_handle is not None and run_handle.client is not None:
-            runtime_lifecycle, active_run = self._start_platform_session()
+        # Runtime services.
+        user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
+        obs_logger = logger.bind(worker_name=self.run_handle.worker_name)
+        stop_heartbeat = threading.Event()
+
+        if self.run_handle.client is not None:
+            # platform
+            runtime_lifecycle, self.run_handle = self._start_platform_session()
+            client = self.run_handle.client
+            if client is None:
+                raise ValueError("platform runtime requires a client")
             obs_logger.info(
                 "worker started job_id={} stage_index={} worker_id={}",
-                active_run.job_id,
-                active_run.stage_index,
-                active_run.worker_id,
+                self.run_handle.job_id,
+                self.run_handle.stage_index,
+                self.run_handle.worker_id,
             )
             try:
                 telemetry_emitter = OtelTelemetryEmitter(
-                    base_url=run_handle.client.base_url,
-                    api_key=run_handle.client.api_key,
-                    job_id=active_run.job_id,
-                    stage_index=active_run.stage_index,
-                    worker_id=active_run.worker_id or "",
+                    base_url=client.base_url,
+                    api_key=client.api_key,
+                    job_id=self.run_handle.job_id,
+                    stage_index=self.run_handle.stage_index,
+                    worker_id=self.run_handle.worker_id or "",
                 )
             except Exception as e:  # noqa: BLE001
                 obs_logger.warning(
@@ -113,8 +131,9 @@ class Worker:
                 )
             else:
                 user_metrics_emitter = telemetry_emitter
-        if runtime_lifecycle is None:
-            raise ValueError("runtime_lifecycle was not initialized")
+        else:
+            # local mode
+            runtime_lifecycle, self.run_handle = self._start_local_session()
         sink = self.pipeline.sink or NullSink()
 
         def _heartbeat_once() -> None:
@@ -171,7 +190,7 @@ class Worker:
 
         heartbeat_thread = threading.Thread(
             target=_heartbeat_loop,
-            name=f"refiner-heartbeat-{self.rank}",
+            name=f"refiner-heartbeat-{self.run_handle.worker_name or 'worker'}",
             daemon=True,
         )
         heartbeat_thread.start()
@@ -201,7 +220,13 @@ class Worker:
                 _maybe_complete_shard(shard.id)
                 previous = shard
 
-        with set_active_user_metrics_emitter(user_metrics_emitter):
+        with (
+            set_active_user_metrics_emitter(user_metrics_emitter),
+            set_active_run_context(
+                run_handle=self.run_handle,
+                runtime_lifecycle=runtime_lifecycle,
+            ),
+        ):
             run_exception: Exception | None = None
             try:
                 try:
@@ -223,7 +248,7 @@ class Worker:
                 except Exception as e:
                     if completion_error is e:
                         raise
-                    failed_error = str(e)
+                    execution_error = e
                     with inflight_lock:
                         failed_shards = list(inflight_by_id.values())
                         inflight_by_id.clear()
@@ -257,28 +282,30 @@ class Worker:
                 heartbeat_thread.join(timeout=1.0)
                 sink.close()
 
-                if active_run is not None and active_run.client is not None:
+                if self.run_handle.client is not None:
                     status = (
                         "failed"
-                        if failed_error is not None or run_exception is not None
+                        if execution_error is not None or run_exception is not None
                         else "completed"
                     )
-                    error = failed_error
-                    if error is None and run_exception is not None:
-                        error = str(run_exception)
+                    error = (
+                        str(execution_error or run_exception)
+                        if (execution_error is not None or run_exception is not None)
+                        else None
+                    )
                     try:
-                        active_run.client.report_worker_finished(
-                            job_id=active_run.job_id,
-                            stage_index=active_run.stage_index,
-                            worker_id=active_run.worker_id or "",
+                        self.run_handle.client.report_worker_finished(
+                            job_id=self.run_handle.job_id,
+                            stage_index=self.run_handle.stage_index,
+                            worker_id=self.run_handle.worker_id or "",
                             status=status,
                             error=error,
                         )
                         obs_logger.info(
                             "worker finished job_id={} stage_index={} worker_id={} status={}",
-                            active_run.job_id,
-                            active_run.stage_index,
-                            active_run.worker_id,
+                            self.run_handle.job_id,
+                            self.run_handle.stage_index,
+                            self.run_handle.worker_id,
                             status,
                         )
                     except Exception as e:  # noqa: BLE001
@@ -288,7 +315,7 @@ class Worker:
                             e,
                         )
 
-                if failed_error is None and run_exception is None:
+                if execution_error is None and run_exception is None:
                     user_metrics_emitter.shutdown()
                 else:
                     try:

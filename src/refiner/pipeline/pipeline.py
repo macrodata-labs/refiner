@@ -251,7 +251,7 @@ class RefinerPipeline:
         self,
         output: DataFolderLike,
         *,
-        filename_template: str = "{shard_id}.jsonl",
+        filename_template: str = "{shard_id}__w{worker_id}.jsonl",
     ) -> "RefinerPipeline":
         return self.with_sink(
             JsonlSink(
@@ -264,7 +264,7 @@ class RefinerPipeline:
         self,
         output: DataFolderLike,
         *,
-        filename_template: str = "{shard_id}.parquet",
+        filename_template: str = "{shard_id}__w{worker_id}.parquet",
         compression: str | None = None,
     ) -> "RefinerPipeline":
         return self.with_sink(

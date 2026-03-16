@@ -11,7 +11,7 @@ from loguru import logger
 from refiner.platform.auth import CredentialsError
 from refiner.platform.client.api import MacrodataClient
 from refiner.platform.client.http import sanitize_terminal_text
-from refiner.platform.client.models import RunHandle
+from refiner.worker.context import RunHandle
 from refiner.platform.manifest import build_run_manifest
 from refiner.pipeline.planning import (
     PlannedStage,

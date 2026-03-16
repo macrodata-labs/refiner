@@ -12,6 +12,12 @@ except ImportError:
     psutil = None  # type: ignore[assignment]
 
 
+def parse_cpu_ids(raw: str) -> list[int]:
+    if not raw.strip():
+        return []
+    return [int(x) for x in raw.split(",") if x.strip()]
+
+
 def available_cpu_ids() -> list[int]:
     if hasattr(os, "sched_getaffinity"):
         return sorted(int(x) for x in os.sched_getaffinity(0))
@@ -112,5 +118,6 @@ __all__ = [
     "build_cpu_sets",
     "cpu_observer_callback",
     "cpu_quota_percent",
+    "parse_cpu_ids",
     "set_cpu_affinity",
 ]

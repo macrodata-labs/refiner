@@ -13,6 +13,7 @@ from refiner.pipeline.sinks.base import (
     ShardCounts,
     split_block_by_shard,
 )
+from refiner.worker.context import get_active_run_handle
 
 
 class ParquetSink(BaseSink):
@@ -20,7 +21,7 @@ class ParquetSink(BaseSink):
         self,
         output: DataFolderLike,
         *,
-        filename_template: str = "{shard_id}.parquet",
+        filename_template: str = "{shard_id}__w{worker_id}.parquet",
         compression: str | None = None,
     ):
         self.output = DataFolder.resolve(output)
@@ -29,7 +30,10 @@ class ParquetSink(BaseSink):
         self._writers: dict[str, pq.ParquetWriter] = {}
 
     def _relpath(self, shard_id: str) -> str:
-        return self.filename_template.format(shard_id=shard_id)
+        return self.filename_template.format(
+            shard_id=shard_id,
+            worker_id=get_active_run_handle().worker_token,
+        )
 
     def _writer(self, shard_id: str, schema: pa.Schema) -> pq.ParquetWriter:
         writer = self._writers.get(shard_id)

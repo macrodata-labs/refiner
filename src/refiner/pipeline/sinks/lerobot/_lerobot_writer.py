@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,6 +16,7 @@ from refiner.pipeline.sinks.base import (
     split_block_by_shard,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import _LeRobotShardWriter
+from refiner.worker.context import get_active_run_handle
 
 
 _DEFAULT_CHUNK_SIZE = 1000
@@ -102,11 +102,9 @@ class LeRobotWriterSink(BaseSink):
         return counts
 
     def process_row(self, row: Mapping[str, Any], shard_id: str) -> None:
-        rank_raw = os.environ.get("REFINER_WORKER_RANK")
-        rank = int(rank_raw) if rank_raw is not None else 0
-        worker_id = "0" if rank < 0 else str(rank)
-        key = f"{worker_id}-{shard_id}"
         writer = self._writers.get(shard_id)
+        token = get_active_run_handle().worker_token
+        key = f"{shard_id}__w{token}"
         if writer is None:
             writer = _LeRobotShardWriter(config=self.config, chunk_key=key)
             self._writers[shard_id] = writer

@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from refiner.pipeline.data.shard import Shard
-from refiner.platform.client import RunHandle
+from refiner.worker.context import RunHandle
+from refiner.platform.client.models import FinalizedShardWorker
 
 
 class PlatformRuntimeLifecycle:
@@ -85,3 +86,14 @@ class PlatformRuntimeLifecycle:
             status="failed",
             error=error,
         )
+
+    def finalized_workers(
+        self, *, stage_index: int | None = None
+    ) -> list[FinalizedShardWorker]:
+        if self.run.client is None:
+            raise ValueError("platform runtime requires a client")
+        response = self.run.client.shard_finalized_workers(
+            job_id=self.run.job_id,
+            stage_index=self.run.stage_index if stage_index is None else stage_index,
+        )
+        return list(response.shards)

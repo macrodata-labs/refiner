@@ -16,6 +16,7 @@ import pytest
 import refiner as mdr
 from refiner.media import hydrate_media
 from refiner.media.video.types import DecodedVideo
+from refiner.pipeline.data.row import DictRow
 from refiner.pipeline import (
     LeRobotStatsConfig as PipelineLeRobotStatsConfig,
     LeRobotVideoConfig as PipelineLeRobotVideoConfig,
@@ -31,6 +32,15 @@ from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
     LeRobotVideoWriter,
 )
+from refiner.pipeline.sinks.lerobot import (
+    LeRobotMetaReduceSink,
+    LeRobotWriterConfig,
+    LeRobotWriterSink,
+)
+from refiner.platform.client.models import FinalizedShardWorker
+from refiner.worker.lifecycle import RuntimeLifecycle
+from refiner.worker.context import set_active_run_context
+from refiner.worker.context import RunHandle
 
 
 _HUB_LEROBOT_MERGE_REPO_IDS = (
@@ -1339,3 +1349,76 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
     tasks = pq.read_table(out_root / "meta" / "tasks.parquet")
     assert tasks.column("task").to_pylist() == ["place", "pick"]
     assert tasks.column("task_index").to_pylist() == [0, 1]
+
+
+class _FinalizedWorkersRuntime:
+    def finalized_workers(
+        self, *, stage_index: int | None = None
+    ) -> list[FinalizedShardWorker]:
+        assert stage_index == 0
+        return [FinalizedShardWorker(shard_id="shard-1", worker_id="2")]
+
+
+def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
+    tmp_path: Path,
+) -> None:
+    out_root = tmp_path / "cleanup"
+    config = LeRobotWriterConfig(root=str(out_root), overwrite=True)
+    row = DictRow(
+        {
+            "episode_index": 0,
+            "task": "pick",
+            "tasks": ["pick"],
+            "frames": [
+                {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
+                {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
+            ],
+            "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+        },
+        shard_id="shard-1",
+    )
+
+    for worker_id, values in [("1", [1.0, 2.0]), ("2", [9.0, 10.0])]:
+        writer = LeRobotWriterSink(config)
+        runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
+        worker_row = row.update(
+            {
+                "frames": [
+                    {
+                        "frame_index": 0,
+                        "timestamp": 0.0,
+                        "observation.state": [values[0]],
+                    },
+                    {
+                        "frame_index": 1,
+                        "timestamp": 0.1,
+                        "observation.state": [values[1]],
+                    },
+                ]
+            }
+        )
+        with set_active_run_context(
+            run_handle=RunHandle(job_id="job", stage_index=0, worker_id=worker_id),
+            runtime_lifecycle=runtime,
+        ):
+            writer.write_block([worker_row])
+            writer.on_shard_complete("shard-1")
+
+    reducer = LeRobotMetaReduceSink(config=config)
+    runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
+    with set_active_run_context(
+        run_handle=RunHandle(job_id="job", stage_index=1, worker_id="local"),
+        runtime_lifecycle=runtime,
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    worker_1 = RunHandle.worker_token_for("1")
+    worker_2 = RunHandle.worker_token_for("2")
+    assert not (out_root / "meta" / f"chunk-shard-1__w{worker_1}").exists()
+    assert not (out_root / "meta" / f"chunk-shard-1__w{worker_2}").exists()
+    assert not (out_root / "data" / f"chunk-shard-1__w{worker_1}").exists()
+    assert (out_root / "data" / f"chunk-shard-1__w{worker_2}").exists()
+    table = pq.read_table(
+        out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    )
+    assert table.column("data/chunk_index").to_pylist() == [f"shard-1__w{worker_2}"]

@@ -19,9 +19,9 @@ def _h_int(*parts: str) -> int:
 class ClaimPolicy:
     BLOCK_SIZE = 8
 
-    def __init__(self, *, job_id: str, worker_id: int):
+    def __init__(self, *, job_id: str, worker_id: str):
         self.job_id = str(job_id)
-        self.worker_id = int(worker_id)
+        self.worker_id = str(worker_id)
 
     def claim(
         self,
@@ -94,7 +94,7 @@ class ClaimPolicy:
                 if total < self.BLOCK_SIZE * 2:
                     continue
                 num_blocks = (total + self.BLOCK_SIZE - 1) // self.BLOCK_SIZE
-                offset = _h_int(self.job_id, str(self.worker_id), start_key) % max(
+                offset = _h_int(self.job_id, self.worker_id, start_key) % max(
                     1, num_blocks
                 )
                 for block_index in range(num_blocks):
@@ -128,7 +128,7 @@ class ClaimPolicy:
 
         start_keys = sorted(
             (start_key for start_key in by_key_pending if start_key not in tried),
-            key=lambda start_key: _h_int(self.job_id, str(self.worker_id), start_key),
+            key=lambda start_key: _h_int(self.job_id, self.worker_id, start_key),
         )
 
         picked = try_blocks(start_keys)
