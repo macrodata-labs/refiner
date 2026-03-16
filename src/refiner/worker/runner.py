@@ -41,10 +41,12 @@ class Worker:
         *,
         run_handle: RunHandle,
         heartbeat_interval_seconds: int = 30,
+        local_workdir: str | None = None,
     ):
         self.pipeline = pipeline
         self.run_handle = run_handle
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
+        self.local_workdir = local_workdir
         if self.heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be > 0")
 
@@ -69,9 +71,8 @@ class Worker:
         if self.run_handle is None:
             raise ValueError("local runtime requires a job_id")
         return LocalRuntimeLifecycle(
-            job_id=self.run_handle.job_id,
-            stage_index=self.run_handle.stage_index,
-            worker_id=uuid4().hex[:12],
+            run=self.run_handle.with_worker(worker_id=uuid4().hex[:12]),
+            workdir=self.local_workdir,
         )
 
     def run(self) -> WorkerRunStats:
@@ -103,6 +104,7 @@ class Worker:
         stop_heartbeat = threading.Event()
 
         if self.run_handle.client is not None:
+            # platform
             runtime_lifecycle, self.run_handle = self._start_platform_session()
             client = self.run_handle.client
             if client is None:
@@ -130,6 +132,7 @@ class Worker:
             else:
                 user_metrics_emitter = telemetry_emitter
         else:
+            # local mode
             local_runtime_lifecycle = self._start_local_session()
             self.run_handle = self.run_handle.with_worker(
                 worker_id=local_runtime_lifecycle.worker_id

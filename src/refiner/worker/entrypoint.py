@@ -37,6 +37,7 @@ def main() -> int:
     parser.add_argument("--worker-name", type=str, default="worker")
     parser.add_argument("--heartbeat-interval-seconds", type=int, default=30)
     parser.add_argument("--stats-path", type=str, default="")
+    parser.add_argument("--workdir", type=str, default=None)
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--mem-mb-per-worker", type=int, default=0)
     args = parser.parse_args()
@@ -79,6 +80,7 @@ def main() -> int:
             pipeline=pipeline,
             run_handle=run_handle,
             heartbeat_interval_seconds=args.heartbeat_interval_seconds,
+            local_workdir=args.workdir,
         ).run()
         _write_stats(
             args.stats_path,

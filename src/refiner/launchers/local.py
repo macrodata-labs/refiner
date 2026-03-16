@@ -87,9 +87,7 @@ class LocalLauncher(BaseLauncher):
         self, *, stage_index: int, shards: list["Shard"]
     ) -> None:
         LocalRuntimeLifecycle(
-            job_id=self.job_id,
-            stage_index=stage_index,
-            worker_id=None,
+            run=RunHandle(job_id=self.job_id, stage_index=stage_index),
             workdir=self.workdir,
         ).seed_shards(shards)
 
@@ -138,6 +136,8 @@ class LocalLauncher(BaseLauncher):
             "refiner.worker.entrypoint",
             "--job-id",
             self.job_id,
+            "--workdir",
+            self.workdir,
             "--heartbeat-interval-seconds",
             str(self.heartbeat_interval_seconds),
             "--runtime-backend",
@@ -163,7 +163,6 @@ class LocalLauncher(BaseLauncher):
 
     def _worker_env(self) -> dict[str, str]:
         env = dict(os.environ)
-        env["REFINER_WORKDIR"] = self.workdir
         src_root = str(Path(__file__).resolve().parents[2])
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = (

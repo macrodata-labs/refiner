@@ -8,6 +8,7 @@ from pathlib import Path
 
 from refiner.pipeline.data.shard import Shard
 from refiner.platform.client.models import FinalizedShardWorker
+from refiner.worker.context import RunHandle
 from refiner.worker.lifecycle.local.claim import ClaimPolicy
 from refiner.worker.lifecycle.local.files import leased_filename
 from refiner.worker.lifecycle.local.files import parse_shard_filename
@@ -45,19 +46,13 @@ class LocalRuntimeLifecycle:
     def __init__(
         self,
         *,
-        job_id: str,
-        stage_index: int = 0,
-        worker_id: str | None,
+        run: RunHandle,
         workdir: str | None = None,
         lease_seconds: int | None = None,
     ):
-        if not job_id:
-            raise ValueError("job_id must be non-empty")
-        if stage_index < 0:
-            raise ValueError("stage_index must be >= 0")
-        self.job_id = str(job_id)
-        self.stage_index = int(stage_index)
-        self.worker_id = str(worker_id) if worker_id is not None else None
+        self.job_id = str(run.job_id)
+        self.stage_index = int(run.stage_index)
+        self.worker_id = str(run.worker_id) if run.worker_id is not None else None
         self.workdir = resolve_workdir(workdir)
         self.lease_seconds = lease_seconds or _runtime_lease_seconds()
 

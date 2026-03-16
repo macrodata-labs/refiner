@@ -3,9 +3,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generator
+from typing import TYPE_CHECKING, Generator
 
 if TYPE_CHECKING:
+    from refiner.platform.client.api import MacrodataClient
     from refiner.worker.lifecycle.base import RuntimeLifecycle
 
 
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 class RunHandle:
     job_id: str
     stage_index: int
-    client: Any | None = None
+    client: "MacrodataClient" | None = None
     workspace_slug: str | None = None
     worker_name: str | None = None
     worker_id: str | None = None
