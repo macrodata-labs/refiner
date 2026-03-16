@@ -179,16 +179,14 @@ class LocalLauncher(BaseLauncher):
             raise RuntimeError(f"worker {rank}: invalid stats output ({err})") from err
 
         if return_code != 0 or "error" in stats:
-            parts: list[str] = []
             stats_error = str(stats.get("error") or "").strip()
             stderr_lines = [line for line in stderr_text.splitlines() if line.strip()]
             stderr_tail = "\n".join(stderr_lines[-20:])
-            if stats_error:
-                parts.append(stats_error)
-            if stderr_tail and stderr_tail != stats_error:
-                parts.append(stderr_tail)
+            parts = [part for part in (stats_error, stderr_tail) if part]
+            if len(parts) == 2 and parts[0] == parts[1]:
+                parts.pop()
             if not parts:
-                parts.append(f"exit code {return_code}")
+                parts = [f"exit code {return_code}"]
             raise RuntimeError(f"worker {rank}: {'; '.join(parts)}")
 
         return (

@@ -128,12 +128,13 @@ class Worker:
         else:
             # local mode
             runtime_lifecycle, self.run_handle = self._start_local_session()
+        runtime_name = "platform" if self.run_handle.client is not None else "file"
         obs_logger.info(
             "worker started job_id={} stage_index={} worker_id={} runtime={}",
             self.run_handle.job_id,
             self.run_handle.stage_index,
             self.run_handle.worker_id,
-            "platform" if self.run_handle.client is not None else "file",
+            runtime_name,
         )
         sink = self.pipeline.sink or NullSink()
 
@@ -336,19 +337,13 @@ class Worker:
                 sink.close()
 
                 if self.run_handle.client is not None:
-                    status = (
-                        "failed"
-                        if execution_error is not None or run_exception is not None
-                        else "completed"
-                    )
+                    current_error = execution_error or run_exception
+                    status = "failed" if current_error is not None else "completed"
                     error = None
-                    if execution_error is not None or run_exception is not None:
-                        current_error = execution_error or run_exception
-                        if current_error is not None:
-                            error = (
-                                str(current_error).strip()
-                                or type(current_error).__name__
-                            )
+                    if current_error is not None:
+                        error = (
+                            str(current_error).strip() or type(current_error).__name__
+                        )
                     try:
                         self.run_handle.client.report_worker_finished(
                             job_id=self.run_handle.job_id,
