@@ -6,6 +6,7 @@ import numpy as np
 
 from refiner.media.video.types import DecodedVideo
 from refiner.pipeline.data.row import Row
+from refiner.pipeline.planning import describe_builtin
 
 
 def _motion_energy(frames: Sequence[Row], key: str) -> np.ndarray:
@@ -45,6 +46,13 @@ def motion_trim(
     if pad_frames < 0:
         raise ValueError("pad_frames must be >= 0")
 
+    @describe_builtin(
+        "robotics:motion_trim",
+        action_key=action_key,
+        state_key=state_key,
+        threshold=threshold,
+        pad_frames=pad_frames,
+    )
     def _trim(row: Row) -> Row:
         frames = row.get("frames")
         first_frame = frames[0] if isinstance(frames, list) and frames else None

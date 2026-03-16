@@ -7,6 +7,7 @@ from typing import Any, Coroutine, Literal
 from refiner.io import DataFile
 from refiner.media.video.types import DecodedVideo, Video, VideoFile
 from refiner.pipeline.data.row import Row
+from refiner.pipeline.planning import describe_builtin
 from refiner.pipeline.utils.cache.decoder_cache import get_video_decoder_cache
 from refiner.pipeline.utils.cache.file_cache import get_media_cache
 
@@ -49,6 +50,7 @@ def hydrate_video(
     if on_error not in {"raise", "null"}:
         raise ValueError("on_error must be 'raise' or 'null'")
 
+    @describe_builtin("video:hydrate_video", columns=list(columns), on_error=on_error)
     async def _map(row: Row) -> Row:
         async def _decode_column(column: str) -> tuple[str, Video | None]:
             try:
