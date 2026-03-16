@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections import deque
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, IO, Any
@@ -27,7 +27,8 @@ from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _serialize_stats,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
-    VideoWriter,
+    DEFAULT_VIDEO_PATH,
+    LeRobotVideoWriter,
     _CompletedVideoRun,
 )
 
@@ -39,7 +40,6 @@ if TYPE_CHECKING:
 
 
 _DEFAULT_DATA_PATH = "data/chunk-{chunk_key}/file-{file_index:03d}.parquet"
-_DEFAULT_VIDEO_PATH = "videos/{video_key}/chunk-{chunk_index}/file-{file_index:03d}.mp4"
 _DEFAULT_CODEBASE_VERSION = "v3.0"
 
 
@@ -118,12 +118,13 @@ class _LeRobotShardWriter:
     _data_writer_file: IO[bytes] | None = field(default=None, init=False)
     _data_schema: pa.Schema | None = field(default=None, init=False)
 
-    _pending_episode_order: deque[int] = field(default_factory=deque, init=False)
-    _pending_episodes: dict[int, _PendingEpisode] = field(
-        default_factory=dict,
+    _pending_episodes: OrderedDict[int, _PendingEpisode] = field(
+        default_factory=OrderedDict,
         init=False,
     )
-    _video_writers: dict[str, VideoWriter] = field(default_factory=dict, init=False)
+    _video_writers: dict[str, LeRobotVideoWriter] = field(
+        default_factory=dict, init=False
+    )
     _video_config: "LeRobotVideoConfig" = field(init=False)
 
     def __post_init__(self) -> None:
@@ -144,6 +145,14 @@ class _LeRobotShardWriter:
     @property
     def _video_bytes_limit(self) -> int:
         return int(self.config.video_files_size_in_mb) * 1024 * 1024
+
+    @property
+    def _pending_episode_soft_limit(self) -> int:
+        return max(
+            int(self.config.chunk_size),
+            int(self.config.media_prelease_max_in_flight)
+            * max(1, len(self._video_writers)),
+        )
 
     @property
     def _has_videos(self) -> bool:
@@ -197,7 +206,6 @@ class _LeRobotShardWriter:
                 continue
             episode_row[key] = value
 
-        self._pending_episode_order.append(episode_index)
         self._pending_episodes[episode_index] = _PendingEpisode(
             row=episode_row,
             frame_stats=frame_stats,
@@ -212,7 +220,14 @@ class _LeRobotShardWriter:
                 source_stats=source_episode_stats.get(key),
             )
 
+        self._drain_video_writers()
         self._flush_ready_episodes()
+        while len(self._pending_episodes) > self._pending_episode_soft_limit:
+            pending_before = len(self._pending_episodes)
+            self._drain_video_writers(force_schedule_pending_runs=True)
+            self._flush_ready_episodes()
+            if len(self._pending_episodes) >= pending_before:
+                break
         self._total_episodes += 1
 
     def finalize(self) -> None:
@@ -263,7 +278,7 @@ class _LeRobotShardWriter:
             "data_files_size_in_mb": self.config.data_files_size_in_mb,
             "video_files_size_in_mb": self.config.video_files_size_in_mb,
             "data_path": _DEFAULT_DATA_PATH,
-            "video_path": _DEFAULT_VIDEO_PATH if self._has_videos else None,
+            "video_path": DEFAULT_VIDEO_PATH if self._has_videos else None,
             "total_episodes": self._total_episodes,
             "total_frames": self._global_frame_index,
         }
@@ -309,7 +324,7 @@ class _LeRobotShardWriter:
     ) -> None:
         writer = self._video_writers.get(video_key)
         if writer is None:
-            writer = VideoWriter(
+            writer = LeRobotVideoWriter(
                 folder=self.folder,
                 chunk_key=self.chunk_key,
                 video_key=video_key,
@@ -317,6 +332,7 @@ class _LeRobotShardWriter:
                 stats_config=self.config.stats,
                 default_fps=self._fps,
                 video_bytes_limit=self._video_bytes_limit,
+                prepare_max_in_flight=self.config.media_prelease_max_in_flight,
             )
             self._video_writers[video_key] = writer
 
@@ -328,11 +344,21 @@ class _LeRobotShardWriter:
             )
         )
 
+    def _drain_video_writers(
+        self, *, force_schedule_pending_runs: bool = False
+    ) -> None:
+        for writer in self._video_writers.values():
+            self._apply_completed_video_runs(
+                writer.drain_completed(
+                    force_schedule_pending_run=force_schedule_pending_runs
+                )
+            )
+
     def _apply_completed_video_runs(
         self,
-        runs: Sequence[_CompletedVideoRun],
+        completed_runs: Sequence[_CompletedVideoRun],
     ) -> None:
-        for run in runs:
+        for run in completed_runs:
             if run.feature is not None:
                 self.features[run.video_key] = run.feature
             for segment in run.segments:
@@ -349,12 +375,9 @@ class _LeRobotShardWriter:
         self._flush_ready_episodes()
 
     def _flush_ready_episodes(self) -> None:
-        while self._pending_episode_order:
-            episode_index = self._pending_episode_order[0]
-            pending = self._pending_episodes.get(episode_index)
-            if pending is None:
-                self._pending_episode_order.popleft()
-                continue
+        while self._pending_episodes:
+            episode_index = next(iter(self._pending_episodes))
+            pending = self._pending_episodes[episode_index]
             if pending.pending_video_keys:
                 break
 
@@ -396,8 +419,7 @@ class _LeRobotShardWriter:
                 )
             )
             self._stats_file.write("\n")
-            self._pending_episode_order.popleft()
-            self._pending_episodes.pop(episode_index, None)
+            self._pending_episodes.popitem(last=False)
 
     def _tasks(self, row: Mapping[str, Any]) -> list[str]:
         tasks = [
@@ -592,6 +614,5 @@ class _LeRobotShardWriter:
 __all__ = [
     "_DEFAULT_CODEBASE_VERSION",
     "_DEFAULT_DATA_PATH",
-    "_DEFAULT_VIDEO_PATH",
     "_LeRobotShardWriter",
 ]

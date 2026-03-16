@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -19,12 +20,16 @@ from refiner.pipeline import (
     LeRobotStatsConfig as PipelineLeRobotStatsConfig,
     LeRobotVideoConfig as PipelineLeRobotVideoConfig,
 )
+from refiner.io import DataFolder
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     _PendingVideoRun,
     _PendingVideoSegment,
     _VIDEO_PROBE_CACHE_MAX_ENTRIES,
     _VideoProbeCache,
     run_can_extend,
+)
+from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
+    LeRobotVideoWriter,
 )
 
 
@@ -1195,6 +1200,52 @@ def test_lerobot_probe_cache_is_bounded() -> None:
         "observation.images.main",
         f"memory://video-{_VIDEO_PROBE_CACHE_MAX_ENTRIES + 4}.mp4",
     ) in cache._cache
+
+
+def test_lerobot_video_writer_can_force_schedule_pending_run(tmp_path: Path) -> None:
+    src_video = tmp_path / "source" / "episode.mp4"
+    _write_video(src_video, fps=10, frames=6)
+
+    writer = LeRobotVideoWriter(
+        folder=DataFolder.resolve(tmp_path / "out"),
+        chunk_key="000",
+        video_key="observation.images.main",
+        video_config=PipelineLeRobotVideoConfig(encoder_threads=1, decoder_threads=1),
+        stats_config=PipelineLeRobotStatsConfig(sample_stride=1, quantile_bins=16),
+        default_fps=10,
+        video_bytes_limit=1024 * 1024,
+        prepare_max_in_flight=1,
+    )
+    media = mdr.MediaFile(str(src_video))
+    writer.submit(
+        episode_index=0,
+        video=mdr.Video(media=media, from_timestamp_s=0.0, to_timestamp_s=0.3),
+        source_stats={"max": np.zeros((3, 1, 1), dtype=np.float64)},
+    )
+    writer.submit(
+        episode_index=1,
+        video=mdr.Video(media=media, from_timestamp_s=0.3, to_timestamp_s=0.6),
+        source_stats={"max": np.zeros((3, 1, 1), dtype=np.float64)},
+    )
+
+    assert writer.drain_completed() == []
+
+    deadline = time.time() + 5.0
+    completed_runs: list[Any] = []
+    while time.time() < deadline and not completed_runs:
+        completed_runs = writer.drain_completed(force_schedule_pending_run=True)
+        if completed_runs:
+            break
+        time.sleep(0.05)
+
+    try:
+        assert len(completed_runs) == 1
+        assert [segment.episode_index for segment in completed_runs[0].segments] == [
+            0,
+            1,
+        ]
+    finally:
+        writer.flush()
 
 
 def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) -> None:

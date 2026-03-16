@@ -5,39 +5,25 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, cast
+from typing import IO, Any, cast
 
 import av
-import numpy as np
 
 from refiner.execution.asyncio.runtime import submit
 from refiner.io import DataFolder
 from refiner.media import MediaFile, Video
 from refiner.media.video.types import DecodedVideo
+from refiner.pipeline.sinks.lerobot._lerobot_video import (
+    _PendingVideoRun,
+    _PendingVideoSegment,
+    run_can_extend,
+)
+
+_ = (_PendingVideoSegment, run_can_extend)
 
 _TIMESTAMP_EPSILON_S = 1e-3
 _VIDEO_PROBE_CACHE_MAX_ENTRIES = 256
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
-
-
-@dataclass(slots=True)
-class _PendingVideoSegment:
-    episode_index: int
-    video: Video
-    source_stats: dict[str, np.ndarray] | None = None
-
-
-@dataclass(slots=True)
-class _PendingVideoRun:
-    video_key: str
-    segments: list[_PendingVideoSegment] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class _PendingRemuxBatch:
-    entries: list[tuple[_PendingVideoRun, _VideoSourceProbe]] = field(
-        default_factory=list
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +40,65 @@ class _VideoSourceProbe:
     packet_boundary_pts: tuple[int, ...]
     keyframe_pts: tuple[int, ...]
     monotonic_pts_dts: bool
+
+
+class RemuxWriter:
+    def __init__(
+        self,
+        *,
+        video_key: str,
+        file_idx: int,
+        probe: _VideoSourceProbe,
+        output_file: IO[bytes],
+        container: Any,
+    ) -> None:
+        self.video_key = video_key
+        self.file_idx = file_idx
+        self.probe = probe
+        self.output_file = output_file
+        self.container = container
+        self.stream: Any | None = None
+        self.output_offset_pts = 0
+        self.duration_s = 0.0
+
+    @classmethod
+    def open(
+        cls,
+        *,
+        folder: DataFolder,
+        video_key: str,
+        file_idx: int,
+        output_rel: str,
+        probe: _VideoSourceProbe,
+    ) -> RemuxWriter:
+        output_abs = folder._join(output_rel)
+        folder.fs.makedirs(folder.fs._parent(output_abs), exist_ok=True)
+        output_file = folder.open(output_rel, mode="wb")
+        try:
+            container = av.open(
+                output_file,
+                mode="w",
+                format="mp4",
+                options={"movflags": _SEGMENTED_MP4_MOVFLAGS},
+            )
+        except Exception:
+            output_file.close()
+            raise
+        return cls(
+            video_key=video_key,
+            file_idx=file_idx,
+            probe=probe,
+            output_file=output_file,
+            container=container,
+        )
+
+    @property
+    def size_bytes(self) -> int:
+        return int(self.output_file.tell())
+
+    def close(self) -> None:
+        self.container.close()
+        self.output_file.close()
 
 
 def _stream_duration_seconds(container: Any, stream: Any) -> float | None:
@@ -76,35 +121,6 @@ def _match_timestamp_to_pts(
         ):
             return int(candidate)
     return None
-
-
-def run_can_extend(run: _PendingVideoRun, video: Video) -> bool:
-    if not run.segments:
-        return True
-
-    prev = run.segments[-1].video
-    if isinstance(prev.media, DecodedVideo) or isinstance(video.media, DecodedVideo):
-        return False
-    return prev.uri == video.uri and (
-        abs(float(prev.to_timestamp_s) - float(video.from_timestamp_s))
-        <= _TIMESTAMP_EPSILON_S
-    )
-
-
-def _run_is_full_source(
-    run: _PendingVideoRun,
-    probe: _VideoSourceProbe,
-) -> bool:
-    if not run.segments:
-        return False
-    first = run.segments[0].video
-    last = run.segments[-1].video
-    if abs(float(first.from_timestamp_s)) > _TIMESTAMP_EPSILON_S:
-        return False
-    return (
-        abs(float(last.to_timestamp_s) - float(probe.duration_s))
-        <= _TIMESTAMP_EPSILON_S
-    )
 
 
 def _run_aligned_pts(
@@ -131,15 +147,6 @@ def _run_aligned_pts(
     return start_pts, end_pts
 
 
-def run_is_remuxable(
-    run: _PendingVideoRun,
-    probe: _VideoSourceProbe,
-) -> bool:
-    if _run_is_full_source(run, probe):
-        return True
-    return _run_aligned_pts(run, probe) is not None
-
-
 def probes_are_remux_compatible(
     left: _VideoSourceProbe,
     right: _VideoSourceProbe,
@@ -154,15 +161,6 @@ def probes_are_remux_compatible(
         and not left.has_audio
         and not right.has_audio
     )
-
-
-def _cached_media_path(video_key: str, video: Video) -> str | None:
-    if not isinstance(video.media, MediaFile):
-        return None
-    cached_path = submit(
-        video.media.cache_file(cache_name=f"lerobot_writer:{video_key}")
-    ).result()
-    return str(cached_path)
 
 
 @dataclass(slots=True)
@@ -188,13 +186,16 @@ class _VideoProbeCache:
                 self._cache.pop(cache_key, None)
                 self._cache[cache_key] = cached
                 return cached
-            if cache_key in self._cache:
-                self._cache.pop(cache_key, None)
+            self._cache.pop(cache_key, None)
 
-        local_path = _cached_media_path(video_key, video)
-        if local_path is None:
+        if not isinstance(video.media, MediaFile):
             self.cache(cache_key, None)
             return None
+        local_path = str(
+            submit(
+                video.media.cache_file(cache_name=f"lerobot_writer:{video_key}")
+            ).result()
+        )
 
         with av.open(local_path, mode="r") as container:
             stream = cast(
@@ -208,20 +209,10 @@ class _VideoProbeCache:
                 self.cache(cache_key, None)
                 return None
             duration_s = _stream_duration_seconds(container, stream)
-            if duration_s is None:
+            if duration_s is None or stream.time_base is None:
                 self.cache(cache_key, None)
                 return None
-            stream_fps = stream.average_rate or stream.base_rate
-            fps = (
-                int(round(float(stream_fps)))
-                if stream_fps is not None
-                else int(default_fps or 30)
-            )
-            codec_obj = getattr(getattr(stream, "codec_context", None), "codec", None)
-            codec = getattr(codec_obj, "canonical_name", None) or getattr(
-                codec_obj, "name", None
-            )
-            pix_fmt = getattr(getattr(stream, "codec_context", None), "pix_fmt", None)
+
             packet_boundary_pts: list[int] = []
             keyframe_pts: list[int] = []
             monotonic_pts_dts = True
@@ -231,11 +222,10 @@ class _VideoProbeCache:
                 packet_boundary_pts.append(int(packet.pts))
                 if packet.is_keyframe:
                     keyframe_pts.append(int(packet.pts))
-                if int(packet.pts) != int(packet.dts):
-                    monotonic_pts_dts = False
-            if stream.time_base is None:
-                self.cache(cache_key, None)
-                return None
+                monotonic_pts_dts &= int(packet.pts) == int(packet.dts)
+
+            stream_fps = stream.average_rate or stream.base_rate
+            codec_obj = getattr(getattr(stream, "codec_context", None), "codec", None)
             duration_pts = (
                 int(stream.duration)
                 if stream.duration is not None
@@ -247,15 +237,32 @@ class _VideoProbeCache:
                 duration_s=float(duration_s),
                 width=int(stream.width),
                 height=int(stream.height),
-                fps=max(1, fps),
+                fps=max(
+                    1,
+                    int(round(float(stream_fps)))
+                    if stream_fps is not None
+                    else int(default_fps or 30),
+                ),
                 time_base=Fraction(cast(Any, stream.time_base)),
-                codec=str(codec) if codec else None,
-                pix_fmt=str(pix_fmt) if pix_fmt else None,
+                codec=str(
+                    getattr(codec_obj, "canonical_name", None)
+                    or getattr(codec_obj, "name", None)
+                )
+                if codec_obj is not None
+                else None,
+                pix_fmt=(
+                    str(
+                        getattr(getattr(stream, "codec_context", None), "pix_fmt", None)
+                    )
+                    if getattr(getattr(stream, "codec_context", None), "pix_fmt", None)
+                    else None
+                ),
                 has_audio=any(item.type == "audio" for item in container.streams),
                 packet_boundary_pts=tuple(sorted(set(packet_boundary_pts))),
                 keyframe_pts=tuple(sorted(set(keyframe_pts))),
                 monotonic_pts_dts=monotonic_pts_dts,
             )
+
         self.cache(cache_key, probe)
         return probe
 
@@ -268,14 +275,12 @@ class _VideoProbeCache:
             self._cache.pop(cache_key, None)
             self._cache[cache_key] = probe
             while len(self._cache) > self.max_entries:
-                oldest_key = next(iter(self._cache))
-                self._cache.pop(oldest_key, None)
+                self._cache.pop(next(iter(self._cache)), None)
 
     def cleanup_video(self, video: Video) -> None:
         with self._lock:
-            self._cache = {
-                key: value for key, value in self._cache.items() if key[1] != video.uri
-            }
+            for key in [key for key in self._cache if key[1] == video.uri]:
+                self._cache.pop(key, None)
         if isinstance(video.media, MediaFile):
             video.media.cleanup()
 
@@ -293,94 +298,69 @@ def probe_run_for_remux(
         for segment in run.segments
     ):
         return None
+
     probe = probe_cache.probe_video_source(
         video_key=run.video_key,
         video=run.segments[0].video,
         default_fps=default_fps,
     )
-    if probe is None or not run_is_remuxable(run, probe):
+    if probe is None:
         return None
-    return probe
+
+    first = run.segments[0].video
+    last = run.segments[-1].video
+    if abs(float(first.from_timestamp_s)) <= _TIMESTAMP_EPSILON_S and (
+        abs(float(last.to_timestamp_s) - float(probe.duration_s))
+        <= _TIMESTAMP_EPSILON_S
+    ):
+        return probe
+    return probe if _run_aligned_pts(run, probe) is not None else None
 
 
-def remux_batch(
+def append_remux_run(
     *,
-    folder: DataFolder,
-    output_rel: str,
-    video_key: str,
-    entries: Sequence[tuple[_PendingVideoRun, _VideoSourceProbe]],
+    writer: RemuxWriter,
+    run: _PendingVideoRun,
+    probe: _VideoSourceProbe,
 ) -> None:
-    if not entries:
-        raise ValueError("remux requires at least one run/probe entry")
+    if not probes_are_remux_compatible(writer.probe, probe):
+        raise ValueError(f"Video run for {writer.video_key!r} is not remux-compatible")
 
-    with folder.open(output_rel, mode="wb") as output_file:
-        output_container = av.open(
-            output_file,
-            mode="w",
-            format="mp4",
-            options={"movflags": _SEGMENTED_MP4_MOVFLAGS},
+    aligned_pts = _run_aligned_pts(run, probe)
+    if aligned_pts is None:
+        raise ValueError(f"Video run for {writer.video_key!r} is not remux-aligned")
+    start_pts, end_pts = aligned_pts
+
+    with av.open(probe.local_path, mode="r") as input_container:
+        input_stream = next(
+            (item for item in input_container.streams if item.type == "video"),
+            None,
         )
-        try:
-            output_stream: Any | None = None
-            output_offset_pts = 0
+        if input_stream is None:
+            raise ValueError(
+                f"Video source for {writer.video_key!r} has no video stream"
+            )
+        if writer.stream is None:
+            writer.stream = writer.container.add_stream_from_template(
+                template=input_stream,
+                opaque=True,
+            )
+            writer.stream.time_base = input_stream.time_base
 
-            for run, probe in entries:
-                aligned_pts = _run_aligned_pts(run, probe)
-                if aligned_pts is None:
-                    raise ValueError(
-                        f"Video run for {video_key!r} is not remux-aligned"
-                    )
-                start_pts, end_pts = aligned_pts
+        for packet in input_container.demux(input_stream):
+            if packet.pts is None or packet.dts is None:
+                continue
+            packet_pts = int(packet.pts)
+            if packet_pts < start_pts:
+                continue
+            if packet_pts >= end_pts:
+                break
+            packet.pts = int(packet.pts) - start_pts + writer.output_offset_pts
+            packet.dts = int(packet.dts) - start_pts + writer.output_offset_pts
+            packet.stream = writer.stream
+            writer.container.mux(packet)
 
-                with av.open(probe.local_path, mode="r") as input_container:
-                    input_stream = next(
-                        (
-                            item
-                            for item in input_container.streams
-                            if item.type == "video"
-                        ),
-                        None,
-                    )
-                    if input_stream is None:
-                        raise ValueError(
-                            f"Video source for {video_key!r} has no video stream"
-                        )
-                    if output_stream is None:
-                        output_stream = output_container.add_stream_from_template(
-                            template=input_stream,
-                            opaque=True,
-                        )
-                        output_stream.time_base = input_stream.time_base
-
-                    for packet in input_container.demux(input_stream):
-                        if packet.pts is None or packet.dts is None:
-                            continue
-                        packet_pts = int(packet.pts)
-                        if packet_pts < start_pts:
-                            continue
-                        if packet_pts >= end_pts:
-                            break
-                        packet.pts = int(packet.pts) - start_pts + output_offset_pts
-                        packet.dts = int(packet.dts) - start_pts + output_offset_pts
-                        packet.stream = output_stream
-                        output_container.mux(packet)
-
-                output_offset_pts += end_pts - start_pts
-        finally:
-            output_container.close()
-
-
-__all__ = [
-    "_PendingRemuxBatch",
-    "_PendingVideoRun",
-    "_PendingVideoSegment",
-    "_TIMESTAMP_EPSILON_S",
-    "_VIDEO_PROBE_CACHE_MAX_ENTRIES",
-    "_VideoProbeCache",
-    "_VideoSourceProbe",
-    "probe_run_for_remux",
-    "probes_are_remux_compatible",
-    "remux_batch",
-    "run_can_extend",
-    "run_is_remuxable",
-]
+    writer.output_offset_pts += end_pts - start_pts
+    writer.duration_s += float(run.segments[-1].video.to_timestamp_s) - float(
+        run.segments[0].video.from_timestamp_s
+    )

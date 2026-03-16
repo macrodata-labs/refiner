@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import TYPE_CHECKING, IO, Any
 
 import av
 import numpy as np
 
+from refiner.io import DataFolder
 from refiner.io.datafile import DataFile
 from refiner.media import Video
 from refiner.media.video.types import DecodedVideo
@@ -21,27 +22,71 @@ if TYPE_CHECKING:
     )
 
 
-# This creates fragmented mp4 files, but not empty moov atoms.
-# This is because we want to be able to append to the video files, and the empty moov atoms
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
 
 @dataclass(slots=True)
-class VideoTrackWriter:
-    chunk_key: str
+class _PendingVideoSegment:
+    episode_index: int
+    video: Video
+    source_stats: dict[str, np.ndarray] | None = None
+
+
+@dataclass(slots=True)
+class _PendingVideoRun:
     video_key: str
-    file_idx: int
-    fps: int
-    config: "LeRobotVideoConfig"
+    segments: list[_PendingVideoSegment] = field(default_factory=list)
 
-    container: Any | None = None
-    stream: Any | None = None
-    output_file: IO[bytes] | None = None
-    frames_written: int = 0
-    duration_s: float = 0.0
 
-    def __post_init__(self) -> None:
-        self.fps = int(self.fps)
+class VideoTrackWriter:
+    def __init__(
+        self,
+        *,
+        chunk_key: str,
+        video_key: str,
+        file_idx: int,
+        fps: int,
+        config: "LeRobotVideoConfig",
+    ) -> None:
+        self.chunk_key = chunk_key
+        self.video_key = video_key
+        self.file_idx = file_idx
+        self.fps = int(fps)
+        self.config = config
+        self.container: Any | None = None
+        self.stream: Any | None = None
+        self.output_file: IO[bytes] | None = None
+        self.frames_written = 0
+        self.duration_s = 0.0
+
+    @classmethod
+    def open(
+        cls,
+        *,
+        folder: DataFolder,
+        output_rel: str,
+        chunk_key: str,
+        video_key: str,
+        file_idx: int,
+        fps: int,
+        config: "LeRobotVideoConfig",
+    ) -> VideoTrackWriter:
+        output_abs = folder._join(output_rel)
+        folder.fs.makedirs(folder.fs._parent(output_abs), exist_ok=True)
+        output_file = folder.open(output_rel, mode="wb")
+        writer = cls(
+            chunk_key=chunk_key,
+            video_key=video_key,
+            file_idx=file_idx,
+            fps=fps,
+            config=config,
+        )
+        try:
+            writer._open_output(output_file)
+        except Exception:
+            output_file.close()
+            raise
+        return writer
 
     @property
     def size_bytes(self) -> int:
@@ -49,7 +94,7 @@ class VideoTrackWriter:
             return 0
         return int(self.output_file.tell())
 
-    def open(self, output: IO[bytes]) -> None:
+    def _open_output(self, output: IO[bytes]) -> None:
         if self.container is not None:
             return
 
@@ -130,6 +175,18 @@ class VideoTrackWriter:
         if output_file is not None:
             output_file.close()
             self.output_file = None
+
+
+def run_can_extend(run: _PendingVideoRun, video: Video) -> bool:
+    if not run.segments:
+        return True
+
+    prev = run.segments[-1].video
+    if isinstance(prev.media, DecodedVideo) or isinstance(video.media, DecodedVideo):
+        return False
+    return prev.uri == video.uri and (
+        abs(float(prev.to_timestamp_s) - float(video.from_timestamp_s)) <= 1e-3
+    )
 
 
 def _auto_downsample_height_width(
@@ -273,7 +330,7 @@ async def _append_video_segment_from_media(
         nonlocal selected_frames, frame_index
         writer.ensure_stream(width=frame.width, height=frame.height)
         writer.write_frame(frame)
-        if tracker is not None and frame_index % sample_stride == 0:
+        if frame_index % sample_stride == 0:
             _update_video_stats_if_due(
                 tracker=tracker,
                 frame_index=frame_index,
