@@ -158,25 +158,38 @@ class BaseReader(BaseSource):
         Notes:
             - Splittable files contribute raw byte spans.
             - Atomic files stay whole with `start=0, end=-1`.
-            - `num_shards` partitions total planned bytes; otherwise `target_shard_bytes`
-              controls shard size heuristically.
+            - `num_shards` produces exactly that many planned byte buckets when possible;
+              otherwise `target_shard_bytes` controls shard size heuristically.
         """
         num_shards = self.num_shards
+        shard_sizes: list[int] | None = None
         if num_shards is None or num_shards <= 0:
             target_bytes = self.target_shard_bytes
         else:
-            # `num_shards` partitions the total planned byte span across all resolved files.
-            total_size = 0
-            for source_index, files in enumerate(self.fileset.expand_sources()):
-                for file in files:
-                    total_size += self.fileset.size(source_index, file.abs_path())
-            target_bytes = 1 if total_size <= 0 else max(1, total_size // num_shards)
+            # `num_shards` defines exact global byte buckets; the last bucket absorbs any
+            # remainder instead of creating an extra shard.
+            total_size = sum(
+                self.fileset.size(source_index, file.abs_path())
+                for source_index, files in enumerate(self.fileset.expand_sources())
+                for file in files
+            )
+            if total_size <= 0:
+                target_bytes = 1
+            else:
+                base, remainder = divmod(total_size, num_shards)
+                # Spread the leftover bytes across the first shards instead of creating
+                # one oversized remainder shard at the end.
+                shard_sizes = [base + (i < remainder) for i in range(num_shards)]
+                target_bytes = max(1, shard_sizes[0])
         shards: list[Shard] = []
         current_parts: list[FilePart] = []
         current_size = 0
 
+        def can_flush_more() -> bool:
+            return shard_sizes is None or len(shards) < len(shard_sizes) - 1
+
         def flush() -> None:
-            nonlocal current_parts, current_size
+            nonlocal current_parts, current_size, target_bytes
             if not current_parts:
                 return
             shards.append(
@@ -184,6 +197,8 @@ class BaseReader(BaseSource):
             )
             current_parts = []
             current_size = 0
+            if shard_sizes is not None and len(shards) < len(shard_sizes):
+                target_bytes = max(1, shard_sizes[len(shards)])
 
         for source_index, files in enumerate(self.fileset.expand_sources()):
             for file in files:
@@ -193,7 +208,11 @@ class BaseReader(BaseSource):
                 if not self.split_by_bytes or not is_splittable_by_bytes(
                     file.fs, file.path
                 ):
-                    if current_parts and current_size + size > target_bytes:
+                    if (
+                        current_parts
+                        and current_size + size > target_bytes
+                        and can_flush_more()
+                    ):
                         flush()
                     current_parts.append(
                         FilePart(
@@ -209,9 +228,14 @@ class BaseReader(BaseSource):
                 offset = 0
                 while offset < size:
                     # Splittable files are planned as raw byte spans; readers snap these to real boundaries later.
-                    if current_size >= target_bytes:
+                    if current_size >= target_bytes and can_flush_more():
                         flush()
-                    span_size = min(size - offset, target_bytes - current_size)
+                    remaining_capacity = target_bytes - current_size
+                    span_size = (
+                        size - offset
+                        if remaining_capacity <= 0
+                        else min(size - offset, remaining_capacity)
+                    )
                     current_parts.append(
                         FilePart(
                             path=path,

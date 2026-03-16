@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from fsspec.implementations.memory import MemoryFileSystem
+import pytest
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -108,3 +109,25 @@ def test_parquet_reader_reads_across_mixed_local_and_memory_files() -> None:
 
         assert _pipeline_values(pipeline) == [1, 2]
         assert len(pipeline.source.list_shards()) == 1
+
+
+@pytest.mark.parametrize("split_sources", [False, True])
+def test_parquet_num_shards_is_exact(split_sources: bool) -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        first_dir = root / "first"
+        second_dir = root / "second"
+        first_dir.mkdir()
+        second_dir.mkdir()
+        first_path = first_dir / "a.parquet"
+        second_path = second_dir / "b.parquet"
+        _write_parquet(first_path, list(range(10)))
+        _write_parquet(second_path, list(range(10, 20)))
+        inputs = (
+            [str(first_path), str(second_path)]
+            if not split_sources
+            else [DataFolder(str(first_dir)), DataFolder(str(second_dir))]
+        )
+        shards = read_parquet(inputs, num_shards=5).source.list_shards()
+
+        assert len(shards) == 5
