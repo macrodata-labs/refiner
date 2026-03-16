@@ -26,13 +26,6 @@ from refiner.worker.metrics.context import (
 from refiner.worker.metrics.otel import OtelTelemetryEmitter
 
 
-def _error_message(error: BaseException | None) -> str | None:
-    if error is None:
-        return None
-    message = str(error).strip()
-    return message or type(error).__name__
-
-
 @dataclass(frozen=True, slots=True)
 class WorkerRunStats:
     claimed: int = 0
@@ -157,11 +150,12 @@ class Worker:
                 try:
                     _heartbeat_once()
                 except Exception as e:  # noqa: BLE001
+                    message = str(e).strip() or type(e).__name__
                     obs_logger.warning(
                         "heartbeat failed for worker_id={}: {}: {}",
                         self.run_handle.worker_id,
                         type(e).__name__,
-                        _error_message(e),
+                        message,
                     )
                     heartbeat_error = e
                     return
@@ -293,7 +287,7 @@ class Worker:
                     if completion_error is e:
                         raise
                     execution_error = e
-                    failed_error = _error_message(e)
+                    failed_error = str(e).strip() or type(e).__name__
                     with inflight_lock:
                         failed_shards = list(inflight_by_id.values())
                         inflight_by_id.clear()
@@ -347,7 +341,14 @@ class Worker:
                         if execution_error is not None or run_exception is not None
                         else "completed"
                     )
-                    error = _error_message(execution_error or run_exception)
+                    error = None
+                    if execution_error is not None or run_exception is not None:
+                        current_error = execution_error or run_exception
+                        if current_error is not None:
+                            error = (
+                                str(current_error).strip()
+                                or type(current_error).__name__
+                            )
                     try:
                         self.run_handle.client.report_worker_finished(
                             job_id=self.run_handle.job_id,
