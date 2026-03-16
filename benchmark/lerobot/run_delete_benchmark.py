@@ -263,11 +263,14 @@ def _run_official_case(
     iteration: int,
     output_root: str | None,
 ) -> CaseResult:
-    from lerobot.datasets.dataset_tools import (
-        delete_episodes as delete_lerobot_episodes,
-    )
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from importlib import import_module
+
     from huggingface_hub import create_bucket, sync_bucket
+
+    delete_lerobot_episodes = import_module(
+        "lerobot.datasets.dataset_tools"
+    ).delete_episodes
+    LeRobotDataset = import_module("lerobot.datasets.lerobot_dataset").LeRobotDataset
 
     hf_home = run_dir / "hf-home"
     local_output_root = run_dir / "deleted-official"

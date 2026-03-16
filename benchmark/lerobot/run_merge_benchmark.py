@@ -220,9 +220,12 @@ def _run_official_case(
     iteration: int,
     output_root: str | None,
 ) -> CaseResult:
-    from lerobot.datasets.dataset_tools import merge_datasets
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from importlib import import_module
+
     from huggingface_hub import create_bucket, sync_bucket
+
+    merge_datasets = import_module("lerobot.datasets.dataset_tools").merge_datasets
+    LeRobotDataset = import_module("lerobot.datasets.lerobot_dataset").LeRobotDataset
 
     hf_home = run_dir / "hf-home"
     local_output_root = run_dir / "merged-official"
