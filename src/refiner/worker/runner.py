@@ -158,7 +158,7 @@ class Worker:
                     _heartbeat_once()
                 except Exception as e:  # noqa: BLE001
                     obs_logger.warning(
-                        "heartbeat failed worker_id={} error={} {}",
+                        "heartbeat failed for worker_id={}: {}: {}",
                         self.run_handle.worker_id,
                         type(e).__name__,
                         _error_message(e),
