@@ -11,12 +11,15 @@ import av
 
 from refiner.execution.asyncio.runtime import submit
 from refiner.io import DataFolder
-from refiner.media import MediaFile, Video
-from refiner.media.video.types import DecodedVideo
+from refiner.media import Video
+from refiner.media.video.types import DecodedVideo, VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_video import (
     _PendingVideoRun,
     _PendingVideoSegment,
     run_can_extend,
+    video_from_timestamp_s,
+    video_to_timestamp_s,
+    video_uri,
 )
 
 _ = (_PendingVideoSegment, run_can_extend)
@@ -131,14 +134,17 @@ def _run_aligned_pts(
         return None
 
     start_pts = _match_timestamp_to_pts(
-        float(run.segments[0].video.from_timestamp_s),
+        video_from_timestamp_s(run.segments[0].video),
         probe.keyframe_pts,
         probe.time_base,
     )
     if start_pts is None:
         return None
+    run_end_s = video_to_timestamp_s(run.segments[-1].video)
+    if run_end_s is None:
+        return None
     end_pts = _match_timestamp_to_pts(
-        float(run.segments[-1].video.to_timestamp_s),
+        run_end_s,
         probe.packet_boundary_pts,
         probe.time_base,
     )
@@ -179,7 +185,7 @@ class _VideoProbeCache:
         video: Video,
         default_fps: int | None,
     ) -> _VideoSourceProbe | None:
-        cache_key = (video_key, video.uri)
+        cache_key = (video_key, video_uri(video))
         with self._lock:
             cached = self._cache.get(cache_key)
             if cached is not None and Path(cached.local_path).exists():
@@ -188,13 +194,11 @@ class _VideoProbeCache:
                 return cached
             self._cache.pop(cache_key, None)
 
-        if not isinstance(video.media, MediaFile):
+        if not isinstance(video, VideoFile):
             self.cache(cache_key, None)
             return None
         local_path = str(
-            submit(
-                video.media.cache_file(cache_name=f"lerobot_writer:{video_key}")
-            ).result()
+            submit(video.cache_file(cache_name=f"lerobot_writer:{video_key}")).result()
         )
 
         with av.open(local_path, mode="r") as container:
@@ -278,11 +282,14 @@ class _VideoProbeCache:
                 self._cache.pop(next(iter(self._cache)), None)
 
     def cleanup_video(self, video: Video) -> None:
+        uri = video_uri(video)
         with self._lock:
-            for key in [key for key in self._cache if key[1] == video.uri]:
+            for key in [key for key in self._cache if key[1] == uri]:
                 self._cache.pop(key, None)
-        if isinstance(video.media, MediaFile):
-            video.media.cleanup()
+        if isinstance(video, VideoFile):
+            video.cleanup()
+        elif isinstance(video, DecodedVideo):
+            video.original_file.cleanup()
 
 
 def probe_run_for_remux(
@@ -294,7 +301,7 @@ def probe_run_for_remux(
     if not run.segments:
         return None
     if any(
-        isinstance(segment.video.media, DecodedVideo) or segment.source_stats is None
+        isinstance(segment.video, DecodedVideo) or segment.source_stats is None
         for segment in run.segments
     ):
         return None
@@ -309,9 +316,11 @@ def probe_run_for_remux(
 
     first = run.segments[0].video
     last = run.segments[-1].video
-    if abs(float(first.from_timestamp_s)) <= _TIMESTAMP_EPSILON_S and (
-        abs(float(last.to_timestamp_s) - float(probe.duration_s))
-        <= _TIMESTAMP_EPSILON_S
+    last_to = video_to_timestamp_s(last)
+    if (
+        abs(video_from_timestamp_s(first)) <= _TIMESTAMP_EPSILON_S
+        and last_to is not None
+        and abs(last_to - float(probe.duration_s)) <= _TIMESTAMP_EPSILON_S
     ):
         return probe
     return probe if _run_aligned_pts(run, probe) is not None else None
@@ -361,6 +370,7 @@ def append_remux_run(
             writer.container.mux(packet)
 
     writer.output_offset_pts += end_pts - start_pts
-    writer.duration_s += float(run.segments[-1].video.to_timestamp_s) - float(
-        run.segments[0].video.from_timestamp_s
-    )
+    run_end_s = video_to_timestamp_s(run.segments[-1].video)
+    if run_end_s is None:
+        raise ValueError(f"Video run for {writer.video_key!r} is missing an end time")
+    writer.duration_s += run_end_s - video_from_timestamp_s(run.segments[0].video)

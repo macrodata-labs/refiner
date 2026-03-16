@@ -18,6 +18,9 @@ from refiner.pipeline.sinks.lerobot._lerobot_video import (
     _append_video_segment,
     _resolve_video_fps,
     run_can_extend,
+    video_from_timestamp_s,
+    video_to_timestamp_s,
+    video_uri,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     RemuxWriter,
@@ -340,8 +343,8 @@ class LeRobotVideoWriter:
             clip_duration_s, clip_stats = await _append_video_segment(
                 writer=writer,
                 video=segment.video,
-                clip_from=segment.video.from_timestamp_s,
-                clip_to=segment.video.to_timestamp_s,
+                clip_from=video_from_timestamp_s(segment.video),
+                clip_to=video_to_timestamp_s(segment.video),
                 video_config=self.video_config,
                 stats_config=self.stats_config,
             )
@@ -438,9 +441,14 @@ def _completed_remux_run(
     probe_cache: _VideoProbeCache,
     video_config: "LeRobotVideoConfig",
 ) -> _CompletedVideoRun:
-    run_start_s = float(run.segments[0].video.from_timestamp_s)
+    run_start_s = video_from_timestamp_s(run.segments[0].video)
     segments: list[_CompletedVideoSegment] = []
     for segment in run.segments:
+        segment_to = video_to_timestamp_s(segment.video)
+        if segment_to is None:
+            raise ValueError(
+                f"Video segment for {video_uri(segment.video)!r} is missing an end time"
+            )
         segments.append(
             _CompletedVideoSegment(
                 episode_index=segment.episode_index,
@@ -450,13 +458,11 @@ def _completed_remux_run(
                     f"videos/{video_key}/file_index": file_idx,
                     f"videos/{video_key}/from_timestamp": (
                         base_duration_s
-                        + float(segment.video.from_timestamp_s)
+                        + video_from_timestamp_s(segment.video)
                         - run_start_s
                     ),
                     f"videos/{video_key}/to_timestamp": (
-                        base_duration_s
-                        + float(segment.video.to_timestamp_s)
-                        - run_start_s
+                        base_duration_s + segment_to - run_start_s
                     ),
                 },
                 video_stats=dict(segment.source_stats or {}),

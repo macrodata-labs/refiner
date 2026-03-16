@@ -10,7 +10,7 @@ import numpy as np
 from refiner.io import DataFolder
 from refiner.io.datafile import DataFile
 from refiner.media import Video
-from refiner.media.video.types import DecodedVideo
+from refiner.media.video.types import DecodedVideo, VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_stats import _RunningQuantileStats
 from refiner.pipeline.utils.cache.decoder_cache import get_video_decoder_cache
 from refiner.pipeline.utils.cache.file_cache import get_media_cache
@@ -182,11 +182,34 @@ def run_can_extend(run: _PendingVideoRun, video: Video) -> bool:
         return True
 
     prev = run.segments[-1].video
-    if isinstance(prev.media, DecodedVideo) or isinstance(video.media, DecodedVideo):
+    if isinstance(prev, DecodedVideo) or isinstance(video, DecodedVideo):
         return False
-    return prev.uri == video.uri and (
-        abs(float(prev.to_timestamp_s) - float(video.from_timestamp_s)) <= 1e-3
+    prev_to = video_to_timestamp_s(prev)
+    return (
+        prev_to is not None
+        and video_uri(prev) == video_uri(video)
+        and abs(prev_to - video_from_timestamp_s(video)) <= 1e-3
     )
+
+
+def video_from_timestamp_s(video: Video) -> float:
+    if isinstance(video, DecodedVideo):
+        return float(video.original_file.from_timestamp_s or 0.0)
+    return float(video.from_timestamp_s or 0.0)
+
+
+def video_to_timestamp_s(video: Video) -> float | None:
+    if isinstance(video, DecodedVideo):
+        raw = video.original_file.to_timestamp_s
+    else:
+        raw = video.to_timestamp_s
+    return None if raw is None else float(raw)
+
+
+def video_uri(video: Video) -> str:
+    if isinstance(video, DecodedVideo):
+        return str(video.original_file.uri)
+    return str(video.uri)
 
 
 def _auto_downsample_height_width(
@@ -259,10 +282,10 @@ async def _resolve_video_fps(
     if default_fps is not None:
         return int(round(float(default_fps)))
 
-    if isinstance(video.media, DecodedVideo):
+    if isinstance(video, DecodedVideo):
         return 30
 
-    data_file = DataFile.resolve(video.media.uri)
+    data_file = DataFile.resolve(video.uri)
     cache_name = f"lerobot_writer:{video_key}"
     media_cache = get_media_cache(name=cache_name)
     decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
@@ -277,7 +300,7 @@ async def _append_video_segment(
     writer: VideoTrackWriter,
     video: Video,
     clip_from: float,
-    clip_to: float,
+    clip_to: float | None,
     video_config: "LeRobotVideoConfig",
     stats_config: "LeRobotStatsConfig",
 ) -> tuple[float, dict[str, np.ndarray]]:
@@ -287,10 +310,10 @@ async def _append_video_segment(
         num_quantile_bins=stats_config.quantile_bins,
     )
 
-    if isinstance(video.media, DecodedVideo):
+    if isinstance(video, DecodedVideo):
         duration_s = _append_video_segment_from_frames(
             writer=writer,
-            video=video.media,
+            video=video,
             tracker=tracker,
             sample_stride=sample_stride,
         )
@@ -311,16 +334,16 @@ async def _append_video_segment(
 async def _append_video_segment_from_media(
     *,
     writer: VideoTrackWriter,
-    video: Video,
+    video: VideoFile,
     clip_from: float,
-    clip_to: float,
+    clip_to: float | None,
     tracker: _RunningQuantileStats,
     sample_stride: int,
     video_config: "LeRobotVideoConfig",
 ) -> float:
     selected_frames = 0
     frame_index = 0
-    data_file = DataFile.resolve(video.media.uri)
+    data_file = DataFile.resolve(video.uri)
     cache_name = f"lerobot_writer:{writer.video_key}"
     media_cache = get_media_cache(name=cache_name)
     decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
@@ -376,7 +399,7 @@ def _append_video_segment_from_frames(
 ) -> float:
     if not video.frames:
         raise ValueError(
-            f"Decoded video segment for {video.uri!r} contains no decodable frames."
+            f"Decoded video segment for {video.original_file.uri!r} contains no decodable frames."
         )
 
     width = video.width

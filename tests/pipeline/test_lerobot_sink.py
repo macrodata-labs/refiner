@@ -14,14 +14,19 @@ import pyarrow.parquet as pq
 import pytest
 
 import refiner as mdr
-from refiner.media import hydrate_media
+from refiner.io import DataFolder
+from refiner.media import hydrate_video
 from refiner.media.video.types import DecodedVideo
-from refiner.pipeline.data.row import DictRow
 from refiner.pipeline import (
     LeRobotStatsConfig as PipelineLeRobotStatsConfig,
     LeRobotVideoConfig as PipelineLeRobotVideoConfig,
 )
-from refiner.io import DataFolder
+from refiner.pipeline.data.row import DictRow
+from refiner.pipeline.sinks.lerobot import (
+    LeRobotMetaReduceSink,
+    LeRobotWriterConfig,
+    LeRobotWriterSink,
+)
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     _PendingVideoRun,
     _PendingVideoSegment,
@@ -29,18 +34,10 @@ from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     _VideoProbeCache,
     run_can_extend,
 )
-from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
-    LeRobotVideoWriter,
-)
-from refiner.pipeline.sinks.lerobot import (
-    LeRobotMetaReduceSink,
-    LeRobotWriterConfig,
-    LeRobotWriterSink,
-)
+from refiner.pipeline.sinks.lerobot._lerobot_video_writer import LeRobotVideoWriter
 from refiner.platform.client.models import FinalizedShardWorker
+from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.lifecycle import RuntimeLifecycle
-from refiner.worker.context import set_active_run_context
-from refiner.worker.context import RunHandle
 
 
 _HUB_LEROBOT_MERGE_REPO_IDS = (
@@ -558,8 +555,8 @@ def _episode(
             }
             for i, v in enumerate(values)
         ],
-        "observation.images.main": mdr.Video(
-            media=mdr.MediaFile(str(video_path)),
+        "observation.images.main": mdr.VideoFile(
+            str(video_path),
             from_timestamp_s=from_ts,
             to_timestamp_s=to_ts,
         ),
@@ -1161,7 +1158,7 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
                 ),
             ]
         )
-        .map_async(hydrate_media("observation.images.main"))
+        .map_async(hydrate_video("observation.images.main"))
         .write_lerobot(str(out_root), overwrite=True)
     )
 
@@ -1184,12 +1181,12 @@ def test_lerobot_decoded_video_runs_are_non_extendable() -> None:
             np.zeros((16, 16, 3), dtype=np.uint8),
             np.zeros((16, 16, 3), dtype=np.uint8),
         ),
-        uri="memory://decoded.mp4",
+        original_file=mdr.VideoFile("memory://decoded.mp4"),
         width=16,
         height=16,
     )
-    first = mdr.Video(media=decoded, from_timestamp_s=0.0, to_timestamp_s=0.2)
-    second = mdr.Video(media=decoded, from_timestamp_s=0.2, to_timestamp_s=0.4)
+    first = decoded
+    second = decoded
     run = _PendingVideoRun(
         video_key="observation.images.main",
         segments=[_PendingVideoSegment(episode_index=0, video=first)],
@@ -1226,15 +1223,14 @@ def test_lerobot_video_writer_can_force_schedule_pending_run(tmp_path: Path) -> 
         video_bytes_limit=1024 * 1024,
         prepare_max_in_flight=1,
     )
-    media = mdr.MediaFile(str(src_video))
     writer.submit(
         episode_index=0,
-        video=mdr.Video(media=media, from_timestamp_s=0.0, to_timestamp_s=0.3),
+        video=mdr.VideoFile(str(src_video), from_timestamp_s=0.0, to_timestamp_s=0.3),
         source_stats={"max": np.zeros((3, 1, 1), dtype=np.float64)},
     )
     writer.submit(
         episode_index=1,
-        video=mdr.Video(media=media, from_timestamp_s=0.3, to_timestamp_s=0.6),
+        video=mdr.VideoFile(str(src_video), from_timestamp_s=0.3, to_timestamp_s=0.6),
         source_stats={"max": np.zeros((3, 1, 1), dtype=np.float64)},
     )
 

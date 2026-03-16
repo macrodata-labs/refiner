@@ -6,11 +6,11 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from refiner.media import Video
 from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_EPISODE_STATS,
-    LeRobotEpisodeReader,
 )
+from refiner.media import VideoFile
+from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -151,7 +151,7 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert int(first_frames[1]["frame_index"]) == 1
 
     video = first["observation.images.main"]
-    assert isinstance(video, Video)
+    assert isinstance(video, VideoFile)
     assert video.uri.endswith("/videos/observation.images.main/chunk-000/file-000.mp4")
     assert video.from_timestamp_s == 0.0
     assert video.to_timestamp_s == 1.0

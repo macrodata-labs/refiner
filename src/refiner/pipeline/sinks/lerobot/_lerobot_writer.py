@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pyarrow as pa
-
 from fsspec.spec import AbstractFileSystem
 
 from refiner.execution.operators.vectorized import iter_table_rows
@@ -17,7 +16,6 @@ from refiner.pipeline.sinks.base import (
 )
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import _LeRobotShardWriter
 from refiner.worker.context import get_active_run_handle
-
 
 _DEFAULT_CHUNK_SIZE = 1000
 _DEFAULT_DATA_FILE_SIZE_IN_MB = 100

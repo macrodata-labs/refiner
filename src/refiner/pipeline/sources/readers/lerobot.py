@@ -14,8 +14,9 @@ import pyarrow.parquet as pq
 from fsspec.spec import AbstractFileSystem
 
 from refiner.execution.asyncio.window import AsyncWindow
-from refiner.io.datafolder import DataFolder, DataFolderLike, DataFolderSpec
-from refiner.media import MediaFile, Video
+from refiner.io import DataFolder
+from refiner.io.datafolder import DataFolderLike, DataFolderSpec
+from refiner.media import VideoFile
 from refiner.pipeline.data.row import ArrowRowView, DictRow, Row
 from refiner.pipeline.data.shard import FilePartsDescriptor, Shard
 from refiner.pipeline.sources.base import SourceUnit
@@ -246,7 +247,7 @@ class LeRobotEpisodeReader(ParquetReader):
         episode: Mapping[str, Any],
         video_key: str,
         source_index: int,
-    ) -> Video | None:
+    ) -> VideoFile | None:
         dataset = self._get_datasets()[source_index]
         chunk_key = f"videos/{video_key}/chunk_index"
         file_key = f"videos/{video_key}/file_index"
@@ -278,8 +279,8 @@ class LeRobotEpisodeReader(ParquetReader):
         except (TypeError, ValueError):
             return None
 
-        return Video(
-            media=MediaFile(uri),
+        return VideoFile(
+            uri=uri,
             from_timestamp_s=from_timestamp_s,
             to_timestamp_s=to_timestamp_s,
         )

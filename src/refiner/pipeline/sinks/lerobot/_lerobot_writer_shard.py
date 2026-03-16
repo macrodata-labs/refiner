@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from refiner.io import DataFolder
-from refiner.media import Video
+from refiner.media import DecodedVideo, Video, VideoFile
 from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_EPISODE_STATS,
     LEROBOT_INFO,
@@ -479,7 +479,9 @@ class _LeRobotShardWriter:
         }.items():
             self.features.setdefault(key, spec)
 
-        video_count = sum(1 for value in row.values() if isinstance(value, Video))
+        video_count = sum(
+            1 for value in row.values() if isinstance(value, (VideoFile, DecodedVideo))
+        )
         self._video_config = replace(
             self.config.video,
             encoder_threads=_resolve_video_threads(
@@ -493,7 +495,7 @@ class _LeRobotShardWriter:
         )
 
     def _feature_spec(self, value: Any) -> dict[str, Any] | None:
-        if isinstance(value, Video):
+        if isinstance(value, (VideoFile, DecodedVideo)):
             return {"dtype": "video", "shape": None, "names": None, "info": None}
         if isinstance(value, bool):
             return {"dtype": "bool", "shape": [1], "names": None}
