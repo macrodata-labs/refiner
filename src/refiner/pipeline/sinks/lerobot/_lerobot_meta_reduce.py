@@ -21,10 +21,10 @@ from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import (
     _DEFAULT_CODEBASE_VERSION,
 )
 from refiner.worker.context import (
+    RunHandle,
     get_active_run_handle,
     get_active_runtime_lifecycle,
 )
-from refiner.worker.id import worker_token
 
 
 __all__ = ["LeRobotMetaReduceSink"]
@@ -298,4 +298,7 @@ class _LeRobotMetaReducer:
         if runtime_lifecycle is None or stage_index is None or stage_index <= 0:
             raise ValueError("LeRobot stage-2 reduce requires active runtime context")
         rows = runtime_lifecycle.finalized_workers(stage_index=stage_index - 1)
-        return {f"{row.shard_id}__w{worker_token(row.worker_id)}" for row in rows}
+        return {
+            f"{row.shard_id}__w{RunHandle.worker_token_for(row.worker_id)}"
+            for row in rows
+        }

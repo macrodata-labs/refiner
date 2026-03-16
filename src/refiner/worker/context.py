@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -18,6 +19,16 @@ class RunHandle:
     workspace_slug: str | None = None
     worker_name: str | None = None
     worker_id: str | None = None
+
+    @staticmethod
+    def worker_token_for(worker_id: str) -> str:
+        digest = hashlib.blake2b(digest_size=6)
+        digest.update(worker_id.encode("utf-8"))
+        return digest.hexdigest()
+
+    @property
+    def worker_token(self) -> str:
+        return self.worker_token_for(self.worker_id or "local")
 
     def with_worker(
         self,

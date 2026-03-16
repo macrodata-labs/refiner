@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from refiner.worker.id import worker_token
+from refiner.worker.context import RunHandle
 
 
 _RE_SHARD_FILENAME = re.compile(
@@ -16,7 +16,7 @@ def pending_filename(shard_id: str) -> str:
 
 
 def leased_filename(shard_id: str, worker_id: str) -> str:
-    return f"{shard_id}__w{worker_token(worker_id)}.json"
+    return f"{shard_id}__w{RunHandle.worker_token_for(worker_id)}.json"
 
 
 def parse_shard_filename(filename: str) -> tuple[str, str | None]:
