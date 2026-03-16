@@ -25,6 +25,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
                 job_id = "job-123"
                 stage_index = 0
                 status = "queued"
+                workspace_slug = None
 
             return _Resp()
 
@@ -104,6 +105,7 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
                 job_id = "job-123"
                 stage_index = 0
                 status = "queued"
+                workspace_slug = None
 
             return _Resp()
 
@@ -154,6 +156,7 @@ def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
                 job_id = "job-123"
                 stage_index = 0
                 status = "queued"
+                workspace_slug = None
 
             return _Resp()
 
@@ -214,6 +217,7 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
                 job_id = "job-123"
                 stage_index = 0
                 status = "queued"
+                workspace_slug = None
 
             return _Resp()
 
@@ -314,6 +318,7 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
                 job_id = "job-123"
                 stage_index = 0
                 status = "queued"
+                workspace_slug = None
 
             return _Resp()
 
