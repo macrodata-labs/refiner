@@ -128,11 +128,7 @@ class _LeRobotShardWriter:
     _video_config: "LeRobotVideoConfig" = field(init=False)
 
     def __post_init__(self) -> None:
-        self.folder = DataFolder.resolve(
-            self.config.root,
-            fs=self.config.fs,
-            storage_options=self.config.storage_options,
-        )
+        self.folder = DataFolder.resolve(self.config.output)
         self._video_config = self.config.video
 
     def _meta_path(self, filename: str) -> str:
@@ -148,11 +144,7 @@ class _LeRobotShardWriter:
 
     @property
     def _pending_episode_soft_limit(self) -> int:
-        return max(
-            int(self.config.chunk_size),
-            int(self.config.media_prelease_max_in_flight)
-            * max(1, len(self._video_writers)),
-        )
+        return int(self.config.max_buffered_episodes) * max(1, len(self._video_writers))
 
     @property
     def _has_videos(self) -> bool:
@@ -274,7 +266,6 @@ class _LeRobotShardWriter:
             "fps": self._fps,
             "robot_type": self._robot_type,
             "features": self.features,
-            "chunks_size": self.config.chunk_size,
             "data_files_size_in_mb": self.config.data_files_size_in_mb,
             "video_files_size_in_mb": self.config.video_files_size_in_mb,
             "data_path": _DEFAULT_DATA_PATH,
@@ -332,7 +323,7 @@ class _LeRobotShardWriter:
                 stats_config=self.config.stats,
                 default_fps=self._fps,
                 video_bytes_limit=self._video_bytes_limit,
-                prepare_max_in_flight=self.config.media_prelease_max_in_flight,
+                prepare_max_in_flight=self.config.max_buffered_episodes,
             )
             self._video_writers[video_key] = writer
 

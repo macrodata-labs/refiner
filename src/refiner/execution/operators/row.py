@@ -94,11 +94,9 @@ def execute_row_steps(
                 return
             tmp = scratch[i]
             tmp.clear()
-            while inp:
-                for row in inp.take_all():
-                    tmp.extend(
-                        window.submit_blocking(_run_async_step(step=step, row=row))
-                    )
+            for row in inp.take_all():
+                window.submit_blocking(_run_async_step(step=step, row=row))
+            tmp.extend(window.poll())
             if flush_all:
                 tmp.extend(window.flush())
             if tmp:

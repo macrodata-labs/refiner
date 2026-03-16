@@ -716,7 +716,7 @@ def _merge_with_refiner_reader(
     merged_rows = mdr.read_lerobot([str(root) for root in roots]).materialize()
     stats = (
         mdr.from_items(merged_rows, items_per_shard=max(1, len(merged_rows)))
-        .write_lerobot(str(out_root), overwrite=True)
+        .write_lerobot(str(out_root))
         .launch_local(
             name="lerobot-reader-merge-equivalence",
             num_workers=1,
@@ -737,7 +737,7 @@ def test_read_lerobot_multiple_roots_roundtrips_into_one_dataset(
     out_root = tmp_path / "merged-refiner"
     stats = (
         mdr.read_lerobot([str(first_root), str(second_root)])
-        .write_lerobot(str(out_root), overwrite=True)
+        .write_lerobot(str(out_root))
         .launch_local(
             name="lerobot-multi-root-merge",
             num_workers=1,
@@ -818,7 +818,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
             ),
         ],
         items_per_shard=1,
-    ).write_lerobot(str(out_root), overwrite=True)
+    ).write_lerobot(str(out_root))
     assert not (out_root / "meta" / "info.json").exists()
 
     stats = pipeline.launch_local(
@@ -866,7 +866,7 @@ def test_write_lerobot_remuxes_full_source_video_runs(tmp_path: Path) -> None:
     out_root = tmp_path / "remuxed-full-source-lerobot"
     stats = (
         mdr.read_lerobot(str(src_root))
-        .write_lerobot(str(out_root), overwrite=True)
+        .write_lerobot(str(out_root))
         .launch_local(
             name="lerobot-remux-full-source-run",
             num_workers=1,
@@ -928,7 +928,7 @@ def test_write_lerobot_remuxes_full_source_files_into_one_output(
     out_root = tmp_path / "remuxed-lerobot"
     stats = (
         mdr.read_lerobot(str(src_root))
-        .write_lerobot(str(out_root), overwrite=True)
+        .write_lerobot(str(out_root))
         .launch_local(
             name="lerobot-remux-full-source-files",
             num_workers=1,
@@ -990,7 +990,7 @@ def test_write_lerobot_remuxes_aligned_subsegment_without_transcoding(
     out_root = tmp_path / "remuxed-subsegment"
     stats = (
         mdr.read_lerobot(str(src_root))
-        .write_lerobot(str(out_root), overwrite=True)
+        .write_lerobot(str(out_root))
         .launch_local(
             name="lerobot-remux-aligned-subsegment",
             num_workers=1,
@@ -1126,7 +1126,7 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
             },
         ],
         items_per_shard=1,
-    ).write_lerobot(str(out_root), overwrite=True)
+    ).write_lerobot(str(out_root))
 
     stats = pipeline.launch_local(
         name="lerobot-two-stage-local",
@@ -1159,7 +1159,7 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
             ]
         )
         .map_async(hydrate_video("observation.images.main"))
-        .write_lerobot(str(out_root), overwrite=True)
+        .write_lerobot(str(out_root))
     )
 
     stats = pipeline.launch_local(
@@ -1287,10 +1287,9 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
         items_per_shard=2,
     ).write_lerobot(
         str(out_root),
-        overwrite=True,
         video_files_size_in_mb=1,
-        video=mdr.LeRobotVideoConfig(encoder_threads=1, decoder_threads=1),
-        stats=mdr.LeRobotStatsConfig(sample_stride=2, quantile_bins=64),
+        video_config=mdr.LeRobotVideoConfig(encoder_threads=1, decoder_threads=1),
+        stats_config=mdr.LeRobotStatsConfig(sample_stride=2, quantile_bins=64),
     )
 
     stats = pipeline.launch_local(
@@ -1333,7 +1332,7 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
             },
         ],
         items_per_shard=10,
-    ).write_lerobot(str(out_root), overwrite=True)
+    ).write_lerobot(str(out_root))
 
     stats = pipeline.launch_local(
         name="lerobot-task-index-stable",
@@ -1359,7 +1358,7 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
     tmp_path: Path,
 ) -> None:
     out_root = tmp_path / "cleanup"
-    config = LeRobotWriterConfig(root=str(out_root), overwrite=True)
+    config = LeRobotWriterConfig(output=str(out_root))
     row = DictRow(
         {
             "episode_index": 0,

@@ -373,7 +373,7 @@ def _run_refiner_case(
     launch_stats = (
         mdr.read_lerobot(source_root)
         .flat_map(_drop_episodes)
-        .write_lerobot(str(output_root), overwrite=True)
+        .write_lerobot(str(output_root))
         .launch_local(
             name=f"lerobot-benchmark-delete-{iteration}",
             num_workers=num_workers,

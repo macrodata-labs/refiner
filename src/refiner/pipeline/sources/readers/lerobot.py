@@ -160,9 +160,8 @@ class LeRobotEpisodeReader(ParquetReader):
                     index_by_name=index_by_name,
                     row_idx=idx,
                 )
-                yield from async_window.submit_blocking(
-                    self._build_episode_row(row, source_index)
-                )
+                async_window.submit_blocking(self._build_episode_row(row, source_index))
+                yield from async_window.poll()
                 self._submitted_episodes += 1
 
         yield from async_window.flush()

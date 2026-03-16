@@ -145,7 +145,7 @@ def _package_version(name: str) -> str:
         return "unknown"
 
 
-def _package_versions(implementation: str) -> dict[str, str]:
+def _package_versions() -> dict[str, str]:
     versions = {
         "huggingface-hub": _package_version("huggingface-hub"),
         "pyarrow": _package_version("pyarrow"),
@@ -268,7 +268,7 @@ def _run_official_case(
         merged_frame_count=merged_frame_count,
         python_version=sys.version,
         platform=platform.platform(),
-        package_versions=_package_versions("official"),
+        package_versions=_package_versions(),
     )
 
 
@@ -297,7 +297,7 @@ def _run_refiner_case(
 
     launch_stats = (
         mdr.read_lerobot([f"hf://datasets/{repo_id}" for repo_id in repo_ids])
-        .write_lerobot(str(output_root), overwrite=True)
+        .write_lerobot(str(output_root))
         .launch_local(
             name=f"lerobot-benchmark-merge-{iteration}",
             num_workers=num_workers,
@@ -326,7 +326,7 @@ def _run_refiner_case(
         merged_frame_count=merged_frame_count,
         python_version=sys.version,
         platform=platform.platform(),
-        package_versions=_package_versions("refiner"),
+        package_versions=_package_versions(),
     )
 
 

@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pyarrow as pa
-from fsspec.spec import AbstractFileSystem
 
 from refiner.execution.operators.vectorized import iter_table_rows
+from refiner.io.datafolder import DataFolderLike
 from refiner.pipeline.sinks.base import (
     BaseSink,
     Block,
@@ -17,7 +17,6 @@ from refiner.pipeline.sinks.base import (
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import _LeRobotShardWriter
 from refiner.worker.context import get_active_run_handle
 
-_DEFAULT_CHUNK_SIZE = 1000
 _DEFAULT_DATA_FILE_SIZE_IN_MB = 100
 _DEFAULT_VIDEO_FILE_SIZE_IN_MB = 200
 
@@ -55,26 +54,20 @@ class LeRobotStatsConfig:
 
 @dataclass(frozen=True, slots=True)
 class LeRobotWriterConfig:
-    root: str
-    fs: AbstractFileSystem | None = None
-    storage_options: Mapping[str, Any] | None = None
-    overwrite: bool = False
-    chunk_size: int = _DEFAULT_CHUNK_SIZE
+    output: DataFolderLike
     data_files_size_in_mb: int = _DEFAULT_DATA_FILE_SIZE_IN_MB
     video_files_size_in_mb: int = _DEFAULT_VIDEO_FILE_SIZE_IN_MB
     video: LeRobotVideoConfig = field(default_factory=LeRobotVideoConfig)
     stats: LeRobotStatsConfig = field(default_factory=LeRobotStatsConfig)
-    media_prelease_max_in_flight: int = 10
-    media_prelease_preserve_order: bool = True
+    max_buffered_episodes: int = 10
+    preserve_order: bool = True
 
     def __post_init__(self) -> None:
-        if self.chunk_size <= 0:
-            raise ValueError("chunk_size must be > 0")
         if self.data_files_size_in_mb <= 0:
             raise ValueError("data_files_size_in_mb must be > 0")
         if self.video_files_size_in_mb <= 0:
             raise ValueError("video_files_size_in_mb must be > 0")
-        if self.media_prelease_max_in_flight <= 0:
+        if self.max_buffered_episodes <= 0:
             raise ValueError("media_prelease_max_in_flight must be > 0")
 
 

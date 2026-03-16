@@ -17,6 +17,7 @@ class AsyncWindow(Generic[T]):
     preserve_order: bool = True
     _futures: set[Future[tuple[int, T]]] = field(default_factory=set, init=False)
     _ready: list[tuple[int, T]] = field(default_factory=list, init=False)
+    _buffered: list[T] = field(default_factory=list, init=False)
     _next_submit: int = field(default=0, init=False)
     _next_yield: int = field(default=0, init=False)
 
@@ -24,10 +25,9 @@ class AsyncWindow(Generic[T]):
         if self.max_in_flight <= 0:
             raise ValueError("max_in_flight must be > 0")
 
-    def submit_blocking(self, coro: Coroutine[object, object, T]) -> list[T]:
-        out: list[T] = []
+    def submit_blocking(self, coro: Coroutine[object, object, T]) -> None:
         if len(self._futures) >= self.max_in_flight:
-            out.extend(self._drain_until_available())
+            self._drain_until_available()
 
         idx = self._next_submit
         self._next_submit += 1
@@ -36,14 +36,15 @@ class AsyncWindow(Generic[T]):
             return idx, await coro
 
         self._futures.add(submit(_tagged()))
-        return out
 
     def poll(self) -> list[T]:
         done = {future for future in self._futures if future.done()}
-        return self._consume_done(done)
+        out = self._take_buffered()
+        out.extend(self._consume_done(done))
+        return out
 
     def flush(self) -> list[T]:
-        out: list[T] = []
+        out = self._take_buffered()
         while self._futures:
             done, pending = wait(
                 self._futures,
@@ -72,12 +73,15 @@ class AsyncWindow(Generic[T]):
             out.append(value)
         return out
 
-    def _drain_until_available(self) -> list[T]:
-        out: list[T] = []
+    def _drain_until_available(self) -> None:
         while self._futures and len(self._futures) >= self.max_in_flight:
             done, pending = wait(self._futures, return_when=FIRST_COMPLETED)
             self._futures = set(pending)
-            out.extend(self._consume_done(done))
+            self._buffered.extend(self._consume_done(done))
+
+    def _take_buffered(self) -> list[T]:
+        out = self._buffered
+        self._buffered = []
         return out
 
 

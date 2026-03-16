@@ -58,11 +58,7 @@ class _LeRobotMetaReducer:
     folder: DataFolder = field(init=False)
 
     def __post_init__(self) -> None:
-        self.folder = DataFolder.resolve(
-            self.config.root,
-            fs=self.config.fs,
-            storage_options=self.config.storage_options,
-        )
+        self.folder = DataFolder.resolve(self.config.output)
 
     def reduce(self) -> None:
         finalized_chunk_keys = self._finalized_chunk_keys()
@@ -212,9 +208,6 @@ class _LeRobotMetaReducer:
                 if infos and first.get("codebase_version") is not None
                 else _DEFAULT_CODEBASE_VERSION
             ),
-            "chunks_size": int(first["chunks_size"])
-            if infos
-            else self.config.chunk_size,
             "data_files_size_in_mb": int(first["data_files_size_in_mb"])
             if infos
             else self.config.data_files_size_in_mb,
