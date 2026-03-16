@@ -29,6 +29,10 @@ class Row(Mapping[str, Any]):
         return dict(self.items())
 
     @property
+    def metadata(self) -> Mapping[str, Any]:
+        return {}
+
+    @property
     def shard_id(self) -> str | None:
         return None
 
@@ -65,6 +69,7 @@ class Row(Mapping[str, Any]):
                 base=self.base,
                 patch=combined_patch,
                 deleted=deleted,
+                metadata=self.metadata,
                 shard_id=shard_id,
             )
 
@@ -72,6 +77,7 @@ class Row(Mapping[str, Any]):
             base=self,
             patch=merged,
             deleted=frozenset(),
+            metadata=self.metadata,
             shard_id=shard_id,
         )
 
@@ -97,6 +103,7 @@ class Row(Mapping[str, Any]):
                 base=self.base,
                 patch=patch,
                 deleted=deleted,
+                metadata=self.metadata,
                 shard_id=self.shard_id,
             )
 
@@ -104,6 +111,7 @@ class Row(Mapping[str, Any]):
             base=self,
             patch={},
             deleted=frozenset(keys),
+            metadata=self.metadata,
             shard_id=self.shard_id,
         )
 
@@ -125,6 +133,7 @@ class _OverlayRow(Row):
     base: Row
     patch: Mapping[str, Any]
     deleted: frozenset[str]
+    metadata: Mapping[str, Any] = field(default_factory=dict)
     shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:
@@ -199,6 +208,7 @@ class ArrowRowView(Row):
     columns: tuple[Any, ...]
     index_by_name: Mapping[str, int]
     row_idx: int
+    metadata: Mapping[str, Any] = field(default_factory=dict)
     shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:

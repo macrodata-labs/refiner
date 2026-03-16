@@ -24,7 +24,6 @@ from refiner.pipeline.sinks.lerobot._lerobot_frames import (
 from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _cast_stats_to_numpy,
     _flatten_stats_for_episode,
-    _serialize_stats,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
     DEFAULT_VIDEO_PATH,
@@ -224,7 +223,7 @@ class _LeRobotShardWriter:
 
     def finalize(self) -> None:
         for writer in self._video_writers.values():
-            self._apply_completed_video_runs(writer.flush())
+            self._process_video_runs(writer.flush())
         self._flush_ready_episodes()
         if self._pending_episodes:
             pending = sorted(self._pending_episodes)
@@ -327,25 +326,23 @@ class _LeRobotShardWriter:
             )
             self._video_writers[video_key] = writer
 
-        self._apply_completed_video_runs(
-            writer.submit(
-                episode_index=episode_index,
-                video=video,
-                source_stats=source_stats,
-            )
+        writer.submit(
+            episode_index=episode_index,
+            video=video,
+            source_stats=source_stats,
         )
 
     def _drain_video_writers(
         self, *, force_schedule_pending_runs: bool = False
     ) -> None:
         for writer in self._video_writers.values():
-            self._apply_completed_video_runs(
+            self._process_video_runs(
                 writer.drain_completed(
                     force_schedule_pending_run=force_schedule_pending_runs
                 )
             )
 
-    def _apply_completed_video_runs(
+    def _process_video_runs(
         self,
         completed_runs: Sequence[_CompletedVideoRun],
     ) -> None:
@@ -358,12 +355,16 @@ class _LeRobotShardWriter:
                     raise RuntimeError(
                         f"Missing pending episode for {segment.episode_index}"
                     )
-                pending.row.update(segment.video_meta)
-                pending.video_stats[segment.video_key] = {
-                    key: np.asarray(value) for key, value in segment.video_stats.items()
-                }
+                pending.row = pending.row.update(
+                    {
+                        f"videos/{segment.video_key}/chunk_index": segment.chunk_key,
+                        f"videos/{segment.video_key}/file_index": segment.file_index,
+                        f"videos/{segment.video_key}/from_timestamp": segment.from_timestamp,
+                        f"videos/{segment.video_key}/to_timestamp": segment.to_timestamp,
+                    }
+                )
+                pending.video_stats[segment.video_key] = segment.stats
                 pending.pending_video_keys.discard(segment.video_key)
-        self._flush_ready_episodes()
 
     def _flush_ready_episodes(self) -> None:
         while self._pending_episodes:
@@ -393,23 +394,6 @@ class _LeRobotShardWriter:
                     use_dictionary=True,
                 )
                 self._episodes_writer.write_table(table)
-
-            if self._stats_file is None:
-                self._stats_file = self.folder.open(
-                    self._meta_path("stats.jsonl"),
-                    mode="wt",
-                    encoding="utf-8",
-                )
-            self._stats_file.write(
-                json.dumps(
-                    {
-                        "episode_index": episode_index,
-                        "stats": _serialize_stats(episode_stats),
-                    },
-                    sort_keys=True,
-                )
-            )
-            self._stats_file.write("\n")
             self._pending_episodes.popitem(last=False)
 
     def _tasks(self, row: Mapping[str, Any]) -> list[str]:

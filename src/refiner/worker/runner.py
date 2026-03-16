@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from loguru import logger
 
+from refiner.execution.asyncio.runtime import shutdown as shutdown_async_runtime
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
@@ -281,6 +282,7 @@ class Worker:
                 stop_heartbeat.set()
                 heartbeat_thread.join(timeout=1.0)
                 sink.close()
+                shutdown_async_runtime()
 
                 if self.run_handle.client is not None:
                     status = (

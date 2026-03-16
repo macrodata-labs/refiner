@@ -4,7 +4,7 @@ import asyncio
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from queue import Empty, Queue
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
@@ -15,18 +15,14 @@ from refiner.pipeline.sinks.lerobot._lerobot_video import (
     _PendingVideoRun,
     _PendingVideoSegment,
     VideoTrackWriter,
-    _append_video_segment,
     _resolve_video_fps,
     run_can_extend,
-    video_from_timestamp_s,
-    video_to_timestamp_s,
-    video_uri,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     RemuxWriter,
+    _RunPtsAlignment,
     _VideoProbeCache,
     _VideoSourceProbe,
-    append_remux_run,
     probe_run_for_remux,
     probes_are_remux_compatible,
 )
@@ -38,18 +34,6 @@ if TYPE_CHECKING:
     )
 
 DEFAULT_VIDEO_PATH = "videos/{video_key}/chunk-{chunk_index}/file-{file_index:03d}.mp4"
-
-
-def _format_video_path(*, chunk_key: str, video_key: str, file_idx: int) -> str:
-    return DEFAULT_VIDEO_PATH.format(
-        video_key=video_key,
-        chunk=chunk_key,
-        chunk_key=chunk_key,
-        chunk_index=chunk_key,
-        file=file_idx,
-        file_idx=file_idx,
-        file_index=file_idx,
-    )
 
 
 def _video_feature(
@@ -81,8 +65,11 @@ def _video_feature(
 class _CompletedVideoSegment:
     episode_index: int
     video_key: str
-    video_meta: dict[str, Any]
-    video_stats: dict[str, np.ndarray]
+    file_index: int
+    chunk_key: str
+    from_timestamp: float
+    to_timestamp: float
+    stats: dict[str, np.ndarray]
 
 
 @dataclass(slots=True)
@@ -95,7 +82,7 @@ class _CompletedVideoRun:
 @dataclass(slots=True)
 class _PreparedVideoRun:
     run: _PendingVideoRun
-    probe: _VideoSourceProbe | None
+    remux_alignment: _RunPtsAlignment | None
 
 
 @dataclass(slots=True)
@@ -142,7 +129,7 @@ class LeRobotVideoWriter:
         episode_index: int,
         video: Video,
         source_stats: dict[str, np.ndarray] | None,
-    ) -> list[_CompletedVideoRun]:
+    ):
         self._raise_if_failed()
 
         current_run = self._pending_run
@@ -159,7 +146,6 @@ class LeRobotVideoWriter:
                 source_stats=source_stats,
             )
         )
-        return self._drain_completed_runs()
 
     def flush(self) -> list[_CompletedVideoRun]:
         self._raise_if_failed()
@@ -274,135 +260,90 @@ class LeRobotVideoWriter:
                 next_commit_seq += 1
 
     async def _prepare_closed_run(self, run: _PendingVideoRun) -> _PreparedVideoRun:
-        probe = await asyncio.to_thread(
+        remux_alignment = await asyncio.to_thread(
             probe_run_for_remux,
             run=run,
             probe_cache=self._probe_cache,
             default_fps=self.default_fps,
         )
-        return _PreparedVideoRun(run=run, probe=probe)
+        return _PreparedVideoRun(run=run, remux_alignment=remux_alignment)
 
     async def _commit_prepared_run(
         self, prepared: _PreparedVideoRun
     ) -> list[_CompletedVideoRun]:
-        if prepared.probe is not None:
-            return [self._remux_run(prepared.run, prepared.probe)]
-        return [await self._transcode_run(prepared.run)]
+        if prepared.remux_alignment is not None:
+            remux_writer = self._ensure_remux_writer(
+                prepared.run, prepared.remux_alignment.probe
+            )
+            flushed_timestamps = remux_writer.add_run(
+                prepared.run, prepared.remux_alignment
+            )
+            stats = [
+                segment.source_stats if segment.source_stats is not None else {}
+                for segment in prepared.run.segments
+            ]
+        else:
+            transcode_writer = self._ensure_transcode_writer(
+                prepared.run.segments[0].video
+            )
+            flushed_timestamps, stats = cast(Any, transcode_writer).add_run(
+                prepared.run
+            )
 
-    def _remux_run(
-        self,
-        run: _PendingVideoRun,
-        probe: _VideoSourceProbe,
-    ) -> _CompletedVideoRun:
-        if isinstance(self._writer, VideoTrackWriter):
-            self._rotate_writer()
-
-        writer = self._writer if isinstance(self._writer, RemuxWriter) else None
-        if writer is None or (
-            not probes_are_remux_compatible(writer.probe, probe)
-            or writer.size_bytes >= self.video_bytes_limit
+        completed_segments = []
+        for segment, (from_timestamp, to_timestamp), stats in zip(
+            prepared.run.segments, flushed_timestamps, stats
         ):
-            if writer is not None:
-                self._rotate_writer()
-            writer = RemuxWriter.open(
-                folder=self.folder,
-                video_key=self.video_key,
-                output_rel=self._current_output_rel,
-                file_idx=self._next_file_index,
-                probe=probe,
-            )
-            self._writer = writer
-
-        base_duration_s = float(writer.duration_s)
-        append_remux_run(writer=writer, run=run, probe=probe)
-        return _completed_remux_run(
-            video_key=self.video_key,
-            chunk_key=self.chunk_key,
-            run=run,
-            probe=probe,
-            file_idx=writer.file_idx,
-            base_duration_s=base_duration_s,
-            probe_cache=self._probe_cache,
-            video_config=self.video_config,
-        )
-
-    async def _transcode_run(self, run: _PendingVideoRun) -> _CompletedVideoRun:
-        completed_segments: list[_CompletedVideoSegment] = []
-        feature: dict[str, Any] | None = None
-
-        for segment in run.segments:
-            if isinstance(self._writer, RemuxWriter):
-                self._rotate_writer()
-
-            writer = await self._ensure_transcode_writer(segment.video)
-            if writer.size_bytes >= self.video_bytes_limit:
-                self._rotate_writer()
-                writer = await self._ensure_transcode_writer(segment.video)
-
-            from_timestamp = float(writer.duration_s)
-            clip_duration_s, clip_stats = await _append_video_segment(
-                writer=writer,
-                video=segment.video,
-                clip_from=video_from_timestamp_s(segment.video),
-                clip_to=video_to_timestamp_s(segment.video),
-                video_config=self.video_config,
-                stats_config=self.stats_config,
-            )
-            writer.duration_s = from_timestamp + float(clip_duration_s)
-            if writer.output_file is not None:
-                writer.output_file.flush()
-            if writer.stream is None:
-                raise RuntimeError("Video writer stream was not initialized")
-
             completed_segments.append(
                 _CompletedVideoSegment(
                     episode_index=segment.episode_index,
                     video_key=self.video_key,
-                    video_meta={
-                        f"videos/{self.video_key}/chunk_index": self.chunk_key,
-                        f"videos/{self.video_key}/file_index": writer.file_idx,
-                        f"videos/{self.video_key}/from_timestamp": from_timestamp,
-                        f"videos/{self.video_key}/to_timestamp": writer.duration_s,
-                    },
-                    video_stats=clip_stats,
+                    file_index=self._next_file_index - 1,
+                    chunk_key=self.chunk_key,
+                    from_timestamp=from_timestamp,
+                    to_timestamp=to_timestamp,
+                    stats=stats,
                 )
             )
-            feature = _video_feature(
-                fps=writer.fps,
-                height=int(writer.stream.height),
-                width=int(writer.stream.width),
-                codec=self.video_config.codec,
-                pix_fmt=self.video_config.pix_fmt,
-            )
-            self._probe_cache.cleanup_video(segment.video)
-            if writer.size_bytes >= self.video_bytes_limit:
-                self._rotate_writer()
 
-        return _CompletedVideoRun(
+        return completed_segments
+
+    def _ensure_transcode_writer(self, video: Video) -> VideoTrackWriter:
+        fps = _resolve_video_fps(
+            video=video,
             video_key=self.video_key,
-            feature=feature,
-            segments=completed_segments,
         )
-
-    async def _ensure_transcode_writer(self, video: Video) -> VideoTrackWriter:
         writer = self._writer
-        if isinstance(writer, VideoTrackWriter):
+        if isinstance(writer, VideoTrackWriter) and writer.fps == fps:
             return writer
+
         if writer is not None:
-            raise RuntimeError("Expected transcoder writer state")
+            self._rotate_writer()
 
         writer = VideoTrackWriter.open(
             folder=self.folder,
             output_rel=self._current_output_rel,
-            chunk_key=self.chunk_key,
-            video_key=self.video_key,
-            file_idx=self._next_file_index,
-            fps=await _resolve_video_fps(
-                video=video,
-                default_fps=self.default_fps,
-                video_key=self.video_key,
-            ),
             config=self.video_config,
+        )
+        self._writer = writer
+        return writer
+
+    def _ensure_remux_writer(
+        self, run: _PendingVideoRun, probe: _VideoSourceProbe
+    ) -> RemuxWriter:
+        writer = self._writer
+        if isinstance(writer, RemuxWriter) and probes_are_remux_compatible(
+            writer.probe, probe
+        ):
+            return writer
+
+        if writer is not None:
+            self._rotate_writer()
+
+        writer = RemuxWriter.open(
+            folder=self.folder,
+            output_rel=self._current_output_rel,
+            probe=probe,
         )
         self._writer = writer
         return writer
@@ -423,64 +364,15 @@ class LeRobotVideoWriter:
 
     @property
     def _current_output_rel(self) -> str:
-        return _format_video_path(
-            chunk_key=self.chunk_key,
+        return DEFAULT_VIDEO_PATH.format(
             video_key=self.video_key,
+            chunk=self.chunk_key,
+            chunk_key=self.chunk_key,
+            chunk_index=self.chunk_key,
+            file=self._next_file_index,
             file_idx=self._next_file_index,
+            file_index=self._next_file_index,
         )
-
-
-def _completed_remux_run(
-    *,
-    video_key: str,
-    chunk_key: str,
-    run: _PendingVideoRun,
-    probe: _VideoSourceProbe,
-    file_idx: int,
-    base_duration_s: float,
-    probe_cache: _VideoProbeCache,
-    video_config: "LeRobotVideoConfig",
-) -> _CompletedVideoRun:
-    run_start_s = video_from_timestamp_s(run.segments[0].video)
-    segments: list[_CompletedVideoSegment] = []
-    for segment in run.segments:
-        segment_to = video_to_timestamp_s(segment.video)
-        if segment_to is None:
-            raise ValueError(
-                f"Video segment for {video_uri(segment.video)!r} is missing an end time"
-            )
-        segments.append(
-            _CompletedVideoSegment(
-                episode_index=segment.episode_index,
-                video_key=video_key,
-                video_meta={
-                    f"videos/{video_key}/chunk_index": chunk_key,
-                    f"videos/{video_key}/file_index": file_idx,
-                    f"videos/{video_key}/from_timestamp": (
-                        base_duration_s
-                        + video_from_timestamp_s(segment.video)
-                        - run_start_s
-                    ),
-                    f"videos/{video_key}/to_timestamp": (
-                        base_duration_s + segment_to - run_start_s
-                    ),
-                },
-                video_stats=dict(segment.source_stats or {}),
-            )
-        )
-        probe_cache.cleanup_video(segment.video)
-
-    return _CompletedVideoRun(
-        video_key=video_key,
-        feature=_video_feature(
-            fps=int(probe.fps),
-            height=int(probe.height),
-            width=int(probe.width),
-            codec=probe.codec or video_config.codec,
-            pix_fmt=probe.pix_fmt or video_config.pix_fmt,
-        ),
-        segments=segments,
-    )
 
 
 __all__ = [

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -127,7 +125,11 @@ class LocalLauncher(BaseLauncher):
         platform_run: RunHandle | None,
     ) -> list[str]:
         command = [
-            *(self._worker_python_command_prefix()),
+            # Use `uv run` so worker subprocesses import the current checkout/worktree
+            # instead of an installed `refiner` package from some other environment.
+            "uv",
+            "run",
+            "python",
             "-m",
             "refiner.worker.entrypoint",
             "--job-id",
@@ -154,13 +156,6 @@ class LocalLauncher(BaseLauncher):
                 ]
             )
         return command
-
-    def _worker_python_command_prefix(self) -> list[str]:
-        if os.environ.get("REFINER_DEBUG_WORKER") == "1":
-            return [sys.executable]
-        # Use `uv run` so worker subprocesses import the current checkout/worktree
-        # instead of an installed `refiner` package from some other environment.
-        return ["uv", "run", "python"]
 
     def _read_worker_stats(
         self,
