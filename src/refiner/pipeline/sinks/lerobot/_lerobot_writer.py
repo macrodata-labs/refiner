@@ -20,6 +20,7 @@ from refiner.pipeline.sinks.base import (
 )
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import _LeRobotShardWriter
 from refiner.worker.context import get_active_run_handle
+from refiner.worker.id import worker_token
 
 
 _DEFAULT_CHUNK_SIZE = 1000
@@ -135,10 +136,10 @@ class LeRobotWriterSink(BaseSink):
     def process_leased_rows(
         self, rows: Iterable[tuple[Mapping[str, Any], str]]
     ) -> None:
-        worker_id = get_active_run_handle().worker_id
+        token = worker_token(get_active_run_handle().worker_id or "local")
         for row, shard_id in rows:
             try:
-                key = f"{shard_id}__w{worker_id}"
+                key = f"{shard_id}__w{token}"
                 writer = self._writers.get(shard_id)
                 if writer is None:
                     writer = _LeRobotShardWriter(config=self.config, chunk_key=key)

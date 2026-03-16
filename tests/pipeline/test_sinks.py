@@ -8,6 +8,7 @@ from refiner import col
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline import from_items
 from refiner.pipeline.sinks import JsonlSink
+from refiner.worker.id import worker_token
 
 
 def test_iter_rows_ignores_sink(tmp_path) -> None:
@@ -85,5 +86,5 @@ def test_jsonl_sink_uses_local_worker_suffix_outside_runtime(tmp_path) -> None:
     sink.on_shard_complete("abc")
 
     written = sorted(tmp_path.iterdir())
-    assert [path.name for path in written] == ["abc__wlocal.jsonl"]
+    assert [path.name for path in written] == [f"abc__w{worker_token('local')}.jsonl"]
     assert json.loads(written[0].read_text(encoding="utf-8")) == {"x": 1}

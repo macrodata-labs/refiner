@@ -24,6 +24,7 @@ from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.context import set_active_run_context
 from refiner.worker.context import RunHandle
+from refiner.worker.id import worker_token
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -401,11 +402,13 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
     ):
         reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
-    assert not (out_root / "meta" / "chunk-shard-1__w1").exists()
-    assert not (out_root / "meta" / "chunk-shard-1__w2").exists()
-    assert not (out_root / "data" / "chunk-shard-1__w1").exists()
-    assert (out_root / "data" / "chunk-shard-1__w2").exists()
+    worker_1 = worker_token("1")
+    worker_2 = worker_token("2")
+    assert not (out_root / "meta" / f"chunk-shard-1__w{worker_1}").exists()
+    assert not (out_root / "meta" / f"chunk-shard-1__w{worker_2}").exists()
+    assert not (out_root / "data" / f"chunk-shard-1__w{worker_1}").exists()
+    assert (out_root / "data" / f"chunk-shard-1__w{worker_2}").exists()
     table = pq.read_table(
         out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
     )
-    assert table.column("data/chunk_index").to_pylist() == ["shard-1__w2"]
+    assert table.column("data/chunk_index").to_pylist() == [f"shard-1__w{worker_2}"]
