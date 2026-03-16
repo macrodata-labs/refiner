@@ -6,10 +6,10 @@ from pathlib import Path
 
 import av
 import numpy as np
-import refiner as mdr
 
+import refiner as mdr
 from refiner.io import DataFile
-from refiner.media import MediaFile, Video, hydrate_media
+from refiner.media import DecodedVideo, VideoFile, hydrate_video
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.utils.cache.file_cache import get_media_cache
 
@@ -34,25 +34,19 @@ def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
             container.mux(packet)
 
 
-def test_hydrate_media_decodes_video(tmp_path: Path) -> None:
+def test_hydrate_video_decodes_video(tmp_path: Path) -> None:
     video_path = tmp_path / "episode.mp4"
     _write_video(video_path)
     row = DictRow(
-        {
-            "video": Video(
-                media=MediaFile(str(video_path)),
-                from_timestamp_s=0.0,
-                to_timestamp_s=0.3,
-            )
-        }
+        {"video": VideoFile(str(video_path), from_timestamp_s=0.0, to_timestamp_s=0.3)}
     )
 
-    hydrated = asyncio.run(hydrate_media("video")(row))
+    hydrated = asyncio.run(hydrate_video("video")(row))
     video = hydrated["video"]
-    assert isinstance(video, Video)
-    assert len(video.media.frames) == 4
-    assert video.media.width == 16
-    assert video.media.height == 16
+    assert isinstance(video, DecodedVideo)
+    assert len(video.frames) == 4
+    assert video.width == 16
+    assert video.height == 16
 
 
 def test_map_async_hydration_preserves_row_order(tmp_path: Path) -> None:
@@ -63,8 +57,8 @@ def test_map_async_hydration_preserves_row_order(tmp_path: Path) -> None:
         rows.append(
             {
                 "id": i,
-                "video": Video(
-                    media=MediaFile(str(video_path)),
+                "video": VideoFile(
+                    str(video_path),
                     from_timestamp_s=0.0,
                     to_timestamp_s=0.3,
                 ),
@@ -73,17 +67,37 @@ def test_map_async_hydration_preserves_row_order(tmp_path: Path) -> None:
 
     out = (
         mdr.from_items(rows)
-        .map_async(hydrate_media("video"), max_in_flight=2)
+        .map_async(hydrate_video("video"), max_in_flight=2)
         .materialize()
     )
 
     assert [int(r["id"]) for r in out] == [0, 1, 2, 3, 4]
-    assert all(len(row["video"].media.frames) == 4 for row in out)
+    assert all(len(row["video"].frames) == 4 for row in out)
+
+
+def test_hydrate_video_can_decode_multiple_columns(tmp_path: Path) -> None:
+    video_a = tmp_path / "episode-a.mp4"
+    video_b = tmp_path / "episode-b.mp4"
+    _write_video(video_a)
+    _write_video(video_b)
+    row = DictRow(
+        {
+            "left": VideoFile(str(video_a), from_timestamp_s=0.0, to_timestamp_s=0.3),
+            "right": VideoFile(str(video_b), from_timestamp_s=0.0, to_timestamp_s=0.3),
+        }
+    )
+
+    hydrated = asyncio.run(hydrate_video("left", "right")(row))
+
+    assert isinstance(hydrated["left"], DecodedVideo)
+    assert isinstance(hydrated["right"], DecodedVideo)
+    assert len(hydrated["left"].frames) == 4
+    assert len(hydrated["right"].frames) == 4
 
 
 def test_media_cache_async_context_reuses_download() -> None:
     uri = "memory://context-manager.bin"
-    with MediaFile(uri).open("wb") as f:
+    with VideoFile(uri).open("wb") as f:
         f.write(b"context-manager")
 
     cache = get_media_cache("context-manager")
@@ -102,7 +116,7 @@ def test_media_cache_async_context_reuses_download() -> None:
 
 def test_media_cache_file_lease_can_be_acquired_and_released_twice() -> None:
     uri = "memory://lease-same-file.bin"
-    with MediaFile(uri).open("wb") as f:
+    with VideoFile(uri).open("wb") as f:
         f.write(b"lease-reuse")
 
     cache = get_media_cache("lease-same-file")

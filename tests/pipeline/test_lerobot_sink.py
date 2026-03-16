@@ -9,21 +9,22 @@ import numpy as np
 import pyarrow.parquet as pq
 
 import refiner as mdr
-from refiner.media import hydrate_media
-from refiner.pipeline.data.row import DictRow
+from refiner.media import hydrate_video
 from refiner.pipeline import (
     LeRobotStatsConfig as PipelineLeRobotStatsConfig,
+)
+from refiner.pipeline import (
     LeRobotVideoConfig as PipelineLeRobotVideoConfig,
 )
+from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.sinks.lerobot import (
     LeRobotMetaReduceSink,
     LeRobotWriterConfig,
     LeRobotWriterSink,
 )
 from refiner.platform.client.models import FinalizedShardWorker
+from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.lifecycle import RuntimeLifecycle
-from refiner.worker.context import set_active_run_context
-from refiner.worker.context import RunHandle
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -92,8 +93,8 @@ def _episode(
             }
             for i, v in enumerate(values)
         ],
-        "observation.images.main": mdr.Video(
-            media=mdr.MediaFile(str(video_path)),
+        "observation.images.main": mdr.VideoFile(
+            str(video_path),
             from_timestamp_s=from_ts,
             to_timestamp_s=to_ts,
         ),
@@ -230,7 +231,7 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
                 ),
             ]
         )
-        .map_async(hydrate_media("observation.images.main"))
+        .map_async(hydrate_video("observation.images.main"))
         .write_lerobot(str(out_root), overwrite=True)
     )
 

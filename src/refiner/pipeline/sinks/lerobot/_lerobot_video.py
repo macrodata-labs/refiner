@@ -9,7 +9,7 @@ import numpy as np
 
 from refiner.io.datafile import DataFile
 from refiner.media import Video
-from refiner.media.video.types import DecodedVideo
+from refiner.media.video.types import DecodedVideo, VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_stats import _RunningQuantileStats
 from refiner.pipeline.utils.cache.decoder_cache import get_video_decoder_cache
 from refiner.pipeline.utils.cache.file_cache import get_media_cache
@@ -200,10 +200,10 @@ async def _resolve_video_fps(
     if default_fps is not None:
         return int(round(float(default_fps)))
 
-    if isinstance(video.media, DecodedVideo):
+    if isinstance(video, DecodedVideo):
         return 30
 
-    data_file = DataFile.resolve(video.media.uri)
+    data_file = DataFile.resolve(video.uri)
     cache_name = f"lerobot_writer:{video_key}"
     media_cache = get_media_cache(name=cache_name)
     decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
@@ -218,7 +218,7 @@ async def _append_video_segment(
     writer: VideoTrackWriter,
     video: Video,
     clip_from: float,
-    clip_to: float,
+    clip_to: float | None,
     video_config: "LeRobotVideoConfig",
     stats_config: "LeRobotStatsConfig",
 ) -> tuple[float, dict[str, np.ndarray]]:
@@ -228,10 +228,10 @@ async def _append_video_segment(
         num_quantile_bins=stats_config.quantile_bins,
     )
 
-    if isinstance(video.media, DecodedVideo):
+    if isinstance(video, DecodedVideo):
         duration_s = _append_video_segment_from_frames(
             writer=writer,
-            video=video.media,
+            video=video,
             tracker=tracker,
             sample_stride=sample_stride,
         )
@@ -252,16 +252,16 @@ async def _append_video_segment(
 async def _append_video_segment_from_media(
     *,
     writer: VideoTrackWriter,
-    video: Video,
+    video: VideoFile,
     clip_from: float,
-    clip_to: float,
+    clip_to: float | None,
     tracker: _RunningQuantileStats,
     sample_stride: int,
     video_config: "LeRobotVideoConfig",
 ) -> float:
     selected_frames = 0
     frame_index = 0
-    data_file = DataFile.resolve(video.media.uri)
+    data_file = DataFile.resolve(video.uri)
     cache_name = f"lerobot_writer:{writer.video_key}"
     media_cache = get_media_cache(name=cache_name)
     decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
@@ -317,7 +317,7 @@ def _append_video_segment_from_frames(
 ) -> float:
     if not video.frames:
         raise ValueError(
-            f"Decoded video segment for {video.uri!r} contains no decodable frames."
+            f"Decoded video segment for {video.original_file.uri!r} contains no decodable frames."
         )
 
     width = video.width

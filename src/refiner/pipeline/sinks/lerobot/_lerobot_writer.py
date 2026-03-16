@@ -6,12 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 import pyarrow as pa
-
 from fsspec.spec import AbstractFileSystem
 
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.execution.operators.vectorized import iter_table_rows
-from refiner.media import MediaFile, Video
+from refiner.media import VideoFile
 from refiner.pipeline.sinks.base import (
     BaseSink,
     Block,
@@ -20,7 +19,6 @@ from refiner.pipeline.sinks.base import (
 )
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import _LeRobotShardWriter
 from refiner.worker.context import get_active_run_handle
-
 
 _DEFAULT_CHUNK_SIZE = 1000
 _DEFAULT_DATA_FILE_SIZE_IN_MB = 100
@@ -96,8 +94,8 @@ class LeRobotWriterSink(BaseSink):
 
     def cleanup_leases(self, row: Mapping[str, Any]) -> None:
         for key, value in row.items():
-            if isinstance(value, Video) and isinstance(value.media, MediaFile):
-                value.media.cleanup()
+            if isinstance(value, VideoFile):
+                value.cleanup()
 
     def write_block(self, block: Block) -> ShardCounts:
         blocks_by_shard, counts = split_block_by_shard(block)
@@ -125,9 +123,9 @@ class LeRobotWriterSink(BaseSink):
     ) -> tuple[Mapping[str, Any], str]:
         lease_requests = []
         for key, value in row.items():
-            if isinstance(value, Video) and isinstance(value.media, MediaFile):
+            if isinstance(value, VideoFile):
                 lease_requests.append(
-                    value.media.cache_file(cache_name=f"lerobot_writer:{key}")
+                    value.cache_file(cache_name=f"lerobot_writer:{key}")
                 )
         await asyncio.gather(*lease_requests)
         return row, shard_id
