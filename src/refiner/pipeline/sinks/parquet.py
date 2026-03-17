@@ -68,7 +68,7 @@ class ParquetSink(BaseSink):
             writer.close()
         self._writers.clear()
 
-    def describe_for_plan(self) -> tuple[str, str, dict[str, object]]:
+    def describe(self) -> tuple[str, str, dict[str, object]]:
         args: dict[str, object] = {
             "path": describe_datafolder_path(self.output),
             "filename_template": self.filename_template,

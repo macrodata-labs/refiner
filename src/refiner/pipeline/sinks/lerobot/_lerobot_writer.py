@@ -113,7 +113,7 @@ class LeRobotWriterSink(BaseSink):
             writer.finalize()
         self._writers.clear()
 
-    def describe_for_plan(self) -> tuple[str, str, dict[str, object]]:
+    def describe(self) -> tuple[str, str, dict[str, object]]:
         return (
             "write_lerobot",
             "writer",

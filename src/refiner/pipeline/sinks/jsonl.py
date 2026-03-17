@@ -73,7 +73,7 @@ class JsonlSink(BaseSink):
             file.close()
         self._files.clear()
 
-    def describe_for_plan(self) -> tuple[str, str, dict[str, object]]:
+    def describe(self) -> tuple[str, str, dict[str, object]]:
         return (
             "write_jsonl",
             "writer",

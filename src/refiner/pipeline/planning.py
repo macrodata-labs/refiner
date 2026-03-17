@@ -367,9 +367,7 @@ def _compile_stage_steps(pipeline: "RefinerPipeline") -> list[dict[str, Any]]:
             )
         )
 
-    sink_payload = (
-        pipeline.sink.describe_for_plan() if pipeline.sink is not None else None
-    )
+    sink_payload = pipeline.sink.describe() if pipeline.sink is not None else None
     if sink_payload is not None:
         base_name, step_type, args = sink_payload
         unique_name = _unique_name(base_name)

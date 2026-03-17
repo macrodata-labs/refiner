@@ -20,7 +20,7 @@ class BaseSink(ABC):
     def write_block(self, block: Block) -> ShardCounts:
         raise NotImplementedError
 
-    def describe_for_plan(self) -> tuple[str, str, dict[str, Any] | None] | None:
+    def describe(self) -> tuple[str, str, dict[str, Any] | None] | None:
         return None
 
     def on_shard_complete(self, shard_id: str) -> None:

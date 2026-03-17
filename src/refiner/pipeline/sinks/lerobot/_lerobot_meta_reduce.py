@@ -56,7 +56,7 @@ class LeRobotMetaReduceSink(BaseSink):
         _LeRobotMetaReducer(config=self.config).reduce()
         self._reduced = True
 
-    def describe_for_plan(self) -> tuple[str, str, dict[str, str]]:
+    def describe(self) -> tuple[str, str, dict[str, str]]:
         return (
             "write_lerobot_meta_reduce",
             "writer",
