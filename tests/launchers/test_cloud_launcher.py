@@ -88,6 +88,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         "version": 1,
         "environment": {"refiner_ref": "abc123def456"},
         "script": {"text": "print('hi')"},
+        "macrodata_cloud": {"stage_runtimes": [{"num_workers": 3}]},
     }
 
 

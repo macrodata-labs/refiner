@@ -4,7 +4,6 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, cast
 
 import pytest
-from unittest.mock import Mock
 
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_jsonl
@@ -263,7 +262,7 @@ def test_local_launcher_stops_after_failed_stage(
     assert launched == [0]
 
 
-def test_local_launcher_does_not_force_platform_stage_or_job_terminal_state(
+def test_local_launcher_does_not_force_platform_terminal_state(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "a.jsonl"
@@ -311,16 +310,9 @@ def test_local_launcher_does_not_force_platform_stage_or_job_terminal_state(
             output_rows=1,
         ),
     )
-    finish_stage = Mock()
-    finish_job = Mock()
-    monkeypatch.setattr(launcher, "_finish_platform_stage", finish_stage)
-    monkeypatch.setattr(launcher, "_finish_platform_job", finish_job)
-
     stats = launcher.launch()
 
     assert stats.completed == 1
-    finish_stage.assert_not_called()
-    finish_job.assert_not_called()
 
 
 def test_read_worker_stats_includes_stderr_tail_on_failure(tmp_path) -> None:

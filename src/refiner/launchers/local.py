@@ -93,6 +93,7 @@ class LocalLauncher(BaseLauncher):
             return None
         return self._create_platform_run(
             plan=self._compiled_plan(stages),
+            stages=stages,
             fail_open=self.runtime_backend != "platform",
         )
 

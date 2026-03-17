@@ -167,3 +167,43 @@ def test_file_runtime_reports_finalized_workers(tmp_path: Path) -> None:
     assert lifecycle.finalized_workers() == [
         FinalizedShardWorker(shard_id=shard.id, worker_id="2")
     ]
+
+
+def test_file_runtime_requeues_failed_shard_while_retry_budget_remains(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SHARD_MAX_ATTEMPTS", "3")
+    lifecycle = LocalRuntimeLifecycle(
+        run=_run(job_id="job8", worker_id="1"),
+        workdir=str(tmp_path),
+    )
+    shard = _shard("p", 0, 1)
+    lifecycle.seed_shards([shard])
+
+    claimed = lifecycle.claim()
+    assert claimed is not None
+    lifecycle.fail(claimed, "boom")
+
+    reclaimed = lifecycle.claim()
+    assert reclaimed is not None
+    assert reclaimed.id == shard.id
+
+
+def test_file_runtime_marks_failed_when_retry_budget_is_exhausted(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SHARD_MAX_ATTEMPTS", "1")
+    lifecycle = LocalRuntimeLifecycle(
+        run=_run(job_id="job9", worker_id="1"),
+        workdir=str(tmp_path),
+    )
+    shard = _shard("p", 0, 1)
+    lifecycle.seed_shards([shard])
+
+    claimed = lifecycle.claim()
+    assert claimed is not None
+    lifecycle.fail(claimed, "boom")
+
+    assert lifecycle.claim() is None
+    failed_dir = tmp_path / "runs" / "job9" / "lifecycle" / "stage-0" / "failed"
+    assert (failed_dir / f"{shard.id}.json").exists()
