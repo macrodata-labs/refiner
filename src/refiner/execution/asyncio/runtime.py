@@ -82,7 +82,7 @@ class AsyncRuntime:
         if loop is None or thread is None or loop.is_closed():
             executor = self._io_executor
             if executor is not None:
-                executor.shutdown(wait=False, cancel_futures=True)
+                executor.shutdown(wait=True, cancel_futures=False)
                 self._io_executor = None
             return
         loop.call_soon_threadsafe(loop.stop)
@@ -91,7 +91,7 @@ class AsyncRuntime:
         self._thread = None
         executor = self._io_executor
         if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=False)
             self._io_executor = None
 
 

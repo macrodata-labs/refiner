@@ -3,8 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from loguru import logger
-
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io.datafolder import DataFolderLike
 from refiner.pipeline.sinks.base import (
@@ -86,7 +84,6 @@ class LeRobotWriterSink(BaseSink):
 
         for shard_id, shard_block in blocks_by_shard.items():
             for row in shard_block:
-                logger.debug("Writing row: {}", row["episode_index"])
                 self._async_window.submit_blocking(
                     self._writer_for_shard(shard_id).write_row(row=row)
                 )

@@ -4,11 +4,9 @@ import asyncio
 from dataclasses import dataclass
 from functools import partial
 from fractions import Fraction
-import threading
 from typing import IO, Any, cast
 
 import av
-from loguru import logger
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
 from refiner.media import Video
@@ -50,10 +48,6 @@ class _PreparedSource:
 
     def close(self) -> None:
         try:
-            logger.debug(
-                "Closing prepared remux source: uri={!r}",
-                self.uri,
-            )
             self.container.close()
         finally:
             self.input_file.close()
@@ -94,10 +88,6 @@ class RemuxWriter:
         except Exception:
             output_file.close()
             raise
-        logger.debug(
-            "Opened remux output container: output_rel={!r}",
-            output_rel,
-        )
         return cls(
             probe=probe,
             output_file=output_file,
@@ -109,7 +99,6 @@ class RemuxWriter:
         return int(self.output_file.tell())
 
     def close(self) -> None:
-        logger.debug("Closing remux output container")
         self.container.close()
         self.output_file.close()
 
@@ -159,12 +148,6 @@ class RemuxWriter:
         self.output_offset_pts += end_pts - start_pts
         out_from_s = float(output_base_pts) * time_base_s
         out_to_s = float(output_base_pts + (end_pts - start_pts)) * time_base_s
-        logger.debug(
-            "Finished remux append: packets_muxed={} out_from_s={:.6f} out_to_s={:.6f}",
-            packets_muxed,
-            out_from_s,
-            out_to_s,
-        )
         return out_from_s, out_to_s
 
 
@@ -265,10 +248,6 @@ def _prepare_video(
 ) -> _PreparedSource:
     input_file = video.open("rb")
     try:
-        logger.debug(
-            "Opening remux source during prepare: uri={!r}",
-            video_uri(video),
-        )
         container = av.open(input_file, mode="r")
         stream = cast(
             Any,
@@ -287,12 +266,6 @@ def _prepare_video(
             )
 
         try:
-            logger.debug(
-                "Preparing remux source seek: uri={!r} start_pts={} thread_id={} backward=True any_frame=False",
-                video_uri(video),
-                start_pts,
-                threading.get_ident(),
-            )
             container.seek(
                 start_pts,
                 stream=stream,
@@ -300,11 +273,6 @@ def _prepare_video(
             )
         except Exception:
             try:
-                logger.debug(
-                    "Retrying prepare remux seek: uri={!r} start_pts={} backward=True any_frame=True",
-                    video_uri(video),
-                    max(0, start_pts),
-                )
                 container.seek(
                     max(0, start_pts),
                     stream=stream,
@@ -318,14 +286,6 @@ def _prepare_video(
             container=container,
             video=video,
             default_fps=default_fps,
-        )
-
-        logger.debug(
-            "Prepared video source: uri={!r} start_pts={} end_pts={} remuxable={}",
-            video_uri(video),
-            start_pts,
-            alignment.end_pts if alignment is not None else None,
-            alignment is not None,
         )
         return _PreparedSource(
             uri=video_uri(video),
