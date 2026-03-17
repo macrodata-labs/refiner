@@ -97,7 +97,6 @@ class LeRobotVideoWriter:
     video_key: str
     video_config: "LeRobotVideoConfig"
     stats_config: "LeRobotStatsConfig"
-    default_fps: int | None
     video_bytes_limit: int
 
     _writer: RemuxWriter | TranscodeWriter | None = field(default=None, init=False)
@@ -138,18 +137,18 @@ class LeRobotVideoWriter:
         item: _VideoItem,
     ) -> _PreparedVideoItem:
         prepared_source = await prepare_video(
+            video_key=self.video_key,
             video=item.video,
-            default_fps=self.default_fps,
         )
+        transcode_fps = None
+        if prepared_source.alignment is None and prepared_source.probe is not None:
+            transcode_fps = prepared_source.probe.fps
+        if transcode_fps is None and isinstance(self._writer, TranscodeWriter):
+            transcode_fps = int(self._writer.fps)
         return _PreparedVideoItem(
             item=item,
             source=prepared_source,
-            transcode_fps=(
-                None
-                if prepared_source.alignment is not None
-                or prepared_source.probe is None
-                else prepared_source.probe.fps
-            ),
+            transcode_fps=transcode_fps,
         )
 
     async def _commit_item(
@@ -171,6 +170,8 @@ class LeRobotVideoWriter:
         item = prepared.item
         source = prepared.source
         if source.alignment is not None and source.probe is not None:
+            if source.probe.fps is None:
+                raise ValueError("Prepared remux item is missing FPS")
             remux_writer = self._ensure_remux_writer(source.probe)
             file_index = self._next_file_index
             from_timestamp, to_timestamp = remux_writer.append_prepared_video(
@@ -178,7 +179,7 @@ class LeRobotVideoWriter:
             )
             stats = item.source_stats if item.source_stats is not None else {}
             feature = _video_feature(
-                fps=source.probe.fps,
+                fps=int(source.probe.fps),
                 height=source.probe.height,
                 width=source.probe.width,
                 codec=source.probe.codec or self.video_config.codec,

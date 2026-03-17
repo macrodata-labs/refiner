@@ -209,7 +209,6 @@ class _LeRobotShardWriter:
             video_key=video_key,
             video_config=self._video_config,
             stats_config=self.config.stats,
-            default_fps=self._fps,
             video_bytes_limit=self._video_bytes_limit,
         )
         self._video_writers[video_key] = writer

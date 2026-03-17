@@ -284,7 +284,9 @@ def _run_refiner_case(
     output_root: str | Path,
 ) -> CaseResult:
     import refiner as mdr
-    from refiner.pipeline.utils.cache.decoder_cache import reset_video_decoder_cache
+    from refiner.pipeline.utils.cache.decoder_cache import (
+        reset_opened_video_source_cache,
+    )
     from refiner.pipeline.utils.cache.file_cache import reset_media_cache
 
     hf_home = run_dir / "hf-home"
@@ -293,7 +295,7 @@ def _run_refiner_case(
         _prepare_empty_dir(output_root)
     _prepare_empty_dir(workdir)
     reset_media_cache()
-    reset_video_decoder_cache()
+    reset_opened_video_source_cache()
 
     started_at = datetime.now(timezone.utc)
     total_start = perf_counter()
