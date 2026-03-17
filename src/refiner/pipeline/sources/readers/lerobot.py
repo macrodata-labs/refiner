@@ -125,13 +125,12 @@ class LeRobotEpisodeReader(ParquetReader):
         self._datasets: tuple[_DatasetState, ...] | None = None
         self._frames_cache_lock = asyncio.Lock()
         self._frames_cache_entry: _FrameFileCacheEntry | None = None
-        self._episode_index = 0
+        self._next_episode_index = 0
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read one episode-file shard and hydrate episode rows lazily."""
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
-        part = descriptor.parts[0]
         if self._limit is not None and self._submitted_episodes >= self._limit:
             return
 
@@ -139,35 +138,41 @@ class LeRobotEpisodeReader(ParquetReader):
             max_in_flight=self._media_max_in_flight,
             preserve_order=self._media_preserve_order,
         )
-        for batch in super().read_shard(shard):
-            if not isinstance(batch, (pa.RecordBatch, pa.Table)):
-                raise TypeError(
-                    "LeRobotEpisodeReader requires Arrow batches from ParquetReader"
-                )
+        for part in descriptor.parts:
+            part_shard = Shard.from_file_parts((part,))
+            for batch in super().read_shard(part_shard):
+                if not isinstance(batch, (pa.RecordBatch, pa.Table)):
+                    raise TypeError(
+                        "LeRobotEpisodeReader requires Arrow batches from ParquetReader"
+                    )
 
-            names = tuple(str(name) for name in batch.schema.names)
-            columns = tuple(batch.column(i) for i in range(batch.num_columns))
-            index_by_name = {name: i for i, name in enumerate(names)}
-            for idx in range(batch.num_rows):
-                if self._limit is not None and self._submitted_episodes >= self._limit:
-                    yield from async_window.flush()
-                    return
+                names = tuple(str(name) for name in batch.schema.names)
+                columns = tuple(batch.column(i) for i in range(batch.num_columns))
+                index_by_name = {name: i for i, name in enumerate(names)}
+                for idx in range(batch.num_rows):
+                    if (
+                        self._limit is not None
+                        and self._submitted_episodes >= self._limit
+                    ):
+                        yield from async_window.flush()
+                        return
 
-                row = ArrowRowView(
-                    names=names,
-                    columns=columns,
-                    index_by_name=index_by_name,
-                    row_idx=idx,
-                )
-                episode_index = max(
-                    row.get("episode_index", 0),
-                    self._episode_index,
-                )
-                async_window.submit_blocking(
-                    self._build_episode_row(row, part.source_index, episode_index)
-                )
-                yield from async_window.poll()
-                self._submitted_episodes += 1
+                    row = ArrowRowView(
+                        names=names,
+                        columns=columns,
+                        index_by_name=index_by_name,
+                        row_idx=idx,
+                    )
+                    episode_index = max(
+                        row.get("episode_index", 0),
+                        self._next_episode_index,
+                    )
+                    self._next_episode_index = episode_index + 1
+                    async_window.submit_blocking(
+                        self._build_episode_row(row, part.source_index, episode_index)
+                    )
+                    yield from async_window.poll()
+                    self._submitted_episodes += 1
 
         yield from async_window.flush()
 

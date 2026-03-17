@@ -14,7 +14,7 @@ from refiner.pipeline.sinks.base import BaseSink, Block, ShardCounts
 
 from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _aggregate_stats,
-    _cast_stats_to_numpy,
+    _extract_episode_stats,
     _serialize_stats,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import (
@@ -67,7 +67,11 @@ class _LeRobotMetaReducer:
             return
 
         tasks = self._load_stage1_tasks(finalized_chunk_keys)
-        stats_list = self._load_stage1_stats(finalized_chunk_keys)
+        stats_list = [
+            _extract_episode_stats(row)
+            for row in episodes_rows
+            if _extract_episode_stats(row)
+        ]
         infos = self._load_stage1_infos(finalized_chunk_keys)
 
         for row in episodes_rows:
@@ -148,24 +152,6 @@ class _LeRobotMetaReducer:
 
         ordered = sorted(task_to_index.items(), key=lambda kv: (kv[1], kv[0]))
         return [task for task, _ in ordered]
-
-    def _load_stage1_stats(
-        self, finalized_chunk_keys: set[str]
-    ) -> list[dict[str, dict[str, Any]]]:
-        out: list[dict[str, dict[str, Any]]] = []
-        for rel in self._iter_stage1_jsonl_files(
-            finalized_chunk_keys, filename="stats.jsonl"
-        ):
-            with self.folder.open(rel, mode="rt", encoding="utf-8") as src:
-                for line in src:
-                    payload = line.strip()
-                    if not payload:
-                        continue
-                    item = json.loads(payload)
-                    raw = item.get("stats")
-                    if isinstance(raw, Mapping):
-                        out.append(_cast_stats_to_numpy(raw))
-        return out
 
     def _load_stage1_infos(
         self, finalized_chunk_keys: set[str]

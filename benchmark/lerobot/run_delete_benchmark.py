@@ -21,7 +21,7 @@ from huggingface_hub import get_token
 from refiner.io import DataFolder
 
 
-DEFAULT_REPO_ID = "macrodata/aloha_static_battery_ep000_004"
+DEFAULT_REPO_ID = "lerobot/aloha_static_battery"
 DEFAULT_DELETE_EPISODES = (1,)
 DEFAULT_ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
 REPO_ROOT = Path(__file__).resolve().parents[2]

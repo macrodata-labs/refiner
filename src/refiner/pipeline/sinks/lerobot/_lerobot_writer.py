@@ -2,11 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
 
-import pyarrow as pa
-
-from refiner.execution.operators.vectorized import iter_table_rows
 from refiner.io.datafolder import DataFolderLike
 from refiner.pipeline.sinks.base import (
     BaseSink,
@@ -82,24 +78,18 @@ class LeRobotWriterSink(BaseSink):
         blocks_by_shard, counts = split_block_by_shard(block)
 
         for shard_id, shard_block in blocks_by_shard.items():
-            if isinstance(shard_block, pa.Table):
-                rows = iter_table_rows(shard_block)
-            else:
-                rows = shard_block
-
-            for row in rows:
-                self.process_row(row, shard_id)
+            self._writer_for_shard(shard_id).write_block(shard_block)
 
         return counts
 
-    def process_row(self, row: Mapping[str, Any], shard_id: str) -> None:
+    def _writer_for_shard(self, shard_id: str) -> _LeRobotShardWriter:
         writer = self._writers.get(shard_id)
         token = get_active_run_handle().worker_token
         key = f"{shard_id}__w{token}"
         if writer is None:
             writer = _LeRobotShardWriter(config=self.config, chunk_key=key)
             self._writers[shard_id] = writer
-        writer.consume_row(row)
+        return writer
 
     def on_shard_complete(self, shard_id: str) -> None:
         writer = self._writers.pop(shard_id, None)

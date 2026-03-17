@@ -12,6 +12,7 @@ from refiner.io import DataFile
 from refiner.media import DecodedVideo, VideoFile, hydrate_video
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.utils.cache.file_cache import get_media_cache
+from refiner.pipeline.utils.cache.lease_cache import LeaseCache
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -128,5 +129,42 @@ def test_media_cache_file_lease_can_be_acquired_and_released_twice() -> None:
         assert lease1.path == lease2.path
         lease1.release()
         lease2.release()
+
+    asyncio.run(exercise())
+
+
+def test_lease_cache_waiters_share_one_inflight_load() -> None:
+    class _TestLeaseCache(LeaseCache[str, str]):
+        def __init__(self) -> None:
+            super().__init__(max_entries=4)
+            self.create_calls = 0
+            self.started = asyncio.Event()
+            self.unblock = asyncio.Event()
+
+        async def _create_resource(self, key: str) -> tuple[str, int]:
+            self.create_calls += 1
+            self.started.set()
+            await self.unblock.wait()
+            return f"resource:{key}", 1
+
+        def _close_resource(self, resource: str) -> None:
+            return
+
+    async def exercise() -> None:
+        cache = _TestLeaseCache()
+
+        first = asyncio.create_task(cache.acquire("same"))
+        await cache.started.wait()
+        second = asyncio.create_task(cache.acquire("same"))
+
+        cache.unblock.set()
+        lease1, lease2 = await asyncio.gather(first, second)
+        try:
+            assert lease1.resource == "resource:same"
+            assert lease2.resource == "resource:same"
+            assert cache.create_calls == 1
+        finally:
+            lease1.release()
+            lease2.release()
 
     asyncio.run(exercise())

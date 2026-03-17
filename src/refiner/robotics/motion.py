@@ -103,6 +103,7 @@ def motion_trim(
             if isinstance(video, DecodedVideo):
                 updates[key] = DecodedVideo(
                     frames=tuple(video.frames[start_idx : end_idx + 1]),
+                    fps=video.fps,
                     original_file=video.original_file,
                     width=video.width,
                     height=video.height,

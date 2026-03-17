@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 from bisect import bisect_left
-import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -9,21 +9,14 @@ from pathlib import Path
 from typing import IO, Any, cast
 
 import av
-
-from refiner.execution.asyncio.runtime import submit
 from refiner.io import DataFolder
 from refiner.media import Video
 from refiner.media.video.types import DecodedVideo, VideoFile
-from refiner.pipeline.sinks.lerobot._lerobot_video import (
-    _PendingVideoRun,
-    _PendingVideoSegment,
-    run_can_extend,
+from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
     video_from_timestamp_s,
     video_to_timestamp_s,
     video_uri,
 )
-
-_ = (_PendingVideoSegment, run_can_extend)
 
 _TIMESTAMP_EPSILON_S = 1e-3
 _VIDEO_PROBE_CACHE_MAX_ENTRIES = 256
@@ -47,11 +40,10 @@ class _VideoSourceProbe:
 
 
 @dataclass(frozen=True, slots=True)
-class _RunPtsAlignment:
+class _VideoPtsAlignment:
     probe: _VideoSourceProbe
     start_pts: int
     end_pts: int
-    segment_end_pts: tuple[int, ...]
 
 
 class RemuxWriter:
@@ -104,19 +96,17 @@ class RemuxWriter:
         self.container.close()
         self.output_file.close()
 
-    def add_run(
+    def append_video(
         self,
-        run: _PendingVideoRun,
-        alignment: _RunPtsAlignment,
-    ) -> list[tuple[float, float]]:
+        video: Video,
+        alignment: _VideoPtsAlignment,
+    ) -> tuple[float, float]:
         probe = alignment.probe
         if not probes_are_remux_compatible(self.probe, probe):
-            raise ValueError("Video run is not remux-compatible")
+            raise ValueError("Video clip is not remux-compatible")
 
         start_pts = alignment.start_pts
         end_pts = alignment.end_pts
-        segment_end_pts = list(alignment.segment_end_pts)
-        segment_start_pts = [start_pts, *segment_end_pts[:-1]]
         output_base_pts = self.output_offset_pts
         time_base_s = float(probe.time_base)
 
@@ -152,16 +142,9 @@ class RemuxWriter:
 
         self.output_offset_pts += end_pts - start_pts
         self.duration_s = float(self.output_offset_pts) * time_base_s
-        flushed_timestamps: list[tuple[float, float]] = []
-        for index in range(len(run.segments)):
-            segment_start = segment_start_pts[index]
-            segment_end = segment_end_pts[index]
-            out_from_s = (
-                float(output_base_pts + (segment_start - start_pts)) * time_base_s
-            )
-            out_to_s = float(output_base_pts + (segment_end - start_pts)) * time_base_s
-            flushed_timestamps.append((out_from_s, out_to_s))
-        return flushed_timestamps
+        out_from_s = float(output_base_pts) * time_base_s
+        out_to_s = float(output_base_pts + (end_pts - start_pts)) * time_base_s
+        return out_from_s, out_to_s
 
 
 def _stream_duration_seconds(container: Any, stream: Any) -> float | None:
@@ -206,26 +189,26 @@ def _match_timestamp_to_pts(
     return best[0], best[1]
 
 
-def _run_aligned_pts(
-    run: _PendingVideoRun,
+def _video_aligned_pts(
+    video: Video,
     probe: _VideoSourceProbe,
 ) -> tuple[int, int, int] | None:
-    if not run.segments or not probe.monotonic_pts_dts:
+    if not probe.monotonic_pts_dts:
         return None
 
     start_match = _match_timestamp_to_pts(
-        video_from_timestamp_s(run.segments[0].video),
+        video_from_timestamp_s(video),
         probe.keyframe_pts,
         probe.time_base,
     )
     if start_match is None:
         return None
     start_pts, _ = start_match
-    run_end_s = video_to_timestamp_s(run.segments[-1].video)
-    if run_end_s is None:
+    video_end_s = video_to_timestamp_s(video)
+    if video_end_s is None:
         return None
     end_match = _match_timestamp_to_pts(
-        run_end_s,
+        video_end_s,
         probe.packet_boundary_pts,
         probe.time_base,
     )
@@ -235,50 +218,6 @@ def _run_aligned_pts(
     if end_pts <= start_pts:
         return None
     return start_pts, end_pts, end_idx
-
-
-def _run_segment_end_pts(
-    *,
-    run: _PendingVideoRun,
-    probe: _VideoSourceProbe,
-    start_pts: int,
-    end_pts: int,
-    end_pts_index: int,
-) -> list[int]:
-    segment_end_pts: list[int] = []
-    previous_end = start_pts
-    search_min_index = 0
-    for index, segment in enumerate(run.segments):
-        segment_to_s = video_to_timestamp_s(segment.video)
-        if index == len(run.segments) - 1:
-            segment_end = end_pts
-        else:
-            if segment_to_s is None:
-                segment_to_s = video_from_timestamp_s(run.segments[index + 1].video)
-            resolved = _match_timestamp_to_pts(
-                timestamp_s=float(segment_to_s),
-                candidates=probe.packet_boundary_pts,
-                time_base=probe.time_base,
-                min_index=search_min_index,
-            )
-            if resolved is None:
-                raise ValueError(
-                    f"Video run for {run.video_key!r} has non-aligned segment boundary"
-                )
-            segment_end, resolved_index = resolved
-            if resolved_index > end_pts_index:
-                raise ValueError(
-                    f"Video run for {run.video_key!r} has non-aligned segment boundary"
-                )
-            search_min_index = resolved_index
-
-        if segment_end < previous_end or segment_end > end_pts:
-            raise ValueError(
-                f"Video run for {run.video_key!r} has invalid segment layout"
-            )
-        segment_end_pts.append(segment_end)
-        previous_end = segment_end
-    return segment_end_pts
 
 
 def probes_are_remux_compatible(
@@ -304,9 +243,9 @@ class _VideoProbeCache:
         default_factory=dict,
         init=False,
     )
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
-    def probe_video_source(
+    async def probe_video_source(
         self,
         *,
         video_key: str,
@@ -314,7 +253,7 @@ class _VideoProbeCache:
         default_fps: int | None,
     ) -> _VideoSourceProbe | None:
         cache_key = (video_key, video_uri(video))
-        with self._lock:
+        async with self._lock:
             cached = self._cache.get(cache_key)
             if cached is not None and Path(cached.local_path).exists():
                 self._cache.pop(cache_key, None)
@@ -323,10 +262,10 @@ class _VideoProbeCache:
             self._cache.pop(cache_key, None)
 
         if not isinstance(video, VideoFile):
-            self.cache(cache_key, None)
+            await self.cache(cache_key, None)
             return None
         local_path = str(
-            submit(video.cache_file(cache_name=f"lerobot_writer:{video_key}")).result()
+            await video.cache_file(cache_name=f"lerobot_writer:{video_key}")
         )
 
         with av.open(local_path, mode="r") as container:
@@ -338,11 +277,11 @@ class _VideoProbeCache:
                 ),
             )
             if stream is None or stream.width is None or stream.height is None:
-                self.cache(cache_key, None)
+                await self.cache(cache_key, None)
                 return None
             duration_s = _stream_duration_seconds(container, stream)
             if duration_s is None or stream.time_base is None:
-                self.cache(cache_key, None)
+                await self.cache(cache_key, None)
                 return None
 
             packet_boundary_pts: list[int] = []
@@ -395,48 +334,35 @@ class _VideoProbeCache:
                 monotonic_pts_dts=monotonic_pts_dts,
             )
 
-        self.cache(cache_key, probe)
+        await self.cache(cache_key, probe)
         return probe
 
-    def cache(
+    async def cache(
         self,
         cache_key: tuple[str, str],
         probe: _VideoSourceProbe | None,
     ) -> None:
-        with self._lock:
+        async with self._lock:
             self._cache.pop(cache_key, None)
             self._cache[cache_key] = probe
             while len(self._cache) > self.max_entries:
                 self._cache.pop(next(iter(self._cache)), None)
 
-    def cleanup_video(self, video: Video) -> None:
-        uri = video_uri(video)
-        with self._lock:
-            for key in [key for key in self._cache if key[1] == uri]:
-                self._cache.pop(key, None)
-        if isinstance(video, VideoFile):
-            video.cleanup()
-        elif isinstance(video, DecodedVideo):
-            video.original_file.cleanup()
 
-
-def probe_run_for_remux(
+async def probe_video_for_remux(
     *,
-    run: _PendingVideoRun,
+    video_key: str,
+    video: Video,
+    source_stats: dict[str, Any] | None,
     probe_cache: _VideoProbeCache,
     default_fps: int | None,
-) -> _RunPtsAlignment | None:
-    if not run.segments:
-        return None
-    if any(
-        isinstance(segment.video, DecodedVideo) or segment.source_stats is None
-        for segment in run.segments
-    ):
+) -> _VideoPtsAlignment | None:
+    if isinstance(video, DecodedVideo) or source_stats is None:
         return None
 
-    probe = probe_cache.probe_video_source(
-        video_key=run.video_key,
-        video=run.segments[0].video,
+    probe = await probe_cache.probe_video_source(
+        video_key=video_key,
+        video=video,
         default_fps=default_fps,
     )
     if probe is None:
@@ -444,24 +370,12 @@ def probe_run_for_remux(
     if not probe.monotonic_pts_dts:
         return None
 
-    start_match = _run_aligned_pts(run, probe)
+    start_match = _video_aligned_pts(video, probe)
     if start_match is None:
         return None
-    start_pts, end_pts, end_pts_index = start_match
-
-    try:
-        segment_end_pts = _run_segment_end_pts(
-            run=run,
-            probe=probe,
-            start_pts=start_pts,
-            end_pts=end_pts,
-            end_pts_index=end_pts_index,
-        )
-    except ValueError:
-        return None
-    return _RunPtsAlignment(
+    start_pts, end_pts, _ = start_match
+    return _VideoPtsAlignment(
         probe=probe,
         start_pts=start_pts,
         end_pts=end_pts,
-        segment_end_pts=tuple(segment_end_pts),
     )

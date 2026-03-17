@@ -1,30 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import Future
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from queue import Empty, Queue
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from refiner.execution.asyncio.runtime import submit
 from refiner.io import DataFolder
 from refiner.media import Video
-from refiner.pipeline.sinks.lerobot._lerobot_video import (
-    _PendingVideoRun,
-    _PendingVideoSegment,
-    VideoTrackWriter,
-    _resolve_video_fps,
-    run_can_extend,
-)
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     RemuxWriter,
-    _RunPtsAlignment,
+    _VideoPtsAlignment,
     _VideoProbeCache,
     _VideoSourceProbe,
-    probe_run_for_remux,
+    probe_video_for_remux,
     probes_are_remux_compatible,
+)
+from refiner.pipeline.sinks.lerobot._lerobot_video_transcode import (
+    TranscodeWriter,
+    _resolve_video_fps,
 )
 
 if TYPE_CHECKING:
@@ -32,6 +27,7 @@ if TYPE_CHECKING:
         LeRobotStatsConfig,
         LeRobotVideoConfig,
     )
+
 
 DEFAULT_VIDEO_PATH = "videos/{video_key}/chunk-{chunk_index}/file-{file_index:03d}.mp4"
 
@@ -62,6 +58,13 @@ def _video_feature(
 
 
 @dataclass(slots=True)
+class _VideoBatchItem:
+    episode_index: int
+    video: Video
+    source_stats: dict[str, np.ndarray] | None = None
+
+
+@dataclass(slots=True)
 class _CompletedVideoSegment:
     episode_index: int
     video_key: str
@@ -73,26 +76,16 @@ class _CompletedVideoSegment:
 
 
 @dataclass(slots=True)
-class _CompletedVideoRun:
+class _CompletedVideoItem:
     video_key: str
     feature: dict[str, Any] | None
-    segments: list[_CompletedVideoSegment]
-
-
-@dataclass(slots=True)
-class _PreparedVideoRun:
-    run: _PendingVideoRun
-    remux_alignment: _RunPtsAlignment | None
-
-
-@dataclass(slots=True)
-class _SequencedVideoRun:
-    seq: int
-    run: _PendingVideoRun
+    segment: _CompletedVideoSegment
 
 
 @dataclass(slots=True)
 class LeRobotVideoWriter:
+    """Write one video column for one shard chunk."""
+
     folder: DataFolder
     chunk_key: str
     video_key: str
@@ -100,244 +93,179 @@ class LeRobotVideoWriter:
     stats_config: "LeRobotStatsConfig"
     default_fps: int | None
     video_bytes_limit: int
-    prepare_max_in_flight: int = 10
+    prepare_max_in_flight: int = 4
 
-    _coordinator_future: Future[None] = field(init=False)
-    _input_runs: Queue[_SequencedVideoRun | None] = field(
-        default_factory=Queue,
-        init=False,
-    )
-    _completed_runs: Queue[_CompletedVideoRun] = field(
-        default_factory=Queue,
-        init=False,
-    )
     _probe_cache: _VideoProbeCache = field(default_factory=_VideoProbeCache, init=False)
-    _pending_run: _PendingVideoRun | None = field(default=None, init=False)
-    _writer: RemuxWriter | VideoTrackWriter | None = field(
-        default=None,
-        init=False,
-    )
+    _writer: RemuxWriter | TranscodeWriter | None = field(default=None, init=False)
     _next_file_index: int = field(default=0, init=False)
-    _next_run_seq: int = field(default=0, init=False)
 
-    def __post_init__(self) -> None:
-        self._coordinator_future = submit(self._run_coordinator())
-
-    def submit(
+    async def write_videos(
         self,
+        items: list[_VideoBatchItem],
         *,
-        episode_index: int,
-        video: Video,
-        source_stats: dict[str, np.ndarray] | None,
-    ):
-        self._raise_if_failed()
+        output_queue: asyncio.Queue[_CompletedVideoItem] | None = None,
+    ) -> list[_CompletedVideoItem]:
+        if not items:
+            return []
 
-        current_run = self._pending_run
-        if current_run is not None and not run_can_extend(current_run, video):
-            self._schedule_pending_run()
+        completed: list[_CompletedVideoItem] = []
+        prepared_by_index: dict[
+            int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]
+        ] = {}
+        next_commit_index = 0
 
-        if self._pending_run is None:
-            self._pending_run = _PendingVideoRun(video_key=self.video_key)
+        async for index, prepared in self._prepare_items(items):
+            prepared_by_index[index] = prepared
+            while next_commit_index in prepared_by_index:
+                completed_item = await self._commit_item(
+                    prepared_by_index.pop(next_commit_index)
+                )
+                completed.append(completed_item)
+                if output_queue is not None:
+                    await output_queue.put(completed_item)
+                next_commit_index += 1
 
-        self._pending_run.segments.append(
-            _PendingVideoSegment(
-                episode_index=episode_index,
-                video=video,
-                source_stats=source_stats,
-            )
-        )
+        if prepared_by_index:
+            raise RuntimeError("Prepared video items remained uncommitted")
+        return completed
 
-    def flush(self) -> list[_CompletedVideoRun]:
-        self._raise_if_failed()
-        self._schedule_pending_run()
-        self._input_runs.put(None)
-        self._coordinator_future.result()
-        self._close_writer()
-        return self._drain_completed_runs()
-
-    def drain_completed(
-        self, *, force_schedule_pending_run: bool = False
-    ) -> list[_CompletedVideoRun]:
-        self._raise_if_failed()
-        if force_schedule_pending_run:
-            self._schedule_pending_run()
-        return self._drain_completed_runs()
-
-    def _schedule_pending_run(self) -> bool:
-        current_run = self._pending_run
-        if current_run is None or not current_run.segments:
-            return False
-        self._input_runs.put(
-            _SequencedVideoRun(seq=self._next_run_seq, run=current_run)
-        )
-        self._next_run_seq += 1
-        self._pending_run = None
-        return True
-
-    def _raise_if_failed(self) -> None:
-        if not self._coordinator_future.done():
+    def finalize(self) -> None:
+        if self._writer is None:
             return
-        if (exc := self._coordinator_future.exception()) is not None:
-            raise exc
+        self._writer.close()
+        self._writer = None
 
-    def _drain_completed_runs(self) -> list[_CompletedVideoRun]:
-        self._raise_if_failed()
-        completed: list[_CompletedVideoRun] = []
-        while True:
-            try:
-                completed.append(self._completed_runs.get_nowait())
-            except Empty:
-                return completed
-
-    async def _run_coordinator(self) -> None:
-        prepared_queue: asyncio.Queue[tuple[int, _PreparedVideoRun] | None] = (
-            asyncio.Queue()
-        )
-        await asyncio.gather(
-            self._produce_prepared_runs(prepared_queue),
-            self._commit_prepared_runs(prepared_queue),
-        )
-
-    async def _produce_prepared_runs(
+    async def _prepare_items(
         self,
-        prepared_queue: asyncio.Queue[tuple[int, _PreparedVideoRun] | None],
-    ) -> None:
-        active_prepares: set[asyncio.Task[None]] = set()
+        items: list[_VideoBatchItem],
+    ) -> AsyncIterator[tuple[int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]]]:
+        semaphore = asyncio.Semaphore(max(1, int(self.prepare_max_in_flight)))
 
-        while True:
-            sequenced = await asyncio.to_thread(self._input_runs.get)
-            if sequenced is None:
-                break
-
-            while len(active_prepares) >= self.prepare_max_in_flight:
-                done, pending = await asyncio.wait(
-                    active_prepares,
-                    return_when=asyncio.FIRST_COMPLETED,
+        async def _prepare(
+            index: int,
+            item: _VideoBatchItem,
+        ) -> tuple[int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]]:
+            async with semaphore:
+                return (
+                    index,
+                    (
+                        item,
+                        await probe_video_for_remux(
+                            video_key=self.video_key,
+                            video=item.video,
+                            source_stats=item.source_stats,
+                            probe_cache=self._probe_cache,
+                            default_fps=self.default_fps,
+                        ),
+                    ),
                 )
-                active_prepares = set(pending)
-                for task in done:
-                    task.result()
 
-            active_prepares.add(
-                asyncio.create_task(self._prepare_and_queue(sequenced, prepared_queue))
-            )
+        tasks = [
+            asyncio.create_task(_prepare(index, item))
+            for index, item in enumerate(items)
+        ]
+        try:
+            for task in asyncio.as_completed(tasks):
+                yield await task
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-        if active_prepares:
-            done, _ = await asyncio.wait(active_prepares)
-            for task in done:
-                task.result()
-        await prepared_queue.put(None)
-
-    async def _prepare_and_queue(
+    async def _commit_item(
         self,
-        sequenced: _SequencedVideoRun,
-        prepared_queue: asyncio.Queue[tuple[int, _PreparedVideoRun] | None],
-    ) -> None:
-        await prepared_queue.put(
-            (sequenced.seq, await self._prepare_closed_run(sequenced.run))
-        )
-
-    async def _commit_prepared_runs(
-        self,
-        prepared_queue: asyncio.Queue[tuple[int, _PreparedVideoRun] | None],
-    ) -> None:
-        prepared_by_seq: dict[int, _PreparedVideoRun] = {}
-        next_commit_seq = 0
-        producer_done = False
-
-        while not producer_done or prepared_by_seq:
-            prepared_item = await prepared_queue.get()
-            if prepared_item is None:
-                producer_done = True
-            else:
-                prepared_by_seq[prepared_item[0]] = prepared_item[1]
-
-            # Ensures order
-            while next_commit_seq in prepared_by_seq:
-                prepared = prepared_by_seq.pop(next_commit_seq)
-                for completed in await self._commit_prepared_run(prepared):
-                    self._completed_runs.put(completed)
-                next_commit_seq += 1
-
-    async def _prepare_closed_run(self, run: _PendingVideoRun) -> _PreparedVideoRun:
-        remux_alignment = await asyncio.to_thread(
-            probe_run_for_remux,
-            run=run,
-            probe_cache=self._probe_cache,
-            default_fps=self.default_fps,
-        )
-        return _PreparedVideoRun(run=run, remux_alignment=remux_alignment)
-
-    async def _commit_prepared_run(
-        self, prepared: _PreparedVideoRun
-    ) -> list[_CompletedVideoRun]:
-        if prepared.remux_alignment is not None:
-            remux_writer = self._ensure_remux_writer(
-                prepared.run, prepared.remux_alignment.probe
+        prepared: tuple[_VideoBatchItem, _VideoPtsAlignment | None],
+    ) -> _CompletedVideoItem:
+        item, remux_alignment = prepared
+        file_index = self._next_file_index
+        if remux_alignment is not None:
+            remux_writer = self._ensure_remux_writer(remux_alignment.probe)
+            file_index = self._next_file_index
+            from_timestamp, to_timestamp = remux_writer.append_video(
+                item.video,
+                remux_alignment,
             )
-            flushed_timestamps = remux_writer.add_run(
-                prepared.run, prepared.remux_alignment
+            stats = item.source_stats if item.source_stats is not None else {}
+            feature = _video_feature(
+                fps=remux_alignment.probe.fps,
+                height=remux_alignment.probe.height,
+                width=remux_alignment.probe.width,
+                codec=remux_alignment.probe.codec or self.video_config.codec,
+                pix_fmt=remux_alignment.probe.pix_fmt or self.video_config.pix_fmt,
             )
-            stats = [
-                segment.source_stats if segment.source_stats is not None else {}
-                for segment in prepared.run.segments
-            ]
         else:
-            transcode_writer = self._ensure_transcode_writer(
-                prepared.run.segments[0].video
+            transcode_writer = await self._ensure_transcode_writer(item.video)
+            file_index = self._next_file_index
+            (from_timestamp, to_timestamp), stats = await transcode_writer.append_video(
+                video=item.video,
+                stats_config=self.stats_config,
             )
-            flushed_timestamps, stats = cast(Any, transcode_writer).add_run(
-                prepared.run
-            )
-
-        completed_segments = []
-        for segment, (from_timestamp, to_timestamp), stats in zip(
-            prepared.run.segments, flushed_timestamps, stats
-        ):
-            completed_segments.append(
-                _CompletedVideoSegment(
-                    episode_index=segment.episode_index,
-                    video_key=self.video_key,
-                    file_index=self._next_file_index - 1,
-                    chunk_key=self.chunk_key,
-                    from_timestamp=from_timestamp,
-                    to_timestamp=to_timestamp,
-                    stats=stats,
+            if transcode_writer.stream is None:
+                raise RuntimeError(
+                    "Transcode writer did not initialize an output stream"
                 )
+            feature = _video_feature(
+                fps=int(transcode_writer.fps),
+                height=int(transcode_writer.stream.height),
+                width=int(transcode_writer.stream.width),
+                codec=self.video_config.codec,
+                pix_fmt=self.video_config.pix_fmt,
             )
 
-        return completed_segments
+        return _CompletedVideoItem(
+            video_key=self.video_key,
+            feature=feature,
+            segment=_CompletedVideoSegment(
+                episode_index=item.episode_index,
+                video_key=self.video_key,
+                file_index=file_index,
+                chunk_key=self.chunk_key,
+                from_timestamp=from_timestamp,
+                to_timestamp=to_timestamp,
+                stats=stats,
+            ),
+        )
 
-    def _ensure_transcode_writer(self, video: Video) -> VideoTrackWriter:
-        fps = _resolve_video_fps(
+    async def _ensure_transcode_writer(self, video: Video) -> TranscodeWriter:
+        fps = await _resolve_video_fps(
             video=video,
             video_key=self.video_key,
         )
         writer = self._writer
-        if isinstance(writer, VideoTrackWriter) and writer.fps == fps:
-            return writer
+        if isinstance(writer, TranscodeWriter) and writer.fps == fps:
+            if writer.size_bytes >= self.video_bytes_limit:
+                self._rotate_writer()
+            else:
+                return writer
 
-        if writer is not None:
+        if self._writer is not None:
             self._rotate_writer()
 
-        writer = VideoTrackWriter.open(
+        writer = TranscodeWriter.open(
             folder=self.folder,
             output_rel=self._current_output_rel,
             config=self.video_config,
+            video_key=self.video_key,
+            fps=fps,
         )
         self._writer = writer
         return writer
 
     def _ensure_remux_writer(
-        self, run: _PendingVideoRun, probe: _VideoSourceProbe
+        self,
+        probe: _VideoSourceProbe,
     ) -> RemuxWriter:
         writer = self._writer
         if isinstance(writer, RemuxWriter) and probes_are_remux_compatible(
             writer.probe, probe
         ):
-            return writer
+            if writer.size_bytes >= self.video_bytes_limit:
+                self._rotate_writer()
+            else:
+                return writer
 
-        if writer is not None:
+        if self._writer is not None:
             self._rotate_writer()
 
         writer = RemuxWriter.open(
@@ -347,12 +275,6 @@ class LeRobotVideoWriter:
         )
         self._writer = writer
         return writer
-
-    def _close_writer(self) -> None:
-        if self._writer is None:
-            return
-        self._writer.close()
-        self._writer = None
 
     def _rotate_writer(self) -> None:
         writer = self._writer
@@ -378,7 +300,7 @@ class LeRobotVideoWriter:
 __all__ = [
     "DEFAULT_VIDEO_PATH",
     "LeRobotVideoWriter",
-    "_CompletedVideoRun",
+    "_CompletedVideoItem",
     "_CompletedVideoSegment",
-    "_PreparedVideoRun",
+    "_VideoBatchItem",
 ]

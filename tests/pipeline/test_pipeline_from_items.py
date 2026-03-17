@@ -34,6 +34,20 @@ def test_from_items_wraps_primitives_in_items_column() -> None:
     assert [r["v"] for r in out] == [1, "x", True]
 
 
+def test_from_items_preserves_row_metadata() -> None:
+    row = DictRow(
+        data={"x": 1, "metadata": {"source": "kept"}},
+        metadata={"source": "kept"},
+        shard_id="s0",
+    )
+
+    out = from_items([row]).materialize()
+
+    assert len(out) == 1
+    assert out[0]["x"] == 1
+    assert out[0]["metadata"] == {"source": "kept"}
+
+
 class _CustomSource(BaseSource):
     def list_shards(self) -> list[Shard]:
         return [Shard.from_file_parts([FilePart(path="custom", start=0, end=2)])]

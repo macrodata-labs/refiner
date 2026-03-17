@@ -35,6 +35,7 @@ class AsyncRuntime:
                 try:
                     loop.run_forever()
                 finally:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
                     loop.close()
 
             self._thread = threading.Thread(
@@ -58,26 +59,8 @@ class AsyncRuntime:
         thread = self._thread
         if loop is None or thread is None or loop.is_closed():
             return
-
-        async def _shutdown_loop() -> None:
-            current = asyncio.current_task()
-            tasks = [
-                task
-                for task in asyncio.all_tasks(loop)
-                if task is not current and not task.done()
-            ]
-            for task in tasks:
-                task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            await loop.shutdown_asyncgens()
-            await loop.shutdown_default_executor()
-            loop.stop()
-
-        if thread.is_alive():
-            future = asyncio.run_coroutine_threadsafe(_shutdown_loop(), loop)
-            future.result(timeout=10.0)
-            thread.join(timeout=10.0)
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=1.0)
         self._loop = None
         self._thread = None
 
@@ -89,11 +72,7 @@ def submit(coro: Coroutine[Any, Any, T]) -> Future[T]:
     return _runtime.submit(coro)
 
 
-def shutdown() -> None:
-    _runtime.shutdown()
-
-
 atexit.register(_runtime.shutdown)
 
 
-__all__ = ["AsyncRuntime", "shutdown", "submit"]
+__all__ = ["AsyncRuntime", "submit"]

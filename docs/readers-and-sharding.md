@@ -82,5 +82,5 @@ Rows are yielded in input order unless you explicitly choose otherwise on the as
 - Parquet row access uses batch-level cached column-name indexing for faster key lookup.
 - LeRobot expects parquet metadata under `meta/episodes/**`; legacy JSONL metadata is not used.
 - LeRobot reads `fps`, `robot_type`, `features`, `data_path`, and `video_path` from `meta/info.json` when present.
-- The LeRobot writer keeps one `VideoWriter` state machine per `video_key`; run grouping stays synchronous and export work is serialized per key before episode metadata is applied back onto rows.
+- The LeRobot writer is batch-oriented per shard block: frame parquet writes happen per batch table, each `video_key` uses one batch-scoped `VideoWriter.write_videos(...)` call that prepares videos concurrently and commits them in order, and episode rows are finalized from an async queue of completed video results.
 - `hydrate_media(...)` is intentionally narrow here; it is not a general file/bytes hydration helper.

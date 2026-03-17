@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
-from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, IO, Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from refiner.execution.asyncio.runtime import submit
 from refiner.io import DataFolder
 from refiner.media import DecodedVideo, Video, VideoFile
+from refiner.pipeline.sinks.base import ShardedBlock
 from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_EPISODE_STATS,
     LEROBOT_INFO,
@@ -28,10 +30,12 @@ from refiner.pipeline.sinks.lerobot._lerobot_stats import (
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
     DEFAULT_VIDEO_PATH,
     LeRobotVideoWriter,
-    _CompletedVideoRun,
+    _CompletedVideoItem,
+    _VideoBatchItem,
 )
 
 if TYPE_CHECKING:
+    from refiner.pipeline.data.row import Row
     from refiner.pipeline.sinks.lerobot._lerobot_writer import (
         LeRobotVideoConfig,
         LeRobotWriterConfig,
@@ -83,10 +87,10 @@ def _format_chunk_path(
 
 
 @dataclass(slots=True)
-class _PendingEpisode:
+class _EpisodeBatchItem:
+    episode_index: int
     row: dict[str, Any]
     frame_stats: dict[str, dict[str, np.ndarray]]
-    pending_video_keys: set[str]
     video_stats: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
 
 
@@ -98,15 +102,10 @@ class _LeRobotShardWriter:
 
     _task_to_index: dict[str, int] = field(default_factory=dict, init=False)
     _task_order: list[str] = field(default_factory=list, init=False)
-
-    _episodes_writer: pq.ParquetWriter | None = field(default=None, init=False)
-    _episodes_writer_file: IO[bytes] | None = field(default=None, init=False)
-    _episodes_schema: pa.Schema | None = field(default=None, init=False)
-    _stats_file: IO[str] | None = field(default=None, init=False)
-
     _fps: int | None = field(default=None, init=False)
     _robot_type: str | None = field(default=None, init=False)
     features: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
+    _video_config: "LeRobotVideoConfig" = field(init=False)
 
     _total_episodes: int = field(default=0, init=False)
     _global_frame_index: int = field(default=0, init=False)
@@ -114,21 +113,36 @@ class _LeRobotShardWriter:
     _data_file_index: int = field(default=0, init=False)
     _data_bytes_written: int = field(default=0, init=False)
     _data_writer: pq.ParquetWriter | None = field(default=None, init=False)
-    _data_writer_file: IO[bytes] | None = field(default=None, init=False)
+    _data_writer_file: Any = field(default=None, init=False)
     _data_schema: pa.Schema | None = field(default=None, init=False)
 
-    _pending_episodes: OrderedDict[int, _PendingEpisode] = field(
-        default_factory=OrderedDict,
-        init=False,
-    )
     _video_writers: dict[str, LeRobotVideoWriter] = field(
         default_factory=dict, init=False
     )
-    _video_config: "LeRobotVideoConfig" = field(init=False)
+    _episode_rows: list[dict[str, Any]] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
         self.folder = DataFolder.resolve(self.config.output)
         self._video_config = self.config.video
+
+    def write_block(self, block: ShardedBlock) -> None:
+        if isinstance(block, pa.Table):
+            if block.num_rows <= 0:
+                return
+            submit(self._write_table(block)).result()
+            return
+
+        rows = list(block)
+        if not rows:
+            return
+        submit(self._write_rows(rows)).result()
+
+    def finalize(self) -> None:
+        for writer in self._video_writers.values():
+            writer.finalize()
+        self._video_writers.clear()
+        self._close_data()
+        self._write_stage1_meta()
 
     def _meta_path(self, filename: str) -> str:
         return f"meta/chunk-{self.chunk_key}/{filename}"
@@ -142,45 +156,63 @@ class _LeRobotShardWriter:
         return int(self.config.video_files_size_in_mb) * 1024 * 1024
 
     @property
-    def _pending_episode_soft_limit(self) -> int:
-        return int(self.config.max_buffered_episodes) * max(1, len(self._video_writers))
-
-    @property
     def _has_videos(self) -> bool:
         return any(spec.get("dtype") == "video" for spec in self.features.values())
 
-    def consume_row(self, row: Mapping[str, Any]) -> None:
-        episode_index = int(row["episode_index"])
-        frames = self._require_required_fields(row)
-        tasks = self._tasks(row)
-        source_episode_stats = self._source_episode_stats(row)
-
-        self._initialize_info_from_row(row=row, frames=frames)
-
-        data_meta = self._write_frames_to_data(
-            episode_index=episode_index,
-            tasks=tasks,
-            frames=frames,
+    async def _write_rows(self, rows: list[Row | Mapping[str, Any]]) -> None:
+        self._initialize_info_from_rows(rows)
+        batch_items, video_batches, frame_table_for_batch = self._prepare_batch(rows)
+        await self._write_prepared_batch(
+            batch_items=batch_items,
+            video_batches=video_batches,
+            frame_table_for_batch=frame_table_for_batch,
         )
-        frame_stats = compute_episode_stats(frames=frames)
 
-        episode_row: dict[str, Any] = {
-            "episode_index": episode_index,
-            "length": len(frames),
-            "tasks": tasks,
-            "data/chunk_index": data_meta["chunk_index"],
-            "data/file_index": data_meta["file_index"],
-            "dataset_from_index": data_meta["dataset_from_index"],
-            "dataset_to_index": data_meta["dataset_to_index"],
-            "meta/episodes/chunk_index": self.chunk_key,
-            "meta/episodes/file_index": 0,
-        }
-        if tasks:
-            episode_row["task"] = tasks[0]
+    async def _write_table(self, table: pa.Table) -> None:
+        self._initialize_info_from_table(table)
 
-        video_items: list[tuple[str, Video]] = []
-        for key, value in row.items():
-            if key in {
+        batch_items: list[_EpisodeBatchItem] = []
+        video_batches: dict[str, list[_VideoBatchItem]] = {}
+        frame_tables: list[pa.Table] = []
+
+        current_chunk = self.chunk_key
+        current_file = self._data_file_index
+        batch_start_index = self._global_frame_index
+        batch_frame_offset = 0
+
+        if (
+            self._data_writer is not None
+            and self._data_bytes_written >= self._data_bytes_limit
+        ):
+            self._close_data()
+            self._data_file_index += 1
+            current_file = self._data_file_index
+
+        episode_indices = [
+            int(value) for value in table.column("episode_index").to_pylist()
+        ]
+        frames_by_row = table.column("frames").to_pylist()
+        tasks_by_row = (
+            table.column("tasks").to_pylist()
+            if "tasks" in table.schema.names
+            else [None] * table.num_rows
+        )
+        task_by_row = (
+            table.column("task").to_pylist()
+            if "task" in table.schema.names
+            else [None] * table.num_rows
+        )
+        metadata_by_row = (
+            table.column("metadata").to_pylist()
+            if "metadata" in table.schema.names
+            else [None] * table.num_rows
+        )
+
+        passthrough_keys = [
+            key
+            for key in table.column_names
+            if key
+            not in {
                 "frames",
                 "task",
                 "tasks",
@@ -190,65 +222,315 @@ class _LeRobotShardWriter:
                 "data/file_index",
                 "dataset_from_index",
                 "dataset_to_index",
-            }:
-                continue
-            if isinstance(value, Video):
-                video_items.append((key, value))
-                continue
-            episode_row[key] = value
+            }
+        ]
+        passthrough_columns = {
+            key: table.column(key).to_pylist() for key in passthrough_keys
+        }
 
-        self._pending_episodes[episode_index] = _PendingEpisode(
-            row=episode_row,
-            frame_stats=frame_stats,
-            pending_video_keys={key for key, _ in video_items},
+        for row_idx, episode_index in enumerate(episode_indices):
+            frames = self._require_required_fields_from_value(frames_by_row[row_idx])
+            tasks = self._tasks_from_values(
+                tasks_value=tasks_by_row[row_idx],
+                task_value=task_by_row[row_idx],
+            )
+            source_episode_stats = self._source_episode_stats_from_value(
+                metadata_by_row[row_idx]
+            )
+            frame_stats = compute_episode_stats(frames=frames)
+
+            dataset_from_index = batch_start_index + batch_frame_offset
+            dataset_to_index = dataset_from_index + len(frames)
+            batch_frame_offset += len(frames)
+
+            episode_row: dict[str, Any] = {
+                "episode_index": episode_index,
+                "length": len(frames),
+                "tasks": tasks,
+                "data/chunk_index": current_chunk,
+                "data/file_index": current_file,
+                "dataset_from_index": dataset_from_index,
+                "dataset_to_index": dataset_to_index,
+                "meta/episodes/chunk_index": self.chunk_key,
+                "meta/episodes/file_index": 0,
+            }
+            if tasks:
+                episode_row["task"] = tasks[0]
+
+            for key, values in passthrough_columns.items():
+                value = values[row_idx]
+                if isinstance(value, Video):
+                    video_batches.setdefault(key, []).append(
+                        _VideoBatchItem(
+                            episode_index=episode_index,
+                            video=value,
+                            source_stats=source_episode_stats.get(key),
+                        )
+                    )
+                    continue
+                episode_row[key] = value
+
+            batch_items.append(
+                _EpisodeBatchItem(
+                    episode_index=episode_index,
+                    row=episode_row,
+                    frame_stats=frame_stats,
+                )
+            )
+
+            if frames:
+                frame_tables.append(
+                    frame_table(
+                        frames=frames,
+                        episode_index=episode_index,
+                        start_index=dataset_from_index,
+                        task_index=self._task_to_index.get(tasks[0]) if tasks else None,
+                    )
+                )
+
+        frame_table_for_batch = pa.concat_tables(frame_tables) if frame_tables else None
+        await self._write_prepared_batch(
+            batch_items=batch_items,
+            video_batches=video_batches,
+            frame_table_for_batch=frame_table_for_batch,
         )
 
-        for key, value in video_items:
-            self._queue_video_segment(
-                episode_index=episode_index,
-                video_key=key,
-                video=value,
-                source_stats=source_episode_stats.get(key),
+    async def _write_prepared_batch(
+        self,
+        *,
+        batch_items: list[_EpisodeBatchItem],
+        video_batches: dict[str, list[_VideoBatchItem]],
+        frame_table_for_batch: pa.Table | None,
+    ) -> None:
+        data_write = None
+        if frame_table_for_batch is not None and frame_table_for_batch.num_rows > 0:
+            data_write = asyncio.to_thread(
+                self._write_frame_table, frame_table_for_batch
             )
 
-        self._drain_video_writers()
-        self._flush_ready_episodes()
-        while len(self._pending_episodes) > self._pending_episode_soft_limit:
-            pending_before = len(self._pending_episodes)
-            self._drain_video_writers(force_schedule_pending_runs=True)
-            self._flush_ready_episodes()
-            if len(self._pending_episodes) >= pending_before:
-                break
-        self._total_episodes += 1
+        video_queue: asyncio.Queue[_CompletedVideoItem] = asyncio.Queue()
+        total_video_items = sum(len(items) for items in video_batches.values())
+        episode_task = asyncio.create_task(
+            self._consume_video_results(
+                batch_items=batch_items,
+                video_queue=video_queue,
+                total_video_items=total_video_items,
+                remaining_by_episode=self._remaining_video_keys(video_batches),
+            )
+        )
 
-    def finalize(self) -> None:
-        for writer in self._video_writers.values():
-            self._process_video_runs(writer.flush())
-        self._flush_ready_episodes()
-        if self._pending_episodes:
-            pending = sorted(self._pending_episodes)
-            raise RuntimeError(
-                "LeRobot writer finalized with unresolved episode video metadata: "
-                f"{pending!r}"
+        video_tasks = [
+            asyncio.create_task(
+                self._video_writer(video_key).write_videos(
+                    items,
+                    output_queue=video_queue,
+                )
+            )
+            for video_key, items in video_batches.items()
+        ]
+
+        try:
+            if video_tasks:
+                await asyncio.gather(*video_tasks)
+            await episode_task
+        except Exception:
+            episode_task.cancel()
+            await asyncio.gather(episode_task, return_exceptions=True)
+            raise
+
+        if data_write is not None:
+            await data_write
+
+        self._total_episodes += len(batch_items)
+
+    def _prepare_batch(
+        self,
+        rows: list[Row | Mapping[str, Any]],
+    ) -> tuple[
+        list[_EpisodeBatchItem], dict[str, list[_VideoBatchItem]], pa.Table | None
+    ]:
+        batch_items: list[_EpisodeBatchItem] = []
+        video_batches: dict[str, list[_VideoBatchItem]] = {}
+        frame_tables: list[pa.Table] = []
+
+        current_chunk = self.chunk_key
+        current_file = self._data_file_index
+        batch_start_index = self._global_frame_index
+        batch_frame_offset = 0
+
+        if (
+            self._data_writer is not None
+            and self._data_bytes_written >= self._data_bytes_limit
+        ):
+            self._close_data()
+            self._data_file_index += 1
+            current_file = self._data_file_index
+
+        for row in rows:
+            episode_index = int(row["episode_index"])
+            frames = self._require_required_fields(row)
+            tasks = self._tasks(row)
+            source_episode_stats = self._source_episode_stats(row)
+            frame_stats = compute_episode_stats(frames=frames)
+
+            dataset_from_index = batch_start_index + batch_frame_offset
+            dataset_to_index = dataset_from_index + len(frames)
+            batch_frame_offset += len(frames)
+
+            episode_row: dict[str, Any] = {
+                "episode_index": episode_index,
+                "length": len(frames),
+                "tasks": tasks,
+                "data/chunk_index": current_chunk,
+                "data/file_index": current_file,
+                "dataset_from_index": dataset_from_index,
+                "dataset_to_index": dataset_to_index,
+                "meta/episodes/chunk_index": self.chunk_key,
+                "meta/episodes/file_index": 0,
+            }
+            if tasks:
+                episode_row["task"] = tasks[0]
+
+            for key, value in row.items():
+                if key in {
+                    "frames",
+                    "task",
+                    "tasks",
+                    "metadata",
+                    "episode_index",
+                    "data/chunk_index",
+                    "data/file_index",
+                    "dataset_from_index",
+                    "dataset_to_index",
+                }:
+                    continue
+                if isinstance(value, Video):
+                    video_batches.setdefault(key, []).append(
+                        _VideoBatchItem(
+                            episode_index=episode_index,
+                            video=value,
+                            source_stats=source_episode_stats.get(key),
+                        )
+                    )
+                    continue
+                episode_row[key] = value
+
+            batch_items.append(
+                _EpisodeBatchItem(
+                    episode_index=episode_index,
+                    row=episode_row,
+                    frame_stats=frame_stats,
+                )
             )
 
-        self._video_writers.clear()
-        self._close_data()
-        if self._episodes_writer is not None:
-            self._episodes_writer.close()
-            self._episodes_writer = None
-        if self._episodes_writer_file is not None:
-            self._episodes_writer_file.close()
-            self._episodes_writer_file = None
-        if self._stats_file is not None:
-            self._stats_file.close()
-            self._stats_file = None
+            if frames:
+                frame_tables.append(
+                    frame_table(
+                        frames=frames,
+                        episode_index=episode_index,
+                        start_index=dataset_from_index,
+                        task_index=self._task_to_index.get(tasks[0]) if tasks else None,
+                    )
+                )
+
+        if not frame_tables:
+            return batch_items, video_batches, None
+
+        return batch_items, video_batches, pa.concat_tables(frame_tables)
+
+    async def _consume_video_results(
+        self,
+        *,
+        batch_items: list[_EpisodeBatchItem],
+        video_queue: asyncio.Queue[_CompletedVideoItem],
+        total_video_items: int,
+        remaining_by_episode: dict[int, set[str]],
+    ) -> None:
+        items_by_episode = {item.episode_index: item for item in batch_items}
+
+        for item in batch_items:
+            if not remaining_by_episode.get(item.episode_index):
+                self._append_completed_episode(item)
+
+        processed = 0
+        while processed < total_video_items:
+            completed = await video_queue.get()
+            processed += 1
+
+            if completed.feature is not None:
+                self.features[completed.video_key] = completed.feature
+
+            segment = completed.segment
+            item = items_by_episode.get(segment.episode_index)
+            if item is None:
+                raise RuntimeError(f"Missing batch episode for {segment.episode_index}")
+
+            item.row.update(
+                {
+                    f"videos/{segment.video_key}/chunk_index": segment.chunk_key,
+                    f"videos/{segment.video_key}/file_index": segment.file_index,
+                    f"videos/{segment.video_key}/from_timestamp": segment.from_timestamp,
+                    f"videos/{segment.video_key}/to_timestamp": segment.to_timestamp,
+                }
+            )
+            item.video_stats[segment.video_key] = segment.stats
+
+            remaining = remaining_by_episode.get(segment.episode_index)
+            if remaining is not None:
+                remaining.discard(segment.video_key)
+                if not remaining:
+                    self._append_completed_episode(item)
+
+    def _append_completed_episode(self, item: _EpisodeBatchItem) -> None:
+        episode_stats = dict(item.frame_stats)
+        episode_stats.update(item.video_stats)
+        item.row.update(_flatten_stats_for_episode(episode_stats))
+        self._episode_rows.append(item.row)
+
+    def _remaining_video_keys(
+        self,
+        video_batches: dict[str, list[_VideoBatchItem]],
+    ) -> dict[int, set[str]]:
+        remaining_by_episode: dict[int, set[str]] = {}
+        for video_key, items in video_batches.items():
+            for item in items:
+                remaining_by_episode.setdefault(item.episode_index, set()).add(
+                    video_key
+                )
+        return remaining_by_episode
+
+    def _video_writer(self, video_key: str) -> LeRobotVideoWriter:
+        writer = self._video_writers.get(video_key)
+        if writer is not None:
+            return writer
+        writer = LeRobotVideoWriter(
+            folder=self.folder,
+            chunk_key=self.chunk_key,
+            video_key=video_key,
+            video_config=self._video_config,
+            stats_config=self.config.stats,
+            default_fps=self._fps,
+            video_bytes_limit=self._video_bytes_limit,
+            prepare_max_in_flight=self.config.max_buffered_episodes,
+        )
+        self._video_writers[video_key] = writer
+        return writer
+
+    def _write_stage1_meta(self) -> None:
+        if self._episode_rows:
+            episodes_table = pa.Table.from_pylist(self._episode_rows)
+            with self.folder.open(
+                self._meta_path("episodes/file-000.parquet"), mode="wb"
+            ) as out:
+                pq.write_table(
+                    episodes_table,
+                    out,
+                    compression="snappy",
+                    use_dictionary=True,
+                )
 
         task_lines = [
-            json.dumps(
-                {"task": task, "task_index": task_index},
-                sort_keys=True,
-            )
+            json.dumps({"task": task, "task_index": task_index}, sort_keys=True)
             for task_index, task in enumerate(self._task_order)
         ]
         if task_lines:
@@ -272,20 +554,38 @@ class _LeRobotShardWriter:
             "total_episodes": self._total_episodes,
             "total_frames": self._global_frame_index,
         }
-
         with self.folder.open(
-            self._meta_path("info.jsonl"),
-            mode="wt",
-            encoding="utf-8",
+            self._meta_path("info.jsonl"), mode="wt", encoding="utf-8"
         ) as out:
             out.write(json.dumps(info_record, sort_keys=True))
             out.write("\n")
+
+    def _write_frame_table(self, table: pa.Table) -> None:
+        if (
+            self._data_writer is not None
+            and self._data_bytes_written >= self._data_bytes_limit
+        ):
+            self._close_data()
+            self._data_file_index += 1
+
+        self._ensure_data_writer(table.schema)
+        if self._data_writer is None or self._data_writer_file is None:
+            raise RuntimeError("data writer is not initialized")
+
+        self._data_writer.write_table(table)
+        self._data_bytes_written = int(self._data_writer_file.tell())
+        self._global_frame_index += int(table.num_rows)
 
     def _require_required_fields(
         self,
         row: Mapping[str, Any],
     ) -> list[Mapping[str, Any]]:
-        frames_raw = row["frames"]
+        return self._require_required_fields_from_value(row["frames"])
+
+    def _require_required_fields_from_value(
+        self,
+        frames_raw: Any,
+    ) -> list[Mapping[str, Any]]:
         if not isinstance(frames_raw, list):
             raise ValueError("LeRobot writer requires frames as a list on each row")
         if not all(isinstance(item, Mapping) for item in frames_raw):
@@ -296,7 +596,12 @@ class _LeRobotShardWriter:
         self,
         row: Mapping[str, Any],
     ) -> dict[str, dict[str, np.ndarray]]:
-        metadata = row.get("metadata")
+        return self._source_episode_stats_from_value(row.get("metadata"))
+
+    def _source_episode_stats_from_value(
+        self,
+        metadata: Any,
+    ) -> dict[str, dict[str, np.ndarray]]:
         if not isinstance(metadata, Mapping):
             return {}
         raw_stats = metadata.get(LEROBOT_EPISODE_STATS)
@@ -304,104 +609,23 @@ class _LeRobotShardWriter:
             return {}
         return _cast_stats_to_numpy(raw_stats)
 
-    def _queue_video_segment(
-        self,
-        *,
-        episode_index: int,
-        video_key: str,
-        video: Video,
-        source_stats: dict[str, np.ndarray] | None,
-    ) -> None:
-        writer = self._video_writers.get(video_key)
-        if writer is None:
-            writer = LeRobotVideoWriter(
-                folder=self.folder,
-                chunk_key=self.chunk_key,
-                video_key=video_key,
-                video_config=self._video_config,
-                stats_config=self.config.stats,
-                default_fps=self._fps,
-                video_bytes_limit=self._video_bytes_limit,
-                prepare_max_in_flight=self.config.max_buffered_episodes,
-            )
-            self._video_writers[video_key] = writer
-
-        writer.submit(
-            episode_index=episode_index,
-            video=video,
-            source_stats=source_stats,
+    def _tasks(self, row: Mapping[str, Any]) -> list[str]:
+        return self._tasks_from_values(
+            tasks_value=row["tasks"] if "tasks" in row else None,
+            task_value=row.get("task"),
         )
 
-    def _drain_video_writers(
-        self, *, force_schedule_pending_runs: bool = False
-    ) -> None:
-        for writer in self._video_writers.values():
-            self._process_video_runs(
-                writer.drain_completed(
-                    force_schedule_pending_run=force_schedule_pending_runs
-                )
-            )
-
-    def _process_video_runs(
+    def _tasks_from_values(
         self,
-        completed_runs: Sequence[_CompletedVideoRun],
-    ) -> None:
-        for run in completed_runs:
-            if run.feature is not None:
-                self.features[run.video_key] = run.feature
-            for segment in run.segments:
-                pending = self._pending_episodes.get(segment.episode_index)
-                if pending is None:
-                    raise RuntimeError(
-                        f"Missing pending episode for {segment.episode_index}"
-                    )
-                pending.row = pending.row.update(
-                    {
-                        f"videos/{segment.video_key}/chunk_index": segment.chunk_key,
-                        f"videos/{segment.video_key}/file_index": segment.file_index,
-                        f"videos/{segment.video_key}/from_timestamp": segment.from_timestamp,
-                        f"videos/{segment.video_key}/to_timestamp": segment.to_timestamp,
-                    }
-                )
-                pending.video_stats[segment.video_key] = segment.stats
-                pending.pending_video_keys.discard(segment.video_key)
-
-    def _flush_ready_episodes(self) -> None:
-        while self._pending_episodes:
-            episode_index = next(iter(self._pending_episodes))
-            pending = self._pending_episodes[episode_index]
-            if pending.pending_video_keys:
-                break
-
-            episode_stats = dict(pending.frame_stats)
-            episode_stats.update(pending.video_stats)
-            pending.row.update(_flatten_stats_for_episode(episode_stats))
-            table = pa.Table.from_pylist([pending.row])
-            if self._episodes_writer is not None:
-                if self._episodes_schema != table.schema:
-                    raise ValueError(
-                        "LeRobot writer requires a stable episode schema across rows"
-                    )
-                self._episodes_writer.write_table(table)
-            else:
-                episodes_rel = self._meta_path("episodes/file-000.parquet")
-                self._episodes_schema = table.schema
-                self._episodes_writer_file = self.folder.open(episodes_rel, mode="wb")
-                self._episodes_writer = pq.ParquetWriter(
-                    self._episodes_writer_file,
-                    schema=table.schema,
-                    compression="snappy",
-                    use_dictionary=True,
-                )
-                self._episodes_writer.write_table(table)
-            self._pending_episodes.popitem(last=False)
-
-    def _tasks(self, row: Mapping[str, Any]) -> list[str]:
+        *,
+        tasks_value: Any,
+        task_value: Any,
+    ) -> list[str]:
         tasks = [
             value
             for value in [
-                *(row["tasks"] if isinstance(row["tasks"], list) else []),
-                row["task"],
+                *(tasks_value if isinstance(tasks_value, list) else []),
+                task_value,
             ]
             if isinstance(value, str) and value
         ]
@@ -413,15 +637,15 @@ class _LeRobotShardWriter:
             self._task_order.append(task)
         return tasks
 
-    def _initialize_info_from_row(
-        self,
-        row: Mapping[str, Any],
-        frames: Sequence[Mapping[str, Any]],
+    def _initialize_info_from_rows(
+        self, rows: Sequence[Row | Mapping[str, Any]]
     ) -> None:
         if self.features:
             return
 
-        metadata = row["metadata"]
+        first = rows[0]
+        frames = self._require_required_fields(first)
+        metadata = first.get("metadata")
         if isinstance(metadata, Mapping):
             info = metadata.get(LEROBOT_INFO)
             if isinstance(info, Mapping):
@@ -432,12 +656,13 @@ class _LeRobotShardWriter:
                     str(robot_type_raw) if robot_type_raw is not None else None
                 )
 
-        for key, value in row.items():
-            if key in {"frames", "task", "tasks", "metadata", "episode_index"}:
-                continue
-            spec = self._feature_spec(value)
-            if spec is not None:
-                self.features.setdefault(key, spec)
+        for row in rows:
+            for key, value in row.items():
+                if key in {"frames", "task", "tasks", "metadata", "episode_index"}:
+                    continue
+                spec = self._feature_spec(value)
+                if spec is not None:
+                    self.features.setdefault(key, spec)
 
         if frames:
             for key, value in frames[0].items():
@@ -454,20 +679,109 @@ class _LeRobotShardWriter:
         }.items():
             self.features.setdefault(key, spec)
 
-        video_count = sum(
-            1 for value in row.values() if isinstance(value, (VideoFile, DecodedVideo))
+        max_videos_in_row = max(
+            (
+                sum(
+                    1
+                    for value in row.values()
+                    if isinstance(value, (VideoFile, DecodedVideo))
+                )
+                for row in rows
+            ),
+            default=0,
         )
         self._video_config = replace(
             self.config.video,
             encoder_threads=_resolve_video_threads(
                 requested_threads=self.config.video.encoder_threads,
-                videos_in_row=video_count,
+                videos_in_row=max_videos_in_row,
             ),
             decoder_threads=_resolve_video_threads(
                 requested_threads=self.config.video.decoder_threads,
-                videos_in_row=video_count,
+                videos_in_row=max_videos_in_row,
             ),
         )
+
+    def _initialize_info_from_table(self, table: pa.Table) -> None:
+        if self.features:
+            return
+
+        first_frames = self._require_required_fields_from_value(
+            table.column("frames")[0].as_py()
+        )
+        metadata = (
+            table.column("metadata")[0].as_py()
+            if "metadata" in table.schema.names and table.num_rows > 0
+            else None
+        )
+        if isinstance(metadata, Mapping):
+            info = metadata.get(LEROBOT_INFO)
+            if isinstance(info, Mapping):
+                fps_raw = info.get("fps")
+                self._fps = int(fps_raw) if fps_raw is not None else None
+                robot_type_raw = info.get("robot_type")
+                self._robot_type = (
+                    str(robot_type_raw) if robot_type_raw is not None else None
+                )
+
+        video_columns: list[list[Any]] = []
+        for key in table.column_names:
+            if key in {"frames", "task", "tasks", "metadata", "episode_index"}:
+                continue
+            values = table.column(key).to_pylist()
+            spec = self._first_feature_spec(values)
+            if spec is not None:
+                self.features.setdefault(key, spec)
+            if spec is not None and spec.get("dtype") == "video":
+                video_columns.append(values)
+
+        if first_frames:
+            for key, value in first_frames[0].items():
+                spec = self._feature_spec(value)
+                if spec is not None:
+                    self.features.setdefault(key, spec)
+
+        for key, spec in {
+            "timestamp": {"dtype": "float32", "shape": [1], "names": None},
+            "frame_index": {"dtype": "int64", "shape": [1], "names": None},
+            "episode_index": {"dtype": "int64", "shape": [1], "names": None},
+            "index": {"dtype": "int64", "shape": [1], "names": None},
+            "task_index": {"dtype": "int64", "shape": [1], "names": None},
+        }.items():
+            self.features.setdefault(key, spec)
+
+        max_videos_in_row = 0
+        if video_columns:
+            for row_idx in range(table.num_rows):
+                count = sum(
+                    1
+                    for values in video_columns
+                    if isinstance(values[row_idx], (VideoFile, DecodedVideo))
+                )
+                if count > max_videos_in_row:
+                    max_videos_in_row = count
+
+        self._video_config = replace(
+            self.config.video,
+            encoder_threads=_resolve_video_threads(
+                requested_threads=self.config.video.encoder_threads,
+                videos_in_row=max_videos_in_row,
+            ),
+            decoder_threads=_resolve_video_threads(
+                requested_threads=self.config.video.decoder_threads,
+                videos_in_row=max_videos_in_row,
+            ),
+        )
+
+    def _first_feature_spec(
+        self,
+        values: Sequence[Any],
+    ) -> dict[str, Any] | None:
+        for value in values:
+            spec = self._feature_spec(value)
+            if spec is not None:
+                return spec
+        return None
 
     def _feature_spec(self, value: Any) -> dict[str, Any] | None:
         if isinstance(value, (VideoFile, DecodedVideo)):
@@ -495,61 +809,6 @@ class _LeRobotShardWriter:
             "dtype": dtype,
             "shape": [int(size) for size in array.shape],
             "names": None,
-        }
-
-    def _write_frames_to_data(
-        self,
-        *,
-        episode_index: int,
-        tasks: list[str],
-        frames: list[Mapping[str, Any]],
-    ) -> dict[str, Any]:
-        start_index = self._global_frame_index
-        current_chunk = self.chunk_key
-        current_file = self._data_file_index
-
-        if not frames:
-            return {
-                "chunk_index": current_chunk,
-                "file_index": current_file,
-                "dataset_from_index": start_index,
-                "dataset_to_index": start_index,
-            }
-
-        table = frame_table(
-            frames=frames,
-            episode_index=episode_index,
-            start_index=start_index,
-            task_index=self._task_to_index.get(tasks[0]) if tasks else None,
-        )
-
-        if (
-            self._data_writer is not None
-            and self._data_bytes_written >= self._data_bytes_limit
-        ):
-            self._close_data()
-            self._data_file_index += 1
-            self._data_bytes_written = 0
-            current_chunk = self.chunk_key
-            current_file = self._data_file_index
-
-        self._ensure_data_writer(table.schema)
-        if self._data_writer is None:
-            raise RuntimeError("data writer is not initialized")
-
-        data_writer_file = self._data_writer_file
-        if data_writer_file is None:
-            raise RuntimeError("data writer file is not initialized")
-
-        self._data_writer.write_table(table)
-        self._data_bytes_written = data_writer_file.tell()
-
-        self._global_frame_index += int(table.num_rows)
-        return {
-            "chunk_index": current_chunk,
-            "file_index": current_file,
-            "dataset_from_index": start_index,
-            "dataset_to_index": self._global_frame_index,
         }
 
     def _ensure_data_writer(self, schema: pa.Schema) -> None:

@@ -16,6 +16,7 @@ CacheEntryStatus = Literal["loading", "ready", "error"]
 class _LeaseCacheEntry(Generic[R]):
     status: CacheEntryStatus
     resource: R | None
+    ready_future: asyncio.Future[None]
     error: BaseException | None = None
     ref_count: int = 0
     weight: int = 0
@@ -61,11 +62,13 @@ class LeaseCache(Generic[K, R]):
 
     async def acquire(self, key: K) -> CacheLease[K, R]:
         while True:
+            wait_future: asyncio.Future[None] | None = None
             entry = self._entries.get(key)
             if entry is None:
                 self._entries[key] = _LeaseCacheEntry(
                     status="loading",
                     resource=None,
+                    ready_future=asyncio.get_running_loop().create_future(),
                 )
                 self._entries.move_to_end(key)
                 should_create = True
@@ -84,6 +87,7 @@ class LeaseCache(Generic[K, R]):
                 raise err
             else:
                 should_create = False
+                wait_future = entry.ready_future
 
             if should_create:
                 try:
@@ -99,6 +103,8 @@ class LeaseCache(Generic[K, R]):
                     current.status = "ready"
                     current.error = None
                     current.ref_count += 1
+                    if not current.ready_future.done():
+                        current.ready_future.set_result(None)
                     self._entries.move_to_end(key)
                     self._total_weight += current.weight
                     self._evict_unlocked()
@@ -107,7 +113,9 @@ class LeaseCache(Generic[K, R]):
                 self._close_resource(resource)
                 continue
 
-            await asyncio.sleep(0.001)
+            if wait_future is None:
+                raise RuntimeError("loading cache entry missing ready future")
+            await wait_future
 
     def evict(self, key: K) -> None:
         entry = self._entries.get(key)
@@ -122,9 +130,12 @@ class LeaseCache(Generic[K, R]):
 
         for entry in entries:
             if entry.status == "loading":
-                entry.error = RuntimeError(
+                error = RuntimeError(
                     "cache was cleared while resource load was in-flight"
                 )
+                entry.error = error
+                if not entry.ready_future.done():
+                    entry.ready_future.set_exception(error)
                 continue
             if entry.status == "ready" and entry.resource is not None:
                 self._close_resource(entry.resource)
@@ -142,6 +153,8 @@ class LeaseCache(Generic[K, R]):
             return
         entry.status = "error"
         entry.error = exc
+        if not entry.ready_future.done():
+            entry.ready_future.set_exception(exc)
 
     def _evict_unlocked(self) -> None:
         while self._over_limit_unlocked():

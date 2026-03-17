@@ -127,8 +127,8 @@ class LocalLauncher(BaseLauncher):
         command = [
             # Use `uv run` so worker subprocesses import the current checkout/worktree
             # instead of an installed `refiner` package from some other environment.
-            "uv",
-            "run",
+            # "uv",
+            # "run",
             "python",
             "-m",
             "refiner.worker.entrypoint",

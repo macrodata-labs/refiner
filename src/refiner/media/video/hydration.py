@@ -29,9 +29,13 @@ async def _decode_video(
         from_timestamp_s=video.from_timestamp_s,
         to_timestamp_s=video.to_timestamp_s,
     )
+    fps = await decoder_cache.resolve_fps(data_file=DataFile.resolve(video.uri))
+    if fps is None:
+        raise ValueError(f"Failed to resolve FPS for video {video.uri!r}")
 
     return DecodedVideo(
         frames=frames,
+        fps=fps,
         original_file=video,
         width=width,
         height=height,
