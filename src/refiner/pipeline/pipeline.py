@@ -353,32 +353,24 @@ class RefinerPipeline:
 
     def write_lerobot(
         self,
-        root: str,
+        output: DataFolderLike,
         *,
-        fs: AbstractFileSystem | None = None,
-        storage_options: Mapping[str, Any] | None = None,
-        overwrite: bool = False,
-        chunk_size: int = 1000,
         data_files_size_in_mb: int = 100,
         video_files_size_in_mb: int = 200,
-        video: LeRobotVideoConfig | None = None,
-        stats: LeRobotStatsConfig | None = None,
-        media_prelease_max_in_flight: int = 10,
-        media_prelease_preserve_order: bool = True,
+        video_config: LeRobotVideoConfig | None = None,
+        stats_config: LeRobotStatsConfig | None = None,
+        max_video_prepare_in_flight: int = 10,
+        preserve_order: bool = True,
     ) -> "RefinerPipeline":
         """Append a deferred LeRobot writer sink and return a pipeline."""
         config = LeRobotWriterConfig(
-            root=root,
-            fs=fs,
-            storage_options=storage_options,
-            overwrite=overwrite,
-            chunk_size=chunk_size,
+            output=output,
             data_files_size_in_mb=data_files_size_in_mb,
             video_files_size_in_mb=video_files_size_in_mb,
-            video=video if video is not None else LeRobotVideoConfig(),
-            stats=stats if stats is not None else LeRobotStatsConfig(),
-            media_prelease_max_in_flight=media_prelease_max_in_flight,
-            media_prelease_preserve_order=media_prelease_preserve_order,
+            video=video_config if video_config is not None else LeRobotVideoConfig(),
+            stats=stats_config if stats_config is not None else LeRobotStatsConfig(),
+            max_video_prepare_in_flight=max_video_prepare_in_flight,
+            preserve_order=preserve_order,
         )
 
         return self.with_sink(LeRobotWriterSink(config=config))

@@ -29,12 +29,13 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 - LeRobot reader emits one row per episode with:
   - `frames`: list of frame dicts for the episode slice.
   - video feature columns from `meta/info.json.features` where `dtype == "video"`, emitted as `Video` handles.
-  - `metadata`: dict with `lerobot_info` and `lerobot_stats`.
+  - `metadata`: dict with `lerobot_info`, dataset-level `lerobot_stats`, and per-episode `lerobot_episode_stats`.
   - raw transport metadata keys under `stats/*`, `videos/*`, and `meta/episodes/*` are omitted from emitted rows.
   - frame slicing requires `dataset_from_index`/`dataset_to_index` in each episode row.
   - optional `limit` bounds emitted episodes per reader instance.
   - `media_max_in_flight` controls concurrent episode materialization work inside the reader.
   - `media_preserve_order` controls whether those async reader results are yielded in input order.
+  - `read_lerobot(...)` accepts either one dataset root or a list of dataset roots on the same filesystem/protocol.
 - Use `target_shard_bytes` to control shard granularity.
 
 ## Hydrating External Files
@@ -69,6 +70,10 @@ Rows are yielded in input order unless you explicitly choose otherwise on the as
 - `video=mdr.LeRobotVideoConfig(...)` groups codec, pixel format, encoder threads, decoder threads, and encoder options.
 - `stats=mdr.LeRobotStatsConfig(...)` groups clip sampling stride and quantile bin count.
 - Video stats are always written; use a larger `stats.sample_stride` when you want cheaper sampling.
+- When the sink receives consecutive LeRobot episodes that span an entire source video file, it can remux that file into the output without decoding frames.
+- When consecutive episodes span several whole compatible source files, the sink can remux those files into one output file without decoding frames.
+- When an episode clip starts on a source keyframe and ends on an exact packet boundary, the sink can remux that aligned subsegment without transcoding.
+- Remux output is written directly as fragmented MP4 to the destination stream; it does not stage a separate local temp file first.
 - Video entries in `meta/info.json.features` are written in LeRobot-style channel-first form with an `info` block for fps, size, channels, codec, and pixel format.
 
 ## Internal Notes
@@ -77,4 +82,5 @@ Rows are yielded in input order unless you explicitly choose otherwise on the as
 - Parquet row access uses batch-level cached column-name indexing for faster key lookup.
 - LeRobot expects parquet metadata under `meta/episodes/**`; legacy JSONL metadata is not used.
 - LeRobot reads `fps`, `robot_type`, `features`, `data_path`, and `video_path` from `meta/info.json` when present.
+- The LeRobot writer is batch-oriented per shard block: frame parquet writes happen per batch table, each `video_key` uses one batch-scoped `VideoWriter.write_videos(...)` call that prepares videos concurrently and commits them in order, and episode rows are finalized from an async queue of completed video results.
 - `hydrate_media(...)` is intentionally narrow here; it is not a general file/bytes hydration helper.

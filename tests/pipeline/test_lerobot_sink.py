@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import cast
@@ -7,6 +8,7 @@ from typing import cast
 import av
 import numpy as np
 import pyarrow.parquet as pq
+import pytest
 
 import refiner as mdr
 from refiner.media import hydrate_video
@@ -22,9 +24,20 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotWriterConfig,
     LeRobotWriterSink,
 )
+from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
+    LeRobotVideoWriter,
+    _CompletedVideoItem,
+    _CompletedVideoSegment,
+    _VideoBatchItem,
+)
 from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.lifecycle import RuntimeLifecycle
+
+_ALOHA_REPO_IDS = (
+    "macrodata/aloha_static_battery_ep000_004",
+    "macrodata/aloha_static_battery_ep005_009",
+)
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -132,7 +145,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
             ),
         ],
         items_per_shard=1,
-    ).write_lerobot(str(out_root), overwrite=True)
+    ).write_lerobot(str(out_root))
     assert not (out_root / "meta" / "info.json").exists()
 
     stats = pipeline.launch_local(
@@ -199,7 +212,7 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
             },
         ],
         items_per_shard=1,
-    ).write_lerobot(str(out_root), overwrite=True)
+    ).write_lerobot(str(out_root))
 
     stats = pipeline.launch_local(
         name="lerobot-two-stage-local",
@@ -232,7 +245,7 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
             ]
         )
         .map_async(hydrate_video("observation.images.main"))
-        .write_lerobot(str(out_root), overwrite=True)
+        .write_lerobot(str(out_root))
     )
 
     stats = pipeline.launch_local(
@@ -281,10 +294,9 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
         items_per_shard=2,
     ).write_lerobot(
         str(out_root),
-        overwrite=True,
         video_files_size_in_mb=1,
-        video=mdr.LeRobotVideoConfig(encoder_threads=1, decoder_threads=1),
-        stats=mdr.LeRobotStatsConfig(sample_stride=2, quantile_bins=64),
+        video_config=mdr.LeRobotVideoConfig(encoder_threads=1, decoder_threads=1),
+        stats_config=mdr.LeRobotStatsConfig(sample_stride=2, quantile_bins=64),
     )
 
     stats = pipeline.launch_local(
@@ -327,7 +339,7 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
             },
         ],
         items_per_shard=10,
-    ).write_lerobot(str(out_root), overwrite=True)
+    ).write_lerobot(str(out_root))
 
     stats = pipeline.launch_local(
         name="lerobot-task-index-stable",
@@ -353,7 +365,7 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
     tmp_path: Path,
 ) -> None:
     out_root = tmp_path / "cleanup"
-    config = LeRobotWriterConfig(root=str(out_root), overwrite=True)
+    config = LeRobotWriterConfig(output=str(out_root))
     row = DictRow(
         {
             "episode_index": 0,
@@ -412,3 +424,98 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
         out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
     )
     assert table.column("data/chunk_index").to_pylist() == [f"shard-1__w{worker_2}"]
+
+
+def test_hub_aloha_merge_uses_remux_and_preserves_episode_count(tmp_path: Path) -> None:
+    out_root = tmp_path / "hub-aloha-merge"
+    source_roots = [f"hf://datasets/{repo_id}" for repo_id in _ALOHA_REPO_IDS]
+    stats = (
+        mdr.read_lerobot(source_roots)
+        .write_lerobot(str(out_root))
+        .launch_local(
+            name="lerobot-hub-aloha-merge",
+            num_workers=1,
+            workdir=str(tmp_path / "workdir-hub-aloha-merge"),
+        )
+    )
+    assert stats.failed == 0
+
+    with (out_root / "meta" / "info.json").open("r", encoding="utf-8") as fh:
+        info_json = json.load(fh)
+    assert info_json["total_episodes"] == 10
+    for video_key in [
+        "observation.images.cam_high",
+        "observation.images.cam_left_wrist",
+        "observation.images.cam_low",
+        "observation.images.cam_right_wrist",
+    ]:
+        assert info_json["features"][video_key]["info"]["video.codec"] == "av1"
+
+
+def test_lerobot_video_writer_respects_preserve_order_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _prepare_items(
+        self: LeRobotVideoWriter,
+        items: list[_VideoBatchItem],
+    ):
+        yield 1, (items[1], None)
+        yield 0, (items[0], None)
+
+    committed: list[int] = []
+
+    async def _commit_item(
+        self: LeRobotVideoWriter,
+        prepared: tuple[_VideoBatchItem, object | None],
+    ) -> _CompletedVideoItem:
+        item, _ = prepared
+        committed.append(item.episode_index)
+        return _CompletedVideoItem(
+            video_key=self.video_key,
+            feature=None,
+            segment=_CompletedVideoSegment(
+                episode_index=item.episode_index,
+                video_key=self.video_key,
+                file_index=0,
+                chunk_key="chunk",
+                from_timestamp=0.0,
+                to_timestamp=0.1,
+                stats={},
+            ),
+        )
+
+    monkeypatch.setattr(LeRobotVideoWriter, "_prepare_items", _prepare_items)
+    monkeypatch.setattr(LeRobotVideoWriter, "_commit_item", _commit_item)
+
+    items = [
+        _VideoBatchItem(episode_index=0, video=mdr.VideoFile(str(tmp_path / "a.mp4"))),
+        _VideoBatchItem(episode_index=1, video=mdr.VideoFile(str(tmp_path / "b.mp4"))),
+    ]
+
+    ordered_writer = LeRobotVideoWriter(
+        folder=mdr.DataFolder.resolve(str(tmp_path / "ordered")),
+        chunk_key="000",
+        video_key="observation.images.main",
+        video_config=mdr.LeRobotVideoConfig(),
+        stats_config=mdr.LeRobotStatsConfig(),
+        default_fps=10,
+        video_bytes_limit=1024,
+        preserve_order=True,
+    )
+    asyncio.run(ordered_writer.write_videos(items))
+    assert committed == [0, 1]
+
+    committed.clear()
+    unordered_writer = LeRobotVideoWriter(
+        folder=mdr.DataFolder.resolve(str(tmp_path / "unordered")),
+        chunk_key="000",
+        video_key="observation.images.main",
+        video_config=mdr.LeRobotVideoConfig(),
+        stats_config=mdr.LeRobotStatsConfig(),
+        default_fps=10,
+        video_bytes_limit=1024,
+        preserve_order=False,
+    )
+    asyncio.run(unordered_writer.write_videos(items))
+    assert committed == [1, 0]

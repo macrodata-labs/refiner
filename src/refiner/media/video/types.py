@@ -28,6 +28,7 @@ class VideoFile(MediaFile):
 @dataclass(frozen=True, slots=True)
 class DecodedVideo:
     frames: tuple[np.ndarray, ...]
+    fps: int
     original_file: VideoFile
     width: int | None = None
     height: int | None = None

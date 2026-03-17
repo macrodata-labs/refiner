@@ -48,7 +48,7 @@ class ItemsSource(BaseSource):
                 f"Invalid items shard range [{start}, {end}) for {self._row_count} rows"
             )
         for row in self._rows[start:end]:
-            yield DictRow(data=row)
+            yield row
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -57,12 +57,12 @@ class ItemsSource(BaseSource):
         }
 
 
-def _normalize_item(item: Any) -> dict[str, Any]:
+def _normalize_item(item: Any) -> Row:
     if isinstance(item, Row):
-        return dict(item)
+        return item
     if isinstance(item, Mapping):
-        return dict(item)
-    return {"item": item}
+        return DictRow(data=dict(item))
+    return DictRow(data={"item": item})
 
 
 __all__ = [

@@ -214,6 +214,18 @@ def _flatten_stats_for_episode(
     return out
 
 
+def _extract_episode_stats(
+    row: Mapping[str, Any],
+) -> dict[str, dict[str, np.ndarray]]:
+    out: dict[str, dict[str, np.ndarray]] = {}
+    for key, value in row.items():
+        if not isinstance(key, str) or not key.startswith("stats/"):
+            continue
+        _, feature, stat_name = key.split("/", 2)
+        out.setdefault(feature, {})[stat_name] = np.asarray(value)
+    return out
+
+
 def _aggregate_stats(
     stats_list: list[dict[str, dict[str, np.ndarray]]],
 ) -> dict[str, dict[str, np.ndarray]]:

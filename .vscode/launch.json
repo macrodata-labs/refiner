@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Refiner: Merge Benchmark",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/benchmark/lerobot/run_merge_benchmark.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "subProcess": true,
+      "args": [
+        "--mode",
+        "refiner"
+      ],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "PYTHONUNBUFFERED": "1",
+        "REFINER_DEBUG_WORKER": "1"
+      }
+    }
+  ]
+}

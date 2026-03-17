@@ -24,14 +24,17 @@ async def _decode_video(
         name=f"decode_video:{cache_name}",
         media_cache=get_media_cache(name=f"decode_video:{cache_name}"),
     )
-    frames, width, height, pix_fmt = await decoder_cache.decode_segment(
+    frames, fps, width, height, pix_fmt = await decoder_cache.decode_segment(
         data_file=DataFile.resolve(video.uri),
         from_timestamp_s=video.from_timestamp_s,
         to_timestamp_s=video.to_timestamp_s,
     )
+    if fps is None:
+        raise ValueError(f"Failed to resolve FPS for video {video.uri!r}")
 
     return DecodedVideo(
         frames=frames,
+        fps=fps,
         original_file=video,
         width=width,
         height=height,
