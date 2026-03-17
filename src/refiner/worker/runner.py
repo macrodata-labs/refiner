@@ -302,6 +302,7 @@ class Worker:
                         len(failed_shards),
                         failed_error,
                     )
+                    user_metrics_emitter.force_flush_logs()
                     for shard in failed_shards:
                         obs_logger.warning(
                             "shard failed shard_id={} global_ordinal={} error={}",
@@ -309,6 +310,7 @@ class Worker:
                             shard.global_ordinal,
                             failed_error,
                         )
+                        user_metrics_emitter.force_flush_logs()
                         runtime_lifecycle.fail(shard, failed_error)
                         user_metrics_emitter.force_flush_user_metrics()
                         failed += 1
