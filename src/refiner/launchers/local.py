@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,9 +197,6 @@ class LocalLauncher(BaseLauncher):
             int(stats["output_rows"]),
         )
 
-    def _stream_worker_logs(self) -> bool:
-        return os.environ.get("LOGURU_LEVEL", "").upper() in {"DEBUG", "TRACE"}
-
     def _collect_worker_stats(
         self,
         *,
@@ -275,7 +271,7 @@ class LocalLauncher(BaseLauncher):
                     platform_run=stage_run,
                 ),
                 stdout=subprocess.PIPE,
-                stderr=None if self._stream_worker_logs() else subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
             )
             for rank in range(stage.compute.num_workers)

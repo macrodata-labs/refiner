@@ -28,10 +28,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _CASE_COMMAND = "__run_case__"
 
 
-def _stream_benchmark_logs() -> bool:
-    return os.environ.get("LOGURU_LEVEL", "").upper() in {"DEBUG", "TRACE"}
-
-
 @dataclass(slots=True)
 class CaseResult:
     implementation: str
@@ -439,25 +435,17 @@ def _subprocess_case(
     for repo_id in repo_ids:
         cmd.extend(["--repo-id", repo_id])
 
-    if _stream_benchmark_logs():
-        completed = subprocess.run(
-            cmd,
-            cwd=str(REPO_ROOT),
-            text=True,
-            check=False,
-        )
-    else:
-        completed = subprocess.run(
-            cmd,
-            cwd=str(REPO_ROOT),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if completed.stdout:
-            print(completed.stdout, end="")
-        if completed.stderr:
-            print(completed.stderr, end="", file=sys.stderr)
+    completed = subprocess.run(
+        cmd,
+        cwd=str(REPO_ROOT),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.stdout:
+        print(completed.stdout, end="")
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
     if completed.returncode != 0:
         raise RuntimeError(
             f"Benchmark case failed for {implementation} iteration {iteration}"
