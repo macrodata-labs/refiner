@@ -185,7 +185,7 @@ def build_run_manifest() -> dict[str, Any]:
     path, text, sha256 = _read_script(script_path)
     refiner_ref = _resolve_refiner_ref()
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "version": 1,
         "script": {
             "path": path,

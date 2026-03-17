@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 from typing import Any
 
 from refiner.worker.metrics.context import UserMetricsEmitter
@@ -136,6 +137,22 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             level_name = str(record["level"].name).upper()
             severity_number = self._severity_by_level.get(level_name)
             text = str(record.get("message") or "")
+            exception = record.get("exception")
+            if exception is not None:
+                attrs_exception_type = getattr(exception.type, "__name__", "")
+                attrs_exception_message = str(exception.value or "")
+                stacktrace = "".join(
+                    traceback.format_exception(
+                        exception.type,
+                        exception.value,
+                        exception.traceback,
+                    )
+                ).rstrip()
+                if stacktrace:
+                    text = f"{text}\n{stacktrace}" if text else stacktrace
+            else:
+                attrs_exception_type = ""
+                attrs_exception_message = ""
             timestamp_ns = int(record["time"].timestamp() * 1_000_000_000)
             attrs: dict[str, Any] = {
                 "logger.name": str(record.get("name") or ""),
@@ -143,6 +160,10 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
                 "code.lineno": int(record.get("line") or 0),
                 "code.function": str(record.get("function") or ""),
             }
+            if attrs_exception_type:
+                attrs["exception.type"] = attrs_exception_type
+            if attrs_exception_message:
+                attrs["exception.message"] = attrs_exception_message
             for key, value in dict(record.get("extra") or {}).items():
                 attrs[f"loguru.extra.{key}"] = str(value)
 

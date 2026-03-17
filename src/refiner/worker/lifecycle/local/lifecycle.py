@@ -33,6 +33,21 @@ def _runtime_lease_seconds() -> int:
     return value
 
 
+def _runtime_max_attempts() -> int:
+    raw = os.environ.get("SHARD_MAX_ATTEMPTS", "")
+    if not raw:
+        return 3
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid SHARD_MAX_ATTEMPTS={raw!r}; expected integer"
+        ) from exc
+    if value <= 0:
+        raise ValueError("SHARD_MAX_ATTEMPTS must be > 0")
+    return value
+
+
 class LocalRuntimeLifecycle:
     """Filesystem-backed runtime shard lifecycle.
 
@@ -55,6 +70,7 @@ class LocalRuntimeLifecycle:
         self.worker_id = str(run.worker_id) if run.worker_id is not None else None
         self.workdir = resolve_workdir(workdir)
         self.lease_seconds = lease_seconds or _runtime_lease_seconds()
+        self.max_attempts = _runtime_max_attempts()
 
         self._root = (
             Path(self.workdir)
@@ -140,6 +156,19 @@ class LocalRuntimeLifecycle:
     def _load_shard(path: Path) -> Shard:
         return Shard.from_dict(json.loads(path.read_text()))
 
+    @staticmethod
+    def _attempt_count(path: Path) -> int:
+        try:
+            payload = json.loads(path.read_text())
+        except Exception:
+            return 0
+        if not isinstance(payload, dict):
+            return 0
+        raw = payload.get("_attempt_count", 0)
+        if isinstance(raw, int) and raw >= 0:
+            return raw
+        return 0
+
     def claim(self, previous: Shard | None = None) -> Shard | None:
         worker_id = self._require_worker_id()
         now = int(time.time())
@@ -180,7 +209,18 @@ class LocalRuntimeLifecycle:
         def try_claim(shard: Shard) -> bool:
             src = self._pending_dir / pending_filename(shard.id)
             dst = self._leased_dir / leased_filename(shard.id, worker_id)
-            return not dst.exists() and safe_replace(str(src), str(dst))
+            if dst.exists() or not safe_replace(str(src), str(dst)):
+                return False
+            try:
+                payload = json.loads(dst.read_text())
+                if not isinstance(payload, dict):
+                    raise ValueError("shard payload must be an object")
+                payload["_attempt_count"] = self._attempt_count(dst) + 1
+                dst.write_text(json.dumps(payload, sort_keys=True))
+            except Exception:
+                safe_replace(str(dst), str(src))
+                return False
+            return True
 
         picked = ClaimPolicy(job_id=self.job_id, worker_id=worker_id).claim(
             previous=previous,
@@ -219,6 +259,13 @@ class LocalRuntimeLifecycle:
     def fail(self, shard: Shard, error: str | None = None) -> None:
         worker_id = self._require_worker_id()
         leased_path = self._leased_dir / leased_filename(shard.id, worker_id)
+        if self._attempt_count(leased_path) < self.max_attempts:
+            pending_path = self._pending_dir / pending_filename(shard.id)
+            try:
+                os.replace(leased_path, pending_path)
+            except Exception:
+                pass
+            return
         failed_base = pending_filename(shard.id)
         failed_path = self._failed_dir / failed_base
         try:

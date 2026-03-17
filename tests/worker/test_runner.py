@@ -42,6 +42,7 @@ class _FakeRuntimeLifecycle:
         self.claim_previous: list[Shard | None] = []
         self.completed_ids: list[str] = []
         self.failed_ids: list[str] = []
+        self.failed_errors: list[str | None] = []
         self.heartbeat_batches: list[list[str]] = []
 
     def claim(self, previous: Shard | None = None) -> Shard | None:
@@ -57,8 +58,8 @@ class _FakeRuntimeLifecycle:
         self.completed_ids.append(shard.id)
 
     def fail(self, shard: Shard, error: str | None = None) -> None:
-        del error
         self.failed_ids.append(shard.id)
+        self.failed_errors.append(error)
 
     def finalized_workers(
         self, *, stage_index: int | None = None
@@ -123,6 +124,14 @@ class _RecordingSink(BaseSink):
 class _FlushFailingTelemetryEmitter(_NoopTelemetryEmitter):
     def force_flush_user_metrics(self) -> None:
         raise RuntimeError("flush failed")
+
+
+class _RecordingTelemetryEmitter(_NoopTelemetryEmitter):
+    def __init__(self) -> None:
+        self.log_flushes = 0
+
+    def force_flush_logs(self) -> None:
+        self.log_flushes += 1
 
 
 class _LifecycleClientWithFailingTelemetry:
@@ -261,6 +270,31 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     assert stats.failed == 2
     assert runtime_lifecycle.completed_ids == []
     assert runtime_lifecycle.failed_ids == [shard1.id, shard2.id]
+    assert runtime_lifecycle.failed_errors == ["kaboom", "kaboom"]
+
+
+def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
+    shard = _shard("boom", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 1})]}
+
+    def fail(row: Row) -> Row:
+        del row
+        raise RuntimeError()
+
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(fail),
+        run_handle=_local_run(),
+    )
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+    )
+
+    stats = worker.run()
+
+    assert stats.failed == 1
+    assert runtime_lifecycle.failed_errors == ["RuntimeError"]
 
 
 def test_worker_can_batch_across_shards() -> None:
@@ -367,6 +401,33 @@ def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
     )
     with pytest.raises(RuntimeError, match="flush failed"):
         worker.run()
+
+
+def test_worker_flushes_logs_on_failure(monkeypatch) -> None:
+    shard = _shard("boom", 0, 1)
+    rows_by_shard = {shard.id: [DictRow({"x": 2})]}
+    emitter = _RecordingTelemetryEmitter()
+
+    def maybe_fail(row: Row) -> Row:
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(
+        "refiner.worker.runner.OtelTelemetryEmitter", lambda **_: emitter
+    )
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail),
+        run_handle=RunHandle(
+            job_id="job",
+            stage_index=0,
+            client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
+            worker_name="worker-0",
+        ),
+    )
+
+    stats = worker.run()
+
+    assert stats.failed == 1
+    assert emitter.log_flushes == 2
 
 
 __all__: list[str] = []

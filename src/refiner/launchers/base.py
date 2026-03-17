@@ -122,7 +122,11 @@ class BaseLauncher(ABC):
         return build_run_manifest()
 
     def _create_platform_run(
-        self, *, plan: dict[str, object], fail_open: bool = True
+        self,
+        *,
+        plan: dict[str, object],
+        stages: list[PlannedStage],
+        fail_open: bool = True,
     ) -> RunHandle | None:
         client = self._platform_client_or_none()
         if client is None:
@@ -171,33 +175,6 @@ class BaseLauncher(ABC):
             stage_index=stage_index,
             shards=shards,
         )
-
-    def _finish_platform_stage(
-        self, platform_run: RunHandle | None, *, stage_index: int, status: str
-    ) -> None:
-        stage_run = self._stage_run(platform_run, stage_index=stage_index)
-        if stage_run is None or stage_run.client is None:
-            return
-        try:
-            stage_run.client.report_stage_finished(
-                job_id=stage_run.job_id,
-                stage_index=stage_run.stage_index,
-                status=status,
-            )
-        except Exception as e:  # noqa: BLE001
-            self._warn(f"platform finish_stage failed: {type(e).__name__}: {e}")
-
-    def _finish_platform_job(
-        self, platform_run: RunHandle | None, *, status: str
-    ) -> None:
-        if platform_run is None or platform_run.client is None:
-            return
-        try:
-            platform_run.client.report_job_finished(
-                job_id=platform_run.job_id, status=status
-            )
-        except Exception as e:  # noqa: BLE001
-            self._warn(f"platform finish_job failed: {type(e).__name__}: {e}")
 
     @abstractmethod
     def launch(self):
