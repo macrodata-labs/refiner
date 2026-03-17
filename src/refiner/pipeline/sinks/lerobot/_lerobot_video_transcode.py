@@ -120,7 +120,7 @@ class TranscodeWriter:
         self.frames_written += 1
         self.duration_s = self.frames_written / float(self.fps)
 
-    def append_prepared_video_sync(
+    def append_prepared_video(
         self,
         *,
         video: Video,

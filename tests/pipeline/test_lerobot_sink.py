@@ -222,7 +222,7 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     assert (out_root / "meta" / "tasks.parquet").exists()
 
 
-def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
+def test_lerobot_video_writer_reopens_remux_source_for_each_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

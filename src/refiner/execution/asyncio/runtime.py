@@ -13,7 +13,7 @@ T = TypeVar("T")
 
 def _default_io_workers() -> int:
     cpu_count = max(1, os.cpu_count() or 1)
-    return max(4, min(32, cpu_count * 4))
+    return min(4, cpu_count)
 
 
 class AsyncRuntime:
@@ -82,7 +82,7 @@ class AsyncRuntime:
         if loop is None or thread is None or loop.is_closed():
             executor = self._io_executor
             if executor is not None:
-                executor.shutdown(wait=True, cancel_futures=False)
+                executor.shutdown(wait=False, cancel_futures=True)
                 self._io_executor = None
             return
         loop.call_soon_threadsafe(loop.stop)
@@ -91,7 +91,7 @@ class AsyncRuntime:
         self._thread = None
         executor = self._io_executor
         if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=False)
+            executor.shutdown(wait=False, cancel_futures=True)
             self._io_executor = None
 
 

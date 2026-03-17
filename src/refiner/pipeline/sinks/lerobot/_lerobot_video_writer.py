@@ -191,7 +191,7 @@ class LeRobotVideoWriter:
             transcode_writer = self._ensure_transcode_writer(transcode_fps)
             file_index = self._next_file_index
             (from_timestamp, to_timestamp), stats = (
-                transcode_writer.append_prepared_video_sync(
+                transcode_writer.append_prepared_video(
                     video=item.video,
                     prepared_source=source,
                     stats_config=self.stats_config,
