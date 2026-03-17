@@ -15,7 +15,7 @@ OUTPUT_DATASET = "hf://buckets/macrodata/test_bucket/aloha_motion"
 if __name__ == "__main__":
     (
         mdr.read_lerobot(INPUT_DATASET)
-        .map_async(mdr.hydrate_video(*MOTION_VIDEO_KEYS), max_in_flight=8)
+        .map(lambda row: row.drop(*MOTION_VIDEO_KEYS))
         .map(
             mdr.robotics.motion_trim(
                 threshold=0.001,

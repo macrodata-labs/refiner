@@ -1,26 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
-from refiner.media import Video
-from refiner.media.video.types import DecodedVideo, VideoFile
+from refiner.media import VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     RemuxWriter,
-    _VideoPtsAlignment,
-    _VideoProbeCache,
+    _PreparedSource,
     _VideoSourceProbe,
-    probe_video_for_remux,
+    prepare_video,
     probes_are_remux_compatible,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_transcode import (
     TranscodeWriter,
-    _resolve_video_fps,
 )
 
 if TYPE_CHECKING:
@@ -59,9 +57,9 @@ def _video_feature(
 
 
 @dataclass(slots=True)
-class _VideoBatchItem:
+class _VideoItem:
     episode_index: int
-    video: Video
+    video: VideoFile
     source_stats: dict[str, np.ndarray] | None = None
 
 
@@ -84,6 +82,13 @@ class _CompletedVideoItem:
 
 
 @dataclass(slots=True)
+class _PreparedVideoItem:
+    item: _VideoItem
+    source: _PreparedSource
+    transcode_fps: int | None = None
+
+
+@dataclass(slots=True)
 class LeRobotVideoWriter:
     """Write one video column for one shard chunk."""
 
@@ -92,59 +97,34 @@ class LeRobotVideoWriter:
     video_key: str
     video_config: "LeRobotVideoConfig"
     stats_config: "LeRobotStatsConfig"
-    default_fps: int | None
     video_bytes_limit: int
-    prepare_max_in_flight: int = 4
-    preserve_order: bool = True
 
-    _probe_cache: _VideoProbeCache = field(default_factory=_VideoProbeCache, init=False)
     _writer: RemuxWriter | TranscodeWriter | None = field(default=None, init=False)
     _next_file_index: int = field(default=0, init=False)
+    _commit_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
-    async def write_videos(
+    async def write_video(
         self,
-        items: list[_VideoBatchItem],
+        video: VideoFile,
         *,
-        output_queue: asyncio.Queue[_CompletedVideoItem] | None = None,
-    ) -> None:
-        if not items:
-            return None
+        episode_index: int,
+        source_stats: dict[str, np.ndarray] | None = None,
+    ) -> _CompletedVideoItem:
+        prepared = await self._prepare_item(
+            _VideoItem(
+                episode_index=episode_index,
+                video=video,
+                source_stats=source_stats,
+            )
+        )
+        try:
+            return await self._commit_item(prepared)
+        finally:
+            self._release_prepared_resources(prepared)
 
-        if not self.preserve_order:
-            async for _, prepared_item in self._prepare_items(items):
-                completed_item = await self._commit_item(prepared_item)
-                if output_queue is not None:
-                    await output_queue.put(completed_item)
-                self._release_item_resources(prepared_item[0])
-            return None
-
-        prepared_by_index: dict[
-            int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]
-        ] = {}
-        next_commit_index = 0
-
-        async for index, prepared in self._prepare_items(items):
-            prepared_by_index[index] = prepared
-            while next_commit_index in prepared_by_index:
-                prepared_item = prepared_by_index.pop(next_commit_index)
-                completed_item = await self._commit_item(prepared_item)
-                if output_queue is not None:
-                    await output_queue.put(completed_item)
-                self._release_item_resources(prepared_item[0])
-                next_commit_index += 1
-
-        if prepared_by_index:
-            raise RuntimeError("Prepared video items remained uncommitted")
-        return None
-
-    def _release_item_resources(self, item: _VideoBatchItem) -> None:
-        video = item.video
-        if isinstance(video, DecodedVideo):
-            video.original_file.cleanup()
-            item.video = video.original_file
-        elif isinstance(video, VideoFile):
-            video.cleanup()
-        item.source_stats = None
+    def _release_prepared_resources(self, prepared: _PreparedVideoItem) -> None:
+        prepared.item.source_stats = None
+        prepared.source.close()
 
     def finalize(self) -> None:
         if self._writer is None:
@@ -152,87 +132,71 @@ class LeRobotVideoWriter:
         self._writer.close()
         self._writer = None
 
-    async def _prepare_items(
+    async def _prepare_item(
         self,
-        items: list[_VideoBatchItem],
-    ) -> AsyncIterator[tuple[int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]]]:
-        max_in_flight = max(1, int(self.prepare_max_in_flight))
-
-        async def _prepare(
-            index: int,
-            item: _VideoBatchItem,
-        ) -> tuple[int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]]:
-            return (
-                index,
-                (
-                    item,
-                    await probe_video_for_remux(
-                        video_key=self.video_key,
-                        video=item.video,
-                        source_stats=item.source_stats,
-                        probe_cache=self._probe_cache,
-                        default_fps=self.default_fps,
-                    ),
-                ),
-            )
-
-        inflight: dict[
-            asyncio.Task[tuple[int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]]],
-            int,
-        ] = {}
-        next_schedule_index = 0
-        try:
-            while next_schedule_index < len(items) or inflight:
-                while (
-                    next_schedule_index < len(items) and len(inflight) < max_in_flight
-                ):
-                    task = asyncio.create_task(
-                        _prepare(next_schedule_index, items[next_schedule_index])
-                    )
-                    inflight[task] = next_schedule_index
-                    next_schedule_index += 1
-
-                done, _ = await asyncio.wait(
-                    inflight.keys(),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for task in done:
-                    inflight.pop(task, None)
-                    yield await task
-        finally:
-            for task in list(inflight):
-                if not task.done():
-                    task.cancel()
-            if inflight:
-                await asyncio.gather(*inflight.keys(), return_exceptions=True)
+        item: _VideoItem,
+    ) -> _PreparedVideoItem:
+        prepared_source = await prepare_video(
+            video_key=self.video_key,
+            video=item.video,
+        )
+        transcode_fps = None
+        if prepared_source.alignment is None and prepared_source.probe is not None:
+            transcode_fps = prepared_source.probe.fps
+        if transcode_fps is None and isinstance(self._writer, TranscodeWriter):
+            transcode_fps = int(self._writer.fps)
+        return _PreparedVideoItem(
+            item=item,
+            source=prepared_source,
+            transcode_fps=transcode_fps,
+        )
 
     async def _commit_item(
         self,
-        prepared: tuple[_VideoBatchItem, _VideoPtsAlignment | None],
+        prepared: _PreparedVideoItem,
     ) -> _CompletedVideoItem:
-        item, remux_alignment = prepared
-        file_index = self._next_file_index
-        if remux_alignment is not None:
-            remux_writer = self._ensure_remux_writer(remux_alignment.probe)
+        # We need the lock so that we can rotate the writer without race conditions
+        async with self._commit_lock:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                io_executor(),
+                partial(self._commit_item_sync, prepared),
+            )
+
+    def _commit_item_sync(
+        self,
+        prepared: _PreparedVideoItem,
+    ) -> _CompletedVideoItem:
+        item = prepared.item
+        source = prepared.source
+        if source.alignment is not None and source.probe is not None:
+            if source.probe.fps is None:
+                raise ValueError("Prepared remux item is missing FPS")
+            remux_writer = self._ensure_remux_writer(source.probe)
             file_index = self._next_file_index
-            from_timestamp, to_timestamp = remux_writer.append_video(
-                item.video,
-                remux_alignment,
+            from_timestamp, to_timestamp = remux_writer.append_prepared_video(
+                source,
             )
             stats = item.source_stats if item.source_stats is not None else {}
             feature = _video_feature(
-                fps=remux_alignment.probe.fps,
-                height=remux_alignment.probe.height,
-                width=remux_alignment.probe.width,
-                codec=remux_alignment.probe.codec or self.video_config.codec,
-                pix_fmt=remux_alignment.probe.pix_fmt or self.video_config.pix_fmt,
+                fps=int(source.probe.fps),
+                height=source.probe.height,
+                width=source.probe.width,
+                codec=source.probe.codec or self.video_config.codec,
+                pix_fmt=source.probe.pix_fmt or self.video_config.pix_fmt,
             )
         else:
-            transcode_writer = await self._ensure_transcode_writer(item.video)
+            transcode_fps = prepared.transcode_fps
+            if transcode_fps is None:
+                raise ValueError("Prepared transcode item is missing FPS")
+            transcode_writer = self._ensure_transcode_writer(transcode_fps)
             file_index = self._next_file_index
-            (from_timestamp, to_timestamp), stats = await transcode_writer.append_video(
-                video=item.video,
-                stats_config=self.stats_config,
+            (from_timestamp, to_timestamp), stats = (
+                transcode_writer.append_prepared_video(
+                    video=item.video,
+                    prepared_source=source,
+                    stats_config=self.stats_config,
+                )
             )
             if transcode_writer.stream is None:
                 raise RuntimeError(
@@ -260,11 +224,7 @@ class LeRobotVideoWriter:
             ),
         )
 
-    async def _ensure_transcode_writer(self, video: Video) -> TranscodeWriter:
-        fps = await _resolve_video_fps(
-            video=video,
-            video_key=self.video_key,
-        )
+    def _ensure_transcode_writer(self, fps: int) -> TranscodeWriter:
         writer = self._writer
         if isinstance(writer, TranscodeWriter) and writer.fps == fps:
             if writer.size_bytes >= self.video_bytes_limit:
@@ -335,5 +295,5 @@ __all__ = [
     "LeRobotVideoWriter",
     "_CompletedVideoItem",
     "_CompletedVideoSegment",
-    "_VideoBatchItem",
+    "_VideoItem",
 ]

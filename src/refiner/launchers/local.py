@@ -172,7 +172,7 @@ class LocalLauncher(BaseLauncher):
                 stats_line = line
                 break
         if not stats_line:
-            message = stderr_text.strip() or f"exit code {return_code}"
+            message = (stderr_text or "").strip() or f"exit code {return_code}"
             raise RuntimeError(f"worker {rank}: missing stats output ({message})")
         try:
             stats = json.loads(stats_line)
