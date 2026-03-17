@@ -319,6 +319,56 @@ def _serialize_args(args: dict[str, Any] | None) -> dict[str, Any] | None:
     return serialized
 
 
+def _datafolder_path(value: Any) -> str:
+    from refiner.io.datafolder import DataFolder
+
+    folder = DataFolder.resolve(value)
+    return str(folder.fs.unstrip_protocol(folder.path))
+
+
+def _sink_name_type(sink: Any) -> tuple[str, str, dict[str, Any] | None] | None:
+    from refiner.pipeline.sinks import JsonlSink, ParquetSink
+    from refiner.pipeline.sinks.lerobot import LeRobotMetaReduceSink, LeRobotWriterSink
+
+    if isinstance(sink, JsonlSink):
+        return (
+            "write_jsonl",
+            "writer",
+            {
+                "path": _datafolder_path(sink.output),
+                "filename_template": sink.filename_template,
+            },
+        )
+    if isinstance(sink, ParquetSink):
+        args: dict[str, Any] = {
+            "path": _datafolder_path(sink.output),
+            "filename_template": sink.filename_template,
+        }
+        if sink.compression is not None:
+            args["compression"] = sink.compression
+        return "write_parquet", "writer", args
+    if isinstance(sink, LeRobotWriterSink):
+        return (
+            "write_lerobot",
+            "writer",
+            {
+                "path": _datafolder_path(sink.config.output),
+                "data_files_size_in_mb": sink.config.data_files_size_in_mb,
+                "video_files_size_in_mb": sink.config.video_files_size_in_mb,
+                "max_video_prepare_in_flight": sink.config.max_video_prepare_in_flight,
+            },
+        )
+    if isinstance(sink, LeRobotMetaReduceSink):
+        return (
+            "write_lerobot_meta_reduce",
+            "writer",
+            {
+                "path": _datafolder_path(sink.config.output),
+            },
+        )
+    return None
+
+
 def _compile_stage_steps(pipeline: "RefinerPipeline") -> list[dict[str, Any]]:
     source_step_name = str(getattr(pipeline.source, "name", "source"))
     source_args: dict[str, Any] = dict(pipeline.source.describe())
@@ -363,6 +413,19 @@ def _compile_stage_steps(pipeline: "RefinerPipeline") -> list[dict[str, Any]]:
                 name=unique_name,
                 step_type=step_type,
                 index=step.index,
+                args=_serialize_args(args),
+            )
+        )
+
+    sink_payload = _sink_name_type(pipeline.sink)
+    if sink_payload is not None:
+        base_name, step_type, args = sink_payload
+        unique_name = _unique_name(base_name)
+        steps.append(
+            _step_payload(
+                name=unique_name,
+                step_type=step_type,
+                index=len(steps),
                 args=_serialize_args(args),
             )
         )
