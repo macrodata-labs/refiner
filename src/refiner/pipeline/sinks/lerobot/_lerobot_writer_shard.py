@@ -511,7 +511,8 @@ class _LeRobotShardWriter:
             stats_config=self.config.stats,
             default_fps=self._fps,
             video_bytes_limit=self._video_bytes_limit,
-            prepare_max_in_flight=self.config.max_buffered_episodes,
+            prepare_max_in_flight=self.config.max_video_prepare_in_flight,
+            preserve_order=self.config.preserve_order,
         )
         self._video_writers[video_key] = writer
         return writer

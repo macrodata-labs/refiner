@@ -95,6 +95,7 @@ class LeRobotVideoWriter:
     default_fps: int | None
     video_bytes_limit: int
     prepare_max_in_flight: int = 4
+    preserve_order: bool = True
 
     _probe_cache: _VideoProbeCache = field(default_factory=_VideoProbeCache, init=False)
     _writer: RemuxWriter | TranscodeWriter | None = field(default=None, init=False)
@@ -107,6 +108,14 @@ class LeRobotVideoWriter:
         output_queue: asyncio.Queue[_CompletedVideoItem] | None = None,
     ) -> None:
         if not items:
+            return None
+
+        if not self.preserve_order:
+            async for _, prepared_item in self._prepare_items(items):
+                completed_item = await self._commit_item(prepared_item)
+                if output_queue is not None:
+                    await output_queue.put(completed_item)
+                self._release_item_resources(prepared_item[0])
             return None
 
         prepared_by_index: dict[

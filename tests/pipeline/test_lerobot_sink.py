@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import cast
@@ -7,6 +8,7 @@ from typing import cast
 import av
 import numpy as np
 import pyarrow.parquet as pq
+import pytest
 
 import refiner as mdr
 from refiner.media import hydrate_video
@@ -21,6 +23,12 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotMetaReduceSink,
     LeRobotWriterConfig,
     LeRobotWriterSink,
+)
+from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
+    LeRobotVideoWriter,
+    _CompletedVideoItem,
+    _CompletedVideoSegment,
+    _VideoBatchItem,
 )
 from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.context import RunHandle, set_active_run_context
@@ -442,3 +450,72 @@ def test_hub_aloha_merge_uses_remux_and_preserves_episode_count(tmp_path: Path) 
         "observation.images.cam_right_wrist",
     ]:
         assert info_json["features"][video_key]["info"]["video.codec"] == "av1"
+
+
+def test_lerobot_video_writer_respects_preserve_order_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _prepare_items(
+        self: LeRobotVideoWriter,
+        items: list[_VideoBatchItem],
+    ):
+        yield 1, (items[1], None)
+        yield 0, (items[0], None)
+
+    committed: list[int] = []
+
+    async def _commit_item(
+        self: LeRobotVideoWriter,
+        prepared: tuple[_VideoBatchItem, object | None],
+    ) -> _CompletedVideoItem:
+        item, _ = prepared
+        committed.append(item.episode_index)
+        return _CompletedVideoItem(
+            video_key=self.video_key,
+            feature=None,
+            segment=_CompletedVideoSegment(
+                episode_index=item.episode_index,
+                video_key=self.video_key,
+                file_index=0,
+                chunk_key="chunk",
+                from_timestamp=0.0,
+                to_timestamp=0.1,
+                stats={},
+            ),
+        )
+
+    monkeypatch.setattr(LeRobotVideoWriter, "_prepare_items", _prepare_items)
+    monkeypatch.setattr(LeRobotVideoWriter, "_commit_item", _commit_item)
+
+    items = [
+        _VideoBatchItem(episode_index=0, video=mdr.VideoFile(str(tmp_path / "a.mp4"))),
+        _VideoBatchItem(episode_index=1, video=mdr.VideoFile(str(tmp_path / "b.mp4"))),
+    ]
+
+    ordered_writer = LeRobotVideoWriter(
+        folder=mdr.DataFolder.resolve(str(tmp_path / "ordered")),
+        chunk_key="000",
+        video_key="observation.images.main",
+        video_config=mdr.LeRobotVideoConfig(),
+        stats_config=mdr.LeRobotStatsConfig(),
+        default_fps=10,
+        video_bytes_limit=1024,
+        preserve_order=True,
+    )
+    asyncio.run(ordered_writer.write_videos(items))
+    assert committed == [0, 1]
+
+    committed.clear()
+    unordered_writer = LeRobotVideoWriter(
+        folder=mdr.DataFolder.resolve(str(tmp_path / "unordered")),
+        chunk_key="000",
+        video_key="observation.images.main",
+        video_config=mdr.LeRobotVideoConfig(),
+        stats_config=mdr.LeRobotStatsConfig(),
+        default_fps=10,
+        video_bytes_limit=1024,
+        preserve_order=False,
+    )
+    asyncio.run(unordered_writer.write_videos(items))
+    assert committed == [1, 0]

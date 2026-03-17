@@ -359,7 +359,7 @@ class RefinerPipeline:
         video_files_size_in_mb: int = 200,
         video_config: LeRobotVideoConfig | None = None,
         stats_config: LeRobotStatsConfig | None = None,
-        max_buffered_episodes: int = 10,
+        max_video_prepare_in_flight: int = 10,
         preserve_order: bool = True,
     ) -> "RefinerPipeline":
         """Append a deferred LeRobot writer sink and return a pipeline."""
@@ -369,7 +369,7 @@ class RefinerPipeline:
             video_files_size_in_mb=video_files_size_in_mb,
             video=video_config if video_config is not None else LeRobotVideoConfig(),
             stats=stats_config if stats_config is not None else LeRobotStatsConfig(),
-            max_buffered_episodes=max_buffered_episodes,
+            max_video_prepare_in_flight=max_video_prepare_in_flight,
             preserve_order=preserve_order,
         )
 

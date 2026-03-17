@@ -55,7 +55,7 @@ class LeRobotWriterConfig:
     video_files_size_in_mb: int = _DEFAULT_VIDEO_FILE_SIZE_IN_MB
     video: LeRobotVideoConfig = field(default_factory=LeRobotVideoConfig)
     stats: LeRobotStatsConfig = field(default_factory=LeRobotStatsConfig)
-    max_buffered_episodes: int = 10
+    max_video_prepare_in_flight: int = 10
     preserve_order: bool = True
 
     def __post_init__(self) -> None:
@@ -63,8 +63,8 @@ class LeRobotWriterConfig:
             raise ValueError("data_files_size_in_mb must be > 0")
         if self.video_files_size_in_mb <= 0:
             raise ValueError("video_files_size_in_mb must be > 0")
-        if self.max_buffered_episodes <= 0:
-            raise ValueError("media_prelease_max_in_flight must be > 0")
+        if self.max_video_prepare_in_flight <= 0:
+            raise ValueError("max_video_prepare_in_flight must be > 0")
 
 
 class LeRobotWriterSink(BaseSink):
