@@ -9,7 +9,7 @@ from typing import IO, Any, cast
 
 import av
 from loguru import logger
-from refiner.execution.asyncio.runtime import io as io_executor
+from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
 from refiner.media import Video
 from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
@@ -348,6 +348,6 @@ async def prepare_video(
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
-        io_executor,
+        io_executor(),
         partial(_prepare_video, video=video, default_fps=default_fps),
     )

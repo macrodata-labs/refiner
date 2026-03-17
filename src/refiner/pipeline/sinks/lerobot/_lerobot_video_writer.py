@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from refiner.execution.asyncio.runtime import io as io_executor
+from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
 from refiner.media import Video
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
@@ -162,7 +162,7 @@ class LeRobotVideoWriter:
         async with self._commit_lock:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
-                io_executor,
+                io_executor(),
                 partial(self._commit_item_sync, prepared),
             )
 

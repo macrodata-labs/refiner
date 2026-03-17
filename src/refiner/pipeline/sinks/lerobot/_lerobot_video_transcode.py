@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from fractions import Fraction
-from typing import TYPE_CHECKING, IO, Any, Iterator, cast
+from typing import TYPE_CHECKING, IO, Any, Iterator
 
 import av
 import numpy as np
@@ -121,25 +120,6 @@ class TranscodeWriter:
         self.frames_written += 1
         self.duration_s = self.frames_written / float(self.fps)
 
-    def append_video_sync(
-        self,
-        *,
-        video: Video,
-        stats_config: "LeRobotStatsConfig",
-    ) -> tuple[tuple[float, float], dict[str, np.ndarray]]:
-        from_timestamp = self.duration_s
-        with _open_video_container(video) as (container, stream):
-            stats = _transcode_from_source(
-                writer=self,
-                video=video,
-                container=container,
-                stream=stream,
-                stats_config=stats_config,
-                video_config=self.config,
-                seek=True,
-            )
-        return (from_timestamp, self.duration_s), stats
-
     def append_prepared_video_sync(
         self,
         *,
@@ -158,14 +138,6 @@ class TranscodeWriter:
             seek=False,
         )
         return (from_timestamp, self.duration_s), stats
-
-    async def append_video(
-        self,
-        *,
-        video: Video,
-        stats_config: "LeRobotStatsConfig",
-    ) -> tuple[tuple[float, float], dict[str, np.ndarray]]:
-        return self.append_video_sync(video=video, stats_config=stats_config)
 
     def close(self) -> None:
         container = self.container
@@ -336,62 +308,3 @@ def _transcode_from_source(
             f"[{clip_from:.6f}, {clip_to if clip_to is not None else 'end'})."
         )
     return _video_stats_from_tracker(tracker)
-
-
-async def compute_video_stats(
-    *,
-    video: Video,
-    stats_config: "LeRobotStatsConfig",
-    video_config: "LeRobotVideoConfig",
-) -> dict[str, np.ndarray]:
-    tracker = _new_tracker(stats_config)
-    clip_from = video_from_timestamp_s(video)
-    clip_to = video_to_timestamp_s(video)
-
-    with _open_video_container(video) as (container, stream):
-        _configure_decoder(stream, video_config)
-        for frame_index, frame in enumerate(
-            _iter_selected_frames(
-                container=container,
-                stream=stream,
-                clip_from=clip_from,
-                clip_to=clip_to,
-                seek=True,
-            )
-        ):
-            _update_video_stats_if_due(
-                tracker=tracker,
-                frame_index=frame_index,
-                sample_stride=stats_config.sample_stride,
-                rgb_frame=frame.to_ndarray(format="rgb24"),
-            )
-
-    return _video_stats_from_tracker(tracker)
-
-
-async def _resolve_video_fps(
-    *,
-    video: Video,
-    video_key: str,
-) -> int:
-    with _open_video_container(video) as (_, stream):
-        return _stream_fps(stream)
-    raise ValueError(f"Failed to resolve FPS for video {video_key!r}")
-
-
-@contextmanager
-def _open_video_container(video: Video) -> Iterator[tuple[Any, Any]]:
-    input_file = video.open_for_container("rb")
-    try:
-        with av.open(input_file, mode="r") as container:
-            stream = cast(
-                Any,
-                next(
-                    (item for item in container.streams if item.type == "video"), None
-                ),
-            )
-            if stream is None:
-                raise ValueError(f"Video source has no video stream for {video.uri!r}")
-            yield container, stream
-    finally:
-        input_file.close()

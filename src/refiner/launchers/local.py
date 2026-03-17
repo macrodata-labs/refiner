@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -166,11 +164,6 @@ class LocalLauncher(BaseLauncher):
         process: subprocess.Popen[str],
     ) -> tuple[int, int, int, int]:
         stdout_text, stderr_text = process.communicate()
-        self._forward_worker_logs(
-            rank=rank,
-            stdout_text=stdout_text or "",
-            stderr_text=stderr_text or "",
-        )
         return_code = process.returncode
         stats_line = ""
         for line in reversed(stdout_text.splitlines()):
@@ -199,32 +192,6 @@ class LocalLauncher(BaseLauncher):
             int(stats["failed"]),
             int(stats["output_rows"]),
         )
-
-    def _forward_worker_logs(
-        self,
-        *,
-        rank: int,
-        stdout_text: str,
-        stderr_text: str,
-    ) -> None:
-        if not self._should_forward_worker_logs():
-            return
-
-        stderr_lines = [line for line in stderr_text.splitlines() if line.strip()]
-        if stderr_lines:
-            for line in stderr_lines:
-                sys.stderr.write(f"[worker {rank} stderr] {line}\n")
-            sys.stderr.flush()
-
-        stdout_lines = [line for line in stdout_text.splitlines() if line.strip()]
-        if stdout_lines:
-            for line in stdout_lines[:-1]:
-                sys.stderr.write(f"[worker {rank} stdout] {line}\n")
-            sys.stderr.flush()
-
-    def _should_forward_worker_logs(self) -> bool:
-        level = os.environ.get("LOGURU_LEVEL", "").strip().upper()
-        return level in {"DEBUG", "TRACE"}
 
     def _collect_worker_stats(
         self,
@@ -306,9 +273,7 @@ class LocalLauncher(BaseLauncher):
                     platform_run=stage_run,
                 ),
                 stdout=subprocess.PIPE,
-                stderr=(
-                    None if self._should_forward_worker_logs() else subprocess.PIPE
-                ),
+                stderr=subprocess.PIPE,
                 text=True,
             )
             for rank in range(stage.compute.num_workers)

@@ -433,22 +433,17 @@ def _subprocess_case(
     for repo_id in repo_ids:
         cmd.extend(["--repo-id", repo_id])
 
-    debug_logging = os.environ.get("LOGURU_LEVEL", "").strip().upper() in {
-        "DEBUG",
-        "TRACE",
-    }
     completed = subprocess.run(
         cmd,
         cwd=str(REPO_ROOT),
         text=True,
-        capture_output=not debug_logging,
+        capture_output=True,
         check=False,
     )
-    if not debug_logging:
-        if completed.stdout:
-            print(completed.stdout, end="")
-        if completed.stderr:
-            print(completed.stderr, end="", file=sys.stderr)
+    if completed.stdout:
+        print(completed.stdout, end="")
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
     if completed.returncode != 0:
         raise RuntimeError(
             f"Benchmark case failed for {implementation} iteration {iteration}"

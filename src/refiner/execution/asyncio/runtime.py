@@ -5,7 +5,7 @@ import atexit
 import os
 import threading
 from collections.abc import Coroutine
-from concurrent.futures import Executor, Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, TypeVar
 
 T = TypeVar("T")
@@ -14,14 +14,6 @@ T = TypeVar("T")
 def _default_io_workers() -> int:
     cpu_count = max(1, os.cpu_count() or 1)
     return max(4, min(32, cpu_count * 4))
-
-
-class _RuntimeExecutorProxy(Executor):
-    def __init__(self, *, runtime: "AsyncRuntime") -> None:
-        self._runtime = runtime
-
-    def submit(self, fn, /, *args, **kwargs):
-        return self._runtime.io_executor().submit(fn, *args, **kwargs)
 
 
 class AsyncRuntime:
@@ -104,7 +96,6 @@ class AsyncRuntime:
 
 
 _runtime = AsyncRuntime()
-io = _RuntimeExecutorProxy(runtime=_runtime)
 
 
 def submit(coro: Coroutine[Any, Any, T]) -> Future[T]:
@@ -118,4 +109,4 @@ def io_executor() -> ThreadPoolExecutor:
 atexit.register(_runtime.shutdown)
 
 
-__all__ = ["AsyncRuntime", "io", "io_executor", "submit"]
+__all__ = ["AsyncRuntime", "io_executor", "submit"]

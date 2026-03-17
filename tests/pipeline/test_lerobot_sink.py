@@ -222,55 +222,6 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     assert (out_root / "meta" / "tasks.parquet").exists()
 
 
-def test_lerobot_video_writer_remuxes_non_local_video(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    src_video = tmp_path / "source" / "episode.mp4"
-    _write_video(src_video)
-
-    memfs = fsspec.filesystem("memory")
-    uri = "memory://lerobot-remux/episode.mp4"
-    with src_video.open("rb") as src, memfs.open(uri, "wb") as dst:
-        dst.write(src.read())
-
-    async def _fail_transcode(self, *, video, stats_config):
-        raise AssertionError("expected remux path for aligned non-local video")
-
-    monkeypatch.setattr(
-        "refiner.pipeline.sinks.lerobot._lerobot_video_transcode.TranscodeWriter.append_video",
-        _fail_transcode,
-    )
-
-    writer = LeRobotVideoWriter(
-        folder=mdr.DataFolder.resolve(str(tmp_path / "out")),
-        chunk_key="000",
-        video_key="observation.images.main",
-        video_config=mdr.LeRobotVideoConfig(),
-        stats_config=mdr.LeRobotStatsConfig(),
-        default_fps=10,
-        video_bytes_limit=1024 * 1024,
-    )
-    completed = asyncio.run(
-        writer.write_video(
-            mdr.VideoFile(uri, from_timestamp_s=0.0, to_timestamp_s=0.6),
-            episode_index=0,
-        )
-    )
-    writer.finalize()
-
-    assert completed.feature is not None
-    assert completed.segment.to_timestamp > completed.segment.from_timestamp
-    assert (
-        tmp_path
-        / "out"
-        / "videos"
-        / "observation.images.main"
-        / "chunk-000"
-        / "file-000.mp4"
-    ).exists()
-
-
 def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
