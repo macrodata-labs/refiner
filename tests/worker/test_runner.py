@@ -126,6 +126,14 @@ class _FlushFailingTelemetryEmitter(_NoopTelemetryEmitter):
         raise RuntimeError("flush failed")
 
 
+class _RecordingTelemetryEmitter(_NoopTelemetryEmitter):
+    def __init__(self) -> None:
+        self.log_flushes = 0
+
+    def force_flush_logs(self) -> None:
+        self.log_flushes += 1
+
+
 class _LifecycleClientWithFailingTelemetry:
     def __init__(self, shard: Shard):
         self._next_shard = shard
@@ -393,6 +401,33 @@ def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
     )
     with pytest.raises(RuntimeError, match="flush failed"):
         worker.run()
+
+
+def test_worker_flushes_logs_on_failure(monkeypatch) -> None:
+    shard = _shard("boom", 0, 1)
+    rows_by_shard = {shard.id: [DictRow({"x": 2})]}
+    emitter = _RecordingTelemetryEmitter()
+
+    def maybe_fail(row: Row) -> Row:
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(
+        "refiner.worker.runner.OtelTelemetryEmitter", lambda **_: emitter
+    )
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail),
+        run_handle=RunHandle(
+            job_id="job",
+            stage_index=0,
+            client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
+            worker_name="worker-0",
+        ),
+    )
+
+    stats = worker.run()
+
+    assert stats.failed == 1
+    assert emitter.log_flushes == 2
 
 
 __all__: list[str] = []
