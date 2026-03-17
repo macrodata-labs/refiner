@@ -13,8 +13,6 @@ from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFile
 from refiner.pipeline.utils.cache.lease_cache import LeaseCache
 
-_OPENED_VIDEO_SOURCE_CACHE_MAX_WEIGHT = 1024 * 1024 * 1024
-
 
 @dataclass(frozen=True, slots=True)
 class VideoSourceProbe:
@@ -48,30 +46,27 @@ class OpenedVideoSourceCache(LeaseCache[str, OpenedVideoSource]):
         *,
         name: str,
         max_entries: int,
-        max_weight: int,
     ) -> None:
         super().__init__(
             max_entries=max_entries,
-            max_weight=max_weight,
             max_leases_per_key=1,
             block_on_capacity=True,
         )
         self.name = name
         self.max_entries = int(max_entries)
-        self.max_weight = int(max_weight)
 
     async def _create_resource(
         self,
         key: str,
     ) -> tuple[OpenedVideoSource, int]:
-        source, weight = await asyncio.get_running_loop().run_in_executor(
+        source = await asyncio.get_running_loop().run_in_executor(
             io_executor(),
             partial(
                 _open_video_source,
                 uri=key,
             ),
         )
-        return source, weight
+        return source, 0
 
     def _close_resource(self, resource: OpenedVideoSource) -> None:
         resource.close()
@@ -115,9 +110,8 @@ def _probe_video_source(
 def _open_video_source(
     *,
     uri: str,
-) -> tuple[OpenedVideoSource, int]:
-    data_file = DataFile.resolve(uri)
-    input_file = data_file.open("rb")
+) -> OpenedVideoSource:
+    input_file = DataFile.resolve(uri).open("rb")
     try:
         container = av.open(input_file, mode="r")
         stream = cast(
@@ -131,34 +125,16 @@ def _open_video_source(
         probe = _probe_video_source(
             container=container,
         )
-        return (
-            OpenedVideoSource(
-                uri=uri,
-                probe=probe,
-                input_file=input_file,
-                container=container,
-                stream=stream,
-            ),
-            _video_source_weight(input_file),
+        return OpenedVideoSource(
+            uri=uri,
+            probe=probe,
+            input_file=input_file,
+            container=container,
+            stream=stream,
         )
     except Exception:
         input_file.close()
         raise
-
-
-def _video_source_weight(input_file: IO[bytes]) -> int:
-    try:
-        size = getattr(input_file, "size", None)
-        if size is None:
-            details = getattr(input_file, "details", None)
-            if isinstance(details, dict):
-                size = details.get("size")
-        if size is not None:
-            return max(1, int(size))
-    except Exception:
-        # In case of an error, we fall through to the default return value.
-        pass
-    return 1
 
 
 _opened_video_source_cache_registry: dict[str, OpenedVideoSourceCache] = {}
@@ -168,7 +144,6 @@ def get_opened_video_source_cache(
     *,
     name: str = "default",
     max_entries: int | None = None,
-    max_weight: int | None = None,
 ) -> OpenedVideoSourceCache:
     if not isinstance(name, str) or not name.strip():
         raise ValueError("opened video source cache name must be a non-empty string")
@@ -179,11 +154,6 @@ def get_opened_video_source_cache(
         cache = OpenedVideoSourceCache(
             name=normalized,
             max_entries=max_entries if max_entries is not None else 8,
-            max_weight=(
-                max_weight
-                if max_weight is not None
-                else _OPENED_VIDEO_SOURCE_CACHE_MAX_WEIGHT
-            ),
         )
         _opened_video_source_cache_registry[normalized] = cache
         return cache
@@ -191,11 +161,6 @@ def get_opened_video_source_cache(
         raise ValueError(
             f"Opened video source cache {normalized!r} already exists with "
             f"max_entries={cache.max_entries}"
-        )
-    if max_weight is not None and cache.max_weight != int(max_weight):
-        raise ValueError(
-            f"Opened video source cache {normalized!r} already exists with "
-            f"max_weight={cache.max_weight}"
         )
     return cache
 
