@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from dataclasses import dataclass
-from functools import partial
 from fractions import Fraction
+from functools import partial
 from typing import IO, Any, cast
 
 import av
+from loguru import logger
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
 from refiner.media import Video
@@ -17,6 +19,275 @@ from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
 )
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
+
+
+@dataclass(slots=True)
+class _OpenedVideoSource:
+    uri: str
+    input_file: IO[bytes]
+    container: Any
+    stream: Any
+    probe: _VideoSourceProbe | None
+
+    def close(self) -> None:
+        try:
+            self.container.close()
+        finally:
+            self.input_file.close()
+
+
+@dataclass(slots=True)
+class _OpenedVideoSourceEntry:
+    ready: asyncio.Future[None] | None = None
+    available: asyncio.Event | None = None
+    source: _OpenedVideoSource | None = None
+    error: BaseException | None = None
+    ref_count: int = 0
+
+
+class _OpenedVideoSourceLease:
+    def __init__(
+        self,
+        *,
+        cache: "_OpenedVideoSourceCache",
+        uri: str,
+        source: _OpenedVideoSource,
+    ) -> None:
+        self._cache = cache
+        self._uri = uri
+        self.source = source
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._cache.release(self._uri)
+
+
+class _OpenedVideoSourceCache:
+    def __init__(
+        self,
+        *,
+        video_key: str,
+        default_fps: int | None,
+        max_entries: int = 8,
+    ) -> None:
+        if max_entries <= 0:
+            raise ValueError("max_entries must be > 0")
+        self.video_key = video_key
+        self.default_fps = default_fps
+        self.max_entries = int(max_entries)
+        self.lock = asyncio.Lock()
+        self._entries: OrderedDict[str, _OpenedVideoSourceEntry] = OrderedDict()
+
+    async def acquire(
+        self,
+        *,
+        video: Video,
+    ) -> _OpenedVideoSourceLease:
+        uri = video_uri(video)
+        while True:
+            entry = self._entries.get(uri)
+            if entry is None:
+                logger.debug(
+                    "opened video source cache miss: video_key={!r} uri={!r}",
+                    self.video_key,
+                    uri,
+                )
+                entry = _OpenedVideoSourceEntry(
+                    ready=asyncio.get_running_loop().create_future(),
+                    available=asyncio.Event(),
+                )
+                self._entries[uri] = entry
+                self._entries.move_to_end(uri)
+                break
+            if entry.error is not None:
+                logger.debug(
+                    "opened video source cache load error: video_key={!r} uri={!r}",
+                    self.video_key,
+                    uri,
+                )
+                self._entries.pop(uri, None)
+                raise entry.error
+            if entry.source is not None and entry.ref_count == 0:
+                logger.debug(
+                    "opened video source cache hit: video_key={!r} uri={!r}",
+                    self.video_key,
+                    uri,
+                )
+                entry.ref_count = 1
+                if entry.available is not None:
+                    entry.available.clear()
+                self._entries.move_to_end(uri)
+                return _OpenedVideoSourceLease(
+                    cache=self,
+                    uri=uri,
+                    source=entry.source,
+                )
+            if entry.source is None:
+                if entry.ready is None:
+                    raise RuntimeError(f"Opened source state is invalid for {uri!r}")
+                logger.debug(
+                    "opened video source cache wait for create: video_key={!r} uri={!r}",
+                    self.video_key,
+                    uri,
+                )
+                await entry.ready
+            else:
+                if entry.available is None:
+                    raise RuntimeError(f"Opened source state is invalid for {uri!r}")
+                logger.debug(
+                    "opened video source cache wait for lease: video_key={!r} uri={!r}",
+                    self.video_key,
+                    uri,
+                )
+                await entry.available.wait()
+
+        try:
+            logger.debug(
+                "opened video source cache creating source: video_key={!r} uri={!r}",
+                self.video_key,
+                uri,
+            )
+            source = await asyncio.get_running_loop().run_in_executor(
+                io_executor(),
+                partial(_open_video_source, video=video, default_fps=self.default_fps),
+            )
+        except BaseException as exc:
+            entry = self._entries.get(uri)
+            if entry is not None and entry.source is None:
+                entry.error = exc
+                if entry.ready is not None and not entry.ready.done():
+                    entry.ready.set_result(None)
+            logger.debug(
+                "opened video source cache create failed: video_key={!r} uri={!r} error={!r}",
+                self.video_key,
+                uri,
+                exc,
+            )
+            raise
+
+        entry = self._entries.get(uri)
+        if entry is None or entry.source is not None:
+            source.close()
+            return await self.acquire(video=video)
+
+        entry.source = source
+        entry.error = None
+        entry.ref_count = 1
+        if entry.available is None:
+            entry.available = asyncio.Event()
+        entry.available.clear()
+        if entry.ready is not None and not entry.ready.done():
+            entry.ready.set_result(None)
+        self._entries.move_to_end(uri)
+        logger.debug(
+            "opened video source cache created source: video_key={!r} uri={!r}",
+            self.video_key,
+            uri,
+        )
+        for item in self._evict_idle():
+            item.close()
+        return _OpenedVideoSourceLease(
+            cache=self,
+            uri=uri,
+            source=source,
+        )
+
+    def release(self, uri: str) -> None:
+        entry = self._entries.get(uri)
+        if entry is None or entry.source is None:
+            return
+        entry.ref_count = max(0, entry.ref_count - 1)
+        logger.debug(
+            "opened video source cache release: video_key={!r} uri={!r} ref_count={}",
+            self.video_key,
+            uri,
+            entry.ref_count,
+        )
+        if entry.ref_count == 0 and entry.available is not None:
+            entry.available.set()
+            for item in self._evict_idle():
+                item.close()
+
+    def clear(self) -> None:
+        to_close = [
+            entry.source for entry in self._entries.values() if entry.source is not None
+        ]
+        if to_close:
+            logger.debug(
+                "opened video source cache clear: video_key={!r} entries={}",
+                self.video_key,
+                len(to_close),
+            )
+        self._entries.clear()
+        for item in to_close:
+            item.close()
+
+    def _evict_idle(self) -> list[_OpenedVideoSource]:
+        to_close: list[_OpenedVideoSource] = []
+        while self._ready_entry_count() > self.max_entries:
+            candidate_key = next(
+                (
+                    key
+                    for key, entry in self._entries.items()
+                    if entry.source is not None and entry.ref_count == 0
+                ),
+                None,
+            )
+            if candidate_key is None:
+                break
+            entry = self._entries.pop(candidate_key)
+            if entry.source is not None:
+                logger.debug(
+                    "opened video source cache evict idle source: video_key={!r} uri={!r}",
+                    self.video_key,
+                    candidate_key,
+                )
+                to_close.append(entry.source)
+        return to_close
+
+    def _ready_entry_count(self) -> int:
+        return sum(1 for entry in self._entries.values() if entry.source is not None)
+
+
+_opened_video_source_cache_registry: dict[str, _OpenedVideoSourceCache] = {}
+
+
+def _get_opened_video_source_cache(
+    *,
+    video_key: str,
+    default_fps: int | None,
+) -> _OpenedVideoSourceCache:
+    cache = _opened_video_source_cache_registry.get(video_key)
+    if cache is None:
+        cache = _OpenedVideoSourceCache(
+            video_key=video_key,
+            default_fps=default_fps,
+        )
+        _opened_video_source_cache_registry[video_key] = cache
+        return cache
+    if cache.default_fps != default_fps:
+        raise ValueError(
+            f"Opened video source cache for {video_key!r} already exists with "
+            f"default_fps={cache.default_fps!r}"
+        )
+    return cache
+
+
+def reset_opened_video_source_cache(video_key: str | None = None) -> None:
+    if video_key is None:
+        caches = list(_opened_video_source_cache_registry.values())
+        _opened_video_source_cache_registry.clear()
+    else:
+        cache = _opened_video_source_cache_registry.pop(video_key, None)
+        caches = [cache] if cache is not None else []
+
+    for cache in caches:
+        if cache is None:
+            continue
+        cache.clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,18 +310,15 @@ class _VideoPtsAlignment:
 
 @dataclass(slots=True)
 class _PreparedSource:
+    lease: _OpenedVideoSourceLease
     uri: str
     probe: _VideoSourceProbe | None
     alignment: _VideoPtsAlignment | None
-    input_file: IO[bytes]
     container: Any
     stream: Any
 
     def close(self) -> None:
-        try:
-            self.container.close()
-        finally:
-            self.input_file.close()
+        self.lease.release()
 
 
 class RemuxWriter:
@@ -210,14 +478,9 @@ def _probe_video_source(
 
 def probe_for_remux(
     *,
-    container: Any,
+    probe: _VideoSourceProbe | None,
     video: Video,
-    default_fps: int | None,
 ) -> tuple[_VideoSourceProbe | None, _VideoPtsAlignment | None]:
-    probe = _probe_video_source(
-        container=container,
-        default_fps=default_fps,
-    )
     if probe is None:
         return None, None
 
@@ -241,11 +504,11 @@ def probe_for_remux(
     )
 
 
-def _prepare_video(
+def _open_video_source(
     *,
     video: Video,
     default_fps: int | None,
-) -> _PreparedSource:
+) -> _OpenedVideoSource:
     input_file = video.open("rb")
     try:
         container = av.open(input_file, mode="r")
@@ -257,40 +520,13 @@ def _prepare_video(
             container.close()
             input_file.close()
             raise ValueError(f"Video source has no video stream for {video.uri!r}")
-
-        start_pts = 0
-        if stream.time_base is not None:
-            start_pts = max(
-                0,
-                int(round(video_from_timestamp_s(video) / float(stream.time_base))),
-            )
-
-        try:
-            container.seek(
-                start_pts,
-                stream=stream,
-                backward=True,
-            )
-        except Exception:
-            try:
-                container.seek(
-                    max(0, start_pts),
-                    stream=stream,
-                    backward=True,
-                    any_frame=True,
-                )
-            except Exception:
-                pass
-
-        probe, alignment = probe_for_remux(
+        probe = _probe_video_source(
             container=container,
-            video=video,
             default_fps=default_fps,
         )
-        return _PreparedSource(
+        return _OpenedVideoSource(
             uri=video_uri(video),
             probe=probe,
-            alignment=alignment,
             input_file=input_file,
             container=container,
             stream=stream,
@@ -302,12 +538,56 @@ def _prepare_video(
 
 async def prepare_video(
     *,
+    video_key: str,
     video: Video,
     default_fps: int | None,
 ) -> _PreparedSource:
+    lease = await _get_opened_video_source_cache(
+        video_key=video_key,
+        default_fps=default_fps,
+    ).acquire(video=video)
+    source = lease.source
+    try:
+        start_pts = 0
+        if source.stream.time_base is not None:
+            start_pts = max(
+                0,
+                int(
+                    round(
+                        video_from_timestamp_s(video) / float(source.stream.time_base)
+                    )
+                ),
+            )
 
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        io_executor(),
-        partial(_prepare_video, video=video, default_fps=default_fps),
-    )
+        try:
+            source.container.seek(
+                start_pts,
+                stream=source.stream,
+                backward=True,
+            )
+        except Exception:
+            try:
+                source.container.seek(
+                    max(0, start_pts),
+                    stream=source.stream,
+                    backward=True,
+                    any_frame=True,
+                )
+            except Exception:
+                pass
+
+        probe, alignment = probe_for_remux(
+            probe=source.probe,
+            video=video,
+        )
+        return _PreparedSource(
+            lease=lease,
+            uri=source.uri,
+            probe=probe,
+            alignment=alignment,
+            container=source.container,
+            stream=source.stream,
+        )
+    except Exception:
+        lease.release()
+        raise

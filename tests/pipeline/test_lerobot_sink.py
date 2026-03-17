@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import cast
+from typing import Iterator, cast
 
 import av
 import fsspec
@@ -27,6 +27,9 @@ from refiner.pipeline.sinks.lerobot import (
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
     LeRobotVideoWriter,
 )
+from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
+    reset_opened_video_source_cache,
+)
 from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.lifecycle import RuntimeLifecycle
@@ -35,6 +38,13 @@ _ALOHA_REPO_IDS = (
     "macrodata/aloha_static_battery_ep000_004",
     "macrodata/aloha_static_battery_ep005_009",
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_opened_source_cache() -> Iterator[None]:
+    reset_opened_video_source_cache()
+    yield
+    reset_opened_video_source_cache()
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -222,7 +232,7 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     assert (out_root / "meta" / "tasks.parquet").exists()
 
 
-def test_lerobot_video_writer_reopens_remux_source_for_each_write(
+def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -272,7 +282,7 @@ def test_lerobot_video_writer_reopens_remux_source_for_each_write(
     )
     writer.finalize()
 
-    assert read_open_calls == 2
+    assert read_open_calls == 1
 
 
 def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) -> None:

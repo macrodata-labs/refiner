@@ -138,6 +138,7 @@ class LeRobotVideoWriter:
         item: _VideoItem,
     ) -> _PreparedVideoItem:
         prepared_source = await prepare_video(
+            video_key=self.video_key,
             video=item.video,
             default_fps=self.default_fps,
         )
