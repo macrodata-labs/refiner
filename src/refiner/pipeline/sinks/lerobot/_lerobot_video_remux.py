@@ -262,7 +262,7 @@ def _prepare_video(
     *,
     video: Video,
     default_fps: int | None,
-) -> _PreparedSource | None:
+) -> _PreparedSource:
     input_file = video.open("rb")
     try:
         logger.debug(
@@ -277,7 +277,7 @@ def _prepare_video(
         if stream is None:
             container.close()
             input_file.close()
-            return None
+            raise ValueError(f"Video source has no video stream for {video.uri!r}")
 
         start_pts = 0
         if stream.time_base is not None:
@@ -344,7 +344,7 @@ async def prepare_video(
     *,
     video: Video,
     default_fps: int | None,
-) -> _PreparedSource | None:
+) -> _PreparedSource:
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(

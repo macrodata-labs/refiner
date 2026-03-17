@@ -141,8 +141,6 @@ class LeRobotVideoWriter:
             video=item.video,
             default_fps=self.default_fps,
         )
-        if prepared_source is None:
-            raise ValueError(f"Failed to prepare video source for {item.video.uri!r}")
         return _PreparedVideoItem(
             item=item,
             source=prepared_source,

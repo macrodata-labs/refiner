@@ -128,15 +128,37 @@ class TranscodeWriter:
         stats_config: "LeRobotStatsConfig",
     ) -> tuple[tuple[float, float], dict[str, np.ndarray]]:
         from_timestamp = self.duration_s
-        stats = _transcode_from_source(
-            writer=self,
-            video=video,
-            container=prepared_source.container,
-            stream=prepared_source.stream,
-            stats_config=stats_config,
-            video_config=self.config,
-            seek=False,
-        )
+        tracker = _new_tracker(stats_config)
+        selected_frames = 0
+
+        _configure_decoder(prepared_source.stream, self.config)
+        clip_from = video_from_timestamp_s(video)
+        clip_to = video_to_timestamp_s(video)
+        for frame_index, frame in enumerate(
+            _iter_selected_frames(
+                container=prepared_source.container,
+                stream=prepared_source.stream,
+                clip_from=clip_from,
+                clip_to=clip_to,
+                seek=False,
+            )
+        ):
+            self.ensure_stream(width=frame.width, height=frame.height)
+            self.write_frame(frame)
+            _update_video_stats_if_due(
+                tracker=tracker,
+                frame_index=frame_index,
+                sample_stride=stats_config.sample_stride,
+                rgb_frame=frame.to_ndarray(format="rgb24"),
+            )
+            selected_frames += 1
+
+        if selected_frames <= 0:
+            raise ValueError(
+                f"Video segment for {video.uri!r} contains no decodable frames in "
+                f"[{clip_from:.6f}, {clip_to if clip_to is not None else 'end'})."
+            )
+        stats = _video_stats_from_tracker(tracker)
         return (from_timestamp, self.duration_s), stats
 
     def close(self) -> None:
@@ -154,15 +176,6 @@ class TranscodeWriter:
         if self.output_file is not None:
             self.output_file.close()
             self.output_file = None
-
-
-def _stream_fps(stream: Any, *, default_fps: int | None = None) -> int:
-    for rate in (stream.average_rate, stream.guessed_rate, stream.base_rate):
-        if rate is not None:
-            return int(round(float(rate)))
-    if default_fps is not None:
-        return int(default_fps)
-    raise ValueError("Failed to resolve FPS from video stream")
 
 
 def _configure_decoder(stream: Any, video_config: "LeRobotVideoConfig") -> None:
@@ -265,46 +278,3 @@ def _video_stats_from_tracker(
                 np.asarray(value, dtype=np.float64).reshape(3, 1, 1) / 255.0
             )
     return normalized
-
-
-def _transcode_from_source(
-    *,
-    writer: TranscodeWriter,
-    video: Video,
-    container: Any,
-    stream: Any,
-    stats_config: "LeRobotStatsConfig",
-    video_config: "LeRobotVideoConfig",
-    seek: bool,
-) -> dict[str, np.ndarray]:
-    tracker = _new_tracker(stats_config)
-    selected_frames = 0
-
-    _configure_decoder(stream, video_config)
-    clip_from = video_from_timestamp_s(video)
-    clip_to = video_to_timestamp_s(video)
-    for frame_index, frame in enumerate(
-        _iter_selected_frames(
-            container=container,
-            stream=stream,
-            clip_from=clip_from,
-            clip_to=clip_to,
-            seek=seek,
-        )
-    ):
-        writer.ensure_stream(width=frame.width, height=frame.height)
-        writer.write_frame(frame)
-        _update_video_stats_if_due(
-            tracker=tracker,
-            frame_index=frame_index,
-            sample_stride=stats_config.sample_stride,
-            rgb_frame=frame.to_ndarray(format="rgb24"),
-        )
-        selected_frames += 1
-
-    if selected_frames <= 0:
-        raise ValueError(
-            f"Video segment for {video.uri!r} contains no decodable frames in "
-            f"[{clip_from:.6f}, {clip_to if clip_to is not None else 'end'})."
-        )
-    return _video_stats_from_tracker(tracker)
