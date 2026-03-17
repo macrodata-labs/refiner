@@ -265,7 +265,6 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
         video_key="observation.images.main",
         video_config=mdr.LeRobotVideoConfig(),
         stats_config=mdr.LeRobotStatsConfig(),
-        default_fps=10,
         video_bytes_limit=1024 * 1024,
     )
     asyncio.run(
