@@ -130,6 +130,7 @@ class TranscodeWriter:
         from_timestamp = self.duration_s
         tracker = _new_tracker(stats_config)
         selected_frames = 0
+        sampled_frame_count = 0
 
         _configure_decoder(prepared_source.stream, self.config)
         clip_from = video_from_timestamp_s(video)
@@ -145,12 +146,13 @@ class TranscodeWriter:
         ):
             self.ensure_stream(width=frame.width, height=frame.height)
             self.write_frame(frame)
-            _update_video_stats_if_due(
+            if _update_video_stats_if_due(
                 tracker=tracker,
                 frame_index=frame_index,
                 sample_stride=stats_config.sample_stride,
                 rgb_frame=frame.to_ndarray(format="rgb24"),
-            )
+            ):
+                sampled_frame_count += 1
             selected_frames += 1
 
         if selected_frames <= 0:
@@ -158,7 +160,10 @@ class TranscodeWriter:
                 f"Video segment for {video.uri!r} contains no decodable frames in "
                 f"[{clip_from:.6f}, {clip_to if clip_to is not None else 'end'})."
             )
-        stats = _video_stats_from_tracker(tracker)
+        stats = _video_stats_from_tracker(
+            tracker,
+            sampled_frame_count=sampled_frame_count,
+        )
         return (from_timestamp, self.duration_s), stats
 
     def close(self) -> None:
@@ -254,25 +259,28 @@ def _update_video_stats_if_due(
     frame_index: int,
     sample_stride: int,
     rgb_frame: np.ndarray | None,
-) -> None:
+) -> bool:
     if frame_index % sample_stride != 0 or rgb_frame is None or rgb_frame.ndim != 3:
-        return
+        return False
     _update_video_stats_tracker(
         tracker=tracker,
         image_chw=_auto_downsample_height_width(np.transpose(rgb_frame, (2, 0, 1))),
     )
+    return True
 
 
 def _video_stats_from_tracker(
     tracker: _RunningQuantileStats,
+    *,
+    sampled_frame_count: int,
 ) -> dict[str, np.ndarray]:
-    if tracker.count <= 0:
+    if tracker.count <= 0 or sampled_frame_count <= 0:
         return {}
     stats = tracker.get_statistics()
     normalized: dict[str, np.ndarray] = {}
     for key, value in stats.items():
         if key == "count":
-            normalized[key] = value
+            normalized[key] = np.array([sampled_frame_count], dtype=np.int64)
         else:
             normalized[key] = (
                 np.asarray(value, dtype=np.float64).reshape(3, 1, 1) / 255.0

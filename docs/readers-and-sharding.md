@@ -63,4 +63,4 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 - Parquet row access uses batch-level cached column-name indexing for faster key lookup.
 - LeRobot expects parquet metadata under `meta/episodes/**`; legacy JSONL metadata is not used.
 - LeRobot reads `fps`, `robot_type`, `features`, `data_path`, and `video_path` from `meta/info.json` when present.
-- The LeRobot writer is batch-oriented per shard block: frame parquet writes happen per batch table, each `video_key` uses one batch-scoped `VideoWriter.write_videos(...)` call that prepares videos concurrently and commits them in order, and episode rows are finalized from an async queue of completed video results.
+- The LeRobot writer is row-oriented within each shard: frame parquet writes and per-video writes for the row run concurrently, and the episode metadata row is emitted after both complete.

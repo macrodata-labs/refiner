@@ -169,21 +169,24 @@ class LeRobotVideoWriter:
     ) -> _CompletedVideoItem:
         item = prepared.item
         source = prepared.source
-        if source.alignment is not None and source.probe is not None:
-            if source.probe.fps is None:
+        if not self._should_transcode(prepared):
+            probe = source.probe
+            if probe is None:
+                raise RuntimeError("Remux path selected without a source probe")
+            if probe.fps is None:
                 raise ValueError("Prepared remux item is missing FPS")
-            remux_writer = self._ensure_remux_writer(source.probe)
+            remux_writer = self._ensure_remux_writer(probe)
             file_index = self._next_file_index
             from_timestamp, to_timestamp = remux_writer.append_prepared_video(
                 source,
             )
             stats = item.source_stats if item.source_stats is not None else {}
             feature = _video_feature(
-                fps=int(source.probe.fps),
-                height=source.probe.height,
-                width=source.probe.width,
-                codec=source.probe.codec or self.video_config.codec,
-                pix_fmt=source.probe.pix_fmt or self.video_config.pix_fmt,
+                fps=probe.fps,
+                height=probe.height,
+                width=probe.width,
+                codec=probe.codec or self.video_config.codec,
+                pix_fmt=probe.pix_fmt or self.video_config.pix_fmt,
             )
         else:
             transcode_fps = prepared.transcode_fps
@@ -223,6 +226,18 @@ class LeRobotVideoWriter:
                 stats=stats,
             ),
         )
+
+    def _should_transcode(self, prepared: _PreparedVideoItem) -> bool:
+        source = prepared.source
+        if source.probe is None or source.alignment is None:
+            return True
+        if self.stats_config.force_recompute_video_stats:
+            return True
+        if prepared.item.source_stats is None:
+            # TODO: Detect automatically when reused source stats no longer match the
+            # emitted clip and force transcode even if source stats exist.
+            return True
+        return False
 
     def _ensure_transcode_writer(self, fps: int) -> TranscodeWriter:
         writer = self._writer

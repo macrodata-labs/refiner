@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+_DEFAULT_QUANTILES = [0.01, 0.10, 0.50, 0.90, 0.99]
+
 
 @dataclass(slots=True)
 class _RunningQuantileStats:
@@ -190,18 +192,40 @@ class _RunningQuantileStats:
 
 def _feature_stats(
     array: np.ndarray,
+    *,
+    quantile_list: list[float] | None = None,
+    num_quantile_bins: int = 5000,
 ) -> dict[str, np.ndarray]:
     if array.ndim == 0:
-        array = array.reshape(1)
+        array = array.reshape(1, 1)
+    elif array.ndim == 1:
+        array = array.reshape(-1, 1)
 
     count = int(array.shape[0])
-    return {
-        "min": np.atleast_1d(np.min(array, axis=0)),
-        "max": np.atleast_1d(np.max(array, axis=0)),
-        "mean": np.atleast_1d(np.mean(array, axis=0)),
-        "std": np.atleast_1d(np.std(array, axis=0)),
-        "count": np.array([count], dtype=np.int64),
-    }
+    if quantile_list is None:
+        quantile_list = list(_DEFAULT_QUANTILES)
+
+    if count < 2:
+        mean = np.atleast_1d(np.mean(array, axis=0))
+        stats = {
+            "min": np.atleast_1d(np.min(array, axis=0)),
+            "max": np.atleast_1d(np.max(array, axis=0)),
+            "mean": mean,
+            "std": np.atleast_1d(np.std(array, axis=0)),
+            "count": np.array([count], dtype=np.int64),
+        }
+        for q in quantile_list:
+            stats[f"q{int(q * 100):02d}"] = mean.copy()
+        return stats
+
+    running_stats = _RunningQuantileStats(
+        quantile_list=list(quantile_list),
+        num_quantile_bins=num_quantile_bins,
+    )
+    running_stats.update(array)
+    stats = running_stats.get_statistics()
+    stats["count"] = np.array([count], dtype=np.int64)
+    return stats
 
 
 def _flatten_stats_for_episode(

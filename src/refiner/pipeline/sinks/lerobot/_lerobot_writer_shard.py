@@ -202,7 +202,10 @@ class _LeRobotShardWriter:
     ) -> _FrameWriteInfo:
         episode_index = int(row["episode_index"])
         frames = self._require_required_fields(row)
-        frame_stats = compute_episode_stats(frames=frames)
+        frame_stats = compute_episode_stats(
+            frames=frames,
+            stats_config=self.config.stats,
+        )
         index_to_task = row[LEROBOT_TASKS]
         if not self._index_to_task:
             self._index_to_task = dict(index_to_task)
