@@ -87,7 +87,7 @@ def main() -> int:
         return 0
     except MacrodataApiError as e:
         message = str(e).strip() or type(e).__name__
-        if e.status == 409 and "Cannot start worker for stage" in e.message:
+        if e.status == 409:
             logger.info("worker entrypoint exiting cleanly: {}", message)
             print(json.dumps({"skipped": message}, sort_keys=True))
             return 0
