@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from loguru import logger
+
+from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io.datafolder import DataFolderLike
 from refiner.pipeline.sinks.base import (
     BaseSink,
@@ -73,12 +76,20 @@ class LeRobotWriterSink(BaseSink):
     def __init__(self, config: LeRobotWriterConfig):
         self.config = config
         self._writers: dict[str, _LeRobotShardWriter] = {}
+        self._async_window = AsyncWindow[None](
+            max_in_flight=self.config.max_video_prepare_in_flight,
+            preserve_order=self.config.preserve_order,
+        )
 
     def write_block(self, block: Block) -> ShardCounts:
         blocks_by_shard, counts = split_block_by_shard(block)
 
         for shard_id, shard_block in blocks_by_shard.items():
-            self._writer_for_shard(shard_id).write_block(shard_block)
+            for row in shard_block:
+                logger.debug("Writing row: {}", row["episode_index"])
+                self._async_window.submit_blocking(
+                    self._writer_for_shard(shard_id).write_row(row=row)
+                )
 
         return counts
 
@@ -93,11 +104,14 @@ class LeRobotWriterSink(BaseSink):
 
     def on_shard_complete(self, shard_id: str) -> None:
         writer = self._writers.pop(shard_id, None)
+        # TODO: We don't have to flush the whole thing we just need to flush the shard rows
+        self._async_window.flush()
         if writer is None:
             return
         writer.finalize()
 
     def close(self) -> None:
+        self._async_window.flush()
         for writer in self._writers.values():
             writer.finalize()
         self._writers.clear()

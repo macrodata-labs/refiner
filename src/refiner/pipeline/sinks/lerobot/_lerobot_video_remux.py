@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 from fractions import Fraction
-from typing import IO, Any, Iterator, cast
+import threading
+from typing import IO, Any, cast
 
 import av
 from loguru import logger
+from refiner.execution.asyncio.runtime import io as io_executor
 from refiner.io import DataFolder
 from refiner.media import Video
 from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
@@ -16,7 +18,6 @@ from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
     video_uri,
 )
 
-_TIMESTAMP_EPSILON_S = 1e-3
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
 
@@ -39,11 +40,23 @@ class _VideoPtsAlignment:
 
 
 @dataclass(slots=True)
-class _OpenedVideoSource:
+class _PreparedSource:
     uri: str
+    probe: _VideoSourceProbe | None
+    alignment: _VideoPtsAlignment | None
     input_file: IO[bytes]
     container: Any
     stream: Any
+
+    def close(self) -> None:
+        try:
+            logger.debug(
+                "Closing prepared remux source: uri={!r}",
+                self.uri,
+            )
+            self.container.close()
+        finally:
+            self.input_file.close()
 
 
 class RemuxWriter:
@@ -59,8 +72,6 @@ class RemuxWriter:
         self.container = container
         self.stream: Any | None = None
         self.output_offset_pts = 0
-        self.duration_s = 0.0
-        self._source: _OpenedVideoSource | None = None
 
     @classmethod
     def open(
@@ -83,6 +94,10 @@ class RemuxWriter:
         except Exception:
             output_file.close()
             raise
+        logger.debug(
+            "Opened remux output container: output_rel={!r}",
+            output_rel,
+        )
         return cls(
             probe=probe,
             output_file=output_file,
@@ -94,27 +109,29 @@ class RemuxWriter:
         return int(self.output_file.tell())
 
     def close(self) -> None:
-        self._close_source()
+        logger.debug("Closing remux output container")
         self.container.close()
         self.output_file.close()
 
-    def append_video(
+    def append_prepared_video(
         self,
-        video: Video,
-        alignment: _VideoPtsAlignment,
+        prepared: _PreparedSource,
     ) -> tuple[float, float]:
-        probe = alignment.probe
-        if not probes_are_remux_compatible(self.probe, probe):
-            raise ValueError("Video clip is not remux-compatible")
+        if (
+            prepared.probe is None
+            or prepared.alignment is None
+            or not probes_are_remux_compatible(prepared.probe, self.probe)
+        ):
+            raise ValueError("Prepared source is not remuxable")
+        probe = prepared.probe
+        input_container = prepared.container
+        input_stream = prepared.stream
+        start_pts = prepared.alignment.start_pts
+        end_pts = prepared.alignment.end_pts
 
-        start_pts = alignment.start_pts
-        end_pts = alignment.end_pts
         output_base_pts = self.output_offset_pts
         time_base_s = float(probe.time_base)
-
-        source = self._source_for(video)
-        input_container = source.container
-        input_stream = source.stream
+        packets_muxed = 0
         if self.stream is None:
             self.stream = self.container.add_stream_from_template(
                 template=input_stream,
@@ -124,23 +141,6 @@ class RemuxWriter:
         if stream is None:
             raise RuntimeError("Remux output stream was not initialized")
         stream.time_base = input_stream.time_base
-
-        try:
-            input_container.seek(
-                start_pts,
-                stream=input_stream,
-                backward=True,
-            )
-        except Exception:
-            try:
-                input_container.seek(
-                    max(0, start_pts),
-                    stream=input_stream,
-                    backward=True,
-                    any_frame=True,
-                )
-            except Exception:
-                pass
 
         for packet in input_container.demux(input_stream):
             if packet.pts is None or packet.dts is None:
@@ -154,74 +154,18 @@ class RemuxWriter:
             packet.dts = int(packet.dts) - start_pts + self.output_offset_pts
             packet.stream = stream
             self.container.mux(packet)
+            packets_muxed += 1
 
         self.output_offset_pts += end_pts - start_pts
-        self.duration_s = float(self.output_offset_pts) * time_base_s
         out_from_s = float(output_base_pts) * time_base_s
         out_to_s = float(output_base_pts + (end_pts - start_pts)) * time_base_s
-        return out_from_s, out_to_s
-
-    def _source_for(self, video: Video) -> _OpenedVideoSource:
-        source_uri = video_uri(video)
-        current = self._source
-        if current is not None and current.uri == source_uri:
-            return current
-
-        if current is not None:
-            logger.debug(
-                "Invalidating remux source container: old_uri={!r} new_uri={!r}",
-                current.uri,
-                source_uri,
-            )
-        self._close_source()
-        input_file = video.open("rb")
-        try:
-            container = av.open(input_file, mode="r")
-            input_stream = next(
-                (item for item in container.streams if item.type == "video"),
-                None,
-            )
-            if input_stream is None:
-                raise ValueError("Video source has no video stream")
-            opened = _OpenedVideoSource(
-                uri=source_uri,
-                input_file=input_file,
-                container=container,
-                stream=input_stream,
-            )
-            logger.debug(
-                "Opened remux source container: uri={!r}",
-                source_uri,
-            )
-            self._source = opened
-            return opened
-        except Exception:
-            input_file.close()
-            raise
-
-    def _close_source(self) -> None:
-        source = self._source
-        if source is None:
-            return
         logger.debug(
-            "Closing remux source container: uri={!r}",
-            source.uri,
+            "Finished remux append: packets_muxed={} out_from_s={:.6f} out_to_s={:.6f}",
+            packets_muxed,
+            out_from_s,
+            out_to_s,
         )
-        try:
-            source.container.close()
-        finally:
-            source.input_file.close()
-            self._source = None
-
-
-@contextmanager
-def _open_video_container(video: Video) -> Iterator[Any]:
-    input_file = video.open("rb")
-    try:
-        with av.open(input_file, mode="r") as container:
-            yield container
-    finally:
-        input_file.close()
+        return out_from_s, out_to_s
 
 
 def probes_are_remux_compatible(
@@ -242,76 +186,168 @@ def probes_are_remux_compatible(
 
 def _probe_video_source(
     *,
-    video: Video,
+    container: Any,
     default_fps: int | None,
 ) -> _VideoSourceProbe | None:
-    with _open_video_container(video) as container:
-        stream = cast(
-            Any,
-            next((item for item in container.streams if item.type == "video"), None),
-        )
-        if stream is None or stream.width is None or stream.height is None:
-            return None
-        if stream.time_base is None:
-            return None
-
-        stream_fps = stream.average_rate or stream.base_rate
-        codec_obj = getattr(getattr(stream, "codec_context", None), "codec", None)
-        return _VideoSourceProbe(
-            width=int(stream.width),
-            height=int(stream.height),
-            fps=max(
-                1,
-                int(round(float(stream_fps)))
-                if stream_fps is not None
-                else int(default_fps or 30),
-            ),
-            time_base=Fraction(cast(Any, stream.time_base)),
-            codec=str(
-                getattr(codec_obj, "canonical_name", None)
-                or getattr(codec_obj, "name", None)
-            )
-            if codec_obj is not None
-            else None,
-            pix_fmt=(
-                str(getattr(getattr(stream, "codec_context", None), "pix_fmt", None))
-                if getattr(getattr(stream, "codec_context", None), "pix_fmt", None)
-                else None
-            ),
-            has_audio=any(item.type == "audio" for item in container.streams),
-        )
-
-
-async def probe_video_for_remux(
-    *,
-    video: Video,
-    source_stats: dict[str, Any] | None,
-    default_fps: int | None,
-) -> _VideoPtsAlignment | None:
-    if source_stats is None:
+    stream = cast(
+        Any,
+        next((item for item in container.streams if item.type == "video"), None),
+    )
+    if stream is None or stream.width is None or stream.height is None:
+        return None
+    if stream.time_base is None:
         return None
 
-    probe = await asyncio.to_thread(
-        _probe_video_source,
-        video=video,
+    stream_fps = stream.average_rate or stream.base_rate
+    codec_obj = getattr(getattr(stream, "codec_context", None), "codec", None)
+    return _VideoSourceProbe(
+        width=int(stream.width),
+        height=int(stream.height),
+        fps=max(
+            1,
+            int(round(float(stream_fps)))
+            if stream_fps is not None
+            else int(default_fps or 30),
+        ),
+        time_base=Fraction(cast(Any, stream.time_base)),
+        codec=str(
+            getattr(codec_obj, "canonical_name", None)
+            or getattr(codec_obj, "name", None)
+        )
+        if codec_obj is not None
+        else None,
+        pix_fmt=(
+            str(getattr(getattr(stream, "codec_context", None), "pix_fmt", None))
+            if getattr(getattr(stream, "codec_context", None), "pix_fmt", None)
+            else None
+        ),
+        has_audio=any(item.type == "audio" for item in container.streams),
+    )
+
+
+def probe_for_remux(
+    *,
+    container: Any,
+    video: Video,
+    default_fps: int | None,
+) -> tuple[_VideoSourceProbe | None, _VideoPtsAlignment | None]:
+    probe = _probe_video_source(
+        container=container,
         default_fps=default_fps,
     )
     if probe is None:
-        return None
+        return None, None
+
+    video_end_s = video_to_timestamp_s(video)
+    if video_end_s is None:
+        return probe, None
+
     time_base_s = float(probe.time_base)
     start_pts = max(
         0,
         int(round(video_from_timestamp_s(video) / time_base_s)),
     )
-    video_end_s = video_to_timestamp_s(video)
-    if video_end_s is None:
-        return None
     end_pts = max(
         start_pts + 1,
         int(round(video_end_s / time_base_s)),
     )
-    return _VideoPtsAlignment(
+    return probe, _VideoPtsAlignment(
         probe=probe,
         start_pts=start_pts,
         end_pts=end_pts,
+    )
+
+
+def _prepare_video(
+    *,
+    video: Video,
+    default_fps: int | None,
+) -> _PreparedSource | None:
+    input_file = video.open("rb")
+    try:
+        logger.debug(
+            "Opening remux source during prepare: uri={!r}",
+            video_uri(video),
+        )
+        container = av.open(input_file, mode="r")
+        stream = cast(
+            Any,
+            next((item for item in container.streams if item.type == "video"), None),
+        )
+        if stream is None:
+            container.close()
+            input_file.close()
+            return None
+
+        start_pts = 0
+        if stream.time_base is not None:
+            start_pts = max(
+                0,
+                int(round(video_from_timestamp_s(video) / float(stream.time_base))),
+            )
+
+        try:
+            logger.debug(
+                "Preparing remux source seek: uri={!r} start_pts={} thread_id={} backward=True any_frame=False",
+                video_uri(video),
+                start_pts,
+                threading.get_ident(),
+            )
+            container.seek(
+                start_pts,
+                stream=stream,
+                backward=True,
+            )
+        except Exception:
+            try:
+                logger.debug(
+                    "Retrying prepare remux seek: uri={!r} start_pts={} backward=True any_frame=True",
+                    video_uri(video),
+                    max(0, start_pts),
+                )
+                container.seek(
+                    max(0, start_pts),
+                    stream=stream,
+                    backward=True,
+                    any_frame=True,
+                )
+            except Exception:
+                pass
+
+        probe, alignment = probe_for_remux(
+            container=container,
+            video=video,
+            default_fps=default_fps,
+        )
+
+        logger.debug(
+            "Prepared video source: uri={!r} start_pts={} end_pts={} remuxable={}",
+            video_uri(video),
+            start_pts,
+            alignment.end_pts if alignment is not None else None,
+            alignment is not None,
+        )
+        return _PreparedSource(
+            uri=video_uri(video),
+            probe=probe,
+            alignment=alignment,
+            input_file=input_file,
+            container=container,
+            stream=stream,
+        )
+    except Exception:
+        input_file.close()
+        raise
+
+
+async def prepare_video(
+    *,
+    video: Video,
+    default_fps: int | None,
+) -> _PreparedSource | None:
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        io_executor,
+        partial(_prepare_video, video=video, default_fps=default_fps),
     )
