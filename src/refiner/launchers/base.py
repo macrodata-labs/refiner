@@ -118,17 +118,8 @@ class BaseLauncher(ABC):
     ) -> dict[str, object]:
         return compile_planned_stages(stages or self._planned_stages())
 
-    def _run_manifest(
-        self, stages: list[PlannedStage] | None = None
-    ) -> dict[str, object]:
-        planned_stages = stages or self._planned_stages()
-        manifest = build_run_manifest()
-        manifest["macrodata_cloud"] = {
-            "stage_runtimes": [
-                {"num_workers": stage.compute.num_workers} for stage in planned_stages
-            ]
-        }
-        return manifest
+    def _run_manifest(self) -> dict[str, object]:
+        return build_run_manifest()
 
     def _create_platform_run(
         self,
@@ -150,7 +141,7 @@ class BaseLauncher(ABC):
                 name=self.name,
                 executor={"type": "refiner-local"},
                 plan=plan,
-                manifest=self._run_manifest(stages),
+                manifest=self._run_manifest(),
             )
             self.job_id = job.job_id
             return job

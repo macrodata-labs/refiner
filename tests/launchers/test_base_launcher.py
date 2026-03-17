@@ -30,16 +30,26 @@ def test_job_tracking_url_sanitizes_terminal_control_characters() -> None:
     assert "\x1b" not in url
 
 
-def test_run_manifest_includes_stage_worker_counts(monkeypatch) -> None:
+def test_compiled_plan_includes_stage_worker_counts(monkeypatch) -> None:
     launcher = _DummyLauncher(
         pipeline=cast(RefinerPipeline, object()), name="unit-test", num_workers=2
     )
     monkeypatch.setattr(
-        "refiner.launchers.base.build_run_manifest",
-        lambda: {},
+        "refiner.launchers.base.compile_planned_stages",
+        lambda stages: {
+            "stages": [
+                {
+                    "name": stage.name,
+                    "index": stage.index,
+                    "requested_num_workers": stage.compute.num_workers,
+                    "steps": [],
+                }
+                for stage in stages
+            ]
+        },
     )
 
-    manifest = launcher._run_manifest(
+    plan = launcher._compiled_plan(
         [
             PlannedStage(
                 index=0,
@@ -56,6 +66,7 @@ def test_run_manifest_includes_stage_worker_counts(monkeypatch) -> None:
         ]
     )
 
-    assert manifest == {
-        "macrodata_cloud": {"stage_runtimes": [{"num_workers": 2}, {"num_workers": 1}]}
-    }
+    assert plan["stages"] == [
+        {"name": "stage-0", "index": 0, "requested_num_workers": 2, "steps": []},
+        {"name": "stage-1", "index": 1, "requested_num_workers": 1, "steps": []},
+    ]

@@ -103,7 +103,7 @@ class CloudLauncher(BaseLauncher):
                 for stage in stages
             ],
             manifest=_redact_captured_strings(
-                self._run_manifest(stages), secret_values=secret_values
+                self._run_manifest(), secret_values=secret_values
             ),
             sync_local_dependencies=self.sync_local_dependencies,
             secrets=resolved_secrets,
