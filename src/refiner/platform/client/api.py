@@ -139,7 +139,9 @@ class MacrodataClient:
         error: str | None = None,
     ) -> OkResponse:
         request_body: dict[str, Any] = {"status": status}
-        if error:
+        if status == "failed":
+            request_body["error"] = (error or "").strip() or "UnknownError"
+        elif error:
             request_body["error"] = error
         response_data = request_json(
             method="POST",
@@ -245,7 +247,9 @@ class MacrodataClient:
         error: str | None = None,
     ) -> OkResponse:
         request_body: dict[str, Any] = {"worker_id": worker_id, "status": status}
-        if error:
+        if status == "failed":
+            request_body["error"] = (error or "").strip() or "UnknownError"
+        elif error:
             request_body["error"] = error
         response_data = request_json(
             method="POST",

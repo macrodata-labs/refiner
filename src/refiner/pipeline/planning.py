@@ -423,6 +423,7 @@ def compile_planned_stages(stages: list[PlannedStage]) -> dict[str, Any]:
             {
                 "name": stage.name,
                 "index": stage.index,
+                "requested_num_workers": stage.compute.num_workers,
                 "steps": _compile_stage_steps(stage.pipeline),
             }
             for stage in stages

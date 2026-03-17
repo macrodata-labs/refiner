@@ -46,3 +46,16 @@ def test_build_run_manifest_redacts_secret_values(monkeypatch, tmp_path: Path) -
 
     assert manifest["script"]["path"] == str(script_path.resolve())
     assert "super-secret-value" in manifest["script"]["text"]
+
+
+def test_build_run_manifest_omits_stage_runtimes_by_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+
+    manifest = build_run_manifest()
+
+    assert "macrodata_cloud" not in manifest

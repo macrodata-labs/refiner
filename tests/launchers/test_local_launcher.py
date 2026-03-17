@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+from typing import Any, cast
 
 import pytest
 
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_jsonl
-from refiner.launchers.local import LocalLauncher
+from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
@@ -28,6 +29,16 @@ class _FakeReader(BaseReader):
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:
         yield from self._rows_by_shard_id.get(shard.id, [])
+
+
+class _FakeProcess:
+    def __init__(self, *, stdout: str, stderr: str, returncode: int) -> None:
+        self._stdout = stdout
+        self._stderr = stderr
+        self.returncode = returncode
+
+    def communicate(self) -> tuple[str, str]:
+        return self._stdout, self._stderr
 
 
 def test_launch_local_single_worker(tmp_path) -> None:
@@ -199,3 +210,126 @@ def test_launch_local_runs_planned_stages_sequentially(
     assert stats.output_rows == 3
     assert (tmp_path / "runs" / stats.job_id / "launcher" / "stage-0").exists()
     assert (tmp_path / "runs" / stats.job_id / "launcher" / "stage-1").exists()
+
+
+def test_local_launcher_stops_after_failed_stage(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = read_jsonl(str(tmp_path / "missing.jsonl"))
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-stop-on-failure",
+        num_workers=1,
+        workdir=str(tmp_path),
+        runtime_backend="file",
+    )
+
+    stages = [
+        PlannedStage(
+            index=0,
+            name="stage_0",
+            pipeline=pipeline,
+            compute=StageComputeRequirements(num_workers=1),
+        ),
+        PlannedStage(
+            index=1,
+            name="stage_1",
+            pipeline=pipeline,
+            compute=StageComputeRequirements(num_workers=1),
+        ),
+    ]
+    launched: list[int] = []
+
+    monkeypatch.setattr(launcher, "_planned_stages", lambda: stages)
+
+    def fake_launch_stage(*, stage, runtime_backend, platform_run):  # noqa: ANN001
+        del runtime_backend, platform_run
+        launched.append(stage.index)
+        return LaunchStats(
+            job_id="job-1",
+            workers=1,
+            claimed=1,
+            completed=0,
+            failed=1 if stage.index == 0 else 0,
+            output_rows=0,
+        )
+
+    monkeypatch.setattr(launcher, "_launch_stage", fake_launch_stage)
+
+    with pytest.raises(RuntimeError, match=r"stage 0 failed"):
+        launcher.launch()
+
+    assert launched == [0]
+
+
+def test_local_launcher_does_not_force_platform_terminal_state(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-no-forced-platform-finish",
+        num_workers=1,
+        workdir=str(tmp_path),
+        runtime_backend="platform",
+    )
+
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+
+    class _DummyRun:
+        client = object()
+        job_id = "job-1"
+        workspace_slug = "ws"
+
+    monkeypatch.setattr(
+        launcher, "_resolve_platform_context", lambda *, stages: _DummyRun()
+    )
+    monkeypatch.setattr(launcher, "_log_tracking_url", lambda platform_run: None)
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        lambda *, stage, runtime_backend, platform_run: LaunchStats(
+            job_id="job-1",
+            workers=1,
+            claimed=1,
+            completed=1,
+            failed=0,
+            output_rows=1,
+        ),
+    )
+    stats = launcher.launch()
+
+    assert stats.completed == 1
+
+
+def test_read_worker_stats_includes_stderr_tail_on_failure(tmp_path) -> None:
+    launcher = LocalLauncher(
+        pipeline=read_jsonl(str(tmp_path / "missing.jsonl")),
+        name="worker-error-tail",
+        num_workers=1,
+        workdir=str(tmp_path),
+    )
+
+    process = _FakeProcess(
+        stdout='{"error":"RuntimeError"}\n',
+        stderr="line 1\nline 2\nroot cause\n",
+        returncode=1,
+    )
+
+    with pytest.raises(
+        RuntimeError, match=r"worker 0: RuntimeError; line 1\nline 2\nroot cause"
+    ):
+        launcher._read_worker_stats(rank=0, process=cast(Any, process))

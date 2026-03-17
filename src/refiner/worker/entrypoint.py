@@ -85,7 +85,9 @@ def main() -> int:
         )
         return 0
     except Exception as e:
-        print(json.dumps({"error": str(e)}, sort_keys=True))
+        message = str(e).strip() or type(e).__name__
+        logger.exception("worker entrypoint failed: {}", message)
+        print(json.dumps({"error": message}, sort_keys=True))
         return 1
 
 

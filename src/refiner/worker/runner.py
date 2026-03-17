@@ -109,12 +109,6 @@ class Worker:
             client = self.run_handle.client
             if client is None:
                 raise ValueError("platform runtime requires a client")
-            obs_logger.info(
-                "worker started job_id={} stage_index={} worker_id={}",
-                self.run_handle.job_id,
-                self.run_handle.stage_index,
-                self.run_handle.worker_id,
-            )
             try:
                 telemetry_emitter = OtelTelemetryEmitter(
                     base_url=client.base_url,
@@ -134,6 +128,14 @@ class Worker:
         else:
             # local mode
             runtime_lifecycle, self.run_handle = self._start_local_session()
+        runtime_name = "platform" if self.run_handle.client is not None else "file"
+        obs_logger.info(
+            "worker started job_id={} stage_index={} worker_id={} runtime={}",
+            self.run_handle.job_id,
+            self.run_handle.stage_index,
+            self.run_handle.worker_id,
+            runtime_name,
+        )
         sink = self.pipeline.sink or NullSink()
 
         def _heartbeat_once() -> None:
@@ -149,6 +151,13 @@ class Worker:
                 try:
                     _heartbeat_once()
                 except Exception as e:  # noqa: BLE001
+                    message = str(e).strip() or type(e).__name__
+                    obs_logger.warning(
+                        "heartbeat failed for worker_id={}: {}: {}",
+                        self.run_handle.worker_id,
+                        type(e).__name__,
+                        message,
+                    )
                     heartbeat_error = e
                     return
 
@@ -167,6 +176,11 @@ class Worker:
                 completion_error = err
                 raise
             completed += 1
+            obs_logger.info(
+                "shard completed shard_id={} global_ordinal={}",
+                shard.id,
+                shard.global_ordinal,
+            )
 
         def _maybe_complete_shard(shard_id: str) -> None:
             with inflight_lock:
@@ -202,19 +216,44 @@ class Worker:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                 shard = runtime_lifecycle.claim(previous=previous)
                 if shard is None:
+                    obs_logger.info(
+                        "no more shards worker_id={} claimed={}",
+                        self.run_handle.worker_id,
+                        claimed,
+                    )
                     break
                 claimed += 1
+                rows_read = 0
                 with inflight_lock:
                     inflight_by_id[shard.id] = shard
+                obs_logger.info(
+                    "shard claimed shard_id={} global_ordinal={} start_key={} end_key={}",
+                    shard.id,
+                    shard.global_ordinal,
+                    shard.start_key,
+                    shard.end_key,
+                )
                 with set_active_step_index(0):
+                    obs_logger.info(
+                        "shard source started shard_id={} global_ordinal={}",
+                        shard.id,
+                        shard.global_ordinal,
+                    )
                     for unit in self.pipeline.source.iter_shard_units(shard):
                         rows = block_num_rows(unit)
                         if rows > 0:
+                            rows_read += rows
                             with inflight_lock:
                                 pending_rows_by_shard[shard.id] = (
                                     pending_rows_by_shard.get(shard.id, 0) + rows
                                 )
                         yield unit
+                obs_logger.info(
+                    "shard source finished shard_id={} global_ordinal={} rows_read={}",
+                    shard.id,
+                    shard.global_ordinal,
+                    rows_read,
+                )
                 with inflight_lock:
                     source_done_shards.add(shard.id)
                 _maybe_complete_shard(shard.id)
@@ -249,13 +288,30 @@ class Worker:
                     if completion_error is e:
                         raise
                     execution_error = e
+                    failed_error = str(e).strip() or type(e).__name__
                     with inflight_lock:
                         failed_shards = list(inflight_by_id.values())
                         inflight_by_id.clear()
                         pending_rows_by_shard.clear()
                         source_done_shards.clear()
+                    obs_logger.exception(
+                        "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
+                        self.run_handle.worker_id,
+                        claimed,
+                        completed,
+                        len(failed_shards),
+                        failed_error,
+                    )
+                    user_metrics_emitter.force_flush_logs()
                     for shard in failed_shards:
-                        runtime_lifecycle.fail(shard, str(e))
+                        obs_logger.warning(
+                            "shard failed shard_id={} global_ordinal={} error={}",
+                            shard.id,
+                            shard.global_ordinal,
+                            failed_error,
+                        )
+                        user_metrics_emitter.force_flush_logs()
+                        runtime_lifecycle.fail(shard, failed_error)
                         user_metrics_emitter.force_flush_user_metrics()
                         failed += 1
                 else:
@@ -283,16 +339,13 @@ class Worker:
                 sink.close()
 
                 if self.run_handle.client is not None:
-                    status = (
-                        "failed"
-                        if execution_error is not None or run_exception is not None
-                        else "completed"
-                    )
-                    error = (
-                        str(execution_error or run_exception)
-                        if (execution_error is not None or run_exception is not None)
-                        else None
-                    )
+                    current_error = execution_error or run_exception
+                    status = "failed" if current_error is not None else "completed"
+                    error = None
+                    if current_error is not None:
+                        error = (
+                            str(current_error).strip() or type(current_error).__name__
+                        )
                     try:
                         self.run_handle.client.report_worker_finished(
                             job_id=self.run_handle.job_id,

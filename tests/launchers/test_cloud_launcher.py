@@ -77,6 +77,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.name == "demo cloud"
     assert request.sync_local_dependencies is True
     assert request.plan["stages"][0]["name"] == "stage_0"
+    assert request.plan["stages"][0]["requested_num_workers"] == 3
     assert len(request.stage_payloads) == 1
     assert request.stage_payloads[0].stage_index == 0
     assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"

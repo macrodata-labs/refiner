@@ -93,6 +93,7 @@ class LocalLauncher(BaseLauncher):
             return None
         return self._create_platform_run(
             plan=self._compiled_plan(stages),
+            stages=stages,
             fail_open=self.runtime_backend != "platform",
         )
 
@@ -179,10 +180,15 @@ class LocalLauncher(BaseLauncher):
             raise RuntimeError(f"worker {rank}: invalid stats output ({err})") from err
 
         if return_code != 0 or "error" in stats:
-            message = str(
-                stats.get("error") or stderr_text.strip() or f"exit code {return_code}"
-            )
-            raise RuntimeError(f"worker {rank}: {message}")
+            stats_error = str(stats.get("error") or "").strip()
+            stderr_lines = [line for line in stderr_text.splitlines() if line.strip()]
+            stderr_tail = "\n".join(stderr_lines[-20:])
+            parts = [part for part in (stats_error, stderr_tail) if part]
+            if len(parts) == 2 and parts[0] == parts[1]:
+                parts.pop()
+            if not parts:
+                parts = [f"exit code {return_code}"]
+            raise RuntimeError(f"worker {rank}: {'; '.join(parts)}")
 
         return (
             int(stats["claimed"]),
@@ -194,10 +200,8 @@ class LocalLauncher(BaseLauncher):
     def _collect_worker_stats(
         self,
         *,
-        stage_index: int,
         stage_workers: int,
         processes: list[subprocess.Popen[str]],
-        stage_run: RunHandle | None,
     ) -> LaunchStats:
         claimed = 0
         completed = 0
@@ -218,10 +222,6 @@ class LocalLauncher(BaseLauncher):
             failed += worker_failed
             output_rows += worker_output_rows
 
-        final_status = "failed" if errors or failed > 0 else "completed"
-        self._finish_platform_stage(
-            stage_run, stage_index=stage_index, status=final_status
-        )
         if errors:
             raise RuntimeError("; ".join(errors))
 
@@ -277,10 +277,8 @@ class LocalLauncher(BaseLauncher):
             for rank in range(stage.compute.num_workers)
         ]
         return self._collect_worker_stats(
-            stage_index=stage.index,
             stage_workers=stage.compute.num_workers,
             processes=processes,
-            stage_run=stage_run,
         )
 
     def launch(self) -> LaunchStats:
@@ -314,12 +312,13 @@ class LocalLauncher(BaseLauncher):
                     failed=totals.failed + stage_stats.failed,
                     output_rows=totals.output_rows + stage_stats.output_rows,
                 )
+                if stage_stats.failed > 0:
+                    raise RuntimeError(
+                        f"stage {stage.index} failed with {stage_stats.failed} failed shard(s)"
+                    )
         except Exception:
-            self._finish_platform_job(platform_run, status="failed")
             raise
 
-        final_status = "failed" if totals.failed > 0 else "completed"
-        self._finish_platform_job(platform_run, status=final_status)
         return totals
 
 
