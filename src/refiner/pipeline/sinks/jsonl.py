@@ -12,6 +12,7 @@ from refiner.pipeline.sinks.base import (
     BaseSink,
     Block,
     ShardCounts,
+    describe_datafolder_path,
     split_block_by_shard,
 )
 from refiner.worker.context import get_active_run_handle
@@ -71,6 +72,16 @@ class JsonlSink(BaseSink):
         for file in self._files.values():
             file.close()
         self._files.clear()
+
+    def describe_for_plan(self) -> tuple[str, str, dict[str, object]]:
+        return (
+            "write_jsonl",
+            "writer",
+            {
+                "path": describe_datafolder_path(self.output),
+                "filename_template": self.filename_template,
+            },
+        )
 
 
 __all__ = ["JsonlSink"]

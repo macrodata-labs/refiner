@@ -11,6 +11,7 @@ from refiner.pipeline.sinks.base import (
     BaseSink,
     Block,
     ShardCounts,
+    describe_datafolder_path,
     split_block_by_shard,
 )
 from refiner.worker.context import get_active_run_handle
@@ -66,6 +67,15 @@ class ParquetSink(BaseSink):
         for writer in self._writers.values():
             writer.close()
         self._writers.clear()
+
+    def describe_for_plan(self) -> tuple[str, str, dict[str, object]]:
+        args: dict[str, object] = {
+            "path": describe_datafolder_path(self.output),
+            "filename_template": self.filename_template,
+        }
+        if self.compression is not None:
+            args["compression"] = self.compression
+        return ("write_parquet", "writer", args)
 
 
 __all__ = ["ParquetSink"]

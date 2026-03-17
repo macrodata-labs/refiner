@@ -9,6 +9,7 @@ from refiner.pipeline.sinks.base import (
     BaseSink,
     Block,
     ShardCounts,
+    describe_datafolder_path,
     split_block_by_shard,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import _LeRobotShardWriter
@@ -111,6 +112,18 @@ class LeRobotWriterSink(BaseSink):
         for writer in self._writers.values():
             writer.finalize()
         self._writers.clear()
+
+    def describe_for_plan(self) -> tuple[str, str, dict[str, object]]:
+        return (
+            "write_lerobot",
+            "writer",
+            {
+                "path": describe_datafolder_path(self.config.output),
+                "data_files_size_in_mb": self.config.data_files_size_in_mb,
+                "video_files_size_in_mb": self.config.video_files_size_in_mb,
+                "max_video_prepare_in_flight": self.config.max_video_prepare_in_flight,
+            },
+        )
 
 
 __all__ = [
