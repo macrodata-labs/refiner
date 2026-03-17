@@ -1,7 +1,7 @@
+import refiner.robotics as robotics
 from refiner.io import DataFile, DataFileSet, DataFolder
 from refiner.launchers import LaunchStats, LocalLauncher
-from refiner.media import MediaFile, Video, VideoFile
-import refiner.robotics as robotics
+from refiner.media import MediaFile, VideoFile
 from refiner.pipeline import (
     RefinerPipeline,
     Row,

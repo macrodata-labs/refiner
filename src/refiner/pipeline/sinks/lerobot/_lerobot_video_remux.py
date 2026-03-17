@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from functools import partial
 from fractions import Fraction
+from functools import partial
 from typing import IO, Any, cast
 
 import av
+
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
-from refiner.media import Video
+from refiner.media import VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
     video_from_timestamp_s,
     video_to_timestamp_s,
@@ -211,7 +212,7 @@ def _probe_video_source(
 def probe_for_remux(
     *,
     container: Any,
-    video: Video,
+    video: VideoFile,
     default_fps: int | None,
 ) -> tuple[_VideoSourceProbe | None, _VideoPtsAlignment | None]:
     probe = _probe_video_source(
@@ -243,7 +244,7 @@ def probe_for_remux(
 
 def _prepare_video(
     *,
-    video: Video,
+    video: VideoFile,
     default_fps: int | None,
 ) -> _PreparedSource:
     input_file = video.open("rb")
@@ -302,7 +303,7 @@ def _prepare_video(
 
 async def prepare_video(
     *,
-    video: Video,
+    video: VideoFile,
     default_fps: int | None,
 ) -> _PreparedSource:
 

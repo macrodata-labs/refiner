@@ -12,11 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from refiner.io import DataFolder
-from refiner.media import Video, VideoFile
-from refiner.pipeline.sources.readers.lerobot import (
-    LEROBOT_EPISODE_STATS,
-    LEROBOT_INFO,
-)
+from refiner.media import VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_frames import (
     compute_episode_stats,
     frame_table,
@@ -29,6 +25,10 @@ from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
     DEFAULT_VIDEO_PATH,
     LeRobotVideoWriter,
     _CompletedVideoItem,
+)
+from refiner.pipeline.sources.readers.lerobot import (
+    LEROBOT_EPISODE_STATS,
+    LEROBOT_INFO,
 )
 
 if TYPE_CHECKING:
@@ -152,13 +152,16 @@ class _LeRobotShardWriter:
         *,
         row: Row | Mapping[str, Any],
     ) -> None:
+        if not row["frames"]:
+            # all frames were trimmed or similar
+            return
         self._initialize_info_from_rows([row])
         episode_index = int(row["episode_index"])
         source_episode_stats = self._source_episode_stats(row)
 
         writer_tasks: list[asyncio.Task[_CompletedVideoItem]] = []
         for video_key, video in row.items():
-            if not isinstance(video, Video):
+            if not isinstance(video, VideoFile):
                 continue
 
             writer_tasks.append(
@@ -277,7 +280,7 @@ class _LeRobotShardWriter:
                 "dataset_to_index",
             }:
                 continue
-            if isinstance(value, Video):
+            if isinstance(value, VideoFile):
                 continue
             episode_row[key] = value
 

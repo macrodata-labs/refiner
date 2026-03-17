@@ -17,7 +17,4 @@ class VideoFile(MediaFile):
         object.__setattr__(self, "_data_file", DataFile.resolve(self.uri))
 
 
-Video = VideoFile
-
-
-__all__ = ["VideoFile", "Video"]
+__all__ = ["VideoFile"]

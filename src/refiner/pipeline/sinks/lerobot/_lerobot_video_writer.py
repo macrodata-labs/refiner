@@ -9,7 +9,7 @@ import numpy as np
 
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
-from refiner.media import Video
+from refiner.media import VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     RemuxWriter,
     _PreparedSource,
@@ -59,7 +59,7 @@ def _video_feature(
 @dataclass(slots=True)
 class _VideoItem:
     episode_index: int
-    video: Video
+    video: VideoFile
     source_stats: dict[str, np.ndarray] | None = None
 
 
@@ -106,7 +106,7 @@ class LeRobotVideoWriter:
 
     async def write_video(
         self,
-        video: Video,
+        video: VideoFile,
         *,
         episode_index: int,
         source_stats: dict[str, np.ndarray] | None = None,
