@@ -156,7 +156,7 @@ def _video_source_weight(input_file: IO[bytes]) -> int:
         if size is not None:
             return max(1, int(size))
     except Exception:
-        return 1
+        # In case of an error, we fall through to the default return value.
         pass
     return 1
 
