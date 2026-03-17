@@ -360,7 +360,6 @@ class RefinerPipeline:
         video_config: LeRobotVideoConfig | None = None,
         stats_config: LeRobotStatsConfig | None = None,
         max_video_prepare_in_flight: int = 10,
-        preserve_order: bool = True,
     ) -> "RefinerPipeline":
         """Append a deferred LeRobot writer sink and return a pipeline."""
         config = LeRobotWriterConfig(
@@ -370,7 +369,6 @@ class RefinerPipeline:
             video=video_config if video_config is not None else LeRobotVideoConfig(),
             stats=stats_config if stats_config is not None else LeRobotStatsConfig(),
             max_video_prepare_in_flight=max_video_prepare_in_flight,
-            preserve_order=preserve_order,
         )
 
         return self.with_sink(LeRobotWriterSink(config=config))

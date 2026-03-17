@@ -57,7 +57,6 @@ class LeRobotWriterConfig:
     video: LeRobotVideoConfig = field(default_factory=LeRobotVideoConfig)
     stats: LeRobotStatsConfig = field(default_factory=LeRobotStatsConfig)
     max_video_prepare_in_flight: int = 10
-    preserve_order: bool = True
 
     def __post_init__(self) -> None:
         if self.data_files_size_in_mb <= 0:
@@ -76,7 +75,7 @@ class LeRobotWriterSink(BaseSink):
         self._writers: dict[str, _LeRobotShardWriter] = {}
         self._async_window = AsyncWindow[None](
             max_in_flight=self.config.max_video_prepare_in_flight,
-            preserve_order=self.config.preserve_order,
+            preserve_order=False,
         )
 
     def write_block(self, block: Block) -> ShardCounts:
