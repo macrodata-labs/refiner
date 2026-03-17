@@ -7,6 +7,7 @@ import os
 import cloudpickle
 from loguru import logger
 
+from refiner.platform.client.http import MacrodataApiError
 from refiner.platform.client.api import MacrodataClient
 from refiner.worker.context import RunHandle
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
@@ -84,6 +85,15 @@ def main() -> int:
             )
         )
         return 0
+    except MacrodataApiError as e:
+        message = str(e).strip() or type(e).__name__
+        if e.status == 409 and "Cannot start worker for stage" in e.message:
+            logger.info("worker entrypoint exiting cleanly: {}", message)
+            print(json.dumps({"skipped": message}, sort_keys=True))
+            return 0
+        logger.exception("worker entrypoint failed: {}", message)
+        print(json.dumps({"error": message}, sort_keys=True))
+        return 1
     except Exception as e:
         message = str(e).strip() or type(e).__name__
         logger.exception("worker entrypoint failed: {}", message)

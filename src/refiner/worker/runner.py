@@ -91,10 +91,8 @@ class Worker:
         source_done_shards: set[str] = set()
         inflight_lock = threading.Lock()
 
-        # Error state: completion failures are re-raised directly, execution
-        # failures are converted into shard failures, and heartbeat failures
-        # are surfaced from the background thread.
-        completion_error: Exception | None = None
+        # Error state: worker failures are converted into shard failures, and
+        # heartbeat failures are surfaced from the background thread.
         execution_error: Exception | None = None
         heartbeat_error: Exception | None = None
 
@@ -162,19 +160,20 @@ class Worker:
                     return
 
         def _complete_shard(shard_id: str) -> None:
-            nonlocal completed, completion_error
+            nonlocal completed
             with inflight_lock:
-                shard = inflight_by_id.pop(shard_id, None)
-                source_done_shards.discard(shard_id)
+                shard = inflight_by_id.get(shard_id)
                 if shard is None:
                     return
             try:
                 sink.on_shard_complete(shard_id)
                 user_metrics_emitter.force_flush_user_metrics()
                 runtime_lifecycle.complete(shard)
-            except Exception as err:  # noqa: BLE001
-                completion_error = err
+            except Exception:  # noqa: BLE001
                 raise
+            with inflight_lock:
+                inflight_by_id.pop(shard_id, None)
+                source_done_shards.discard(shard_id)
             completed += 1
             obs_logger.info(
                 "shard completed shard_id={} global_ordinal={}",
@@ -285,8 +284,6 @@ class Worker:
                         )
                         output_rows += block_num_rows(block)
                 except Exception as e:
-                    if completion_error is e:
-                        raise
                     execution_error = e
                     failed_error = str(e).strip() or type(e).__name__
                     with inflight_lock:
