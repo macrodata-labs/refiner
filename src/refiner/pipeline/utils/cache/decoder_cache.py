@@ -26,6 +26,7 @@ class _DecoderResource:
 @dataclass(frozen=True, slots=True)
 class DecodeWindowMeta:
     frame_count: int
+    fps: int | None
     width: int | None
     height: int | None
     pix_fmt: str | None
@@ -198,7 +199,7 @@ class VideoDecoderCache:
         from_timestamp_s: float | None = None,
         to_timestamp_s: float | None,
         decoder_threads: int | None = None,
-    ) -> tuple[tuple[np.ndarray, ...], int | None, int | None, str | None]:
+    ) -> tuple[tuple[np.ndarray, ...], int | None, int | None, int | None, str | None]:
         lease = await self.acquire(data_file=data_file)
         try:
             frames_tuple, meta = await lease.decode_window_collect_rgb24(
@@ -213,7 +214,7 @@ class VideoDecoderCache:
             raise ValueError(
                 "Video segment contains no decodable frames in requested timestamp window."
             )
-        return frames_tuple, meta.width, meta.height, meta.pix_fmt
+        return frames_tuple, meta.fps, meta.width, meta.height, meta.pix_fmt
 
     async def decode_segment_with_callback_from_data_file(
         self,
@@ -281,6 +282,16 @@ class VideoDecoderCache:
     ) -> DecodeWindowMeta:
         input_stream = container.streams.video[stream_index]
         stream_time_base = input_stream.time_base
+        fps: int | None = None
+        for rate in (
+            input_stream.average_rate,
+            input_stream.guessed_rate,
+            input_stream.base_rate,
+        ):
+            if rate is None:
+                continue
+            fps = int(round(float(rate)))
+            break
 
         if stream_time_base is not None:
             seek_ts = int(from_timestamp_s / float(stream_time_base))
@@ -316,6 +327,7 @@ class VideoDecoderCache:
 
         return DecodeWindowMeta(
             frame_count=selected,
+            fps=fps,
             width=width,
             height=height,
             pix_fmt="rgb24",

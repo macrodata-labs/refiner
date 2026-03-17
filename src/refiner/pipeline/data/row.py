@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 _MISSING = object()
@@ -27,10 +27,6 @@ class Row(Mapping[str, Any]):
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.items())
-
-    @property
-    def metadata(self) -> Mapping[str, Any]:
-        return {}
 
     @property
     def shard_id(self) -> str | None:
@@ -69,7 +65,6 @@ class Row(Mapping[str, Any]):
                 base=self.base,
                 patch=combined_patch,
                 deleted=deleted,
-                metadata=self.metadata,
                 shard_id=shard_id,
             )
 
@@ -77,7 +72,6 @@ class Row(Mapping[str, Any]):
             base=self,
             patch=merged,
             deleted=frozenset(),
-            metadata=self.metadata,
             shard_id=shard_id,
         )
 
@@ -103,7 +97,6 @@ class Row(Mapping[str, Any]):
                 base=self.base,
                 patch=patch,
                 deleted=deleted,
-                metadata=self.metadata,
                 shard_id=self.shard_id,
             )
 
@@ -111,7 +104,6 @@ class Row(Mapping[str, Any]):
             base=self,
             patch={},
             deleted=frozenset(keys),
-            metadata=self.metadata,
             shard_id=self.shard_id,
         )
 
@@ -133,7 +125,6 @@ class _OverlayRow(Row):
     base: Row
     patch: Mapping[str, Any]
     deleted: frozenset[str]
-    metadata: Mapping[str, Any] = field(default_factory=dict)
     shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:
@@ -167,7 +158,6 @@ class DictRow(Row):
     """A `Row` backed by a plain mapping (e.g. from CSV parsing)."""
 
     data: Mapping[str, Any]
-    metadata: Mapping[str, Any] = field(default_factory=dict)
     shard_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -208,7 +198,6 @@ class ArrowRowView(Row):
     columns: tuple[Any, ...]
     index_by_name: Mapping[str, int]
     row_idx: int
-    metadata: Mapping[str, Any] = field(default_factory=dict)
     shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:

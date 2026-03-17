@@ -9,6 +9,7 @@ import numpy as np
 
 from refiner.io import DataFolder
 from refiner.media import Video
+from refiner.media.video.types import DecodedVideo, VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     RemuxWriter,
     _VideoPtsAlignment,
@@ -104,11 +105,10 @@ class LeRobotVideoWriter:
         items: list[_VideoBatchItem],
         *,
         output_queue: asyncio.Queue[_CompletedVideoItem] | None = None,
-    ) -> list[_CompletedVideoItem]:
+    ) -> None:
         if not items:
-            return []
+            return None
 
-        completed: list[_CompletedVideoItem] = []
         prepared_by_index: dict[
             int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]
         ] = {}
@@ -117,17 +117,25 @@ class LeRobotVideoWriter:
         async for index, prepared in self._prepare_items(items):
             prepared_by_index[index] = prepared
             while next_commit_index in prepared_by_index:
-                completed_item = await self._commit_item(
-                    prepared_by_index.pop(next_commit_index)
-                )
-                completed.append(completed_item)
+                prepared_item = prepared_by_index.pop(next_commit_index)
+                completed_item = await self._commit_item(prepared_item)
                 if output_queue is not None:
                     await output_queue.put(completed_item)
+                self._release_item_resources(prepared_item[0])
                 next_commit_index += 1
 
         if prepared_by_index:
             raise RuntimeError("Prepared video items remained uncommitted")
-        return completed
+        return None
+
+    def _release_item_resources(self, item: _VideoBatchItem) -> None:
+        video = item.video
+        if isinstance(video, DecodedVideo):
+            video.original_file.cleanup()
+            item.video = video.original_file
+        elif isinstance(video, VideoFile):
+            video.cleanup()
+        item.source_stats = None
 
     def finalize(self) -> None:
         if self._writer is None:
@@ -139,39 +147,55 @@ class LeRobotVideoWriter:
         self,
         items: list[_VideoBatchItem],
     ) -> AsyncIterator[tuple[int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]]]:
-        semaphore = asyncio.Semaphore(max(1, int(self.prepare_max_in_flight)))
+        max_in_flight = max(1, int(self.prepare_max_in_flight))
 
         async def _prepare(
             index: int,
             item: _VideoBatchItem,
         ) -> tuple[int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]]:
-            async with semaphore:
-                return (
-                    index,
-                    (
-                        item,
-                        await probe_video_for_remux(
-                            video_key=self.video_key,
-                            video=item.video,
-                            source_stats=item.source_stats,
-                            probe_cache=self._probe_cache,
-                            default_fps=self.default_fps,
-                        ),
+            return (
+                index,
+                (
+                    item,
+                    await probe_video_for_remux(
+                        video_key=self.video_key,
+                        video=item.video,
+                        source_stats=item.source_stats,
+                        probe_cache=self._probe_cache,
+                        default_fps=self.default_fps,
                     ),
-                )
+                ),
+            )
 
-        tasks = [
-            asyncio.create_task(_prepare(index, item))
-            for index, item in enumerate(items)
-        ]
+        inflight: dict[
+            asyncio.Task[tuple[int, tuple[_VideoBatchItem, _VideoPtsAlignment | None]]],
+            int,
+        ] = {}
+        next_schedule_index = 0
         try:
-            for task in asyncio.as_completed(tasks):
-                yield await task
+            while next_schedule_index < len(items) or inflight:
+                while (
+                    next_schedule_index < len(items) and len(inflight) < max_in_flight
+                ):
+                    task = asyncio.create_task(
+                        _prepare(next_schedule_index, items[next_schedule_index])
+                    )
+                    inflight[task] = next_schedule_index
+                    next_schedule_index += 1
+
+                done, _ = await asyncio.wait(
+                    inflight.keys(),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    inflight.pop(task, None)
+                    yield await task
         finally:
-            for task in tasks:
+            for task in list(inflight):
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            if inflight:
+                await asyncio.gather(*inflight.keys(), return_exceptions=True)
 
     async def _commit_item(
         self,
