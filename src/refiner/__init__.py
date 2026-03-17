@@ -1,6 +1,6 @@
 from refiner.io import DataFile, DataFileSet, DataFolder
 from refiner.launchers import LaunchStats, LocalLauncher
-from refiner.media import MediaFile, Video, VideoFile, hydrate_video
+from refiner.media import MediaFile, Video, VideoFile
 import refiner.robotics as robotics
 from refiner.pipeline import (
     RefinerPipeline,
@@ -50,7 +50,6 @@ __all__ = [
     "lit",
     "coalesce",
     "if_else",
-    "hydrate_video",
     "MediaFile",
     "VideoFile",
     "Video",

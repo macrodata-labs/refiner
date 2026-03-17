@@ -9,11 +9,9 @@ import numpy as np
 
 from refiner.io import DataFolder
 from refiner.media import Video
-from refiner.media.video.types import DecodedVideo, VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     RemuxWriter,
     _VideoPtsAlignment,
-    _VideoProbeCache,
     _VideoSourceProbe,
     probe_video_for_remux,
     probes_are_remux_compatible,
@@ -94,10 +92,9 @@ class LeRobotVideoWriter:
     stats_config: "LeRobotStatsConfig"
     default_fps: int | None
     video_bytes_limit: int
-    prepare_max_in_flight: int = 4
+    prepare_max_in_flight: int = 1
     preserve_order: bool = True
 
-    _probe_cache: _VideoProbeCache = field(default_factory=_VideoProbeCache, init=False)
     _writer: RemuxWriter | TranscodeWriter | None = field(default=None, init=False)
     _next_file_index: int = field(default=0, init=False)
 
@@ -138,12 +135,6 @@ class LeRobotVideoWriter:
         return None
 
     def _release_item_resources(self, item: _VideoBatchItem) -> None:
-        video = item.video
-        if isinstance(video, DecodedVideo):
-            video.original_file.cleanup()
-            item.video = video.original_file
-        elif isinstance(video, VideoFile):
-            video.cleanup()
         item.source_stats = None
 
     def finalize(self) -> None:
@@ -167,10 +158,8 @@ class LeRobotVideoWriter:
                 (
                     item,
                     await probe_video_for_remux(
-                        video_key=self.video_key,
                         video=item.video,
                         source_stats=item.source_stats,
-                        probe_cache=self._probe_cache,
                         default_fps=self.default_fps,
                     ),
                 ),

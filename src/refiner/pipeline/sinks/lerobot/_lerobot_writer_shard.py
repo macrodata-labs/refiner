@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 
 from refiner.execution.asyncio.runtime import submit
 from refiner.io import DataFolder
-from refiner.media import DecodedVideo, Video, VideoFile
+from refiner.media import Video, VideoFile
 from refiner.pipeline.sinks.base import ShardedBlock
 from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_EPISODE_STATS,
@@ -682,11 +682,7 @@ class _LeRobotShardWriter:
 
         max_videos_in_row = max(
             (
-                sum(
-                    1
-                    for value in row.values()
-                    if isinstance(value, (VideoFile, DecodedVideo))
-                )
+                sum(1 for value in row.values() if isinstance(value, VideoFile))
                 for row in rows
             ),
             default=0,
@@ -757,7 +753,7 @@ class _LeRobotShardWriter:
                 count = sum(
                     1
                     for values in video_columns
-                    if isinstance(values[row_idx], (VideoFile, DecodedVideo))
+                    if isinstance(values[row_idx], VideoFile)
                 )
                 if count > max_videos_in_row:
                     max_videos_in_row = count
@@ -785,7 +781,7 @@ class _LeRobotShardWriter:
         return None
 
     def _feature_spec(self, value: Any) -> dict[str, Any] | None:
-        if isinstance(value, (VideoFile, DecodedVideo)):
+        if isinstance(value, VideoFile):
             return {"dtype": "video", "shape": None, "names": None, "info": None}
         if isinstance(value, bool):
             return {"dtype": "bool", "shape": [1], "names": None}

@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import cast
 
 import av
+import fsspec
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
 import refiner as mdr
-from refiner.media import hydrate_video
 from refiner.pipeline import (
     LeRobotStatsConfig as PipelineLeRobotStatsConfig,
 )
@@ -226,39 +226,113 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     assert (out_root / "meta" / "tasks.parquet").exists()
 
 
-def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
+def test_lerobot_video_writer_remuxes_non_local_video(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     src_video = tmp_path / "source" / "episode.mp4"
     _write_video(src_video)
 
-    out_root = tmp_path / "decoded"
-    pipeline = (
-        mdr.from_items(
-            [
-                _episode(
-                    episode_index=0,
-                    task="pick",
-                    video_path=src_video,
-                    from_ts=0.0,
-                    to_ts=0.4,
-                    values=[1.0, 2.0, 3.0, 4.0],
-                ),
-            ]
+    memfs = fsspec.filesystem("memory")
+    uri = "memory://lerobot-remux/episode.mp4"
+    with src_video.open("rb") as src, memfs.open(uri, "wb") as dst:
+        dst.write(src.read())
+
+    async def _fail_transcode(self, *, video, stats_config):
+        raise AssertionError("expected remux path for aligned non-local video")
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.lerobot._lerobot_video_transcode.TranscodeWriter.append_video",
+        _fail_transcode,
+    )
+
+    writer = LeRobotVideoWriter(
+        folder=mdr.DataFolder.resolve(str(tmp_path / "out")),
+        chunk_key="000",
+        video_key="observation.images.main",
+        video_config=mdr.LeRobotVideoConfig(),
+        stats_config=mdr.LeRobotStatsConfig(),
+        default_fps=10,
+        video_bytes_limit=1024 * 1024,
+    )
+    items = [
+        _VideoBatchItem(
+            episode_index=0,
+            video=mdr.VideoFile(uri, from_timestamp_s=0.0, to_timestamp_s=0.6),
+            source_stats={},
         )
-        .map_async(hydrate_video("observation.images.main"))
-        .write_lerobot(str(out_root))
-    )
+    ]
+    output_queue: asyncio.Queue[_CompletedVideoItem] = asyncio.Queue()
 
-    stats = pipeline.launch_local(
-        name="lerobot-decoded-videos",
-        num_workers=1,
-        workdir=str(tmp_path / "workdir"),
-    )
-    assert stats.failed == 0
+    asyncio.run(writer.write_videos(items, output_queue=output_queue))
+    writer.finalize()
 
-    rows = pq.read_table(
-        out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    completed = output_queue.get_nowait()
+    assert completed.feature is not None
+    assert completed.segment.to_timestamp > completed.segment.from_timestamp
+    assert (
+        tmp_path
+        / "out"
+        / "videos"
+        / "observation.images.main"
+        / "chunk-000"
+        / "file-000.mp4"
+    ).exists()
+
+
+def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src_video = tmp_path / "source" / "episode.mp4"
+    _write_video(src_video)
+
+    memfs = fsspec.filesystem("memory")
+    uri = "memory://lerobot-remux-reuse/episode.mp4"
+    with src_video.open("rb") as src, memfs.open(uri, "wb") as dst:
+        dst.write(src.read())
+
+    remux_module = __import__(
+        "refiner.pipeline.sinks.lerobot._lerobot_video_remux",
+        fromlist=["av"],
     )
-    assert len(rows) == 1
+    original_av_open = remux_module.av.open
+    read_open_calls = 0
+
+    def _counting_av_open(*args, **kwargs):
+        nonlocal read_open_calls
+        if kwargs.get("mode") == "r":
+            read_open_calls += 1
+        return original_av_open(*args, **kwargs)
+
+    monkeypatch.setattr(remux_module.av, "open", _counting_av_open)
+
+    writer = LeRobotVideoWriter(
+        folder=mdr.DataFolder.resolve(str(tmp_path / "out")),
+        chunk_key="000",
+        video_key="observation.images.main",
+        video_config=mdr.LeRobotVideoConfig(),
+        stats_config=mdr.LeRobotStatsConfig(),
+        default_fps=10,
+        video_bytes_limit=1024 * 1024,
+    )
+    items = [
+        _VideoBatchItem(
+            episode_index=0,
+            video=mdr.VideoFile(uri, from_timestamp_s=0.0, to_timestamp_s=0.3),
+            source_stats={},
+        ),
+        _VideoBatchItem(
+            episode_index=1,
+            video=mdr.VideoFile(uri, from_timestamp_s=0.3, to_timestamp_s=0.6),
+            source_stats={},
+        ),
+    ]
+
+    asyncio.run(writer.write_videos(items))
+    writer.finalize()
+
+    assert read_open_calls == 3
 
 
 def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) -> None:

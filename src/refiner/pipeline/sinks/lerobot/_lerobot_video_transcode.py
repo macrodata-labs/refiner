@@ -1,22 +1,19 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from fractions import Fraction
-from typing import TYPE_CHECKING, IO, Any
+from typing import TYPE_CHECKING, IO, Any, Iterator, cast
 
 import av
 import numpy as np
 
 from refiner.io import DataFolder
-from refiner.io.datafile import DataFile
 from refiner.media import Video
-from refiner.media.video.types import DecodedVideo, VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_stats import _RunningQuantileStats
 from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
     video_from_timestamp_s,
     video_to_timestamp_s,
 )
-from refiner.pipeline.utils.cache.decoder_cache import get_video_decoder_cache
-from refiner.pipeline.utils.cache.file_cache import get_media_cache
 
 if TYPE_CHECKING:
     from refiner.pipeline.sinks.lerobot._lerobot_writer import (
@@ -26,6 +23,7 @@ if TYPE_CHECKING:
 
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
+_FRAME_TIMESTAMP_EPSILON_S = 1e-6
 
 
 class TranscodeWriter:
@@ -187,15 +185,6 @@ async def _append_video_segment(
         num_quantile_bins=stats_config.quantile_bins,
     )
 
-    if isinstance(video, DecodedVideo):
-        _append_video_segment_from_frames(
-            writer=writer,
-            video=video,
-            tracker=tracker,
-            sample_stride=sample_stride,
-        )
-        return _video_stats_from_tracker(tracker)
-
     await _append_video_segment_from_media(
         writer=writer,
         video=video,
@@ -211,7 +200,7 @@ async def _append_video_segment(
 async def _append_video_segment_from_media(
     *,
     writer: TranscodeWriter,
-    video: VideoFile,
+    video: Video,
     clip_from: float,
     clip_to: float | None,
     tracker: _RunningQuantileStats,
@@ -220,11 +209,11 @@ async def _append_video_segment_from_media(
 ) -> None:
     selected_frames = 0
     frame_index = 0
-    data_file = DataFile.resolve(video.uri)
-    cache_name = f"lerobot_writer:{writer.video_key}"
-    media_cache = get_media_cache(name=cache_name)
-    decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
-    decoder_threads = video_config.decoder_threads
+    decoder_threads = (
+        int(video_config.decoder_threads)
+        if video_config.decoder_threads is not None
+        else None
+    )
 
     def _on_frame(frame: av.VideoFrame) -> None:
         nonlocal selected_frames, frame_index
@@ -240,69 +229,45 @@ async def _append_video_segment_from_media(
         selected_frames += 1
         frame_index += 1
 
-    try:
-        await decoder_cache.decode_segment_with_callback_from_data_file(
-            data_file=data_file,
-            from_timestamp_s=clip_from,
-            to_timestamp_s=clip_to,
-            on_frame=_on_frame,
-            decoder_threads=(
-                int(decoder_threads) if decoder_threads is not None else None
-            ),
+    with _open_video_container(video) as container:
+        stream = cast(
+            Any,
+            next((item for item in container.streams if item.type == "video"), None),
         )
-    except ValueError as exc:
-        if "contains no decodable frames" not in str(exc):
-            raise
-        raise ValueError(
-            f"Video segment for {video.uri!r} contains no decodable frames in "
-            f"[{clip_from:.6f}, {clip_to if clip_to is not None else 'end'})."
-        ) from exc
+        if stream is None:
+            raise ValueError(f"Video source has no video stream for {video.uri!r}")
+
+        codec_context = getattr(stream, "codec_context", None)
+        if codec_context is not None and decoder_threads is not None:
+            codec_context.thread_count = decoder_threads
+            codec_context.thread_type = "AUTO"
+
+        if stream.time_base is not None:
+            seek_ts = int(clip_from / float(stream.time_base))
+            try:
+                container.seek(seek_ts, stream=stream)
+            except Exception:
+                try:
+                    container.seek(max(0, seek_ts), any_frame=True, stream=stream)
+                except Exception:
+                    pass
+
+        for frame in container.decode(stream):
+            ts = None
+            if frame.pts is not None and frame.time_base is not None:
+                ts = float(frame.pts * frame.time_base)
+            if ts is None:
+                continue
+            if ts + _FRAME_TIMESTAMP_EPSILON_S < clip_from:
+                continue
+            if clip_to is not None and ts - _FRAME_TIMESTAMP_EPSILON_S >= clip_to:
+                break
+            _on_frame(frame)
 
     if selected_frames <= 0:
         raise ValueError(
             f"Video segment for {video.uri!r} contains no decodable frames in "
             f"[{clip_from:.6f}, {clip_to if clip_to is not None else 'end'})."
-        )
-
-
-def _append_video_segment_from_frames(
-    *,
-    writer: TranscodeWriter,
-    video: DecodedVideo,
-    tracker: _RunningQuantileStats,
-    sample_stride: int,
-) -> None:
-    if not video.frames:
-        raise ValueError(
-            f"Decoded video segment for {video.original_file.uri!r} contains no decodable frames."
-        )
-
-    width = video.width
-    height = video.height
-    frames_written = 0
-    for frame_data in video.frames:
-        if width is None or height is None:
-            if isinstance(frame_data, np.ndarray) and frame_data.ndim >= 2:
-                height = int(frame_data.shape[0])
-                width = int(frame_data.shape[1])
-        if width is None or height is None:
-            raise RuntimeError(
-                "Decoded video frame shape missing width/height metadata."
-            )
-
-        writer.ensure_stream(width=width, height=height, fps=video.fps)
-        frame = av.VideoFrame.from_ndarray(
-            frame_data,
-            format=video.pix_fmt or "rgb24",
-        )
-        writer.write_frame(frame)
-
-        frames_written += 1
-        _update_video_stats_if_due(
-            tracker=tracker,
-            frame_index=frames_written - 1,
-            sample_stride=sample_stride,
-            rgb_frame=frame_data if isinstance(frame_data, np.ndarray) else None,
         )
 
 
@@ -372,15 +337,31 @@ async def _resolve_video_fps(
     video: Video,
     video_key: str,
 ) -> int:
-    if isinstance(video, DecodedVideo):
-        return video.fps
+    with _open_video_container(video) as container:
+        stream = cast(
+            Any,
+            next((item for item in container.streams if item.type == "video"), None),
+        )
+        if stream is None:
+            raise ValueError(f"Video source has no video stream for {video.uri!r}")
 
-    data_file = DataFile.resolve(video.uri)
-    cache_name = f"lerobot_writer:{video_key}"
-    media_cache = get_media_cache(name=cache_name)
-    decoder_cache = get_video_decoder_cache(name=cache_name, media_cache=media_cache)
-    resolved_fps = await decoder_cache.resolve_fps(data_file=data_file)
-    if resolved_fps is not None:
-        return resolved_fps
+        for rate in (
+            stream.average_rate,
+            stream.guessed_rate,
+            stream.base_rate,
+        ):
+            if rate is None:
+                continue
+            return int(round(float(rate)))
 
     raise ValueError(f"Failed to resolve FPS for video {video_key!r}")
+
+
+@contextmanager
+def _open_video_container(video: Video) -> Iterator[Any]:
+    input_file = video.open("rb")
+    try:
+        with av.open(input_file, mode="r") as container:
+            yield container
+    finally:
+        input_file.close()

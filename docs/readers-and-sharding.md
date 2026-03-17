@@ -28,7 +28,7 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 - Parquet reader yields row views that are converted on access.
 - LeRobot reader emits one row per episode with:
   - `frames`: list of frame dicts for the episode slice.
-  - video feature columns from `meta/info.json.features` where `dtype == "video"`, emitted as `Video` handles.
+  - video feature columns from `meta/info.json.features` where `dtype == "video"`, emitted as `VideoFile` handles.
   - `metadata`: dict with `lerobot_info`, dataset-level `lerobot_stats`, and per-episode `lerobot_episode_stats`.
   - raw transport metadata keys under `stats/*`, `videos/*`, and `meta/episodes/*` are omitted from emitted rows.
   - frame slicing requires `dataset_from_index`/`dataset_to_index` in each episode row.
@@ -37,32 +37,6 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
   - `media_preserve_order` controls whether those async reader results are yielded in input order.
   - `read_lerobot(...)` accepts either one dataset root or a list of dataset roots on the same filesystem/protocol.
 - Use `target_shard_bytes` to control shard granularity.
-
-## Hydrating External Files
-
-Use `refiner.hydrate_media(...)` with `.map_async(...)` when you want decoded
-video clips materialized in-process.
-
-```python
-import refiner as mdr
-
-pipeline = (
-    mdr.read_lerobot("s3://bucket/dataset")
-    .map_async(
-        mdr.hydrate_media("observation.images.main"),
-        max_in_flight=8,
-    )
-)
-```
-
-`hydrate_media(...)` currently accepts `Video` values only. For LeRobot inputs,
-that means clip-aligned hydration is explicit and decode-backed:
-
-- use `.map_async(...)` to control concurrency
-- expect decoded frames in `video.media`
-
-Rows are yielded in input order unless you explicitly choose otherwise on the async step.
-
 ## LeRobot Writer Tuning
 
 `write_lerobot(...)` keeps video tuning grouped:
@@ -70,6 +44,7 @@ Rows are yielded in input order unless you explicitly choose otherwise on the as
 - `video=mdr.LeRobotVideoConfig(...)` groups codec, pixel format, encoder threads, decoder threads, and encoder options.
 - `stats=mdr.LeRobotStatsConfig(...)` groups clip sampling stride and quantile bin count.
 - Video stats are always written; use a larger `stats.sample_stride` when you want cheaper sampling.
+- Writer-side video work reopens source clips through `fsspec` and PyAV when needed; Refiner does not require a separate writer-managed temp-file cache in the normal path.
 - When the sink receives consecutive LeRobot episodes that span an entire source video file, it can remux that file into the output without decoding frames.
 - When consecutive episodes span several whole compatible source files, the sink can remux those files into one output file without decoding frames.
 - When an episode clip starts on a source keyframe and ends on an exact packet boundary, the sink can remux that aligned subsegment without transcoding.
@@ -83,4 +58,3 @@ Rows are yielded in input order unless you explicitly choose otherwise on the as
 - LeRobot expects parquet metadata under `meta/episodes/**`; legacy JSONL metadata is not used.
 - LeRobot reads `fps`, `robot_type`, `features`, `data_path`, and `video_path` from `meta/info.json` when present.
 - The LeRobot writer is batch-oriented per shard block: frame parquet writes happen per batch table, each `video_key` uses one batch-scoped `VideoWriter.write_videos(...)` call that prepares videos concurrently and commits them in order, and episode rows are finalized from an async queue of completed video results.
-- `hydrate_media(...)` is intentionally narrow here; it is not a general file/bytes hydration helper.

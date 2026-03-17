@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 
-from refiner.media.video.types import DecodedVideo
+from refiner.media import VideoFile
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.planning import describe_builtin
 
@@ -33,8 +33,7 @@ def motion_trim(
     """Return a row mapper that trims LeRobot episodes to the active motion window.
 
     The trim span is inferred from the earliest action/state activity above the
-    threshold and then applied to the episode frame list and all hydrated top-level
-    decoded videos in the row.
+    threshold and then applied to the episode frame list.
     """
 
     if not action_key:
@@ -54,6 +53,9 @@ def motion_trim(
         pad_frames=pad_frames,
     )
     def _trim(row: Row) -> Row:
+        if any(isinstance(row.get(key), VideoFile) for key in row.keys()):
+            raise ValueError("motion_trim does not support top-level video columns.")
+
         frames = row.get("frames")
         first_frame = frames[0] if isinstance(frames, list) and frames else None
         if (
@@ -97,20 +99,7 @@ def motion_trim(
                 }
             )
 
-        updates: dict[str, object] = {"frames": kept_frames}
-        for key in row.keys():
-            video = row.get(key)
-            if isinstance(video, DecodedVideo):
-                updates[key] = DecodedVideo(
-                    frames=tuple(video.frames[start_idx : end_idx + 1]),
-                    fps=video.fps,
-                    original_file=video.original_file,
-                    width=video.width,
-                    height=video.height,
-                    pix_fmt=video.pix_fmt,
-                )
-
-        return row.update(updates)
+        return row.update({"frames": kept_frames})
 
     return _trim
 
