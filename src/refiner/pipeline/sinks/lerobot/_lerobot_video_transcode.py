@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from fractions import Fraction
-from typing import TYPE_CHECKING, IO, Any, Iterator
+from typing import IO, TYPE_CHECKING, Any, Iterator
 
 import av
 import numpy as np
 
 from refiner.io import DataFolder
-from refiner.media import Video
+from refiner.media import VideoFile
 from refiner.pipeline.sinks.lerobot._lerobot_stats import _RunningQuantileStats
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import _PreparedSource
 from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
@@ -123,7 +123,7 @@ class TranscodeWriter:
     def append_prepared_video(
         self,
         *,
-        video: Video,
+        video: VideoFile,
         prepared_source: _PreparedSource,
         stats_config: "LeRobotStatsConfig",
     ) -> tuple[tuple[float, float], dict[str, np.ndarray]]:

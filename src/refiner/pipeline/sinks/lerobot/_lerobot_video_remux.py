@@ -4,8 +4,13 @@ from dataclasses import dataclass
 from typing import IO, Any
 
 import av
+
 from refiner.io import DataFolder
-from refiner.media import Video
+from refiner.media import VideoFile
+from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
+    video_from_timestamp_s,
+    video_to_timestamp_s,
+)
 from refiner.pipeline.utils.cache.decoder_cache import (
     OpenedVideoSource,
     VideoSourceProbe as _VideoSourceProbe,
@@ -13,10 +18,6 @@ from refiner.pipeline.utils.cache.decoder_cache import (
     reset_opened_video_source_cache,
 )
 from refiner.pipeline.utils.cache.lease_cache import CacheLease
-from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
-    video_from_timestamp_s,
-    video_to_timestamp_s,
-)
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
@@ -108,7 +109,6 @@ class RemuxWriter:
 
         output_base_pts = self.output_offset_pts
         time_base_s = float(probe.time_base)
-        packets_muxed = 0
         if self.stream is None:
             self.stream = self.container.add_stream_from_template(
                 template=input_stream,
@@ -131,7 +131,6 @@ class RemuxWriter:
             packet.dts = int(packet.dts) - start_pts + self.output_offset_pts
             packet.stream = stream
             self.container.mux(packet)
-            packets_muxed += 1
 
         self.output_offset_pts += end_pts - start_pts
         out_from_s = float(output_base_pts) * time_base_s
@@ -158,7 +157,7 @@ def probes_are_remux_compatible(
 def probe_for_remux(
     *,
     probe: _VideoSourceProbe | None,
-    video: Video,
+    video: VideoFile,
 ) -> tuple[_VideoSourceProbe | None, _VideoPtsAlignment | None]:
     if probe is None:
         return None, None
@@ -182,11 +181,9 @@ def probe_for_remux(
 async def prepare_video(
     *,
     video_key: str,
-    video: Video,
+    video: VideoFile,
 ) -> _PreparedSource:
-    lease = await get_opened_video_source_cache(
-        name=video_key,
-    ).acquire(video.uri)
+    lease = await get_opened_video_source_cache(name=video_key).acquire(video.uri)
     source = lease.resource
     try:
         start_pts = 0
