@@ -333,7 +333,7 @@ def test_worker_can_batch_across_shards() -> None:
     assert emitted == [shard2.id, shard1.id]
 
 
-def test_worker_runtime_complete_errors_are_not_swallowed() -> None:
+def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> None:
     shard = _shard("p", 0, 1)
     rows_by_shard = {shard.id: [DictRow({"x": 1})]}
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
@@ -352,8 +352,14 @@ def test_worker_runtime_complete_errors_are_not_swallowed() -> None:
         runtime_lifecycle,
         _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
     )
-    with pytest.raises(RuntimeError, match="complete failed"):
-        worker.run()
+    stats = worker.run()
+
+    assert stats.claimed == 1
+    assert stats.completed == 0
+    assert stats.failed == 1
+    assert runtime_lifecycle.completed_ids == []
+    assert runtime_lifecycle.failed_ids == [shard.id]
+    assert runtime_lifecycle.failed_errors == ["complete failed"]
 
 
 def test_worker_completes_shards_only_after_sink_drain() -> None:
