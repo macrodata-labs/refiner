@@ -23,12 +23,13 @@ In practice, task pipelines are often used for rank-aware side effects. The retu
 ```python
 import refiner as mdr
 
-def task_worker(rank: int, world_size: int) -> dict:
+def task_worker(rank: int, world_size: int) -> dict | None:
     # Do rank-aware work here, for example:
     # - call an external tool
     # - run inference
     # - write a partition of output data
     # - produce one bookkeeping row per task
+    # Returning a row is optional; return None if the task is purely side-effecting.
 
     return {
         "rank": rank,
@@ -39,6 +40,7 @@ def task_worker(rank: int, world_size: int) -> dict:
 (
     mdr.task(task_worker, num_tasks=8)
     .write_jsonl("s3://my-bucket/task-output/")
+    # Add a writer only if you want to persist bookkeeping rows from the task callback.
     .launch_cloud(
         name="task-example",
         # Workers claim task shards until all tasks are complete,
