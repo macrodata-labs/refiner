@@ -121,6 +121,17 @@ class _RecordingSink(BaseSink):
         self.completed_shards.append(shard_id)
 
 
+class _CloseFailingSink(_RecordingSink):
+    def close(self) -> None:
+        raise RuntimeError("close failed")
+
+
+class _ShortWriteAndCloseFailingSink(_CloseFailingSink):
+    def write_block(self, block) -> dict[str, int]:
+        counts = super().write_block(block)
+        return {shard_id: 1 for shard_id in counts}
+
+
 class _FlushFailingTelemetryEmitter(_NoopTelemetryEmitter):
     def force_flush_user_metrics(self) -> None:
         raise RuntimeError("flush failed")
@@ -167,6 +178,30 @@ class _LifecycleClientWithFailingTelemetry:
     def shard_finish(self, **kwargs):
         del kwargs
         return OkResponse()
+
+
+def _run_local_worker(
+    *,
+    rows_by_shard: Mapping[str, Sequence[Row]],
+    runtime_lifecycle: _FakeRuntimeLifecycle,
+    sink: BaseSink | None = None,
+    transform=None,
+) -> Worker:
+    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
+    if transform is not None:
+        pipeline = pipeline.map(transform)
+    if sink is not None:
+        pipeline = pipeline.with_sink(sink)
+
+    worker = Worker(
+        pipeline=pipeline,
+        run_handle=_local_run(),
+    )
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+    )
+    return worker
 
 
 def test_pipeline_executes_row_and_batch_steps() -> None:
@@ -434,6 +469,57 @@ def test_worker_flushes_logs_on_failure(monkeypatch) -> None:
 
     assert stats.failed == 1
     assert emitter.log_flushes == 2
+
+
+def test_worker_suppresses_sink_close_errors_after_execution_failure() -> None:
+    shard = _shard("boom", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 2})]}
+
+    def maybe_fail(row: Row) -> Row:
+        raise RuntimeError("kaboom")
+
+    stats = _run_local_worker(
+        rows_by_shard=rows_by_shard,
+        runtime_lifecycle=runtime_lifecycle,
+        sink=_CloseFailingSink(),
+        transform=maybe_fail,
+    )
+    stats = stats.run()
+
+    assert stats.failed == 1
+    assert runtime_lifecycle.failed_ids == [shard.id]
+    assert runtime_lifecycle.failed_errors == ["kaboom"]
+
+
+def test_worker_suppresses_sink_close_errors_after_run_failure() -> None:
+    shard = _shard("p", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 1}), DictRow({"x": 2})]}
+
+    worker = _run_local_worker(
+        rows_by_shard=rows_by_shard,
+        runtime_lifecycle=runtime_lifecycle,
+        sink=_ShortWriteAndCloseFailingSink(),
+    )
+
+    with pytest.raises(RuntimeError, match="worker finished with unflushed shards"):
+        worker.run()
+
+
+def test_worker_raises_sink_close_errors_after_success() -> None:
+    shard = _shard("p", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 1})]}
+
+    worker = _run_local_worker(
+        rows_by_shard=rows_by_shard,
+        runtime_lifecycle=runtime_lifecycle,
+        sink=_CloseFailingSink(),
+    )
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        worker.run()
 
 
 __all__: list[str] = []
