@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+from collections.abc import Callable
 from typing import cast
 
 from refiner.pipeline import read_jsonl
@@ -8,17 +10,24 @@ from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
 )
+from refiner.platform.manifest import _redact_captured_text
 
 
-def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
+def _stub_cloud_submit(
+    monkeypatch,
+    *,
+    manifest: dict[str, object] | Callable[..., dict[str, object]] | None = None,
+    fail_on_submit: bool = False,
+) -> dict[str, object]:
     captured: dict[str, object] = {}
 
     class FakeMacrodataClient:
         def __init__(self):
-            captured["client_initialized"] = True
             self.base_url = "https://example.com"
 
         def cloud_submit_job(self, *, request):
+            if fail_on_submit:
+                raise AssertionError("should not submit")
             captured["request"] = request
 
             class _Resp:
@@ -52,7 +61,15 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "refiner.launchers.base.build_run_manifest",
-        lambda **_: {
+        manifest if callable(manifest) else (lambda **_: manifest or {"version": 1}),
+    )
+    return captured
+
+
+def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
+    captured = _stub_cloud_submit(
+        monkeypatch,
+        manifest={
             "version": 1,
             "environment": {"refiner_ref": "abc123def456"},
             "script": {"text": "print('hi')"},
@@ -71,7 +88,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert result.job_id == "job-123"
     assert result.stage_index == 0
     assert result.status == "queued"
-    assert captured["client_initialized"] is True
 
     request = cast(CloudRunCreateRequest, captured["request"])
     assert request.name == "demo cloud"
@@ -93,48 +109,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
 
 
 def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    class FakeMacrodataClient:
-        def __init__(self):
-            self.base_url = "https://example.com"
-
-        def cloud_submit_job(self, *, request):
-            captured["request"] = request
-
-            class _Resp:
-                job_id = "job-123"
-                stage_index = 0
-                status = "queued"
-                workspace_slug = None
-
-            return _Resp()
-
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
-    monkeypatch.setattr(
-        "refiner.launchers.cloud.serialize_pipeline_inline",
-        lambda pipeline: CloudPipelinePayload(
-            format="cloudpickle",
-            bytes_b64="AQID",
-            sha256="abc123",
-            size_bytes=3,
-        ),
-    )
-    monkeypatch.setattr(
-        "refiner.launchers.base.plan_pipeline_stages",
-        lambda pipeline, default_num_workers: [
-            PlannedStage(
-                index=0,
-                name="stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=default_num_workers),
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        "refiner.launchers.base.build_run_manifest",
-        lambda **_: {"version": 1},
-    )
+    captured = _stub_cloud_submit(monkeypatch)
 
     pipeline = read_jsonl("input.jsonl")
     pipeline.launch_cloud(name="demo cloud", sync_local_dependencies=False)
@@ -144,48 +119,7 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
 
 
 def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    class FakeMacrodataClient:
-        def __init__(self):
-            self.base_url = "https://example.com"
-
-        def cloud_submit_job(self, *, request):
-            captured["request"] = request
-
-            class _Resp:
-                job_id = "job-123"
-                stage_index = 0
-                status = "queued"
-                workspace_slug = None
-
-            return _Resp()
-
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
-    monkeypatch.setattr(
-        "refiner.launchers.cloud.serialize_pipeline_inline",
-        lambda pipeline: CloudPipelinePayload(
-            format="cloudpickle",
-            bytes_b64="AQID",
-            sha256="abc123",
-            size_bytes=3,
-        ),
-    )
-    monkeypatch.setattr(
-        "refiner.launchers.base.plan_pipeline_stages",
-        lambda pipeline, default_num_workers: [
-            PlannedStage(
-                index=0,
-                name="stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=default_num_workers),
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        "refiner.launchers.base.build_run_manifest",
-        lambda **_: {"version": 1},
-    )
+    captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
 
     pipeline = read_jsonl("input.jsonl")
@@ -201,53 +135,61 @@ def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
     }
 
 
+def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> None:
+    secret = "super-secret-value"
+    env_value = "plain-env-value"
+    captured = _stub_cloud_submit(
+        monkeypatch,
+        manifest={"version": 1, "script": {"text": "TOKEN='super-secret-value'"}},
+    )
+
+    pipeline = read_jsonl("input.jsonl").map(
+        lambda row: {"token": "super-secret-value", "x": row["x"]}
+    )
+    pipeline.launch_cloud(
+        name="demo cloud",
+        secrets={"OPENAI_API_KEY": secret},
+        env={"MODEL_NAME": env_value},
+    )
+
+    request = cast(CloudRunCreateRequest, captured["request"])
+    assert request.secrets == {
+        "OPENAI_API_KEY": "super-secret-value",
+        "MODEL_NAME": "plain-env-value",
+    }
+    assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
+
+
+def test_pipeline_launch_cloud_rejects_overlapping_secret_and_env_keys(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(SystemExit, match="API_KEY"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            secrets={"API_KEY": "secret"},
+            env={"API_KEY": "env"},
+        )
+
+
 def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
     monkeypatch,
 ) -> None:
-    captured: dict[str, object] = {}
     secret = "super-secret-value"
-
-    class FakeMacrodataClient:
-        def __init__(self):
-            self.base_url = "https://example.com"
-
-        def cloud_submit_job(self, *, request):
-            captured["request"] = request
-
-            class _Resp:
-                job_id = "job-123"
-                stage_index = 0
-                status = "queued"
-                workspace_slug = None
-
-            return _Resp()
-
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
-    monkeypatch.setattr(
-        "refiner.launchers.cloud.serialize_pipeline_inline",
-        lambda pipeline: CloudPipelinePayload(
-            format="cloudpickle",
-            bytes_b64="AQID",
-            sha256="abc123",
-            size_bytes=3,
-        ),
-    )
-    monkeypatch.setattr(
-        "refiner.launchers.base.plan_pipeline_stages",
-        lambda pipeline, default_num_workers: [
-            PlannedStage(
-                index=0,
-                name="stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=default_num_workers),
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        "refiner.launchers.base.build_run_manifest",
-        lambda: {
+    captured = _stub_cloud_submit(
+        monkeypatch,
+        manifest=lambda **kwargs: {
             "version": 1,
-            "script": {"text": "API_KEY = 'super-secret-value'"},
+            "script": {
+                "path": "/tmp/super-secret-value_job.py",
+                "text": _redact_captured_text(
+                    "API_KEY = 'super-secret-value'",
+                    secret_values=kwargs.get("secret_values", ()),
+                ),
+            },
+            "environment": {"refiner_ref": "super-secret-value-ref"},
+            "dependencies": [{"name": "pkg", "version": "super-secret-value-dep"}],
         },
     )
 
@@ -260,8 +202,13 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
     assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
     assert secret not in request.plan["stages"][0]["steps"][1]["args"]["fn"]
     assert request.manifest is not None
+    assert request.manifest["script"]["path"] == "/tmp/super-secret-value_job.py"
     assert "REDACTED_SECRET" in request.manifest["script"]["text"]
     assert secret not in request.manifest["script"]["text"]
+    assert request.manifest["environment"]["refiner_ref"] == "super-secret-value-ref"
+    assert request.manifest["dependencies"] == [
+        {"name": "pkg", "version": "super-secret-value-dep"}
+    ]
 
 
 def test_pipeline_launch_cloud_requires_missing_env_secret(monkeypatch) -> None:

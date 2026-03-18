@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 import pyarrow as pa
 
 from refiner.execution.operators.vectorized import TabularBlock
 from refiner.execution.tracking.shards import SHARD_ID_COLUMN, count_block_by_shard
+from refiner.io.datafolder import DataFolder
 from refiner.pipeline.data.row import Row
 
 Block = list[Row] | TabularBlock
@@ -18,6 +20,9 @@ class BaseSink(ABC):
     def write_block(self, block: Block) -> ShardCounts:
         raise NotImplementedError
 
+    def describe(self) -> tuple[str, str, dict[str, Any] | None] | None:
+        return None
+
     def on_shard_complete(self, shard_id: str) -> None:
         del shard_id
 
@@ -28,6 +33,11 @@ class BaseSink(ABC):
 class NullSink(BaseSink):
     def write_block(self, block: Block) -> ShardCounts:
         return count_block_by_shard(block)
+
+
+def describe_datafolder_path(value: Any) -> str:
+    folder = DataFolder.resolve(value)
+    return str(folder.fs.unstrip_protocol(folder.path))
 
 
 def split_block_by_shard(block: Block) -> tuple[dict[str, ShardedBlock], ShardCounts]:
@@ -64,4 +74,11 @@ def split_block_by_shard(block: Block) -> tuple[dict[str, ShardedBlock], ShardCo
     return tables_by_shard, counts
 
 
-__all__ = ["BaseSink", "NullSink", "Block", "ShardCounts", "split_block_by_shard"]
+__all__ = [
+    "BaseSink",
+    "NullSink",
+    "Block",
+    "ShardCounts",
+    "describe_datafolder_path",
+    "split_block_by_shard",
+]

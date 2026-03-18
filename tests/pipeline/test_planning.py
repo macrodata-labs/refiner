@@ -4,7 +4,6 @@ from collections.abc import Iterator
 
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner import col
-from refiner.media import hydrate_video
 from refiner.pipeline import RefinerPipeline, from_items
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
@@ -130,28 +129,47 @@ def test_compile_pipeline_plan_uses_named_callable_for_step_name() -> None:
 
 
 def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:
-    pipeline = (
-        RefinerPipeline(_FakeReader())
-        .map_async(hydrate_video("video"), max_in_flight=4)
-        .map(motion_trim(threshold=0.25, pad_frames=2))
+    pipeline = RefinerPipeline(_FakeReader()).map(
+        motion_trim(threshold=0.25, pad_frames=2)
     )
 
     steps = compile_pipeline_plan(pipeline)["stages"][0]["steps"]
 
-    assert steps[1]["name"] == "video:hydrate_video"
+    assert steps[1]["name"] == "robotics:motion_trim"
     assert steps[1]["args"] == {
-        "columns": ["video"],
-        "on_error": "raise",
-        "async_map.max_in_flight": 4,
-        "async_map.preserve_order": True,
-    }
-    assert steps[2]["name"] == "robotics:motion_trim"
-    assert steps[2]["args"] == {
         "action_key": "action",
         "state_key": "observation.state",
         "threshold": 0.25,
         "pad_frames": 2,
     }
+
+
+def test_compile_pipeline_plan_includes_lerobot_writer_steps() -> None:
+    pipeline = (
+        RefinerPipeline(_FakeReader())
+        .map(motion_trim(threshold=0.25, pad_frames=2))
+        .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_motion")
+    )
+
+    stages = compile_pipeline_plan(pipeline)["stages"]
+
+    assert stages[0]["steps"][1]["name"] == "robotics:motion_trim"
+    assert stages[0]["steps"][2]["name"] == "write_lerobot"
+    assert stages[0]["steps"][2]["type"] == "writer"
+    assert (
+        stages[0]["steps"][2]["args"]["path"]
+        == "hf://buckets/macrodata/test_bucket/aloha_motion"
+    )
+
+    assert [step["name"] for step in stages[1]["steps"]] == [
+        "task",
+        "write_lerobot_meta_reduce",
+    ]
+    assert stages[1]["steps"][1]["type"] == "writer"
+    assert (
+        stages[1]["steps"][1]["args"]["path"]
+        == "hf://buckets/macrodata/test_bucket/aloha_motion"
+    )
 
 
 def test_extract_lambda_source_handles_chained_call_fragment() -> None:

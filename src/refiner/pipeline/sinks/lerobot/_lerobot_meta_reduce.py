@@ -10,7 +10,12 @@ import pyarrow.parquet as pq
 
 from refiner.execution.tracking.shards import count_block_by_shard
 from refiner.io import DataFolder
-from refiner.pipeline.sinks.base import BaseSink, Block, ShardCounts
+from refiner.pipeline.sinks.base import (
+    BaseSink,
+    Block,
+    ShardCounts,
+    describe_datafolder_path,
+)
 
 from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _aggregate_stats,
@@ -50,6 +55,13 @@ class LeRobotMetaReduceSink(BaseSink):
             return
         _LeRobotMetaReducer(config=self.config).reduce()
         self._reduced = True
+
+    def describe(self) -> tuple[str, str, dict[str, str]]:
+        return (
+            "write_lerobot_meta_reduce",
+            "writer",
+            {"path": describe_datafolder_path(self.config.output)},
+        )
 
 
 @dataclass(slots=True)

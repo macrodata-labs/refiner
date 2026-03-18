@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 
-from refiner.media.video.types import DecodedVideo
+from refiner.media import VideoFile
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.planning import describe_builtin
 
@@ -25,16 +25,16 @@ def _motion_energy(frames: Sequence[Row], key: str) -> np.ndarray:
 
 def motion_trim(
     *,
+    threshold: float = 0.001,
+    pad_frames: int = 0,
     action_key: str = "action",
     state_key: str = "observation.state",
-    threshold: float = 0.001,
-    pad_frames: int = 5,
 ) -> Callable[[Row], Row]:
     """Return a row mapper that trims LeRobot episodes to the active motion window.
 
     The trim span is inferred from the earliest action/state activity above the
-    threshold and then applied to the episode frame list and all hydrated top-level
-    decoded videos in the row.
+    threshold and then applied to the episode frame list. Top-level video columns
+    are rewritten as trimmed VideoFile windows rather than slicing decoded frames.
     """
 
     if not action_key:
@@ -48,10 +48,10 @@ def motion_trim(
 
     @describe_builtin(
         "robotics:motion_trim",
-        action_key=action_key,
-        state_key=state_key,
         threshold=threshold,
         pad_frames=pad_frames,
+        action_key=action_key,
+        state_key=state_key,
     )
     def _trim(row: Row) -> Row:
         frames = row.get("frames")
@@ -72,7 +72,18 @@ def motion_trim(
         action_active = np.flatnonzero(_motion_energy(frames, action_key) > threshold)
         state_active = np.flatnonzero(_motion_energy(frames, state_key) > threshold)
         if action_active.size == 0 and state_active.size == 0:
-            return row
+            updates: dict[str, object] = {"frames": []}
+            for key in row.keys():
+                value = row.get(key)
+                if not isinstance(value, VideoFile):
+                    continue
+                base_from_ts = value.from_timestamp_s or 0.0
+                updates[key] = VideoFile(
+                    uri=value.uri,
+                    from_timestamp_s=base_from_ts,
+                    to_timestamp_s=base_from_ts,
+                )
+            return row.update(updates)
 
         start_candidates = [
             int(active[0])
@@ -88,6 +99,11 @@ def motion_trim(
         end_idx = min(len(frames) - 1, max(end_candidates) + pad_frames)
         kept_frames = frames[start_idx : end_idx + 1]
         kept_start_ts = float(kept_frames[0]["timestamp"])
+        kept_duration_s = (
+            float(frames[end_idx + 1]["timestamp"]) - kept_start_ts
+            if end_idx + 1 < len(frames)
+            else None
+        )
 
         for new_idx, frame in enumerate(kept_frames):
             kept_frames[new_idx] = frame.update(
@@ -99,16 +115,23 @@ def motion_trim(
 
         updates: dict[str, object] = {"frames": kept_frames}
         for key in row.keys():
-            video = row.get(key)
-            if isinstance(video, DecodedVideo):
-                updates[key] = DecodedVideo(
-                    frames=tuple(video.frames[start_idx : end_idx + 1]),
-                    fps=video.fps,
-                    original_file=video.original_file,
-                    width=video.width,
-                    height=video.height,
-                    pix_fmt=video.pix_fmt,
-                )
+            value = row.get(key)
+            if not isinstance(value, VideoFile):
+                continue
+
+            base_from_ts = value.from_timestamp_s or 0.0
+            trimmed_from_ts = base_from_ts + kept_start_ts
+            trimmed_to_ts = (
+                trimmed_from_ts + kept_duration_s
+                if kept_duration_s is not None
+                else value.to_timestamp_s
+            )
+
+            updates[key] = VideoFile(
+                uri=value.uri,
+                from_timestamp_s=trimmed_from_ts,
+                to_timestamp_s=trimmed_to_ts,
+            )
 
         return row.update(updates)
 

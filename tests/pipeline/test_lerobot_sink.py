@@ -3,15 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Iterator, TypedDict, cast
 
 import av
+import fsspec
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
 import refiner as mdr
-from refiner.media import hydrate_video
 from refiner.pipeline import (
     LeRobotStatsConfig as PipelineLeRobotStatsConfig,
 )
@@ -25,12 +25,10 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotWriterSink,
 )
 from refiner.pipeline.sources.readers.lerobot import LEROBOT_TASKS
-from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
-    LeRobotVideoWriter,
-    _CompletedVideoItem,
-    _CompletedVideoSegment,
-    _VideoBatchItem,
+from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
+    reset_opened_video_source_cache,
 )
+from refiner.pipeline.sinks.lerobot._lerobot_video_writer import LeRobotVideoWriter
 from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.lifecycle import RuntimeLifecycle
@@ -50,6 +48,13 @@ _DEFAULT_TASKS: tuple[_TaskMetadata, ...] = (
     {"task_index": 0, "task": "pick"},
     {"task_index": 1, "task": "place"},
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_opened_source_cache() -> Iterator[None]:
+    reset_opened_video_source_cache()
+    yield
+    reset_opened_video_source_cache()
 
 
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
@@ -231,46 +236,61 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     with (out_root / "meta" / "stats.json").open("r", encoding="utf-8") as fh:
         stats_json = json.load(fh)
     assert stats_json["observation.state"]["mean"] == [3.0]
-    assert "observation.images.main" in stats_json
 
     out_rows = mdr.read_lerobot(str(out_root)).materialize()
     assert [row["task"] for row in out_rows] == ["pick", "place"]
 
 
-def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
+def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     src_video = tmp_path / "source" / "episode.mp4"
     _write_video(src_video)
 
-    out_root = tmp_path / "decoded"
-    pipeline = (
-        mdr.from_items(
-            [
-                _episode(
-                    episode_index=0,
-                    task="pick",
-                    task_index=0,
-                    video_path=src_video,
-                    from_ts=0.0,
-                    to_ts=0.4,
-                    values=[1.0, 2.0, 3.0, 4.0],
-                ),
-            ]
+    memfs = fsspec.filesystem("memory")
+    uri = "memory://lerobot-remux-reuse/episode.mp4"
+    with src_video.open("rb") as src, memfs.open(uri, "wb") as dst:
+        dst.write(src.read())
+
+    remux_module = __import__(
+        "refiner.pipeline.sinks.lerobot._lerobot_video_remux",
+        fromlist=["av"],
+    )
+    original_av_open = remux_module.av.open
+    read_open_calls = 0
+
+    def _counting_av_open(*args, **kwargs):
+        nonlocal read_open_calls
+        if kwargs.get("mode") == "r":
+            read_open_calls += 1
+        return original_av_open(*args, **kwargs)
+
+    monkeypatch.setattr(remux_module.av, "open", _counting_av_open)
+
+    writer = LeRobotVideoWriter(
+        folder=mdr.DataFolder.resolve(str(tmp_path / "out")),
+        chunk_key="000",
+        video_key="observation.images.main",
+        video_config=mdr.LeRobotVideoConfig(),
+        stats_config=mdr.LeRobotStatsConfig(),
+        video_bytes_limit=1024 * 1024,
+    )
+    asyncio.run(
+        writer.write_video(
+            mdr.VideoFile(uri, from_timestamp_s=0.0, to_timestamp_s=0.3),
+            episode_index=0,
         )
-        .map_async(hydrate_video("observation.images.main"))
-        .write_lerobot(str(out_root))
     )
+    asyncio.run(
+        writer.write_video(
+            mdr.VideoFile(uri, from_timestamp_s=0.3, to_timestamp_s=0.6),
+            episode_index=1,
+        )
+    )
+    writer.finalize()
 
-    stats = pipeline.launch_local(
-        name="lerobot-decoded-videos",
-        num_workers=1,
-        workdir=str(tmp_path / "workdir"),
-    )
-    assert stats.failed == 0
-
-    rows = pq.read_table(
-        out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
-    )
-    assert len(rows) == 1
+    assert read_open_calls == 1
 
 
 def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) -> None:
@@ -389,6 +409,7 @@ def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> No
                 )
             ]
         )
+        writer.close()
 
 
 def test_write_lerobot_raises_on_conflicting_task_tables(tmp_path: Path) -> None:
@@ -427,6 +448,7 @@ def test_write_lerobot_raises_on_conflicting_task_tables(tmp_path: Path) -> None
                 ),
             ]
         )
+        writer.close()
 
 
 class _FinalizedWorkersRuntime:
@@ -511,72 +533,3 @@ def test_hub_aloha_merge_uses_remux_and_preserves_episode_count(tmp_path: Path) 
         "observation.images.cam_right_wrist",
     ]:
         assert info_json["features"][video_key]["info"]["video.codec"] == "av1"
-
-
-def test_lerobot_video_writer_respects_preserve_order_flag(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _prepare_items(
-        self: LeRobotVideoWriter,
-        items: list[_VideoBatchItem],
-    ):
-        yield 1, (items[1], None)
-        yield 0, (items[0], None)
-
-    committed: list[int] = []
-
-    async def _commit_item(
-        self: LeRobotVideoWriter,
-        prepared: tuple[_VideoBatchItem, object | None],
-    ) -> _CompletedVideoItem:
-        item, _ = prepared
-        committed.append(item.episode_index)
-        return _CompletedVideoItem(
-            video_key=self.video_key,
-            feature=None,
-            segment=_CompletedVideoSegment(
-                episode_index=item.episode_index,
-                video_key=self.video_key,
-                file_index=0,
-                chunk_key="chunk",
-                from_timestamp=0.0,
-                to_timestamp=0.1,
-                stats={},
-            ),
-        )
-
-    monkeypatch.setattr(LeRobotVideoWriter, "_prepare_items", _prepare_items)
-    monkeypatch.setattr(LeRobotVideoWriter, "_commit_item", _commit_item)
-
-    items = [
-        _VideoBatchItem(episode_index=0, video=mdr.VideoFile(str(tmp_path / "a.mp4"))),
-        _VideoBatchItem(episode_index=1, video=mdr.VideoFile(str(tmp_path / "b.mp4"))),
-    ]
-
-    ordered_writer = LeRobotVideoWriter(
-        folder=mdr.DataFolder.resolve(str(tmp_path / "ordered")),
-        chunk_key="000",
-        video_key="observation.images.main",
-        video_config=mdr.LeRobotVideoConfig(),
-        stats_config=mdr.LeRobotStatsConfig(),
-        default_fps=10,
-        video_bytes_limit=1024,
-        preserve_order=True,
-    )
-    asyncio.run(ordered_writer.write_videos(items))
-    assert committed == [0, 1]
-
-    committed.clear()
-    unordered_writer = LeRobotVideoWriter(
-        folder=mdr.DataFolder.resolve(str(tmp_path / "unordered")),
-        chunk_key="000",
-        video_key="observation.images.main",
-        video_config=mdr.LeRobotVideoConfig(),
-        stats_config=mdr.LeRobotStatsConfig(),
-        default_fps=10,
-        video_bytes_limit=1024,
-        preserve_order=False,
-    )
-    asyncio.run(unordered_writer.write_videos(items))
-    assert committed == [1, 0]
