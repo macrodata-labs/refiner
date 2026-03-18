@@ -10,7 +10,6 @@ from refiner.platform.client import (
     StagePayload,
     serialize_pipeline_inline,
 )
-from refiner.platform.manifest import _redact_captured_strings
 
 from refiner.launchers.base import BaseLauncher
 
@@ -86,9 +85,7 @@ class CloudLauncher(BaseLauncher):
         stages = self._planned_stages()
         request = CloudRunCreateRequest(
             name=self.name,
-            plan=_redact_captured_strings(
-                self._compiled_plan(stages), secret_values=secret_values
-            ),
+            plan=self._compiled_plan(stages, secret_values=secret_values),
             stage_payloads=[
                 StagePayload(
                     stage_index=stage.index,
@@ -102,9 +99,7 @@ class CloudLauncher(BaseLauncher):
                 )
                 for stage in stages
             ],
-            manifest=_redact_captured_strings(
-                self._run_manifest(), secret_values=secret_values
-            ),
+            manifest=self._run_manifest(secret_values=secret_values),
             sync_local_dependencies=self.sync_local_dependencies,
             secrets=resolved_secrets,
         )
