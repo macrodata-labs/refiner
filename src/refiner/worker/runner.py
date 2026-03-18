@@ -333,7 +333,17 @@ class Worker:
             finally:
                 stop_heartbeat.set()
                 heartbeat_thread.join(timeout=1.0)
-                sink.close()
+                try:
+                    sink.close()
+                except Exception as e:
+                    if execution_error is not None or run_exception is not None:
+                        obs_logger.warning(
+                            "sink close failed during worker failure handling: {}: {}",
+                            type(e).__name__,
+                            e,
+                        )
+                    else:
+                        raise
 
                 if self.run_handle.client is not None:
                     current_error = execution_error or run_exception
