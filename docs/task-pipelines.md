@@ -41,6 +41,8 @@ def task_worker(rank: int, world_size: int) -> dict:
     .write_jsonl("s3://my-bucket/task-output/")
     .launch_cloud(
         name="task-example",
+        # Workers claim task shards until all tasks are complete,
+        # so this can be lower than num_tasks.
         num_workers=8,
     )
 )
