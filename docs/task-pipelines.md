@@ -16,16 +16,27 @@ Your callback receives:
 
 and returns a row-like result.
 
+In practice, task pipelines are often used for rank-aware side effects. The returned row can be just a small bookkeeping record if the real work happens inside the callback.
+
 ## Example
 
 ```python
 import refiner as mdr
 
 def task_worker(rank: int, world_size: int) -> dict:
+    output_prefix = f"s3://my-bucket/task-output/part-{rank:05d}"
+
+    # Do rank-aware work here, for example:
+    # - call an external tool
+    # - run inference
+    # - write a partition of output data
+    # - produce one manifest row per task
+
     return {
         "rank": rank,
         "world_size": world_size,
-        "shard_prefix": f"part-{rank:05d}",
+        "output_prefix": output_prefix,
+        "status": "done",
     }
 
 (
@@ -45,12 +56,13 @@ Use task pipelines when:
 - there is no source dataset to read from
 - you want one unit of work per rank
 - you need rank/world-size aware initialization logic
+- the real work is side-effecting and the returned row is just bookkeeping
 - you want to fan out arbitrary work and still use Refiner launchers, sinks, and observability
 
 ## Notes
 
 - task pipelines still participate in normal launcher/runtime behavior
-- each task callback is represented as a row-producing stage, so you can keep composing normal transforms and sinks afterward
+- each task callback is represented as a row-producing stage, so you can still compose normal transforms and sinks afterward
 
 ## Related Pages
 
