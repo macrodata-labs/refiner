@@ -204,14 +204,16 @@ class LeRobotEpisodeReader(ParquetReader):
         grouped_columns = {
             str(name)
             for name in table.column_names
-            if isinstance(name, str) and _is_grouped_episode_stats_column(str(name))
+            if isinstance(name, str)
+            and str(name).startswith("stats/")
+            and str(name).count("/") == 1
         }
 
         for name in table.column_names:
             if not isinstance(name, str) or not name.startswith("stats/"):
                 continue
             _, feature, stat_name = name.split("/", 2)
-            if _episode_stats_column_name(feature) in grouped_columns:
+            if f"stats/{feature}" in grouped_columns:
                 continue
             stat_fields.setdefault(feature, []).append((stat_name, table.column(name)))
 
@@ -228,7 +230,7 @@ class LeRobotEpisodeReader(ParquetReader):
         for feature, feature_stats in sorted(stat_fields.items()):
             stat_names = [stat_name for stat_name, _ in feature_stats]
             stat_columns = [column.combine_chunks() for _, column in feature_stats]
-            ordered_names.append(_episode_stats_column_name(feature))
+            ordered_names.append(f"stats/{feature}")
             columns.append(
                 pa.chunked_array(
                     [pa.StructArray.from_arrays(stat_columns, names=stat_names)]
@@ -650,14 +652,6 @@ def _merge_task_metadata(
         )
 
     return index_to_task, tuple(remaps)
-
-
-def _episode_stats_column_name(feature: str) -> str:
-    return f"stats/{feature}"
-
-
-def _is_grouped_episode_stats_column(column_name: str) -> bool:
-    return column_name.startswith("stats/") and column_name.count("/") == 1
 
 
 __all__ = [

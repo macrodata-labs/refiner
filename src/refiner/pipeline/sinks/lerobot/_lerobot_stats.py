@@ -235,43 +235,16 @@ def _flatten_stats_for_episode(
 def _extract_episode_stats(
     row: Mapping[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    return {
-        feature: feature_stats
-        for feature, feature_stats in _extract_episode_stats_raw(row).items()
-        if feature_stats is not None
-    }
-
-
-def _extract_episode_stats_raw(
-    row: Mapping[str, Any],
-    *,
-    preserve_null: bool = False,
-) -> dict[str, dict[str, Any] | None]:
-    out: dict[str, dict[str, Any] | None] = {}
-    legacy_stats: dict[str, dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
     for key, value in row.items():
-        if not isinstance(key, str):
+        if (
+            not isinstance(key, str)
+            or not key.startswith("stats/")
+            or key.count("/") != 2
+        ):
             continue
-        if _is_grouped_episode_stats_column(key):
-            if value is None:
-                if preserve_null:
-                    out[_feature_name_from_stats_column(key)] = None
-                continue
-            if not isinstance(value, Mapping):
-                continue
-            out[_feature_name_from_stats_column(key)] = {
-                str(stat_name): stat_value for stat_name, stat_value in value.items()
-            }
-            continue
-        if not key.startswith("stats/"):
-            continue
-        parts = key.split("/", 2)
-        if len(parts) != 3:
-            continue
-        _, feature, stat_name = parts
-        legacy_stats.setdefault(feature, {})[stat_name] = value
-    for feature, feature_stats in legacy_stats.items():
-        out.setdefault(feature, feature_stats)
+        _, feature, stat_name = key.split("/", 2)
+        out.setdefault(feature, {})[stat_name] = value
     return out
 
 
@@ -369,16 +342,3 @@ def _jsonable_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_jsonable_value(item) for item in value]
     return value
-
-
-def _episode_stats_column_name(feature: str) -> str:
-    return f"stats/{feature}"
-
-
-def _feature_name_from_stats_column(column_name: str) -> str:
-    _, feature = column_name.split("/", 1)
-    return feature
-
-
-def _is_grouped_episode_stats_column(column_name: str) -> bool:
-    return column_name.startswith("stats/") and column_name.count("/") == 1

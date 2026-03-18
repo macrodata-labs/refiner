@@ -18,8 +18,6 @@ from refiner.pipeline.sinks.lerobot._lerobot_frames import (
     frame_table,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_stats import (
-    _cast_stats_to_numpy,
-    _extract_episode_stats_raw,
     _flatten_stats_for_episode,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
@@ -380,7 +378,25 @@ class _LeRobotShardWriter:
         self,
         row: Mapping[str, Any],
     ) -> dict[str, dict[str, np.ndarray] | None]:
-        return _cast_stats_to_numpy(_extract_episode_stats_raw(row, preserve_null=True))
+        out: dict[str, dict[str, np.ndarray] | None] = {}
+        for key, value in row.items():
+            if (
+                not isinstance(key, str)
+                or not key.startswith("stats/")
+                or key.count("/") != 1
+            ):
+                continue
+            _, feature = key.split("/", 1)
+            if value is None:
+                out[feature] = None
+                continue
+            if not isinstance(value, Mapping):
+                continue
+            out[feature] = {
+                str(stat_name): np.asarray(stat_value)
+                for stat_name, stat_value in value.items()
+            }
+        return out
 
     def _initialize_info_from_row(
         self,

@@ -76,11 +76,11 @@ class _LeRobotMetaReducer:
             return
 
         task_to_index = self._load_stage1_tasks(finalized_chunk_keys)
-        stats_list = [
-            _extract_episode_stats(row)
-            for row in episodes_rows
-            if _extract_episode_stats(row)
-        ]
+        stats_list = []
+        for row in episodes_rows:
+            episode_stats = _extract_episode_stats(row)
+            if episode_stats:
+                stats_list.append(episode_stats)
         info = self._load_stage1_info(finalized_chunk_keys)
 
         for row in episodes_rows:
