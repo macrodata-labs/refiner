@@ -215,7 +215,7 @@ class RefinerPipeline:
     ) -> Iterable[Block]:
         """Execute source stream through compiled segments.
 
-        Returns internal execution blocks (row blocks or Arrow blocks).
+        Returns internal execution blocks (row blocks or tabular blocks).
         Use `iter_rows()` to force row iteration.
         """
         yield from execute_segments(

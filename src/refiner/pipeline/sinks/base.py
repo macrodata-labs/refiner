@@ -5,13 +5,13 @@ from typing import Any
 
 import pyarrow as pa
 
-from refiner.execution.operators.vectorized import TabularBlock
 from refiner.execution.tracking.shards import SHARD_ID_COLUMN, count_block_by_shard
 from refiner.io.datafolder import DataFolder
+from refiner.pipeline.data.block import TabularBlock
 from refiner.pipeline.data.row import Row
 
 Block = list[Row] | TabularBlock
-ShardedBlock = list[Row] | pa.Table
+ShardedBlock = list[Row] | TabularBlock
 ShardCounts = dict[str, int]
 
 
@@ -48,9 +48,9 @@ def split_block_by_shard(block: Block) -> tuple[dict[str, ShardedBlock], ShardCo
             shard_id = row.require_shard_id()
             rows_by_shard.setdefault(shard_id, []).append(row)
             counts[shard_id] = counts.get(shard_id, 0) + 1
-        return rows_by_shard, counts
+        return dict(rows_by_shard), counts
 
-    table = block if isinstance(block, pa.Table) else pa.Table.from_batches([block])
+    table = block.table
     if SHARD_ID_COLUMN not in table.schema.names:
         raise ValueError("tabular sink input is missing __shard_id")
 
@@ -61,17 +61,17 @@ def split_block_by_shard(block: Block) -> tuple[dict[str, ShardedBlock], ShardCo
         shard_indices.setdefault(shard_id, []).append(idx)
 
     data_table = table.drop_columns([SHARD_ID_COLUMN])
-    tables_by_shard: dict[str, pa.Table] = {}
+    tables_by_shard: dict[str, TabularBlock] = {}
     counts: ShardCounts = {}
     for shard_id, indices in shard_indices.items():
         counts[shard_id] = len(indices)
         if len(indices) == data_table.num_rows:
-            tables_by_shard[shard_id] = data_table
+            tables_by_shard[shard_id] = block.with_table(data_table)
         else:
-            tables_by_shard[shard_id] = data_table.take(
-                pa.array(indices, type=pa.int64())
+            tables_by_shard[shard_id] = block.with_table(
+                data_table.take(pa.array(indices, type=pa.int64()))
             )
-    return tables_by_shard, counts
+    return dict(tables_by_shard), counts
 
 
 __all__ = [

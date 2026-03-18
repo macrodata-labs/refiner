@@ -6,15 +6,13 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from refiner.pipeline.data.block import TabularBlock
 from refiner.pipeline.steps import RefinerStep, VectorizedOp, VectorizedSegmentStep
 from refiner.execution.buffer import RowBuffer
 from refiner.execution.operators.row import ShardDeltaFn, execute_row_steps
 from refiner.execution.operators.vectorized import (
-    TabularBlock,
     apply_vectorized_op,
-    iter_record_batch_rows,
-    iter_table_rows,
-    rows_to_table,
+    rows_to_block,
 )
 from refiner.execution.tracking.shards import count_tabular_by_shard, counts_delta
 from refiner.pipeline.data.row import Row
@@ -34,7 +32,7 @@ class VectorSegment:
 
 Segment = RowSegment | VectorSegment
 Block = list[Row] | TabularBlock
-StreamItem = Row | list[Row] | TabularBlock
+StreamItem = Row | list[Row] | TabularBlock | pa.Table | pa.RecordBatch
 
 
 def compile_segments(steps: Sequence[RefinerStep]) -> tuple[Segment, ...]:
@@ -97,11 +95,11 @@ def iter_rows(stream: Iterable[StreamItem]) -> Iterator[Row]:
         if isinstance(item, list):
             yield from item
             continue
-        if isinstance(item, pa.RecordBatch):
-            yield from iter_record_batch_rows(item)
+        if isinstance(item, TabularBlock):
+            yield from item.iter_rows()
             continue
-        if isinstance(item, pa.Table):
-            yield from iter_table_rows(item)
+        if isinstance(item, (pa.Table, pa.RecordBatch)):
+            yield from TabularBlock(item.to_table()).iter_rows()
             continue
         raise TypeError(f"Unsupported stream item: {type(item)!r}")
 
@@ -111,9 +109,9 @@ def block_num_rows(item: StreamItem) -> int:
         return 1
     if isinstance(item, list):
         return len(item)
-    if isinstance(item, pa.RecordBatch):
-        return int(item.num_rows)
-    if isinstance(item, pa.Table):
+    if isinstance(item, TabularBlock):
+        return int(item.table.num_rows)
+    if isinstance(item, (pa.Table, pa.RecordBatch)):
         return int(item.num_rows)
     raise TypeError(f"Unsupported stream item: {type(item)!r}")
 
@@ -146,14 +144,19 @@ def _normalize_blocks(
                 yield item
             continue
 
+        if isinstance(item, TabularBlock):
+            if item.table.num_rows > 0:
+                yield item
+            continue
+
         if isinstance(item, pa.RecordBatch):
             if item.num_rows > 0:
-                yield item
+                yield TabularBlock(item.to_table())
             continue
 
         if isinstance(item, pa.Table):
             if item.num_rows > 0:
-                yield item
+                yield TabularBlock(item)
             continue
 
         raise TypeError(f"Unsupported stream item: {type(item)!r}")
@@ -179,9 +182,9 @@ def _execute_row_segment(
         yield from _chunk_output_rows(step_out, output_block_rows)
         return
     for batch in _chunk_output_rows(step_out, output_block_rows):
-        table = rows_to_table(batch)
-        if table.num_rows > 0:
-            yield table
+        block = rows_to_block(batch)
+        if block.table.num_rows > 0:
+            yield block
 
 
 def _execute_vector_segment(
@@ -228,13 +231,14 @@ def _execute_vector_segment(
         while True:
             batch = pending_rows.peek(rows_for_try)
             try:
-                table = rows_to_table(batch)
+                block = rows_to_block(batch)
             except pa.ArrowMemoryError:
                 if rows_for_try <= 1:
                     raise
                 rows_for_try = max(1, rows_for_try // 2)
                 current_chunk_rows = min(current_chunk_rows, rows_for_try)
                 continue
+            table = block.table
 
             if table.num_rows > 0:
                 estimated_row_bytes = table.nbytes / int(table.num_rows)
@@ -253,7 +257,7 @@ def _execute_vector_segment(
                 continue
 
             try:
-                out = _run_block(table)
+                out = _run_block(block)
             except pa.ArrowMemoryError:
                 if rows_for_try <= 1:
                     raise
@@ -262,8 +266,8 @@ def _execute_vector_segment(
                 continue
 
             pending_rows.discard(rows_for_try)
-            _emit_tabular_delta(produced=out, consumed=table)
-            if out.num_rows > 0:
+            _emit_tabular_delta(produced=out, consumed=block)
+            if out.table.num_rows > 0:
                 yield out
             return
 
@@ -279,22 +283,22 @@ def _execute_vector_segment(
         queue: deque[TabularBlock] = deque([block])
         while queue:
             chunk = queue.popleft()
-            chunk_rows = int(chunk.num_rows)
+            chunk_rows = int(chunk.table.num_rows)
             if chunk_rows <= 0:
                 continue
 
             if (
                 max_vectorized_block_bytes is not None
                 and chunk_rows > 1
-                and chunk.nbytes > max_vectorized_block_bytes
+                and chunk.table.nbytes > max_vectorized_block_bytes
             ):
                 scaled_rows = int(
                     chunk_rows
-                    * (max_vectorized_block_bytes / max(1, int(chunk.nbytes)))
+                    * (max_vectorized_block_bytes / max(1, int(chunk.table.nbytes)))
                 )
                 split_rows = min(chunk_rows - 1, max(1, scaled_rows))
                 for start in range(0, chunk_rows, split_rows):
-                    queue.append(chunk.slice(start, split_rows))
+                    queue.append(chunk.with_table(chunk.table.slice(start, split_rows)))
                 current_chunk_rows = min(current_chunk_rows, split_rows)
                 continue
 
@@ -304,14 +308,18 @@ def _execute_vector_segment(
                 if chunk_rows <= 1:
                     raise
                 split_rows = max(1, chunk_rows // 2)
-                queue.appendleft(chunk.slice(split_rows, chunk_rows - split_rows))
-                queue.appendleft(chunk.slice(0, split_rows))
+                queue.appendleft(
+                    chunk.with_table(
+                        chunk.table.slice(split_rows, chunk_rows - split_rows)
+                    )
+                )
+                queue.appendleft(chunk.with_table(chunk.table.slice(0, split_rows)))
                 current_chunk_rows = min(current_chunk_rows, split_rows)
                 continue
 
-            estimated_row_bytes = chunk.nbytes / chunk_rows
+            estimated_row_bytes = chunk.table.nbytes / chunk_rows
             _emit_tabular_delta(produced=out, consumed=chunk)
-            if out.num_rows > 0:
+            if out.table.num_rows > 0:
                 yield out
 
     for item in stream:
