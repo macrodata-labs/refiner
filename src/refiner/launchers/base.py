@@ -11,8 +11,8 @@ from loguru import logger
 from refiner.platform.auth import CredentialsError
 from refiner.platform.client.api import MacrodataClient
 from refiner.platform.client.http import sanitize_terminal_text
-from refiner.worker.context import RunHandle
 from refiner.platform.manifest import build_run_manifest
+from refiner.worker.context import RunHandle
 from refiner.pipeline.planning import (
     PlannedStage,
     compile_planned_stages,
@@ -114,12 +114,19 @@ class BaseLauncher(ABC):
         )
 
     def _compiled_plan(
-        self, stages: list[PlannedStage] | None = None
+        self,
+        stages: list[PlannedStage] | None = None,
+        *,
+        secret_values: tuple[str, ...] = (),
     ) -> dict[str, object]:
-        return compile_planned_stages(stages or self._planned_stages())
+        return compile_planned_stages(
+            stages or self._planned_stages(), secret_values=secret_values
+        )
 
-    def _run_manifest(self) -> dict[str, object]:
-        return build_run_manifest()
+    def _run_manifest(
+        self, *, secret_values: tuple[str, ...] = ()
+    ) -> dict[str, object]:
+        return build_run_manifest(secret_values=secret_values)
 
     def _create_platform_run(
         self,

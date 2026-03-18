@@ -26,29 +26,6 @@ def _redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
     return redacted
 
 
-def _redact_captured_strings(value: Any, *, secret_values: Sequence[str]) -> Any:
-    if not secret_values:
-        return value
-    if isinstance(value, str):
-        return _redact_captured_text(value, secret_values=secret_values)
-    if isinstance(value, list):
-        return [
-            _redact_captured_strings(item, secret_values=secret_values)
-            for item in value
-        ]
-    if isinstance(value, tuple):
-        return tuple(
-            _redact_captured_strings(item, secret_values=secret_values)
-            for item in value
-        )
-    if isinstance(value, dict):
-        return {
-            key: _redact_captured_strings(item, secret_values=secret_values)
-            for key, item in value.items()
-        }
-    return value
-
-
 def _is_external_script(path: Path) -> bool:
     resolved_str = str(path)
     if "/site-packages/" in resolved_str or "/dist-packages/" in resolved_str:
@@ -180,7 +157,7 @@ def _resolve_refiner_ref() -> str | None:
     )
 
 
-def build_run_manifest() -> dict[str, Any]:
+def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
     refiner_ref = _resolve_refiner_ref()
@@ -189,7 +166,9 @@ def build_run_manifest() -> dict[str, Any]:
         "version": 1,
         "script": {
             "path": path,
-            "text": text,
+            "text": _redact_captured_text(text, secret_values=secret_values)
+            if isinstance(text, str) and secret_values
+            else text,
             "sha256": sha256,
         },
         "environment": {
@@ -202,4 +181,7 @@ def build_run_manifest() -> dict[str, Any]:
     return manifest
 
 
-__all__ = ["build_run_manifest"]
+__all__ = [
+    "build_run_manifest",
+    "_redact_captured_text",
+]

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from types import CodeType
 from typing import TYPE_CHECKING, Any
 
+from refiner.platform.manifest import _redact_captured_text
+
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
 
@@ -299,7 +301,9 @@ def _step_payload(
     return payload
 
 
-def _serialize_args(args: dict[str, Any] | None) -> dict[str, Any] | None:
+def _serialize_args(
+    args: dict[str, Any] | None, *, secret_values: tuple[str, ...] = ()
+) -> dict[str, Any] | None:
     if not args:
         return args
 
@@ -309,7 +313,11 @@ def _serialize_args(args: dict[str, Any] | None) -> dict[str, Any] | None:
         if callable(value):
             source = _callable_source(value)
             if source is not None:
-                serialized[key] = source
+                serialized[key] = (
+                    _redact_captured_text(source, secret_values=secret_values)
+                    if secret_values
+                    else source
+                )
                 meta[key] = "code"
                 continue
         serialized[key] = value
@@ -319,7 +327,9 @@ def _serialize_args(args: dict[str, Any] | None) -> dict[str, Any] | None:
     return serialized
 
 
-def _compile_stage_steps(pipeline: "RefinerPipeline") -> list[dict[str, Any]]:
+def _compile_stage_steps(
+    pipeline: "RefinerPipeline", *, secret_values: tuple[str, ...] = ()
+) -> list[dict[str, Any]]:
     source_step_name = str(getattr(pipeline.source, "name", "source"))
     source_args: dict[str, Any] = dict(pipeline.source.describe())
 
@@ -337,7 +347,7 @@ def _compile_stage_steps(pipeline: "RefinerPipeline") -> list[dict[str, Any]]:
             name=source_name,
             step_type="source",
             index=0,
-            args=_serialize_args(source_args),
+            args=_serialize_args(source_args, secret_values=secret_values),
         )
     )
     from refiner.pipeline.steps import VectorizedSegmentStep
@@ -352,7 +362,7 @@ def _compile_stage_steps(pipeline: "RefinerPipeline") -> list[dict[str, Any]]:
                         name=unique_name,
                         step_type=step_type,
                         index=len(steps),
-                        args=_serialize_args(args),
+                        args=_serialize_args(args, secret_values=secret_values),
                     )
                 )
             continue
@@ -363,7 +373,7 @@ def _compile_stage_steps(pipeline: "RefinerPipeline") -> list[dict[str, Any]]:
                 name=unique_name,
                 step_type=step_type,
                 index=step.index,
-                args=_serialize_args(args),
+                args=_serialize_args(args, secret_values=secret_values),
             )
         )
 
@@ -430,14 +440,18 @@ def plan_pipeline_stages(
     ]
 
 
-def compile_planned_stages(stages: list[PlannedStage]) -> dict[str, Any]:
+def compile_planned_stages(
+    stages: list[PlannedStage], *, secret_values: tuple[str, ...] = ()
+) -> dict[str, Any]:
     plan = {
         "stages": [
             {
                 "name": stage.name,
                 "index": stage.index,
                 "requested_num_workers": stage.compute.num_workers,
-                "steps": _compile_stage_steps(stage.pipeline),
+                "steps": _compile_stage_steps(
+                    stage.pipeline, secret_values=secret_values
+                ),
             }
             for stage in stages
         ]
@@ -445,9 +459,14 @@ def compile_planned_stages(stages: list[PlannedStage]) -> dict[str, Any]:
     return plan
 
 
-def compile_pipeline_plan(pipeline: "RefinerPipeline") -> dict[str, Any]:
+def compile_pipeline_plan(
+    pipeline: "RefinerPipeline", *, secret_values: tuple[str, ...] = ()
+) -> dict[str, Any]:
     """Compile a transport-neutral single-pipeline plan description."""
-    return compile_planned_stages(plan_pipeline_stages(pipeline, default_num_workers=1))
+    return compile_planned_stages(
+        plan_pipeline_stages(pipeline, default_num_workers=1),
+        secret_values=secret_values,
+    )
 
 
 __all__ = [
