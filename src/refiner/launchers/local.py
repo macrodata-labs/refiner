@@ -41,7 +41,6 @@ class LocalLauncher(BaseLauncher):
         workdir: str | None = None,
         heartbeat_interval_seconds: int = 30,
         cpus_per_worker: int | None = None,
-        mem_mb_per_worker: int | None = None,
         runtime_backend: str = "auto",
     ):
         super().__init__(
@@ -50,7 +49,6 @@ class LocalLauncher(BaseLauncher):
             num_workers=num_workers,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             cpus_per_worker=cpus_per_worker,
-            mem_mb_per_worker=mem_mb_per_worker,
         )
         if runtime_backend not in {"auto", "platform", "file"}:
             raise ValueError("runtime_backend must be one of: auto, platform, file")
@@ -146,8 +144,6 @@ class LocalLauncher(BaseLauncher):
             "--cpu-ids",
             ",".join(str(cpu_id) for cpu_id in cpu_ids or []),
         ]
-        if self.mem_mb_per_worker is not None:
-            command.extend(["--mem-mb-per-worker", str(self.mem_mb_per_worker)])
         command.extend(["--stage-index", str(stage_index)])
         if runtime_backend == "platform" and platform_run is not None:
             command.extend(

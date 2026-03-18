@@ -286,7 +286,6 @@ class RefinerPipeline:
         workdir: str | None = None,
         heartbeat_interval_seconds: int = 30,
         cpus_per_worker: int | None = None,
-        mem_mb_per_worker: int | None = None,
         runtime_backend: str = "auto",
     ) -> "LaunchStats":
         """Launch the pipeline locally.
@@ -297,7 +296,6 @@ class RefinerPipeline:
             workdir: Optional working directory for runtime lifecycle and run artifacts.
             heartbeat_interval_seconds: Heartbeat cadence for worker progress reporting.
             cpus_per_worker: Optional CPU cores pinned per worker.
-            mem_mb_per_worker: Optional per-worker soft memory limit in MB.
             runtime_backend: Runtime lifecycle backend selection (`auto`, `platform`, or `file`).
         """
         from refiner.launchers.local import LocalLauncher
@@ -309,7 +307,6 @@ class RefinerPipeline:
             workdir=workdir,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             cpus_per_worker=cpus_per_worker,
-            mem_mb_per_worker=mem_mb_per_worker,
             runtime_backend=runtime_backend,
         )
         return launcher.launch()
@@ -333,7 +330,7 @@ class RefinerPipeline:
             num_workers: Requested logical worker count.
             heartbeat_interval_seconds: Worker heartbeat cadence.
             cpus_per_worker: Optional requested CPU cores per worker.
-            mem_mb_per_worker: Optional requested memory per worker in MB.
+            mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             sync_local_dependencies: Sync submitting environment dependencies in cloud image.
             secrets: Extra environment variables to mount inside the cloud image.
                 `None` values are loaded from the submitting environment.

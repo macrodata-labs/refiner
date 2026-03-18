@@ -82,7 +82,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         num_workers=3,
         heartbeat_interval_seconds=12,
         cpus_per_worker=2,
-        mem_mb_per_worker=8192,
+        mem_mb_per_worker=4096,
     )
 
     assert result.job_id == "job-123"
@@ -100,7 +100,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.num_workers == 3
     assert request.stage_payloads[0].runtime.heartbeat_interval_seconds == 12
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
-    assert request.stage_payloads[0].runtime.mem_mb_per_worker == 8192
+    assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
     assert request.manifest == {
         "version": 1,
         "environment": {"refiner_ref": "abc123def456"},
