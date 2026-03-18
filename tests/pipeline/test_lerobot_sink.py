@@ -29,6 +29,9 @@ from refiner.pipeline.sources.readers.lerobot import (
     LeRobotInfo,
     LeRobotMetadata,
 )
+from refiner.pipeline.sinks.lerobot._lerobot_video_transcode import (
+    _estimate_sample_stride,
+)
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     reset_opened_video_source_cache,
 )
@@ -95,6 +98,37 @@ def _write_large_video(
             container.mux(packet)
 
 
+def _sampled_frame_count(
+    path: Path,
+    *,
+    from_ts: float,
+    to_ts: float | None,
+) -> int:
+    frame_count = 0
+
+    with av.open(str(path), mode="r") as container:
+        stream = next(
+            (item for item in container.streams if item.type == "video"), None
+        )
+        if stream is None:
+            raise ValueError(f"Video source has no video stream: {path}")
+
+        for frame in container.decode(stream):
+            if not isinstance(frame, av.VideoFrame):
+                continue
+            if frame.pts is None or frame.time_base is None:
+                continue
+            timestamp = float(frame.pts * frame.time_base)
+            if timestamp + 1e-6 < from_ts:
+                continue
+            if to_ts is not None and timestamp - 1e-6 >= to_ts:
+                break
+            frame_count += 1
+
+    sample_stride = _estimate_sample_stride(frame_count)
+    return len(range(0, frame_count, sample_stride))
+
+
 def _episode(
     *,
     episode_index: int,
@@ -134,9 +168,25 @@ def _metadata() -> LeRobotMetadata:
     )
 
 
+def _dummy_video_stats(*, count: int) -> dict[str, np.ndarray]:
+    return {
+        "min": np.zeros((3, 1, 1), dtype=np.float64),
+        "max": np.ones((3, 1, 1), dtype=np.float64),
+        "mean": np.full((3, 1, 1), 0.5, dtype=np.float64),
+        "std": np.full((3, 1, 1), 0.1, dtype=np.float64),
+        "count": np.array([count], dtype=np.int64),
+        "q01": np.full((3, 1, 1), 0.1, dtype=np.float64),
+        "q10": np.full((3, 1, 1), 0.2, dtype=np.float64),
+        "q50": np.full((3, 1, 1), 0.5, dtype=np.float64),
+        "q90": np.full((3, 1, 1), 0.8, dtype=np.float64),
+        "q99": np.full((3, 1, 1), 0.9, dtype=np.float64),
+    }
+
+
 def test_lerobot_configs_export_from_pipeline() -> None:
     assert PipelineLeRobotVideoConfig is mdr.LeRobotVideoConfig
     assert PipelineLeRobotStatsConfig is mdr.LeRobotStatsConfig
+    assert mdr.LeRobotStatsConfig().quantile_bins == 5000
 
 
 def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
@@ -201,6 +251,19 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     with (out_root / "meta" / "stats.json").open("r", encoding="utf-8") as fh:
         stats_json = json.load(fh)
     assert stats_json["observation.state"]["mean"] == [3.0]
+    assert "q01" in stats_json["observation.state"]
+    assert "q99" in stats_json["observation.state"]
+    assert "observation.images.main" in stats_json
+    expected_video_count = _sampled_frame_count(
+        src_video,
+        from_ts=0.0,
+        to_ts=0.3,
+    ) + _sampled_frame_count(
+        src_video,
+        from_ts=0.3,
+        to_ts=0.6,
+    )
+    assert stats_json["observation.images.main"]["count"] == [expected_video_count]
 
     out_rows = mdr.read_lerobot(str(out_root)).materialize()
     assert [row["task"] for row in out_rows] == ["pick", "place"]
@@ -305,17 +368,70 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
         writer.write_video(
             mdr.VideoFile(uri, from_timestamp_s=0.0, to_timestamp_s=0.3),
             episode_index=0,
+            frame_count=3,
+            source_stats=_dummy_video_stats(count=3),
         )
     )
     asyncio.run(
         writer.write_video(
             mdr.VideoFile(uri, from_timestamp_s=0.3, to_timestamp_s=0.6),
             episode_index=1,
+            frame_count=3,
+            source_stats=_dummy_video_stats(count=3),
         )
     )
     writer.finalize()
 
     assert read_open_calls == 1
+
+
+def test_write_lerobot_force_recompute_video_stats_ignores_source_video_stats(
+    tmp_path: Path,
+) -> None:
+    src_video = tmp_path / "source" / "episode.mp4"
+    _write_video(src_video)
+
+    row = _episode(
+        episode_index=0,
+        task="pick",
+        task_index=0,
+        video_path=src_video,
+        from_ts=0.0,
+        to_ts=0.3,
+        values=[0.0, 2.0],
+    )
+    row.update(
+        {
+            f"stats/observation.images.main/{name}": value
+            for name, value in _dummy_video_stats(count=999).items()
+        }
+    )
+
+    out_root = tmp_path / "force-recompute"
+    stats = (
+        mdr.from_items([row])
+        .write_lerobot(
+            str(out_root),
+            stats_config=mdr.LeRobotStatsConfig(force_recompute_video_stats=True),
+        )
+        .launch_local(
+            name="lerobot-force-recompute-video-stats",
+            num_workers=1,
+            workdir=str(tmp_path / "workdir-force-recompute"),
+        )
+    )
+    assert stats.failed == 0
+
+    with (out_root / "meta" / "stats.json").open("r", encoding="utf-8") as fh:
+        stats_json = json.load(fh)
+
+    expected_video_count = _sampled_frame_count(
+        src_video,
+        from_ts=0.0,
+        to_ts=0.3,
+    )
+    assert stats_json["observation.images.main"]["count"] == [expected_video_count]
+    assert stats_json["observation.images.main"]["count"] != [999]
 
 
 def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) -> None:
@@ -355,7 +471,7 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
         str(out_root),
         video_files_size_in_mb=1,
         video_config=mdr.LeRobotVideoConfig(encoder_threads=1, decoder_threads=1),
-        stats_config=mdr.LeRobotStatsConfig(sample_stride=2, quantile_bins=64),
+        stats_config=mdr.LeRobotStatsConfig(quantile_bins=64),
     )
 
     stats = pipeline.launch_local(

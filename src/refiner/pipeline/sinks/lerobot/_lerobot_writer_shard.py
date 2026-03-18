@@ -134,11 +134,12 @@ class _LeRobotShardWriter:
         *,
         row: Row | Mapping[str, Any],
     ) -> None:
-        if not row["frames"]:
-            # all frames were trimmed or similar
-            return
-        self._initialize_info_from_row(row)
+        frames = row["frames"]
+        if not frames:
+            raise ValueError("LeRobot writer requires each row to contain frames")
+        self._initialize_info_from_row(row, frames=frames)
         episode_index = int(row["episode_index"])
+        frame_count = len(frames)
         source_episode_stats = self._source_episode_stats(row)
 
         writer_tasks: list[asyncio.Task[_CompletedVideoItem]] = []
@@ -151,12 +152,15 @@ class _LeRobotShardWriter:
                     self._video_writer(video_key).write_video(
                         video=video,
                         episode_index=episode_index,
+                        frame_count=frame_count,
                         source_stats=source_episode_stats.get(video_key),
                     )
                 )
             )
 
-        frame_write_task = asyncio.create_task(self._write_frame_table(row))
+        frame_write_task = asyncio.create_task(
+            self._write_frame_table(row, frames=frames)
+        )
 
         try:
             frame_info = await frame_write_task
@@ -199,10 +203,14 @@ class _LeRobotShardWriter:
     async def _write_frame_table(
         self,
         row: Row | Mapping[str, Any],
+        *,
+        frames: list[Mapping[str, Any]],
     ) -> _FrameWriteInfo:
         episode_index = int(row["episode_index"])
-        frames = self._require_required_fields(row)
-        frame_stats = compute_episode_stats(frames=frames)
+        frame_stats = compute_episode_stats(
+            frames=frames,
+            quantile_bins=self.config.stats.quantile_bins,
+        )
         index_to_task = row[LEROBOT_TASKS]
         if not self._index_to_task:
             self._index_to_task = dict(index_to_task)
@@ -362,33 +370,21 @@ class _LeRobotShardWriter:
         self._global_frame_index = dataset_to_index
         return current_file_index, dataset_from_index, dataset_to_index
 
-    def _require_required_fields(
-        self,
-        row: Mapping[str, Any],
-    ) -> list[Mapping[str, Any]]:
-        return self._require_required_fields_from_value(row["frames"])
-
-    def _require_required_fields_from_value(
-        self,
-        frames_raw: Any,
-    ) -> list[Mapping[str, Any]]:
-        if not isinstance(frames_raw, list):
-            raise ValueError("LeRobot writer requires frames as a list on each row")
-        if not all(isinstance(item, Mapping) for item in frames_raw):
-            raise ValueError("LeRobot writer requires each frame to be a mapping")
-        return [item for item in frames_raw if isinstance(item, Mapping)]
-
     def _source_episode_stats(
         self,
         row: Mapping[str, Any],
     ) -> dict[str, dict[str, np.ndarray]]:
         return _cast_stats_to_numpy(_extract_episode_stats(row))
 
-    def _initialize_info_from_row(self, row: Row | Mapping[str, Any]) -> None:
+    def _initialize_info_from_row(
+        self,
+        row: Row | Mapping[str, Any],
+        *,
+        frames: list[Mapping[str, Any]],
+    ) -> None:
         if self.features:
             return
 
-        frames = self._require_required_fields(row)
         metadata = row.get("metadata")
         if isinstance(metadata, LeRobotMetadata):
             fps_raw = metadata.lerobot_info.fps

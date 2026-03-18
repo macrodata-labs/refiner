@@ -40,12 +40,10 @@ class LeRobotVideoConfig:
 
 @dataclass(frozen=True, slots=True)
 class LeRobotStatsConfig:
-    sample_stride: int = 1
-    quantile_bins: int = 500
+    quantile_bins: int = 5000
+    force_recompute_video_stats: bool = False
 
     def __post_init__(self) -> None:
-        if self.sample_stride <= 0:
-            raise ValueError("stats.sample_stride must be > 0")
         if self.quantile_bins <= 1:
             raise ValueError("stats.quantile_bins must be > 1")
 

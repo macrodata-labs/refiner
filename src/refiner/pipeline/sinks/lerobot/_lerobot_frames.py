@@ -48,8 +48,9 @@ def compute_episode_stats(
     *,
     frames: list[Mapping[str, Any]],
     video_stats: Mapping[str, dict[str, np.ndarray]] | None = None,
+    quantile_bins: int = 5000,
 ) -> dict[str, dict[str, np.ndarray]]:
-    stats = _frame_stats(frames)
+    stats = _frame_stats(frames, quantile_bins=quantile_bins)
     if video_stats:
         stats.update(video_stats)
     return stats
@@ -57,6 +58,8 @@ def compute_episode_stats(
 
 def _frame_stats(
     frames: list[Mapping[str, Any]],
+    *,
+    quantile_bins: int = 5000,
 ) -> dict[str, dict[str, np.ndarray]]:
     if not frames:
         return {}
@@ -76,7 +79,10 @@ def _frame_stats(
             numeric = _stack_numeric_values(column.to_pylist())
         if numeric is None:
             continue
-        out[key] = _feature_stats(numeric)
+        out[key] = _feature_stats(
+            numeric,
+            num_quantile_bins=quantile_bins,
+        )
     return out
 
 
