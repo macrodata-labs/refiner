@@ -29,7 +29,7 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 - LeRobot reader emits one row per episode with:
   - `frames`: list of frame dicts for the episode slice.
   - `lerobot_tasks`: shared dataset-level `{task_index: task}` mapping loaded from `meta/tasks.parquet`.
-  - episode-level `stats/*` columns preserved as normal row fields for filtering and transforms.
+  - episode-level stats exposed as grouped nullable `stats/<feature>` struct columns such as `stats/observation.state`, synthesized from the underlying `stats/<feature>/<stat>` episode parquet columns for filtering and transforms.
   - video feature columns from `meta/info.json.features` where `dtype == "video"`, emitted as `VideoFile` handles.
   - `metadata`: shared frozen `LeRobotMetadata` dataclass with `lerobot_info` and dataset-level `lerobot_stats`.
   - episode-level `tasks` from LeRobot metadata are preserved as ordinary row data.
@@ -51,6 +51,7 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 - Task metadata is canonical: `write_lerobot(...)` resolves frame `task_index` values through top-level `lerobot_tasks`, derives episode-level `tasks`, treats top-level `task` as an ordinary passthrough column rather than canonical task metadata, and raises if any frame task index cannot be mapped.
 - `write_lerobot(...)` writes `meta/tasks.parquet` with plain `task` and `task_index` columns. The reader still accepts legacy LeRobot parquet files that store task names under `__index_level_0__`.
 - Video stats are always written; video sampling is derived automatically from episode frame count.
+- Setting a `stats/<video_key>` episode field to `None` forces the writer to recompute stats for that output video clip, while the written episode parquet still uses standard `stats/<feature>/<stat>` columns.
 - Writer-side video work reopens source clips through `fsspec` and PyAV when needed; Refiner does not require a separate writer-managed temp-file cache in the normal path.
 - When the sink receives consecutive LeRobot episodes that span an entire source video file, it can remux that file into the output without decoding frames.
 - When consecutive episodes span several whole compatible source files, the sink can remux those files into one output file without decoding frames.

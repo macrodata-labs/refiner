@@ -19,7 +19,7 @@ from refiner.pipeline.sinks.lerobot._lerobot_frames import (
 )
 from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _cast_stats_to_numpy,
-    _extract_episode_stats,
+    _extract_episode_stats_raw,
     _flatten_stats_for_episode,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
@@ -274,6 +274,12 @@ class _LeRobotShardWriter:
                 "dataset_to_index",
             }:
                 continue
+            if (
+                isinstance(key, str)
+                and key.startswith("stats/")
+                and key.count("/") == 1
+            ):
+                continue
             if isinstance(value, VideoFile):
                 continue
             episode_row[key] = value
@@ -373,8 +379,8 @@ class _LeRobotShardWriter:
     def _source_episode_stats(
         self,
         row: Mapping[str, Any],
-    ) -> dict[str, dict[str, np.ndarray]]:
-        return _cast_stats_to_numpy(_extract_episode_stats(row))
+    ) -> dict[str, dict[str, np.ndarray] | None]:
+        return _cast_stats_to_numpy(_extract_episode_stats_raw(row, preserve_null=True))
 
     def _initialize_info_from_row(
         self,

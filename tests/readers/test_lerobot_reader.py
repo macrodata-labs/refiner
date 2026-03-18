@@ -152,7 +152,7 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     with pytest.raises(FrozenInstanceError):
         first["metadata"].lerobot_info = first["metadata"].lerobot_info
     assert first["tasks"] == ["pick"]
-    assert first["stats/observation.state/min"] == [-999.0]
+    assert first["stats/observation.state"]["min"] == [-999.0]
     assert "videos/observation.images.main/chunk_index" not in first
     assert "meta/episodes/chunk_index" not in first
 

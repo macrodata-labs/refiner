@@ -8,7 +8,11 @@ import numpy as np
 from refiner.pipeline.sinks.lerobot._lerobot_frames import compute_episode_stats
 from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _aggregate_stats,
+    _cast_stats_to_numpy,
+    _extract_episode_stats,
+    _extract_episode_stats_raw,
     _feature_stats,
+    _flatten_stats_for_episode,
 )
 
 
@@ -121,3 +125,54 @@ def test_aggregate_stats_computes_expected_weighted_quantiles() -> None:
             "q99": np.array([5.98]),
         },
     )
+
+
+def test_flatten_stats_for_episode_writes_legacy_flat_stat_columns() -> None:
+    grouped = _flatten_stats_for_episode(
+        {
+            "observation.state": {
+                "min": np.array([0.0]),
+                "count": np.array([5], dtype=np.int64),
+            }
+        }
+    )
+
+    assert grouped == {
+        "stats/observation.state/min": [0.0],
+        "stats/observation.state/count": [5],
+    }
+
+
+def test_extract_episode_stats_reads_grouped_and_legacy_shapes() -> None:
+    extracted = _extract_episode_stats(
+        {
+            "stats/observation.state": {
+                "min": [0.0],
+                "max": [1.0],
+            },
+            "stats/observation.images.main/count": [3],
+        }
+    )
+
+    assert extracted == {
+        "observation.state": {
+            "min": [0.0],
+            "max": [1.0],
+        },
+        "observation.images.main": {
+            "count": [3],
+        },
+    }
+
+
+def test_extract_episode_stats_raw_preserves_explicit_null_grouped_stats() -> None:
+    extracted = _cast_stats_to_numpy(
+        _extract_episode_stats_raw(
+            {
+                "stats/observation.images.main": None,
+            },
+            preserve_null=True,
+        )
+    )
+
+    assert extracted == {"observation.images.main": None}
