@@ -103,6 +103,7 @@ Core concepts:
 - [In-process debugging](docs/in-process-debugging.md)
 - [Readers and sharding](docs/readers-and-sharding.md)
 - [Expression transforms](docs/expression-transforms.md)
+- [Task pipelines](docs/task-pipelines.md)
 
 Modalities and platform:
 

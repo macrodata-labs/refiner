@@ -17,10 +17,45 @@ import refiner as mdr
 pipeline = mdr.read_parquet("data/*.parquet")
 ```
 
-You can also start from a custom source:
+Other entry points:
+
+### `from_items(...)`
+
+Use this for small in-memory inputs:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.from_items(
+    [
+        {"text": "hello", "lang": "en"},
+        {"text": "bonjour", "lang": "fr"},
+    ]
+)
+```
+
+### `from_source(...)`
+
+Use this when you already have a custom source object:
 
 ```python
 pipeline = mdr.from_source(my_source)
+```
+
+### `task(...)`
+
+Use this when you want to run arbitrary task-style work instead of reading a dataset.
+
+```python
+import refiner as mdr
+
+pipeline = mdr.task(
+    lambda rank, world_size: {
+        "rank": rank,
+        "world_size": world_size,
+    },
+    num_tasks=8,
+)
 ```
 
 ## Add Transforms
@@ -183,3 +218,4 @@ It does not receive internal `Tabular` blocks directly.
 - [Readers and sharding](readers-and-sharding.md)
 - [In-process debugging](in-process-debugging.md)
 - [Launchers](launchers.md)
+- [Task pipelines](task-pipelines.md)

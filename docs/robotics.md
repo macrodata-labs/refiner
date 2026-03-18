@@ -123,7 +123,7 @@ import refiner as mdr
     .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_motion")
     .launch_cloud(
         name="motion_trim",
-        num_workers=1,
+        num_workers=4,
     )
 )
 ```
@@ -173,7 +173,7 @@ import refiner as mdr
     .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_merge")
     .launch_local(
         name="merge_aloha",
-        num_workers=1,
+        num_workers=2,
     )
 )
 ```

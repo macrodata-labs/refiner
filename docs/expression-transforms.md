@@ -28,17 +28,21 @@ Use:
 
 for boolean composition. Do not use Python `and`, `or`, or `not` with `Expr` objects.
 
-## Expression-Backed Pipeline Methods
+## Pipeline methods
 
-- `.select(...)`
-- `.with_columns(...)`
-- `.with_column(...)`
-- `.drop(...)`
-- `.rename(...)`
-- `.cast(...)`
-- `.filter(expr)`
+These methods operate on the current row schema and stay shard-local.
 
-Example:
+| method | what it does | input shape | output shape |
+| --- | --- | --- | --- |
+| `.filter(expr)` | keeps only rows where the expression is truthy | any rows with the referenced columns present | same columns, fewer rows |
+| `.with_columns(...)` | adds or overwrites multiple columns | any rows with the referenced columns present | same rows, wider schema |
+| `.with_column(...)` | adds or overwrites one column | any rows with the referenced columns present | same rows, wider schema |
+| `.select(...)` | keeps only the listed columns | rows containing those columns | narrower schema |
+| `.drop(...)` | removes the listed columns | any rows | narrower schema |
+| `.rename(...)` | renames columns | rows containing the referenced columns | same values, renamed schema |
+| `.cast(...)` | casts columns to new dtypes | rows containing the referenced columns | same rows, new column dtypes |
+
+## Example
 
 ```python
 import refiner as mdr
