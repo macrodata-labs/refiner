@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Generator
+from math import ceil
 
 from opentelemetry.metrics import CallbackOptions, Observation
 
@@ -28,6 +29,16 @@ def set_memory_soft_limit_mb(mem_mb: int) -> tuple[int, int] | None:
     target_bytes = int(mem_mb) * 1024 * 1024
     if target_bytes <= 0:
         raise ValueError("mem_mb_per_worker must be > 0")
+
+    current_vms = _current_virtual_memory_bytes()
+    if current_vms is not None and target_bytes <= current_vms:
+        current_vms_mb = ceil(current_vms / (1024.0 * 1024.0))
+        raise ValueError(
+            "mem_mb_per_worker="
+            f"{mem_mb} MB is below the worker's current virtual memory footprint "
+            f"({current_vms_mb} MB); local memory limiting uses RLIMIT_AS and "
+            "cannot enforce limits below the current process image"
+        )
 
     soft, hard = resource.getrlimit(resource.RLIMIT_AS)
     if hard != resource.RLIM_INFINITY:
@@ -58,6 +69,15 @@ def _parse_int(value: str | None) -> int | None:
     try:
         return int(value)
     except ValueError:
+        return None
+
+
+def _current_virtual_memory_bytes() -> int | None:
+    if psutil is None:
+        return None
+    try:
+        return psutil.Process().memory_info().vms
+    except Exception:
         return None
 
 
