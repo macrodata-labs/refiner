@@ -14,7 +14,7 @@ Your callback receives:
 - `rank`
 - `world_size`
 
-and returns a row-like result.
+and should return a row-like result.
 
 In practice, task pipelines are often used for rank-aware side effects. The returned row can be just a small bookkeeping record if the real work happens inside the callback.
 
@@ -24,18 +24,15 @@ In practice, task pipelines are often used for rank-aware side effects. The retu
 import refiner as mdr
 
 def task_worker(rank: int, world_size: int) -> dict:
-    output_prefix = f"s3://my-bucket/task-output/part-{rank:05d}"
-
     # Do rank-aware work here, for example:
     # - call an external tool
     # - run inference
     # - write a partition of output data
-    # - produce one manifest row per task
+    # - produce one bookkeeping row per task
 
     return {
         "rank": rank,
         "world_size": world_size,
-        "output_prefix": output_prefix,
         "status": "done",
     }
 
@@ -48,6 +45,8 @@ def task_worker(rank: int, world_size: int) -> dict:
     )
 )
 ```
+
+The writer is completely optional. Add one if you want Refiner to persist the task results. If the useful work happens entirely inside the callback, the returned row can stay minimal.
 
 ## When To Use It
 
@@ -63,6 +62,7 @@ Use task pipelines when:
 
 - task pipelines still participate in normal launcher/runtime behavior
 - each task callback is represented as a row-producing stage, so you can still compose normal transforms and sinks afterward
+- task callbacks still need to return a row-like result today, even if it is just minimal bookkeeping
 
 ## Related Pages
 
