@@ -33,7 +33,7 @@ class CloudLauncher(BaseLauncher):
         num_workers: Requested logical worker count for cloud execution.
         heartbeat_interval_seconds: Worker heartbeat cadence.
         cpus_per_worker: Optional requested CPU cores per worker.
-        mem_mb_per_worker: Optional requested memory in MB per worker.
+        mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
     """
 
     def __init__(
@@ -55,9 +55,11 @@ class CloudLauncher(BaseLauncher):
             num_workers=num_workers,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             cpus_per_worker=cpus_per_worker,
-            mem_mb_per_worker=mem_mb_per_worker,
         )
+        if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
+            raise ValueError("mem_mb_per_worker must be > 0")
         self.sync_local_dependencies = sync_local_dependencies
+        self.mem_mb_per_worker = mem_mb_per_worker
         self.secrets = secrets
         self.env = env
 
