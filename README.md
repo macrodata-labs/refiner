@@ -1,8 +1,8 @@
-# Refiner
-
-<p align="left">
+<p align="center">
   <img src="https://macrodata.co/logo.svg" alt="Macrodata" width="180">
 </p>
+
+<h1 align="center">Macrodata Refiner</h1>
 
 Refiner is an open-source engine for training data pipelines. It is built for turning raw, unstructured, and multimodal data into high-quality datasets for large model training, with shard-aware execution, built-in observability, and a seamless path from local runs to managed cloud execution.
 
