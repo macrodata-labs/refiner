@@ -22,9 +22,6 @@ from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _extract_episode_stats,
     _serialize_stats,
 )
-from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import (
-    _DEFAULT_CODEBASE_VERSION,
-)
 from refiner.worker.context import (
     RunHandle,
     get_active_run_handle,
@@ -78,13 +75,13 @@ class _LeRobotMetaReducer:
         if not episodes_rows:
             return
 
-        tasks = self._load_stage1_tasks(finalized_chunk_keys)
+        task_to_index = self._load_stage1_tasks(finalized_chunk_keys)
         stats_list = [
             _extract_episode_stats(row)
             for row in episodes_rows
             if _extract_episode_stats(row)
         ]
-        infos = self._load_stage1_infos(finalized_chunk_keys)
+        info = self._load_stage1_info(finalized_chunk_keys)
 
         for row in episodes_rows:
             row["meta/episodes/chunk_index"] = 0
@@ -101,10 +98,13 @@ class _LeRobotMetaReducer:
                 use_dictionary=True,
             )
 
-        tasks_table = pa.table(
+        ordered_tasks = sorted(
+            task_to_index.items(), key=lambda item: (item[1], item[0])
+        )
+        tasks_table = pa.Table.from_pydict(
             {
-                "task_index": list(range(len(tasks))),
-                "task": tasks,
+                "task": [task for task, _ in ordered_tasks],
+                "task_index": [task_index for _, task_index in ordered_tasks],
             }
         )
         with self.folder.open("meta/tasks.parquet", mode="wb") as out:
@@ -119,7 +119,18 @@ class _LeRobotMetaReducer:
         with self.folder.open("meta/stats.json", mode="wt", encoding="utf-8") as out:
             json.dump(_serialize_stats(merged_stats), out, indent=2, sort_keys=True)
 
-        info = self._merge_infos(infos=infos, tasks=tasks, episodes_rows=episodes_rows)
+        info.update(
+            total_episodes=len(episodes_rows),
+            total_frames=sum(
+                max(
+                    0,
+                    int(row["dataset_to_index"]) - int(row["dataset_from_index"]),
+                )
+                for row in episodes_rows
+            ),
+            total_tasks=len(task_to_index),
+            splits={"train": f"0:{len(episodes_rows)}"},
+        )
         with self.folder.open("meta/info.json", mode="wt", encoding="utf-8") as out:
             json.dump(info, out, indent=2, sort_keys=True)
 
@@ -136,94 +147,43 @@ class _LeRobotMetaReducer:
         rows.sort(key=lambda row: int(row["episode_index"]))
         return rows
 
-    def _load_stage1_tasks(self, finalized_chunk_keys: set[str]) -> list[str]:
-        task_to_index: dict[str, int] = {}
-        for rel in self._iter_stage1_jsonl_files(
-            finalized_chunk_keys, filename="tasks.jsonl"
-        ):
-            with self.folder.open(rel, mode="rt", encoding="utf-8") as src:
-                for line in src:
-                    payload = line.strip()
-                    if not payload:
-                        continue
-                    item = json.loads(payload)
-                    task = item["task"]
-                    if not isinstance(task, str) or not task:
-                        continue
-                    raw_idx = int(item["task_index"]) if "task_index" in item else None
-                    if raw_idx is None:
-                        task_to_index.setdefault(task, len(task_to_index))
-                        continue
-                    existing = task_to_index.get(task)
-                    if existing is None:
-                        task_to_index[task] = raw_idx
-                    else:
-                        task_to_index[task] = min(existing, raw_idx)
-        if not task_to_index:
-            return []
+    def _load_stage1_tasks(self, finalized_chunk_keys: set[str]) -> dict[str, int]:
+        task_to_index: dict[str, int] | None = None
+        for rel in self._iter_stage1_task_files(finalized_chunk_keys):
+            with self.folder.open(rel, mode="rb") as src:
+                table = pq.read_table(src)
+            current = {row["task"]: int(row["task_index"]) for row in table.to_pylist()}
+            if task_to_index is not None and current != task_to_index:
+                raise ValueError(
+                    "LeRobot reduce encountered mismatched canonical task tables "
+                    "across stage-1 shard outputs"
+                )
+            task_to_index = current
+        return {} if task_to_index is None else task_to_index
 
-        ordered = sorted(task_to_index.items(), key=lambda kv: (kv[1], kv[0]))
-        return [task for task, _ in ordered]
-
-    def _load_stage1_infos(
-        self, finalized_chunk_keys: set[str]
-    ) -> list[dict[str, Any]]:
-        infos: list[dict[str, Any]] = []
+    def _load_stage1_info(self, finalized_chunk_keys: set[str]) -> dict[str, Any]:
+        info: dict[str, Any] | None = None
         for rel in self._iter_stage1_jsonl_files(
             finalized_chunk_keys, filename="info.jsonl"
         ):
             with self.folder.open(rel, mode="rt", encoding="utf-8") as src:
-                for line in src:
-                    payload = line.strip()
-                    if not payload:
-                        continue
-                    item = json.loads(payload)
-                    if isinstance(item, Mapping):
-                        infos.append(dict(item))
-        return infos
-
-    def _merge_infos(
-        self,
-        *,
-        infos: list[dict[str, Any]],
-        tasks: list[str],
-        episodes_rows: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        first = infos[0] if infos else {}
-
-        total_episodes = len(episodes_rows)
-        total_frames = sum(
-            max(
-                0,
-                int(row["dataset_to_index"]) - int(row["dataset_from_index"]),
-            )
-            for row in episodes_rows
-        )
-
-        return {
-            "codebase_version": str(
-                first["codebase_version"]
-                if infos and first.get("codebase_version") is not None
-                else _DEFAULT_CODEBASE_VERSION
-            ),
-            "data_files_size_in_mb": int(first["data_files_size_in_mb"])
-            if infos
-            else self.config.data_files_size_in_mb,
-            "video_files_size_in_mb": int(first["video_files_size_in_mb"])
-            if infos
-            else self.config.video_files_size_in_mb,
-            "data_path": str(first["data_path"]) if infos else None,
-            "video_path": first["video_path"] if infos else None,
-            "fps": int(first["fps"])
-            if infos and first.get("fps") is not None
-            else None,
-            "robot_type": first["robot_type"] if infos else None,
-            "features": first["features"] if infos else {},
-            "total_episodes": total_episodes,
-            "total_frames": total_frames,
-            "total_tasks": len(tasks),
-            "splits": {"train": f"0:{total_episodes}"},
-        }
+                payloads = [line.strip() for line in src if line.strip()]
+            if len(payloads) != 1:
+                raise ValueError(
+                    "LeRobot reduce requires exactly one stage-1 info record per shard"
+                )
+            item = json.loads(payloads[0])
+            if not isinstance(item, Mapping):
+                raise ValueError("LeRobot reduce encountered invalid stage-1 info")
+            current = dict(item)
+            if info is not None and current != info:
+                raise ValueError(
+                    "LeRobot reduce encountered mismatched stage-1 info metadata"
+                )
+            info = current
+        if info is None:
+            raise ValueError("LeRobot reduce is missing required stage-1 info metadata")
+        return info
 
     def _cleanup_stage1_chunks(self, finalized_chunk_keys: set[str]) -> None:
         for rel_path in self._stage1_matches("meta/chunk-*"):
@@ -258,6 +218,12 @@ class _LeRobotMetaReducer:
         self, finalized_chunk_keys: set[str], *, filename: str
     ) -> list[str]:
         return self._stage1_matches(f"meta/chunk-*/{filename}", finalized_chunk_keys)
+
+    def _iter_stage1_task_files(self, finalized_chunk_keys: set[str]) -> list[str]:
+        return self._stage1_matches(
+            "meta/chunk-*/tasks.parquet",
+            finalized_chunk_keys,
+        )
 
     def _stage1_matches(
         self, pattern: str, finalized_chunk_keys: set[str] | None = None

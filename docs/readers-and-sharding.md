@@ -28,23 +28,29 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 - Parquet reader yields row views that are converted on access.
 - LeRobot reader emits one row per episode with:
   - `frames`: list of frame dicts for the episode slice.
+  - `lerobot_tasks`: shared dataset-level `{task_index: task}` mapping loaded from `meta/tasks.parquet`.
+  - episode-level `stats/*` columns preserved as normal row fields for filtering and transforms.
   - video feature columns from `meta/info.json.features` where `dtype == "video"`, emitted as `VideoFile` handles.
-  - `metadata`: dict with `lerobot_info`, dataset-level `lerobot_stats`, and per-episode `lerobot_episode_stats`.
-  - raw transport metadata keys under `stats/*`, `videos/*`, and `meta/episodes/*` are omitted from emitted rows.
+  - `metadata`: shared frozen `LeRobotMetadata` dataclass with `lerobot_info` and dataset-level `lerobot_stats`.
+  - episode-level `tasks` from LeRobot metadata are preserved as ordinary row data.
+  - raw transport metadata keys under `videos/*` and `meta/episodes/*` are omitted from emitted rows.
   - frame slicing requires `dataset_from_index`/`dataset_to_index` in each episode row.
   - optional `limit` bounds emitted episodes per reader instance.
   - `media_max_in_flight` controls concurrent episode materialization work inside the reader.
   - `media_preserve_order` controls whether those async reader results are yielded in input order.
   - `read_lerobot(...)` accepts either one dataset root or a list of dataset roots on the same filesystem/protocol.
+  - when reading multiple dataset roots, the reader merges all source `meta/tasks.parquet` tables once in input order, keeps the first-seen task ids stable, appends unseen tasks at the end, and remaps per-frame `task_index` values into that merged task table before emitting rows.
 - Use `target_shard_bytes` to control shard granularity.
+
 ## LeRobot Writer Tuning
 
 `write_lerobot(...)` keeps video tuning grouped:
 
 - `video=mdr.LeRobotVideoConfig(...)` groups codec, pixel format, encoder threads, decoder threads, and encoder options.
 - `stats=mdr.LeRobotStatsConfig(...)` groups clip sampling stride and quantile bin count.
+- Task metadata is canonical: `write_lerobot(...)` resolves frame `task_index` values through top-level `lerobot_tasks`, derives episode-level `tasks`, treats top-level `task` as an ordinary passthrough column rather than canonical task metadata, and raises if any frame task index cannot be mapped.
+- `write_lerobot(...)` writes `meta/tasks.parquet` with plain `task` and `task_index` columns. The reader still accepts legacy LeRobot parquet files that store task names under `__index_level_0__`.
 - Video stats are always written; use a larger `stats.sample_stride` when you want cheaper sampling.
-- Writer-side video work reopens source clips through `fsspec` and PyAV when needed; Refiner does not require a separate writer-managed temp-file cache in the normal path.
 - When the sink receives consecutive LeRobot episodes that span an entire source video file, it can remux that file into the output without decoding frames.
 - When consecutive episodes span several whole compatible source files, the sink can remux those files into one output file without decoding frames.
 - When an episode clip starts on a source keyframe and ends on an exact packet boundary, the sink can remux that aligned subsegment without transcoding.

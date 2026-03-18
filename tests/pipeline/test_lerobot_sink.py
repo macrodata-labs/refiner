@@ -24,12 +24,15 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotWriterConfig,
     LeRobotWriterSink,
 )
-from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
-    LeRobotVideoWriter,
+from refiner.pipeline.sources.readers.lerobot import (
+    LEROBOT_TASKS,
+    LeRobotInfo,
+    LeRobotMetadata,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     reset_opened_video_source_cache,
 )
+from refiner.pipeline.sinks.lerobot._lerobot_video_writer import LeRobotVideoWriter
 from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.lifecycle import RuntimeLifecycle
@@ -96,6 +99,7 @@ def _episode(
     *,
     episode_index: int,
     task: str,
+    task_index: int,
     video_path: Path,
     from_ts: float,
     to_ts: float,
@@ -104,11 +108,11 @@ def _episode(
     return {
         "episode_index": episode_index,
         "task": task,
-        "tasks": [task],
         "frames": [
             {
                 "frame_index": i,
                 "timestamp": float(i) / 10.0,
+                "task_index": task_index,
                 "observation.state": [v],
             }
             for i, v in enumerate(values)
@@ -118,8 +122,16 @@ def _episode(
             from_timestamp_s=from_ts,
             to_timestamp_s=to_ts,
         ),
-        "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+        LEROBOT_TASKS: {0: "pick", 1: "place"},
+        "metadata": _metadata(),
     }
+
+
+def _metadata() -> LeRobotMetadata:
+    return LeRobotMetadata(
+        lerobot_info=LeRobotInfo(root="", fps=10, robot_type="mockbot"),
+        lerobot_stats={},
+    )
 
 
 def test_lerobot_configs_export_from_pipeline() -> None:
@@ -137,6 +149,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
             _episode(
                 episode_index=0,
                 task="pick",
+                task_index=0,
                 video_path=src_video,
                 from_ts=0.0,
                 to_ts=0.3,
@@ -145,6 +158,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
             _episode(
                 episode_index=1,
                 task="place",
+                task_index=1,
                 video_path=src_video,
                 from_ts=0.3,
                 to_ts=0.6,
@@ -199,22 +213,42 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
             {
                 "episode_index": 0,
                 "task": "pick",
-                "tasks": ["pick"],
                 "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
+                    {
+                        "frame_index": 0,
+                        "timestamp": 0.0,
+                        "task_index": 0,
+                        "observation.state": [1.0],
+                    },
+                    {
+                        "frame_index": 1,
+                        "timestamp": 0.1,
+                        "task_index": 0,
+                        "observation.state": [2.0],
+                    },
                 ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+                LEROBOT_TASKS: {0: "pick", 1: "place"},
+                "metadata": _metadata(),
             },
             {
                 "episode_index": 1,
                 "task": "place",
-                "tasks": ["place"],
                 "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [3.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [4.0]},
+                    {
+                        "frame_index": 0,
+                        "timestamp": 0.0,
+                        "task_index": 1,
+                        "observation.state": [3.0],
+                    },
+                    {
+                        "frame_index": 1,
+                        "timestamp": 0.1,
+                        "task_index": 1,
+                        "observation.state": [4.0],
+                    },
                 ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+                LEROBOT_TASKS: {0: "pick", 1: "place"},
+                "metadata": _metadata(),
             },
         ],
         items_per_shard=1,
@@ -300,6 +334,7 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
             _episode(
                 episode_index=0,
                 task="pick",
+                task_index=0,
                 video_path=src_video,
                 from_ts=0.0,
                 to_ts=10.0,
@@ -308,6 +343,7 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
             _episode(
                 episode_index=1,
                 task="place",
+                task_index=1,
                 video_path=src_video,
                 from_ts=0.0,
                 to_ts=10.0,
@@ -342,23 +378,43 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
         [
             {
                 "episode_index": 0,
-                "task": "place",
-                "tasks": ["place"],
+                "task": "pick",
                 "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
+                    {
+                        "frame_index": 0,
+                        "timestamp": 0.0,
+                        "task_index": 5,
+                        "observation.state": [1.0],
+                    },
+                    {
+                        "frame_index": 1,
+                        "timestamp": 0.1,
+                        "task_index": 5,
+                        "observation.state": [2.0],
+                    },
                 ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+                LEROBOT_TASKS: {1: "place", 5: "pick"},
+                "metadata": _metadata(),
             },
             {
                 "episode_index": 1,
-                "task": "pick",
-                "tasks": ["pick"],
+                "task": "place",
                 "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [3.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [4.0]},
+                    {
+                        "frame_index": 0,
+                        "timestamp": 0.0,
+                        "task_index": 1,
+                        "observation.state": [3.0],
+                    },
+                    {
+                        "frame_index": 1,
+                        "timestamp": 0.1,
+                        "task_index": 1,
+                        "observation.state": [4.0],
+                    },
                 ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+                LEROBOT_TASKS: {1: "place", 5: "pick"},
+                "metadata": _metadata(),
             },
         ],
         items_per_shard=10,
@@ -373,15 +429,56 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
 
     tasks = pq.read_table(out_root / "meta" / "tasks.parquet")
     assert tasks.column("task").to_pylist() == ["place", "pick"]
-    assert tasks.column("task_index").to_pylist() == [0, 1]
+    assert tasks.column("task_index").to_pylist() == [1, 5]
+    episodes = pq.read_table(
+        out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    )
+    assert episodes.column("tasks").to_pylist() == [["pick"], ["place"]]
+    assert episodes.column("task").to_pylist() == ["pick", "place"]
+
+
+def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> None:
+    writer = LeRobotWriterSink(LeRobotWriterConfig(output=str(tmp_path / "out")))
+    with pytest.raises(
+        KeyError,
+        match="7",
+    ):
+        writer.write_block(
+            [
+                DictRow(
+                    {
+                        "episode_index": 0,
+                        "task": "pick",
+                        "frames": [
+                            {
+                                "frame_index": 0,
+                                "timestamp": 0.0,
+                                "task_index": 7,
+                                "observation.state": [1.0],
+                            }
+                        ],
+                        LEROBOT_TASKS: {0: "pick", 1: "place"},
+                        "metadata": _metadata(),
+                    },
+                    shard_id="shard-1",
+                )
+            ]
+        )
+        writer.close()
 
 
 class _FinalizedWorkersRuntime:
+    def __init__(
+        self,
+        rows: list[FinalizedShardWorker] | None = None,
+    ) -> None:
+        self._rows = rows or [FinalizedShardWorker(shard_id="shard-1", worker_id="2")]
+
     def finalized_workers(
         self, *, stage_index: int | None = None
     ) -> list[FinalizedShardWorker]:
         assert stage_index == 0
-        return [FinalizedShardWorker(shard_id="shard-1", worker_id="2")]
+        return self._rows
 
 
 def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
@@ -393,12 +490,22 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
         {
             "episode_index": 0,
             "task": "pick",
-            "tasks": ["pick"],
             "frames": [
-                {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
-                {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
+                {
+                    "frame_index": 0,
+                    "timestamp": 0.0,
+                    "task_index": 0,
+                    "observation.state": [1.0],
+                },
+                {
+                    "frame_index": 1,
+                    "timestamp": 0.1,
+                    "task_index": 0,
+                    "observation.state": [2.0],
+                },
             ],
-            "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
+            LEROBOT_TASKS: {0: "pick", 1: "place"},
+            "metadata": _metadata(),
         },
         shard_id="shard-1",
     )
@@ -412,14 +519,16 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
                     {
                         "frame_index": 0,
                         "timestamp": 0.0,
+                        "task_index": 0,
                         "observation.state": [values[0]],
                     },
                     {
                         "frame_index": 1,
                         "timestamp": 0.1,
+                        "task_index": 0,
                         "observation.state": [values[1]],
                     },
-                ]
+                ],
             }
         )
         with set_active_run_context(

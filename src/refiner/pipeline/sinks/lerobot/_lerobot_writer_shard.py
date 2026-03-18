@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +19,7 @@ from refiner.pipeline.sinks.lerobot._lerobot_frames import (
 )
 from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _cast_stats_to_numpy,
+    _extract_episode_stats,
     _flatten_stats_for_episode,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
@@ -27,8 +28,8 @@ from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
     _CompletedVideoItem,
 )
 from refiner.pipeline.sources.readers.lerobot import (
-    LEROBOT_EPISODE_STATS,
-    LEROBOT_INFO,
+    LEROBOT_TASKS,
+    LeRobotMetadata,
 )
 
 if TYPE_CHECKING:
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
     )
 
 
-_DEFAULT_DATA_PATH = "data/chunk-{chunk_key}/file-{file_index:03d}.parquet"
+_DEFAULT_DATA_PATH = "data/chunk-{chunk_index}/file-{file_index:03d}.parquet"
 _DEFAULT_CODEBASE_VERSION = "v3.0"
 
 
@@ -65,24 +66,6 @@ def _resolve_video_threads(
     return max(1, _cpu_thread_count() // int(videos_in_row))
 
 
-def _format_chunk_path(
-    template: str,
-    *,
-    chunk: str,
-    file_idx: int,
-    video_key: str | None = None,
-) -> str:
-    return template.format(
-        video_key="" if video_key is None else video_key,
-        chunk=chunk,
-        chunk_key=chunk,
-        chunk_index=chunk,
-        file=file_idx,
-        file_idx=file_idx,
-        file_index=file_idx,
-    )
-
-
 @dataclass(slots=True)
 class _FrameWriteInfo:
     episode_index: int
@@ -100,8 +83,7 @@ class _LeRobotShardWriter:
     chunk_key: str
     folder: DataFolder = field(init=False)
 
-    _task_to_index: dict[str, int] = field(default_factory=dict, init=False)
-    _task_order: list[str] = field(default_factory=list, init=False)
+    _index_to_task: dict[int, str] = field(default_factory=dict, init=False)
     _fps: int | None = field(default=None, init=False)
     _robot_type: str | None = field(default=None, init=False)
     features: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
@@ -155,7 +137,7 @@ class _LeRobotShardWriter:
         if not row["frames"]:
             # all frames were trimmed or similar
             return
-        self._initialize_info_from_rows([row])
+        self._initialize_info_from_row(row)
         episode_index = int(row["episode_index"])
         source_episode_stats = self._source_episode_stats(row)
 
@@ -221,13 +203,20 @@ class _LeRobotShardWriter:
         episode_index = int(row["episode_index"])
         frames = self._require_required_fields(row)
         frame_stats = compute_episode_stats(frames=frames)
-        tasks = self._tasks(row)
+        index_to_task = row[LEROBOT_TASKS]
+        if not self._index_to_task:
+            self._index_to_task = dict(index_to_task)
+        elif self._index_to_task != index_to_task:
+            raise ValueError(
+                "LeRobot writer encountered mismatched task metadata across episodes"
+            )
+        tasks = sorted({index_to_task[int(frame["task_index"])] for frame in frames})
         table = (
             frame_table(
                 frames=frames,
                 episode_index=episode_index,
                 start_index=self._global_frame_index,
-                task_index=self._task_to_index.get(tasks[0]) if tasks else None,
+                task_index=None,
             )
             if frames
             else None
@@ -263,15 +252,13 @@ class _LeRobotShardWriter:
             "meta/episodes/chunk_index": self.chunk_key,
             "meta/episodes/file_index": 0,
         }
-        if frame_info.tasks:
-            episode_row["task"] = frame_info.tasks[0]
 
         for key, value in row.items():
             if key in {
                 "frames",
-                "task",
                 "tasks",
                 "metadata",
+                LEROBOT_TASKS,
                 "episode_index",
                 "data/chunk_index",
                 "data/file_index",
@@ -316,18 +303,20 @@ class _LeRobotShardWriter:
                     use_dictionary=True,
                 )
 
-        task_lines = [
-            json.dumps({"task": task, "task_index": task_index}, sort_keys=True)
-            for task_index, task in enumerate(self._task_order)
-        ]
-        if task_lines:
-            with self.folder.open(
-                self._meta_path("tasks.jsonl"),
-                mode="wt",
-                encoding="utf-8",
-            ) as out:
-                out.write("\n".join(task_lines))
-                out.write("\n")
+        ordered_tasks = sorted(self._index_to_task.items())
+        tasks_table = pa.Table.from_pydict(
+            {
+                "task": [task for _, task in ordered_tasks],
+                "task_index": [task_index for task_index, _ in ordered_tasks],
+            }
+        )
+        with self.folder.open(self._meta_path("tasks.parquet"), mode="wb") as out:
+            pq.write_table(
+                tasks_table,
+                out,
+                compression="snappy",
+                use_dictionary=True,
+            )
 
         info_record = {
             "codebase_version": _DEFAULT_CODEBASE_VERSION,
@@ -393,73 +382,35 @@ class _LeRobotShardWriter:
         self,
         row: Mapping[str, Any],
     ) -> dict[str, dict[str, np.ndarray]]:
-        return self._source_episode_stats_from_value(row.get("metadata"))
+        return _cast_stats_to_numpy(_extract_episode_stats(row))
 
-    def _source_episode_stats_from_value(
-        self,
-        metadata: Any,
-    ) -> dict[str, dict[str, np.ndarray]]:
-        if not isinstance(metadata, Mapping):
-            return {}
-        raw_stats = metadata.get(LEROBOT_EPISODE_STATS)
-        if not isinstance(raw_stats, Mapping):
-            return {}
-        return _cast_stats_to_numpy(raw_stats)
-
-    def _tasks(self, row: Mapping[str, Any]) -> list[str]:
-        return self._tasks_from_values(
-            tasks_value=row["tasks"] if "tasks" in row else None,
-            task_value=row.get("task"),
-        )
-
-    def _tasks_from_values(
-        self,
-        *,
-        tasks_value: Any,
-        task_value: Any,
-    ) -> list[str]:
-        tasks = [
-            value
-            for value in [
-                *(tasks_value if isinstance(tasks_value, list) else []),
-                task_value,
-            ]
-            if isinstance(value, str) and value
-        ]
-        tasks = list(dict.fromkeys(tasks))
-        for task in tasks:
-            if task in self._task_to_index:
-                continue
-            self._task_to_index[task] = len(self._task_order)
-            self._task_order.append(task)
-        return tasks
-
-    def _initialize_info_from_rows(
-        self, rows: Sequence[Row | Mapping[str, Any]]
-    ) -> None:
+    def _initialize_info_from_row(self, row: Row | Mapping[str, Any]) -> None:
         if self.features:
             return
 
-        first = rows[0]
-        frames = self._require_required_fields(first)
-        metadata = first.get("metadata")
-        if isinstance(metadata, Mapping):
-            info = metadata.get(LEROBOT_INFO)
-            if isinstance(info, Mapping):
-                fps_raw = info.get("fps")
-                self._fps = int(fps_raw) if fps_raw is not None else None
-                robot_type_raw = info.get("robot_type")
-                self._robot_type = (
-                    str(robot_type_raw) if robot_type_raw is not None else None
-                )
+        frames = self._require_required_fields(row)
+        metadata = row.get("metadata")
+        if isinstance(metadata, LeRobotMetadata):
+            fps_raw = metadata.lerobot_info.fps
+            self._fps = int(fps_raw) if fps_raw is not None else None
+            robot_type_raw = metadata.lerobot_info.robot_type
+            self._robot_type = (
+                str(robot_type_raw) if robot_type_raw is not None else None
+            )
 
-        for row in rows:
-            for key, value in row.items():
-                if key in {"frames", "task", "tasks", "metadata", "episode_index"}:
-                    continue
-                spec = self._feature_spec(value)
-                if spec is not None:
-                    self.features.setdefault(key, spec)
+        for key, value in row.items():
+            if key in {
+                "frames",
+                "task",
+                "tasks",
+                "metadata",
+                LEROBOT_TASKS,
+                "episode_index",
+            }:
+                continue
+            spec = self._feature_spec(value)
+            if spec is not None:
+                self.features.setdefault(key, spec)
 
         if frames:
             for key, value in frames[0].items():
@@ -476,12 +427,8 @@ class _LeRobotShardWriter:
         }.items():
             self.features.setdefault(key, spec)
 
-        max_videos_in_row = max(
-            (
-                sum(1 for value in row.values() if isinstance(value, VideoFile))
-                for row in rows
-            ),
-            default=0,
+        max_videos_in_row = sum(
+            1 for value in row.values() if isinstance(value, VideoFile)
         )
         self._video_config = replace(
             self.config.video,
@@ -535,10 +482,9 @@ class _LeRobotShardWriter:
             return
 
         self._data_schema = schema
-        rel = _format_chunk_path(
-            _DEFAULT_DATA_PATH,
-            chunk=self.chunk_key,
-            file_idx=self._data_file_index,
+        rel = _DEFAULT_DATA_PATH.format(
+            chunk_index=self.chunk_key,
+            file_index=self._data_file_index,
         )
         self._data_writer_file = self.folder.open(rel, mode="wb")
         self._data_writer = pq.ParquetWriter(
