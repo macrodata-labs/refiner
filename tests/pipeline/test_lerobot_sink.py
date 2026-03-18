@@ -25,7 +25,6 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotWriterSink,
 )
 from refiner.pipeline.sources.readers.lerobot import (
-    LEROBOT_EPISODE_STATS,
     LEROBOT_TASKS,
     LeRobotInfo,
     LeRobotMetadata,
@@ -160,6 +159,7 @@ def _episode(
         LEROBOT_TASKS: {0: "pick", 1: "place"},
         "metadata": _metadata(),
     }
+
 
 def _metadata() -> LeRobotMetadata:
     return LeRobotMetadata(
@@ -394,14 +394,18 @@ def test_write_lerobot_force_recompute_video_stats_ignores_source_video_stats(
     row = _episode(
         episode_index=0,
         task="pick",
+        task_index=0,
         video_path=src_video,
         from_ts=0.0,
         to_ts=0.3,
         values=[0.0, 2.0],
     )
-    row["metadata"][LEROBOT_EPISODE_STATS] = {
-        "observation.images.main": _dummy_video_stats(count=999).copy()
-    }
+    row.update(
+        {
+            f"stats/observation.images.main/{name}": value
+            for name, value in _dummy_video_stats(count=999).items()
+        }
+    )
 
     out_root = tmp_path / "force-recompute"
     stats = (
