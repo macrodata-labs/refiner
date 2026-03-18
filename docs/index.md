@@ -1,49 +1,58 @@
 ---
 title: "Refiner Docs"
-description: "User-facing guide and roadmap for building batch data pipelines with Refiner"
+description: "Documentation for building and running Refiner data pipelines"
 ---
 
-Refiner is a Python pipeline framework for row-oriented data processing across CSV, JSONL, and Parquet inputs.
-
-## Long-Term Direction
-
-Refiner is being built as a batch-first processing engine with:
-
-- Implicit operator fusion inside stages (row and batch steps in one execution loop).
-- Explicit materialization boundaries only when required (for example shuffle/sort/join).
-- Long-lived worker execution with shard-based progress and retries.
-- Async model-processing islands inside a stage without forcing stage handoff.
-- Launcher portability across local, Slurm, and Ray runtimes.
-- Observability-first lifecycle integration (job, stage, worker, shard, logs, and user OTEL metrics).
-
-## What You Can Use Now
-
-- Build pipelines with `read_csv(...)`, `read_jsonl(...)`, `read_parquet(...)`, or `from_source(...)`.
-- Add row-level transforms with `.map(...)`, `.map_async(...)`, batch transforms with `.batch_map(...)`, and expansion with `.flat_map(...)`.
-- Attach output sinks with `.write_jsonl(...)` or `.write_parquet(...)`.
-- Run locally with lazy iteration (`for row in pipeline`) or eager collection (`pipeline.materialize()`).
-- Run worker-driven execution with `Worker.run()` for shard-claiming and lifecycle updates.
+Refiner is a Python batch pipeline framework with local and cloud launchers, built-in readers and sinks, and Macrodata platform integration.
 
 ## Start Here
 
-1. `docs/pipeline-basics.md` for core API usage.
-2. `docs/local-execution.md` for lazy local iteration and materialization.
-3. `docs/readers-and-sharding.md` for input readers and shard behavior.
-4. `docs/worker-runtime.md` for worker lifecycle and runtime lifecycle interaction.
-5. `docs/launchers.md` for local launcher usage.
-6. `docs/expression-transforms.md` for expression-backed vectorized transforms.
-7. `docs/cli-auth.md` for `macrodata login`, `whoami`, and `logout`.
-8. `docs/observability.md` for Macrodata platform lifecycle integration.
-9. `docs/lerobot-benchmarks.md` for cold-cache LeRobot merge benchmarking.
+If you are new to Refiner, read these first:
 
-## Planned Additions
+1. [Pipeline basics](pipeline-basics.md)
+2. [Launchers](launchers.md)
+3. [CLI auth](cli-auth.md)
 
-- Launcher interfaces shared by future Slurm/Ray backends.
-- Stage/materialization boundary operators (shuffle, dedup, sort, join).
-- Async-island execution model for model-based processing with pull-based completion.
-- Expanded observability docs for backend metric querying and cardinality guardrails.
+## Top-Level Structure
 
-## Internal Notes
+### Getting Started
 
-- These docs reflect current behavior in `src/refiner/pipeline/`, `src/refiner/execution/`, `src/refiner/worker/`, and `src/refiner/launchers/`.
-- Long-term goals are aligned with `OVERVIEW.md` and should remain consistent with architecture updates.
+- [Pipeline basics](pipeline-basics.md): how to build a pipeline from a source, transforms, and a sink
+- [Launchers](launchers.md): how to run pipelines locally or on Macrodata Cloud
+- [CLI auth](cli-auth.md): how to create a key, log in, verify auth, and log out
+
+### Execution Model
+
+- [Local execution](local-execution.md): in-process iteration, `take()`, and `materialize()`
+- [Readers and sharding](readers-and-sharding.md): reader behavior and shard planning
+- [Expression transforms](expression-transforms.md): vectorized expression-backed operations
+- [Worker runtime](worker-runtime.md): direct worker execution and runtime lifecycle integration
+
+### Platform Integration
+
+- [Observability](observability.md): jobs, stages, workers, shards, logs, and metrics in Macrodata
+
+## Typical Flows
+
+### Local development
+
+Use:
+
+- [Local execution](local-execution.md) for quick iteration in notebooks and scripts
+- [Launchers](launchers.md) when you want multi-worker local jobs and runtime lifecycle tracking
+
+### Cloud execution
+
+Use:
+
+- [CLI auth](cli-auth.md) to authenticate
+- [Launchers](launchers.md) for `launch_cloud(...)`
+- [Observability](observability.md) to understand what gets reported back to Macrodata
+
+### Dataset-oriented pipelines
+
+Use:
+
+- [Readers and sharding](readers-and-sharding.md) for input planning
+- [Pipeline basics](pipeline-basics.md) for sink attachment
+- [Expression transforms](expression-transforms.md) when you want Arrow-backed transforms instead of Python row UDFs

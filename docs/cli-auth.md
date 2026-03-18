@@ -1,53 +1,66 @@
 ---
 title: "CLI Auth"
-description: "Log in to Macrodata from the CLI using an API key"
+description: "Authenticate Refiner against Macrodata with an API key"
 ---
 
-Use the `macrodata` CLI to store and validate a Macrodata API key for local tooling and future launcher integrations.
+Use the `macrodata` CLI to store and validate a Macrodata API key.
 
-## Commands
+Default API key page:
 
-### `macrodata login`
+- https://macrodata.co/settings/api-keys
 
-Prompts for an `ing_...` API key, validates it via `GET /api/me`, and stores it locally.
+If you set `MACRODATA_BASE_URL` to point at another deployment, the CLI uses that base URL instead.
+
+## Login
+
+Interactive login:
 
 ```bash
 macrodata login
 ```
 
-Non-interactive options:
+Non-interactive login:
 
 ```bash
-macrodata login --token ing_xxx
-printf '%s' 'ing_xxx' | macrodata login --token-stdin
+macrodata login --token md_xxx
+printf '%s' 'md_xxx' | macrodata login --token-stdin
 ```
 
-The CLI prints your authenticated identity (`name` / `username` / `email`) after successful validation.
+The CLI validates the key via `GET /api/me`, stores it locally, and prints:
 
-### `macrodata whoami`
+- authenticated user identity
+- API key name
+- workspace name / slug when present
 
-Verifies the stored key and shows the current authenticated identity:
+## Check Current Auth
 
 ```bash
 macrodata whoami
 ```
 
-### `macrodata logout`
+`whoami` verifies the current key and shows the same identity summary without changing local state.
 
-Removes the locally stored API key:
+## Logout
 
 ```bash
 macrodata logout
 ```
 
-## Configuration
+This removes the locally stored API key.
 
-- Base URL defaults to the Macrodata platform control plane.
-- Set `MACRODATA_BASE_URL` to override it temporarily (for dev/staging).
-- `macrodata whoami` uses `MACRODATA_API_KEY` if set; otherwise it reads the local key file.
-- Credentials are stored in XDG config (`~/.config/macrodata/api_key` on Linux if `XDG_CONFIG_HOME` is unset).
+## Where Credentials Come From
 
-## Internal Notes
+Lookup order:
 
-- `macrodata login` is API-key-only in v1 (no email/password flow in the CLI).
-- Validation uses the platform `GET /api/me` endpoint and expects API key metadata plus nested user identity fields.
+1. `MACRODATA_API_KEY`
+2. local credential file created by `macrodata login`
+
+Stored credentials live in XDG config:
+
+- Linux default: `~/.config/macrodata/api_key`
+
+## Notes
+
+- Refiner expects `md_...` API keys, not a separate username/password flow.
+- `launch_local(...)` can use the stored key for platform lifecycle reporting.
+- `launch_cloud(...)` requires Macrodata auth and uses the same key lookup path.

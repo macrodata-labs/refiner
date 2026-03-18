@@ -1,35 +1,63 @@
 ---
 title: "Worker Runtime"
-description: "How worker execution interacts with runtime lifecycle state and shard processing"
+description: "How Refiner workers execute shards and talk to runtime lifecycle backends"
 ---
 
-Use `Worker` when running shard-claiming execution with runtime lifecycle state management.
+Use `Worker` directly when you need explicit shard-claiming execution instead of the higher-level launchers.
 
-## Basic Worker Usage
+## Basic Usage
 
 ```python
 import refiner as mdr
 
-worker = mdr.Worker(rank=0, runtime_lifecycle=runtime_lifecycle, pipeline=pipeline)
+worker = mdr.Worker(
+    rank=0,
+    runtime_lifecycle=runtime_lifecycle,
+    pipeline=pipeline,
+)
 stats = worker.run()
 ```
 
 ## What `run()` Does
 
-1. Claims shards from the runtime lifecycle backend.
-2. Streams shard rows into fused pipeline execution.
-3. Sends periodic heartbeats.
-4. Marks shards complete on success, or failed on exception.
-5. Returns summary stats (`claimed`, `completed`, `failed`, `output_rows`).
+`Worker.run()`:
 
-## When to Use It
+1. claims shards from the runtime lifecycle backend
+2. streams rows into the compiled pipeline
+3. sends periodic heartbeats
+4. marks shards complete on success
+5. marks shards failed on exception
+6. returns aggregate worker stats
 
-- Use local pipeline iteration for notebook/dev workflows.
-- Use `Worker` when you need explicit shard lifecycle coordination against platform or local file runtime.
+## Runtime Lifecycle Backends
 
-## Internal Notes
+Worker lifecycle implementations live under `src/refiner/worker/lifecycle/`.
 
-- Worker runtime code lives in `src/refiner/worker/runner.py`.
-- Runtime lifecycle implementations live in `src/refiner/worker/lifecycle/`.
-- Worker resource helpers (CPU, memory, network metrics and pinning helpers) live in `src/refiner/worker/resources/`.
-- Worker subprocess bootstrapping lives in `src/refiner/worker/entrypoint.py`.
+Current backends:
+
+- local filesystem runtime
+- Macrodata platform runtime
+
+The launchers choose the backend for you in normal use.
+
+## When To Use Worker Directly
+
+Use `Worker` directly when you are:
+
+- testing runtime lifecycle behavior
+- embedding Refiner into another launcher/orchestrator
+- debugging shard claim / finish behavior
+
+For normal user-facing job execution, prefer [`launch_local(...)` or `launch_cloud(...)`](launchers.md).
+
+## Notes
+
+- worker subprocess bootstrapping lives in `src/refiner/worker/entrypoint.py`
+- lifecycle and worker cleanup are intentionally centralized in the worker runtime
+- worker resources and telemetry helpers live under `src/refiner/worker/resources/` and `src/refiner/worker/metrics/`
+
+## Related Pages
+
+- [Launchers](launchers.md)
+- [Readers and sharding](readers-and-sharding.md)
+- [Observability](observability.md)

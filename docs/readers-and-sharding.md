@@ -1,67 +1,161 @@
 ---
-title: "Readers and Sharding"
-description: "Choose input readers and understand shard planning behavior"
+title: "Readers And Sharding"
+description: "How Refiner readers emit data, plan shards, and feed Python code"
 ---
 
-Refiner includes built-in readers for tabular and episode-oriented datasets.
+Readers decide two things:
 
-## Available Readers
+- what data shape enters the pipeline
+- how that input is split into shards for launched execution
+
+## Built-In Readers
 
 - `read_csv(...)`
 - `read_jsonl(...)`
 - `read_parquet(...)`
 - `read_lerobot(...)`
 
-Each returns a `RefinerPipeline` with that reader as the source.
+Each reader returns a `RefinerPipeline`.
 
 ## Shard Model
 
-Readers expose shards as units of work. A shard is identified by `path`, `start`, and `end`.
+A shard is the unit of work claimed by a worker.
 
-- CSV/JSONL: shard ranges are byte-oriented.
-- Parquet: shard ranges are row-group-based (`rowgroups`) or planned by bytes (`bytes_lazy`).
-- LeRobot: shard ranges are per-file over `meta/episodes/*.parquet` (one shard per episode parquet file).
+Common shard metadata includes:
 
-## Reader Notes for Users
+- `shard_id`
+- `path`
+- `start`
+- `end`
 
-- CSV and JSONL readers yield dict-backed rows.
-- Parquet reader yields row views that are converted on access.
-- LeRobot reader emits one row per episode with:
-  - `frames`: list of frame dicts for the episode slice.
-  - `lerobot_tasks`: shared dataset-level `{task_index: task}` mapping loaded from `meta/tasks.parquet`.
-  - episode-level `stats/*` columns preserved as normal row fields for filtering and transforms.
-  - video feature columns from `meta/info.json.features` where `dtype == "video"`, emitted as `VideoFile` handles.
-  - `metadata`: shared frozen `LeRobotMetadata` dataclass with `lerobot_info` and dataset-level `lerobot_stats`.
-  - episode-level `tasks` from LeRobot metadata are preserved as ordinary row data.
-  - raw transport metadata keys under `videos/*` and `meta/episodes/*` are omitted from emitted rows.
-  - frame slicing requires `dataset_from_index`/`dataset_to_index` in each episode row.
-  - optional `limit` bounds emitted episodes per reader instance.
-  - `media_max_in_flight` controls concurrent episode materialization work inside the reader.
-  - `media_preserve_order` controls whether those async reader results are yielded in input order.
-  - `read_lerobot(...)` accepts either one dataset root or a list of dataset roots on the same filesystem/protocol.
-  - when reading multiple dataset roots, the reader merges all source `meta/tasks.parquet` tables once in input order, keeps the first-seen task ids stable, appends unseen tasks at the end, and remaps per-frame `task_index` values into that merged task table before emitting rows.
-- Use `target_shard_bytes` to control shard granularity.
+For launched execution, workers claim shards from the runtime lifecycle backend
+until no work remains. Local iteration still respects the same reader/planning
+model, but runs in-process.
 
-## LeRobot Writer Tuning
+Use reader-specific options such as `target_shard_bytes` and `num_shards` to
+change shard granularity.
 
-`write_lerobot(...)` keeps video tuning grouped:
+## What Python Functions Receive
 
-- `video=mdr.LeRobotVideoConfig(...)` groups codec, pixel format, encoder threads, decoder threads, and encoder options.
-- `stats=mdr.LeRobotStatsConfig(...)` groups quantile bin count and `force_recompute_video_stats`.
-- Task metadata is canonical: `write_lerobot(...)` resolves frame `task_index` values through top-level `lerobot_tasks`, derives episode-level `tasks`, treats top-level `task` as an ordinary passthrough column rather than canonical task metadata, and raises if any frame task index cannot be mapped.
-- `write_lerobot(...)` writes `meta/tasks.parquet` with plain `task` and `task_index` columns. The reader still accepts legacy LeRobot parquet files that store task names under `__index_level_0__`.
-- Video stats are always written; video sampling is derived automatically from episode frame count.
-- Writer-side video work reopens source clips through `fsspec` and PyAV when needed; Refiner does not require a separate writer-managed temp-file cache in the normal path.
-- When the sink receives consecutive LeRobot episodes that span an entire source video file, it can remux that file into the output without decoding frames.
-- When consecutive episodes span several whole compatible source files, the sink can remux those files into one output file without decoding frames.
-- When an episode clip starts on a source keyframe and ends on an exact packet boundary, the sink can remux that aligned subsegment without transcoding.
-- Remux output is written directly as fragmented MP4 to the destination stream; it does not stage a separate local temp file first.
-- Video entries in `meta/info.json.features` are written in LeRobot-style channel-first form with an `info` block for fps, size, channels, codec, and pixel format.
+Refiner has two execution styles:
 
-## Internal Notes
+- Python UDF steps such as `map(...)`, `flat_map(...)`, `filter(...)`, and `batch_map(...)`
+- expression-backed vectorized steps such as `select(...)`, `with_columns(...)`, and `filter(expr)`
 
-- Parquet byte-lazy mode maps planned byte ranges to row groups at read time.
-- Parquet row access uses batch-level cached column-name indexing for faster key lookup.
-- LeRobot expects parquet metadata under `meta/episodes/**`; legacy JSONL metadata is not used.
-- LeRobot reads `fps`, `robot_type`, `features`, `data_path`, and `video_path` from `meta/info.json` when present.
-- The LeRobot writer is row-oriented within each shard: frame parquet writes and per-video writes for the row run concurrently, and the episode metadata row is emitted after both complete.
+The important contract for Python code is:
+
+- `map(...)` receives one `Row`
+- `map_async(...)` receives one `Row`
+- `flat_map(...)` receives one `Row`
+- `filter(...)` with a Python predicate receives one `Row`
+- `batch_map(...)` receives `list[Row]`
+
+Even though the engine may use Arrow-backed `Tabular` blocks internally between
+segments, Python UDFs do not receive raw Arrow tables directly. If you want
+Arrow-backed/vectorized behavior, use the expression API instead of a Python UDF.
+
+### `Row` assumptions
+
+A `Row` is:
+
+- mapping-like (`row["column"]`)
+- immutable from the caller's perspective
+- either dict-backed or a lightweight view over tabular data
+
+Use:
+
+- `row.update(...)` to return a patched row
+- `row.drop(...)` to hide keys
+- `row.pop(...)` for persistent pop semantics
+
+Do not assume:
+
+- the row is a plain `dict`
+- mutating nested values in place is part of the execution contract
+- every reader yields the same concrete row subclass
+
+## Reader Behavior
+
+### CSV and JSONL
+
+- rows are dict-backed
+- shard planning is byte-oriented
+
+### Parquet
+
+- rows are lightweight views over Arrow-backed tabular data
+- shard planning is row-group-based, or lazily refined from byte targets
+- row values are converted to Python on access
+
+### LeRobot
+
+`read_lerobot(...)` emits one episode row at a time.
+
+Each emitted row is a `LeRobotRow`, which wraps a normal base row and adds
+LeRobot-specific views/helpers.
+
+A LeRobot episode row includes:
+
+- ordinary episode-level columns from `meta/episodes`
+- `frames`
+  - usually a `LeRobotTabular` / `Tabular` containing that episode's frame rows
+- `metadata`
+  - a `LeRobotMetadata` dataclass carrying dataset-level `info`, `stats`, and canonical tasks
+- video feature columns
+  - exposed as `VideoFile` handles through the LeRobot row helpers
+
+The reader also applies a few format assumptions:
+
+- one pipeline row represents one episode
+- frame slicing is driven by `dataset_from_index` / `dataset_to_index`
+- the canonical task table is loaded from `meta/tasks.parquet`
+- when several dataset roots are read together, task ids are merged once in input order and per-frame `task_index` values are remapped to that merged table
+- transport-only keys such as `videos/*` placement fields remain available in the base row, but the high-level API is meant to go through `LeRobotRow.videos`, `LeRobotRow.stats`, `LeRobotRow.metadata`, and `LeRobotRow.frames`
+
+## LeRobot Writer Notes
+
+`write_lerobot(...)` is a deferred sink:
+
+- local iteration helpers such as `iter_rows()`, `take()`, and `materialize()` do not write output
+- actual LeRobot files are produced in launched execution (`launch_local(...)`, `launch_cloud(...)`)
+
+Current writer API:
+
+- `output`
+- `data_files_size_in_mb`
+- `video_files_size_in_mb`
+- `max_video_prepare_in_flight`
+- `codec`
+- `pix_fmt`
+- `transencoding_threads`
+- `encoder_options`
+- `quantile_bins`
+- `force_recompute_video_stats`
+
+Important writer assumptions:
+
+- input rows are expected to be LeRobot-shaped episode rows
+- `metadata` must be present on every row as `LeRobotMetadata`
+- per-frame `task_index` is canonical; episode-level `tasks` are rebuilt from the frame table
+- `fps` and `robot_type` must stay stable within a written shard
+- frame parquet data is written incrementally
+- episode metadata rows are buffered per shard and flushed at shard completion
+- video stats are dropped and recomputed when upstream transforms invalidate them
+
+Stage 2 reduction writes final:
+
+- `meta/episodes/chunk-000/file-000.parquet`
+- `meta/tasks.parquet`
+- `meta/info.json`
+- `meta/stats.json`
+
+while cleaning up stage-1 `meta/chunk-*` metadata and any non-finalized
+`data/chunk-*` / `videos/.../chunk-*` payloads.
+
+## Related Pages
+
+- [Pipeline basics](pipeline-basics.md)
+- [Local execution](local-execution.md)
+- [Expression transforms](expression-transforms.md)
+- [Launchers](launchers.md)
+- [Worker runtime](worker-runtime.md)

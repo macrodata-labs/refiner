@@ -1,9 +1,9 @@
 ---
 title: "Expression Transforms"
-description: "Use expression-backed pipeline transforms that run on the vectorized Arrow path"
+description: "Use Arrow-backed expression transforms in Refiner pipelines"
 ---
 
-Refiner supports expression-backed transforms that keep the same pipeline style while enabling a fast vectorized execution path.
+Refiner supports expression-backed transforms that run on the vectorized Arrow path.
 
 ## Build Expressions
 
@@ -20,18 +20,22 @@ Core constructors:
 - `mdr.coalesce(...)`
 - `mdr.if_else(condition, on_true, on_false)`
 
-Use `&`, `|`, and `~` to combine boolean expressions. Do not use Python `and`, `or`, or `not` with `Expr` objects.
+Use:
 
-## Vectorized Transforms
+- `&`
+- `|`
+- `~`
 
-These methods are shard-local and expression-backed:
+for boolean composition. Do not use Python `and`, `or`, or `not` with `Expr` objects.
 
-- `.select(*cols)`
-- `.with_columns(**exprs)`
-- `.with_column(name, expr)`
-- `.drop(*cols)`
-- `.rename(**mapping)`
-- `.cast(**dtype_map)`
+## Expression-Backed Pipeline Methods
+
+- `.select(...)`
+- `.with_columns(...)`
+- `.with_column(...)`
+- `.drop(...)`
+- `.rename(...)`
+- `.cast(...)`
 - `.filter(expr)`
 
 Example:
@@ -50,50 +54,32 @@ pipeline = (
 )
 ```
 
-## String and Datetime Namespaces
+## Namespaces
 
-String namespace (`.str`):
+### String
 
-- `.lower()`, `.upper()`, `.strip()`, `.len()`
-- `.contains(pattern)`, `.startswith(prefix)`, `.endswith(suffix)`
-- `.regex_contains(pattern)`, `.replace(pattern, replacement)`, `.regex_replace(pattern, replacement)`
+- `.lower()`
+- `.upper()`
+- `.strip()`
+- `.len()`
+- `.contains(...)`
+- `.startswith(...)`
+- `.endswith(...)`
+- `.regex_contains(...)`
+- `.replace(...)`
+- `.regex_replace(...)`
 
-Datetime namespace (`.datetime`):
+### Datetime
 
-- `.year()`, `.month()`, `.day()`, `.hour()`, `.to_date()`
+- `.year()`
+- `.month()`
+- `.day()`
+- `.hour()`
+- `.to_date()`
 
-General expression helpers:
+## Mixed Pipelines
 
-- Null and conditional: `.is_null()`, `.is_not_null()`, `.fill_null(value)`, `.null_if(value)`, `mdr.if_else(...)`
-- Membership and ranges: `.is_in(values)`, `.between(lower, upper)`
-- Numeric unary: `.abs()`, `.floor()`, `.ceil()`, `.round(ndigits=0)`, `.clip(min_value=..., max_value=...)`
-
-Example:
-
-```python
-pipeline = (
-    mdr.from_items(
-        [
-            {"x": 1, "text": "foo1", "score": None, "z": 1.2},
-            {"x": 2, "text": "bar2", "score": 5, "z": 2.6},
-        ]
-    )
-    .with_columns(
-        keep=mdr.col("x").is_in([1, 3]),
-        x_band=mdr.col("x").between(1, 2),
-        prefix=mdr.col("text").str.startswith("ba"),
-        has_digit=mdr.col("text").str.regex_contains(r"\d"),
-        text_clean=mdr.col("text").str.regex_replace(r"\d", ""),
-        score=mdr.col("score").fill_null(0),
-        score_bucket=mdr.if_else(mdr.col("score") > 3, "high", "low"),
-        z=mdr.col("z").clip(min_value=1.5, max_value=2.5).round(0),
-    )
-)
-```
-
-## Interop with Python UDF Steps
-
-Expression-backed transforms and Python UDF steps can be mixed in one pipeline.
+Expression-backed and Python-backed steps can be mixed:
 
 ```python
 pipeline = (
@@ -104,10 +90,15 @@ pipeline = (
 )
 ```
 
-Refiner handles boundaries internally: expression runs on Arrow blocks, UDF runs on row mode.
+Refiner handles the boundary between Arrow blocks and row execution internally.
 
-## Internal Notes
+## Notes
 
-- Adjacent expression-backed operations are fused into one vectorized segment.
-- Vectorized segments convert row input to Arrow once per segment and convert back once.
-- Global operators like `sort`, `limit`, `distinct`, `groupby`, and `join` are intentionally out of scope in this phase.
+- adjacent expression-backed operations are fused into vectorized segments
+- vectorized execution is shard-local
+- global operators like join, sort, and shuffle are still out of scope here
+
+## Related Pages
+
+- [Pipeline basics](pipeline-basics.md)
+- [Local execution](local-execution.md)
