@@ -67,8 +67,8 @@ import refiner as mdr
         text=mdr.col("text").str.strip(),
         text_len=mdr.col("text").str.len(),
     )
-    .map(lambda row: {"text": row["text"], "bucket": "long" if row["text_len"] > 512 else "short"})
-    .write_parquet("out/")
+    .map(lambda row: row.update(length_bucket="long" if row["text_len"] > 512 else "short"))
+    .write_parquet("s3://my-bucket/english-cleanup/")
     .launch_local(
         name="english-cleanup",
         num_workers=2,
@@ -81,7 +81,7 @@ import refiner as mdr
 - the Python package as `refiner`
 - the CLI as `macrodata`
 
-## what refiner gives you
+## Batteries included
 
 - training-data-first pipeline primitives instead of generic ETL abstractions
 - multimodal processing, with robotics support today
@@ -108,3 +108,7 @@ Modalities and platform:
 
 - [Robotics](docs/robotics.md)
 - [Observability](docs/observability.md)
+
+## Community
+
+- join the Macrodata Discord: https://discord.gg/S8kZtmBR2x

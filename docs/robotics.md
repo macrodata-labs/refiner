@@ -1,24 +1,100 @@
 ---
 title: "Robotics"
-description: "Current robotics support in Refiner"
+description: "Robotics data workflows in Refiner"
 ---
 
-Refiner already includes robotics-specific support through the LeRobot reader, writer, and robotics transforms.
+Refiner already includes robotics-specific support through the LeRobot reader,
+writer, and robotics transforms.
 
-## Current Support
+## What You Can Do Today
 
-- `read_lerobot(...)`
-- `write_lerobot(...)`
-- robotics transforms under `mdr.robotics.*`
+- read LeRobot datasets with `read_lerobot(...)`
+- transform episode rows with normal pipeline ops like `map(...)`, `filter(...)`, and expression-backed transforms where applicable
+- run robotics-specific transforms under `mdr.robotics.*`
+- write LeRobot-compatible output datasets with `write_lerobot(...)`
+- merge compatible LeRobot datasets into one output dataset
 
-Current workflows include:
+## How Robotics Data Is Read
 
-- reading LeRobot datasets from local paths or remote `fsspec` paths
-- transforming episode-level rows
-- writing LeRobot-compatible output datasets
-- multistage writer flows for episode data, metadata reduction, and dataset finalization
+`read_lerobot(...)` yields one row per episode.
 
-## Motion Trimming Example
+Those rows include:
+
+- `frames`
+- per-episode metadata
+- video feature columns as handles
+- dataset and episode stats metadata
+
+So the programming model is the same as the rest of Refiner: you read rows,
+transform rows, and then write rows through a sink. The difference is that the
+rows are episode-oriented and the writer understands how to materialize a
+LeRobot dataset back out.
+
+## Quick Toc
+
+- [reading datasets](#reading-datasets)
+- [transforming rows](#transforming-rows)
+- [writing datasets](#writing-datasets)
+- [motion trimming](#motion-trimming)
+- [performance notes](#lerobot-performance-notes)
+- [merging datasets](#merging-datasets)
+
+## Reading Datasets
+
+Read a single LeRobot dataset:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
+```
+
+Read multiple compatible datasets together:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_lerobot(
+    [
+        "hf://datasets/macrodata/aloha_static_battery_ep005_009",
+        "hf://datasets/macrodata/aloha_static_battery_ep000_004",
+    ]
+)
+```
+
+## Transforming Rows
+
+Once read, LeRobot data is manipulated through the same row pipeline model as
+everything else in Refiner.
+
+Example:
+
+```python
+pipeline = pipeline.map(lambda row: row.update(task="trimmed_motion"))
+```
+
+If you need to remove fields from the row before writing:
+
+```python
+pipeline = pipeline.map(lambda row: row.drop("some_field"))
+```
+
+## Writing Datasets
+
+Use `write_lerobot(...)` to write a LeRobot-compatible output dataset:
+
+```python
+pipeline = pipeline.write_lerobot("hf://buckets/macrodata/my_robotics_output")
+```
+
+The writer handles the LeRobot-specific output layout, metadata reduction, and
+finalization path for you.
+
+## Motion Trimming
+
+Motion trimming is currently available through `mdr.robotics.motion_trim(...)`.
+
+Example:
 
 ```python
 import refiner as mdr
@@ -66,13 +142,32 @@ The practical consequence is:
 - frame-heavy no-video datasets mostly behave like a parquet writer
 - video-heavy datasets are dominated by source probing, remux/transcode work, and the quality of source clip alignment
 
-## Notes
+## Merging Datasets
 
-- robotics is the first modality with deeper built-in support today
-- more multimodal primitives and modality-specific building blocks are expected to grow from here
+You can merge compatible LeRobot datasets by reading multiple roots and writing
+them back through `write_lerobot(...)`.
+
+```python
+import refiner as mdr
+
+(
+    mdr.read_lerobot(
+        [
+            "hf://datasets/macrodata/aloha_static_battery_ep005_009",
+            "hf://datasets/macrodata/aloha_static_battery_ep000_004",
+        ]
+    )
+    .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_merge")
+    .launch_local(
+        name="merge_aloha",
+        num_workers=1,
+    )
+)
+```
 
 ## Related Pages
 
 - [Readers and sharding](readers-and-sharding.md)
+- [Pipeline basics](pipeline-basics.md)
 - [Launchers](launchers.md)
 - [Observability](observability.md)

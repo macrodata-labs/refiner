@@ -33,6 +33,19 @@ pipeline = pipeline.filter(lambda row: row["x"] > 0)
 pipeline = pipeline.flat_map(lambda row: [row, {"x": row["x"] * 10}])
 ```
 
+For `map(...)`, returning a `Mapping[str, Any]` is treated as a patch and merged
+into the input row.
+
+```python
+pipeline = pipeline.map(lambda row: {"length_bucket": "long"})
+```
+
+If you want to be explicit, return `row.update(...)` instead:
+
+```python
+pipeline = pipeline.map(lambda row: row.update(length_bucket="long"))
+```
+
 ### Batch transforms
 
 ```python
@@ -137,13 +150,8 @@ pipeline = (
         text=mdr.col("text").str.strip(),
         text_len=mdr.col("text").str.len(),
     )
-    .map(
-        lambda row: {
-            "text": row["text"],
-            "bucket": "long" if row["text_len"] > 512 else "short",
-        }
-    )
-    .write_parquet("out/")
+    .map(lambda row: row.update(length_bucket="long" if row["text_len"] > 512 else "short"))
+    .write_parquet("s3://my-bucket/english-cleanup/")
 )
 ```
 
