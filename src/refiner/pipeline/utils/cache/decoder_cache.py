@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import atexit
-import asyncio
 from dataclasses import dataclass
 from fractions import Fraction
-from functools import partial
 from typing import IO, Any, cast
 
 import av
 
-from refiner.execution.asyncio.runtime import io_executor
+from refiner.execution.asyncio.runtime import run_in_io_executor
 from refiner.io import DataFile
 from refiner.pipeline.utils.cache.lease_cache import LeaseCache
 
@@ -59,12 +57,9 @@ class OpenedVideoSourceCache(LeaseCache[str, OpenedVideoSource]):
         self,
         key: str,
     ) -> tuple[OpenedVideoSource, int]:
-        source = await asyncio.get_running_loop().run_in_executor(
-            io_executor(),
-            partial(
-                _open_video_source,
-                uri=key,
-            ),
+        source = await run_in_io_executor(
+            _open_video_source,
+            uri=key,
         )
         return source, 0
 

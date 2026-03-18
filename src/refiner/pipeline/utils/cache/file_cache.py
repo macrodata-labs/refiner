@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import shutil
 import tempfile
@@ -8,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from refiner.io import DataFile
+from refiner.execution.asyncio.runtime import run_in_io_executor
 from refiner.pipeline.utils.cache.lease_cache import CacheLease, LeaseCache
 
 
@@ -43,7 +43,7 @@ class _FileLeaseCache(LeaseCache[_FileCacheKey, _FileResource]):
         self.name = name
 
     async def _create_resource(self, key: _FileCacheKey) -> tuple[_FileResource, int]:
-        downloaded_path, downloaded_size_bytes = await asyncio.to_thread(
+        downloaded_path, downloaded_size_bytes = await run_in_io_executor(
             _download_data_file_to_temp,
             key.file,
             cache_name=self.name,
