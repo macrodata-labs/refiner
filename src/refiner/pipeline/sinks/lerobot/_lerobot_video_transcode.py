@@ -124,6 +124,7 @@ class TranscodeWriter:
         self,
         *,
         video: VideoFile,
+        frame_count: int,
         prepared_source: _PreparedSource,
         stats_config: "LeRobotStatsConfig",
     ) -> tuple[tuple[float, float], dict[str, np.ndarray]]:
@@ -131,6 +132,7 @@ class TranscodeWriter:
         tracker = _new_tracker(stats_config)
         selected_frames = 0
         sampled_frame_count = 0
+        sample_stride = _estimate_sample_stride(frame_count)
 
         _configure_decoder(prepared_source.stream, self.config)
         clip_from = video_from_timestamp_s(video)
@@ -149,7 +151,7 @@ class TranscodeWriter:
             if _update_video_stats_if_due(
                 tracker=tracker,
                 frame_index=frame_index,
-                sample_stride=stats_config.sample_stride,
+                sample_stride=sample_stride,
                 rgb_frame=frame.to_ndarray(format="rgb24"),
             ):
                 sampled_frame_count += 1
@@ -229,6 +231,29 @@ def _new_tracker(stats_config: "LeRobotStatsConfig") -> _RunningQuantileStats:
         [0.01, 0.10, 0.50, 0.90, 0.99],
         num_quantile_bins=stats_config.quantile_bins,
     )
+
+
+def _estimate_num_samples(
+    data_len: int,
+    *,
+    min_num_samples: int = 100,
+    max_num_samples: int = 10_000,
+    power: float = 0.75,
+) -> int:
+    if data_len < min_num_samples:
+        min_num_samples = data_len
+    return max(min_num_samples, min(int(data_len**power), max_num_samples))
+
+
+def _estimate_sample_stride(frame_count: int) -> int:
+    if frame_count <= 1:
+        return 1
+    target_samples = _estimate_num_samples(frame_count)
+    # Upstream LeRobot chooses a dynamic number of evenly spread video samples based
+    # on the number of visual frames. We approximate that here from the episode
+    # frame-row count so we can keep a single transcode pass instead of pre-counting
+    # decoded clip frames just for stats sampling.
+    return max(1, (frame_count + target_samples - 1) // target_samples)
 
 
 def _update_video_stats_tracker(

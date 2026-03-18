@@ -59,6 +59,7 @@ def _video_feature(
 @dataclass(slots=True)
 class _VideoItem:
     episode_index: int
+    frame_count: int
     video: VideoFile
     source_stats: dict[str, np.ndarray] | None = None
 
@@ -108,11 +109,13 @@ class LeRobotVideoWriter:
         video: VideoFile,
         *,
         episode_index: int,
+        frame_count: int,
         source_stats: dict[str, np.ndarray] | None = None,
     ) -> _CompletedVideoItem:
         prepared = await self._prepare_item(
             _VideoItem(
                 episode_index=episode_index,
+                frame_count=frame_count,
                 video=video,
                 source_stats=source_stats,
             )
@@ -197,6 +200,7 @@ class LeRobotVideoWriter:
             (from_timestamp, to_timestamp), stats = (
                 transcode_writer.append_prepared_video(
                     video=item.video,
+                    frame_count=item.frame_count,
                     prepared_source=source,
                     stats_config=self.stats_config,
                 )

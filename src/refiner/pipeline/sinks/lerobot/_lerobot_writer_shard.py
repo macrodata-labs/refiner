@@ -139,6 +139,7 @@ class _LeRobotShardWriter:
             return
         self._initialize_info_from_row(row)
         episode_index = int(row["episode_index"])
+        frame_count = len(self._require_required_fields(row))
         source_episode_stats = self._source_episode_stats(row)
 
         writer_tasks: list[asyncio.Task[_CompletedVideoItem]] = []
@@ -151,6 +152,7 @@ class _LeRobotShardWriter:
                     self._video_writer(video_key).write_video(
                         video=video,
                         episode_index=episode_index,
+                        frame_count=frame_count,
                         source_stats=source_episode_stats.get(video_key),
                     )
                 )

@@ -47,10 +47,11 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 `write_lerobot(...)` keeps video tuning grouped:
 
 - `video=mdr.LeRobotVideoConfig(...)` groups codec, pixel format, encoder threads, decoder threads, and encoder options.
-- `stats=mdr.LeRobotStatsConfig(...)` groups clip sampling stride and quantile bin count.
+- `stats=mdr.LeRobotStatsConfig(...)` groups quantile bin count and `force_recompute_video_stats`.
 - Task metadata is canonical: `write_lerobot(...)` resolves frame `task_index` values through top-level `lerobot_tasks`, derives episode-level `tasks`, treats top-level `task` as an ordinary passthrough column rather than canonical task metadata, and raises if any frame task index cannot be mapped.
 - `write_lerobot(...)` writes `meta/tasks.parquet` with plain `task` and `task_index` columns. The reader still accepts legacy LeRobot parquet files that store task names under `__index_level_0__`.
-- Video stats are always written; use a larger `stats.sample_stride` when you want cheaper sampling.
+- Video stats are always written; video sampling is derived automatically from episode frame count.
+- Writer-side video work reopens source clips through `fsspec` and PyAV when needed; Refiner does not require a separate writer-managed temp-file cache in the normal path.
 - When the sink receives consecutive LeRobot episodes that span an entire source video file, it can remux that file into the output without decoding frames.
 - When consecutive episodes span several whole compatible source files, the sink can remux those files into one output file without decoding frames.
 - When an episode clip starts on a source keyframe and ends on an exact packet boundary, the sink can remux that aligned subsegment without transcoding.

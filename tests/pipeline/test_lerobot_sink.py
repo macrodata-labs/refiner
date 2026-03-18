@@ -30,6 +30,9 @@ from refiner.pipeline.sources.readers.lerobot import (
     LeRobotInfo,
     LeRobotMetadata,
 )
+from refiner.pipeline.sinks.lerobot._lerobot_video_transcode import (
+    _estimate_sample_stride,
+)
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     reset_opened_video_source_cache,
 )
@@ -101,10 +104,8 @@ def _sampled_frame_count(
     *,
     from_ts: float,
     to_ts: float | None,
-    sample_stride: int = 1,
 ) -> int:
     frame_count = 0
-    sampled_count = 0
 
     with av.open(str(path), mode="r") as container:
         stream = next(
@@ -123,11 +124,10 @@ def _sampled_frame_count(
                 continue
             if to_ts is not None and timestamp - 1e-6 >= to_ts:
                 break
-            if frame_count % sample_stride == 0:
-                sampled_count += 1
             frame_count += 1
 
-    return sampled_count
+    sample_stride = _estimate_sample_stride(frame_count)
+    return len(range(0, frame_count, sample_stride))
 
 
 def _episode(
@@ -368,6 +368,7 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
         writer.write_video(
             mdr.VideoFile(uri, from_timestamp_s=0.0, to_timestamp_s=0.3),
             episode_index=0,
+            frame_count=3,
             source_stats=_dummy_video_stats(count=3),
         )
     )
@@ -375,6 +376,7 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
         writer.write_video(
             mdr.VideoFile(uri, from_timestamp_s=0.3, to_timestamp_s=0.6),
             episode_index=1,
+            frame_count=3,
             source_stats=_dummy_video_stats(count=3),
         )
     )
@@ -465,7 +467,7 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
         str(out_root),
         video_files_size_in_mb=1,
         video_config=mdr.LeRobotVideoConfig(encoder_threads=1, decoder_threads=1),
-        stats_config=mdr.LeRobotStatsConfig(sample_stride=2, quantile_bins=64),
+        stats_config=mdr.LeRobotStatsConfig(quantile_bins=64),
     )
 
     stats = pipeline.launch_local(
