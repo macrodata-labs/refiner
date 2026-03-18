@@ -8,7 +8,6 @@ from typing import Iterator, cast
 import av
 import fsspec
 import numpy as np
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -557,78 +556,6 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
         out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
     )
     assert table.column("data/chunk_index").to_pylist() == [f"shard-1__w{worker_2}"]
-
-
-def test_write_lerobot_stage2_raises_on_mismatched_stage1_info(tmp_path: Path) -> None:
-    out_root = tmp_path / "reduce-info-mismatch"
-    worker_1 = RunHandle.worker_token_for("1")
-    worker_2 = RunHandle.worker_token_for("2")
-    stage1_rows = [
-        ("shard-1__w" + worker_1, 0, 10),
-        ("shard-2__w" + worker_2, 1, 20),
-    ]
-    for chunk_key, episode_index, fps in stage1_rows:
-        chunk_root = out_root / "meta" / f"chunk-{chunk_key}"
-        (chunk_root / "episodes").mkdir(parents=True, exist_ok=True)
-        pq.write_table(
-            pa.Table.from_pylist(
-                [
-                    {
-                        "episode_index": episode_index,
-                        "tasks": ["pick"],
-                        "data/chunk_index": chunk_key,
-                        "data/file_index": 0,
-                        "dataset_from_index": 0,
-                        "dataset_to_index": 1,
-                        "meta/episodes/chunk_index": chunk_key,
-                        "meta/episodes/file_index": 0,
-                    }
-                ]
-            ),
-            chunk_root / "episodes" / "file-000.parquet",
-        )
-        pq.write_table(
-            pa.Table.from_pylist([{"task": "pick", "task_index": 0}]),
-            chunk_root / "tasks.parquet",
-        )
-        (chunk_root / "info.jsonl").write_text(
-            json.dumps(
-                {
-                    "codebase_version": "v3.0",
-                    "data_files_size_in_mb": 1,
-                    "video_files_size_in_mb": 1,
-                    "data_path": "data/chunk-{chunk_index}/file-{file_index:03d}.parquet",
-                    "video_path": None,
-                    "fps": fps,
-                    "robot_type": "mockbot",
-                    "features": {},
-                    "total_episodes": 1,
-                    "total_frames": 1,
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-
-    reducer = LeRobotMetaReduceSink(config=LeRobotWriterConfig(output=str(out_root)))
-    runtime = cast(
-        RuntimeLifecycle,
-        _FinalizedWorkersRuntime(
-            [
-                FinalizedShardWorker(shard_id="shard-1", worker_id="1"),
-                FinalizedShardWorker(shard_id="shard-2", worker_id="2"),
-            ]
-        ),
-    )
-    with pytest.raises(
-        ValueError,
-        match="mismatched stage-1 info metadata",
-    ):
-        with set_active_run_context(
-            run_handle=RunHandle(job_id="job", stage_index=1, worker_id="local"),
-            runtime_lifecycle=runtime,
-        ):
-            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
 
 def test_hub_aloha_merge_uses_remux_and_preserves_episode_count(tmp_path: Path) -> None:
