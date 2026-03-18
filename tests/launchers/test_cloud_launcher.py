@@ -8,6 +8,7 @@ from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
 )
+from refiner.platform.manifest import _redact_captured_text
 
 
 def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
@@ -245,9 +246,17 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
     )
     monkeypatch.setattr(
         "refiner.launchers.base.build_run_manifest",
-        lambda: {
+        lambda **kwargs: {
             "version": 1,
-            "script": {"text": "API_KEY = 'super-secret-value'"},
+            "script": {
+                "path": "/tmp/super-secret-value_job.py",
+                "text": _redact_captured_text(
+                    "API_KEY = 'super-secret-value'",
+                    secret_values=kwargs.get("secret_values", ()),
+                ),
+            },
+            "environment": {"refiner_ref": "super-secret-value-ref"},
+            "dependencies": [{"name": "pkg", "version": "super-secret-value-dep"}],
         },
     )
 
@@ -260,8 +269,13 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
     assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
     assert secret not in request.plan["stages"][0]["steps"][1]["args"]["fn"]
     assert request.manifest is not None
+    assert request.manifest["script"]["path"] == "/tmp/super-secret-value_job.py"
     assert "REDACTED_SECRET" in request.manifest["script"]["text"]
     assert secret not in request.manifest["script"]["text"]
+    assert request.manifest["environment"]["refiner_ref"] == "super-secret-value-ref"
+    assert request.manifest["dependencies"] == [
+        {"name": "pkg", "version": "super-secret-value-dep"}
+    ]
 
 
 def test_pipeline_launch_cloud_requires_missing_env_secret(monkeypatch) -> None:

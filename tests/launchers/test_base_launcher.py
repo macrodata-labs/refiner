@@ -36,7 +36,7 @@ def test_compiled_plan_includes_stage_worker_counts(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "refiner.launchers.base.compile_planned_stages",
-        lambda stages: {
+        lambda stages, **_: {
             "stages": [
                 {
                     "name": stage.name,

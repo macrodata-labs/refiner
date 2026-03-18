@@ -144,6 +144,34 @@ def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:
     }
 
 
+def test_compile_pipeline_plan_includes_lerobot_writer_steps() -> None:
+    pipeline = (
+        RefinerPipeline(_FakeReader())
+        .map(motion_trim(threshold=0.25, pad_frames=2))
+        .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_motion")
+    )
+
+    stages = compile_pipeline_plan(pipeline)["stages"]
+
+    assert stages[0]["steps"][1]["name"] == "robotics:motion_trim"
+    assert stages[0]["steps"][2]["name"] == "write_lerobot"
+    assert stages[0]["steps"][2]["type"] == "writer"
+    assert (
+        stages[0]["steps"][2]["args"]["path"]
+        == "hf://buckets/macrodata/test_bucket/aloha_motion"
+    )
+
+    assert [step["name"] for step in stages[1]["steps"]] == [
+        "task",
+        "write_lerobot_meta_reduce",
+    ]
+    assert stages[1]["steps"][1]["type"] == "writer"
+    assert (
+        stages[1]["steps"][1]["args"]["path"]
+        == "hf://buckets/macrodata/test_bucket/aloha_motion"
+    )
+
+
 def test_extract_lambda_source_handles_chained_call_fragment() -> None:
     fn = _score_filter_lambda()
     source = '.filter(lambda row: int(row["score"]) >= 15)'
