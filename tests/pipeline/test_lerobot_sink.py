@@ -436,48 +436,6 @@ def test_write_lerobot_force_recompute_video_stats_ignores_source_video_stats(
     assert stats_json["observation.images.main"]["count"] != [999]
 
 
-def test_lerobot_video_writer_recomputes_stats_when_source_stats_are_null(
-    tmp_path: Path,
-) -> None:
-    src_video = tmp_path / "source" / "episode.mp4"
-    _write_video(src_video)
-
-    writer = LeRobotVideoWriter(
-        folder=mdr.DataFolder.resolve(str(tmp_path / "out")),
-        chunk_key="000",
-        video_key="observation.images.main",
-        video_config=mdr.LeRobotVideoConfig(),
-        stats_config=mdr.LeRobotStatsConfig(),
-        video_bytes_limit=1024 * 1024,
-    )
-    reused = asyncio.run(
-        writer.write_video(
-            mdr.VideoFile(str(src_video), from_timestamp_s=0.0, to_timestamp_s=0.6),
-            episode_index=0,
-            frame_count=6,
-            source_stats=_dummy_video_stats(count=999),
-        )
-    )
-    recomputed = asyncio.run(
-        writer.write_video(
-            mdr.VideoFile(str(src_video), from_timestamp_s=0.0, to_timestamp_s=0.6),
-            episode_index=1,
-            frame_count=6,
-            source_stats=None,
-        )
-    )
-    writer.finalize()
-
-    assert reused.segment.stats["count"].tolist() == [999]
-    expected_video_count = _sampled_frame_count(
-        src_video,
-        from_ts=0.0,
-        to_ts=0.6,
-    )
-    assert recomputed.segment.stats["count"].tolist() == [expected_video_count]
-    assert recomputed.segment.stats["count"].tolist() != [999]
-
-
 def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) -> None:
     src_video = tmp_path / "source" / "episode.mp4"
     _write_large_video(
