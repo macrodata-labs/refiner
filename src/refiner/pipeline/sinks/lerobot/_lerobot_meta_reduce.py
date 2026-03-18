@@ -89,10 +89,10 @@ class _LeRobotMetaReducer:
                 use_dictionary=True,
             )
 
-        tasks_table = pa.table(
+        tasks_table = pa.Table.from_pydict(
             {
-                "task_index": list(range(len(tasks))),
                 "task": tasks,
+                "task_index": list(range(len(tasks))),
             }
         )
         with self.folder.open("meta/tasks.parquet", mode="wb") as out:
@@ -126,6 +126,7 @@ class _LeRobotMetaReducer:
 
     def _load_stage1_tasks(self, finalized_chunk_keys: set[str]) -> list[str]:
         task_to_index: dict[str, int] = {}
+        index_to_task: dict[int, str] = {}
         for rel in self._iter_stage1_jsonl_files(
             finalized_chunk_keys, filename="tasks.jsonl"
         ):
@@ -142,11 +143,22 @@ class _LeRobotMetaReducer:
                     if raw_idx is None:
                         task_to_index.setdefault(task, len(task_to_index))
                         continue
+                    existing_task = index_to_task.get(raw_idx)
+                    if existing_task is not None and existing_task != task:
+                        raise ValueError(
+                            "LeRobot reduce encountered conflicting canonical "
+                            f"task mappings for task_index={raw_idx}"
+                        )
+                    index_to_task[raw_idx] = task
                     existing = task_to_index.get(task)
                     if existing is None:
                         task_to_index[task] = raw_idx
-                    else:
-                        task_to_index[task] = min(existing, raw_idx)
+                        continue
+                    if existing != raw_idx:
+                        raise ValueError(
+                            "LeRobot reduce encountered conflicting canonical "
+                            f"task indices for task={task!r}"
+                        )
         if not task_to_index:
             return []
 

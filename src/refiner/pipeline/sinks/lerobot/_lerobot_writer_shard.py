@@ -18,6 +18,7 @@ from refiner.pipeline.sinks.base import ShardedBlock
 from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_EPISODE_STATS,
     LEROBOT_INFO,
+    LEROBOT_TASKS,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_frames import (
     compute_episode_stats,
@@ -192,16 +193,6 @@ class _LeRobotShardWriter:
             int(value) for value in table.column("episode_index").to_pylist()
         ]
         frames_by_row = table.column("frames").to_pylist()
-        tasks_by_row = (
-            table.column("tasks").to_pylist()
-            if "tasks" in table.schema.names
-            else [None] * table.num_rows
-        )
-        task_by_row = (
-            table.column("task").to_pylist()
-            if "task" in table.schema.names
-            else [None] * table.num_rows
-        )
         metadata_by_row = (
             table.column("metadata").to_pylist()
             if "metadata" in table.schema.names
@@ -214,7 +205,6 @@ class _LeRobotShardWriter:
             if key
             not in {
                 "frames",
-                "task",
                 "tasks",
                 "metadata",
                 "episode_index",
@@ -230,9 +220,9 @@ class _LeRobotShardWriter:
 
         for row_idx, episode_index in enumerate(episode_indices):
             frames = self._require_required_fields_from_value(frames_by_row[row_idx])
-            tasks = self._tasks_from_values(
-                tasks_value=tasks_by_row[row_idx],
-                task_value=task_by_row[row_idx],
+            tasks = self._tasks_from_frames(
+                frames=frames,
+                metadata=metadata_by_row[row_idx],
             )
             source_episode_stats = self._source_episode_stats_from_value(
                 metadata_by_row[row_idx]
@@ -254,8 +244,6 @@ class _LeRobotShardWriter:
                 "meta/episodes/chunk_index": self.chunk_key,
                 "meta/episodes/file_index": 0,
             }
-            if tasks:
-                episode_row["task"] = tasks[0]
 
             for key, values in passthrough_columns.items():
                 value = values[row_idx]
@@ -284,7 +272,7 @@ class _LeRobotShardWriter:
                         frames=frames,
                         episode_index=episode_index,
                         start_index=dataset_from_index,
-                        task_index=self._task_to_index.get(tasks[0]) if tasks else None,
+                        task_index=None,
                     )
                 )
 
@@ -369,7 +357,10 @@ class _LeRobotShardWriter:
         for row in rows:
             episode_index = int(row["episode_index"])
             frames = self._require_required_fields(row)
-            tasks = self._tasks(row)
+            tasks = self._tasks_from_frames(
+                frames=frames,
+                metadata=row.get("metadata"),
+            )
             source_episode_stats = self._source_episode_stats(row)
             frame_stats = compute_episode_stats(frames=frames)
 
@@ -388,13 +379,10 @@ class _LeRobotShardWriter:
                 "meta/episodes/chunk_index": self.chunk_key,
                 "meta/episodes/file_index": 0,
             }
-            if tasks:
-                episode_row["task"] = tasks[0]
 
             for key, value in row.items():
                 if key in {
                     "frames",
-                    "task",
                     "tasks",
                     "metadata",
                     "episode_index",
@@ -429,7 +417,7 @@ class _LeRobotShardWriter:
                         frames=frames,
                         episode_index=episode_index,
                         start_index=dataset_from_index,
-                        task_index=self._task_to_index.get(tasks[0]) if tasks else None,
+                        task_index=None,
                     )
                 )
 
@@ -610,33 +598,102 @@ class _LeRobotShardWriter:
             return {}
         return _cast_stats_to_numpy(raw_stats)
 
-    def _tasks(self, row: Mapping[str, Any]) -> list[str]:
-        return self._tasks_from_values(
-            tasks_value=row["tasks"] if "tasks" in row else None,
-            task_value=row.get("task"),
-        )
-
-    def _tasks_from_values(
+    def _tasks_from_frames(
         self,
         *,
-        tasks_value: Any,
-        task_value: Any,
+        frames: Sequence[Mapping[str, Any]],
+        metadata: Any,
     ) -> list[str]:
-        tasks = [
-            value
-            for value in [
-                *(tasks_value if isinstance(tasks_value, list) else []),
-                task_value,
-            ]
-            if isinstance(value, str) and value
-        ]
-        tasks = list(dict.fromkeys(tasks))
-        for task in tasks:
-            if task in self._task_to_index:
-                continue
-            self._task_to_index[task] = len(self._task_order)
-            self._task_order.append(task)
+        tasks_by_index = self._canonical_tasks(metadata)
+        tasks: list[str] = []
+        for frame_idx, frame in enumerate(frames):
+            task_index_raw = frame.get("task_index")
+            if task_index_raw is None:
+                raise ValueError(
+                    "LeRobot writer requires every frame to contain an integer "
+                    f"'task_index'; frame {frame_idx} is missing a usable value"
+                )
+            try:
+                task_index = int(task_index_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "LeRobot writer requires every frame to contain an integer "
+                    f"'task_index'; frame {frame_idx} is missing a usable value"
+                ) from exc
+            task = tasks_by_index.get(task_index)
+            if task is None:
+                raise ValueError(
+                    "LeRobot writer could not map frame task_index="
+                    f"{task_index} through metadata.{LEROBOT_TASKS}"
+                )
+            if task not in tasks:
+                tasks.append(task)
         return tasks
+
+    def _canonical_tasks(self, metadata: Any) -> dict[int, str]:
+        if not isinstance(metadata, Mapping):
+            raise ValueError(
+                "LeRobot writer requires metadata with canonical "
+                f"'{LEROBOT_TASKS}' entries"
+            )
+        raw_tasks = metadata.get(LEROBOT_TASKS)
+        if not isinstance(raw_tasks, Mapping):
+            raise ValueError(
+                "LeRobot writer requires metadata."
+                f"{LEROBOT_TASKS} as a mapping of task to task_index"
+            )
+
+        tasks_by_index: dict[int, str] = {}
+        for task, task_index_raw in raw_tasks.items():
+            if not isinstance(task, str) or not task:
+                raise ValueError(
+                    "LeRobot writer requires each metadata."
+                    f"{LEROBOT_TASKS} key to be a non-empty task string"
+                )
+            try:
+                task_index = int(task_index_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "LeRobot writer requires each metadata."
+                    f"{LEROBOT_TASKS} value to be an integer task_index"
+                ) from exc
+
+            existing_task = tasks_by_index.get(task_index)
+            if existing_task is not None and existing_task != task:
+                raise ValueError(
+                    "LeRobot writer encountered conflicting canonical task mappings "
+                    f"for task_index={task_index}"
+                )
+            tasks_by_index[task_index] = task
+
+            existing_index = self._task_to_index.get(task)
+            if existing_index is None:
+                self._task_to_index[task] = task_index
+            elif existing_index != task_index:
+                raise ValueError(
+                    "LeRobot writer encountered conflicting canonical task indices "
+                    f"for task={task!r}"
+                )
+
+        if self._task_to_index:
+            max_index = max(self._task_to_index.values())
+            task_order = [""] * (max_index + 1)
+            for task, task_index in self._task_to_index.items():
+                existing = task_order[task_index]
+                if existing and existing != task:
+                    raise ValueError(
+                        "LeRobot writer encountered conflicting canonical task names "
+                        f"for task_index={task_index}"
+                    )
+                task_order[task_index] = task
+            if any(not task for task in task_order):
+                raise ValueError(
+                    "LeRobot writer requires metadata."
+                    f"{LEROBOT_TASKS} to define a contiguous task_index space"
+                )
+            self._task_order = task_order
+
+        return tasks_by_index
 
     def _initialize_info_from_rows(
         self, rows: Sequence[Row | Mapping[str, Any]]

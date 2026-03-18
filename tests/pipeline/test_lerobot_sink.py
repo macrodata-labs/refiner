@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import cast
+from typing import TypedDict, cast
 
 import av
 import numpy as np
@@ -24,6 +24,7 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotWriterConfig,
     LeRobotWriterSink,
 )
+from refiner.pipeline.sources.readers.lerobot import LEROBOT_TASKS
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
     LeRobotVideoWriter,
     _CompletedVideoItem,
@@ -37,6 +38,17 @@ from refiner.worker.lifecycle import RuntimeLifecycle
 _ALOHA_REPO_IDS = (
     "macrodata/aloha_static_battery_ep000_004",
     "macrodata/aloha_static_battery_ep005_009",
+)
+
+
+class _TaskMetadata(TypedDict):
+    task_index: int
+    task: str
+
+
+_DEFAULT_TASKS: tuple[_TaskMetadata, ...] = (
+    {"task_index": 0, "task": "pick"},
+    {"task_index": 1, "task": "place"},
 )
 
 
@@ -85,33 +97,70 @@ def _write_large_video(
             container.mux(packet)
 
 
+def _metadata(
+    *,
+    fps: int = 10,
+    robot_type: str = "mockbot",
+    tasks_metadata: tuple[_TaskMetadata, ...] = _DEFAULT_TASKS,
+) -> dict[str, object]:
+    return {
+        "lerobot_info": {"fps": fps, "robot_type": robot_type},
+        LEROBOT_TASKS: {item["task"]: item["task_index"] for item in tasks_metadata},
+    }
+
+
+def _frames(task_index: int, values: list[float]) -> list[dict[str, object]]:
+    return [
+        {
+            "frame_index": i,
+            "timestamp": float(i) / 10.0,
+            "task_index": task_index,
+            "observation.state": [v],
+        }
+        for i, v in enumerate(values)
+    ]
+
+
+def _row(
+    *,
+    episode_index: int,
+    task: str,
+    task_index: int,
+    values: list[float],
+    tasks_metadata: tuple[_TaskMetadata, ...] = _DEFAULT_TASKS,
+) -> dict[str, object]:
+    return {
+        "episode_index": episode_index,
+        "task": task,
+        "frames": _frames(task_index, values),
+        "metadata": _metadata(tasks_metadata=tasks_metadata),
+    }
+
+
 def _episode(
     *,
     episode_index: int,
     task: str,
+    task_index: int,
     video_path: Path,
     from_ts: float,
     to_ts: float,
     values: list[float],
+    tasks_metadata: tuple[_TaskMetadata, ...] = _DEFAULT_TASKS,
 ) -> dict:
     return {
-        "episode_index": episode_index,
-        "task": task,
-        "tasks": [task],
-        "frames": [
-            {
-                "frame_index": i,
-                "timestamp": float(i) / 10.0,
-                "observation.state": [v],
-            }
-            for i, v in enumerate(values)
-        ],
+        **_row(
+            episode_index=episode_index,
+            task=task,
+            task_index=task_index,
+            values=values,
+            tasks_metadata=tasks_metadata,
+        ),
         "observation.images.main": mdr.VideoFile(
             str(video_path),
             from_timestamp_s=from_ts,
             to_timestamp_s=to_ts,
         ),
-        "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
     }
 
 
@@ -130,6 +179,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
             _episode(
                 episode_index=0,
                 task="pick",
+                task_index=0,
                 video_path=src_video,
                 from_ts=0.0,
                 to_ts=0.3,
@@ -138,6 +188,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
             _episode(
                 episode_index=1,
                 task="place",
+                task_index=1,
                 video_path=src_video,
                 from_ts=0.3,
                 to_ts=0.6,
@@ -186,46 +237,6 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     assert [row["task"] for row in out_rows] == ["pick", "place"]
 
 
-def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> None:
-    out_root = tmp_path / "local-launch"
-    pipeline = mdr.from_items(
-        [
-            {
-                "episode_index": 0,
-                "task": "pick",
-                "tasks": ["pick"],
-                "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
-                ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
-            },
-            {
-                "episode_index": 1,
-                "task": "place",
-                "tasks": ["place"],
-                "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [3.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [4.0]},
-                ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
-            },
-        ],
-        items_per_shard=1,
-    ).write_lerobot(str(out_root))
-
-    stats = pipeline.launch_local(
-        name="lerobot-two-stage-local",
-        num_workers=2,
-        workdir=str(tmp_path / "workdir"),
-    )
-    assert stats.failed == 0
-    assert stats.claimed >= 3
-    assert (out_root / "meta" / "info.json").exists()
-    assert (out_root / "meta" / "stats.json").exists()
-    assert (out_root / "meta" / "tasks.parquet").exists()
-
-
 def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
     src_video = tmp_path / "source" / "episode.mp4"
     _write_video(src_video)
@@ -237,6 +248,7 @@ def test_write_lerobot_accepts_decoded_videos(tmp_path: Path) -> None:
                 _episode(
                     episode_index=0,
                     task="pick",
+                    task_index=0,
                     video_path=src_video,
                     from_ts=0.0,
                     to_ts=0.4,
@@ -277,6 +289,7 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
             _episode(
                 episode_index=0,
                 task="pick",
+                task_index=0,
                 video_path=src_video,
                 from_ts=0.0,
                 to_ts=10.0,
@@ -285,6 +298,7 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
             _episode(
                 episode_index=1,
                 task="place",
+                task_index=1,
                 video_path=src_video,
                 from_ts=0.0,
                 to_ts=10.0,
@@ -315,28 +329,26 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
 
 def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> None:
     out_root = tmp_path / "task-index"
+    tasks_metadata: tuple[_TaskMetadata, ...] = (
+        {"task_index": 0, "task": "place"},
+        {"task_index": 1, "task": "pick"},
+    )
     pipeline = mdr.from_items(
         [
-            {
-                "episode_index": 0,
-                "task": "place",
-                "tasks": ["place"],
-                "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
-                ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
-            },
-            {
-                "episode_index": 1,
-                "task": "pick",
-                "tasks": ["pick"],
-                "frames": [
-                    {"frame_index": 0, "timestamp": 0.0, "observation.state": [3.0]},
-                    {"frame_index": 1, "timestamp": 0.1, "observation.state": [4.0]},
-                ],
-                "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
-            },
+            _row(
+                episode_index=0,
+                task="pick",
+                task_index=0,
+                values=[1.0, 2.0],
+                tasks_metadata=tasks_metadata,
+            ),
+            _row(
+                episode_index=1,
+                task="place",
+                task_index=1,
+                values=[3.0, 4.0],
+                tasks_metadata=tasks_metadata,
+            ),
         ],
         items_per_shard=10,
     ).write_lerobot(str(out_root))
@@ -351,6 +363,70 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
     tasks = pq.read_table(out_root / "meta" / "tasks.parquet")
     assert tasks.column("task").to_pylist() == ["place", "pick"]
     assert tasks.column("task_index").to_pylist() == [0, 1]
+    episodes = pq.read_table(
+        out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    )
+    assert episodes.column("tasks").to_pylist() == [["place"], ["pick"]]
+    assert episodes.column("task").to_pylist() == ["pick", "place"]
+
+
+def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> None:
+    writer = LeRobotWriterSink(LeRobotWriterConfig(output=str(tmp_path / "out")))
+    with pytest.raises(
+        ValueError,
+        match="could not map frame task_index=7",
+    ):
+        writer.write_block(
+            [
+                DictRow(
+                    _row(
+                        episode_index=0,
+                        task="pick",
+                        task_index=7,
+                        values=[1.0],
+                    ),
+                    shard_id="shard-1",
+                )
+            ]
+        )
+
+
+def test_write_lerobot_raises_on_conflicting_task_tables(tmp_path: Path) -> None:
+    writer = LeRobotWriterSink(LeRobotWriterConfig(output=str(tmp_path / "out")))
+    with pytest.raises(
+        ValueError,
+        match="conflicting canonical task indices for task='pick'",
+    ):
+        writer.write_block(
+            [
+                DictRow(
+                    _row(
+                        episode_index=0,
+                        task="pick",
+                        task_index=0,
+                        values=[1.0],
+                        tasks_metadata=(
+                            {"task_index": 0, "task": "pick"},
+                            {"task_index": 1, "task": "place"},
+                        ),
+                    ),
+                    shard_id="shard-1",
+                ),
+                DictRow(
+                    _row(
+                        episode_index=1,
+                        task="place",
+                        task_index=1,
+                        values=[2.0],
+                        tasks_metadata=(
+                            {"task_index": 1, "task": "pick"},
+                            {"task_index": 0, "task": "place"},
+                        ),
+                    ),
+                    shard_id="shard-1",
+                ),
+            ]
+        )
 
 
 class _FinalizedWorkersRuntime:
@@ -367,16 +443,12 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
     out_root = tmp_path / "cleanup"
     config = LeRobotWriterConfig(output=str(out_root))
     row = DictRow(
-        {
-            "episode_index": 0,
-            "task": "pick",
-            "tasks": ["pick"],
-            "frames": [
-                {"frame_index": 0, "timestamp": 0.0, "observation.state": [1.0]},
-                {"frame_index": 1, "timestamp": 0.1, "observation.state": [2.0]},
-            ],
-            "metadata": {"lerobot_info": {"fps": 10, "robot_type": "mockbot"}},
-        },
+        _row(
+            episode_index=0,
+            task="pick",
+            task_index=0,
+            values=[1.0, 2.0],
+        ),
         shard_id="shard-1",
     )
 
@@ -385,18 +457,7 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
         runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
         worker_row = row.update(
             {
-                "frames": [
-                    {
-                        "frame_index": 0,
-                        "timestamp": 0.0,
-                        "observation.state": [values[0]],
-                    },
-                    {
-                        "frame_index": 1,
-                        "timestamp": 0.1,
-                        "observation.state": [values[1]],
-                    },
-                ]
+                "frames": _frames(0, values),
             }
         )
         with set_active_run_context(

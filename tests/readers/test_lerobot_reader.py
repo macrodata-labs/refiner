@@ -8,9 +8,13 @@ import pyarrow.parquet as pq
 
 from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_EPISODE_STATS,
+    LEROBOT_TASKS,
 )
 from refiner.media import VideoFile
-from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.pipeline.sources.readers.lerobot import (
+    LeRobotEpisodeReader,
+    _merge_task_metadata,
+)
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -18,7 +22,17 @@ def _write_parquet(path: Path, rows: list[dict]) -> None:
     pq.write_table(pa.Table.from_pylist(rows), path)
 
 
-def _build_sample_dataset(root: Path) -> None:
+def _build_sample_dataset(
+    root: Path,
+    *,
+    tasks_rows: list[dict] | None = None,
+    episode_tasks: tuple[str, str] = ("pick", "place"),
+    frame_task_indices: tuple[int, int, int, int] = (0, 0, 1, 1),
+) -> None:
+    tasks_rows = tasks_rows or [
+        {"task_index": 0, "task": "pick"},
+        {"task_index": 1, "task": "place"},
+    ]
     (root / "meta").mkdir(parents=True, exist_ok=True)
     (root / "meta" / "info.json").write_text(
         json.dumps(
@@ -45,10 +59,7 @@ def _build_sample_dataset(root: Path) -> None:
     )
     _write_parquet(
         root / "meta" / "tasks.parquet",
-        [
-            {"task_index": 0, "task": "pick"},
-            {"task_index": 1, "task": "place"},
-        ],
+        tasks_rows,
     )
     _write_parquet(
         root / "meta" / "episodes" / "part-000.parquet",
@@ -62,7 +73,7 @@ def _build_sample_dataset(root: Path) -> None:
                 "meta/episodes/chunk_index": 0,
                 "meta/episodes/file_index": 0,
                 "stats/observation.state/min": [-999.0],
-                "tasks": ["pick"],
+                "tasks": [episode_tasks[0]],
                 "videos/observation.images.main/chunk_index": 0,
                 "videos/observation.images.main/file_index": 0,
                 "videos/observation.images.main/from_timestamp": 0.0,
@@ -77,7 +88,7 @@ def _build_sample_dataset(root: Path) -> None:
                 "meta/episodes/chunk_index": 0,
                 "meta/episodes/file_index": 0,
                 "stats/observation.state/min": [-999.0],
-                "tasks": ["place"],
+                "tasks": [episode_tasks[1]],
                 "videos/observation.images.main/chunk_index": 0,
                 "videos/observation.images.main/file_index": 1,
                 "videos/observation.images.main/from_timestamp": 1.0,
@@ -93,28 +104,28 @@ def _build_sample_dataset(root: Path) -> None:
                 "episode_index": 0,
                 "frame_index": 0,
                 "timestamp": 0.0,
-                "task_index": 0,
+                "task_index": frame_task_indices[0],
             },
             {
                 "index": 1,
                 "episode_index": 0,
                 "frame_index": 1,
                 "timestamp": 0.1,
-                "task_index": 0,
+                "task_index": frame_task_indices[1],
             },
             {
                 "index": 2,
                 "episode_index": 1,
                 "frame_index": 0,
                 "timestamp": 1.0,
-                "task_index": 1,
+                "task_index": frame_task_indices[2],
             },
             {
                 "index": 3,
                 "episode_index": 1,
                 "frame_index": 1,
                 "timestamp": 1.1,
-                "task_index": 1,
+                "task_index": frame_task_indices[3],
             },
         ],
     )
@@ -134,12 +145,13 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
 
     assert int(first["episode_index"]) == 0
     assert int(second["episode_index"]) == 1
-    assert first["task"] == "pick"
-    assert second["task"] == "place"
+    assert first["metadata"][LEROBOT_TASKS] == {"pick": 0, "place": 1}
     assert first["metadata"]["lerobot_stats"]["observation.state"]["count"] == 2
     assert first["metadata"][LEROBOT_EPISODE_STATS]["observation.state"]["min"] == [
         -999.0
     ]
+    assert "tasks" not in first
+    assert "task" not in first
     assert "stats/observation.state/min" not in first
     assert "videos/observation.images.main/chunk_index" not in first
     assert "meta/episodes/chunk_index" not in first
@@ -167,13 +179,33 @@ def test_lerobot_reader_exposes_episode_shard_planning_knobs(tmp_path: Path) -> 
     assert len(shards) == 2
 
 
+def test_merge_task_metadata_builds_deterministic_remaps() -> None:
+    task_to_index, remaps = _merge_task_metadata(
+        (
+            {"pick": 0, "place": 1},
+            {"place": 0, "stack": 1},
+        )
+    )
+
+    assert task_to_index == {"pick": 0, "place": 1, "stack": 2}
+    assert remaps == ({}, {0: 1, 1: 2})
+
+
 def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(
     tmp_path: Path,
 ) -> None:
     first_root = tmp_path / "lerobot-a"
     second_root = tmp_path / "lerobot-b"
     _build_sample_dataset(first_root)
-    _build_sample_dataset(second_root)
+    _build_sample_dataset(
+        second_root,
+        tasks_rows=[
+            {"task_index": 0, "task": "place"},
+            {"task_index": 1, "task": "stack"},
+        ],
+        episode_tasks=("place", "stack"),
+        frame_task_indices=(0, 0, 1, 1),
+    )
 
     reader = LeRobotEpisodeReader([str(first_root), str(second_root)])
     rows = [row for shard in reader.list_shards() for row in reader.read_shard(shard)]
@@ -186,3 +218,8 @@ def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(
         str(second_root),
         str(second_root),
     ]
+    expected_tasks = {"pick": 0, "place": 1, "stack": 2}
+    assert rows[0]["metadata"][LEROBOT_TASKS] == expected_tasks
+    assert rows[2]["metadata"][LEROBOT_TASKS] == expected_tasks
+    assert [int(frame["task_index"]) for frame in rows[2]["frames"]] == [1, 1]
+    assert [int(frame["task_index"]) for frame in rows[3]["frames"]] == [2, 2]

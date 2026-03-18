@@ -30,17 +30,19 @@ _DEFAULT_VIDEO_PATH = (
 _DEFAULT_EPISODES_GLOB_ROOT = "meta/episodes"
 _INFO_JSON = "meta/info.json"
 _STATS_JSON = "meta/stats.json"
+_TASKS_PARQUET = "meta/tasks.parquet"
 LEROBOT_STATS = "lerobot_stats"
 LEROBOT_INFO = "lerobot_info"
 LEROBOT_EPISODE_STATS = "lerobot_episode_stats"
+LEROBOT_TASKS = "lerobot_tasks"
 _ROW_DROP_PREFIXES = ("stats/", "videos/", "meta/episodes/", "data/")
-_ROW_DROP_KEYS = {"dataset_from_index", "dataset_to_index"}
+_ROW_DROP_KEYS = {"dataset_from_index", "dataset_to_index", "tasks"}
 _DATA_FILE_CACHE_NAME = "lerobot:data_files"
 
 
 @dataclass(frozen=True, slots=True)
 class _FrameFileCacheEntry:
-    key: tuple[int, Any, Any]
+    key: tuple[str, Any, Any]
     table: pa.Table
 
 
@@ -48,6 +50,8 @@ class _FrameFileCacheEntry:
 class _DatasetState:
     root: DataFolder
     stats_metadata: Mapping[str, Any]
+    task_to_index: Mapping[str, int]
+    task_index_remap: Mapping[int, int]
     fps: int | None
     video_path_template: str
     data_path_template: str
@@ -122,7 +126,7 @@ class LeRobotEpisodeReader(ParquetReader):
             split_row_groups=split_row_groups,
         )
 
-        self._datasets: tuple[_DatasetState, ...] | None = None
+        self._datasets: dict[str, _DatasetState] | None = None
         self._frames_cache_lock = asyncio.Lock()
         self._frames_cache_entry: _FrameFileCacheEntry | None = None
         self._next_episode_index = 0
@@ -169,7 +173,12 @@ class LeRobotEpisodeReader(ParquetReader):
                     )
                     self._next_episode_index = episode_index + 1
                     async_window.submit_blocking(
-                        self._build_episode_row(row, part.source_index, episode_index)
+                        self._build_episode_row(
+                            row,
+                            part.source_index,
+                            part.path,
+                            episode_index,
+                        )
                     )
                     yield from async_window.poll()
                     self._submitted_episodes += 1
@@ -177,9 +186,13 @@ class LeRobotEpisodeReader(ParquetReader):
         yield from async_window.flush()
 
     async def _build_episode_row(
-        self, row: Row, source_index: int, episode_index: int
+        self,
+        row: Row,
+        source_index: int,
+        episode_path: str,
+        episode_index: int,
     ) -> Row:
-        dataset = self._get_datasets()[source_index]
+        dataset = self._dataset_for_source(source_index, episode_path)
         episode_stats = self._extract_episode_stats(row)
         metadata = {
             LEROBOT_INFO: {
@@ -188,6 +201,7 @@ class LeRobotEpisodeReader(ParquetReader):
                 "robot_type": dataset.robot_type,
             },
             LEROBOT_STATS: dataset.stats_metadata,
+            LEROBOT_TASKS: dict(dataset.task_to_index),
         }
         if episode_stats:
             metadata[LEROBOT_EPISODE_STATS] = episode_stats
@@ -196,19 +210,11 @@ class LeRobotEpisodeReader(ParquetReader):
             "metadata": metadata,
         }
 
-        frames = await self._load_episode_frames(row, source_index)
+        frames = await self._load_episode_frames(row, dataset)
         patch["frames"] = frames
 
-        tasks = row.get("tasks")
-        if isinstance(tasks, list) and tasks:
-            patch["task"] = tasks[0]
-
         for video_key in dataset.video_keys:
-            video = self._build_video(
-                episode=row,
-                video_key=video_key,
-                source_index=source_index,
-            )
+            video = self._build_video(episode=row, dataset=dataset, video_key=video_key)
             if video is not None:
                 patch[video_key] = video
 
@@ -225,10 +231,9 @@ class LeRobotEpisodeReader(ParquetReader):
         self,
         *,
         episode: Mapping[str, Any],
+        dataset: _DatasetState,
         video_key: str,
-        source_index: int,
     ) -> VideoFile | None:
-        dataset = self._get_datasets()[source_index]
         chunk_key = f"videos/{video_key}/chunk_index"
         file_key = f"videos/{video_key}/file_index"
         chunk = episode.get(chunk_key)
@@ -236,11 +241,15 @@ class LeRobotEpisodeReader(ParquetReader):
         if chunk is None or file_idx is None:
             return None
 
-        rel = _format_chunked_path(
-            dataset.video_path_template,
-            video_key=video_key,
-            chunk=chunk,
-            file_idx=file_idx,
+        rel = str(
+            dataset.video_path_template.format(
+                video_key=video_key,
+                chunk=chunk,
+                chunk_key=chunk,
+                chunk_index=chunk,
+                file=file_idx,
+                file_index=file_idx,
+            )
         )
         uri = str(dataset.root.abs_paths(rel))
         from_timestamp = episode.get(f"videos/{video_key}/from_timestamp")
@@ -268,7 +277,7 @@ class LeRobotEpisodeReader(ParquetReader):
     async def _load_episode_frames(
         self,
         episode: Mapping[str, Any],
-        source_index: int,
+        dataset: _DatasetState,
     ) -> list[Row]:
         chunk = episode["data/chunk_index"]
         file_idx = episode["data/file_index"]
@@ -297,7 +306,7 @@ class LeRobotEpisodeReader(ParquetReader):
             )
 
         cache_entry = await self._get_cached_frame_table(
-            source_index=source_index,
+            dataset=dataset,
             chunk=chunk,
             file_idx=file_idx,
         )
@@ -308,13 +317,15 @@ class LeRobotEpisodeReader(ParquetReader):
         )
         if episode_table.num_rows <= 0:
             return []
+        remap = dataset.task_index_remap
+        if remap:
+            episode_table = self._remap_task_index_column(episode_table, remap)
 
         names = tuple(str(name) for name in episode_table.column_names)
         columns = tuple(
             episode_table.column(i) for i in range(episode_table.num_columns)
         )
         index_by_name = {name: i for i, name in enumerate(names)}
-
         return [
             ArrowRowView(
                 names=names,
@@ -324,6 +335,24 @@ class LeRobotEpisodeReader(ParquetReader):
             )
             for row_idx in range(episode_table.num_rows)
         ]
+
+    def _remap_task_index_column(
+        self,
+        table: pa.Table,
+        remap: Mapping[int, int],
+    ) -> pa.Table:
+        if "task_index" not in table.schema.names:
+            return table
+        values = table.column("task_index").to_pylist()
+        mapped_values = [
+            remap.get(int(value), int(value)) if value is not None else None
+            for value in values
+        ]
+        return table.set_column(
+            table.schema.get_field_index("task_index"),
+            "task_index",
+            pa.array(mapped_values, type=pa.int64()),
+        )
 
     def _slice_episode_table(
         self,
@@ -345,12 +374,11 @@ class LeRobotEpisodeReader(ParquetReader):
     async def _get_cached_frame_table(
         self,
         *,
-        source_index: int,
+        dataset: _DatasetState,
         chunk: Any,
         file_idx: Any,
     ) -> _FrameFileCacheEntry:
-        dataset = self._get_datasets()[source_index]
-        cache_key = (source_index, chunk, file_idx)
+        cache_key = (str(dataset.root.abs_paths("")), chunk, file_idx)
         cached_entry = self._frames_cache_entry
         if cached_entry is not None and cached_entry.key == cache_key:
             return cached_entry
@@ -360,15 +388,19 @@ class LeRobotEpisodeReader(ParquetReader):
             if cached_entry is not None and cached_entry.key == cache_key:
                 return cached_entry
 
-            rel = _format_chunked_path(
-                dataset.data_path_template,
-                video_key=None,
-                chunk=chunk,
-                file_idx=file_idx,
+            rel = str(
+                dataset.data_path_template.format(
+                    video_key="",
+                    chunk=chunk,
+                    chunk_key=chunk,
+                    chunk_index=chunk,
+                    file=file_idx,
+                    file_index=file_idx,
+                )
             )
             data_file = dataset.root.file(rel)
 
-            async with get_media_cache(_DATA_FILE_CACHE_NAME).cached(
+            async with get_media_cache(_DATA_FILE_CACHE_NAME, max_entries=3).cached(
                 file=data_file
             ) as local_path:
                 with open(local_path, "rb") as handle:
@@ -412,12 +444,45 @@ class LeRobotEpisodeReader(ParquetReader):
             raise ValueError("LeRobot reader requires at least one dataset root")
         return roots
 
-    def _get_datasets(self) -> tuple[_DatasetState, ...]:
+    def _get_datasets(self) -> dict[str, _DatasetState]:
         datasets = self._datasets
         if datasets is None:
-            datasets = tuple(self._load_dataset_state(root) for root in self._roots)
+            raw_datasets = tuple(self._load_dataset_state(root) for root in self._roots)
+            task_to_index, remaps = _merge_task_metadata(
+                tuple(dataset.task_to_index for dataset in raw_datasets)
+            )
+
+            datasets = {
+                str(dataset.root.abs_paths("")): _DatasetState(
+                    root=dataset.root,
+                    stats_metadata=dataset.stats_metadata,
+                    task_to_index=task_to_index,
+                    task_index_remap=remaps[idx],
+                    fps=dataset.fps,
+                    video_path_template=dataset.video_path_template,
+                    data_path_template=dataset.data_path_template,
+                    video_keys=dataset.video_keys,
+                    robot_type=dataset.robot_type,
+                )
+                for idx, dataset in enumerate(raw_datasets)
+            }
             self._datasets = datasets
         return datasets
+
+    def _dataset_for_source(
+        self,
+        source_index: int,
+        episode_path: str,
+    ) -> _DatasetState:
+        source = self.fileset.resolve_file(source_index, episode_path)
+        source_path = source.abs_path()
+        for dataset_name, dataset in self._get_datasets().items():
+            prefix = dataset_name.rstrip("/") + "/"
+            if source_path == dataset_name or source_path.startswith(prefix):
+                return dataset
+        raise FileNotFoundError(
+            f"Could not resolve LeRobot dataset root for episode file {source_path!r}"
+        )
 
     def _load_dataset_state(self, root: DataFolder) -> _DatasetState:
         if not root.fs.isdir(root.path):
@@ -426,41 +491,57 @@ class LeRobotEpisodeReader(ParquetReader):
             )
         info = self._load_info(root)
         stats_metadata = self._load_stats(root)
-        features = info.get("features") if isinstance(info, Mapping) else {}
+        task_to_index = self._load_tasks(root)
+        features = info.get("features")
         return _DatasetState(
             root=root,
             stats_metadata=stats_metadata,
-            fps=(
-                int(info["fps"])
-                if isinstance(info, Mapping) and info.get("fps") is not None
-                else None
-            ),
+            task_to_index=task_to_index,
+            task_index_remap={},
+            fps=int(info["fps"]) if info.get("fps") is not None else None,
             video_path_template=(
-                str(info.get("video_path"))
-                if isinstance(info, Mapping) and isinstance(info.get("video_path"), str)
+                str(info["video_path"])
+                if isinstance(info.get("video_path"), str)
                 else _DEFAULT_VIDEO_PATH
             ),
             data_path_template=(
-                str(info.get("data_path"))
-                if isinstance(info, Mapping) and isinstance(info.get("data_path"), str)
+                str(info["data_path"])
+                if isinstance(info.get("data_path"), str)
                 else _DEFAULT_DATA_PATH
             ),
             video_keys=self._load_video_keys(
                 features if isinstance(features, Mapping) else {}
             ),
-            robot_type=(
-                str(info.get("robot_type"))
-                if isinstance(info, Mapping) and info.get("robot_type") is not None
-                else None
-            ),
+            robot_type=str(info["robot_type"])
+            if info.get("robot_type") is not None
+            else None,
         )
+
+    def _load_tasks(
+        self,
+        root: DataFolder,
+    ) -> dict[str, int]:
+        tasks_file = root.file(_TASKS_PARQUET)
+        if not tasks_file.exists():
+            return {}
+
+        with tasks_file.open("rb") as handle:
+            table = pq.read_table(handle)
+
+        index_field = (
+            "__index_level_0__" if "__index_level_0__" in table.schema.names else "task"
+        )
+        return {
+            str(row[index_field]): int(row["task_index"])
+            for row in table.to_pylist()
+            if row.get("task_index") is not None
+            and isinstance(row.get(index_field), str)
+        }
 
     def _load_info(self, root: DataFolder) -> Mapping[str, Any]:
         info_file = root.file(_INFO_JSON)
         with info_file.open("rb") as handle:
             payload = json.loads(handle.read())
-        if not isinstance(payload, Mapping):
-            raise ValueError("LeRobot info.json must contain a JSON object")
         return dict(payload)
 
     def _load_stats(self, root: DataFolder) -> Mapping[str, Any]:
@@ -469,19 +550,16 @@ class LeRobotEpisodeReader(ParquetReader):
             return {}
         with stats_file.open("rb") as handle:
             payload = json.loads(handle.read())
-        if not isinstance(payload, Mapping):
-            return {}
         return dict(payload)
 
     def _load_video_keys(self, features: Mapping[str, Any]) -> tuple[str, ...]:
-        out: list[str] = []
-        for key, feature in features.items():
-            if not isinstance(key, str) or not isinstance(feature, Mapping):
-                continue
-            if feature.get("dtype") == "video":
-                out.append(key)
-        out.sort()
-        return tuple(out)
+        return tuple(
+            key
+            for key, feature in features.items()
+            if isinstance(key, str)
+            and isinstance(feature, Mapping)
+            and feature.get("dtype") == "video"
+        )
 
     def _extract_episode_stats(
         self,
@@ -496,28 +574,28 @@ class LeRobotEpisodeReader(ParquetReader):
         return out
 
 
-def _format_chunked_path(
-    template: str,
-    *,
-    video_key: str | None,
-    chunk: str | int,
-    file_idx: int,
-) -> str:
-    return str(
-        template.format(
-            video_key=video_key if video_key is not None else "",
-            chunk=chunk,
-            chunk_key=chunk,
-            chunk_index=chunk,
-            file=file_idx,
-            file_index=file_idx,
-        )
-    )
+def _merge_task_metadata(
+    tasks_by_dataset: Sequence[Mapping[str, int]],
+) -> tuple[dict[str, int], tuple[dict[int, int], ...]]:
+    task_to_index: dict[str, int] = {}
+    remaps: list[dict[int, int]] = []
+
+    for source_tasks in tasks_by_dataset:
+        remap: dict[int, int] = {}
+        for task, source_index in source_tasks.items():
+            merged_index = task_to_index.setdefault(task, len(task_to_index))
+            if merged_index != source_index:
+                remap[int(source_index)] = merged_index
+        remaps.append(remap)
+
+    return task_to_index, tuple(remaps)
 
 
 __all__ = [
     "LeRobotEpisodeReader",
     "LEROBOT_EPISODE_STATS",
+    "LEROBOT_TASKS",
     "LEROBOT_STATS",
     "LEROBOT_INFO",
+    "_merge_task_metadata",
 ]
