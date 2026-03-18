@@ -81,12 +81,12 @@ import refiner as mdr
 - the Python package as `refiner`
 - the CLI as `macrodata`
 
-## What To Expect
+## what refiner gives you
 
 - training-data-first pipeline primitives instead of generic ETL abstractions
 - multimodal processing, with robotics support today
 - a lot of built-in readers, transforms, sinks, and lifecycle/runtime machinery so you do not have to rebuild the same scaffolding in scripts
-- access to any storage backend supported by `fsspec`
+- access to any storage backend supported by `fsspec` (S3, GCP, Hugging Face, etc.)
 - local execution for development and elastic cloud execution for large runs
 - built-in observability through the Macrodata platform, so you can inspect how your data is changing instead of debugging blindly after the fact
 
