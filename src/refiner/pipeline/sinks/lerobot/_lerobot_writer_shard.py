@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from refiner.io import DataFolder
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
     )
 
 
-_DEFAULT_DATA_PATH = "data/chunk-{chunk_key}/file-{file_index:03d}.parquet"
+_DEFAULT_DATA_PATH = "data/chunk-{chunk_index}/file-{file_index:03d}.parquet"
 _DEFAULT_CODEBASE_VERSION = "v3.0"
 
 
@@ -64,24 +65,6 @@ def _resolve_video_threads(
     if videos_in_row <= 0:
         return None
     return max(1, _cpu_thread_count() // int(videos_in_row))
-
-
-def _format_chunk_path(
-    template: str,
-    *,
-    chunk: str,
-    file_idx: int,
-    video_key: str | None = None,
-) -> str:
-    return template.format(
-        video_key="" if video_key is None else video_key,
-        chunk=chunk,
-        chunk_key=chunk,
-        chunk_index=chunk,
-        file=file_idx,
-        file_idx=file_idx,
-        file_index=file_idx,
-    )
 
 
 @dataclass(slots=True)
@@ -222,9 +205,117 @@ class _LeRobotShardWriter:
         episode_index = int(row["episode_index"])
         frames = self._require_required_fields(row)
         frame_stats = compute_episode_stats(frames=frames)
-        tasks = self._tasks_from_frames(
-            frames=frames,
-            metadata=row.get("metadata"),
+        metadata = row.get("metadata")
+        if not isinstance(metadata, Mapping):
+            raise ValueError(
+                "LeRobot writer requires metadata with canonical "
+                f"'{LEROBOT_TASKS}' entries"
+            )
+        raw_tasks = metadata.get(LEROBOT_TASKS)
+        if not isinstance(raw_tasks, Mapping):
+            raise ValueError(
+                "LeRobot writer requires metadata."
+                f"{LEROBOT_TASKS} as a mapping of task to task_index"
+            )
+
+        task_to_index: dict[str, int] = {}
+        for task, task_index_raw in raw_tasks.items():
+            if not isinstance(task, str) or not task:
+                raise ValueError(
+                    "LeRobot writer requires each metadata."
+                    f"{LEROBOT_TASKS} key to be a non-empty task string"
+                )
+            try:
+                task_to_index[task] = int(task_index_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "LeRobot writer requires each metadata."
+                    f"{LEROBOT_TASKS} value to be an integer task_index"
+                ) from exc
+
+        max_task_index = max(task_to_index.values(), default=-1)
+        task_names_by_index = [""] * (max_task_index + 1)
+        for task, task_index in task_to_index.items():
+            existing_task = task_names_by_index[task_index]
+            if existing_task and existing_task != task:
+                raise ValueError(
+                    "LeRobot writer encountered conflicting canonical task mappings "
+                    f"for task_index={task_index}"
+                )
+            task_names_by_index[task_index] = task
+            existing_index = self._task_to_index.get(task)
+            if existing_index is None:
+                self._task_to_index[task] = task_index
+            elif existing_index != task_index:
+                raise ValueError(
+                    "LeRobot writer encountered conflicting canonical task indices "
+                    f"for task={task!r}"
+                )
+
+        if any(not task for task in task_names_by_index):
+            raise ValueError(
+                "LeRobot writer requires metadata."
+                f"{LEROBOT_TASKS} to define a contiguous task_index space"
+            )
+
+        if self._task_to_index:
+            max_task_index = max(self._task_to_index.values())
+            self._task_order = [""] * (max_task_index + 1)
+            for task, task_index in self._task_to_index.items():
+                existing_task = self._task_order[task_index]
+                if existing_task and existing_task != task:
+                    raise ValueError(
+                        "LeRobot writer encountered conflicting canonical task names "
+                        f"for task_index={task_index}"
+                    )
+                self._task_order[task_index] = task
+            if any(not task for task in self._task_order):
+                raise ValueError(
+                    "LeRobot writer requires metadata."
+                    f"{LEROBOT_TASKS} to define a contiguous task_index space"
+                )
+
+        frame_task_indices: list[int] = []
+        for frame_idx, frame in enumerate(frames):
+            task_index_raw = frame.get("task_index")
+            if task_index_raw is None:
+                raise ValueError(
+                    "LeRobot writer requires every frame to contain an integer "
+                    f"'task_index'; frame {frame_idx} is missing a usable value"
+                )
+            try:
+                frame_task_indices.append(int(task_index_raw))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "LeRobot writer requires every frame to contain an integer "
+                    f"'task_index'; frame {frame_idx} is missing a usable value"
+                ) from exc
+
+        unmapped_task_index = next(
+            (
+                task_index
+                for task_index in frame_task_indices
+                if task_index < 0 or task_index >= len(task_names_by_index)
+            ),
+            None,
+        )
+        if unmapped_task_index is not None:
+            raise ValueError(
+                "LeRobot writer could not map frame task_index="
+                f"{unmapped_task_index} through metadata.{LEROBOT_TASKS}"
+            )
+
+        tasks = (
+            list(
+                dict.fromkeys(
+                    pc.take(
+                        pa.array(task_names_by_index, type=pa.string()),
+                        pa.array(frame_task_indices, type=pa.int64()),
+                    ).to_pylist()
+                )
+            )
+            if frame_task_indices
+            else []
         )
         table = (
             frame_table(
@@ -317,18 +408,19 @@ class _LeRobotShardWriter:
                     use_dictionary=True,
                 )
 
-        task_lines = [
-            json.dumps({"task": task, "task_index": task_index}, sort_keys=True)
-            for task_index, task in enumerate(self._task_order)
-        ]
-        if task_lines:
-            with self.folder.open(
-                self._meta_path("tasks.jsonl"),
-                mode="wt",
-                encoding="utf-8",
-            ) as out:
-                out.write("\n".join(task_lines))
-                out.write("\n")
+        tasks_table = pa.Table.from_pydict(
+            {
+                "task": list(self._task_order),
+                "task_index": list(range(len(self._task_order))),
+            }
+        )
+        with self.folder.open(self._meta_path("tasks.parquet"), mode="wb") as out:
+            pq.write_table(
+                tasks_table,
+                out,
+                compression="snappy",
+                use_dictionary=True,
+            )
 
         info_record = {
             "codebase_version": _DEFAULT_CODEBASE_VERSION,
@@ -406,103 +498,6 @@ class _LeRobotShardWriter:
         if not isinstance(raw_stats, Mapping):
             return {}
         return _cast_stats_to_numpy(raw_stats)
-
-    def _tasks_from_frames(
-        self,
-        *,
-        frames: Sequence[Mapping[str, Any]],
-        metadata: Any,
-    ) -> list[str]:
-        tasks_by_index = self._canonical_tasks(metadata)
-        tasks: list[str] = []
-        for frame_idx, frame in enumerate(frames):
-            task_index_raw = frame.get("task_index")
-            if task_index_raw is None:
-                raise ValueError(
-                    "LeRobot writer requires every frame to contain an integer "
-                    f"'task_index'; frame {frame_idx} is missing a usable value"
-                )
-            try:
-                task_index = int(task_index_raw)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    "LeRobot writer requires every frame to contain an integer "
-                    f"'task_index'; frame {frame_idx} is missing a usable value"
-                ) from exc
-            task = tasks_by_index.get(task_index)
-            if task is None:
-                raise ValueError(
-                    "LeRobot writer could not map frame task_index="
-                    f"{task_index} through metadata.{LEROBOT_TASKS}"
-                )
-            if task not in tasks:
-                tasks.append(task)
-        return tasks
-
-    def _canonical_tasks(self, metadata: Any) -> dict[int, str]:
-        if not isinstance(metadata, Mapping):
-            raise ValueError(
-                "LeRobot writer requires metadata with canonical "
-                f"'{LEROBOT_TASKS}' entries"
-            )
-        raw_tasks = metadata.get(LEROBOT_TASKS)
-        if not isinstance(raw_tasks, Mapping):
-            raise ValueError(
-                "LeRobot writer requires metadata."
-                f"{LEROBOT_TASKS} as a mapping of task to task_index"
-            )
-
-        tasks_by_index: dict[int, str] = {}
-        for task, task_index_raw in raw_tasks.items():
-            if not isinstance(task, str) or not task:
-                raise ValueError(
-                    "LeRobot writer requires each metadata."
-                    f"{LEROBOT_TASKS} key to be a non-empty task string"
-                )
-            try:
-                task_index = int(task_index_raw)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    "LeRobot writer requires each metadata."
-                    f"{LEROBOT_TASKS} value to be an integer task_index"
-                ) from exc
-
-            existing_task = tasks_by_index.get(task_index)
-            if existing_task is not None and existing_task != task:
-                raise ValueError(
-                    "LeRobot writer encountered conflicting canonical task mappings "
-                    f"for task_index={task_index}"
-                )
-            tasks_by_index[task_index] = task
-
-            existing_index = self._task_to_index.get(task)
-            if existing_index is None:
-                self._task_to_index[task] = task_index
-            elif existing_index != task_index:
-                raise ValueError(
-                    "LeRobot writer encountered conflicting canonical task indices "
-                    f"for task={task!r}"
-                )
-
-        if self._task_to_index:
-            max_index = max(self._task_to_index.values())
-            task_order = [""] * (max_index + 1)
-            for task, task_index in self._task_to_index.items():
-                existing = task_order[task_index]
-                if existing and existing != task:
-                    raise ValueError(
-                        "LeRobot writer encountered conflicting canonical task names "
-                        f"for task_index={task_index}"
-                    )
-                task_order[task_index] = task
-            if any(not task for task in task_order):
-                raise ValueError(
-                    "LeRobot writer requires metadata."
-                    f"{LEROBOT_TASKS} to define a contiguous task_index space"
-                )
-            self._task_order = task_order
-
-        return tasks_by_index
 
     def _initialize_info_from_rows(
         self, rows: Sequence[Row | Mapping[str, Any]]
@@ -605,10 +600,9 @@ class _LeRobotShardWriter:
             return
 
         self._data_schema = schema
-        rel = _format_chunk_path(
-            _DEFAULT_DATA_PATH,
-            chunk=self.chunk_key,
-            file_idx=self._data_file_index,
+        rel = _DEFAULT_DATA_PATH.format(
+            chunk_index=self.chunk_key,
+            file_index=self._data_file_index,
         )
         self._data_writer_file = self.folder.open(rel, mode="wb")
         self._data_writer = pq.ParquetWriter(

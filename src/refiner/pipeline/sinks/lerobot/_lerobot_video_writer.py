@@ -281,11 +281,7 @@ class LeRobotVideoWriter:
     def _current_output_rel(self) -> str:
         return DEFAULT_VIDEO_PATH.format(
             video_key=self.video_key,
-            chunk=self.chunk_key,
-            chunk_key=self.chunk_key,
             chunk_index=self.chunk_key,
-            file=self._next_file_index,
-            file_idx=self._next_file_index,
             file_index=self._next_file_index,
         )
 

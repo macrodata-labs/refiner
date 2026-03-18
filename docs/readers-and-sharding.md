@@ -40,31 +40,6 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
   - when reading multiple dataset roots, the reader merges all source `meta/tasks.parquet` tables once in input order, keeps the first-seen task ids stable, appends unseen tasks at the end, and remaps per-frame `task_index` values into that merged task table before emitting rows.
 - Use `target_shard_bytes` to control shard granularity.
 
-## Hydrating External Files
-
-Use `refiner.hydrate_media(...)` with `.map_async(...)` when you want decoded
-video clips materialized in-process.
-
-```python
-import refiner as mdr
-
-pipeline = (
-    mdr.read_lerobot("s3://bucket/dataset")
-    .map_async(
-        mdr.hydrate_media("observation.images.main"),
-        max_in_flight=8,
-    )
-)
-```
-
-`hydrate_media(...)` currently accepts `Video` values only. For LeRobot inputs,
-that means clip-aligned hydration is explicit and decode-backed:
-
-- use `.map_async(...)` to control concurrency
-- expect decoded frames in `video.media`
-
-Rows are yielded in input order unless you explicitly choose otherwise on the async step.
-
 ## LeRobot Writer Tuning
 
 `write_lerobot(...)` keeps video tuning grouped:
@@ -87,4 +62,3 @@ Rows are yielded in input order unless you explicitly choose otherwise on the as
 - LeRobot expects parquet metadata under `meta/episodes/**`; legacy JSONL metadata is not used.
 - LeRobot reads `fps`, `robot_type`, `features`, `data_path`, and `video_path` from `meta/info.json` when present.
 - The LeRobot writer is batch-oriented per shard block: frame parquet writes happen per batch table, each `video_key` uses one batch-scoped `VideoWriter.write_videos(...)` call that prepares videos concurrently and commits them in order, and episode rows are finalized from an async queue of completed video results.
-- `hydrate_media(...)` is intentionally narrow here; it is not a general file/bytes hydration helper.

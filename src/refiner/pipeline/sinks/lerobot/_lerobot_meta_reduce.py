@@ -78,7 +78,7 @@ class _LeRobotMetaReducer:
         if not episodes_rows:
             return
 
-        tasks = self._load_stage1_tasks(finalized_chunk_keys)
+        task_to_index = self._load_stage1_tasks(finalized_chunk_keys)
         stats_list = [
             _extract_episode_stats(row)
             for row in episodes_rows
@@ -103,8 +103,10 @@ class _LeRobotMetaReducer:
 
         tasks_table = pa.Table.from_pydict(
             {
-                "task": tasks,
-                "task_index": list(range(len(tasks))),
+                "task": [task for task, _ in _ordered_task_items(task_to_index)],
+                "task_index": [
+                    task_index for _, task_index in _ordered_task_items(task_to_index)
+                ],
             }
         )
         with self.folder.open("meta/tasks.parquet", mode="wb") as out:
@@ -119,7 +121,11 @@ class _LeRobotMetaReducer:
         with self.folder.open("meta/stats.json", mode="wt", encoding="utf-8") as out:
             json.dump(_serialize_stats(merged_stats), out, indent=2, sort_keys=True)
 
-        info = self._merge_infos(infos=infos, tasks=tasks, episodes_rows=episodes_rows)
+        info = self._merge_infos(
+            infos=infos,
+            task_to_index=task_to_index,
+            episodes_rows=episodes_rows,
+        )
         with self.folder.open("meta/info.json", mode="wt", encoding="utf-8") as out:
             json.dump(info, out, indent=2, sort_keys=True)
 
@@ -136,46 +142,27 @@ class _LeRobotMetaReducer:
         rows.sort(key=lambda row: int(row["episode_index"]))
         return rows
 
-    def _load_stage1_tasks(self, finalized_chunk_keys: set[str]) -> list[str]:
-        task_to_index: dict[str, int] = {}
-        index_to_task: dict[int, str] = {}
-        for rel in self._iter_stage1_jsonl_files(
-            finalized_chunk_keys, filename="tasks.jsonl"
-        ):
-            with self.folder.open(rel, mode="rt", encoding="utf-8") as src:
-                for line in src:
-                    payload = line.strip()
-                    if not payload:
-                        continue
-                    item = json.loads(payload)
-                    task = item["task"]
-                    if not isinstance(task, str) or not task:
-                        continue
-                    raw_idx = int(item["task_index"]) if "task_index" in item else None
-                    if raw_idx is None:
-                        task_to_index.setdefault(task, len(task_to_index))
-                        continue
-                    existing_task = index_to_task.get(raw_idx)
-                    if existing_task is not None and existing_task != task:
-                        raise ValueError(
-                            "LeRobot reduce encountered conflicting canonical "
-                            f"task mappings for task_index={raw_idx}"
-                        )
-                    index_to_task[raw_idx] = task
-                    existing = task_to_index.get(task)
-                    if existing is None:
-                        task_to_index[task] = raw_idx
-                        continue
-                    if existing != raw_idx:
-                        raise ValueError(
-                            "LeRobot reduce encountered conflicting canonical "
-                            f"task indices for task={task!r}"
-                        )
-        if not task_to_index:
-            return []
-
-        ordered = sorted(task_to_index.items(), key=lambda kv: (kv[1], kv[0]))
-        return [task for task, _ in ordered]
+    def _load_stage1_tasks(self, finalized_chunk_keys: set[str]) -> dict[str, int]:
+        task_to_index: dict[str, int] | None = None
+        for rel in self._iter_stage1_task_files(finalized_chunk_keys):
+            with self.folder.open(rel, mode="rb") as src:
+                table = pq.read_table(src)
+            current = {
+                str(row["task"]): int(row["task_index"])
+                for row in table.to_pylist()
+                if isinstance(row.get("task"), str)
+                and row.get("task_index") is not None
+            }
+            current = dict(_ordered_task_items(current))
+            if task_to_index is None:
+                task_to_index = current
+                continue
+            if current != task_to_index:
+                raise ValueError(
+                    "LeRobot reduce encountered mismatched canonical task tables "
+                    "across stage-1 shard outputs"
+                )
+        return {} if task_to_index is None else task_to_index
 
     def _load_stage1_infos(
         self, finalized_chunk_keys: set[str]
@@ -198,7 +185,7 @@ class _LeRobotMetaReducer:
         self,
         *,
         infos: list[dict[str, Any]],
-        tasks: list[str],
+        task_to_index: Mapping[str, int],
         episodes_rows: list[dict[str, Any]],
     ) -> dict[str, Any]:
         first = infos[0] if infos else {}
@@ -233,7 +220,7 @@ class _LeRobotMetaReducer:
             "features": first["features"] if infos else {},
             "total_episodes": total_episodes,
             "total_frames": total_frames,
-            "total_tasks": len(tasks),
+            "total_tasks": len(task_to_index),
             "splits": {"train": f"0:{total_episodes}"},
         }
 
@@ -271,6 +258,12 @@ class _LeRobotMetaReducer:
     ) -> list[str]:
         return self._stage1_matches(f"meta/chunk-*/{filename}", finalized_chunk_keys)
 
+    def _iter_stage1_task_files(self, finalized_chunk_keys: set[str]) -> list[str]:
+        return self._stage1_matches(
+            "meta/chunk-*/tasks.parquet",
+            finalized_chunk_keys,
+        )
+
     def _stage1_matches(
         self, pattern: str, finalized_chunk_keys: set[str] | None = None
     ) -> list[str]:
@@ -305,3 +298,9 @@ class _LeRobotMetaReducer:
             f"{row.shard_id}__w{RunHandle.worker_token_for(row.worker_id)}"
             for row in rows
         }
+
+
+def _ordered_task_items(
+    task_to_index: Mapping[str, int],
+) -> list[tuple[str, int]]:
+    return sorted(task_to_index.items(), key=lambda item: (item[1], item[0]))

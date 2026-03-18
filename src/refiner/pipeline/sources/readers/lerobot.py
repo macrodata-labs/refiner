@@ -244,10 +244,7 @@ class LeRobotEpisodeReader(ParquetReader):
         rel = str(
             dataset.video_path_template.format(
                 video_key=video_key,
-                chunk=chunk,
-                chunk_key=chunk,
                 chunk_index=chunk,
-                file=file_idx,
                 file_index=file_idx,
             )
         )
@@ -405,11 +402,7 @@ class LeRobotEpisodeReader(ParquetReader):
 
             rel = str(
                 dataset.data_path_template.format(
-                    video_key="",
-                    chunk=chunk,
-                    chunk_key=chunk,
                     chunk_index=chunk,
-                    file=file_idx,
                     file_index=file_idx,
                 )
             )
@@ -495,10 +488,16 @@ class LeRobotEpisodeReader(ParquetReader):
     ) -> _DatasetState:
         source = self.fileset.resolve_file(source_index, episode_path)
         source_path = source.abs_path()
-        for dataset_name, dataset in self._get_datasets().items():
-            prefix = dataset_name.rstrip("/") + "/"
-            if source_path == dataset_name or source_path.startswith(prefix):
-                return dataset
+        marker = f"/{_DEFAULT_EPISODES_GLOB_ROOT}/"
+        if marker not in source_path:
+            raise FileNotFoundError(
+                "Could not resolve LeRobot dataset root for episode file "
+                f"{source_path!r}"
+            )
+        dataset_name = source_path.split(marker, 1)[0]
+        dataset = self._get_datasets().get(dataset_name)
+        if dataset is not None:
+            return dataset
         raise FileNotFoundError(
             f"Could not resolve LeRobot dataset root for episode file {source_path!r}"
         )
