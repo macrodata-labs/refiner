@@ -55,4 +55,6 @@ Use task pipelines when:
 ## Related Pages
 
 - [Pipeline basics](pipeline-basics.md)
+- [Reading and writing data](reading-and-writing.md)
+- [Transforms](transforms.md)
 - [Launchers](launchers.md)

@@ -1,9 +1,9 @@
 ---
 title: "Pipeline Basics"
-description: "Build Refiner pipelines from sources, transforms, and sinks"
+description: "Overview of the basic Refiner pipeline model"
 ---
 
-A Refiner pipeline is:
+A Refiner pipeline has three parts:
 
 - one source
 - zero or more ordered transforms
@@ -21,8 +21,6 @@ Other entry points:
 
 ### `from_items(...)`
 
-Use this for small in-memory inputs:
-
 ```python
 import refiner as mdr
 
@@ -34,19 +32,16 @@ pipeline = mdr.from_items(
 )
 ```
 
-If you pass mappings, those become rows directly. If you pass primitives like strings or ints, Refiner wraps each value as `{"item": ...}`.
+If you pass mappings, those become rows directly. If you pass primitives like
+strings or ints, Refiner wraps each value as `{"item": ...}`.
 
 ### `from_source(...)`
-
-Use this when you already have a custom source object:
 
 ```python
 pipeline = mdr.from_source(my_source)
 ```
 
 ### `task(...)`
-
-Use this when you want to run arbitrary task-style work instead of reading a dataset.
 
 ```python
 import refiner as mdr
@@ -60,49 +55,35 @@ pipeline = mdr.task(
 )
 ```
 
-Each task callback receives `rank` and `world_size`, so this is the right entry point when you want one unit of work per task instead of iterating an existing dataset.
+Each task callback receives `rank` and `world_size`, so this is the right entry
+point when you want one unit of work per task instead of iterating an existing
+dataset.
+
+See [Reading and writing data](reading-and-writing.md) for the different source
+entry points and the row shapes they produce.
 
 ## Add Transforms
 
-### Python row transforms
+Transforms sit between the source and the sink.
 
-```python
-pipeline = pipeline.map(lambda row: {"x": row["x"] + 1})
-pipeline = pipeline.filter(lambda row: row["x"] > 0)
-pipeline = pipeline.flat_map(lambda row: [row, {"x": row["x"] * 10}])
-```
+Some transforms run row-by-row in Python:
 
-For `map(...)`, returning a `Mapping[str, Any]` is treated as a patch and merged
-into the input row.
+- `.map(...)`
+- `.flat_map(...)`
+- `.batch_map(...)`
+- `.map_async(...)`
 
-```python
-pipeline = pipeline.map(lambda row: {"preview": row["text"][:80]})
-```
+Others use the expression DSL and can stay on the vectorized Arrow path:
 
-If you want to be explicit, return `row.update(...)` instead:
+- `.filter(expr)`
+- `.with_columns(...)`
+- `.with_column(...)`
+- `.select(...)`
+- `.drop(...)`
+- `.rename(...)`
+- `.cast(...)`
 
-```python
-pipeline = pipeline.map(lambda row: row.update(preview=row["text"][:80]))
-```
-
-### Batch transforms
-
-```python
-pipeline = pipeline.batch_map(
-    lambda batch: [row for row in batch if row["x"] > 0],
-    batch_size=64,
-)
-```
-
-### Async row transforms
-
-```python
-pipeline = pipeline.map_async(fetch_enrichment, max_in_flight=32)
-```
-
-### Vectorized expression transforms
-
-Use expression-backed transforms when you want Arrow-backed execution:
+Example:
 
 ```python
 import refiner as mdr
@@ -114,19 +95,13 @@ pipeline = (
         text=mdr.col("text").str.strip(),
         text_len=mdr.col("text").str.len(),
     )
-    .select("text", "text_len")
 )
 ```
 
-Common expression-backed methods:
+See:
 
-- `.filter(expr)`
-- `.with_columns(...)`
-- `.with_column(...)`
-- `.select(...)`
-- `.drop(...)`
-- `.rename(...)`
-- `.cast(...)`
+- [Transforms](transforms.md)
+- [Expressions](expressions.md)
 
 ## What Your Python Code Gets
 
@@ -162,20 +137,14 @@ Python row functions.
 
 ## Add A Sink
 
-Built-in sinks:
+Attach a sink when you want launched execution to write output:
 
 - `.write_jsonl(...)`
 - `.write_parquet(...)`
 - `.write_lerobot(...)`
 
-Example:
-
-```python
-pipeline = pipeline.write_parquet("out/")
-```
-
-Attaching a sink affects launched execution. In-process debugging helpers still
-return rows and do not write output.
+See [Reading and writing data](reading-and-writing.md) for the built-in readers
+and writers.
 
 ## Example
 
@@ -208,7 +177,8 @@ May return:
 - a `Row`
 - a `Mapping[str, Any]`
 
-Use `filter(...)` to drop rows and `flat_map(...)` to emit `0..N` rows.
+For `map(...)`, returning a `Mapping[str, Any]` is treated as a patch and merged
+into the input row.
 
 ### `flat_map(...)` and `batch_map(...)`
 
@@ -223,8 +193,9 @@ It does not receive internal `Tabular` blocks directly.
 
 ## Related Pages
 
-- [Expression transforms](expression-transforms.md)
-- [Readers and sharding](readers-and-sharding.md)
+- [Transforms](transforms.md)
+- [Expressions](expressions.md)
+- [Reading and writing data](reading-and-writing.md)
 - [In-process debugging](in-process-debugging.md)
 - [Launchers](launchers.md)
 - [Task pipelines](task-pipelines.md)

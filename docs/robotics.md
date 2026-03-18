@@ -179,7 +179,8 @@ import refiner as mdr
 
 ## Related Pages
 
-- [Readers and sharding](readers-and-sharding.md)
+- [Reading and writing data](reading-and-writing.md)
 - [Pipeline basics](pipeline-basics.md)
+- [Transforms](transforms.md)
 - [Launchers](launchers.md)
 - [Observability](observability.md)

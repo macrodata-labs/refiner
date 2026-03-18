@@ -90,4 +90,5 @@ stats = pipeline.launch_local(name="train-data-build", num_workers=4)
 
 - [Launchers](launchers.md)
 - [CLI](cli.md)
+- [Reading and writing data](reading-and-writing.md)
 - [Robotics](robotics.md)

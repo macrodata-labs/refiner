@@ -47,5 +47,6 @@ This is a chunk-size guardrail for vectorized execution, not a job-level memory 
 ## Related Pages
 
 - [Pipeline basics](pipeline-basics.md)
-- [Expression transforms](expression-transforms.md)
+- [Transforms](transforms.md)
+- [Expressions](expressions.md)
 - [Launchers](launchers.md)

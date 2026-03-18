@@ -105,9 +105,10 @@ Getting started:
 
 Core concepts:
 
+- [Reading and writing data](docs/reading-and-writing.md)
+- [Transforms](docs/transforms.md)
+- [Expressions](docs/expressions.md)
 - [In-process debugging](docs/in-process-debugging.md)
-- [Readers and sharding](docs/readers-and-sharding.md)
-- [Expression transforms](docs/expression-transforms.md)
 - [Task pipelines](docs/task-pipelines.md)
 
 Modalities and platform:
