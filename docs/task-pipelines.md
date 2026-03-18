@@ -43,7 +43,7 @@ def task_worker(rank: int, world_size: int) -> dict:
         name="task-example",
         # Workers claim task shards until all tasks are complete,
         # so this can be lower than num_tasks.
-        num_workers=8,
+        num_workers=4,
     )
 )
 ```
