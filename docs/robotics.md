@@ -70,14 +70,11 @@ everything else in Refiner.
 Example:
 
 ```python
-pipeline = pipeline.map(lambda row: row.update(split="train"))
+pipeline = pipeline.map(lambda row: row.update(dataset_split="train"))
 ```
 
-If you need to remove fields from the row before writing:
-
-```python
-pipeline = pipeline.map(lambda row: row.drop("some_field"))
-```
+Because `map(...)` patches rows by default, this is a convenient way to add
+episode-level annotations or derived fields before writing.
 
 ## Writing Datasets
 
@@ -87,8 +84,24 @@ Use `write_lerobot(...)` to write a LeRobot-compatible output dataset:
 pipeline = pipeline.write_lerobot("hf://buckets/macrodata/my_robotics_output")
 ```
 
-The writer handles the LeRobot-specific output layout, metadata reduction, and
-finalization path for you.
+This is more than a generic file writer. The LeRobot writer handles:
+
+- LeRobot-compatible dataset layout
+- episode/frame materialization
+- video handling
+- dataset metadata reduction and finalization across stages
+
+Current writer tuning is passed directly on `write_lerobot(...)`, including:
+
+- `data_files_size_in_mb`
+- `video_files_size_in_mb`
+- `max_video_prepare_in_flight`
+- `codec`
+- `pix_fmt`
+- `transencoding_threads`
+- `encoder_options`
+- `quantile_bins`
+- `force_recompute_video_stats`
 
 ## Motion Trimming
 
