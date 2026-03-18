@@ -25,19 +25,15 @@ pipeline = mdr.from_source(my_source)
 
 ## Add Transforms
 
-Row transform:
+### Python row transforms
 
 ```python
 pipeline = pipeline.map(lambda row: {"x": row["x"] + 1})
-```
-
-Filter:
-
-```python
 pipeline = pipeline.filter(lambda row: row["x"] > 0)
+pipeline = pipeline.flat_map(lambda row: [row, {"x": row["x"] * 10}])
 ```
 
-Batch transform:
+### Batch transforms
 
 ```python
 pipeline = pipeline.batch_map(
@@ -46,17 +42,39 @@ pipeline = pipeline.batch_map(
 )
 ```
 
-Expansion:
-
-```python
-pipeline = pipeline.flat_map(lambda row: [row, {"x": row["x"] * 10}])
-```
-
-Async row transform:
+### Async row transforms
 
 ```python
 pipeline = pipeline.map_async(fetch_enrichment, max_in_flight=32)
 ```
+
+### Vectorized expression transforms
+
+Use expression-backed transforms when you want Arrow-backed execution:
+
+```python
+import refiner as mdr
+
+pipeline = (
+    pipeline
+    .filter(mdr.col("lang") == "en")
+    .with_columns(
+        text=mdr.col("text").str.strip(),
+        text_len=mdr.col("text").str.len(),
+    )
+    .select("text", "text_len")
+)
+```
+
+Common expression-backed methods:
+
+- `.filter(expr)`
+- `.with_columns(...)`
+- `.with_column(...)`
+- `.select(...)`
+- `.drop(...)`
+- `.rename(...)`
+- `.cast(...)`
 
 ## What Your Python Code Gets
 
@@ -104,7 +122,8 @@ Example:
 pipeline = pipeline.write_parquet("out/")
 ```
 
-Attaching a sink affects launched execution. Local iteration helpers like `iter_rows()` and `materialize()` still return rows and do not write output.
+Attaching a sink affects launched execution. In-process debugging helpers still
+return rows and do not write output.
 
 ## Example
 
@@ -113,8 +132,17 @@ import refiner as mdr
 
 pipeline = (
     mdr.read_jsonl("input/*.jsonl")
-    .filter(lambda row: row["lang"] == "en")
-    .map(lambda row: {"text": row["text"].strip()})
+    .filter(mdr.col("lang") == "en")
+    .with_columns(
+        text=mdr.col("text").str.strip(),
+        text_len=mdr.col("text").str.len(),
+    )
+    .map(
+        lambda row: {
+            "text": row["text"],
+            "bucket": "long" if row["text_len"] > 512 else "short",
+        }
+    )
     .write_parquet("out/")
 )
 ```
@@ -141,23 +169,9 @@ Use `filter(...)` to drop rows and `flat_map(...)` to emit `0..N` rows.
 `batch_map(...)` receives `list[Row]` and should emit the same kinds of items.
 It does not receive internal `Tabular` blocks directly.
 
-### Expression-backed transforms
-
-Use the expression API when you want Arrow-backed vectorized execution:
-
-- `.select(...)`
-- `.with_columns(...)`
-- `.with_column(...)`
-- `.drop(...)`
-- `.rename(...)`
-- `.cast(...)`
-- `.filter(expr)`
-
-See [Expression transforms](expression-transforms.md).
-
 ## Related Pages
 
-- [Readers and sharding](readers-and-sharding.md)
 - [Expression transforms](expression-transforms.md)
-- [Local execution](local-execution.md)
+- [Readers and sharding](readers-and-sharding.md)
+- [In-process debugging](in-process-debugging.md)
 - [Launchers](launchers.md)

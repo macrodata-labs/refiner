@@ -28,6 +28,8 @@ Log in:
 macrodata login
 ```
 
+### Cloud robotics example
+
 Launch a robotics pipeline on Macrodata Cloud.
 
 This requires a valid API key.
@@ -35,16 +37,8 @@ This requires a valid API key.
 ```python
 import refiner as mdr
 
-MOTION_VIDEO_KEYS = (
-    "observation.images.cam_high",
-    "observation.images.cam_left_wrist",
-    "observation.images.cam_low",
-    "observation.images.cam_right_wrist",
-)
-
 (
     mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
-    .map(lambda row: row.drop(*MOTION_VIDEO_KEYS))
     .map(
         mdr.robotics.motion_trim(
             threshold=0.001,
@@ -59,6 +53,8 @@ MOTION_VIDEO_KEYS = (
 )
 ```
 
+### Local example
+
 Launch a local pipeline:
 
 ```python
@@ -71,7 +67,7 @@ import refiner as mdr
         text=mdr.col("text").str.strip(),
         text_len=mdr.col("text").str.len(),
     )
-    .map(lambda row: {"text": row["text"], "text_len": row["text_len"], "source": "docs"})
+    .map(lambda row: {"text": row["text"], "bucket": "long" if row["text_len"] > 512 else "short"})
     .write_parquet("out/")
     .launch_local(
         name="english-cleanup",
@@ -94,35 +90,19 @@ import refiner as mdr
 - local execution for development and elastic cloud execution for large runs
 - built-in observability through the Macrodata platform, so you can inspect how your data is changing instead of debugging blindly after the fact
 
-## Technical Highlights
-
-- **Shard-aware execution**
-  Readers plan shards explicitly, and workers claim, heartbeat, complete, or fail them through the runtime lifecycle.
-- **Fused execution**
-  Adjacent Python row steps and Arrow-backed vectorized segments are compiled into a tighter execution plan rather than materializing between every transform.
-- **Structured cloud submission**
-  Launchers submit a structured plan, serialized pipeline payloads, and a manifest containing script text, dependency inventory, and ref/version metadata.
-- **Secret-aware code capture**
-  Captured code and script text are redacted before submission so platform introspection stays useful without leaking secret values.
-- **Built-in observability**
-  Jobs, stages, workers, shards, logs, metrics, and manifests are all part of the platform path already.
-- **Specialized training-data sinks**
-  Refiner already includes multistage writer flows like the LeRobot pipeline for robotics datasets.
-
 ## Docs
 
 Getting started:
 
 - [Pipeline basics](docs/pipeline-basics.md)
 - [Launchers](docs/launchers.md)
-- [CLI auth](docs/cli-auth.md)
+- [CLI](docs/cli.md)
 
 Core concepts:
 
-- [Local execution](docs/local-execution.md)
+- [In-process debugging](docs/in-process-debugging.md)
 - [Readers and sharding](docs/readers-and-sharding.md)
 - [Expression transforms](docs/expression-transforms.md)
-- [Worker runtime](docs/worker-runtime.md)
 
 Modalities and platform:
 

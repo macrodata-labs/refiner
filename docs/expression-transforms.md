@@ -101,4 +101,4 @@ Refiner handles the boundary between Arrow blocks and row execution internally.
 ## Related Pages
 
 - [Pipeline basics](pipeline-basics.md)
-- [Local execution](local-execution.md)
+- [In-process debugging](in-process-debugging.md)

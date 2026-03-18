@@ -23,16 +23,8 @@ Current workflows include:
 ```python
 import refiner as mdr
 
-MOTION_VIDEO_KEYS = (
-    "observation.images.cam_high",
-    "observation.images.cam_left_wrist",
-    "observation.images.cam_low",
-    "observation.images.cam_right_wrist",
-)
-
 (
     mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
-    .map(lambda row: row.drop(*MOTION_VIDEO_KEYS))
     .map(
         mdr.robotics.motion_trim(
             threshold=0.001,
@@ -47,6 +39,33 @@ MOTION_VIDEO_KEYS = (
 )
 ```
 
+`motion_trim(...)` assumes LeRobot episode rows:
+
+- it expects a `LeRobotRow`
+- it trims the episode frame table directly
+- it updates video timestamps on the row itself
+- when a video span changes, the corresponding `stats/<video_key>/...` fields are dropped so the writer recomputes them later
+
+## LeRobot Performance Notes
+
+Current LeRobot output is optimized for:
+
+- incremental frame parquet writes
+- asynchronous per-episode video preparation
+- cheap metadata reduction after shard-local stage-1 output
+
+Key decisions:
+
+- remux is preferred when source packets and boundaries are compatible
+- transcode is used when compatibility or stats recomputation requires decoded frames
+- `max_video_prepare_in_flight` bounds concurrent episode video work inside one worker
+- `transencoding_threads` is treated as a worker budget and divided across simultaneous video streams in the same row
+
+The practical consequence is:
+
+- frame-heavy no-video datasets mostly behave like a parquet writer
+- video-heavy datasets are dominated by source probing, remux/transcode work, and the quality of source clip alignment
+
 ## Notes
 
 - robotics is the first modality with deeper built-in support today
@@ -56,3 +75,4 @@ MOTION_VIDEO_KEYS = (
 
 - [Readers and sharding](readers-and-sharding.md)
 - [Launchers](launchers.md)
+- [Observability](observability.md)

@@ -91,7 +91,7 @@ Returned result includes:
 Platform integration uses the same auth flow everywhere:
 
 1. `MACRODATA_API_KEY`
-2. local credential file from [`macrodata login`](cli-auth.md)
+2. local credential file from [`macrodata login`](cli.md)
 
 Behavior:
 
@@ -100,6 +100,6 @@ Behavior:
 
 ## Related Pages
 
-- [CLI auth](cli-auth.md)
+- [CLI](cli.md)
 - [Observability](observability.md)
-- [Worker runtime](worker-runtime.md)
+- [Robotics](robotics.md)

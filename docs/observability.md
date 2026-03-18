@@ -10,7 +10,7 @@ When Macrodata auth is available, Refiner reports runtime lifecycle and telemetr
 Auth lookup order:
 
 1. `MACRODATA_API_KEY`
-2. local key file from [`macrodata login`](cli-auth.md)
+2. local key file from [`macrodata login`](cli.md)
 
 If auth is unavailable:
 
@@ -89,5 +89,5 @@ stats = pipeline.launch_local(name="train-data-build", num_workers=4)
 ## Related Pages
 
 - [Launchers](launchers.md)
-- [CLI auth](cli-auth.md)
-- [Worker runtime](worker-runtime.md)
+- [CLI](cli.md)
+- [Robotics](robotics.md)

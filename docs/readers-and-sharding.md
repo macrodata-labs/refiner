@@ -29,8 +29,8 @@ Common shard metadata includes:
 - `end`
 
 For launched execution, workers claim shards from the runtime lifecycle backend
-until no work remains. Local iteration still respects the same reader/planning
-model, but runs in-process.
+until no work remains. In-process debugging still respects the same reader and
+planning model, but runs inside one Python process.
 
 Use reader-specific options such as `target_shard_bytes` and `num_shards` to
 change shard granularity.
@@ -42,7 +42,7 @@ Refiner has two execution styles:
 - Python UDF steps such as `map(...)`, `flat_map(...)`, `filter(...)`, and `batch_map(...)`
 - expression-backed vectorized steps such as `select(...)`, `with_columns(...)`, and `filter(expr)`
 
-The important contract for Python code is:
+The practical Python contract is:
 
 - `map(...)` receives one `Row`
 - `map_async(...)` receives one `Row`
@@ -52,7 +52,7 @@ The important contract for Python code is:
 
 Even though the engine may use Arrow-backed `Tabular` blocks internally between
 segments, Python UDFs do not receive raw Arrow tables directly. If you want
-Arrow-backed/vectorized behavior, use the expression API instead of a Python UDF.
+Arrow-backed execution, use the expression API instead of a Python UDF.
 
 ### `Row` assumptions
 
@@ -62,16 +62,16 @@ A `Row` is:
 - immutable from the caller's perspective
 - either dict-backed or a lightweight view over tabular data
 
-Use:
+Safe assumptions:
 
-- `row.update(...)` to return a patched row
-- `row.drop(...)` to hide keys
-- `row.pop(...)` for persistent pop semantics
+- `row["col"]` works
+- `dict(row.items())` works
+- `row.update(...)` / `row.drop(...)` / `row.pop(...)` return modified rows
 
-Do not assume:
+Unsafe assumptions:
 
-- the row is a plain `dict`
-- mutating nested values in place is part of the execution contract
+- every row is a plain `dict`
+- mutating a row in place is part of the API
 - every reader yields the same concrete row subclass
 
 ## Reader Behavior
@@ -92,7 +92,7 @@ Do not assume:
 `read_lerobot(...)` emits one episode row at a time.
 
 Each emitted row is a `LeRobotRow`, which wraps a normal base row and adds
-LeRobot-specific views/helpers.
+LeRobot-specific helpers/views.
 
 A LeRobot episode row includes:
 
@@ -116,7 +116,7 @@ The reader also applies a few format assumptions:
 
 `write_lerobot(...)` is a deferred sink:
 
-- local iteration helpers such as `iter_rows()`, `take()`, and `materialize()` do not write output
+- in-process debugging helpers such as `iter_rows()`, `take()`, and `materialize()` do not write output
 - actual LeRobot files are produced in launched execution (`launch_local(...)`, `launch_cloud(...)`)
 
 Current writer API:
@@ -142,6 +142,76 @@ Important writer assumptions:
 - episode metadata rows are buffered per shard and flushed at shard completion
 - video stats are dropped and recomputed when upstream transforms invalidate them
 
+### Performance model
+
+The writer is optimized around the natural work unit:
+
+- one pipeline row = one episode
+
+Within a shard:
+
+- frame parquet writing is incremental and synchronous
+- video work is scheduled per episode and prepared asynchronously
+- shard-local metadata is buffered and flushed once the shard completes
+
+This split matters because frame parquet writes are Arrow-friendly and cheap to
+append, while video work is dominated by file IO, source probing, remux or
+transcode decisions, and codec work.
+
+### `max_video_prepare_in_flight`
+
+`max_video_prepare_in_flight` controls how many episode-level video preparation
+tasks can be in flight at once inside one worker.
+
+Why it helps:
+
+- overlapping remote opens and source probing hides latency
+- several episodes can prepare videos while frame parquet writes keep moving
+- it prevents unbounded fan-out when a shard contains many video-bearing episodes
+
+Why it is bounded:
+
+- video preparation is heavy on file handles, network IO, and codec resources
+- too much concurrency just thrashes the worker instead of increasing throughput
+
+### Remux vs transcode
+
+The writer prefers remux when it can, and falls back to transcode when it must.
+
+Remux is used when:
+
+- the source clip and requested output are container/codec-compatible
+- the requested time span can be represented safely without decoding/re-encoding
+- existing source video stats are allowed to be reused
+
+Transcode is used when:
+
+- the requested output codec or pixel format requires it
+- the clip boundaries are not remux-safe
+- `force_recompute_video_stats=True`
+- source video stats are missing or were invalidated by an upstream transform
+
+Why remux is faster:
+
+- it avoids decoding frames
+- it avoids re-encoding frames
+- it mostly moves packets into the output container
+
+Why transcode is sometimes required:
+
+- recomputing video stats needs decoded frames
+- incompatible source/output encoding details need re-encoding
+- exact clip extraction is not always packet-safe
+
+### Threading assumptions
+
+`transencoding_threads` is treated as a per-worker budget for transcode work.
+When several video streams exist on the same row, the writer divides that
+budget across them so each stream writer does not try to claim the whole worker.
+
+This matters because separate video writers can each spawn codec threads.
+Without that division, multi-camera episodes oversubscribe CPUs quickly.
+
 Stage 2 reduction writes final:
 
 - `meta/episodes/chunk-000/file-000.parquet`
@@ -155,7 +225,7 @@ while cleaning up stage-1 `meta/chunk-*` metadata and any non-finalized
 ## Related Pages
 
 - [Pipeline basics](pipeline-basics.md)
-- [Local execution](local-execution.md)
 - [Expression transforms](expression-transforms.md)
+- [In-process debugging](in-process-debugging.md)
 - [Launchers](launchers.md)
-- [Worker runtime](worker-runtime.md)
+- [Robotics](robotics.md)
