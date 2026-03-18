@@ -6,6 +6,7 @@ import os
 import threading
 from collections.abc import Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
 from typing import Any, TypeVar
 
 T = TypeVar("T")
@@ -106,7 +107,19 @@ def io_executor() -> ThreadPoolExecutor:
     return _runtime.io_executor()
 
 
+async def run_in_io_executor(func, /, *args, **kwargs):
+    if os.environ.get("ASYNC_NO_THREADING"):
+        return func(*args, **kwargs)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(io_executor(), partial(func, *args, **kwargs))
+
+
 atexit.register(_runtime.shutdown)
 
 
-__all__ = ["AsyncRuntime", "io_executor", "submit"]
+__all__ = [
+    "AsyncRuntime",
+    "io_executor",
+    "run_in_io_executor",
+    "submit",
+]
