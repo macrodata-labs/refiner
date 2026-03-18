@@ -589,9 +589,7 @@ def _merge_task_metadata(
     index_to_task = dict(tasks_by_dataset[0])
     task_to_index = {task: task_index for task_index, task in index_to_task.items()}
     next_index = max(index_to_task, default=-1) + 1
-    remaps: list[dict[int, int]] = [
-        {task_index: task_index for task_index in index_to_task}
-    ]
+    remaps: list[dict[int, int]] = [{}]
 
     for source_tasks in tasks_by_dataset[1:]:
         remap: dict[int, int] = {}
@@ -603,7 +601,9 @@ def _merge_task_metadata(
                 task_to_index[task] = merged_index
                 index_to_task[merged_index] = task
             remap[int(source_index)] = merged_index
-        remaps.append(remap)
+        remaps.append(
+            {} if all(source == target for source, target in remap.items()) else remap
+        )
 
     return index_to_task, tuple(remaps)
 
