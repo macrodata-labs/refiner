@@ -187,6 +187,8 @@ def _configure_decoder(stream: Any, video_config: "LeRobotVideoConfig") -> None:
     codec_context = getattr(stream, "codec_context", None)
     if codec_context is None or video_config.decoder_threads is None:
         return
+    if getattr(codec_context, "is_open", False):
+        return
     codec_context.thread_count = int(video_config.decoder_threads)
     codec_context.thread_type = "AUTO"
 

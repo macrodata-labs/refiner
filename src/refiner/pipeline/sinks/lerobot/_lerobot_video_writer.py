@@ -140,9 +140,9 @@ class LeRobotVideoWriter:
             video_key=self.video_key,
             video=item.video,
         )
-        transcode_fps = None
-        if prepared_source.alignment is None and prepared_source.probe is not None:
-            transcode_fps = prepared_source.probe.fps
+        transcode_fps = (
+            None if prepared_source.probe is None else prepared_source.probe.fps
+        )
         if transcode_fps is None and isinstance(self._writer, TranscodeWriter):
             transcode_fps = int(self._writer.fps)
         return _PreparedVideoItem(
