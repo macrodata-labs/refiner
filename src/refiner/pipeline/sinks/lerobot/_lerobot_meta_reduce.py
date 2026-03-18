@@ -101,12 +101,13 @@ class _LeRobotMetaReducer:
                 use_dictionary=True,
             )
 
+        ordered_tasks = sorted(
+            task_to_index.items(), key=lambda item: (item[1], item[0])
+        )
         tasks_table = pa.Table.from_pydict(
             {
-                "task": [task for task, _ in _ordered_task_items(task_to_index)],
-                "task_index": [
-                    task_index for _, task_index in _ordered_task_items(task_to_index)
-                ],
+                "task": [task for task, _ in ordered_tasks],
+                "task_index": [task_index for _, task_index in ordered_tasks],
             }
         )
         with self.folder.open("meta/tasks.parquet", mode="wb") as out:
@@ -147,21 +148,13 @@ class _LeRobotMetaReducer:
         for rel in self._iter_stage1_task_files(finalized_chunk_keys):
             with self.folder.open(rel, mode="rb") as src:
                 table = pq.read_table(src)
-            current = {
-                str(row["task"]): int(row["task_index"])
-                for row in table.to_pylist()
-                if isinstance(row.get("task"), str)
-                and row.get("task_index") is not None
-            }
-            current = dict(_ordered_task_items(current))
-            if task_to_index is None:
-                task_to_index = current
-                continue
-            if current != task_to_index:
+            current = {row["task"]: int(row["task_index"]) for row in table.to_pylist()}
+            if task_to_index is not None and current != task_to_index:
                 raise ValueError(
                     "LeRobot reduce encountered mismatched canonical task tables "
                     "across stage-1 shard outputs"
                 )
+            task_to_index = current
         return {} if task_to_index is None else task_to_index
 
     def _load_stage1_infos(
@@ -298,9 +291,3 @@ class _LeRobotMetaReducer:
             f"{row.shard_id}__w{RunHandle.worker_token_for(row.worker_id)}"
             for row in rows
         }
-
-
-def _ordered_task_items(
-    task_to_index: Mapping[str, int],
-) -> list[tuple[str, int]]:
-    return sorted(task_to_index.items(), key=lambda item: (item[1], item[0]))

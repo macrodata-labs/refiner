@@ -12,10 +12,7 @@ from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_TASKS,
 )
 from refiner.media import VideoFile
-from refiner.pipeline.sources.readers.lerobot import (
-    LeRobotEpisodeReader,
-    _merge_task_metadata,
-)
+from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -26,14 +23,11 @@ def _write_parquet(path: Path, rows: list[dict]) -> None:
 def _build_sample_dataset(
     root: Path,
     *,
-    tasks_rows: list[dict] | None = None,
+    task_to_index: dict[str, int] | None = None,
     episode_tasks: tuple[str, str] = ("pick", "place"),
     frame_task_indices: tuple[int, int, int, int] = (0, 0, 1, 1),
 ) -> None:
-    tasks_rows = tasks_rows or [
-        {"task_index": 0, "task": "pick"},
-        {"task_index": 1, "task": "place"},
-    ]
+    task_to_index = task_to_index or {"pick": 0, "place": 1}
     (root / "meta").mkdir(parents=True, exist_ok=True)
     (root / "meta" / "info.json").write_text(
         json.dumps(
@@ -60,7 +54,10 @@ def _build_sample_dataset(
     )
     _write_parquet(
         root / "meta" / "tasks.parquet",
-        tasks_rows,
+        [
+            {"task": task, "task_index": task_index}
+            for task, task_index in task_to_index.items()
+        ],
     )
     _write_parquet(
         root / "meta" / "episodes" / "part-000.parquet",
@@ -152,7 +149,6 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
         -999.0
     ]
     assert "tasks" not in first
-    assert "task" not in first
     assert "stats/observation.state/min" not in first
     assert "videos/observation.images.main/chunk_index" not in first
     assert "meta/episodes/chunk_index" not in first
@@ -180,31 +176,20 @@ def test_lerobot_reader_exposes_episode_shard_planning_knobs(tmp_path: Path) -> 
     assert len(shards) == 2
 
 
-def test_merge_task_metadata_builds_deterministic_remaps() -> None:
-    task_to_index, remaps = _merge_task_metadata(
-        (
-            {"pick": 0, "place": 1},
-            {"place": 0, "stack": 1},
-        )
-    )
-
-    assert task_to_index == {"pick": 0, "place": 1, "stack": 2}
-    assert remaps == ({}, {0: 1, 1: 2})
-
-
-def test_lerobot_reader_remaps_task_index_column_vectorized() -> None:
+def test_lerobot_reader_raises_when_task_index_cannot_be_remapped() -> None:
     reader = object.__new__(LeRobotEpisodeReader)
     table = pa.Table.from_pydict(
         {
-            "task_index": [0, 7, None, 1],
-            "frame_index": [0, 1, 2, 3],
+            "task_index": [0, 7, 1],
+            "frame_index": [0, 1, 2],
         }
     )
 
-    remapped = reader._remap_task_index_column(table, {0: 3, 1: 4})
-
-    assert remapped.column("task_index").to_pylist() == [3, 7, None, 4]
-    assert remapped.column("frame_index").to_pylist() == [0, 1, 2, 3]
+    with pytest.raises(
+        ValueError,
+        match=r"missing from source task metadata: \[7\]",
+    ):
+        reader._remap_task_index_column(table, {0: 3, 1: 4})
 
 
 def test_lerobot_reader_raises_when_frame_table_missing_task_index(
@@ -260,10 +245,7 @@ def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(
     _build_sample_dataset(first_root)
     _build_sample_dataset(
         second_root,
-        tasks_rows=[
-            {"task_index": 0, "task": "place"},
-            {"task_index": 1, "task": "stack"},
-        ],
+        task_to_index={"place": 0, "stack": 1},
         episode_tasks=("place", "stack"),
         frame_task_indices=(0, 0, 1, 1),
     )
