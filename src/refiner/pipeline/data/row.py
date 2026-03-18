@@ -47,6 +47,39 @@ class Row(Mapping[str, Any]):
 
         return Tabular
 
+    def log_throughput(
+        self,
+        label: str,
+        value: float | int,
+        *,
+        unit: str | None = None,
+    ) -> None:
+        if self.shard_id is None:
+            return
+        from refiner.worker.metrics.api import log_throughput
+
+        log_throughput(label, value, shard_id=self.shard_id, unit=unit)
+
+    def log_histogram(
+        self,
+        label: str,
+        value: float | int,
+        *,
+        per: str = "row",
+        unit: str | None = None,
+    ) -> None:
+        if self.shard_id is None:
+            return
+        from refiner.worker.metrics.api import log_histogram
+
+        log_histogram(
+            label,
+            value,
+            shard_id=self.shard_id,
+            per=per,
+            unit=unit,
+        )
+
     def update(self, patch: Mapping[str, Any] | None = None, /, **kwargs: Any) -> "Row":
         """Return a new Row with the given updates applied (immutable).
 

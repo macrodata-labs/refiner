@@ -120,36 +120,42 @@ class FilterRowStep(RefinerStep):
 @dataclass(frozen=True, slots=True)
 class SelectStep(RefinerStep):
     columns: tuple[str, ...]
+    index: int
     op_name: str | None = "select"
 
 
 @dataclass(frozen=True, slots=True)
 class WithColumnsStep(RefinerStep):
     assignments: Mapping[str, Expr]
+    index: int
     op_name: str | None = "with_columns"
 
 
 @dataclass(frozen=True, slots=True)
 class DropStep(RefinerStep):
     columns: tuple[str, ...]
+    index: int
     op_name: str | None = "drop"
 
 
 @dataclass(frozen=True, slots=True)
 class RenameStep(RefinerStep):
     mapping: Mapping[str, str]
+    index: int
     op_name: str | None = "rename"
 
 
 @dataclass(frozen=True, slots=True)
 class CastStep(RefinerStep):
     dtypes: Mapping[str, str]
+    index: int
     op_name: str | None = "cast"
 
 
 @dataclass(frozen=True, slots=True)
 class FilterExprStep(RefinerStep):
     predicate: Expr
+    index: int
     op_name: str | None = "filter"
 
 

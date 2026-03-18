@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import nullcontext
 from typing import cast
 
 from refiner.pipeline.steps import (
@@ -17,6 +18,7 @@ from refiner.pipeline.steps import (
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.execution.buffer import RowBuffer
 from refiner.pipeline.data.row import Row
+from refiner.worker.context import set_active_step_index
 
 ShardDeltaFn = Callable[[dict[str, int]], None]
 
@@ -81,79 +83,96 @@ def execute_row_steps(
         if not inp and not isinstance(step, AsyncRowStep):
             return
         out = queues[i + 1]
+        step_context = (
+            set_active_step_index(step.index)
+            if hasattr(step, "index")
+            else nullcontext()
+        )
 
-        if isinstance(step, RowStep):
-            for row in inp.take_all():
-                normalized = normalize_row_result(row, step.apply_row(row))
-                out.append(normalized)
-            return
-
-        if isinstance(step, AsyncRowStep):
-            window = async_windows[i]
-            if window is None:
+        with step_context:
+            if isinstance(step, RowStep):
+                for row in inp.take_all():
+                    normalized = normalize_row_result(row, step.apply_row(row))
+                    normalized.log_throughput("rows_out", 1, unit="rows")
+                    out.append(normalized)
                 return
-            tmp = scratch[i]
-            tmp.clear()
-            for row in inp.take_all():
-                window.submit_blocking(_run_async_step(step=step, row=row))
-            tmp.extend(window.poll())
-            if flush_all:
-                tmp.extend(window.flush())
-            if tmp:
+
+            if isinstance(step, AsyncRowStep):
+                window = async_windows[i]
+                if window is None:
+                    return
+                tmp = scratch[i]
+                tmp.clear()
+                for row in inp.take_all():
+                    window.submit_blocking(_run_async_step(step=step, row=row))
+                tmp.extend(window.poll())
+                if flush_all:
+                    tmp.extend(window.flush())
+                if tmp:
+                    for row in tmp:
+                        row.log_throughput("rows_out", 1, unit="rows")
+                    out.extend(tmp)
+                return
+
+            if isinstance(step, FilterRowStep):
+                delta = {} if on_shard_delta is not None else None
+                for row in inp.take_all():
+                    if step.apply_predicate(row):
+                        row.log_throughput("rows_out", 1, unit="rows")
+                        out.append(row)
+                    else:
+                        row.log_throughput("rows_dropped", 1, unit="rows")
+                        if delta is not None:
+                            _delta_add(delta, row.require_shard_id(), -1)
+                _emit_delta(delta)
+                return
+
+            if isinstance(step, FlatMapStep):
+                tmp = scratch[i]
+                tmp.clear()
+                delta = {} if on_shard_delta is not None else None
+                for row in inp.take_all():
+                    _delta_remove_rows(delta, (row,))
+                    produced = 0
+                    for item in step.apply_row_many(row):
+                        normalized = normalize_batch_item(item)
+                        if normalized is not None:
+                            produced += 1
+                            normalized.log_throughput("rows_out", 1, unit="rows")
+                            if delta is not None:
+                                _delta_add(delta, normalized.require_shard_id(), 1)
+                            tmp.append(normalized)
+                    row.log_histogram("rows_out_per_input", produced, unit="rows")
                 out.extend(tmp)
-            return
+                _emit_delta(delta)
+                return
 
-        if isinstance(step, FilterRowStep):
-            delta = {} if on_shard_delta is not None else None
-            for row in inp.take_all():
-                if step.apply_predicate(row):
-                    out.append(row)
-                elif delta is not None:
-                    _delta_add(delta, row.require_shard_id(), -1)
-            _emit_delta(delta)
-            return
-
-        if isinstance(step, FlatMapStep):
-            tmp = scratch[i]
-            tmp.clear()
-            delta = {} if on_shard_delta is not None else None
-            for row in inp.take_all():
-                _delta_remove_rows(delta, (row,))
-                for item in step.apply_row_many(row):
+            if isinstance(step, BatchStep):
+                if flush_all:
+                    batch_in = inp.take_all()
+                else:
+                    n = (len(inp) // step.batch_size) * step.batch_size
+                    if n == 0:
+                        return
+                    batch_in = inp.take(n)
+                if not batch_in:
+                    return
+                tmp = scratch[i]
+                tmp.clear()
+                delta = {} if on_shard_delta is not None else None
+                _delta_remove_rows(delta, batch_in)
+                for item in step.apply_batch(batch_in):
                     normalized = normalize_batch_item(item)
                     if normalized is not None:
+                        normalized.log_throughput("rows_out", 1, unit="rows")
                         if delta is not None:
                             _delta_add(delta, normalized.require_shard_id(), 1)
                         tmp.append(normalized)
-            out.extend(tmp)
-            _emit_delta(delta)
-            return
-
-        if isinstance(step, BatchStep):
-            if flush_all:
-                batch_in = inp.take_all()
-            else:
-                n = (len(inp) // step.batch_size) * step.batch_size
-                if n == 0:
-                    return
-                batch_in = inp.take(n)
-            if not batch_in:
+                out.extend(tmp)
+                _emit_delta(delta)
                 return
-            tmp = scratch[i]
-            tmp.clear()
-            delta = {} if on_shard_delta is not None else None
-            _delta_remove_rows(delta, batch_in)
-            for item in step.apply_batch(batch_in):
-                normalized = normalize_batch_item(item)
-                if normalized is not None:
-                    if delta is not None:
-                        _delta_add(delta, normalized.require_shard_id(), 1)
-                    tmp.append(normalized)
-            out.extend(tmp)
-            _emit_delta(delta)
-            return
 
-        raise TypeError(f"Unsupported row-segment step: {type(step)!r}")
+            raise TypeError(f"Unsupported row-segment step: {type(step)!r}")
 
     def _pump(flush_all: bool) -> None:
         for i in range(len(ordered)):

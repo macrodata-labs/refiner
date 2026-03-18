@@ -11,6 +11,7 @@ from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.worker.context import get_active_run_handle
+from refiner.worker.metrics.api import log_throughput
 
 
 class JsonlSink(BaseSink):
@@ -50,15 +51,18 @@ class JsonlSink(BaseSink):
             self._write_rows(shard_id, batch.to_pylist())
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
+        count = block.num_rows if isinstance(block, Tabular) else len(block)
         if isinstance(block, Tabular):
             self._write_table_rows(shard_id, block.table)
         else:
             self._write_rows(shard_id, (row.to_dict() for row in block))
+        log_throughput("rows_written", count, shard_id=shard_id, unit="rows")
 
     def on_shard_complete(self, shard_id: str) -> None:
         file = self._files.pop(shard_id, None)
         if file is not None:
             file.close()
+            log_throughput("files_written", 1, shard_id=shard_id, unit="files")
 
     def close(self) -> None:
         for file in self._files.values():

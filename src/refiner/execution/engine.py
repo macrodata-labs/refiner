@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import cast
 
 import pyarrow as pa
 

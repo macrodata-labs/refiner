@@ -383,6 +383,11 @@ class LeRobotWriterSink(BaseSink):
             state.features.update(video_features)
         state.episode_rows.append(written_row)
         state.frames.total_rows += frames.num_rows
+        row.log_throughput("episodes_written", 1, unit="episodes")
+        row.log_throughput("frames_written", frame_count, unit="frames")
+        row.log_histogram("frames_per_episode", frame_count, unit="frames")
+        if video_inputs:
+            row.log_throughput("videos_written", len(video_inputs), unit="videos")
 
     async def _write_video(
         self,
