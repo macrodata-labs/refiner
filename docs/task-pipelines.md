@@ -21,15 +21,15 @@ and returns a row-like result.
 ```python
 import refiner as mdr
 
+def task_worker(rank: int, world_size: int) -> dict:
+    return {
+        "rank": rank,
+        "world_size": world_size,
+        "shard_prefix": f"part-{rank:05d}",
+    }
+
 (
-    mdr.task(
-        lambda rank, world_size: {
-            "rank": rank,
-            "world_size": world_size,
-            "shard_prefix": f"part-{rank:05d}",
-        },
-        num_tasks=8,
-    )
+    mdr.task(task_worker, num_tasks=8)
     .write_jsonl("s3://my-bucket/task-output/")
     .launch_cloud(
         name="task-example",
