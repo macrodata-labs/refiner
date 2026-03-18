@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_EPISODE_STATS,
@@ -189,6 +190,66 @@ def test_merge_task_metadata_builds_deterministic_remaps() -> None:
 
     assert task_to_index == {"pick": 0, "place": 1, "stack": 2}
     assert remaps == ({}, {0: 1, 1: 2})
+
+
+def test_lerobot_reader_remaps_task_index_column_vectorized() -> None:
+    reader = object.__new__(LeRobotEpisodeReader)
+    table = pa.Table.from_pydict(
+        {
+            "task_index": [0, 7, None, 1],
+            "frame_index": [0, 1, 2, 3],
+        }
+    )
+
+    remapped = reader._remap_task_index_column(table, {0: 3, 1: 4})
+
+    assert remapped.column("task_index").to_pylist() == [3, 7, None, 4]
+    assert remapped.column("frame_index").to_pylist() == [0, 1, 2, 3]
+
+
+def test_lerobot_reader_raises_when_frame_table_missing_task_index(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+    _write_parquet(
+        root / "data" / "chunk-000" / "file-000.parquet",
+        [
+            {
+                "index": 0,
+                "episode_index": 0,
+                "frame_index": 0,
+                "timestamp": 0.0,
+            },
+            {
+                "index": 1,
+                "episode_index": 0,
+                "frame_index": 1,
+                "timestamp": 0.1,
+            },
+        ],
+    )
+
+    reader = LeRobotEpisodeReader(str(root))
+
+    with pytest.raises(
+        ValueError,
+        match="missing required 'task_index' column",
+    ):
+        list(reader.read_shard(reader.list_shards()[0]))
+
+
+def test_lerobot_reader_raises_when_tasks_metadata_missing(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+    (root / "meta" / "tasks.parquet").unlink()
+
+    with pytest.raises(
+        ValueError,
+        match="missing required 'meta/tasks.parquet' metadata",
+    ):
+        reader = LeRobotEpisodeReader(str(root))
+        list(reader.read_shard(reader.list_shards()[0]))
 
 
 def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(

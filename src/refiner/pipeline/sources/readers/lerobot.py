@@ -341,17 +341,32 @@ class LeRobotEpisodeReader(ParquetReader):
         table: pa.Table,
         remap: Mapping[int, int],
     ) -> pa.Table:
-        if "task_index" not in table.schema.names:
+        if not remap:
             return table
-        values = table.column("task_index").to_pylist()
-        mapped_values = [
-            remap.get(int(value), int(value)) if value is not None else None
-            for value in values
-        ]
+        if "task_index" not in table.schema.names:
+            raise ValueError(
+                "LeRobot frame parquet is missing required 'task_index' column"
+            )
+        task_index_column = table.column("task_index").combine_chunks()
+        task_index_type = task_index_column.type
+        source_indices = pa.array(list(remap), type=task_index_type)
+        target_indices = pa.array(
+            [remap[source_index] for source_index in remap],
+            type=task_index_type,
+        )
+        matches = pc.call_function(
+            "index_in",
+            [task_index_column],
+            options=pc.SetLookupOptions(source_indices),
+        )
+        mapped_values = pc.call_function(
+            "coalesce",
+            [pc.take(target_indices, matches), task_index_column],
+        )
         return table.set_column(
             table.schema.get_field_index("task_index"),
             "task_index",
-            pa.array(mapped_values, type=pa.int64()),
+            mapped_values,
         )
 
     def _slice_episode_table(
@@ -409,6 +424,10 @@ class LeRobotEpisodeReader(ParquetReader):
             if "index" not in table.schema.names:
                 raise ValueError(
                     "LeRobot frame parquet is missing required 'index' column"
+                )
+            if "task_index" not in table.schema.names:
+                raise ValueError(
+                    "LeRobot frame parquet is missing required 'task_index' column"
                 )
             index_col = table.column("index")
             if index_col.null_count > 0:
@@ -523,7 +542,9 @@ class LeRobotEpisodeReader(ParquetReader):
     ) -> dict[str, int]:
         tasks_file = root.file(_TASKS_PARQUET)
         if not tasks_file.exists():
-            return {}
+            raise ValueError(
+                f"LeRobot dataset is missing required '{_TASKS_PARQUET}' metadata"
+            )
 
         with tasks_file.open("rb") as handle:
             table = pq.read_table(handle)
