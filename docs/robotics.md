@@ -70,7 +70,7 @@ everything else in Refiner.
 Example:
 
 ```python
-pipeline = pipeline.map(lambda row: row.update(task="trimmed_motion"))
+pipeline = pipeline.map(lambda row: row.update(split="train"))
 ```
 
 If you need to remove fields from the row before writing:
