@@ -32,15 +32,33 @@ for boolean composition. Do not use Python `and`, `or`, or `not` with `Expr` obj
 
 These methods operate on the current row schema and stay shard-local.
 
+The input to every expression-backed operation is an Arrow-backed table built from the current rows in the pipeline. In practice that means:
+
+- every referenced column must already exist
+- each expression is evaluated column-wise, not row-by-row in Python
+- the output row shape is determined entirely by the expression method you call
+
 | method | what it does | input shape | output shape |
 | --- | --- | --- | --- |
-| `.filter(expr)` | keeps only rows where the expression is truthy | any rows with the referenced columns present | same columns, fewer rows |
-| `.with_columns(...)` | adds or overwrites multiple columns | any rows with the referenced columns present | same rows, wider schema |
-| `.with_column(...)` | adds or overwrites one column | any rows with the referenced columns present | same rows, wider schema |
-| `.select(...)` | keeps only the listed columns | rows containing those columns | narrower schema |
-| `.drop(...)` | removes the listed columns | any rows | narrower schema |
-| `.rename(...)` | renames columns | rows containing the referenced columns | same values, renamed schema |
-| `.cast(...)` | casts columns to new dtypes | rows containing the referenced columns | same rows, new column dtypes |
+| `.filter(expr)` | keeps only rows where `expr` evaluates truthy | rows containing the columns used by `expr` | same columns, fewer rows |
+| `.with_columns(...)` | adds or overwrites multiple columns from expressions | rows containing the columns used by each expression | same rows, wider or updated schema |
+| `.with_column(...)` | adds or overwrites one column from an expression | rows containing the columns used by the expression | same rows, one column added or replaced |
+| `.select(...)` | keeps only the listed columns, in the requested order | rows containing those columns | narrower schema with reordered columns if requested |
+| `.drop(...)` | removes the listed columns | any rows; dropped columns may or may not exist depending on usage | narrower schema |
+| `.rename(...)` | renames existing columns | rows containing the referenced source columns | same values under new column names |
+| `.cast(...)` | casts existing columns to new dtypes | rows containing the referenced columns | same rows, same columns, different dtypes |
+
+Typical input rows look like ordinary row dictionaries:
+
+```python
+{"doc_id": "a1", "text": "hello world", "lang": "en"}
+```
+
+Expression-backed methods operate on that schema in bulk. For example:
+
+- `.filter(mdr.col("lang") == "en")` expects a `lang` column
+- `.with_column("text_len", mdr.col("text").str.len())` expects a `text` column
+- `.cast(score="float64")` expects an existing `score` column
 
 ## Example
 

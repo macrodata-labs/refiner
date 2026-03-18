@@ -48,7 +48,7 @@ import refiner as mdr
     .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_motion")
     .launch_cloud(
         name="motion_trim",
-        num_workers=1,
+        num_workers=4,
     )
 )
 ```
@@ -60,6 +60,11 @@ Launch a local pipeline:
 ```python
 import refiner as mdr
 
+def add_preview(row):
+    return row.update(
+        preview=" ".join(row["text"].split()[:20]),
+    )
+
 (
     mdr.read_jsonl("input/*.jsonl")
     .filter(mdr.col("lang") == "en")
@@ -67,7 +72,7 @@ import refiner as mdr
         text=mdr.col("text").str.strip(),
         text_len=mdr.col("text").str.len(),
     )
-    .map(lambda row: row.update(length_bucket="long" if row["text_len"] > 512 else "short"))
+    .map(add_preview)
     .write_parquet("s3://my-bucket/english-cleanup/")
     .launch_local(
         name="english-cleanup",

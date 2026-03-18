@@ -70,11 +70,10 @@ everything else in Refiner.
 Example:
 
 ```python
-pipeline = pipeline.map(lambda row: row.update(dataset_split="train"))
+pipeline = pipeline.map(lambda row: row.update(source_dataset="aloha_static_battery"))
 ```
 
-Because `map(...)` patches rows by default, this is a convenient way to add
-episode-level annotations or derived fields before writing.
+Because `map(...)` patches rows by default, this is a convenient way to add episode-level metadata or derived fields before writing.
 
 ## Writing Datasets
 

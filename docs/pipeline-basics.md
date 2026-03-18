@@ -34,6 +34,8 @@ pipeline = mdr.from_items(
 )
 ```
 
+If you pass mappings, those become rows directly. If you pass primitives like strings or ints, Refiner wraps each value as `{"item": ...}`.
+
 ### `from_source(...)`
 
 Use this when you already have a custom source object:
@@ -58,6 +60,8 @@ pipeline = mdr.task(
 )
 ```
 
+Each task callback receives `rank` and `world_size`, so this is the right entry point when you want one unit of work per task instead of iterating an existing dataset.
+
 ## Add Transforms
 
 ### Python row transforms
@@ -72,13 +76,13 @@ For `map(...)`, returning a `Mapping[str, Any]` is treated as a patch and merged
 into the input row.
 
 ```python
-pipeline = pipeline.map(lambda row: {"length_bucket": "long"})
+pipeline = pipeline.map(lambda row: {"preview": row["text"][:80]})
 ```
 
 If you want to be explicit, return `row.update(...)` instead:
 
 ```python
-pipeline = pipeline.map(lambda row: row.update(length_bucket="long"))
+pipeline = pipeline.map(lambda row: row.update(preview=row["text"][:80]))
 ```
 
 ### Batch transforms
@@ -178,6 +182,11 @@ return rows and do not write output.
 ```python
 import refiner as mdr
 
+def add_preview(row):
+    return row.update(
+        preview=" ".join(row["text"].split()[:20]),
+    )
+
 pipeline = (
     mdr.read_jsonl("input/*.jsonl")
     .filter(mdr.col("lang") == "en")
@@ -185,7 +194,7 @@ pipeline = (
         text=mdr.col("text").str.strip(),
         text_len=mdr.col("text").str.len(),
     )
-    .map(lambda row: row.update(length_bucket="long" if row["text_len"] > 512 else "short"))
+    .map(add_preview)
     .write_parquet("s3://my-bucket/english-cleanup/")
 )
 ```
