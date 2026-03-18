@@ -4,14 +4,11 @@
 
 <h1 align="center">Macrodata Refiner</h1>
 
-Refiner is an open-source engine for training data pipelines. It is built for turning raw, unstructured, and multimodal data into high-quality datasets for large model training, with shard-aware execution, built-in observability, and a seamless path from local runs to managed cloud execution.
+Refiner is an open-source engine for turning raw, unstructured, and multimodal data into **high-quality datasets** for large model training.
 
-Current focus:
+It replaces the brittle scripts and stitched-together data tooling that teams still use for training data work, while offering much better support for multimodal data, robotics workflows, and model-based processing.
 
-- training data, not generic analytics ETL
-- multimodal and model-centric processing
-- robotics support today, more modalities coming
-- integrated platform observability and cloud execution
+It also plugs into the Macrodata platform, which gives you visibility into what is happening to your data while pipelines run: job and shard lifecycle, logs, metrics, manifests, and pipeline behavior. The same code can run locally for development and then scale out through Macrodata's elastic serverless cloud.
 
 ## Quickstart
 
@@ -29,44 +26,57 @@ Log in:
 
 ```bash
 macrodata login
-macrodata whoami
 ```
 
-Launch one pipeline locally:
+Launch a robotics pipeline on Macrodata Cloud.
+
+This requires a valid API key.
 
 ```python
 import refiner as mdr
 
-pipeline = (
+MOTION_VIDEO_KEYS = (
+    "observation.images.cam_high",
+    "observation.images.cam_left_wrist",
+    "observation.images.cam_low",
+    "observation.images.cam_right_wrist",
+)
+
+(
+    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
+    .map(lambda row: row.drop(*MOTION_VIDEO_KEYS))
+    .map(
+        mdr.robotics.motion_trim(
+            threshold=0.001,
+            pad_frames=5,
+        )
+    )
+    .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_motion")
+    .launch_cloud(
+        name="motion_trim",
+        num_workers=1,
+    )
+)
+```
+
+Launch a local pipeline:
+
+```python
+import refiner as mdr
+
+(
     mdr.read_jsonl("input/*.jsonl")
-    .filter(lambda row: row["lang"] == "en")
-    .map(lambda row: {"text": row["text"].strip()})
+    .filter(mdr.col("lang") == "en")
+    .with_columns(
+        text=mdr.col("text").str.strip(),
+        text_len=mdr.col("text").str.len(),
+    )
+    .map(lambda row: {"text": row["text"], "text_len": row["text_len"], "source": "docs"})
     .write_parquet("out/")
-)
-
-stats = pipeline.launch_local(
-    name="english-cleanup",
-    num_workers=2,
-)
-```
-
-Launch the same pipeline on Macrodata Cloud:
-
-```python
-import refiner as mdr
-
-pipeline = (
-    mdr.read_jsonl("input/*.jsonl")
-    .filter(lambda row: row["lang"] == "en")
-    .map(lambda row: {"text": row["text"].strip()})
-    .write_parquet("hf://datasets/macrodata/my-output")
-)
-
-result = pipeline.launch_cloud(
-    name="english-cleanup",
-    num_workers=4,
-    cpus_per_worker=2,
-    mem_mb_per_worker=4096,
+    .launch_local(
+        name="english-cleanup",
+        num_workers=2,
+    )
 )
 ```
 
@@ -75,34 +85,46 @@ result = pipeline.launch_cloud(
 - the Python package as `refiner`
 - the CLI as `macrodata`
 
+## What To Expect
+
+- training-data-first pipeline primitives instead of generic ETL abstractions
+- multimodal processing, with robotics support today
+- a lot of built-in readers, transforms, sinks, and lifecycle/runtime machinery so you do not have to rebuild the same scaffolding in scripts
+- access to any storage backend supported by `fsspec`
+- local execution for development and elastic cloud execution for large runs
+- built-in observability through the Macrodata platform, so you can inspect how your data is changing instead of debugging blindly after the fact
+
 ## Technical Highlights
 
-- **Shard-aware runtime.**
-  Readers plan shards explicitly, workers claim them through the runtime lifecycle, heartbeat them, and complete or fail them with durable state.
-- **Fused execution.**
-  Adjacent Python row steps and Arrow-backed vectorized segments are compiled into a tighter execution plan instead of forcing a materialization boundary at every transform.
-- **Structured cloud submission.**
-  Launchers compile a structured plan, serialize pipeline payloads, and attach a manifest with script text, dependency inventory, and ref/version metadata.
-- **Secret-aware code capture.**
-  Captured code and script text are redacted before submission so cloud introspection stays useful without leaking secret values.
-- **Built-in observability.**
+- **Shard-aware execution**
+  Readers plan shards explicitly, and workers claim, heartbeat, complete, or fail them through the runtime lifecycle.
+- **Fused execution**
+  Adjacent Python row steps and Arrow-backed vectorized segments are compiled into a tighter execution plan rather than materializing between every transform.
+- **Structured cloud submission**
+  Launchers submit a structured plan, serialized pipeline payloads, and a manifest containing script text, dependency inventory, and ref/version metadata.
+- **Secret-aware code capture**
+  Captured code and script text are redacted before submission so platform introspection stays useful without leaking secret values.
+- **Built-in observability**
   Jobs, stages, workers, shards, logs, metrics, and manifests are all part of the platform path already.
-- **Multistage training-data sinks.**
-  Refiner already includes specialized paths like the LeRobot writer stages for robotics datasets.
+- **Specialized training-data sinks**
+  Refiner already includes multistage writer flows like the LeRobot pipeline for robotics datasets.
 
 ## Docs
 
-Start here:
+Getting started:
 
-- [Docs home](docs/index.md)
 - [Pipeline basics](docs/pipeline-basics.md)
 - [Launchers](docs/launchers.md)
 - [CLI auth](docs/cli-auth.md)
 
-Reference:
+Core concepts:
 
 - [Local execution](docs/local-execution.md)
 - [Readers and sharding](docs/readers-and-sharding.md)
 - [Expression transforms](docs/expression-transforms.md)
 - [Worker runtime](docs/worker-runtime.md)
+
+Modalities and platform:
+
+- [Robotics](docs/robotics.md)
 - [Observability](docs/observability.md)
