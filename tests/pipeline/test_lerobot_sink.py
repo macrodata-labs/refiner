@@ -404,7 +404,10 @@ def test_write_lerobot_force_recompute_video_stats_ignores_source_video_stats(
     out_root = tmp_path / "force-recompute"
     stats = (
         mdr.from_items([row])
-        .write_lerobot(str(out_root), force_recompute_video_stats=True)
+        .write_lerobot(
+            str(out_root),
+            stats_config=mdr.LeRobotStatsConfig(force_recompute_video_stats=True),
+        )
         .launch_local(
             name="lerobot-force-recompute-video-stats",
             num_workers=1,

@@ -204,7 +204,7 @@ class _LeRobotShardWriter:
         frames = self._require_required_fields(row)
         frame_stats = compute_episode_stats(
             frames=frames,
-            stats_config=self.config.stats,
+            quantile_bins=self.config.stats.quantile_bins,
         )
         index_to_task = row[LEROBOT_TASKS]
         if not self._index_to_task:

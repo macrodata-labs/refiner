@@ -49,8 +49,6 @@ class LeRobotStatsConfig:
             raise ValueError("stats.sample_stride must be > 0")
         if self.quantile_bins <= 1:
             raise ValueError("stats.quantile_bins must be > 1")
-        if not isinstance(self.force_recompute_video_stats, bool):
-            raise ValueError("stats.force_recompute_video_stats must be a bool")
 
 
 @dataclass(frozen=True, slots=True)

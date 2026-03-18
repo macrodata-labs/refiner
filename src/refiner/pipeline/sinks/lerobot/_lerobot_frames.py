@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
 
 from refiner.pipeline.data.row import ArrowRowView
 from refiner.pipeline.sinks.lerobot._lerobot_stats import _feature_stats
-
-if TYPE_CHECKING:
-    from refiner.pipeline.sinks.lerobot._lerobot_writer import LeRobotStatsConfig
 
 
 def frame_table(
@@ -51,9 +48,9 @@ def compute_episode_stats(
     *,
     frames: list[Mapping[str, Any]],
     video_stats: Mapping[str, dict[str, np.ndarray]] | None = None,
-    stats_config: "LeRobotStatsConfig | None" = None,
+    quantile_bins: int = 5000,
 ) -> dict[str, dict[str, np.ndarray]]:
-    stats = _frame_stats(frames, stats_config=stats_config)
+    stats = _frame_stats(frames, quantile_bins=quantile_bins)
     if video_stats:
         stats.update(video_stats)
     return stats
@@ -62,7 +59,7 @@ def compute_episode_stats(
 def _frame_stats(
     frames: list[Mapping[str, Any]],
     *,
-    stats_config: "LeRobotStatsConfig | None" = None,
+    quantile_bins: int = 5000,
 ) -> dict[str, dict[str, np.ndarray]]:
     if not frames:
         return {}
@@ -84,9 +81,7 @@ def _frame_stats(
             continue
         out[key] = _feature_stats(
             numeric,
-            num_quantile_bins=(
-                stats_config.quantile_bins if stats_config is not None else 5000
-            ),
+            num_quantile_bins=quantile_bins,
         )
     return out
 

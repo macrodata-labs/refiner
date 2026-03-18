@@ -193,7 +193,6 @@ class _RunningQuantileStats:
 def _feature_stats(
     array: np.ndarray,
     *,
-    quantile_list: list[float] | None = None,
     num_quantile_bins: int = 5000,
 ) -> dict[str, np.ndarray]:
     if array.ndim == 0:
@@ -202,9 +201,6 @@ def _feature_stats(
         array = array.reshape(-1, 1)
 
     count = int(array.shape[0])
-    if quantile_list is None:
-        quantile_list = list(_DEFAULT_QUANTILES)
-
     if count < 2:
         mean = np.atleast_1d(np.mean(array, axis=0))
         stats = {
@@ -214,18 +210,16 @@ def _feature_stats(
             "std": np.atleast_1d(np.std(array, axis=0)),
             "count": np.array([count], dtype=np.int64),
         }
-        for q in quantile_list:
+        for q in _DEFAULT_QUANTILES:
             stats[f"q{int(q * 100):02d}"] = mean.copy()
         return stats
 
     running_stats = _RunningQuantileStats(
-        quantile_list=list(quantile_list),
+        quantile_list=list(_DEFAULT_QUANTILES),
         num_quantile_bins=num_quantile_bins,
     )
     running_stats.update(array)
-    stats = running_stats.get_statistics()
-    stats["count"] = np.array([count], dtype=np.int64)
-    return stats
+    return running_stats.get_statistics()
 
 
 def _flatten_stats_for_episode(
