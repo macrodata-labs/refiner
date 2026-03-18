@@ -29,7 +29,7 @@ Readers expose shards as units of work. A shard is identified by `path`, `start`
 - LeRobot reader emits one row per episode with:
   - `frames`: list of frame dicts for the episode slice.
   - video feature columns from `meta/info.json.features` where `dtype == "video"`, emitted as `VideoFile` handles.
-  - `metadata`: dict with `lerobot_info`, dataset-level `lerobot_stats`, dataset-level `lerobot_tasks` as a `{task: task_index}` mapping loaded from `meta/tasks.parquet`, and per-episode `lerobot_episode_stats`.
+  - `metadata`: dict with shared `lerobot_info`, shared dataset-level `lerobot_stats`, shared dataset-level `lerobot_tasks` as a `{task_index: task}` mapping loaded from `meta/tasks.parquet`, and per-episode `lerobot_episode_stats`.
   - episode-level `tasks` from LeRobot metadata are omitted from emitted rows so edits go through the canonical task table plus frame `task_index`.
   - raw transport metadata keys under `stats/*`, `videos/*`, and `meta/episodes/*` are omitted from emitted rows.
   - frame slicing requires `dataset_from_index`/`dataset_to_index` in each episode row.

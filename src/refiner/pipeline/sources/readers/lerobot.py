@@ -49,14 +49,12 @@ class _FrameFileCacheEntry:
 @dataclass(frozen=True, slots=True)
 class _DatasetState:
     root: DataFolder
-    stats_metadata: Mapping[str, Any]
-    task_to_index: Mapping[str, int]
+    metadata: Mapping[str, Any]
+    index_to_task: Mapping[int, str]
     task_index_remap: Mapping[int, int]
-    fps: int | None
     video_path_template: str
     data_path_template: str
     video_keys: tuple[str, ...]
-    robot_type: str | None
 
 
 class LeRobotEpisodeReader(ParquetReader):
@@ -194,20 +192,11 @@ class LeRobotEpisodeReader(ParquetReader):
     ) -> Row:
         dataset = self._dataset_for_source(source_index, episode_path)
         episode_stats = self._extract_episode_stats(row)
-        metadata = {
-            LEROBOT_INFO: {
-                "root": dataset.root.abs_paths(""),
-                "fps": dataset.fps,
-                "robot_type": dataset.robot_type,
-            },
-            LEROBOT_STATS: dataset.stats_metadata,
-            LEROBOT_TASKS: dict(dataset.task_to_index),
-        }
-        if episode_stats:
-            metadata[LEROBOT_EPISODE_STATS] = episode_stats
         patch: dict[str, Any] = {
             "episode_index": episode_index,
-            "metadata": metadata,
+            "metadata": dict(dataset.metadata, **{LEROBOT_EPISODE_STATS: episode_stats})
+            if episode_stats
+            else dataset.metadata,
         }
 
         frames = await self._load_episode_frames(row, dataset)
@@ -470,21 +459,19 @@ class LeRobotEpisodeReader(ParquetReader):
         datasets = self._datasets
         if datasets is None:
             raw_datasets = tuple(self._load_dataset_state(root) for root in self._roots)
-            task_to_index, remaps = _merge_task_metadata(
-                tuple(dataset.task_to_index for dataset in raw_datasets)
+            index_to_task, remaps = _merge_task_metadata(
+                tuple(dataset.index_to_task for dataset in raw_datasets)
             )
 
             datasets = {
                 str(dataset.root.abs_paths("")): _DatasetState(
                     root=dataset.root,
-                    stats_metadata=dataset.stats_metadata,
-                    task_to_index=task_to_index,
+                    metadata=dict(dataset.metadata, **{LEROBOT_TASKS: index_to_task}),
+                    index_to_task=index_to_task,
                     task_index_remap=remaps[idx],
-                    fps=dataset.fps,
                     video_path_template=dataset.video_path_template,
                     data_path_template=dataset.data_path_template,
                     video_keys=dataset.video_keys,
-                    robot_type=dataset.robot_type,
                 )
                 for idx, dataset in enumerate(raw_datasets)
             }
@@ -518,24 +505,30 @@ class LeRobotEpisodeReader(ParquetReader):
                 f"LeRobot reader inputs must be dataset folders, got {root.abs_paths('')!r}"
             )
         info = self._load_info(root)
-        stats_metadata = self._load_stats(root)
-        task_to_index = self._load_tasks(root)
+        index_to_task = self._load_tasks(root)
+        metadata = {
+            LEROBOT_INFO: {
+                "root": root.abs_paths(""),
+                "fps": int(info["fps"]) if info.get("fps") is not None else None,
+                "robot_type": info.get("robot_type"),
+            },
+            LEROBOT_STATS: self._load_stats(root),
+            LEROBOT_TASKS: index_to_task,
+        }
         return _DatasetState(
             root=root,
-            stats_metadata=stats_metadata,
-            task_to_index=task_to_index,
+            metadata=metadata,
+            index_to_task=index_to_task,
             task_index_remap={},
-            fps=int(info["fps"]) if info.get("fps") is not None else None,
             video_path_template=info.get("video_path", _DEFAULT_VIDEO_PATH),
             data_path_template=info.get("data_path", _DEFAULT_DATA_PATH),
             video_keys=self._load_video_keys(info.get("features") or {}),
-            robot_type=info.get("robot_type"),
         )
 
     def _load_tasks(
         self,
         root: DataFolder,
-    ) -> dict[str, int]:
+    ) -> dict[int, str]:
         tasks_file = root.file(_TASKS_PARQUET)
         if not tasks_file.exists():
             raise ValueError(
@@ -549,7 +542,7 @@ class LeRobotEpisodeReader(ParquetReader):
             "__index_level_0__" if "__index_level_0__" in table.schema.names else "task"
         )
         return {
-            str(row[index_field]): int(row["task_index"])
+            int(row["task_index"]): str(row[index_field])
             for row in table.to_pylist()
             if row.get("task_index") is not None
             and isinstance(row.get(index_field), str)
@@ -594,19 +587,30 @@ class LeRobotEpisodeReader(ParquetReader):
 
 
 def _merge_task_metadata(
-    tasks_by_dataset: Sequence[Mapping[str, int]],
-) -> tuple[dict[str, int], tuple[dict[int, int], ...]]:
-    task_to_index: dict[str, int] = {}
-    remaps: list[dict[int, int]] = []
+    tasks_by_dataset: Sequence[Mapping[int, str]],
+) -> tuple[dict[int, str], tuple[dict[int, int], ...]]:
+    if not tasks_by_dataset:
+        return {}, ()
+    index_to_task = dict(tasks_by_dataset[0])
+    task_to_index = {task: task_index for task_index, task in index_to_task.items()}
+    next_index = max(index_to_task, default=-1) + 1
+    remaps: list[dict[int, int]] = [
+        {task_index: task_index for task_index in index_to_task}
+    ]
 
-    for source_tasks in tasks_by_dataset:
+    for source_tasks in tasks_by_dataset[1:]:
         remap: dict[int, int] = {}
-        for task, source_index in source_tasks.items():
-            merged_index = task_to_index.setdefault(task, len(task_to_index))
+        for source_index, task in source_tasks.items():
+            merged_index = task_to_index.get(task)
+            if merged_index is None:
+                merged_index = next_index
+                next_index += 1
+                task_to_index[task] = merged_index
+                index_to_task[merged_index] = task
             remap[int(source_index)] = merged_index
         remaps.append(remap)
 
-    return task_to_index, tuple(remaps)
+    return index_to_task, tuple(remaps)
 
 
 __all__ = [
@@ -615,5 +619,4 @@ __all__ = [
     "LEROBOT_TASKS",
     "LEROBOT_STATS",
     "LEROBOT_INFO",
-    "_merge_task_metadata",
 ]

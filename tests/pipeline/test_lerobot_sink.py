@@ -120,7 +120,7 @@ def _episode(
         ),
         "metadata": {
             "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-            LEROBOT_TASKS: {"pick": 0, "place": 1},
+            LEROBOT_TASKS: {0: "pick", 1: "place"},
         },
     }
 
@@ -220,7 +220,7 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
                 ],
                 "metadata": {
                     "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                    LEROBOT_TASKS: {"pick": 0, "place": 1},
+                    LEROBOT_TASKS: {0: "pick", 1: "place"},
                 },
             },
             {
@@ -242,7 +242,7 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
                 ],
                 "metadata": {
                     "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                    LEROBOT_TASKS: {"pick": 0, "place": 1},
+                    LEROBOT_TASKS: {0: "pick", 1: "place"},
                 },
             },
         ],
@@ -390,7 +390,7 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
                 ],
                 "metadata": {
                     "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                    LEROBOT_TASKS: {"place": 1, "pick": 5},
+                    LEROBOT_TASKS: {1: "place", 5: "pick"},
                 },
             },
             {
@@ -412,7 +412,7 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
                 ],
                 "metadata": {
                     "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                    LEROBOT_TASKS: {"place": 1, "pick": 5},
+                    LEROBOT_TASKS: {1: "place", 5: "pick"},
                 },
             },
         ],
@@ -458,7 +458,7 @@ def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> No
                         ],
                         "metadata": {
                             "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                            LEROBOT_TASKS: {"pick": 0, "place": 1},
+                            LEROBOT_TASKS: {0: "pick", 1: "place"},
                         },
                     },
                     shard_id="shard-1",
@@ -501,7 +501,7 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
             ],
             "metadata": {
                 "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                LEROBOT_TASKS: {"pick": 0, "place": 1},
+                LEROBOT_TASKS: {0: "pick", 1: "place"},
             },
         },
         shard_id="shard-1",

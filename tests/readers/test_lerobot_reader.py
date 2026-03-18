@@ -23,11 +23,11 @@ def _write_parquet(path: Path, rows: list[dict]) -> None:
 def _build_sample_dataset(
     root: Path,
     *,
-    task_to_index: dict[str, int] | None = None,
+    index_to_task: dict[int, str] | None = None,
     episode_tasks: tuple[str, str] = ("pick", "place"),
     frame_task_indices: tuple[int, int, int, int] = (0, 0, 1, 1),
 ) -> None:
-    task_to_index = task_to_index or {"pick": 0, "place": 1}
+    index_to_task = index_to_task or {0: "pick", 1: "place"}
     (root / "meta").mkdir(parents=True, exist_ok=True)
     (root / "meta" / "info.json").write_text(
         json.dumps(
@@ -56,7 +56,7 @@ def _build_sample_dataset(
         root / "meta" / "tasks.parquet",
         [
             {"task": task, "task_index": task_index}
-            for task, task_index in task_to_index.items()
+            for task_index, task in index_to_task.items()
         ],
     )
     _write_parquet(
@@ -143,7 +143,9 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
 
     assert int(first["episode_index"]) == 0
     assert int(second["episode_index"]) == 1
-    assert first["metadata"][LEROBOT_TASKS] == {"pick": 0, "place": 1}
+    assert first["metadata"][LEROBOT_TASKS] == {0: "pick", 1: "place"}
+    assert first["metadata"][LEROBOT_TASKS] is second["metadata"][LEROBOT_TASKS]
+    assert first["metadata"]["lerobot_info"] is second["metadata"]["lerobot_info"]
     assert first["metadata"]["lerobot_stats"]["observation.state"]["count"] == 2
     assert first["metadata"][LEROBOT_EPISODE_STATS]["observation.state"]["min"] == [
         -999.0
@@ -245,7 +247,7 @@ def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(
     _build_sample_dataset(first_root)
     _build_sample_dataset(
         second_root,
-        task_to_index={"place": 0, "stack": 1},
+        index_to_task={0: "place", 1: "stack"},
         episode_tasks=("place", "stack"),
         frame_task_indices=(0, 0, 1, 1),
     )
@@ -261,7 +263,7 @@ def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(
         str(second_root),
         str(second_root),
     ]
-    expected_tasks = {"pick": 0, "place": 1, "stack": 2}
+    expected_tasks = {0: "pick", 1: "place", 2: "stack"}
     assert rows[0]["metadata"][LEROBOT_TASKS] == expected_tasks
     assert rows[2]["metadata"][LEROBOT_TASKS] == expected_tasks
     assert [int(frame["task_index"]) for frame in rows[2]["frames"]] == [1, 1]

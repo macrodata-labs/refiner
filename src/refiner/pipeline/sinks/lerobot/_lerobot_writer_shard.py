@@ -83,7 +83,7 @@ class _LeRobotShardWriter:
     chunk_key: str
     folder: DataFolder = field(init=False)
 
-    _task_to_index: dict[str, int] = field(default_factory=dict, init=False)
+    _index_to_task: dict[int, str] = field(default_factory=dict, init=False)
     _fps: int | None = field(default=None, init=False)
     _robot_type: str | None = field(default=None, init=False)
     features: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
@@ -203,18 +203,16 @@ class _LeRobotShardWriter:
         episode_index = int(row["episode_index"])
         frames = self._require_required_fields(row)
         frame_stats = compute_episode_stats(frames=frames)
-        task_to_index = row["metadata"][LEROBOT_TASKS]
-        if not self._task_to_index:
-            self._task_to_index = dict(task_to_index)
-        elif self._task_to_index != task_to_index:
+        index_to_task = row["metadata"][LEROBOT_TASKS]
+        if not self._index_to_task:
+            self._index_to_task = dict(index_to_task)
+        elif self._index_to_task != index_to_task:
             raise ValueError(
                 "LeRobot writer encountered mismatched task metadata across episodes"
             )
-
-        task_by_index = {task_index: task for task, task_index in task_to_index.items()}
         frame_task_indices = [int(frame["task_index"]) for frame in frames]
         mapped_tasks = [
-            task_by_index.get(task_index) for task_index in frame_task_indices
+            index_to_task.get(task_index) for task_index in frame_task_indices
         ]
         unmapped_task_index = next(
             (
@@ -321,13 +319,11 @@ class _LeRobotShardWriter:
                     use_dictionary=True,
                 )
 
-        ordered_tasks = sorted(
-            self._task_to_index.items(), key=lambda item: (item[1], item[0])
-        )
+        ordered_tasks = sorted(self._index_to_task.items())
         tasks_table = pa.Table.from_pydict(
             {
-                "task": [task for task, _ in ordered_tasks],
-                "task_index": [task_index for _, task_index in ordered_tasks],
+                "task": [task for _, task in ordered_tasks],
+                "task_index": [task_index for task_index, _ in ordered_tasks],
             }
         )
         with self.folder.open(self._meta_path("tasks.parquet"), mode="wb") as out:
