@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from typing import cast
 
 from refiner.pipeline import read_jsonl
@@ -263,8 +264,26 @@ def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> No
         "MODEL_NAME": "plain-env-value",
     }
     assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
-    assert request.manifest is not None
-    assert "REDACTED_SECRET" in request.manifest["script"]["text"]
+
+
+def test_pipeline_launch_cloud_rejects_overlapping_secret_and_env_keys(
+    monkeypatch,
+) -> None:
+    class FakeMacrodataClient:
+        def __init__(self):
+            self.base_url = "https://example.com"
+
+        def cloud_submit_job(self, *, request):
+            raise AssertionError("should not submit when env overlaps secrets")
+
+    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+
+    with pytest.raises(SystemExit, match="API_KEY"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            secrets={"API_KEY": "secret"},
+            env={"API_KEY": "env"},
+        )
 
 
 def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(

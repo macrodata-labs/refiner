@@ -80,6 +80,20 @@ class CloudLauncher(BaseLauncher):
             resolved[name] = str(value)
         return resolved
 
+    @staticmethod
+    def _merged_env(
+        secrets: dict[str, str] | None,
+        env: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        if secrets and env:
+            overlapping = secrets.keys() & env.keys()
+            if overlapping:
+                raise SystemExit(
+                    "cloud env keys must not overlap with secrets: "
+                    + ", ".join(sorted(overlapping))
+                )
+        return {**(secrets or {}), **(env or {})} or None
+
     def launch(self) -> CloudLaunchResult:
         try:
             client = self._require_platform_client()
@@ -107,7 +121,7 @@ class CloudLauncher(BaseLauncher):
             ],
             manifest=self._run_manifest(secret_values=secret_values),
             sync_local_dependencies=self.sync_local_dependencies,
-            secrets=(resolved_secrets or {}) | (resolved_env or {}) or None,
+            secrets=self._merged_env(resolved_secrets, resolved_env),
         )
         resp = client.cloud_submit_job(request=request)
         self._info(
