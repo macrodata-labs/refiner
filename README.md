@@ -28,7 +28,7 @@ Log in:
 macrodata login
 ```
 
-### Cloud robotics example
+### Cloud example
 
 Launch a robotics pipeline on Macrodata Cloud.
 
