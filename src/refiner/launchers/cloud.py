@@ -47,6 +47,7 @@ class CloudLauncher(BaseLauncher):
         mem_mb_per_worker: int | None = None,
         sync_local_dependencies: bool = True,
         secrets: dict[str, object | None] | None = None,
+        env: dict[str, object | None] | None = None,
     ):
         super().__init__(
             pipeline=pipeline,
@@ -58,29 +59,48 @@ class CloudLauncher(BaseLauncher):
         )
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
+        self.env = env
 
-    def _resolved_secrets(self) -> dict[str, str] | None:
-        if not self.secrets:
+    @staticmethod
+    def _resolve_env_values(
+        values: dict[str, object | None] | None,
+    ) -> dict[str, str] | None:
+        if not values:
             return None
         resolved: dict[str, str] = {}
-        for name, value in self.secrets.items():
+        for name, value in values.items():
             if value is None:
                 env_value = os.environ.get(name)
                 if env_value is None:
                     raise SystemExit(
-                        f"cloud secret {name!r} was set to None but is not present in the environment. Make sure it is being exported."
+                        f"cloud env {name!r} was set to None but is not present in the environment. Make sure it is being exported."
                     )
                 resolved[name] = env_value
                 continue
             resolved[name] = str(value)
         return resolved
 
+    @staticmethod
+    def _merged_env(
+        secrets: dict[str, str] | None,
+        env: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        if secrets and env:
+            overlapping = secrets.keys() & env.keys()
+            if overlapping:
+                raise SystemExit(
+                    "cloud env keys must not overlap with secrets: "
+                    + ", ".join(sorted(overlapping))
+                )
+        return {**(secrets or {}), **(env or {})} or None
+
     def launch(self) -> CloudLaunchResult:
         try:
             client = self._require_platform_client()
         except RuntimeError as err:
             raise SystemExit(str(err)) from err
-        resolved_secrets = self._resolved_secrets()
+        resolved_secrets = self._resolve_env_values(self.secrets)
+        resolved_env = self._resolve_env_values(self.env)
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
         stages = self._planned_stages()
         request = CloudRunCreateRequest(
@@ -101,7 +121,7 @@ class CloudLauncher(BaseLauncher):
             ],
             manifest=self._run_manifest(secret_values=secret_values),
             sync_local_dependencies=self.sync_local_dependencies,
-            secrets=resolved_secrets,
+            secrets=self._merged_env(resolved_secrets, resolved_env),
         )
         resp = client.cloud_submit_job(request=request)
         self._info(

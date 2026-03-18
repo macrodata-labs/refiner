@@ -324,6 +324,7 @@ class RefinerPipeline:
         mem_mb_per_worker: int | None = None,
         sync_local_dependencies: bool = True,
         secrets: Mapping[str, object | None] | None = None,
+        env: Mapping[str, object | None] | None = None,
     ) -> "CloudLaunchResult":
         """Launch the pipeline on Macrodata Cloud.
 
@@ -336,6 +337,9 @@ class RefinerPipeline:
             sync_local_dependencies: Sync submitting environment dependencies in cloud image.
             secrets: Extra environment variables to mount inside the cloud image.
                 `None` values are loaded from the submitting environment.
+            env: Extra environment variables to mount inside the cloud image without
+                treating their values as redaction targets. `None` values are loaded
+                from the submitting environment.
         """
         from refiner.launchers.cloud import CloudLauncher
 
@@ -348,6 +352,7 @@ class RefinerPipeline:
             mem_mb_per_worker=mem_mb_per_worker,
             sync_local_dependencies=sync_local_dependencies,
             secrets=dict(secrets) if secrets is not None else None,
+            env=dict(env) if env is not None else None,
         )
         return launcher.launch()
 
