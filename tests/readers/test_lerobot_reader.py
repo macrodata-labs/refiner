@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import json
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from refiner.pipeline.sources.readers.lerobot import (
-    LEROBOT_EPISODE_STATS,
-    LEROBOT_TASKS,
-)
 from refiner.media import VideoFile
-from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.pipeline.sources.readers.lerobot import (
+    LEROBOT_TASKS,
+    LeRobotEpisodeReader,
+    LeRobotMetadata,
+)
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -143,15 +144,15 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
 
     assert int(first["episode_index"]) == 0
     assert int(second["episode_index"]) == 1
-    assert first["metadata"][LEROBOT_TASKS] == {0: "pick", 1: "place"}
-    assert first["metadata"][LEROBOT_TASKS] is second["metadata"][LEROBOT_TASKS]
-    assert first["metadata"]["lerobot_info"] is second["metadata"]["lerobot_info"]
-    assert first["metadata"]["lerobot_stats"]["observation.state"]["count"] == 2
-    assert first["metadata"][LEROBOT_EPISODE_STATS]["observation.state"]["min"] == [
-        -999.0
-    ]
-    assert "tasks" not in first
-    assert "stats/observation.state/min" not in first
+    assert first[LEROBOT_TASKS] == {0: "pick", 1: "place"}
+    assert first[LEROBOT_TASKS] is second[LEROBOT_TASKS]
+    assert isinstance(first["metadata"], LeRobotMetadata)
+    assert first["metadata"].lerobot_info is second["metadata"].lerobot_info
+    assert first["metadata"].lerobot_stats["observation.state"]["count"] == 2
+    with pytest.raises(FrozenInstanceError):
+        first["metadata"].lerobot_info = first["metadata"].lerobot_info
+    assert first["tasks"] == ["pick"]
+    assert first["stats/observation.state/min"] == [-999.0]
     assert "videos/observation.images.main/chunk_index" not in first
     assert "meta/episodes/chunk_index" not in first
 
@@ -257,14 +258,14 @@ def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(
 
     assert len(rows) == 4
     assert [int(row["episode_index"]) for row in rows] == [0, 1, 2, 3]
-    assert [str(row["metadata"]["lerobot_info"]["root"]) for row in rows] == [
+    assert [row["metadata"].lerobot_info.root for row in rows] == [
         str(first_root),
         str(first_root),
         str(second_root),
         str(second_root),
     ]
     expected_tasks = {0: "pick", 1: "place", 2: "stack"}
-    assert rows[0]["metadata"][LEROBOT_TASKS] == expected_tasks
-    assert rows[2]["metadata"][LEROBOT_TASKS] == expected_tasks
+    assert rows[0][LEROBOT_TASKS] == expected_tasks
+    assert rows[2][LEROBOT_TASKS] == expected_tasks
     assert [int(frame["task_index"]) for frame in rows[2]["frames"]] == [1, 1]
     assert [int(frame["task_index"]) for frame in rows[3]["frames"]] == [2, 2]

@@ -31,12 +31,9 @@ _DEFAULT_EPISODES_GLOB_ROOT = "meta/episodes"
 _INFO_JSON = "meta/info.json"
 _STATS_JSON = "meta/stats.json"
 _TASKS_PARQUET = "meta/tasks.parquet"
-LEROBOT_STATS = "lerobot_stats"
-LEROBOT_INFO = "lerobot_info"
-LEROBOT_EPISODE_STATS = "lerobot_episode_stats"
 LEROBOT_TASKS = "lerobot_tasks"
-_ROW_DROP_PREFIXES = ("stats/", "videos/", "meta/episodes/", "data/")
-_ROW_DROP_KEYS = {"dataset_from_index", "dataset_to_index", "tasks"}
+_ROW_DROP_PREFIXES = ("videos/", "meta/episodes/", "data/")
+_ROW_DROP_KEYS = {"dataset_from_index", "dataset_to_index"}
 _DATA_FILE_CACHE_NAME = "lerobot:data_files"
 
 
@@ -47,9 +44,22 @@ class _FrameFileCacheEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class LeRobotInfo:
+    root: str
+    fps: int | None
+    robot_type: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LeRobotMetadata:
+    lerobot_info: LeRobotInfo
+    lerobot_stats: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class _DatasetState:
     root: DataFolder
-    metadata: Mapping[str, Any]
+    metadata: LeRobotMetadata
     index_to_task: Mapping[int, str]
     task_index_remap: Mapping[int, int]
     video_path_template: str
@@ -191,12 +201,10 @@ class LeRobotEpisodeReader(ParquetReader):
         episode_index: int,
     ) -> Row:
         dataset = self._dataset_for_source(source_index, episode_path)
-        episode_stats = self._extract_episode_stats(row)
         patch: dict[str, Any] = {
             "episode_index": episode_index,
-            "metadata": dict(dataset.metadata, **{LEROBOT_EPISODE_STATS: episode_stats})
-            if episode_stats
-            else dataset.metadata,
+            "metadata": dataset.metadata,
+            LEROBOT_TASKS: dataset.index_to_task,
         }
 
         frames = await self._load_episode_frames(row, dataset)
@@ -466,7 +474,7 @@ class LeRobotEpisodeReader(ParquetReader):
             datasets = {
                 str(dataset.root.abs_paths("")): _DatasetState(
                     root=dataset.root,
-                    metadata=dict(dataset.metadata, **{LEROBOT_TASKS: index_to_task}),
+                    metadata=dataset.metadata,
                     index_to_task=index_to_task,
                     task_index_remap=remaps[idx],
                     video_path_template=dataset.video_path_template,
@@ -506,15 +514,14 @@ class LeRobotEpisodeReader(ParquetReader):
             )
         info = self._load_info(root)
         index_to_task = self._load_tasks(root)
-        metadata = {
-            LEROBOT_INFO: {
-                "root": root.abs_paths(""),
-                "fps": int(info["fps"]) if info.get("fps") is not None else None,
-                "robot_type": info.get("robot_type"),
-            },
-            LEROBOT_STATS: self._load_stats(root),
-            LEROBOT_TASKS: index_to_task,
-        }
+        metadata = LeRobotMetadata(
+            lerobot_info=LeRobotInfo(
+                root=str(root.abs_paths("")),
+                fps=int(info["fps"]) if info.get("fps") is not None else None,
+                robot_type=info.get("robot_type"),
+            ),
+            lerobot_stats=self._load_stats(root),
+        )
         return _DatasetState(
             root=root,
             metadata=metadata,
@@ -573,18 +580,6 @@ class LeRobotEpisodeReader(ParquetReader):
             )
         )
 
-    def _extract_episode_stats(
-        self,
-        row: Mapping[str, Any],
-    ) -> dict[str, dict[str, Any]]:
-        out: dict[str, dict[str, Any]] = {}
-        for key in row.keys():
-            if not isinstance(key, str) or not key.startswith("stats/"):
-                continue
-            _, feature, stat_name = key.split("/", 2)
-            out.setdefault(feature, {})[stat_name] = row.get(key)
-        return out
-
 
 def _merge_task_metadata(
     tasks_by_dataset: Sequence[Mapping[int, str]],
@@ -615,8 +610,7 @@ def _merge_task_metadata(
 
 __all__ = [
     "LeRobotEpisodeReader",
-    "LEROBOT_EPISODE_STATS",
+    "LeRobotInfo",
+    "LeRobotMetadata",
     "LEROBOT_TASKS",
-    "LEROBOT_STATS",
-    "LEROBOT_INFO",
 ]

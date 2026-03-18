@@ -8,6 +8,7 @@ from typing import Iterator, cast
 import av
 import fsspec
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -24,7 +25,11 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotWriterConfig,
     LeRobotWriterSink,
 )
-from refiner.pipeline.sources.readers.lerobot import LEROBOT_TASKS
+from refiner.pipeline.sources.readers.lerobot import (
+    LEROBOT_TASKS,
+    LeRobotInfo,
+    LeRobotMetadata,
+)
 from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
     reset_opened_video_source_cache,
 )
@@ -118,11 +123,16 @@ def _episode(
             from_timestamp_s=from_ts,
             to_timestamp_s=to_ts,
         ),
-        "metadata": {
-            "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-            LEROBOT_TASKS: {0: "pick", 1: "place"},
-        },
+        LEROBOT_TASKS: {0: "pick", 1: "place"},
+        "metadata": _metadata(),
     }
+
+
+def _metadata() -> LeRobotMetadata:
+    return LeRobotMetadata(
+        lerobot_info=LeRobotInfo(root="", fps=10, robot_type="mockbot"),
+        lerobot_stats={},
+    )
 
 
 def test_lerobot_configs_export_from_pipeline() -> None:
@@ -218,10 +228,8 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
                         "observation.state": [2.0],
                     },
                 ],
-                "metadata": {
-                    "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                    LEROBOT_TASKS: {0: "pick", 1: "place"},
-                },
+                LEROBOT_TASKS: {0: "pick", 1: "place"},
+                "metadata": _metadata(),
             },
             {
                 "episode_index": 1,
@@ -240,10 +248,8 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
                         "observation.state": [4.0],
                     },
                 ],
-                "metadata": {
-                    "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                    LEROBOT_TASKS: {0: "pick", 1: "place"},
-                },
+                LEROBOT_TASKS: {0: "pick", 1: "place"},
+                "metadata": _metadata(),
             },
         ],
         items_per_shard=1,
@@ -388,10 +394,8 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
                         "observation.state": [2.0],
                     },
                 ],
-                "metadata": {
-                    "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                    LEROBOT_TASKS: {1: "place", 5: "pick"},
-                },
+                LEROBOT_TASKS: {1: "place", 5: "pick"},
+                "metadata": _metadata(),
             },
             {
                 "episode_index": 1,
@@ -410,10 +414,8 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
                         "observation.state": [4.0],
                     },
                 ],
-                "metadata": {
-                    "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                    LEROBOT_TASKS: {1: "place", 5: "pick"},
-                },
+                LEROBOT_TASKS: {1: "place", 5: "pick"},
+                "metadata": _metadata(),
             },
         ],
         items_per_shard=10,
@@ -439,8 +441,8 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
 def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> None:
     writer = LeRobotWriterSink(LeRobotWriterConfig(output=str(tmp_path / "out")))
     with pytest.raises(
-        ValueError,
-        match="could not map frame task_index=7",
+        KeyError,
+        match="7",
     ):
         writer.write_block(
             [
@@ -456,10 +458,8 @@ def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> No
                                 "observation.state": [1.0],
                             }
                         ],
-                        "metadata": {
-                            "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                            LEROBOT_TASKS: {0: "pick", 1: "place"},
-                        },
+                        LEROBOT_TASKS: {0: "pick", 1: "place"},
+                        "metadata": _metadata(),
                     },
                     shard_id="shard-1",
                 )
@@ -469,11 +469,17 @@ def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> No
 
 
 class _FinalizedWorkersRuntime:
+    def __init__(
+        self,
+        rows: list[FinalizedShardWorker] | None = None,
+    ) -> None:
+        self._rows = rows or [FinalizedShardWorker(shard_id="shard-1", worker_id="2")]
+
     def finalized_workers(
         self, *, stage_index: int | None = None
     ) -> list[FinalizedShardWorker]:
         assert stage_index == 0
-        return [FinalizedShardWorker(shard_id="shard-1", worker_id="2")]
+        return self._rows
 
 
 def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
@@ -499,10 +505,8 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
                     "observation.state": [2.0],
                 },
             ],
-            "metadata": {
-                "lerobot_info": {"fps": 10, "robot_type": "mockbot"},
-                LEROBOT_TASKS: {0: "pick", 1: "place"},
-            },
+            LEROBOT_TASKS: {0: "pick", 1: "place"},
+            "metadata": _metadata(),
         },
         shard_id="shard-1",
     )
@@ -553,6 +557,78 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
         out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
     )
     assert table.column("data/chunk_index").to_pylist() == [f"shard-1__w{worker_2}"]
+
+
+def test_write_lerobot_stage2_raises_on_mismatched_stage1_info(tmp_path: Path) -> None:
+    out_root = tmp_path / "reduce-info-mismatch"
+    worker_1 = RunHandle.worker_token_for("1")
+    worker_2 = RunHandle.worker_token_for("2")
+    stage1_rows = [
+        ("shard-1__w" + worker_1, 0, 10),
+        ("shard-2__w" + worker_2, 1, 20),
+    ]
+    for chunk_key, episode_index, fps in stage1_rows:
+        chunk_root = out_root / "meta" / f"chunk-{chunk_key}"
+        (chunk_root / "episodes").mkdir(parents=True, exist_ok=True)
+        pq.write_table(
+            pa.Table.from_pylist(
+                [
+                    {
+                        "episode_index": episode_index,
+                        "tasks": ["pick"],
+                        "data/chunk_index": chunk_key,
+                        "data/file_index": 0,
+                        "dataset_from_index": 0,
+                        "dataset_to_index": 1,
+                        "meta/episodes/chunk_index": chunk_key,
+                        "meta/episodes/file_index": 0,
+                    }
+                ]
+            ),
+            chunk_root / "episodes" / "file-000.parquet",
+        )
+        pq.write_table(
+            pa.Table.from_pylist([{"task": "pick", "task_index": 0}]),
+            chunk_root / "tasks.parquet",
+        )
+        (chunk_root / "info.jsonl").write_text(
+            json.dumps(
+                {
+                    "codebase_version": "v3.0",
+                    "data_files_size_in_mb": 1,
+                    "video_files_size_in_mb": 1,
+                    "data_path": "data/chunk-{chunk_index}/file-{file_index:03d}.parquet",
+                    "video_path": None,
+                    "fps": fps,
+                    "robot_type": "mockbot",
+                    "features": {},
+                    "total_episodes": 1,
+                    "total_frames": 1,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    reducer = LeRobotMetaReduceSink(config=LeRobotWriterConfig(output=str(out_root)))
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [
+                FinalizedShardWorker(shard_id="shard-1", worker_id="1"),
+                FinalizedShardWorker(shard_id="shard-2", worker_id="2"),
+            ]
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match="mismatched stage-1 info metadata",
+    ):
+        with set_active_run_context(
+            run_handle=RunHandle(job_id="job", stage_index=1, worker_id="local"),
+            runtime_lifecycle=runtime,
+        ):
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
 
 def test_hub_aloha_merge_uses_remux_and_preserves_episode_count(tmp_path: Path) -> None:

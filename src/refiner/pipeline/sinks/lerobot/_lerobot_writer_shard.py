@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +19,7 @@ from refiner.pipeline.sinks.lerobot._lerobot_frames import (
 )
 from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _cast_stats_to_numpy,
+    _extract_episode_stats,
     _flatten_stats_for_episode,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
@@ -27,9 +28,8 @@ from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
     _CompletedVideoItem,
 )
 from refiner.pipeline.sources.readers.lerobot import (
-    LEROBOT_EPISODE_STATS,
-    LEROBOT_INFO,
     LEROBOT_TASKS,
+    LeRobotMetadata,
 )
 
 if TYPE_CHECKING:
@@ -137,7 +137,7 @@ class _LeRobotShardWriter:
         if not row["frames"]:
             # all frames were trimmed or similar
             return
-        self._initialize_info_from_rows([row])
+        self._initialize_info_from_row(row)
         episode_index = int(row["episode_index"])
         source_episode_stats = self._source_episode_stats(row)
 
@@ -203,31 +203,14 @@ class _LeRobotShardWriter:
         episode_index = int(row["episode_index"])
         frames = self._require_required_fields(row)
         frame_stats = compute_episode_stats(frames=frames)
-        index_to_task = row["metadata"][LEROBOT_TASKS]
+        index_to_task = row[LEROBOT_TASKS]
         if not self._index_to_task:
             self._index_to_task = dict(index_to_task)
         elif self._index_to_task != index_to_task:
             raise ValueError(
                 "LeRobot writer encountered mismatched task metadata across episodes"
             )
-        frame_task_indices = [int(frame["task_index"]) for frame in frames]
-        mapped_tasks = [
-            index_to_task.get(task_index) for task_index in frame_task_indices
-        ]
-        unmapped_task_index = next(
-            (
-                task_index
-                for task_index, mapped_task in zip(frame_task_indices, mapped_tasks)
-                if mapped_task is None
-            ),
-            None,
-        )
-        if unmapped_task_index is not None:
-            raise ValueError(
-                "LeRobot writer could not map frame task_index="
-                f"{unmapped_task_index} through metadata['{LEROBOT_TASKS}']"
-            )
-        tasks = sorted({task for task in mapped_tasks if task is not None})
+        tasks = sorted({index_to_task[int(frame["task_index"])] for frame in frames})
         table = (
             frame_table(
                 frames=frames,
@@ -275,6 +258,7 @@ class _LeRobotShardWriter:
                 "frames",
                 "tasks",
                 "metadata",
+                LEROBOT_TASKS,
                 "episode_index",
                 "data/chunk_index",
                 "data/file_index",
@@ -398,45 +382,35 @@ class _LeRobotShardWriter:
         self,
         row: Mapping[str, Any],
     ) -> dict[str, dict[str, np.ndarray]]:
-        return self._source_episode_stats_from_value(row.get("metadata"))
+        return _cast_stats_to_numpy(_extract_episode_stats(row))
 
-    def _source_episode_stats_from_value(
-        self,
-        metadata: Any,
-    ) -> dict[str, dict[str, np.ndarray]]:
-        if not isinstance(metadata, Mapping):
-            return {}
-        raw_stats = metadata.get(LEROBOT_EPISODE_STATS)
-        if not isinstance(raw_stats, Mapping):
-            return {}
-        return _cast_stats_to_numpy(raw_stats)
-
-    def _initialize_info_from_rows(
-        self, rows: Sequence[Row | Mapping[str, Any]]
-    ) -> None:
+    def _initialize_info_from_row(self, row: Row | Mapping[str, Any]) -> None:
         if self.features:
             return
 
-        first = rows[0]
-        frames = self._require_required_fields(first)
-        metadata = first.get("metadata")
-        if isinstance(metadata, Mapping):
-            info = metadata.get(LEROBOT_INFO)
-            if isinstance(info, Mapping):
-                fps_raw = info.get("fps")
-                self._fps = int(fps_raw) if fps_raw is not None else None
-                robot_type_raw = info.get("robot_type")
-                self._robot_type = (
-                    str(robot_type_raw) if robot_type_raw is not None else None
-                )
+        frames = self._require_required_fields(row)
+        metadata = row.get("metadata")
+        if isinstance(metadata, LeRobotMetadata):
+            fps_raw = metadata.lerobot_info.fps
+            self._fps = int(fps_raw) if fps_raw is not None else None
+            robot_type_raw = metadata.lerobot_info.robot_type
+            self._robot_type = (
+                str(robot_type_raw) if robot_type_raw is not None else None
+            )
 
-        for row in rows:
-            for key, value in row.items():
-                if key in {"frames", "task", "tasks", "metadata", "episode_index"}:
-                    continue
-                spec = self._feature_spec(value)
-                if spec is not None:
-                    self.features.setdefault(key, spec)
+        for key, value in row.items():
+            if key in {
+                "frames",
+                "task",
+                "tasks",
+                "metadata",
+                LEROBOT_TASKS,
+                "episode_index",
+            }:
+                continue
+            spec = self._feature_spec(value)
+            if spec is not None:
+                self.features.setdefault(key, spec)
 
         if frames:
             for key, value in frames[0].items():
@@ -453,12 +427,8 @@ class _LeRobotShardWriter:
         }.items():
             self.features.setdefault(key, spec)
 
-        max_videos_in_row = max(
-            (
-                sum(1 for value in row.values() if isinstance(value, VideoFile))
-                for row in rows
-            ),
-            default=0,
+        max_videos_in_row = sum(
+            1 for value in row.values() if isinstance(value, VideoFile)
         )
         self._video_config = replace(
             self.config.video,
