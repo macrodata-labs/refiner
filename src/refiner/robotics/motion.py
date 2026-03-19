@@ -120,7 +120,6 @@ def motion_trim(
             removed_frames / max(1, frame_table.num_rows),
             unit="ratio",
         )
-        kept_start_ts = float(timestamps[start_idx])
         kept_duration_s = (
             float(timestamps[end_idx + 1]) - kept_start_ts
             if end_idx + 1 < frame_table.num_rows

@@ -90,7 +90,7 @@ def execute_row_steps(
             if isinstance(step, RowStep):
                 for row in inp.take_all():
                     normalized = normalize_row_result(row, step.apply_row(row))
-                    _emit_rows_out((normalized,))
+                    normalized.log_throughput("rows_out", 1, unit="rows")
                     out.append(normalized)
                 return
 
@@ -114,7 +114,7 @@ def execute_row_steps(
                 delta = {} if on_shard_delta is not None else None
                 for row in inp.take_all():
                     if step.apply_predicate(row):
-                        _emit_rows_out((row,))
+                        row.log_throughput("rows_out", 1, unit="rows")
                         out.append(row)
                     else:
                         row.log_throughput("rows_dropped", 1, unit="rows")
@@ -134,7 +134,7 @@ def execute_row_steps(
                         normalized = normalize_batch_item(item)
                         if normalized is not None:
                             produced += 1
-                            _emit_rows_out((normalized,))
+                            normalized.log_throughput("rows_out", 1, unit="rows")
                             if delta is not None:
                                 _delta_add(delta, normalized.require_shard_id(), 1)
                             tmp.append(normalized)
@@ -160,7 +160,7 @@ def execute_row_steps(
                 for item in step.apply_batch(batch_in):
                     normalized = normalize_batch_item(item)
                     if normalized is not None:
-                        _emit_rows_out((normalized,))
+                        normalized.log_throughput("rows_out", 1, unit="rows")
                         if delta is not None:
                             _delta_add(delta, normalized.require_shard_id(), 1)
                         tmp.append(normalized)
