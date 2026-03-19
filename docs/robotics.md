@@ -92,9 +92,10 @@ Example:
 
 ```python
 import refiner as mdr
+from refiner.robotics.lerobot_format import LeRobotRow
 
 def inspect_episode(row):
-    assert isinstance(row, mdr.LeRobotRow)
+    assert isinstance(row, LeRobotRow)
 
     episode_index = row.episode_index
     length = row.length
