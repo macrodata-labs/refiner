@@ -159,6 +159,23 @@ def with_columns_assignments_to_code(assignments: dict[str, Any]) -> str:
     )
 
 
+def expr_references_column(expr: Expr, name: str) -> bool:
+    if expr.op == "col" and str(expr.args[0]) == name:
+        return True
+    for arg in expr.args:
+        if isinstance(arg, Expr) and expr_references_column(arg, name):
+            return True
+        if isinstance(arg, (list, tuple)):
+            for item in arg:
+                if isinstance(item, Expr) and expr_references_column(item, name):
+                    return True
+        if isinstance(arg, dict):
+            for item in arg.values():
+                if isinstance(item, Expr) and expr_references_column(item, name):
+                    return True
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class Expr:
     op: builtins.str
@@ -580,4 +597,5 @@ __all__ = [
     "coalesce",
     "if_else",
     "eval_expr_arrow",
+    "expr_references_column",
 ]
