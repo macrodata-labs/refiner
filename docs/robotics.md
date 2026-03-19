@@ -17,10 +17,12 @@ writer, and robotics transforms.
 ## Quick Toc
 
 - [reading datasets](#reading-datasets)
+- [working with lerobotrow](#working-with-lerobotrow)
 - [transforming rows](#transforming-rows)
 - [writing datasets](#writing-datasets)
-- [motion trimming](#motion-trimming)
+- [stage-1 writes and stage-2 reduction](#stage-1-writes-and-stage-2-reduction)
 - [performance notes](#lerobot-performance-notes)
+- [motion trimming](#motion-trimming)
 - [merging datasets](#merging-datasets)
 
 ## Reading Datasets
@@ -45,19 +47,6 @@ pipeline = mdr.read_lerobot(
     ]
 )
 ```
-
-## Transforming Rows
-
-Once read, LeRobot data is manipulated through the same row pipeline model as
-everything else in Refiner.
-
-Example:
-
-```python
-pipeline = pipeline.map(lambda row: row.update(source_dataset="aloha_static_battery"))
-```
-
-Because `map(...)` patches rows by default, this is a convenient way to add episode-level metadata or derived fields before writing.
 
 ## Working With `LeRobotRow`
 
@@ -212,6 +201,20 @@ Use:
 
 Those helpers return a new `LeRobotRow`; they do not mutate the input row.
 
+## Transforming Rows
+
+Once read, LeRobot data is manipulated through the same row pipeline model as
+everything else in Refiner.
+
+Example:
+
+```python
+pipeline = pipeline.map(lambda row: row.update(source_dataset="aloha_static_battery"))
+```
+
+Because `map(...)` patches rows by default, this is a convenient way to add
+episode-level metadata or derived fields before writing.
+
 ## Writing Datasets
 
 Use `write_lerobot(...)` to write a LeRobot-compatible output dataset:
@@ -247,6 +250,33 @@ Current writer tuning is passed directly on `write_lerobot(...)`, including:
   - quantile resolution used when computing LeRobot stats files
 - `force_recompute_video_stats`
   - force decoded-frame video stats recomputation even when compatible source stats already exist
+
+## Stage-1 Writes And Stage-2 Reduction
+
+`write_lerobot(...)` is a two-stage write.
+
+Stage 1 is shard-local:
+
+- each worker writes episode rows, frame parquet files, and any emitted videos
+- each worker also writes shard-local metadata under `meta/chunk-*`
+- this stage keeps writes incremental and avoids cross-worker coordination while
+  rows are still in flight
+
+Stage 2 reduces the finalized shard outputs into the final dataset metadata:
+
+- `meta/episodes/chunk-000/file-000.parquet`
+- `meta/tasks.parquet`
+- `meta/info.json`
+- `meta/stats.json`
+
+During reduction, Refiner also:
+
+- keeps only finalized `data/chunk-*` and `videos/.../chunk-*` payloads
+- removes stage-1 `meta/chunk-*` metadata
+- fixes duplicated `episode_index` values when merging datasets that overlap
+
+This is why the writer can stay fast during stage 1 while still producing a
+single normal LeRobot dataset layout at the end.
 
 ## LeRobot Performance Notes
 
