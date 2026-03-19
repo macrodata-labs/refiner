@@ -65,17 +65,21 @@ def test_map_table_runs_on_vectorized_path() -> None:
     assert [int(r["y"]) for r in out] == [11, 12, 13]
 
 
-def test_map_table_fuses_with_vectorized_ops() -> None:
+def test_map_table_does_not_fall_back_to_row_execution(monkeypatch) -> None:
+    def _unexpected_row_execution(*args, **kwargs):
+        raise AssertionError("row execution should not run for fused vectorized ops")
+
+    monkeypatch.setattr(engine_module, "execute_row_steps", _unexpected_row_execution)
+
     pipeline = (
         from_items([{"x": 1}, {"x": 2}, {"x": 3}])
         .with_column("y", col("x") + 1)
         .map_table(lambda table: table.append_column("z", pa.array([100, 200, 300])))
         .select("z")
     )
-    blocks = list(pipeline.execute(pipeline.source.read()))
+    out = pipeline.materialize()
 
-    assert blocks
-    assert all(isinstance(block, Tabular) for block in blocks)
+    assert [int(row["z"]) for row in out] == [100, 200, 300]
 
 
 def test_datetime_namespace_to_date_and_year() -> None:
