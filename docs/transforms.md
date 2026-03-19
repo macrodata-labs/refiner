@@ -17,6 +17,7 @@ Use the expression-backed methods when you can. They are easier to optimize and 
 | method | accepted argument | how it runs | effect |
 | --- | --- | --- | --- |
 | `.map(fn)` | `fn(row) -> Mapping \| Row` | Python row-by-row | patches or replaces each row |
+| `.map_table(fn)` | `fn(table) -> pa.Table` | vectorized block-by-block | transforms fused Arrow tables directly |
 | `.flat_map(fn)` | `fn(row) -> Iterable[Row]` | Python row-by-row | emits zero, one, or many rows per input row |
 | `.filter(predicate)` | `predicate` can be an `Expr` or `fn(row) -> bool` | expression-backed if given an `Expr`, otherwise Python row-by-row | removes rows that do not satisfy the predicate |
 | `.batch_map(fn, batch_size=...)` | `fn(batch) -> Iterable[Row]` | Python batch-by-batch | transforms rows in batches instead of one at a time |
@@ -37,6 +38,7 @@ Python transforms receive `Row` objects, not raw dictionaries or Arrow tables.
 - Python `filter(...)` gets one `Row`
 - `map_async(...)` gets one `Row`
 - `batch_map(...)` gets `list[Row]`
+- `map_table(...)` gets one `pa.Table`
 
 Those rows are mapping-like and immutable from the caller's perspective:
 
@@ -49,7 +51,10 @@ Do not assume:
 
 - every row is a plain `dict`
 - mutating a row in place is part of the API
-- Python transforms receive internal `Tabular` blocks directly
+- Python row UDFs receive internal `Tabular` blocks directly
+
+`map_table(...)` is the explicit escape hatch when you do want block-level
+access to the underlying Arrow table.
 
 ## How `map(...)` behaves
 
@@ -68,6 +73,40 @@ pipeline = pipeline.map(lambda row: row.update(preview=row["text"][:80]))
 ```
 
 Use `map(...)` when you need arbitrary Python logic that does not fit the expression DSL.
+
+## How `map_table(...)` behaves
+
+`map_table(...)` is the block-level counterpart to `map(...)`.
+
+It receives the fused underlying `pa.Table` on the vectorized path:
+
+```python
+import pyarrow as pa
+
+pipeline = pipeline.map_table(
+    lambda table: table.select(["id", "text"])
+)
+```
+
+Use it when:
+
+- you want direct access to the Arrow table
+- the expression DSL is not enough
+- you still want to stay on the fused vectorized execution path
+
+The contract is:
+
+- input: `pa.Table`
+- output: `pa.Table`
+
+Unlike `map(...)`, this is not a row UDF. It operates on internal vectorized
+blocks, so block sizes are an execution detail and should not be treated as a
+stable semantic unit.
+
+Be careful with internal routing columns:
+
+- do not drop or rewrite `__shard_id` unless you intentionally mean to change shard routing
+- do not assume one `map_table(...)` call equals one shard; a block can contain rows from multiple shard ids
 
 ## How `filter(...)` behaves
 
@@ -98,11 +137,12 @@ pipeline = pipeline.filter(lambda row: row["lang"] == "en")
 
 This runs row-by-row in Python and is useful when the predicate needs custom logic.
 
-## Expression-backed transforms
+## Vectorized transforms
 
-These methods expect the current pipeline rows to have the referenced columns available:
+These methods stay on the vectorized execution path:
 
 - `.filter(expr)`
+- `.map_table(...)`
 - `.with_columns(...)`
 - `.with_column(...)`
 - `.select(...)`

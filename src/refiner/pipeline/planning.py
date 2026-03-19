@@ -70,6 +70,7 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         FnBatchStep,
         FnFlatMapStep,
         FnRowStep,
+        FnTableStep,
         RenameStep,
         SelectStep,
         WithColumnsStep,
@@ -142,6 +143,17 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         )
         step_name = inferred_name or "flat_map"
         return step_name, "flat_map", _callable_step_args(step.fn)
+    if isinstance(step, FnTableStep):
+        inferred_name = (
+            explicit_name
+            if explicit_name and explicit_name != "map_table"
+            else _explicit_callable_name(step.fn)
+        )
+        return (
+            (inferred_name or "map_table"),
+            "table_map",
+            _callable_step_args(step.fn),
+        )
     if isinstance(step, SelectStep):
         return (explicit_name or "select"), "select", {"columns": list(step.columns)}
     if isinstance(step, WithColumnsStep):

@@ -82,9 +82,10 @@ Reader output eventually flows into Python UDFs as `Row` objects:
 - `flat_map(...)` gets one `Row`
 - Python `filter(...)` gets one `Row`
 - `batch_map(...)` gets `list[Row]`
+- `map_table(...)` gets one `pa.Table`
 
-Even when the engine is using Arrow-backed `Tabular` blocks internally, Python
-UDFs do not receive raw Arrow tables directly.
+Even when the engine is using Arrow-backed `Tabular` blocks internally, ordinary
+Python row UDFs do not receive them directly.
 
 That means your custom Python code should assume:
 
@@ -95,7 +96,10 @@ and should not assume:
 
 - every row is a plain `dict`
 - mutating a row in place is part of the API
-- internal vectorized blocks are exposed directly to UDFs
+- internal vectorized blocks are exposed directly to row UDFs
+
+`map_table(...)` is the explicit exception when you want the fused underlying
+Arrow table. It receives a `pa.Table` and must return a `pa.Table`.
 
 ## LeRobot-specific notes
 
