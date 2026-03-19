@@ -74,7 +74,7 @@ def motion_trim(
                 f"containing 'timestamp', '{action_key}', and '{state_key}'"
             )
         row.log_throughput("episodes_seen", 1, unit="episodes")
-        row.log_throughput("frames_in", len(frames), unit="frames")
+        row.log_throughput("frames_in", frames.num_rows, unit="frames")
 
         # timestamps
         timestamp_column = frame_table.column("timestamp")
@@ -92,7 +92,7 @@ def motion_trim(
         )
         if action_active.size == 0 and state_active.size == 0:
             row.log_throughput("episodes_fully_trimmed", 1, unit="episodes")
-            row.log_throughput("frames_removed", len(frames), unit="frames")
+            row.log_throughput("frames_removed", frames.num_rows, unit="frames")
             row.log_histogram("trim_fraction", 1.0, unit="ratio")
             return row.update(frames=[])
 

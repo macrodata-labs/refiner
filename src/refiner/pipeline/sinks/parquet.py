@@ -53,7 +53,6 @@ class ParquetSink(BaseSink):
         if SHARD_ID_COLUMN in table.schema.names:
             table = table.drop_columns([SHARD_ID_COLUMN])
         self._writer(shard_id, table.schema).write_table(table)
-        self._writer(shard_id, table.schema).write_table(table)
         log_throughput("rows_written", table.num_rows, shard_id=shard_id, unit="rows")
 
     def on_shard_complete(self, shard_id: str) -> None:
