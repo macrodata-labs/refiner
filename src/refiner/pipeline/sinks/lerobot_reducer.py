@@ -33,7 +33,8 @@ class LeRobotMetaReduceSink(BaseSink):
     def __init__(self, output: DataFolderLike):
         self.output = DataFolder.resolve(output)
 
-    def write_shard_block(self, _shard_id: str, _block: Block) -> None:
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        del shard_id, block
         finalized_chunk_keys = self._finalized_chunk_keys()
         finalized_chunk_key_set = set(finalized_chunk_keys)
 
@@ -154,7 +155,9 @@ class LeRobotMetaReduceSink(BaseSink):
         info = replace(
             info,
             total_episodes=int(episodes_table.num_rows),
-            total_frames=int(pc.sum(episodes_table.column("length")).as_py() or 0),
+            total_frames=int(
+                pc.call_function("sum", [episodes_table.column("length")]).as_py() or 0
+            ),
             total_tasks=len(tasks),
             splits={"train": f"0:{int(episodes_table.num_rows)}"},
             episode_ids_in_sync=episode_ids_in_sync,

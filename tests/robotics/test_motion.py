@@ -69,6 +69,7 @@ def test_motion_trim_rewrites_video_file_bounds() -> None:
     )
 
     trimmed = motion_trim(threshold=0.25, pad_frames=1)(row)
+    assert isinstance(trimmed, LeRobotRow)
 
     frames = trimmed["frames"]
     assert frames.num_rows == 4
@@ -96,6 +97,7 @@ def test_motion_trim_returns_empty_frames_when_no_motion() -> None:
     )
 
     trimmed = motion_trim(threshold=0.25, pad_frames=0)(row)
+    assert isinstance(trimmed, LeRobotRow)
 
     assert trimmed["frames"] == []
     video = trimmed.videos["observation.images.main"]

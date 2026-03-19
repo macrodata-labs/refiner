@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import refiner as mdr
-from refiner.io import DataFolder
+from refiner.io import DataFile, DataFolder
 from refiner.media.video.remux import reset_opened_video_source_cache
 from refiner.media.video.transcode import VideoTranscodeConfig
 from refiner.media.video.writer import VideoStreamWriter
@@ -143,7 +143,7 @@ def _episode(
             for i, v in enumerate(values)
         ],
         "observation.images.main": mdr.VideoFile(
-            str(video_path),
+            DataFile.resolve(str(video_path)),
             from_timestamp_s=from_ts,
             to_timestamp_s=to_ts,
         ),
@@ -352,12 +352,20 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
     )
     asyncio.run(
         writer.write_video(
-            mdr.VideoFile(uri, from_timestamp_s=0.0, to_timestamp_s=0.3),
+            mdr.VideoFile(
+                DataFile.resolve(uri),
+                from_timestamp_s=0.0,
+                to_timestamp_s=0.3,
+            ),
         )
     )
     asyncio.run(
         writer.write_video(
-            mdr.VideoFile(uri, from_timestamp_s=0.3, to_timestamp_s=0.6),
+            mdr.VideoFile(
+                DataFile.resolve(uri),
+                from_timestamp_s=0.3,
+                to_timestamp_s=0.6,
+            ),
         )
     )
     writer.close()
