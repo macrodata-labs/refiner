@@ -34,7 +34,6 @@ Refiner is being built as a batch-first processing engine with:
 6. `docs/expression-transforms.md` for expression-backed vectorized transforms.
 7. `docs/cli-auth.md` for `macrodata login`, `whoami`, and `logout`.
 8. `docs/observability.md` for Macrodata platform lifecycle integration.
-9. `docs/lerobot-benchmarks.md` for cold-cache LeRobot merge benchmarking.
 
 ## Planned Additions
 
