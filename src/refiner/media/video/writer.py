@@ -79,6 +79,10 @@ class VideoStreamWriter:
         self._writer.close()
         self._writer = None
 
+    async def close_async(self) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(io_executor(), self.close)
+
     async def _commit(
         self,
         prepared: PreparedVideoSource,
