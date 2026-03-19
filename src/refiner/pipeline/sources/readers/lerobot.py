@@ -18,6 +18,7 @@ from refiner.io.datafolder import DataFolderLike, DataFolderSpec
 from refiner.media import VideoFile
 from refiner.pipeline.data.row import ArrowRowView, Row
 from refiner.pipeline.data.shard import FilePartsDescriptor, Shard
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.parquet import ParquetReader
 from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
@@ -153,15 +154,16 @@ class LeRobotEpisodeReader(ParquetReader):
         for part in descriptor.parts:
             part_shard = Shard.from_file_parts((part,))
             for batch in super().read_shard(part_shard):
-                if not isinstance(batch, (pa.RecordBatch, pa.Table)):
+                if not isinstance(batch, Tabular):
                     raise TypeError(
-                        "LeRobotEpisodeReader requires Arrow batches from ParquetReader"
+                        "LeRobotEpisodeReader requires Tabular batches from ParquetReader"
                     )
 
-                names = tuple(str(name) for name in batch.schema.names)
-                columns = tuple(batch.column(i) for i in range(batch.num_columns))
+                table = batch.table
+                names = tuple(str(name) for name in table.schema.names)
+                columns = tuple(table.column(i) for i in range(table.num_columns))
                 index_by_name = {name: i for i, name in enumerate(names)}
-                for idx in range(batch.num_rows):
+                for idx in range(table.num_rows):
                     if (
                         self._limit is not None
                         and self._submitted_episodes >= self._limit
@@ -174,6 +176,8 @@ class LeRobotEpisodeReader(ParquetReader):
                         columns=columns,
                         index_by_name=index_by_name,
                         row_idx=idx,
+                        table=table,
+                        tabular_id=batch.tabular_id,
                     )
                     episode_index = max(
                         row.get("episode_index", 0),

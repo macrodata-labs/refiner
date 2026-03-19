@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pyarrow as pa
 import pytest
 
+from refiner.pipeline.data.tabular import Tabular
 import refiner.pipeline.pipeline as pipeline_module
 import refiner.execution.engine as engine_module
 from refiner.pipeline import from_items
@@ -72,8 +73,9 @@ def test_execute_blocks_keeps_arrow_for_vectorized_segment() -> None:
     pipeline = from_items([{"x": 1}, {"x": 2}]).with_column("y", col("x") + 1)
     blocks = list(pipeline.execute(pipeline.source.read()))
     assert blocks
-    assert all(isinstance(block, (pa.RecordBatch, pa.Table)) for block in blocks)
-    assert sum(int(block.num_rows) for block in blocks) == 2
+    tabular_blocks = [block for block in blocks if isinstance(block, Tabular)]
+    assert len(tabular_blocks) == len(blocks)
+    assert sum(int(block.table.num_rows) for block in tabular_blocks) == 2
 
 
 def test_execute_blocks_switches_back_to_arrow_after_row_segment() -> None:
@@ -85,8 +87,9 @@ def test_execute_blocks_switches_back_to_arrow_after_row_segment() -> None:
     )
     blocks = list(pipeline.execute(pipeline.source.read()))
     assert blocks
-    assert all(isinstance(block, (pa.RecordBatch, pa.Table)) for block in blocks)
-    assert sum(int(block.num_rows) for block in blocks) == 2
+    tabular_blocks = [block for block in blocks if isinstance(block, Tabular)]
+    assert len(tabular_blocks) == len(blocks)
+    assert sum(int(block.table.num_rows) for block in tabular_blocks) == 2
 
 
 def test_execute_caches_compiled_segments(monkeypatch) -> None:
@@ -115,21 +118,22 @@ def test_max_vectorized_block_bytes_can_force_smaller_blocks() -> None:
     )
     blocks = list(pipeline.execute(pipeline.source.read()))
     assert blocks
-    assert all(isinstance(block, (pa.RecordBatch, pa.Table)) for block in blocks)
-    assert all(int(block.num_rows) <= 1 for block in blocks)
+    tabular_blocks = [block for block in blocks if isinstance(block, Tabular)]
+    assert len(tabular_blocks) == len(blocks)
+    assert all(int(block.table.num_rows) <= 1 for block in tabular_blocks)
 
 
 def test_vectorized_chunk_shrink_is_run_local(monkeypatch) -> None:
     calls: list[int] = []
-    original_rows_to_table = engine_module.rows_to_table
+    original_from_rows = engine_module.Tabular.from_rows
 
-    def _rows_to_table_with_oom(rows):
+    def _from_rows_with_oom(rows):
         calls.append(len(rows))
         if len(rows) > 2:
             raise pa.ArrowMemoryError("oom")
-        return original_rows_to_table(rows)
+        return original_from_rows(rows)
 
-    monkeypatch.setattr(engine_module, "rows_to_table", _rows_to_table_with_oom)
+    monkeypatch.setattr(engine_module.Tabular, "from_rows", _from_rows_with_oom)
 
     pipeline = (
         from_items([{"x": i} for i in range(8)])

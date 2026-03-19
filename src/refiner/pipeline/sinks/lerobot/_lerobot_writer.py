@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io.datafolder import DataFolderLike
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import (
     BaseSink,
     Block,
@@ -81,7 +82,11 @@ class LeRobotWriterSink(BaseSink):
         blocks_by_shard, counts = split_block_by_shard(block)
 
         for shard_id, shard_block in blocks_by_shard.items():
-            for row in shard_block:
+            if isinstance(shard_block, Tabular):
+                rows = shard_block.to_rows()
+            else:
+                rows = shard_block
+            for row in rows:
                 self._async_window.submit_blocking(
                     self._writer_for_shard(shard_id).write_row(row=row)
                 )

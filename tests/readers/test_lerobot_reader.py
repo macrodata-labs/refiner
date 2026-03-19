@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from refiner.media import VideoFile
+from refiner.pipeline.data.row import Row
 from refiner.pipeline.sources.readers.lerobot import (
     LEROBOT_TASKS,
     LeRobotEpisodeReader,
@@ -19,6 +20,12 @@ from refiner.pipeline.sources.readers.lerobot import (
 def _write_parquet(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(rows), path)
+
+
+def _episode_rows(reader: LeRobotEpisodeReader) -> list[Row]:
+    rows = [row for shard in reader.list_shards() for row in reader.read_shard(shard)]
+    assert all(isinstance(row, Row) for row in rows)
+    return [row for row in rows if isinstance(row, Row)]
 
 
 def _build_sample_dataset(
@@ -135,10 +142,7 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     _build_sample_dataset(root)
 
     reader = LeRobotEpisodeReader(str(root))
-    shards = reader.list_shards()
-    assert len(shards) == 1
-
-    rows = list(reader.read_shard(shards[0]))
+    rows = _episode_rows(reader)
     assert len(rows) == 2
     first, second = rows
 
@@ -254,7 +258,7 @@ def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(
     )
 
     reader = LeRobotEpisodeReader([str(first_root), str(second_root)])
-    rows = [row for shard in reader.list_shards() for row in reader.read_shard(shard)]
+    rows = _episode_rows(reader)
 
     assert len(rows) == 4
     assert [int(row["episode_index"]) for row in rows] == [0, 1, 2, 3]

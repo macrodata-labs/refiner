@@ -3,9 +3,9 @@ from __future__ import annotations
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from refiner.execution.operators.vectorized import rows_to_table
 from refiner.execution.tracking.shards import SHARD_ID_COLUMN
 from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.pipeline.data.tabular import Tabular
 
 from refiner.pipeline.sinks.base import (
     BaseSink,
@@ -49,9 +49,13 @@ class ParquetSink(BaseSink):
         blocks_by_shard, counts = split_block_by_shard(block)
         for shard_id, shard_block in blocks_by_shard.items():
             table = (
-                shard_block
-                if isinstance(shard_block, pa.Table)
-                else rows_to_table(shard_block)
+                shard_block.table
+                if isinstance(shard_block, Tabular)
+                else (
+                    Tabular.from_rows(shard_block).table
+                    if not shard_block
+                    else shard_block[0].tabular_type.from_rows(shard_block).table
+                )
             )
             if SHARD_ID_COLUMN in table.schema.names:
                 table = table.drop_columns([SHARD_ID_COLUMN])

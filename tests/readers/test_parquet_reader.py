@@ -1,6 +1,7 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers import ParquetReader
 
 
@@ -19,9 +20,8 @@ def _write_parquet(tmp_path):
 
 def _rows_from_shard_units(units):
     for unit in units:
-        if isinstance(unit, pa.RecordBatch):
-            tbl = pa.Table.from_batches([unit])
-            yield from tbl.to_pylist()
+        if isinstance(unit, Tabular):
+            yield from unit.to_rows()
         else:
             yield unit
 
