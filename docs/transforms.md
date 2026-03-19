@@ -103,6 +103,11 @@ Unlike `map(...)`, this is not a row UDF. It operates on internal vectorized
 blocks, so block sizes are an execution detail and should not be treated as a
 stable semantic unit.
 
+Be careful with internal routing columns:
+
+- do not drop or rewrite `__shard_id` unless you intentionally mean to change shard routing
+- do not assume one `map_table(...)` call equals one shard; a block can contain rows from multiple shard ids
+
 ## How `filter(...)` behaves
 
 `filter(...)` has two modes.
