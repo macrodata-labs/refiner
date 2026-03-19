@@ -75,6 +75,144 @@ pipeline = pipeline.map(lambda row: row.update(source_dataset="aloha_static_batt
 
 Because `map(...)` patches rows by default, this is a convenient way to add episode-level metadata or derived fields before writing.
 
+## Working With `LeRobotRow`
+
+`read_lerobot(...)` yields `LeRobotRow` objects, so you usually do not need to
+manually unpack the raw LeRobot transport fields.
+
+Typical things you will touch:
+
+- `row.frames`
+- `row.videos`
+- `row.stats`
+- `row.metadata`
+- `row.update(...)`
+
+Example:
+
+```python
+import refiner as mdr
+
+def inspect_episode(row):
+    assert isinstance(row, mdr.LeRobotRow)
+
+    episode_index = row.episode_index
+    length = row.length
+    task_names = row.tasks
+    fps = row.metadata.info.fps
+
+    frames = row.frames
+    first_frame = next(iter(frames))
+    first_timestamp = first_frame["timestamp"]
+
+    video_spans = {
+        key: (video.from_timestamp_s, video.to_timestamp_s)
+        for key, video in row.videos.items()
+    }
+    available_stats = list(row.stats)
+
+    return row.update(
+        debug_summary={
+            "episode_index": episode_index,
+            "length": length,
+            "tasks": task_names,
+            "fps": fps,
+            "first_timestamp": first_timestamp,
+            "videos": video_spans,
+            "stats": available_stats,
+        }
+    )
+```
+
+### Frames
+
+`row.frames` is the episode frame payload.
+
+In practice it is usually a `LeRobotTabular` / `Tabular`, so you can:
+
+- iterate it frame-by-frame
+- inspect `row.frames.num_rows`
+- access `row.frames.table` when you want the Arrow table
+- replace it with `row.update(frames=...)`
+
+Example:
+
+```python
+def keep_first_ten_frames(row):
+    frames = row.frames
+    kept = frames.with_table(frames.table.slice(0, 10))
+    return row.update(frames=kept)
+```
+
+### Videos
+
+`row.videos` is a mapping from video feature key to `LeRobotVideoRef`.
+
+For each video ref, you can access:
+
+- `video.uri`
+- `video.from_timestamp_s`
+- `video.to_timestamp_s`
+- `video.video`
+  - the underlying `VideoFile`
+
+Example:
+
+```python
+def shift_videos_by_half_second(row):
+    for key, video in row.videos.items():
+        row = row.with_video(
+            key,
+            from_timestamp_s=(video.from_timestamp_s or 0.0) + 0.5,
+            to_timestamp_s=(video.to_timestamp_s or 0.0) + 0.5,
+        )
+    return row
+```
+
+### Stats
+
+`row.stats` is a LeRobot-aware mapping over `stats/<feature>/...` fields.
+
+You can:
+
+- iterate available feature names with `for feature in row.stats`
+- read one feature with `row.stats["observation.images.main"]`
+- drop stale stats with `row.stats.drop(feature)`
+
+Example:
+
+```python
+def invalidate_video_stats(row):
+    for key in row.videos:
+        row = row.stats.drop(key)
+    return row
+```
+
+### Metadata
+
+`row.metadata` is a `LeRobotMetadata` dataclass carrying dataset-level state:
+
+- `row.metadata.info`
+- `row.metadata.stats`
+- `row.metadata.tasks`
+
+That is the right place to look for canonical dataset facts such as:
+
+- `fps`
+- `robot_type`
+- merged task mapping
+
+### Updating rows
+
+Use:
+
+- `row.update(...)` for normal row patches
+- `row.with_video(...)` for video placement or timestamp patches
+- `row.with_stats(...)` when you want to write one feature's stats back
+- `row.drop(...)` to hide ordinary row fields
+
+Those helpers return a new `LeRobotRow`; they do not mutate the input row.
+
 ## Writing Datasets
 
 Use `write_lerobot(...)` to write a LeRobot-compatible output dataset:
