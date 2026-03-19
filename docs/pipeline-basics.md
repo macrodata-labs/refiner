@@ -1,80 +1,97 @@
 ---
 title: "Pipeline Basics"
-description: "How to construct and compose Refiner pipelines"
+description: "Overview of the basic Refiner pipeline model"
 ---
 
-A `RefinerPipeline` is built from a source plus ordered processing steps, with an optional sink.
+A Refiner pipeline has three parts:
 
-## Create a Pipeline
+- one source
+- zero or more ordered transforms
+- an optional sink
 
-Use one of the reader entry points:
+Most pipelines also end with a launcher:
+
+- `.launch_local(...)`
+- `.launch_cloud(...)`
+
+So the usual shape is:
 
 ```python
 import refiner as mdr
 
-pipeline = mdr.read_parquet("data/*.parquet")
-```
-
-Or wrap a custom source:
-
-```python
-pipeline = mdr.from_source(my_source)
-```
-
-## Add Processing Steps
-
-Use `.map(...)` for row transforms and `.batch_map(...)` for batch transforms.
-
-```python
-pipeline = (
-    pipeline
-    .map(lambda r: {"x": r["x"] + 1})
-    .batch_map(lambda batch: [row for row in batch if row["x"] > 0], batch_size=64)
+pipeline = mdr.from_items(
+    [{"text": "hello world", "lang": "en"}]
 )
+pipeline = pipeline.filter(mdr.col("lang") == "en")
+pipeline = pipeline.write_jsonl("s3://my-bucket/example-output/")
 ```
 
-Use `.flat_map(...)` for row-level expansion (`0..N` output rows per input row):
+This page is just the overview. The detailed behavior lives on the dedicated
+pages linked below.
 
-```python
-pipeline = pipeline.flat_map(lambda r: [r, {"x": r["x"] * 10}])
-```
+## Sources
 
-Use `.filter(...)` for row predicates:
+Sources define how rows enter the pipeline.
 
-```python
-pipeline = pipeline.filter(lambda r: r["x"] > 0)
-```
+Common entry points:
 
-Use `.map_async(...)` for async row transforms without changing the rest of the pipeline model:
+- `read_csv(...)`
+- `read_jsonl(...)`
+- `read_parquet(...)`
+- `read_lerobot(...)`
+- `from_items(...)`
+- `from_source(...)`
 
-```python
-pipeline = pipeline.map_async(fetch_enrichment, max_in_flight=32)
-```
+There is also a task-style entry point:
 
-## Add a Sink
+- `task(...)`
 
-Sinks mirror sources and live on the pipeline boundary. Today Refiner supports:
+Use that when there is no input dataset and you want one callback invocation per
+rank. See [Task pipelines](task-pipelines.md).
+
+For row shape, sharding, and source-specific behavior, see
+[Reading and writing data](reading-and-writing.md).
+
+## Transforms
+
+Transforms sit between the source and the sink.
+
+Examples:
+
+- Python transforms like `.map(...)`, `.flat_map(...)`, `.batch_map(...)`, `.map_async(...)`
+- expression-backed transforms like `.filter(...)`, `.with_columns(...)`, `.select(...)`, `.drop(...)`, `.rename(...)`, `.cast(...)`
+
+For the transform surface area, see [Transforms](transforms.md).
+
+For the expression DSL itself, see [Expressions](expressions.md).
+
+## Sinks
+
+Sinks define how output is written once the pipeline is launched.
+
+Common sinks:
 
 - `.write_jsonl(...)`
 - `.write_parquet(...)`
+- `.write_lerobot(...)`
 
-```python
-pipeline = pipeline.write_parquet("out/")
-```
+For the built-in readers and writers, see
+[Reading and writing data](reading-and-writing.md).
 
-Attaching a sink changes launched worker execution only. Local row iteration helpers still return rows and do not write files.
+## Launchers
 
-## Step Output Contract
+Launchers turn the pipeline definition into an actual job:
 
-`map` can return:
+- `.launch_local(...)` runs worker subprocesses on the current machine
+- `.launch_cloud(...)` submits the job to Macrodata Cloud
 
-- `Row`: replace current row
-- `Mapping[str, Any]`: merged/normalized into a row
+See [Launchers](launchers.md).
 
-Use `.filter(...)` or `.flat_map(...)` for row dropping/expansion.
+## Related Pages
 
-## Internal Notes
-
-- Batch steps are triggered when enough rows are available for that step’s `batch_size`; tail rows are flushed at end-of-stream.
-- Async row steps run inside a process-local asyncio runtime owned by the execution layer.
-- Shard identity is propagated through execution so sinks and worker lifecycle completion stay aligned.
+- [Reading and writing data](reading-and-writing.md)
+- [Transforms](transforms.md)
+- [Expressions](expressions.md)
+- [In-process debugging](in-process-debugging.md)
+- [Launchers](launchers.md)
+- [Task pipelines](task-pipelines.md)

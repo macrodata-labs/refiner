@@ -215,3 +215,21 @@ def test_vectorized_expression_extensions() -> None:
     assert [int(r["z_ceil"]) for r in out] == [2, 3, -3]
     assert [float(r["z_round"]) for r in out] == pytest.approx([1.0, 3.0, -3.0])
     assert [float(r["z_clip"]) for r in out] == pytest.approx([1.5, 2.5, 1.5])
+
+
+def test_is_in_on_list_column_matches_any_element() -> None:
+    out = (
+        from_items(
+            [
+                {"episode_index": 0, "tasks": ["pick"]},
+                {"episode_index": 1, "tasks": ["place"]},
+                {"episode_index": 2, "tasks": ["pick", "place"]},
+                {"episode_index": 3, "tasks": []},
+            ]
+        )
+        .filter(col("tasks").is_in(["pick"]))
+        .select("episode_index")
+        .materialize()
+    )
+
+    assert [int(row["episode_index"]) for row in out] == [0, 2]
