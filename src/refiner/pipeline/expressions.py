@@ -8,6 +8,8 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+
 _ARROW_FUNCTIONS = frozenset(pc.list_functions())
 _HAS_FLOOR_DIVIDE_KERNEL = "floor_divide" in _ARROW_FUNCTIONS
 _HAS_MOD_KERNEL = "mod" in _ARROW_FUNCTIONS
@@ -340,6 +342,8 @@ class DateTimeExpr:
 
 
 def col(name: str) -> Expr:
+    if name == SHARD_ID_COLUMN:
+        raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
     return Expr(op="col", args=(name,))
 
 

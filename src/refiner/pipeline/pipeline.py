@@ -34,6 +34,7 @@ from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data.row import Row
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.execution.engine import (
     Block,
     Segment,
@@ -177,11 +178,17 @@ class RefinerPipeline:
     def select(self, *columns: str) -> "RefinerPipeline":
         if not columns:
             raise ValueError("select requires at least one column")
-        return self._add_vectorized_op(SelectStep(columns=tuple(columns)))
+        if SHARD_ID_COLUMN in columns:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        return self._add_vectorized_op(
+            SelectStep(columns=tuple(columns) + (SHARD_ID_COLUMN,))
+        )
 
     def with_columns(self, **assignments: Expr | Any) -> "RefinerPipeline":
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
+        if SHARD_ID_COLUMN in assignments:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         exprs = {
             name: value if isinstance(value, Expr) else lit(value)
             for name, value in assignments.items()
@@ -189,22 +196,30 @@ class RefinerPipeline:
         return self._add_vectorized_op(WithColumnsStep(assignments=exprs))
 
     def with_column(self, name: str, value: Expr | Any) -> "RefinerPipeline":
+        if name == SHARD_ID_COLUMN:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
         return self._add_vectorized_op(WithColumnsStep(assignments={name: expr}))
 
     def drop(self, *columns: str) -> "RefinerPipeline":
         if not columns:
             raise ValueError("drop requires at least one column")
+        if SHARD_ID_COLUMN in columns:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(DropStep(columns=tuple(columns)))
 
     def rename(self, **mapping: str) -> "RefinerPipeline":
         if not mapping:
             raise ValueError("rename requires at least one mapping")
+        if SHARD_ID_COLUMN in mapping or SHARD_ID_COLUMN in mapping.values():
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(RenameStep(mapping=mapping))
 
     def cast(self, **dtypes: str) -> "RefinerPipeline":
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
+        if SHARD_ID_COLUMN in dtypes:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(CastStep(dtypes=dtypes))
 
     def execute(

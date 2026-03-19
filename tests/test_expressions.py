@@ -1,6 +1,7 @@
 import pytest
 
 import refiner as mdr
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 
 
 def test_expr_rejects_boolean_coercion() -> None:
@@ -26,3 +27,8 @@ def test_expr_to_code_renders_nested_operations() -> None:
     assert (
         expr.to_code() == "(col('x') + 1).fill_null(0).clip(min_value=0, max_value=10)"
     )
+
+
+def test_col_rejects_internal_shard_column() -> None:
+    with pytest.raises(ValueError, match="internal column"):
+        mdr.col(SHARD_ID_COLUMN)
