@@ -3,17 +3,11 @@ from __future__ import annotations
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from refiner.execution.tracking.shards import SHARD_ID_COLUMN
 from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
-
-from refiner.pipeline.sinks.base import (
-    BaseSink,
-    Block,
-    ShardCounts,
-    describe_datafolder_path,
-    split_block_by_shard,
-)
+from refiner.pipeline.sinks.base import BaseSink
 from refiner.worker.context import get_active_run_handle
 
 
@@ -45,22 +39,19 @@ class ParquetSink(BaseSink):
         self._writers[shard_id] = writer
         return writer
 
-    def write_block(self, block: Block) -> ShardCounts:
-        blocks_by_shard, counts = split_block_by_shard(block)
-        for shard_id, shard_block in blocks_by_shard.items():
-            table = (
-                shard_block.table
-                if isinstance(shard_block, Tabular)
-                else (
-                    Tabular.from_rows(shard_block).table
-                    if not shard_block
-                    else shard_block[0].tabular_type.from_rows(shard_block).table
-                )
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        table = (
+            block.table
+            if isinstance(block, Tabular)
+            else (
+                Tabular.from_rows(block).table
+                if not block
+                else block[0].tabular_type.from_rows(block).table
             )
-            if SHARD_ID_COLUMN in table.schema.names:
-                table = table.drop_columns([SHARD_ID_COLUMN])
-            self._writer(shard_id, table.schema).write_table(table)
-        return counts
+        )
+        if SHARD_ID_COLUMN in table.schema.names:
+            table = table.drop_columns([SHARD_ID_COLUMN])
+        self._writer(shard_id, table.schema).write_table(table)
 
     def on_shard_complete(self, shard_id: str) -> None:
         writer = self._writers.pop(shard_id, None)
@@ -74,7 +65,7 @@ class ParquetSink(BaseSink):
 
     def describe(self) -> tuple[str, str, dict[str, object]]:
         args: dict[str, object] = {
-            "path": describe_datafolder_path(self.output),
+            "path": self.output.abs_path(),
             "filename_template": self.filename_template,
         }
         if self.compression is not None:

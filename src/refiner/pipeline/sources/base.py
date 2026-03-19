@@ -6,7 +6,7 @@ from typing import Any, TypeAlias
 
 import pyarrow as pa
 
-from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import Shard
 from refiner.worker.metrics.api import log_throughput
@@ -65,12 +65,8 @@ def _with_shard_id(unit: SourceUnit, shard_id: str) -> SourceUnit:
             return unit
 
         shard_col = pa.array([shard_id] * int(table.num_rows), type=pa.string())
-        names = table.schema.names
-        if _INTERNAL_SHARD_ID_KEY in names:
-            idx = table.schema.get_field_index(_INTERNAL_SHARD_ID_KEY)
-            return unit.with_table(
-                table.set_column(idx, _INTERNAL_SHARD_ID_KEY, shard_col)
-            )
-        return unit.with_table(table.append_column(_INTERNAL_SHARD_ID_KEY, shard_col))
+        return unit.with_table(
+            set_or_append_column(table, _INTERNAL_SHARD_ID_KEY, shard_col)
+        )
 
     raise TypeError(f"Unsupported source unit type: {type(unit)!r}")

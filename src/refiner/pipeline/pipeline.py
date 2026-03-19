@@ -29,12 +29,7 @@ from refiner.pipeline.steps import (
 from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
 from refiner.pipeline.sources import BaseSource, CsvReader, JsonlReader, ParquetReader
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
-from refiner.pipeline.sinks.lerobot import (
-    LeRobotStatsConfig,
-    LeRobotVideoConfig,
-    LeRobotWriterConfig,
-    LeRobotWriterSink,
-)
+from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data.row import Row
@@ -359,21 +354,29 @@ class RefinerPipeline:
         *,
         data_files_size_in_mb: int = 100,
         video_files_size_in_mb: int = 200,
-        video_config: LeRobotVideoConfig | None = None,
-        stats_config: LeRobotStatsConfig | None = None,
         max_video_prepare_in_flight: int = 10,
+        codec: str = "mpeg4",
+        pix_fmt: str = "yuv420p",
+        transencoding_threads: int | None = None,
+        encoder_options: Mapping[str, str] | None = None,
+        quantile_bins: int = 5000,
+        force_recompute_video_stats: bool = False,
     ) -> "RefinerPipeline":
         """Append a deferred LeRobot writer sink and return a pipeline."""
-        config = LeRobotWriterConfig(
-            output=output,
-            data_files_size_in_mb=data_files_size_in_mb,
-            video_files_size_in_mb=video_files_size_in_mb,
-            video=video_config if video_config is not None else LeRobotVideoConfig(),
-            stats=stats_config if stats_config is not None else LeRobotStatsConfig(),
-            max_video_prepare_in_flight=max_video_prepare_in_flight,
+        return self.with_sink(
+            LeRobotWriterSink(
+                output=output,
+                data_files_size_in_mb=data_files_size_in_mb,
+                video_files_size_in_mb=video_files_size_in_mb,
+                max_video_prepare_in_flight=max_video_prepare_in_flight,
+                codec=codec,
+                pix_fmt=pix_fmt,
+                transencoding_threads=transencoding_threads,
+                encoder_options=encoder_options,
+                quantile_bins=quantile_bins,
+                force_recompute_video_stats=force_recompute_video_stats,
+            )
         )
-
-        return self.with_sink(LeRobotWriterSink(config=config))
 
 
 ## readers
@@ -495,11 +498,8 @@ def read_lerobot(
             inputs,
             fs=fs,
             storage_options=storage_options,
-            limit=limit,
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
-            media_max_in_flight=media_max_in_flight,
-            media_preserve_order=media_preserve_order,
             split_row_groups=split_row_groups,
         )
     )

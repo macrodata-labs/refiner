@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -16,17 +18,16 @@ from refiner.pipeline.steps import (
 )
 
 
-def apply_vectorized_op(block: Tabular, op: VectorizedOp) -> Tabular:
-    table = block.table
+def apply_vectorized_op(table: pa.Table, op: VectorizedOp) -> pa.Table:
     if isinstance(op, SelectStep):
-        return block.with_table(table.select(list(op.columns)))
+        return table.select(list(op.columns))
 
     if isinstance(op, DropStep):
-        return block.with_table(table.drop_columns(list(op.columns)))
+        return table.drop_columns(list(op.columns))
 
     if isinstance(op, RenameStep):
         names = [op.mapping.get(name, name) for name in table.schema.names]
-        return block.with_table(table.rename_columns(names))
+        return table.rename_columns(names)
 
     if isinstance(op, CastStep):
         out = table
@@ -36,7 +37,7 @@ def apply_vectorized_op(block: Tabular, op: VectorizedOp) -> Tabular:
                 raise KeyError(f"Unknown column for cast: {col_name}")
             casted = pc.cast(out.column(col_name), target_type=pa.type_for_alias(dtype))
             out = out.set_column(idx, col_name, casted)
-        return block.with_table(out)
+        return out
 
     if isinstance(op, WithColumnsStep):
         out = table
@@ -49,15 +50,22 @@ def apply_vectorized_op(block: Tabular, op: VectorizedOp) -> Tabular:
                 out = out.append_column(col_name, values)
             else:
                 out = out.set_column(idx, col_name, values)
-        return block.with_table(out)
+        return out
 
     if isinstance(op, FilterExprStep):
         mask = eval_expr_arrow(op.predicate, table)
         if isinstance(mask, pa.Scalar):
-            return block if bool(mask.as_py()) else block.with_table(table.slice(0, 0))
-        return block.with_table(table.filter(mask))
+            return table if bool(mask.as_py()) else table.slice(0, 0)
+        return table.filter(mask)
 
     raise TypeError(f"Unsupported vectorized op: {type(op)!r}")
+
+
+def apply_vectorized_ops(block: Tabular, ops: Sequence[VectorizedOp]) -> Tabular:
+    table = block.table
+    for op in ops:
+        table = apply_vectorized_op(table, op)
+    return block.with_table(table)
 
 
 def _broadcast_scalar(
@@ -73,4 +81,5 @@ def _broadcast_scalar(
 __all__ = [
     "Tabular",
     "apply_vectorized_op",
+    "apply_vectorized_ops",
 ]

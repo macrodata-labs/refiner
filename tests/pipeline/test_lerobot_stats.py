@@ -4,28 +4,32 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
+import pyarrow as pa
 
-from refiner.pipeline.sinks.lerobot._lerobot_frames import compute_episode_stats
-from refiner.pipeline.sinks.lerobot._lerobot_stats import (
-    _aggregate_stats,
-    _feature_stats,
+from refiner.robotics.lerobot_format import (
+    LeRobotStatsFile,
+    compute_feature_stats,
+    compute_table_stats,
 )
 
 
 def _assert_stats_close(
-    actual: dict[str, np.ndarray],
-    expected: dict[str, np.ndarray],
+    actual: Mapping[str, Any],
+    expected: Mapping[str, np.ndarray],
 ) -> None:
     assert actual.keys() == expected.keys()
     for key, value in expected.items():
+        actual_value = np.asarray(actual[key])
         if np.issubdtype(value.dtype, np.integer):
-            np.testing.assert_array_equal(actual[key], value)
+            np.testing.assert_array_equal(actual_value, value)
         else:
-            np.testing.assert_allclose(actual[key], value)
+            np.testing.assert_allclose(actual_value, value)
 
 
 def test_feature_stats_computes_expected_quantiles_for_fixed_numeric_fixture() -> None:
-    stats = _feature_stats(np.array([[0.0], [1.0], [2.0], [3.0], [4.0]]))
+    stats = compute_feature_stats(
+        np.array([[0.0], [1.0], [2.0], [3.0], [4.0]])
+    ).to_json_dict()
 
     _assert_stats_close(
         stats,
@@ -53,7 +57,9 @@ def test_compute_episode_stats_frame_quantiles_match_fixed_fixture() -> None:
         {"observation.state": [4.0, 14.0]},
     ]
 
-    stats = compute_episode_stats(frames=frames)["observation.state"]
+    stats = compute_table_stats(pa.Table.from_pylist(list(frames))).to_json_dict()[
+        "observation.state"
+    ]
 
     _assert_stats_close(
         stats,
@@ -73,38 +79,42 @@ def test_compute_episode_stats_frame_quantiles_match_fixed_fixture() -> None:
 
 
 def test_aggregate_stats_computes_expected_weighted_quantiles() -> None:
-    stats = _aggregate_stats(
+    stats = LeRobotStatsFile.aggregate(
         [
-            {
-                "feat": {
-                    "min": np.array([0.0]),
-                    "max": np.array([2.0]),
-                    "mean": np.array([1.0]),
-                    "std": np.array([0.5]),
-                    "count": np.array([3]),
-                    "q01": np.array([0.1]),
-                    "q10": np.array([0.2]),
-                    "q50": np.array([1.0]),
-                    "q90": np.array([1.8]),
-                    "q99": np.array([1.98]),
+            LeRobotStatsFile.from_json_dict(
+                {
+                    "feat": {
+                        "min": [0.0],
+                        "max": [2.0],
+                        "mean": [1.0],
+                        "std": [0.5],
+                        "count": [3],
+                        "q01": [0.1],
+                        "q10": [0.2],
+                        "q50": [1.0],
+                        "q90": [1.8],
+                        "q99": [1.98],
+                    }
                 }
-            },
-            {
-                "feat": {
-                    "min": np.array([10.0]),
-                    "max": np.array([12.0]),
-                    "mean": np.array([11.0]),
-                    "std": np.array([0.25]),
-                    "count": np.array([2]),
-                    "q01": np.array([10.1]),
-                    "q10": np.array([10.2]),
-                    "q50": np.array([11.0]),
-                    "q90": np.array([11.8]),
-                    "q99": np.array([11.98]),
+            ),
+            LeRobotStatsFile.from_json_dict(
+                {
+                    "feat": {
+                        "min": [10.0],
+                        "max": [12.0],
+                        "mean": [11.0],
+                        "std": [0.25],
+                        "count": [2],
+                        "q01": [10.1],
+                        "q10": [10.2],
+                        "q50": [11.0],
+                        "q90": [11.8],
+                        "q99": [11.98],
+                    }
                 }
-            },
+            ),
         ]
-    )["feat"]
+    ).to_json_dict()["feat"]
 
     _assert_stats_close(
         stats,

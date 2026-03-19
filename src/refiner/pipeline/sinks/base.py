@@ -1,86 +1,69 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any
-from typing import cast
 
-import pyarrow as pa
-
-from refiner.execution.tracking.shards import SHARD_ID_COLUMN, count_block_by_shard
-from refiner.io.datafolder import DataFolder
-from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline.data.row import Row
-
-Block = list[Row] | Tabular
-ShardedBlock = list[Row] | Tabular
-ShardCounts = dict[str, int]
+from refiner.execution.tracking.shards import count_block_by_shard
+from refiner.pipeline.data.block import Block, split_block_by_shard
 
 
 class BaseSink(ABC):
-    @abstractmethod
-    def write_block(self, block: Block) -> ShardCounts:
+    """Base sink interface with shard-local writes as the default behavior.
+
+    Most sinks should implement `write_shard_block(...)` and inherit the default
+    `write_block(...)` behavior. Override `write_block(...)` only for sinks that
+    do not operate shard-by-shard, such as pure counting or global reduction
+    sinks.
+    """
+
+    def write_block(self, block: Block) -> dict[str, int]:
+        """Split a mixed block by shard and dispatch each shard-local block.
+
+        This is the normal entry point and should usually be inherited as-is.
+        """
+        blocks_by_shard, counts = split_block_by_shard(block)
+        for shard_id, shard_block in blocks_by_shard.items():
+            self.write_shard_block(shard_id, shard_block)
+        return counts
+
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        """Write one already shard-local block.
+
+        This is the main method concrete shard-writing sinks should implement.
+        """
+        del shard_id, block
         raise NotImplementedError
 
     def describe(self) -> tuple[str, str, dict[str, Any] | None] | None:
+        """Return an optional sink description for planning and tracing output.
+
+        Override this when the sink should expose structured configuration in
+        pipeline descriptions.
+        """
         return None
 
     def on_shard_complete(self, shard_id: str) -> None:
+        """Flush or finalize state for one shard after upstream completion.
+
+        Override this only when the sink keeps shard-local buffered state that
+        should be finalized before `close()`.
+        """
         del shard_id
 
     def close(self) -> None:
+        """Finalize sink resources after all shard work is complete.
+
+        Override this when the sink keeps process-wide resources or deferred
+        state that should be flushed at the end of execution.
+        """
         return None
 
 
 class NullSink(BaseSink):
-    def write_block(self, block: Block) -> ShardCounts:
+    """Sink that discards data and only reports shard counts."""
+
+    def write_block(self, block: Block) -> dict[str, int]:
         return count_block_by_shard(block)
 
 
-def describe_datafolder_path(value: Any) -> str:
-    folder = DataFolder.resolve(value)
-    return str(folder.fs.unstrip_protocol(folder.path))
-
-
-def split_block_by_shard(block: Block) -> tuple[dict[str, ShardedBlock], ShardCounts]:
-    if not isinstance(block, Tabular):
-        rows_by_shard: dict[str, list[Row]] = {}
-        counts: ShardCounts = {}
-        row_block = cast(list[Row], block)
-        for row in row_block:
-            shard_id = row.require_shard_id()
-            rows_by_shard.setdefault(shard_id, []).append(row)
-            counts[shard_id] = counts.get(shard_id, 0) + 1
-        return dict(rows_by_shard), counts
-
-    table = block.table
-    if SHARD_ID_COLUMN not in table.schema.names:
-        raise ValueError("tabular sink input is missing __shard_id")
-
-    shard_indices: dict[str, list[int]] = {}
-    for idx, shard_id in enumerate(table.column(SHARD_ID_COLUMN).to_pylist()):
-        if not isinstance(shard_id, str) or not shard_id:
-            raise ValueError("tabular sink input has invalid __shard_id")
-        shard_indices.setdefault(shard_id, []).append(idx)
-
-    data_table = table.drop_columns([SHARD_ID_COLUMN])
-    tables_by_shard: dict[str, Tabular] = {}
-    counts: ShardCounts = {}
-    for shard_id, indices in shard_indices.items():
-        counts[shard_id] = len(indices)
-        if len(indices) == data_table.num_rows:
-            tables_by_shard[shard_id] = block.with_table(data_table)
-        else:
-            tables_by_shard[shard_id] = block.with_table(
-                data_table.take(pa.array(indices, type=pa.int64()))
-            )
-    return dict(tables_by_shard), counts
-
-
-__all__ = [
-    "BaseSink",
-    "NullSink",
-    "Block",
-    "ShardCounts",
-    "describe_datafolder_path",
-    "split_block_by_shard",
-]
+__all__ = ["BaseSink", "NullSink"]

@@ -94,7 +94,7 @@ class DataFolder(DirFileSystem):
             "You must pass a DataFolder instance, str path, PathLike, or (path, fs)"
         )
 
-    def _abs_path(self, path: str) -> str:
+    def abs_path(self, path: str = "") -> str:
         # make sure we strip file:// and similar
         return self.fs.unstrip_protocol(self._join(path)).removeprefix("file://")
 
@@ -110,8 +110,8 @@ class DataFolder(DirFileSystem):
 
         """
         if isinstance(paths, str):
-            return self._abs_path(paths)
-        return [self._abs_path(p) for p in paths]
+            return self.abs_path(paths)
+        return [self.abs_path(p) for p in paths]
 
     def open_files(
         self, paths: Iterable[str], mode: str = "rb", **kwargs

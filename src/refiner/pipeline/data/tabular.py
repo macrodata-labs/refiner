@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from itertools import count
 
 import pyarrow as pa
 
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.row import ArrowRowView, Row, _OverlayRow
 
-_SHARD_ID_COLUMN = "__shard_id"
 _NEXT_TABULAR_ID = count()
 
 
@@ -17,6 +17,10 @@ class Tabular:
     def __init__(self, unit: pa.Table) -> None:
         self.unit = unit
         self.tabular_id = next(_NEXT_TABULAR_ID)
+        self.names = tuple(str(name) for name in unit.column_names)
+        self.columns = tuple(unit.column(name) for name in self.names)
+        self.index_by_name = {name: i for i, name in enumerate(self.names)}
+        self.shard_idx = self.index_by_name.get(SHARD_ID_COLUMN)
 
     @classmethod
     def from_rows(cls, rows: Sequence[Row]) -> "Tabular":
@@ -56,33 +60,33 @@ class Tabular:
     def column(self, name: str) -> pa.Array | pa.ChunkedArray:
         return self.unit.column(name)
 
-    def to_rows(self) -> list[Row]:
-        table = self.table
-        names = tuple(str(name) for name in table.column_names)
-        columns = tuple(table.column(name) for name in names)
-        index_by_name = {name: i for i, name in enumerate(names)}
-        shard_idx = index_by_name.get(_SHARD_ID_COLUMN)
-        out: list[Row] = []
+    def __iter__(self) -> Iterator[Row]:
         for row_idx in range(self.num_rows):
             shard_id = None
-            if shard_idx is not None:
-                shard = columns[shard_idx][row_idx].as_py()
+            if self.shard_idx is not None:
+                shard = self.columns[self.shard_idx][row_idx].as_py()
                 shard_id = shard if isinstance(shard, str) else None
-            out.append(
-                ArrowRowView(
-                    names=names,
-                    columns=columns,
-                    index_by_name=index_by_name,
-                    row_idx=row_idx,
-                    table=table,
-                    tabular_id=self.tabular_id,
-                    shard_id=shard_id,
-                )
+            yield ArrowRowView(
+                tabular=self,
+                row_idx=row_idx,
+                shard_id=shard_id,
             )
-        return out
+
+    def to_rows(self) -> list[Row]:
+        return list(self)
 
     def with_table(self, table: pa.Table) -> "Tabular":
         return Tabular(table)
+
+
+def set_or_append_column(
+    table: pa.Table,
+    name: str,
+    column: pa.Array | pa.ChunkedArray,
+) -> pa.Table:
+    if name in table.column_names:
+        return table.set_column(table.column_names.index(name), name, column)
+    return table.append_column(name, column)
 
 
 # everything below is for fast from_rows
@@ -91,13 +95,13 @@ def _table_from_rows(rows: Sequence[Row]) -> pa.Table:
     seen: set[str] = set()
     for row in rows:
         for name in row:
-            if name == _SHARD_ID_COLUMN or name in seen:
+            if name == SHARD_ID_COLUMN or name in seen:
                 continue
             seen.add(name)
             names.append(name)
     columns = {name: [row.get(name) for row in rows] for name in names}
     if any(row.shard_id is not None for row in rows):
-        columns[_SHARD_ID_COLUMN] = [row.shard_id for row in rows]
+        columns[SHARD_ID_COLUMN] = [row.shard_id for row in rows]
     return pa.table(columns)
 
 
@@ -105,7 +109,7 @@ def _sorted_arrow_rows(rows: Sequence[Row]) -> Sequence[Row]:
     return sorted(
         rows,
         key=lambda row: (
-            (_base_arrow_row(row).tabular_id or -1),
+            _base_arrow_row(row).tabular.tabular_id,
             row.shard_id or "",
             _base_arrow_row(row).row_idx,
         ),
@@ -125,13 +129,13 @@ def _arrow_tables_from_rows(rows: Sequence[Row]) -> list[pa.Table]:
     while group_start < len(rows):
         first = rows[group_start]
         first_base = _base_arrow_row(first)
-        group_tabular_id = first_base.tabular_id
+        group_tabular_id = first_base.tabular.tabular_id
         group_shard_id = first.shard_id
         group_end = group_start + 1
         while group_end < len(rows):
             candidate = rows[group_end]
             candidate_base = _base_arrow_row(candidate)
-            if candidate_base.tabular_id != group_tabular_id:
+            if candidate_base.tabular.tabular_id != group_tabular_id:
                 break
             if candidate.shard_id != group_shard_id:
                 break
@@ -147,7 +151,7 @@ def _arrow_table_from_group(
     rows: Sequence[Row], changed_specs: list[tuple[str, pa.DataType]]
 ) -> pa.Table:
     sample = _base_arrow_row(rows[0])
-    base = _table_from_arrow_row(sample)
+    base = sample.tabular.table
     row_indices = [_base_arrow_row(row).row_idx for row in rows]
     min_idx = row_indices[0]
     max_idx = row_indices[-1]
@@ -175,15 +179,12 @@ def _arrow_table_from_group(
         for idx, value in changes:
             values[idx] = value
         column = pa.array(values, type=value_type)
-        if name in table.column_names:
-            table = table.set_column(table.column_names.index(name), name, column)
-        else:
-            table = table.append_column(name, column)
+        table = set_or_append_column(table, name, column)
 
     shard_id = rows[0].shard_id
     if shard_id is not None:
         shard_col = pa.array([shard_id] * len(rows), type=pa.string())
-        table = table.append_column(_SHARD_ID_COLUMN, shard_col)
+        table = set_or_append_column(table, SHARD_ID_COLUMN, shard_col)
     return table
 
 
@@ -217,7 +218,7 @@ def _overlay_changed_specs(rows: Sequence[Row]) -> list[tuple[str, pa.DataType]]
             if name in seen:
                 continue
             seen.add(name)
-            specs.append((name, _table_from_arrow_row(_base_arrow_row(row))[name].type))
+            specs.append((name, _base_arrow_row(row).tabular.table[name].type))
     return specs
 
 
@@ -233,12 +234,6 @@ def _base_arrow_row(row: Row) -> ArrowRowView:
     assert isinstance(row, _OverlayRow)
     assert isinstance(row.base, ArrowRowView)
     return row.base
-
-
-def _table_from_arrow_row(row: ArrowRowView) -> pa.Table:
-    if row.table is not None:
-        return row.table
-    return pa.Table.from_arrays(list(row.columns), names=list(row.names))
 
 
 def _is_contiguous(indices: list[int]) -> bool:

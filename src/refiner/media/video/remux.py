@@ -6,14 +6,10 @@ from typing import IO, Any
 import av
 
 from refiner.io import DataFolder
-from refiner.media import VideoFile
-from refiner.pipeline.sinks.lerobot._lerobot_video_types import (
-    video_from_timestamp_s,
-    video_to_timestamp_s,
-)
+from refiner.media.video.types import VideoFile
 from refiner.pipeline.utils.cache.decoder_cache import (
     OpenedVideoSource,
-    VideoSourceProbe as _VideoSourceProbe,
+    VideoSourceProbe,
     get_opened_video_source_cache,
     reset_opened_video_source_cache,
 )
@@ -22,19 +18,28 @@ from refiner.pipeline.utils.cache.lease_cache import CacheLease
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
 
+def video_from_timestamp_s(video: VideoFile) -> float:
+    return float(video.from_timestamp_s or 0.0)
+
+
+def video_to_timestamp_s(video: VideoFile) -> float | None:
+    return video.to_timestamp_s
+
+
 @dataclass(frozen=True, slots=True)
-class _VideoPtsAlignment:
-    probe: _VideoSourceProbe
+class VideoPtsAlignment:
+    probe: VideoSourceProbe
     start_pts: int
     end_pts: int
 
 
 @dataclass(slots=True)
-class _PreparedSource:
+class PreparedVideoSource:
     lease: CacheLease[str, OpenedVideoSource]
+    video: VideoFile
     uri: str
-    probe: _VideoSourceProbe | None
-    alignment: _VideoPtsAlignment | None
+    probe: VideoSourceProbe | None
+    alignment: VideoPtsAlignment | None
     container: Any
     stream: Any
 
@@ -46,7 +51,7 @@ class RemuxWriter:
     def __init__(
         self,
         *,
-        probe: _VideoSourceProbe,
+        probe: VideoSourceProbe,
         output_file: IO[bytes],
         container: Any,
     ) -> None:
@@ -62,8 +67,8 @@ class RemuxWriter:
         *,
         folder: DataFolder,
         output_rel: str,
-        probe: _VideoSourceProbe,
-    ) -> RemuxWriter:
+        probe: VideoSourceProbe,
+    ) -> "RemuxWriter":
         output_abs = folder._join(output_rel)
         folder.fs.makedirs(folder.fs._parent(output_abs), exist_ok=True)
         output_file = folder.open(output_rel, mode="wb")
@@ -77,11 +82,7 @@ class RemuxWriter:
         except Exception:
             output_file.close()
             raise
-        return cls(
-            probe=probe,
-            output_file=output_file,
-            container=container,
-        )
+        return cls(probe=probe, output_file=output_file, container=container)
 
     @property
     def size_bytes(self) -> int:
@@ -93,7 +94,7 @@ class RemuxWriter:
 
     def append_prepared_video(
         self,
-        prepared: _PreparedSource,
+        prepared: PreparedVideoSource,
     ) -> tuple[float, float]:
         if (
             prepared.probe is None
@@ -101,14 +102,15 @@ class RemuxWriter:
             or not probes_are_remux_compatible(prepared.probe, self.probe)
         ):
             raise ValueError("Prepared source is not remuxable")
+
         probe = prepared.probe
         input_container = prepared.container
         input_stream = prepared.stream
         start_pts = prepared.alignment.start_pts
         end_pts = prepared.alignment.end_pts
-
         output_base_pts = self.output_offset_pts
         time_base_s = float(probe.time_base)
+
         if self.stream is None:
             self.stream = self.container.add_stream_from_template(
                 template=input_stream,
@@ -139,8 +141,8 @@ class RemuxWriter:
 
 
 def probes_are_remux_compatible(
-    left: _VideoSourceProbe,
-    right: _VideoSourceProbe,
+    left: VideoSourceProbe,
+    right: VideoSourceProbe,
 ) -> bool:
     return (
         left.width == right.width
@@ -156,9 +158,9 @@ def probes_are_remux_compatible(
 
 def probe_for_remux(
     *,
-    probe: _VideoSourceProbe | None,
+    probe: VideoSourceProbe | None,
     video: VideoFile,
-) -> tuple[_VideoSourceProbe | None, _VideoPtsAlignment | None]:
+) -> tuple[VideoSourceProbe | None, VideoPtsAlignment | None]:
     if probe is None:
         return None, None
 
@@ -167,23 +169,21 @@ def probe_for_remux(
         return probe, None
 
     time_base_s = float(probe.time_base)
-    start_pts = max(
-        0,
-        int(round(video_from_timestamp_s(video) / time_base_s)),
+    start_pts = max(0, int(round(video_from_timestamp_s(video) / time_base_s)))
+    end_pts = max(start_pts + 1, int(round(video_end_s / time_base_s)))
+    return probe, VideoPtsAlignment(
+        probe=probe,
+        start_pts=start_pts,
+        end_pts=end_pts,
     )
-    end_pts = max(
-        start_pts + 1,
-        int(round(video_end_s / time_base_s)),
-    )
-    return probe, _VideoPtsAlignment(probe=probe, start_pts=start_pts, end_pts=end_pts)
 
 
-async def prepare_video(
+async def prepare_video_source(
     *,
-    video_key: str,
+    cache_key: str,
     video: VideoFile,
-) -> _PreparedSource:
-    lease = await get_opened_video_source_cache(name=video_key).acquire(video.uri)
+) -> PreparedVideoSource:
+    lease = await get_opened_video_source_cache(name=cache_key).acquire(video.uri)
     source = lease.resource
     try:
         start_pts = 0
@@ -198,11 +198,7 @@ async def prepare_video(
             )
 
         try:
-            source.container.seek(
-                start_pts,
-                stream=source.stream,
-                backward=True,
-            )
+            source.container.seek(start_pts, stream=source.stream, backward=True)
         except Exception:
             try:
                 source.container.seek(
@@ -214,12 +210,10 @@ async def prepare_video(
             except Exception:
                 pass
 
-        probe, alignment = probe_for_remux(
-            probe=source.probe,
-            video=video,
-        )
-        return _PreparedSource(
+        probe, alignment = probe_for_remux(probe=source.probe, video=video)
+        return PreparedVideoSource(
             lease=lease,
+            video=video,
             uri=source.uri,
             probe=probe,
             alignment=alignment,
@@ -232,9 +226,14 @@ async def prepare_video(
 
 
 __all__ = [
+    "PreparedVideoSource",
     "RemuxWriter",
-    "prepare_video",
+    "VideoPtsAlignment",
+    "VideoSourceProbe",
+    "prepare_video_source",
     "probe_for_remux",
     "probes_are_remux_compatible",
     "reset_opened_video_source_cache",
+    "video_from_timestamp_s",
+    "video_to_timestamp_s",
 ]

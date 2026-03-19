@@ -10,7 +10,7 @@ from refiner.pipeline.utils.cache.lease_cache import LeaseCache
 
 def test_media_cache_async_context_reuses_download() -> None:
     uri = "memory://context-manager.bin"
-    with VideoFile(uri).open("wb") as f:
+    with VideoFile(DataFile.resolve(uri)).open("wb") as f:
         f.write(b"context-manager")
 
     cache = get_media_cache("context-manager")
@@ -29,7 +29,7 @@ def test_media_cache_async_context_reuses_download() -> None:
 
 def test_media_cache_file_lease_can_be_acquired_and_released_twice() -> None:
     uri = "memory://lease-same-file.bin"
-    with VideoFile(uri).open("wb") as f:
+    with VideoFile(DataFile.resolve(uri)).open("wb") as f:
         f.write(b"lease-reuse")
 
     cache = get_media_cache("lease-same-file")

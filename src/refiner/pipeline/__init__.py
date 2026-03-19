@@ -11,11 +11,6 @@ from refiner.pipeline.pipeline import (
     read_parquet,
     task,
 )
-from refiner.pipeline.sinks.lerobot import (
-    LeRobotStatsConfig,
-    LeRobotVideoConfig,
-    LeRobotWriterConfig,
-)
 from refiner.pipeline.sources.base import BaseSource
 from refiner.pipeline.sources.readers.base import BaseReader
 
@@ -33,7 +28,4 @@ __all__ = [
     "from_source",
     "task",
     "col",
-    "LeRobotVideoConfig",
-    "LeRobotStatsConfig",
-    "LeRobotWriterConfig",
 ]
