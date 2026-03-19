@@ -18,6 +18,7 @@ from refiner.pipeline.steps import (
     FnBatchStep,
     FnFlatMapStep,
     FnRowStep,
+    FnTableStep,
     MapFn,
     RenameStep,
     RefinerStep,
@@ -43,6 +44,7 @@ from refiner.execution.engine import (
 from refiner.execution.operators.row import ShardDeltaFn
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+import pyarrow as pa
 
 if TYPE_CHECKING:
     from refiner.launchers.cloud import CloudLaunchResult
@@ -157,6 +159,9 @@ class RefinerPipeline:
         return self.add_step(
             FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
         )
+
+    def map_table(self, fn: Callable[[pa.Table], pa.Table]) -> "RefinerPipeline":
+        return self._add_vectorized_op(FnTableStep(fn=fn))
 
     def filter(self, predicate: Callable[[Row], bool] | Expr) -> "RefinerPipeline":
         if isinstance(predicate, Expr):

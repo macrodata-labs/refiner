@@ -117,6 +117,17 @@ def test_compile_pipeline_plan_flattens_vectorized_segment_ops() -> None:
     assert "callable" not in steps[2]
 
 
+def test_compile_pipeline_plan_includes_map_table_step() -> None:
+    payload = from_items([{"x": 1}, {"x": 2}]).map_table(lambda table: table)
+
+    plan = compile_pipeline_plan(payload)
+    steps = plan["stages"][0]["steps"]
+
+    assert [step["name"] for step in steps] == ["from_items", "map_table"]
+    assert steps[1]["type"] == "table_map"
+    assert "fn" in steps[1]["args"]
+
+
 def test_compile_pipeline_plan_uses_named_callable_for_step_name() -> None:
     def duplicate_selected(row):
         return {"x": row["x"], "dup": True}

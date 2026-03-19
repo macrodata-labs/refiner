@@ -11,6 +11,7 @@ from refiner.pipeline.steps import (
     CastStep,
     DropStep,
     FilterExprStep,
+    FnTableStep,
     RenameStep,
     SelectStep,
     VectorizedOp,
@@ -57,6 +58,12 @@ def apply_vectorized_op(table: pa.Table, op: VectorizedOp) -> pa.Table:
         if isinstance(mask, pa.Scalar):
             return table if bool(mask.as_py()) else table.slice(0, 0)
         return table.filter(mask)
+
+    if isinstance(op, FnTableStep):
+        out = op.fn(table)
+        if not isinstance(out, pa.Table):
+            raise TypeError(f"map_table() must return pa.Table, got {type(out)!r}")
+        return out
 
     raise TypeError(f"Unsupported vectorized op: {type(op)!r}")
 

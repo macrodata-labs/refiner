@@ -5,6 +5,8 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, TypeAlias
 
+import pyarrow as pa
+
 from refiner.pipeline.expressions import Expr
 from refiner.pipeline.data.row import DictRow, Row
 
@@ -24,6 +26,8 @@ BatchItem: TypeAlias = Row | Mapping[str, Any] | None
 BatchFn: TypeAlias = Callable[[list[Row]], Iterable[BatchItem]]
 FlatMapFn: TypeAlias = Callable[[Row], Iterable[BatchItem]]
 AsyncMapFn: TypeAlias = Callable[[Row], Awaitable[MapResult] | MapResult]
+TableResult: TypeAlias = pa.Table
+TableFn: TypeAlias = Callable[[pa.Table], TableResult]
 
 
 class RowStep(RefinerStep, ABC):
@@ -153,8 +157,20 @@ class FilterExprStep(RefinerStep):
     op_name: str | None = "filter"
 
 
+@dataclass(frozen=True, slots=True)
+class FnTableStep(RefinerStep):
+    fn: TableFn
+    op_name: str | None = "map_table"
+
+
 VectorizedOp: TypeAlias = (
-    SelectStep | WithColumnsStep | DropStep | RenameStep | CastStep | FilterExprStep
+    SelectStep
+    | WithColumnsStep
+    | DropStep
+    | RenameStep
+    | CastStep
+    | FilterExprStep
+    | FnTableStep
 )
 
 
@@ -216,12 +232,15 @@ __all__ = [
     "BatchFn",
     "FlatMapFn",
     "AsyncMapFn",
+    "TableResult",
+    "TableFn",
     "SelectStep",
     "WithColumnsStep",
     "DropStep",
     "RenameStep",
     "CastStep",
     "FilterExprStep",
+    "FnTableStep",
     "VectorizedOp",
     "VectorizedSegmentStep",
     "normalize_row_result",
