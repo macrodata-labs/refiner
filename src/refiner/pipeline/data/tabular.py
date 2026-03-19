@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from itertools import count
 
 import pyarrow as pa
@@ -60,21 +60,20 @@ class Tabular:
     def column(self, name: str) -> pa.Array | pa.ChunkedArray:
         return self.unit.column(name)
 
-    def to_rows(self) -> list[Row]:
-        out: list[Row] = []
+    def __iter__(self) -> Iterator[Row]:
         for row_idx in range(self.num_rows):
             shard_id = None
             if self.shard_idx is not None:
                 shard = self.columns[self.shard_idx][row_idx].as_py()
                 shard_id = shard if isinstance(shard, str) else None
-            out.append(
-                ArrowRowView(
-                    tabular=self,
-                    row_idx=row_idx,
-                    shard_id=shard_id,
-                )
+            yield ArrowRowView(
+                tabular=self,
+                row_idx=row_idx,
+                shard_id=shard_id,
             )
-        return out
+
+    def to_rows(self) -> list[Row]:
+        return list(self)
 
     def with_table(self, table: pa.Table) -> "Tabular":
         return Tabular(table)

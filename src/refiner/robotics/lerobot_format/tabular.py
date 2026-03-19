@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -108,28 +108,27 @@ class LeRobotTabular(Tabular):
             roots_by_row=self.roots_by_row,
         )
 
-    def to_rows(self) -> list[Row]:
+    def __iter__(self) -> Iterator[Row]:
         from refiner.robotics.lerobot_format.row import LeRobotRow
 
-        rows: list[Row] = []
         for row_idx in range(self.table.num_rows):
             shard_id = None
             if self.shard_idx is not None:
                 shard = self.columns[self.shard_idx][row_idx].as_py()
                 shard_id = shard if isinstance(shard, str) else None
-            rows.append(
-                LeRobotRow(
-                    _row=ArrowRowView(
-                        tabular=self,
-                        row_idx=row_idx,
-                        shard_id=shard_id,
-                    ),
-                    metadata=self.metadata_by_row[row_idx],
-                    frames=self.frames_by_row[row_idx],
-                    root=self.roots_by_row[row_idx],
-                )
+            yield LeRobotRow(
+                _row=ArrowRowView(
+                    tabular=self,
+                    row_idx=row_idx,
+                    shard_id=shard_id,
+                ),
+                metadata=self.metadata_by_row[row_idx],
+                frames=self.frames_by_row[row_idx],
+                root=self.roots_by_row[row_idx],
             )
-        return rows
+
+    def to_rows(self) -> list[Row]:
+        return list(self)
 
 
 __all__ = ["LeRobotTabular"]
