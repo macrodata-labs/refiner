@@ -384,7 +384,34 @@ def eval_expr_arrow(
         return _call("if_else", condition, on_true, on_false)
     if op == "is_in":
         options = pc.SetLookupOptions(value_set=pa.array(list(args[1])))
-        return _call("is_in", eval_expr_arrow(args[0], table), options=options)
+        value = eval_expr_arrow(args[0], table)
+        if (
+            pa.types.is_list(value.type)
+            or pa.types.is_large_list(value.type)
+            or pa.types.is_fixed_size_list(value.type)
+        ):
+            lists = (
+                value.combine_chunks() if isinstance(value, pa.ChunkedArray) else value
+            )
+            flattened = _call("list_flatten", lists)
+            if len(flattened) == 0:
+                return pa.array([False] * len(lists), type=pa.bool_())
+            parent_indices = _call("list_parent_indices", lists)
+            matches = _call("is_in", flattened, options=options)
+            grouped = (
+                pa.table({"parent": parent_indices, "match": matches})
+                .group_by("parent")
+                .aggregate([("match", "any")])
+            )
+            result = [False] * len(lists)
+            for parent, matched in zip(
+                grouped.column("parent").to_pylist(),
+                grouped.column("match_any").to_pylist(),
+                strict=True,
+            ):
+                result[int(parent)] = bool(matched)
+            return pa.array(result, type=pa.bool_())
+        return _call("is_in", value, options=options)
     if op == "fill_null":
         return _call(
             "coalesce", eval_expr_arrow(args[0], table), eval_expr_arrow(args[1], table)

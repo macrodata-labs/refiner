@@ -215,6 +215,21 @@ pipeline = pipeline.map(lambda row: row.update(source_dataset="aloha_static_batt
 Because `map(...)` patches rows by default, this is a convenient way to add
 episode-level metadata or derived fields before writing.
 
+Because episode rows carry a `tasks` list, you can also remove episodes by task
+on the vectorized path:
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
+    .filter(~mdr.col("tasks").is_in(["pick"]))
+)
+```
+
+For list-valued columns like `tasks`, `col("tasks").is_in(["pick"])` means
+"does this episode contain any task in that set?"
+
 ## Writing Datasets
 
 Use `write_lerobot(...)` to write a LeRobot-compatible output dataset:
