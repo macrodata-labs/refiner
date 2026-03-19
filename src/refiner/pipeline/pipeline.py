@@ -34,6 +34,7 @@ from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data.row import Row
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.execution.engine import (
     Block,
     Segment,
@@ -49,6 +50,15 @@ import pyarrow as pa
 if TYPE_CHECKING:
     from refiner.launchers.cloud import CloudLaunchResult
     from refiner.launchers.local import LaunchStats
+
+
+def _ensure_public_columns(columns: Iterable[str]) -> None:
+    if SHARD_ID_COLUMN in columns:
+        raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+
+
+def _select_columns(columns: tuple[str, ...]) -> tuple[str, ...]:
+    return columns if SHARD_ID_COLUMN in columns else columns + (SHARD_ID_COLUMN,)
 
 
 class RefinerPipeline:
@@ -177,11 +187,15 @@ class RefinerPipeline:
     def select(self, *columns: str) -> "RefinerPipeline":
         if not columns:
             raise ValueError("select requires at least one column")
-        return self._add_vectorized_op(SelectStep(columns=tuple(columns)))
+        _ensure_public_columns(columns)
+        return self._add_vectorized_op(
+            SelectStep(columns=_select_columns(tuple(columns)))
+        )
 
     def with_columns(self, **assignments: Expr | Any) -> "RefinerPipeline":
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
+        _ensure_public_columns(assignments)
         exprs = {
             name: value if isinstance(value, Expr) else lit(value)
             for name, value in assignments.items()
@@ -189,22 +203,27 @@ class RefinerPipeline:
         return self._add_vectorized_op(WithColumnsStep(assignments=exprs))
 
     def with_column(self, name: str, value: Expr | Any) -> "RefinerPipeline":
+        _ensure_public_columns((name,))
         expr = value if isinstance(value, Expr) else lit(value)
         return self._add_vectorized_op(WithColumnsStep(assignments={name: expr}))
 
     def drop(self, *columns: str) -> "RefinerPipeline":
         if not columns:
             raise ValueError("drop requires at least one column")
+        _ensure_public_columns(columns)
         return self._add_vectorized_op(DropStep(columns=tuple(columns)))
 
     def rename(self, **mapping: str) -> "RefinerPipeline":
         if not mapping:
             raise ValueError("rename requires at least one mapping")
+        _ensure_public_columns(mapping)
+        _ensure_public_columns(mapping.values())
         return self._add_vectorized_op(RenameStep(mapping=mapping))
 
     def cast(self, **dtypes: str) -> "RefinerPipeline":
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
+        _ensure_public_columns(dtypes)
         return self._add_vectorized_op(CastStep(dtypes=dtypes))
 
     def execute(
