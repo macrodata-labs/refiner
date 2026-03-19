@@ -129,7 +129,7 @@ def inspect_episode(row):
 
 `row.frames` is the episode frame payload.
 
-In practice it is usually a `LeRobotTabular` / `Tabular`, so you can:
+In practice it is a normal `Tabular`, so you can:
 
 - iterate it frame-by-frame
 - inspect `row.frames.num_rows`

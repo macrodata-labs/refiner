@@ -110,7 +110,7 @@ In practice, LeRobot rows are `LeRobotRow` wrappers over a normal base row. The
 important high-level fields/views are:
 
 - `frames`
-  - usually a `LeRobotTabular` / `Tabular` for the episode frame rows
+  - a normal `Tabular` for the episode frame rows
 - `metadata`
   - a `LeRobotMetadata` dataclass with dataset-level info, stats, and canonical tasks
 - `videos`
