@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
 
-import pyarrow as pa
-
 if TYPE_CHECKING:
     from refiner.pipeline.data.tabular import Tabular
 
@@ -206,31 +204,29 @@ class ArrowRowView(Row):
         - Values are converted to Python via `.as_py()` on demand.
     """
 
-    names: tuple[str, ...]
-    columns: tuple[Any, ...]
-    index_by_name: Mapping[str, int]
+    tabular: "Tabular"
     row_idx: int
-    table: pa.Table | None = None
-    tabular_id: int | None = None
     shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:
         if key == _SHARD_ID_KEY:
             raise KeyError(key)
         try:
-            j = self.index_by_name[key]
+            j = self.tabular.index_by_name[key]
         except KeyError as e:
             raise KeyError(key) from e
-        return self.columns[j][self.row_idx].as_py()
+        return self.tabular.columns[j][self.row_idx].as_py()
 
     def __iter__(self) -> Iterator[str]:
-        for key in self.names:
+        for key in self.tabular.names:
             if key == _SHARD_ID_KEY:
                 continue
             yield key
 
     def __len__(self) -> int:
-        return len(self.names) - (1 if _SHARD_ID_KEY in self.index_by_name else 0)
+        return len(self.tabular.names) - (
+            1 if _SHARD_ID_KEY in self.tabular.index_by_name else 0
+        )
 
 
 __all__ = ["Row", "DictRow", "ArrowRowView"]

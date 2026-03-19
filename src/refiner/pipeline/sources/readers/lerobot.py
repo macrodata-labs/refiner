@@ -1,79 +1,45 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
-from os import PathLike
-from typing import Any, cast
+from functools import cached_property
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from fsspec.spec import AbstractFileSystem
 
-from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io import DataFolder
-from refiner.io.datafolder import DataFolderLike, DataFolderSpec
-from refiner.media import VideoFile
-from refiner.pipeline.data.row import ArrowRowView, Row
+from refiner.io.datafolder import DataFolderLike
+from refiner.io.fileset import DataFileSet
 from refiner.pipeline.data.shard import FilePartsDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.parquet import ParquetReader
 from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
-from refiner.pipeline.utils.cache.file_cache import get_media_cache
-
-_DEFAULT_DATA_PATH = "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet"
-_DEFAULT_VIDEO_PATH = (
-    "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4"
+from refiner.robotics.lerobot_format import (
+    LeRobotMetadata,
+    LeRobotTabular,
+    merge_metadata,
+    parse_info_json,
+    parse_stats_json,
+    parse_tasks_rows,
+    remap_task_index_table,
 )
+
 _DEFAULT_EPISODES_GLOB_ROOT = "meta/episodes"
 _INFO_JSON = "meta/info.json"
 _STATS_JSON = "meta/stats.json"
 _TASKS_PARQUET = "meta/tasks.parquet"
-LEROBOT_TASKS = "lerobot_tasks"
-_ROW_DROP_PREFIXES = ("videos/", "meta/episodes/", "data/")
-_ROW_DROP_KEYS = {"dataset_from_index", "dataset_to_index"}
-_DATA_FILE_CACHE_NAME = "lerobot:data_files"
-
-
-@dataclass(frozen=True, slots=True)
-class _FrameFileCacheEntry:
-    key: tuple[str, Any, Any]
-    table: pa.Table
-
-
-@dataclass(frozen=True, slots=True)
-class LeRobotInfo:
-    root: str
-    fps: int | None
-    robot_type: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class LeRobotMetadata:
-    lerobot_info: LeRobotInfo
-    lerobot_stats: Mapping[str, Any]
-
-
-@dataclass(frozen=True, slots=True)
-class _DatasetState:
-    root: DataFolder
-    metadata: LeRobotMetadata
-    index_to_task: Mapping[int, str]
-    task_index_remap: Mapping[int, int]
-    video_path_template: str
-    data_path_template: str
-    video_keys: tuple[str, ...]
 
 
 class LeRobotEpisodeReader(ParquetReader):
-    """LeRobot reader that shards and reads episode parquet files.
+    """LeRobot reader skeleton built around `refiner.robotics.lerobot_format`.
 
-    The inherited parquet planner only applies to the episode metadata files
-    under `meta/episodes`. Frame parquet files and videos are loaded later when
-    each episode row is materialized.
+    This file is intentionally a clean restart point. Only the public reader
+    surface and the internal method layout live here for now so the design can
+    be reviewed before we wire behavior in.
     """
 
     name = "read_lerobot"
@@ -84,45 +50,27 @@ class LeRobotEpisodeReader(ParquetReader):
         *,
         fs: AbstractFileSystem | None = None,
         storage_options: Mapping[str, Any] | None = None,
-        limit: int | None = None,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
         arrow_batch_size: int = 65536,
-        media_max_in_flight: int = 8,
-        media_preserve_order: bool = True,
         split_row_groups: bool = True,
     ) -> None:
         """Create a LeRobot episode reader.
 
-        Args:
-            inputs: One or more LeRobot dataset roots.
-            limit: Optional cap on emitted episode rows.
-            target_shard_bytes: Target approximate byte size for episode-file shards.
-            num_shards: Optional explicit number of planned episode-file shards.
-            media_max_in_flight: Max concurrent frame/video hydration tasks.
-            media_preserve_order: Whether hydrated episode rows keep source order.
-            split_row_groups: Whether episode parquet byte spans are refined to
-                deterministic row ranges inside a file.
+        Public constructor should stay very close to the current reader so the
+        rest of the pipeline does not need to change when we swap this in.
         """
-        if limit is not None and limit <= 0:
-            raise ValueError("limit must be > 0 when provided")
-        if media_max_in_flight <= 0:
-            raise ValueError("media_max_in_flight must be > 0")
-
-        roots = self._resolve_roots(inputs, fs=fs, storage_options=storage_options)
-        self._roots = roots
-        self._limit = int(limit) if limit is not None else None
-        self._submitted_episodes = 0
-        self._media_max_in_flight = int(media_max_in_flight)
-        self._media_preserve_order = bool(media_preserve_order)
+        self.roots = self._resolve_roots(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+        )
+        self._last_frame_table: tuple[tuple[int, Any, Any], pa.Table] | None = None
 
         super().__init__(
             inputs=tuple(
-                (
-                    str(root.abs_paths(_DEFAULT_EPISODES_GLOB_ROOT)),
-                    root.fs,
-                )
-                for root in roots
+                (str(root.abs_paths(_DEFAULT_EPISODES_GLOB_ROOT)), root.fs)
+                for root in self.roots
             ),
             fs=fs,
             storage_options=storage_options,
@@ -130,27 +78,14 @@ class LeRobotEpisodeReader(ParquetReader):
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             arrow_batch_size=arrow_batch_size,
-            # Episode parquet files are usually small enough that row-range
-            # splitting is a reasonable default when callers opt into it.
             split_row_groups=split_row_groups,
         )
 
-        self._datasets: dict[str, _DatasetState] | None = None
-        self._frames_cache_lock = asyncio.Lock()
-        self._frames_cache_entry: _FrameFileCacheEntry | None = None
-        self._next_episode_index = 0
-
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
-        """Read one episode-file shard and hydrate episode rows lazily."""
+        """Read one planned episode shard and emit `LeRobotTabular` blocks."""
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
-        if self._limit is not None and self._submitted_episodes >= self._limit:
-            return
-
-        async_window: AsyncWindow[Row] = AsyncWindow(
-            max_in_flight=self._media_max_in_flight,
-            preserve_order=self._media_preserve_order,
-        )
+        metadata, remaps = self._metadata_bundle
         for part in descriptor.parts:
             part_shard = Shard.from_file_parts((part,))
             for batch in super().read_shard(part_shard):
@@ -159,287 +94,32 @@ class LeRobotEpisodeReader(ParquetReader):
                         "LeRobotEpisodeReader requires Tabular batches from ParquetReader"
                     )
 
-                table = batch.table
-                names = tuple(str(name) for name in table.schema.names)
-                columns = tuple(table.column(i) for i in range(table.num_columns))
-                index_by_name = {name: i for i, name in enumerate(names)}
-                for idx in range(table.num_rows):
-                    if (
-                        self._limit is not None
-                        and self._submitted_episodes >= self._limit
-                    ):
-                        yield from async_window.flush()
-                        return
-
-                    row = ArrowRowView(
-                        names=names,
-                        columns=columns,
-                        index_by_name=index_by_name,
-                        row_idx=idx,
-                        table=table,
-                        tabular_id=batch.tabular_id,
-                    )
-                    episode_index = max(
-                        row.get("episode_index", 0),
-                        self._next_episode_index,
-                    )
-                    self._next_episode_index = episode_index + 1
-                    async_window.submit_blocking(
-                        self._build_episode_row(
-                            row,
-                            part.source_index,
-                            part.path,
-                            episode_index,
-                        )
-                    )
-                    yield from async_window.poll()
-                    self._submitted_episodes += 1
-
-        yield from async_window.flush()
-
-    async def _build_episode_row(
-        self,
-        row: Row,
-        source_index: int,
-        episode_path: str,
-        episode_index: int,
-    ) -> Row:
-        dataset = self._dataset_for_source(source_index, episode_path)
-        patch: dict[str, Any] = {
-            "episode_index": episode_index,
-            "metadata": dataset.metadata,
-            LEROBOT_TASKS: dataset.index_to_task,
-        }
-
-        frames = await self._load_episode_frames(row, dataset)
-        patch["frames"] = frames
-
-        for video_key in dataset.video_keys:
-            video = self._build_video(episode=row, dataset=dataset, video_key=video_key)
-            if video is not None:
-                patch[video_key] = video
-
-        drop_keys = [
-            key
-            for key in row.keys()
-            if key in _ROW_DROP_KEYS
-            or any(key.startswith(prefix) for prefix in _ROW_DROP_PREFIXES)
-        ]
-        base = row.drop(*drop_keys)
-        return base.update(patch)
-
-    def _build_video(
-        self,
-        *,
-        episode: Mapping[str, Any],
-        dataset: _DatasetState,
-        video_key: str,
-    ) -> VideoFile | None:
-        chunk_key = f"videos/{video_key}/chunk_index"
-        file_key = f"videos/{video_key}/file_index"
-        chunk = episode.get(chunk_key)
-        file_idx = episode.get(file_key)
-        if chunk is None or file_idx is None:
-            return None
-
-        rel = str(
-            dataset.video_path_template.format(
-                video_key=video_key,
-                chunk_index=chunk,
-                file_index=file_idx,
-            )
-        )
-        uri = str(dataset.root.abs_paths(rel))
-        from_timestamp = episode.get(f"videos/{video_key}/from_timestamp")
-        to_timestamp = episode.get(f"videos/{video_key}/to_timestamp")
-        if to_timestamp is None:
-            return None
-
-        try:
-            from_timestamp_s = (
-                float(from_timestamp) if from_timestamp is not None else 0.0
-            )
-        except (TypeError, ValueError):
-            from_timestamp_s = 0.0
-        try:
-            to_timestamp_s = float(to_timestamp)
-        except (TypeError, ValueError):
-            return None
-
-        return VideoFile(
-            uri=uri,
-            from_timestamp_s=from_timestamp_s,
-            to_timestamp_s=to_timestamp_s,
-        )
-
-    async def _load_episode_frames(
-        self,
-        episode: Mapping[str, Any],
-        dataset: _DatasetState,
-    ) -> list[Row]:
-        chunk = episode["data/chunk_index"]
-        file_idx = episode["data/file_index"]
-        if chunk is None or file_idx is None:
-            return []
-
-        if "dataset_from_index" not in episode or "dataset_to_index" not in episode:
-            raise ValueError(
-                "LeRobot episode row is missing required "
-                "dataset_from_index/dataset_to_index"
-            )
-        from_idx = episode["dataset_from_index"]
-        to_idx = episode["dataset_to_index"]
-
-        try:
-            from_idx = int(from_idx)
-            to_idx = int(to_idx)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "LeRobot episode row has invalid dataset_from_index/dataset_to_index"
-            ) from exc
-
-        if from_idx > to_idx:
-            raise ValueError(
-                "LeRobot episode row has invalid dataset_from_index/dataset_to_index"
-            )
-
-        cache_entry = await self._get_cached_frame_table(
-            dataset=dataset,
-            chunk=chunk,
-            file_idx=file_idx,
-        )
-        episode_table = self._slice_episode_table(
-            cache_entry=cache_entry,
-            from_idx=from_idx,
-            to_idx=to_idx,
-        )
-        if episode_table.num_rows <= 0:
-            return []
-        remap = dataset.task_index_remap
-        if remap:
-            episode_table = self._remap_task_index_column(episode_table, remap)
-
-        names = tuple(str(name) for name in episode_table.column_names)
-        columns = tuple(
-            episode_table.column(i) for i in range(episode_table.num_columns)
-        )
-        index_by_name = {name: i for i, name in enumerate(names)}
-        return [
-            ArrowRowView(
-                names=names,
-                columns=columns,
-                index_by_name=index_by_name,
-                row_idx=row_idx,
-            )
-            for row_idx in range(episode_table.num_rows)
-        ]
-
-    def _remap_task_index_column(
-        self,
-        table: pa.Table,
-        remap: Mapping[int, int],
-    ) -> pa.Table:
-        if "task_index" not in table.schema.names:
-            raise ValueError(
-                "LeRobot frame parquet is missing required 'task_index' column"
-            )
-        task_index_column = table.column("task_index").combine_chunks()
-        task_index_type = task_index_column.type
-        source_indices = pa.array(list(remap), type=task_index_type)
-        target_indices = pa.array(
-            [remap[source_index] for source_index in remap],
-            type=task_index_type,
-        )
-        matches = pc.call_function(
-            "index_in",
-            [task_index_column],
-            options=pc.SetLookupOptions(source_indices),
-        )
-        mapped_values = pc.take(target_indices, matches)
-        unmatched = pc.call_function(
-            "and_kleene",
-            [
-                pc.call_function("is_valid", [task_index_column]),
-                pc.call_function("is_null", [mapped_values]),
-            ],
-        )
-        if pc.call_function("any", [unmatched]).as_py():
-            invalid_indices = pc.call_function(
-                "unique", [task_index_column.filter(unmatched)]
-            ).to_pylist()
-            raise ValueError(
-                "LeRobot frame parquet contains task_index values missing from "
-                f"source task metadata: {invalid_indices}"
-            )
-        return table.set_column(
-            table.schema.get_field_index("task_index"),
-            "task_index",
-            mapped_values,
-        )
-
-    def _slice_episode_table(
-        self,
-        *,
-        cache_entry: _FrameFileCacheEntry,
-        from_idx: int,
-        to_idx: int,
-    ) -> pa.Table:
-        table = cache_entry.table
-        if table.num_rows <= 0:
-            return table.slice(0, 0)
-
-        index_expr = pc.field("index")
-        mask = (index_expr >= pa.scalar(from_idx, type=pa.int64())) & (
-            index_expr < pa.scalar(to_idx, type=pa.int64())
-        )
-        return table.filter(mask)
-
-    async def _get_cached_frame_table(
-        self,
-        *,
-        dataset: _DatasetState,
-        chunk: Any,
-        file_idx: Any,
-    ) -> _FrameFileCacheEntry:
-        cache_key = (str(dataset.root.abs_paths("")), chunk, file_idx)
-        cached_entry = self._frames_cache_entry
-        if cached_entry is not None and cached_entry.key == cache_key:
-            return cached_entry
-
-        async with self._frames_cache_lock:
-            cached_entry = self._frames_cache_entry
-            if cached_entry is not None and cached_entry.key == cache_key:
-                return cached_entry
-
-            rel = str(
-                dataset.data_path_template.format(
-                    chunk_index=chunk,
-                    file_index=file_idx,
+                root = self.roots[part.source_index]
+                metadata_for_source = metadata[part.source_index]
+                remap = remaps[part.source_index]
+                frame_tables = self._load_frame_tables(
+                    source_index=part.source_index,
+                    tabular=batch,
+                    root=root,
+                    metadata=metadata_for_source,
+                    remap=remap,
                 )
-            )
-            data_file = dataset.root.file(rel)
-
-            async with get_media_cache(_DATA_FILE_CACHE_NAME, max_entries=3).cached(
-                file=data_file
-            ) as local_path:
-                with open(local_path, "rb") as handle:
-                    table = pq.read_table(handle)
-
-            if "index" not in table.schema.names:
-                raise ValueError(
-                    "LeRobot frame parquet is missing required 'index' column"
-                )
-            if "task_index" not in table.schema.names:
-                raise ValueError(
-                    "LeRobot frame parquet is missing required 'task_index' column"
-                )
-            index_col = table.column("index")
-            if index_col.null_count > 0:
-                raise ValueError("LeRobot frame parquet contains null index values")
-
-            cache_entry = _FrameFileCacheEntry(key=cache_key, table=table)
-            self._frames_cache_entry = cache_entry
-            return cache_entry
+                if batch.num_rows > 0:
+                    yield LeRobotTabular(
+                        batch,
+                        metadata_by_row=(metadata_for_source,) * batch.num_rows,
+                        frames_by_row=tuple(
+                            Tabular(
+                                self._slice_episode_frame_table(
+                                    row_idx=row_idx,
+                                    tabular=batch,
+                                    frame_tables=frame_tables,
+                                )
+                            )
+                            for row_idx in range(batch.num_rows)
+                        ),
+                        roots_by_row=(root,) * batch.num_rows,
+                    )
 
     @staticmethod
     def _resolve_roots(
@@ -448,173 +128,144 @@ class LeRobotEpisodeReader(ParquetReader):
         fs: AbstractFileSystem | None,
         storage_options: Mapping[str, Any] | None,
     ) -> tuple[DataFolder, ...]:
-        raw_inputs: list[DataFolderLike] = []
-        if isinstance(inputs, (str, PathLike, DataFolder)):
-            raw_inputs.append(cast(DataFolderLike, inputs))
-        elif (
-            isinstance(inputs, tuple)
-            and len(inputs) == 2
-            and isinstance(inputs[1], AbstractFileSystem)
-        ):
-            raw_inputs.append(cast(DataFolderSpec, inputs))
-        else:
-            raw_inputs.extend(cast(Sequence[DataFolderLike], inputs))
-        roots = tuple(
-            DataFolder.resolve(item, fs=fs, storage_options=storage_options)
-            for item in raw_inputs
+        """Resolve raw inputs into dataset roots.
+
+        This should keep the current input flexibility:
+        - single string/path
+        - DataFolder
+        - `(path, fs)` tuples
+        - sequences of the above
+        """
+        fileset = DataFileSet.resolve(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            expect_type="folder",
         )
+        roots = fileset.datafolders
         if not roots:
             raise ValueError("LeRobot reader requires at least one dataset root")
         return roots
 
-    def _get_datasets(self) -> dict[str, _DatasetState]:
-        datasets = self._datasets
-        if datasets is None:
-            raw_datasets = tuple(self._load_dataset_state(root) for root in self._roots)
-            index_to_task, remaps = _merge_task_metadata(
-                tuple(dataset.index_to_task for dataset in raw_datasets)
-            )
-
-            datasets = {
-                str(dataset.root.abs_paths("")): _DatasetState(
-                    root=dataset.root,
-                    metadata=dataset.metadata,
-                    index_to_task=index_to_task,
-                    task_index_remap=remaps[idx],
-                    video_path_template=dataset.video_path_template,
-                    data_path_template=dataset.data_path_template,
-                    video_keys=dataset.video_keys,
-                )
-                for idx, dataset in enumerate(raw_datasets)
-            }
-            self._datasets = datasets
-        return datasets
-
-    def _dataset_for_source(
+    @cached_property
+    def _metadata_bundle(
         self,
-        source_index: int,
-        episode_path: str,
-    ) -> _DatasetState:
-        source = self.fileset.resolve_file(source_index, episode_path)
-        source_path = source.abs_path()
-        marker = f"/{_DEFAULT_EPISODES_GLOB_ROOT}/"
-        if marker not in source_path:
-            raise FileNotFoundError(
-                "Could not resolve LeRobot dataset root for episode file "
-                f"{source_path!r}"
-            )
-        dataset_name = source_path.split(marker, 1)[0]
-        dataset = self._get_datasets().get(dataset_name)
-        if dataset is not None:
-            return dataset
-        raise FileNotFoundError(
-            f"Could not resolve LeRobot dataset root for episode file {source_path!r}"
-        )
+    ) -> tuple[tuple[LeRobotMetadata, ...], tuple[dict[int, int], ...]]:
+        loaded = [self._load_metadata(root) for root in self.roots]
+        return merge_metadata(loaded)
 
-    def _load_dataset_state(self, root: DataFolder) -> _DatasetState:
-        if not root.fs.isdir(root.path):
-            raise ValueError(
-                f"LeRobot reader inputs must be dataset folders, got {root.abs_paths('')!r}"
-            )
-        info = self._load_info(root)
-        index_to_task = self._load_tasks(root)
-        metadata = LeRobotMetadata(
-            lerobot_info=LeRobotInfo(
-                root=str(root.abs_paths("")),
-                fps=int(info["fps"]) if info.get("fps") is not None else None,
-                robot_type=info.get("robot_type"),
-            ),
-            lerobot_stats=self._load_stats(root),
-        )
-        return _DatasetState(
-            root=root,
-            metadata=metadata,
-            index_to_task=index_to_task,
-            task_index_remap={},
-            video_path_template=info.get("video_path", _DEFAULT_VIDEO_PATH),
-            data_path_template=info.get("data_path", _DEFAULT_DATA_PATH),
-            video_keys=self._load_video_keys(info.get("features") or {}),
-        )
+    def _load_metadata(self, root: DataFolder) -> LeRobotMetadata:
+        with root.file(_INFO_JSON).open("rb") as handle:
+            info = parse_info_json(json.loads(handle.read()))
 
-    def _load_tasks(
-        self,
-        root: DataFolder,
-    ) -> dict[int, str]:
-        tasks_file = root.file(_TASKS_PARQUET)
-        if not tasks_file.exists():
-            raise ValueError(
-                f"LeRobot dataset is missing required '{_TASKS_PARQUET}' metadata"
-            )
-
-        with tasks_file.open("rb") as handle:
-            table = pq.read_table(handle)
-
-        index_field = (
-            "__index_level_0__" if "__index_level_0__" in table.schema.names else "task"
-        )
-        return {
-            int(row["task_index"]): str(row[index_field])
-            for row in table.to_pylist()
-            if row.get("task_index") is not None
-            and isinstance(row.get(index_field), str)
-        }
-
-    def _load_info(self, root: DataFolder) -> Mapping[str, Any]:
-        info_file = root.file(_INFO_JSON)
-        with info_file.open("rb") as handle:
-            payload = json.loads(handle.read())
-        return dict(payload)
-
-    def _load_stats(self, root: DataFolder) -> Mapping[str, Any]:
         stats_file = root.file(_STATS_JSON)
-        if not stats_file.exists():
-            return {}
-        with stats_file.open("rb") as handle:
-            payload = json.loads(handle.read())
-        return dict(payload)
+        if stats_file.exists():
+            with stats_file.open("rb") as handle:
+                stats = parse_stats_json(json.loads(handle.read()))
+        else:
+            stats = parse_stats_json({})
 
-    def _load_video_keys(self, features: Mapping[str, Any]) -> tuple[str, ...]:
-        return tuple(
-            sorted(
-                key
-                for key, feature in features.items()
-                if isinstance(key, str)
-                and isinstance(feature, Mapping)
-                and feature.get("dtype") == "video"
+        with root.file(_TASKS_PARQUET).open("rb") as handle:
+            tasks = parse_tasks_rows(pq.read_table(handle).to_pylist())
+
+        return LeRobotMetadata(info=info, stats=stats, tasks=tasks)
+
+    def _load_frame_tables(
+        self,
+        *,
+        source_index: int,
+        tabular: Tabular,
+        root: DataFolder,
+        metadata: LeRobotMetadata,
+        remap: Mapping[int, int],
+    ) -> dict[tuple[Any, Any], pa.Table]:
+        request_ranges = (
+            tabular.table.select(
+                [
+                    "data/chunk_index",
+                    "data/file_index",
+                    "dataset_from_index",
+                    "dataset_to_index",
+                ]
+            )
+            .group_by(["data/chunk_index", "data/file_index"])
+            .aggregate(
+                [
+                    ("dataset_from_index", "min"),
+                    ("dataset_to_index", "max"),
+                ]
             )
         )
 
+        tables: dict[tuple[Any, Any], pa.Table] = {}
+        for row in request_ranges.to_pylist():
+            chunk = row["data/chunk_index"]
+            file_idx = row["data/file_index"]
+            from_idx = int(row["dataset_from_index_min"])
+            to_idx = int(row["dataset_to_index_max"])
+            table = self._get_frame_file_table(
+                source_index=source_index,
+                root=root,
+                metadata=metadata,
+                chunk=chunk,
+                file_idx=file_idx,
+            )
+            if "index" not in table.schema.names:
+                raise ValueError(
+                    "LeRobot frame parquet is missing required 'index' column"
+                )
+            table = table.filter(
+                (pc.field("index") >= pa.scalar(from_idx, type=pa.int64()))
+                & (pc.field("index") < pa.scalar(to_idx, type=pa.int64()))
+            )
+            table = remap_task_index_table(table, remap)
+            tables[(chunk, file_idx)] = table
+        return tables
 
-def _merge_task_metadata(
-    tasks_by_dataset: Sequence[Mapping[int, str]],
-) -> tuple[dict[int, str], tuple[dict[int, int], ...]]:
-    if not tasks_by_dataset:
-        return {}, ()
-    index_to_task = dict(tasks_by_dataset[0])
-    task_to_index = {task: task_index for task_index, task in index_to_task.items()}
-    next_index = max(index_to_task, default=-1) + 1
-    remaps: list[dict[int, int]] = [{}]
+    def _get_frame_file_table(
+        self,
+        *,
+        source_index: int,
+        root: DataFolder,
+        metadata: LeRobotMetadata,
+        chunk: Any,
+        file_idx: Any,
+    ) -> pa.Table:
+        cache_key = (source_index, chunk, file_idx)
+        cached = self._last_frame_table
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
 
-    for source_tasks in tasks_by_dataset[1:]:
-        remap: dict[int, int] = {}
-        for source_index, task in source_tasks.items():
-            merged_index = task_to_index.get(task)
-            if merged_index is None:
-                merged_index = next_index
-                next_index += 1
-                task_to_index[task] = merged_index
-                index_to_task[merged_index] = task
-            remap[int(source_index)] = merged_index
-        remaps.append(
-            {} if all(source == target for source, target in remap.items()) else remap
+        rel = metadata.info.data_path.format(chunk_index=chunk, file_index=file_idx)
+        with root.file(rel).open("rb") as handle:
+            table = pq.read_table(handle)
+        self._last_frame_table = (cache_key, table)
+        return table
+
+    def _slice_episode_frame_table(
+        self,
+        *,
+        row_idx: int,
+        tabular: Tabular,
+        frame_tables: Mapping[tuple[Any, Any], pa.Table],
+    ) -> pa.Table:
+        chunk = self._episode_value(tabular, row_idx, "data/chunk_index")
+        file_idx = self._episode_value(tabular, row_idx, "data/file_index")
+        from_idx = int(self._episode_value(tabular, row_idx, "dataset_from_index"))
+        to_idx = int(self._episode_value(tabular, row_idx, "dataset_to_index"))
+        table = frame_tables[(chunk, file_idx)]
+        return table.filter(
+            (pc.field("index") >= pa.scalar(from_idx, type=pa.int64()))
+            & (pc.field("index") < pa.scalar(to_idx, type=pa.int64()))
         )
 
-    return index_to_task, tuple(remaps)
+    @staticmethod
+    def _episode_value(
+        tabular: Tabular,
+        row_idx: int,
+        key: str,
+    ) -> Any:
+        return tabular.columns[tabular.index_by_name[key]][row_idx].as_py()
 
 
-__all__ = [
-    "LeRobotEpisodeReader",
-    "LeRobotInfo",
-    "LeRobotMetadata",
-    "LEROBOT_TASKS",
-]
+__all__ = ["LeRobotEpisodeReader"]

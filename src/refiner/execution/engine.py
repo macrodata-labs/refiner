@@ -13,7 +13,7 @@ from refiner.pipeline.steps import RefinerStep, VectorizedOp, VectorizedSegmentS
 from refiner.execution.buffer import RowBuffer
 from refiner.execution.operators.row import ShardDeltaFn, execute_row_steps
 from refiner.execution.operators.vectorized import (
-    apply_vectorized_op,
+    apply_vectorized_ops,
 )
 from refiner.execution.tracking.shards import count_tabular_by_shard, counts_delta
 from refiner.pipeline.data.row import Row
@@ -188,10 +188,7 @@ def _execute_vector_segment(
     estimated_row_bytes: float | None = None
 
     def _run_block(block: Tabular) -> Tabular:
-        out = block
-        for op in ops:
-            out = apply_vectorized_op(out, op)
-        return out
+        return apply_vectorized_ops(block, ops)
 
     def _emit_tabular_delta(*, produced: Tabular, consumed: Tabular) -> None:
         if on_shard_delta is None:

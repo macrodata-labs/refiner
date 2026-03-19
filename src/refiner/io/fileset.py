@@ -4,7 +4,7 @@ import glob
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from os import PathLike
-from typing import Any, TypeAlias, Union, cast
+from typing import Any, Literal, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
 
@@ -54,6 +54,7 @@ class DataFileSet:
         storage_options: Mapping[str, Any] | None = None,
         recursive: bool = False,
         extensions: Sequence[str] | None = None,
+        expect_type: Literal["file", "folder"] | None = None,
     ) -> "DataFileSet":
         """Normalize input specs into a lazy file set without listing them yet."""
         if isinstance(data, cls):
@@ -74,10 +75,14 @@ class DataFileSet:
 
         for item in inputs:
             if isinstance(item, DataFile):
+                if expect_type == "folder":
+                    raise TypeError("inputs must be directories")
                 normalized_entries.append(item)
                 continue
 
             if isinstance(item, DataFolder):
+                if expect_type == "file":
+                    raise TypeError("inputs must be files")
                 normalized_entries.append(item)
                 continue
 
@@ -93,9 +98,14 @@ class DataFileSet:
                     raise TypeError(
                         "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                     )
-                normalized_entries.append(
-                    _PathSource(path=item_fs._strip_protocol(path), fs=item_fs)
-                )
+                if expect_type == "folder":
+                    normalized_entries.append(DataFolder(path=path, fs=item_fs))
+                elif expect_type == "file":
+                    normalized_entries.append(DataFile(path=path, fs=item_fs))
+                else:
+                    normalized_entries.append(
+                        _PathSource(path=item_fs._strip_protocol(path), fs=item_fs)
+                    )
                 continue
 
             if isinstance(item, PathLike):
@@ -107,12 +117,26 @@ class DataFileSet:
                 )
 
             if fs is not None:
-                normalized_entries.append(
-                    _PathSource(path=fs._strip_protocol(item), fs=fs)
-                )
+                if expect_type == "folder":
+                    normalized_entries.append(DataFolder.resolve(item, fs=fs))
+                elif expect_type == "file":
+                    normalized_entries.append(DataFile.resolve(item, fs=fs))
+                else:
+                    normalized_entries.append(
+                        _PathSource(path=fs._strip_protocol(item), fs=fs)
+                    )
             else:
-                item_fs, path = url_to_fs(item, **dict(storage_options or {}))
-                normalized_entries.append(_PathSource(path=path, fs=item_fs))
+                if expect_type == "folder":
+                    normalized_entries.append(
+                        DataFolder.resolve(item, storage_options=storage_options)
+                    )
+                elif expect_type == "file":
+                    normalized_entries.append(
+                        DataFile.resolve(item, storage_options=storage_options)
+                    )
+                else:
+                    item_fs, path = url_to_fs(item, **dict(storage_options or {}))
+                    normalized_entries.append(_PathSource(path=path, fs=item_fs))
 
         return cls(
             entries=tuple(normalized_entries),
@@ -124,6 +148,18 @@ class DataFileSet:
     def files(self) -> tuple[DataFile, ...]:
         """Flatten the lazily expanded source groups into one deterministic file list."""
         return tuple(file for group in self.expand_sources() for file in group)
+
+    @property
+    def datafiles(self) -> tuple[DataFile, ...]:
+        if not all(isinstance(entry, DataFile) for entry in self.entries):
+            raise TypeError("DataFileSet entries are not all files")
+        return cast(tuple[DataFile, ...], self.entries)
+
+    @property
+    def datafolders(self) -> tuple[DataFolder, ...]:
+        if not all(isinstance(entry, DataFolder) for entry in self.entries):
+            raise TypeError("DataFileSet entries are not all folders")
+        return cast(tuple[DataFolder, ...], self.entries)
 
     def expand_sources(self) -> tuple[tuple[DataFile, ...], ...]:
         """Expand each source entry into its concrete files, preserving source grouping."""
