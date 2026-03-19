@@ -72,7 +72,7 @@ class LeRobotVideoRef:
 
 @dataclass(frozen=True, slots=True)
 class LeRobotStatsView(Mapping[str, LeRobotFeatureStats]):
-    _row: Row
+    _row: "LeRobotRow"
 
     def __getitem__(self, feature: str) -> LeRobotFeatureStats:
         prefix = f"stats/{feature}/"
@@ -102,6 +102,12 @@ class LeRobotStatsView(Mapping[str, LeRobotFeatureStats]):
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
+
+    def drop(self, feature: str) -> "LeRobotRow":
+        prefix = f"stats/{feature}/"
+        return self._row.drop(
+            *[key for key in self._row._row if key.startswith(prefix)]
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,7 +222,7 @@ class LeRobotRow(Row):
 
     @property
     def stats(self) -> LeRobotStatsView:
-        return LeRobotStatsView(self._row)
+        return LeRobotStatsView(self)
 
     def with_video(
         self,

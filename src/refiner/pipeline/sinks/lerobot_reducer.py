@@ -91,7 +91,7 @@ class LeRobotMetaReduceSink(BaseSink):
             .combine_chunks()
             .to_numpy(zero_copy_only=False),
             dtype=np.int64,
-        )
+        ).copy()
         # we keep all unique episode ids, and remap repeated ones to max(episode_ids)+1...
         episode_ids_in_sync = True
         duplicate_mask = np.zeros(episode_indices.shape[0], dtype=bool)

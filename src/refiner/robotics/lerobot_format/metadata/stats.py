@@ -181,8 +181,14 @@ class LeRobotStatsFile(Mapping[str, LeRobotFeatureStats]):
             means = _require_stat_column(columns["mean"], "mean")
             stds = _require_stat_column(columns["std"], "std")
             counts = _require_stat_column(columns["count"], "count")
-            mins = _require_stat_column(columns["min"], "min")
-            maxs = _require_stat_column(columns["max"], "max")
+            min_column = columns["min"]
+            max_column = columns["max"]
+            mins = _stat_bool_column(min_column)
+            maxs = _stat_bool_column(max_column)
+            if mins is None:
+                mins = _require_stat_column(min_column, "min")
+            if maxs is None:
+                maxs = _require_stat_column(max_column, "max")
 
             total_count = counts.sum(axis=0)
             weights = counts.reshape(counts.shape + (1,) * (means.ndim - counts.ndim))
@@ -191,9 +197,11 @@ class LeRobotStatsFile(Mapping[str, LeRobotFeatureStats]):
                 axis=0
             ) / np.maximum(total_count, 1e-12)
 
+            min_values = np.min(mins, axis=0)
+            max_values = np.max(maxs, axis=0)
             out_feature: dict[str, StatValue | None] = {
-                "min": np.min(mins, axis=0).tolist(),
-                "max": np.max(maxs, axis=0).tolist(),
+                "min": min_values.tolist(),
+                "max": max_values.tolist(),
                 "mean": total_mean.tolist(),
                 "std": np.sqrt(total_var).tolist(),
                 "count": total_count.tolist(),
@@ -403,6 +411,49 @@ def _stat_column_array(column: pa.ChunkedArray) -> np.ndarray | None:
     if numeric is not None:
         return numeric
     return _stack_numeric_values(column.to_pylist())
+
+
+def _stat_bool_column(column: pa.ChunkedArray) -> np.ndarray | None:
+    if column.null_count > 0:
+        return None
+
+    if pa.types.is_boolean(column.type):
+        values = np.asarray(column.to_numpy(zero_copy_only=False), dtype=bool)
+        if values.ndim == 0:
+            values = values.reshape(1, 1)
+        elif values.ndim == 1:
+            values = values.reshape(-1, 1)
+        return values
+
+    try:
+        combined = column.combine_chunks()
+    except (TypeError, ValueError):
+        return None
+
+    if pa.types.is_fixed_size_list(combined.type):
+        width = int(combined.type.list_size)
+    elif pa.types.is_list(combined.type) or pa.types.is_large_list(combined.type):
+        offsets = np.asarray(combined.offsets.to_numpy(zero_copy_only=False))
+        lengths = np.diff(offsets)
+        if lengths.size == 0 or np.any(lengths != lengths[0]) or lengths[0] <= 0:
+            return None
+        width = int(lengths[0])
+    else:
+        return None
+
+    if (
+        not pa.types.is_boolean(combined.type.value_type)
+        or combined.values.null_count > 0
+    ):
+        return None
+
+    values = np.asarray(combined.values.to_numpy(zero_copy_only=False), dtype=bool)
+    if values.size == 0:
+        return None
+    row_count = len(combined)
+    return (
+        values.reshape(row_count, width) if values.size == row_count * width else None
+    )
 
 
 def _estimate_num_samples(
