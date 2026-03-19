@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from fsspec import AbstractFileSystem
 
 from refiner.io.datafolder import DataFolderLike
-from refiner.pipeline.expressions import Expr, expr_references_column, lit
+from refiner.pipeline.expressions import Expr, lit
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.steps import (
     AsyncMapFn,
@@ -166,8 +166,6 @@ class RefinerPipeline:
 
     def filter(self, predicate: Callable[[Row], bool] | Expr) -> "RefinerPipeline":
         if isinstance(predicate, Expr):
-            if expr_references_column(predicate, SHARD_ID_COLUMN):
-                raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
             return self._add_vectorized_op(FilterExprStep(predicate=predicate))
         return self.add_step(
             FilterRowStep(
@@ -195,18 +193,12 @@ class RefinerPipeline:
             name: value if isinstance(value, Expr) else lit(value)
             for name, value in assignments.items()
         }
-        if any(
-            expr_references_column(expr, SHARD_ID_COLUMN) for expr in exprs.values()
-        ):
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(WithColumnsStep(assignments=exprs))
 
     def with_column(self, name: str, value: Expr | Any) -> "RefinerPipeline":
         if name == SHARD_ID_COLUMN:
             raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
-        if expr_references_column(expr, SHARD_ID_COLUMN):
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(WithColumnsStep(assignments={name: expr}))
 
     def drop(self, *columns: str) -> "RefinerPipeline":

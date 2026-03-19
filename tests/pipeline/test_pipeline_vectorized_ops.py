@@ -49,10 +49,7 @@ def test_select_preserves_internal_shard_column() -> None:
         ("select", (SHARD_ID_COLUMN,)),
         ("drop", (SHARD_ID_COLUMN,)),
         ("with_column", (SHARD_ID_COLUMN, 1)),
-        ("with_column", ("sid", col(SHARD_ID_COLUMN))),
         ("with_columns", {SHARD_ID_COLUMN: 1}),
-        ("with_columns", {"sid": col(SHARD_ID_COLUMN)}),
-        ("filter", (col(SHARD_ID_COLUMN) == "abc",)),
         ("rename", {SHARD_ID_COLUMN: "renamed"}),
         ("rename", {"x": SHARD_ID_COLUMN}),
         ("cast", {SHARD_ID_COLUMN: "string"}),
@@ -65,6 +62,16 @@ def test_vectorized_ops_reject_internal_shard_column(builder, kwargs) -> None:
             getattr(pipeline, builder)(*kwargs)
         else:
             getattr(pipeline, builder)(**kwargs)
+
+
+def test_vectorized_ops_reject_internal_shard_column_exprs() -> None:
+    pipeline = from_items([{"x": 1}])
+    with pytest.raises(ValueError, match="internal column"):
+        pipeline.with_column("sid", col(SHARD_ID_COLUMN))
+    with pytest.raises(ValueError, match="internal column"):
+        pipeline.with_columns(sid=col(SHARD_ID_COLUMN))
+    with pytest.raises(ValueError, match="internal column"):
+        pipeline.filter(col(SHARD_ID_COLUMN) == "abc")
 
 
 def test_vectorized_and_row_udf_segments_interoperate() -> None:

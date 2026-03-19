@@ -8,6 +8,8 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+
 _ARROW_FUNCTIONS = frozenset(pc.list_functions())
 _HAS_FLOOR_DIVIDE_KERNEL = "floor_divide" in _ARROW_FUNCTIONS
 _HAS_MOD_KERNEL = "mod" in _ARROW_FUNCTIONS
@@ -157,23 +159,6 @@ def with_columns_assignments_to_code(assignments: dict[str, Any]) -> str:
         f"{name}={expr.to_code() if isinstance(expr, Expr) else expr_to_code(expr)}"
         for name, expr in assignments.items()
     )
-
-
-def expr_references_column(expr: Expr, name: str) -> bool:
-    if expr.op == "col" and str(expr.args[0]) == name:
-        return True
-    for arg in expr.args:
-        if isinstance(arg, Expr) and expr_references_column(arg, name):
-            return True
-        if isinstance(arg, (list, tuple)):
-            for item in arg:
-                if isinstance(item, Expr) and expr_references_column(item, name):
-                    return True
-        if isinstance(arg, dict):
-            for item in arg.values():
-                if isinstance(item, Expr) and expr_references_column(item, name):
-                    return True
-    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,6 +342,8 @@ class DateTimeExpr:
 
 
 def col(name: str) -> Expr:
+    if name == SHARD_ID_COLUMN:
+        raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
     return Expr(op="col", args=(name,))
 
 
@@ -597,5 +584,4 @@ __all__ = [
     "coalesce",
     "if_else",
     "eval_expr_arrow",
-    "expr_references_column",
 ]
