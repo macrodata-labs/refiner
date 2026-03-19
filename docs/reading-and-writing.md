@@ -53,7 +53,9 @@ Reader behavior differs by format:
 You can often influence shard planning with options like:
 
 - `target_shard_bytes=...`
+  - approximate shard size target used by readers that plan work from file size or byte ranges
 - `num_shards=...`
+  - explicit shard-count target when you want to cap or force parallelism more directly than a byte budget
 
 ## Writing data
 

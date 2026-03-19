@@ -230,14 +230,23 @@ This is more than a generic file writer. The LeRobot writer handles:
 Current writer tuning is passed directly on `write_lerobot(...)`, including:
 
 - `data_files_size_in_mb`
+  - approximate rollover target for frame parquet files
 - `video_files_size_in_mb`
+  - approximate rollover target for emitted video files
 - `max_video_prepare_in_flight`
+  - upper bound on concurrent episode-level video preparation work inside one worker
 - `codec`
+  - requested output video codec when transcoding is needed
 - `pix_fmt`
+  - requested output pixel format for transcoded videos
 - `transencoding_threads`
+  - total per-worker transcode thread budget, divided across concurrent video streams on the same row
 - `encoder_options`
+  - extra codec-specific options passed to the encoder
 - `quantile_bins`
+  - quantile resolution used when computing LeRobot stats files
 - `force_recompute_video_stats`
+  - force decoded-frame video stats recomputation even when compatible source stats already exist
 
 ## LeRobot Performance Notes
 
