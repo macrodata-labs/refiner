@@ -3,11 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import cast
 
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import Row
-
-SHARD_ID_COLUMN = "__shard_id"
 
 
 def count_rows_by_shard(rows: list[Row]) -> dict[str, int]:

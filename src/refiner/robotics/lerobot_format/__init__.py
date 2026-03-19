@@ -7,6 +7,9 @@ from refiner.robotics.lerobot_format.row import (
     LeRobotVideosView,
 )
 from refiner.robotics.lerobot_format.metadata import (
+    compute_table_stats,
+    default_feature_info_by_key,
+    infer_feature_info,
     LeRobotFeatureStats,
     LeRobotFeatureInfo,
     LeRobotInfo,
@@ -16,9 +19,6 @@ from refiner.robotics.lerobot_format.metadata import (
     LeRobotVideoInfo,
     merge_metadata,
     merge_tasks,
-    parse_info_json,
-    parse_stats_json,
-    parse_tasks_rows,
     remap_task_index_table,
 )
 
@@ -36,10 +36,10 @@ __all__ = [
     "LeRobotVideoInfo",
     "LeRobotVideoRef",
     "LeRobotVideosView",
+    "compute_table_stats",
+    "default_feature_info_by_key",
+    "infer_feature_info",
     "merge_metadata",
     "merge_tasks",
-    "parse_info_json",
-    "parse_stats_json",
-    "parse_tasks_rows",
     "remap_task_index_table",
 ]

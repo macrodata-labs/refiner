@@ -495,11 +495,8 @@ def read_lerobot(
             inputs,
             fs=fs,
             storage_options=storage_options,
-            limit=limit,
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
-            media_max_in_flight=media_max_in_flight,
-            media_preserve_order=media_preserve_order,
             split_row_groups=split_row_groups,
         )
     )

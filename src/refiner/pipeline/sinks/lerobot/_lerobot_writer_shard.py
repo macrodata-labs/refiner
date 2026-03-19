@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 
 from refiner.io import DataFolder
 from refiner.media import VideoFile
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.lerobot._lerobot_frames import (
     compute_episode_stats,
     frame_table,
@@ -27,8 +28,10 @@ from refiner.pipeline.sinks.lerobot._lerobot_video_writer import (
     LeRobotVideoWriter,
     _CompletedVideoItem,
 )
-from refiner.pipeline.sources.readers.lerobot import (
+from refiner.robotics.lerobot_format import (
     LEROBOT_TASKS,
+    LeRobotFeatureInfo,
+    LeRobotInfo,
     LeRobotMetadata,
 )
 
@@ -86,7 +89,7 @@ class _LeRobotShardWriter:
     _index_to_task: dict[int, str] = field(default_factory=dict, init=False)
     _fps: int | None = field(default=None, init=False)
     _robot_type: str | None = field(default=None, init=False)
-    features: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
+    features: dict[str, LeRobotFeatureInfo] = field(default_factory=dict, init=False)
     _video_config: "LeRobotVideoConfig" = field(init=False)
 
     _total_episodes: int = field(default=0, init=False)
@@ -127,7 +130,7 @@ class _LeRobotShardWriter:
 
     @property
     def _has_videos(self) -> bool:
-        return any(spec.get("dtype") == "video" for spec in self.features.values())
+        return any(spec.dtype == "video" for spec in self.features.values())
 
     async def write_row(
         self,
@@ -135,18 +138,15 @@ class _LeRobotShardWriter:
         row: Row | Mapping[str, Any],
     ) -> None:
         frames = row["frames"]
-        if not frames:
+        frame_count = frames.num_rows if isinstance(frames, Tabular) else len(frames)
+        if frame_count <= 0:
             raise ValueError("LeRobot writer requires each row to contain frames")
         self._initialize_info_from_row(row, frames=frames)
         episode_index = int(row["episode_index"])
-        frame_count = len(frames)
         source_episode_stats = self._source_episode_stats(row)
 
         writer_tasks: list[asyncio.Task[_CompletedVideoItem]] = []
-        for video_key, video in row.items():
-            if not isinstance(video, VideoFile):
-                continue
-
+        for video_key, video in self._videos_in_row(row):
             writer_tasks.append(
                 asyncio.create_task(
                     self._video_writer(video_key).write_video(
@@ -204,21 +204,33 @@ class _LeRobotShardWriter:
         self,
         row: Row | Mapping[str, Any],
         *,
-        frames: list[Mapping[str, Any]],
+        frames: Sequence[Mapping[str, Any]] | Tabular,
     ) -> _FrameWriteInfo:
         episode_index = int(row["episode_index"])
+        frame_count = frames.num_rows if isinstance(frames, Tabular) else len(frames)
         frame_stats = compute_episode_stats(
             frames=frames,
             quantile_bins=self.config.stats.quantile_bins,
         )
-        index_to_task = row[LEROBOT_TASKS]
+        metadata = row.get("metadata")
+        if not isinstance(metadata, LeRobotMetadata):
+            raise ValueError("LeRobot writer requires metadata with task mappings")
+        index_to_task = metadata.tasks.index_to_task
         if not self._index_to_task:
             self._index_to_task = dict(index_to_task)
         elif self._index_to_task != index_to_task:
             raise ValueError(
                 "LeRobot writer encountered mismatched task metadata across episodes"
             )
-        tasks = sorted({index_to_task[int(frame["task_index"])] for frame in frames})
+        if isinstance(frames, Tabular):
+            task_indices = {
+                int(value)
+                for value in frames.table.column("task_index").to_pylist()
+                if value is not None
+            }
+        else:
+            task_indices = {int(frame["task_index"]) for frame in frames}
+        tasks = sorted({index_to_task[task_index] for task_index in task_indices})
         table = (
             frame_table(
                 frames=frames,
@@ -226,7 +238,7 @@ class _LeRobotShardWriter:
                 start_index=self._global_frame_index,
                 task_index=None,
             )
-            if frames
+            if frame_count > 0
             else None
         )
         data_file_index, dataset_from_index, dataset_to_index = (
@@ -234,7 +246,7 @@ class _LeRobotShardWriter:
         )
         return _FrameWriteInfo(
             episode_index=episode_index,
-            length=len(frames),
+            length=frame_count,
             tasks=tasks,
             data_file_index=data_file_index,
             dataset_from_index=dataset_from_index,
@@ -326,18 +338,19 @@ class _LeRobotShardWriter:
                 use_dictionary=True,
             )
 
-        info_record = {
-            "codebase_version": _DEFAULT_CODEBASE_VERSION,
-            "fps": self._fps,
-            "robot_type": self._robot_type,
-            "features": self.features,
-            "data_files_size_in_mb": self.config.data_files_size_in_mb,
-            "video_files_size_in_mb": self.config.video_files_size_in_mb,
-            "data_path": _DEFAULT_DATA_PATH,
-            "video_path": DEFAULT_VIDEO_PATH if self._has_videos else None,
-            "total_episodes": self._total_episodes,
-            "total_frames": self._global_frame_index,
-        }
+        info_record = LeRobotInfo(
+            codebase_version=_DEFAULT_CODEBASE_VERSION,
+            fps=self._fps,
+            robot_type=self._robot_type,
+            total_episodes=self._total_episodes,
+            total_frames=self._global_frame_index,
+            data_files_size_in_mb=self.config.data_files_size_in_mb,
+            video_files_size_in_mb=self.config.video_files_size_in_mb,
+            data_path=_DEFAULT_DATA_PATH,
+            video_path=DEFAULT_VIDEO_PATH if self._has_videos else "",
+            features=self.features,
+        )
+        info_record = info_record.to_json_dict()
         with self.folder.open(
             self._meta_path("info.jsonl"), mode="wt", encoding="utf-8"
         ) as out:
@@ -380,16 +393,16 @@ class _LeRobotShardWriter:
         self,
         row: Row | Mapping[str, Any],
         *,
-        frames: list[Mapping[str, Any]],
+        frames: Sequence[Mapping[str, Any]] | Tabular,
     ) -> None:
         if self.features:
             return
 
         metadata = row.get("metadata")
         if isinstance(metadata, LeRobotMetadata):
-            fps_raw = metadata.lerobot_info.fps
+            fps_raw = metadata.info.fps
             self._fps = int(fps_raw) if fps_raw is not None else None
-            robot_type_raw = metadata.lerobot_info.robot_type
+            robot_type_raw = metadata.info.robot_type
             self._robot_type = (
                 str(robot_type_raw) if robot_type_raw is not None else None
             )
@@ -408,24 +421,38 @@ class _LeRobotShardWriter:
             if spec is not None:
                 self.features.setdefault(key, spec)
 
-        if frames:
-            for key, value in frames[0].items():
-                spec = self._feature_spec(value)
+        if isinstance(frames, Tabular):
+            frame_sample: Mapping[str, Any] | None = next(iter(frames), None)
+        else:
+            frame_sample = frames[0] if frames else None
+        if frame_sample is not None:
+            for key, value in frame_sample.items():
+                fps = (
+                    None
+                    if key
+                    in {
+                        "timestamp",
+                        "frame_index",
+                        "episode_index",
+                        "index",
+                        "task_index",
+                    }
+                    else self._fps
+                )
+                spec = self._feature_spec(value, fps=fps)
                 if spec is not None:
                     self.features.setdefault(key, spec)
 
         for key, spec in {
-            "timestamp": {"dtype": "float32", "shape": [1], "names": None},
-            "frame_index": {"dtype": "int64", "shape": [1], "names": None},
-            "episode_index": {"dtype": "int64", "shape": [1], "names": None},
-            "index": {"dtype": "int64", "shape": [1], "names": None},
-            "task_index": {"dtype": "int64", "shape": [1], "names": None},
+            "timestamp": LeRobotFeatureInfo(dtype="float32", shape=(1,), names=None),
+            "frame_index": LeRobotFeatureInfo(dtype="int64", shape=(1,), names=None),
+            "episode_index": LeRobotFeatureInfo(dtype="int64", shape=(1,), names=None),
+            "index": LeRobotFeatureInfo(dtype="int64", shape=(1,), names=None),
+            "task_index": LeRobotFeatureInfo(dtype="int64", shape=(1,), names=None),
         }.items():
             self.features.setdefault(key, spec)
 
-        max_videos_in_row = sum(
-            1 for value in row.values() if isinstance(value, VideoFile)
-        )
+        max_videos_in_row = sum(1 for _ in self._videos_in_row(row))
         self._video_config = replace(
             self.config.video,
             encoder_threads=_resolve_video_threads(
@@ -438,18 +465,30 @@ class _LeRobotShardWriter:
             ),
         )
 
-    def _feature_spec(self, value: Any) -> dict[str, Any] | None:
+    def _feature_spec(
+        self,
+        value: Any,
+        *,
+        fps: int | None = None,
+    ) -> LeRobotFeatureInfo | None:
         if isinstance(value, VideoFile):
-            return {"dtype": "video", "shape": None, "names": None, "info": None}
+            return None
         if isinstance(value, bool):
-            return {"dtype": "bool", "shape": [1], "names": None}
+            return LeRobotFeatureInfo(dtype="bool", shape=(1,), names=None, fps=fps)
 
         array = np.asarray(value)
         if array.ndim == 0:
             if array.dtype.kind in {"i", "u"}:
-                return {"dtype": "int64", "shape": [1], "names": None}
+                return LeRobotFeatureInfo(
+                    dtype="int64", shape=(1,), names=None, fps=fps
+                )
             if array.dtype.kind == "f":
-                return {"dtype": "float64", "shape": [1], "names": None}
+                return LeRobotFeatureInfo(
+                    dtype="float64",
+                    shape=(1,),
+                    names=None,
+                    fps=fps,
+                )
             return None
 
         if array.dtype.kind in {"i", "u"}:
@@ -460,11 +499,12 @@ class _LeRobotShardWriter:
             dtype = "bool"
         else:
             return None
-        return {
-            "dtype": dtype,
-            "shape": [int(size) for size in array.shape],
-            "names": None,
-        }
+        return LeRobotFeatureInfo(
+            dtype=dtype,
+            shape=tuple(int(size) for size in array.shape),
+            names=None,
+            fps=fps,
+        )
 
     def _ensure_data_writer(self, schema: pa.Schema) -> None:
         if self._data_writer is not None:
@@ -490,6 +530,22 @@ class _LeRobotShardWriter:
             use_dictionary=True,
         )
         self._data_bytes_written = 0
+
+    def _videos_in_row(
+        self,
+        row: Row | Mapping[str, Any],
+    ) -> list[tuple[str, VideoFile]]:
+        direct = [
+            (key, value)
+            for key, value in row.items()
+            if isinstance(key, str) and isinstance(value, VideoFile)
+        ]
+        if direct:
+            return direct
+        videos = getattr(row, "videos", None)
+        if videos is None:
+            return []
+        return [(key, videos[key].video) for key in videos]
 
     def _close_data(self) -> None:
         if self._data_writer is not None:

@@ -24,10 +24,12 @@ from refiner.pipeline.sinks.lerobot import (
     LeRobotWriterConfig,
     LeRobotWriterSink,
 )
-from refiner.pipeline.sources.readers.lerobot import (
+from refiner.robotics.lerobot_format import (
     LEROBOT_TASKS,
     LeRobotInfo,
     LeRobotMetadata,
+    LeRobotStatsFile,
+    LeRobotTasks,
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_transcode import (
     _estimate_sample_stride,
@@ -161,10 +163,14 @@ def _episode(
     }
 
 
-def _metadata() -> LeRobotMetadata:
+def _metadata(
+    index_to_task: dict[int, str] | None = None,
+) -> LeRobotMetadata:
+    index_to_task = index_to_task or {0: "pick", 1: "place"}
     return LeRobotMetadata(
-        lerobot_info=LeRobotInfo(root="", fps=10, robot_type="mockbot"),
-        lerobot_stats={},
+        info=LeRobotInfo(fps=10, robot_type="mockbot"),
+        stats=LeRobotStatsFile.from_json_dict({}),
+        tasks=LeRobotTasks(index_to_task),
     )
 
 
@@ -234,13 +240,10 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
         info_json = json.load(fh)
     assert info_json["features"]["observation.images.main"] == {
         "dtype": "video",
-        "shape": [3, 16, 16],
-        "names": ["channels", "height", "width"],
-        "info": {
+        "shape": [16, 16, 3],
+        "names": ["height", "width", "channels"],
+        "video_info": {
             "video.fps": 10,
-            "video.height": 16,
-            "video.width": 16,
-            "video.channels": 3,
             "video.codec": "mpeg4",
             "video.pix_fmt": "yuv420p",
             "video.is_depth_map": False,
@@ -510,7 +513,7 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
                     },
                 ],
                 LEROBOT_TASKS: {1: "place", 5: "pick"},
-                "metadata": _metadata(),
+                "metadata": _metadata({1: "place", 5: "pick"}),
             },
             {
                 "episode_index": 1,
@@ -530,7 +533,7 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
                     },
                 ],
                 LEROBOT_TASKS: {1: "place", 5: "pick"},
-                "metadata": _metadata(),
+                "metadata": _metadata({1: "place", 5: "pick"}),
             },
         ],
         items_per_shard=10,
@@ -697,4 +700,4 @@ def test_hub_aloha_merge_uses_remux_and_preserves_episode_count(tmp_path: Path) 
         "observation.images.cam_low",
         "observation.images.cam_right_wrist",
     ]:
-        assert info_json["features"][video_key]["info"]["video.codec"] == "av1"
+        assert info_json["features"][video_key]["video_info"]["video.codec"] == "av1"

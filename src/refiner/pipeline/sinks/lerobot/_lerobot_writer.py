@@ -4,15 +4,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from refiner.execution.asyncio.window import AsyncWindow
-from refiner.io.datafolder import DataFolderLike
+from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline.sinks.base import (
-    BaseSink,
-    Block,
-    ShardCounts,
-    describe_datafolder_path,
-    split_block_by_shard,
-)
+from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.lerobot._lerobot_writer_shard import _LeRobotShardWriter
 from refiner.worker.context import get_active_run_handle
 
@@ -78,20 +73,12 @@ class LeRobotWriterSink(BaseSink):
             preserve_order=False,
         )
 
-    def write_block(self, block: Block) -> ShardCounts:
-        blocks_by_shard, counts = split_block_by_shard(block)
-
-        for shard_id, shard_block in blocks_by_shard.items():
-            if isinstance(shard_block, Tabular):
-                rows = shard_block.to_rows()
-            else:
-                rows = shard_block
-            for row in rows:
-                self._async_window.submit_blocking(
-                    self._writer_for_shard(shard_id).write_row(row=row)
-                )
-
-        return counts
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        rows = block.to_rows() if isinstance(block, Tabular) else block
+        for row in rows:
+            self._async_window.submit_blocking(
+                self._writer_for_shard(shard_id).write_row(row=row)
+            )
 
     def _writer_for_shard(self, shard_id: str) -> _LeRobotShardWriter:
         writer = self._writers.get(shard_id)
@@ -121,7 +108,7 @@ class LeRobotWriterSink(BaseSink):
             "write_lerobot",
             "writer",
             {
-                "path": describe_datafolder_path(self.config.output),
+                "path": DataFolder.resolve(self.config.output).abs_path(),
                 "data_files_size_in_mb": self.config.data_files_size_in_mb,
                 "video_files_size_in_mb": self.config.video_files_size_in_mb,
                 "max_video_prepare_in_flight": self.config.max_video_prepare_in_flight,

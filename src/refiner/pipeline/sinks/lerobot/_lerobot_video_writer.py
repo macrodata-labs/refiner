@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -19,6 +19,10 @@ from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
 )
 from refiner.pipeline.sinks.lerobot._lerobot_video_transcode import (
     TranscodeWriter,
+)
+from refiner.robotics.lerobot_format.metadata.info import (
+    LeRobotFeatureInfo,
+    LeRobotVideoInfo,
 )
 
 if TYPE_CHECKING:
@@ -38,22 +42,19 @@ def _video_feature(
     width: int,
     codec: str,
     pix_fmt: str,
-) -> dict[str, Any]:
-    return {
-        "dtype": "video",
-        "shape": [3, int(height), int(width)],
-        "names": ["channels", "height", "width"],
-        "info": {
-            "video.fps": int(fps),
-            "video.height": int(height),
-            "video.width": int(width),
-            "video.channels": 3,
-            "video.codec": codec,
-            "video.pix_fmt": pix_fmt,
-            "video.is_depth_map": False,
-            "has_audio": False,
-        },
-    }
+) -> LeRobotFeatureInfo:
+    return LeRobotFeatureInfo(
+        dtype="video",
+        shape=(int(height), int(width), 3),
+        names=["height", "width", "channels"],
+        video_info=LeRobotVideoInfo(
+            codec=codec,
+            pix_fmt=pix_fmt,
+            is_depth_map=False,
+            fps=int(fps),
+            has_audio=False,
+        ),
+    )
 
 
 @dataclass(slots=True)
@@ -78,7 +79,7 @@ class _CompletedVideoSegment:
 @dataclass(slots=True)
 class _CompletedVideoItem:
     video_key: str
-    feature: dict[str, Any] | None
+    feature: LeRobotFeatureInfo | None
     segment: _CompletedVideoSegment
 
 

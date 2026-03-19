@@ -19,12 +19,12 @@ from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.parquet import ParquetReader
 from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 from refiner.robotics.lerobot_format import (
+    LeRobotInfo,
     LeRobotMetadata,
+    LeRobotStatsFile,
     LeRobotTabular,
+    LeRobotTasks,
     merge_metadata,
-    parse_info_json,
-    parse_stats_json,
-    parse_tasks_rows,
     remap_task_index_table,
 )
 
@@ -35,11 +35,11 @@ _TASKS_PARQUET = "meta/tasks.parquet"
 
 
 class LeRobotEpisodeReader(ParquetReader):
-    """LeRobot reader skeleton built around `refiner.robotics.lerobot_format`.
+    """Read LeRobot episode datasets into `LeRobotTabular` blocks.
 
-    This file is intentionally a clean restart point. Only the public reader
-    surface and the internal method layout live here for now so the design can
-    be reviewed before we wire behavior in.
+    Episode parquet shards are loaded through `ParquetReader`, then hydrated
+    with dataset metadata and per-episode frame tabulars from the corresponding
+    LeRobot dataset roots.
     """
 
     name = "read_lerobot"
@@ -55,10 +55,10 @@ class LeRobotEpisodeReader(ParquetReader):
         arrow_batch_size: int = 65536,
         split_row_groups: bool = True,
     ) -> None:
-        """Create a LeRobot episode reader.
+        """Create a LeRobot episode reader over one or more dataset roots.
 
-        Public constructor should stay very close to the current reader so the
-        rest of the pipeline does not need to change when we swap this in.
+        The shard-planning arguments apply to the episode parquet files under
+        each dataset root's `meta/episodes` directory.
         """
         self.roots = self._resolve_roots(
             inputs,
@@ -128,13 +128,10 @@ class LeRobotEpisodeReader(ParquetReader):
         fs: AbstractFileSystem | None,
         storage_options: Mapping[str, Any] | None,
     ) -> tuple[DataFolder, ...]:
-        """Resolve raw inputs into dataset roots.
+        """Resolve reader inputs into concrete LeRobot dataset roots.
 
-        This should keep the current input flexibility:
-        - single string/path
-        - DataFolder
-        - `(path, fs)` tuples
-        - sequences of the above
+        Inputs may be single paths, `(path, fs)` pairs, `DataFolder`s, or
+        sequences of those values.
         """
         fileset = DataFileSet.resolve(
             inputs,
@@ -151,22 +148,24 @@ class LeRobotEpisodeReader(ParquetReader):
     def _metadata_bundle(
         self,
     ) -> tuple[tuple[LeRobotMetadata, ...], tuple[dict[int, int], ...]]:
+        """Load and merge metadata for all dataset roots once per reader."""
         loaded = [self._load_metadata(root) for root in self.roots]
         return merge_metadata(loaded)
 
     def _load_metadata(self, root: DataFolder) -> LeRobotMetadata:
+        """Load one dataset root's info, stats, and task metadata files."""
         with root.file(_INFO_JSON).open("rb") as handle:
-            info = parse_info_json(json.loads(handle.read()))
+            info = LeRobotInfo.from_json_dict(json.loads(handle.read()))
 
         stats_file = root.file(_STATS_JSON)
         if stats_file.exists():
             with stats_file.open("rb") as handle:
-                stats = parse_stats_json(json.loads(handle.read()))
+                stats = LeRobotStatsFile.from_json_dict(json.loads(handle.read()))
         else:
-            stats = parse_stats_json({})
+            stats = LeRobotStatsFile.from_json_dict({})
 
         with root.file(_TASKS_PARQUET).open("rb") as handle:
-            tasks = parse_tasks_rows(pq.read_table(handle).to_pylist())
+            tasks = LeRobotTasks.from_rows(pq.read_table(handle).to_pylist())
 
         return LeRobotMetadata(info=info, stats=stats, tasks=tasks)
 
@@ -179,6 +178,12 @@ class LeRobotEpisodeReader(ParquetReader):
         metadata: LeRobotMetadata,
         remap: Mapping[int, int],
     ) -> dict[tuple[Any, Any], pa.Table]:
+        """Load one reduced frame table per referenced `(chunk, file)` pair.
+
+        Each table is narrowed to the enclosing dataset-index span needed by
+        the current episode batch and task indices are remapped once at the
+        shared-table level.
+        """
         request_ranges = (
             tabular.table.select(
                 [
@@ -231,6 +236,7 @@ class LeRobotEpisodeReader(ParquetReader):
         chunk: Any,
         file_idx: Any,
     ) -> pa.Table:
+        """Read or reuse the last full frame parquet table for one source file."""
         cache_key = (source_index, chunk, file_idx)
         cached = self._last_frame_table
         if cached is not None and cached[0] == cache_key:
@@ -249,15 +255,26 @@ class LeRobotEpisodeReader(ParquetReader):
         tabular: Tabular,
         frame_tables: Mapping[tuple[Any, Any], pa.Table],
     ) -> pa.Table:
+        """Extract one episode's frame rows from the preloaded shared tables."""
         chunk = self._episode_value(tabular, row_idx, "data/chunk_index")
         file_idx = self._episode_value(tabular, row_idx, "data/file_index")
         from_idx = int(self._episode_value(tabular, row_idx, "dataset_from_index"))
         to_idx = int(self._episode_value(tabular, row_idx, "dataset_to_index"))
-        table = frame_tables[(chunk, file_idx)]
-        return table.filter(
+        table = frame_tables[(chunk, file_idx)].filter(
             (pc.field("index") >= pa.scalar(from_idx, type=pa.int64()))
             & (pc.field("index") < pa.scalar(to_idx, type=pa.int64()))
         )
+        episode_index = int(self._episode_value(tabular, row_idx, "episode_index"))
+        episode_index_column = pa.array(
+            [episode_index] * table.num_rows, type=pa.int64()
+        )
+        if "episode_index" in table.schema.names:
+            return table.set_column(
+                table.schema.get_field_index("episode_index"),
+                "episode_index",
+                episode_index_column,
+            )
+        return table.append_column("episode_index", episode_index_column)
 
     @staticmethod
     def _episode_value(
@@ -265,6 +282,7 @@ class LeRobotEpisodeReader(ParquetReader):
         row_idx: int,
         key: str,
     ) -> Any:
+        """Read one scalar value from an episode batch without row materialization."""
         return tabular.columns[tabular.index_by_name[key]][row_idx].as_py()
 
 

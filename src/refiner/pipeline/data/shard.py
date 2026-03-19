@@ -4,6 +4,8 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+SHARD_ID_COLUMN = "__shard_id"
+
 
 class _HashWriter(Protocol):
     def update(self, data: bytes, /) -> None: ...

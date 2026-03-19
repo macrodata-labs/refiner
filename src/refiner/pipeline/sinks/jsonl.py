@@ -7,15 +7,9 @@ from typing import IO
 import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.tabular import Tabular
-
-from refiner.pipeline.sinks.base import (
-    BaseSink,
-    Block,
-    ShardCounts,
-    describe_datafolder_path,
-    split_block_by_shard,
-)
+from refiner.pipeline.sinks.base import BaseSink
 from refiner.worker.context import get_active_run_handle
 
 
@@ -55,14 +49,11 @@ class JsonlSink(BaseSink):
         for batch in table.to_batches(max_chunksize=4096):
             self._write_rows(shard_id, batch.to_pylist())
 
-    def write_block(self, block: Block) -> ShardCounts:
-        blocks_by_shard, counts = split_block_by_shard(block)
-        for shard_id, shard_block in blocks_by_shard.items():
-            if isinstance(shard_block, Tabular):
-                self._write_table_rows(shard_id, shard_block.table)
-            else:
-                self._write_rows(shard_id, (row.to_dict() for row in shard_block))
-        return counts
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        if isinstance(block, Tabular):
+            self._write_table_rows(shard_id, block.table)
+        else:
+            self._write_rows(shard_id, (row.to_dict() for row in block))
 
     def on_shard_complete(self, shard_id: str) -> None:
         file = self._files.pop(shard_id, None)
@@ -79,7 +70,7 @@ class JsonlSink(BaseSink):
             "write_jsonl",
             "writer",
             {
-                "path": describe_datafolder_path(self.output),
+                "path": self.output.abs_path(),
                 "filename_template": self.filename_template,
             },
         )

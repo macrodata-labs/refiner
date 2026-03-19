@@ -5,9 +5,9 @@ from itertools import count
 
 import pyarrow as pa
 
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.row import ArrowRowView, Row, _OverlayRow
 
-_SHARD_ID_COLUMN = "__shard_id"
 _NEXT_TABULAR_ID = count()
 
 
@@ -20,7 +20,7 @@ class Tabular:
         self.names = tuple(str(name) for name in unit.column_names)
         self.columns = tuple(unit.column(name) for name in self.names)
         self.index_by_name = {name: i for i, name in enumerate(self.names)}
-        self.shard_idx = self.index_by_name.get(_SHARD_ID_COLUMN)
+        self.shard_idx = self.index_by_name.get(SHARD_ID_COLUMN)
 
     @classmethod
     def from_rows(cls, rows: Sequence[Row]) -> "Tabular":
@@ -85,13 +85,13 @@ def _table_from_rows(rows: Sequence[Row]) -> pa.Table:
     seen: set[str] = set()
     for row in rows:
         for name in row:
-            if name == _SHARD_ID_COLUMN or name in seen:
+            if name == SHARD_ID_COLUMN or name in seen:
                 continue
             seen.add(name)
             names.append(name)
     columns = {name: [row.get(name) for row in rows] for name in names}
     if any(row.shard_id is not None for row in rows):
-        columns[_SHARD_ID_COLUMN] = [row.shard_id for row in rows]
+        columns[SHARD_ID_COLUMN] = [row.shard_id for row in rows]
     return pa.table(columns)
 
 
@@ -177,14 +177,14 @@ def _arrow_table_from_group(
     shard_id = rows[0].shard_id
     if shard_id is not None:
         shard_col = pa.array([shard_id] * len(rows), type=pa.string())
-        if _SHARD_ID_COLUMN in table.column_names:
+        if SHARD_ID_COLUMN in table.column_names:
             table = table.set_column(
-                table.column_names.index(_SHARD_ID_COLUMN),
-                _SHARD_ID_COLUMN,
+                table.column_names.index(SHARD_ID_COLUMN),
+                SHARD_ID_COLUMN,
                 shard_col,
             )
         else:
-            table = table.append_column(_SHARD_ID_COLUMN, shard_col)
+            table = table.append_column(SHARD_ID_COLUMN, shard_col)
     return table
 
 

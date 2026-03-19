@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import json
@@ -10,17 +10,17 @@ import pyarrow.parquet as pq
 
 from refiner.execution.tracking.shards import count_block_by_shard
 from refiner.io import DataFolder
-from refiner.pipeline.sinks.base import (
-    BaseSink,
-    Block,
-    ShardCounts,
-    describe_datafolder_path,
-)
+from refiner.pipeline.data.block import Block
+from refiner.pipeline.sinks.base import BaseSink
 
 from refiner.pipeline.sinks.lerobot._lerobot_stats import (
     _aggregate_stats,
     _extract_episode_stats,
     _serialize_stats,
+)
+from refiner.robotics.lerobot_format import (
+    LeRobotInfo,
+    LeRobotTasks,
 )
 from refiner.worker.context import (
     RunHandle,
@@ -40,7 +40,7 @@ class LeRobotMetaReduceSink(BaseSink):
 
     _reduced: bool = False
 
-    def write_block(self, block: Block) -> ShardCounts:
+    def write_block(self, block: Block) -> dict[str, int]:
         counts = count_block_by_shard(block)
         if not self._reduced:
             _LeRobotMetaReducer(config=self.config).reduce()
@@ -57,7 +57,7 @@ class LeRobotMetaReduceSink(BaseSink):
         return (
             "write_lerobot_meta_reduce",
             "writer",
-            {"path": describe_datafolder_path(self.config.output)},
+            {"path": DataFolder.resolve(self.config.output).abs_path()},
         )
 
 
@@ -75,7 +75,7 @@ class _LeRobotMetaReducer:
         if not episodes_rows:
             return
 
-        task_to_index = self._load_stage1_tasks(finalized_chunk_keys)
+        tasks = self._load_stage1_tasks(finalized_chunk_keys)
         stats_list = [
             _extract_episode_stats(row)
             for row in episodes_rows
@@ -98,15 +98,7 @@ class _LeRobotMetaReducer:
                 use_dictionary=True,
             )
 
-        ordered_tasks = sorted(
-            task_to_index.items(), key=lambda item: (item[1], item[0])
-        )
-        tasks_table = pa.Table.from_pydict(
-            {
-                "task": [task for task, _ in ordered_tasks],
-                "task_index": [task_index for _, task_index in ordered_tasks],
-            }
-        )
+        tasks_table = tasks.to_table()
         with self.folder.open("meta/tasks.parquet", mode="wb") as out:
             pq.write_table(
                 tasks_table,
@@ -119,7 +111,8 @@ class _LeRobotMetaReducer:
         with self.folder.open("meta/stats.json", mode="wt", encoding="utf-8") as out:
             json.dump(_serialize_stats(merged_stats), out, indent=2, sort_keys=True)
 
-        info.update(
+        info = replace(
+            info,
             total_episodes=len(episodes_rows),
             total_frames=sum(
                 max(
@@ -128,11 +121,11 @@ class _LeRobotMetaReducer:
                 )
                 for row in episodes_rows
             ),
-            total_tasks=len(task_to_index),
+            total_tasks=len(tasks),
             splits={"train": f"0:{len(episodes_rows)}"},
         )
         with self.folder.open("meta/info.json", mode="wt", encoding="utf-8") as out:
-            json.dump(info, out, indent=2, sort_keys=True)
+            json.dump(info.to_json_dict(), out, indent=2, sort_keys=True)
 
         self._cleanup_stage1_chunks(finalized_chunk_keys)
 
@@ -147,22 +140,22 @@ class _LeRobotMetaReducer:
         rows.sort(key=lambda row: int(row["episode_index"]))
         return rows
 
-    def _load_stage1_tasks(self, finalized_chunk_keys: set[str]) -> dict[str, int]:
-        task_to_index: dict[str, int] | None = None
+    def _load_stage1_tasks(self, finalized_chunk_keys: set[str]) -> LeRobotTasks:
+        tasks: LeRobotTasks | None = None
         for rel in self._iter_stage1_task_files(finalized_chunk_keys):
             with self.folder.open(rel, mode="rb") as src:
                 table = pq.read_table(src)
-            current = {row["task"]: int(row["task_index"]) for row in table.to_pylist()}
-            if task_to_index is not None and current != task_to_index:
+            current = LeRobotTasks.from_rows(table.to_pylist())
+            if tasks is not None and current != tasks:
                 raise ValueError(
                     "LeRobot reduce encountered mismatched canonical task tables "
                     "across stage-1 shard outputs"
                 )
-            task_to_index = current
-        return {} if task_to_index is None else task_to_index
+            tasks = current
+        return LeRobotTasks({}) if tasks is None else tasks
 
-    def _load_stage1_info(self, finalized_chunk_keys: set[str]) -> dict[str, Any]:
-        info: dict[str, Any] | None = None
+    def _load_stage1_info(self, finalized_chunk_keys: set[str]) -> LeRobotInfo:
+        info: LeRobotInfo | None = None
         for rel in self._iter_stage1_jsonl_files(
             finalized_chunk_keys, filename="info.jsonl"
         ):
@@ -175,7 +168,7 @@ class _LeRobotMetaReducer:
             item = json.loads(payloads[0])
             if not isinstance(item, Mapping):
                 raise ValueError("LeRobot reduce encountered invalid stage-1 info")
-            current = dict(item)
+            current = LeRobotInfo.from_json_dict(item)
             if info is not None and current != info:
                 raise ValueError(
                     "LeRobot reduce encountered mismatched stage-1 info metadata"

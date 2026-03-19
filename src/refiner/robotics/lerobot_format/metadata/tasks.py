@@ -25,19 +25,28 @@ class LeRobotTasks(Mapping[int, str]):
     def task_to_index(self) -> dict[str, int]:
         return {task: task_index for task_index, task in self.index_to_task.items()}
 
+    @classmethod
+    def from_rows(cls, rows: Sequence[Mapping[str, Any]]) -> "LeRobotTasks":
+        index_field = (
+            "__index_level_0__" if rows and "__index_level_0__" in rows[0] else "task"
+        )
+        return cls(
+            {
+                int(row["task_index"]): str(row[index_field])
+                for row in rows
+                if row.get("task_index") is not None
+                and isinstance(row.get(index_field), str)
+            }
+        )
 
-def parse_tasks_rows(rows: Sequence[Mapping[str, Any]]) -> LeRobotTasks:
-    index_field = (
-        "__index_level_0__" if rows and "__index_level_0__" in rows[0] else "task"
-    )
-    return LeRobotTasks(
-        {
-            int(row["task_index"]): str(row[index_field])
-            for row in rows
-            if row.get("task_index") is not None
-            and isinstance(row.get(index_field), str)
-        }
-    )
+    def to_table(self) -> pa.Table:
+        ordered_tasks = sorted(self.index_to_task.items())
+        return pa.Table.from_pydict(
+            {
+                "task": [task for _, task in ordered_tasks],
+                "task_index": [task_index for task_index, _ in ordered_tasks],
+            }
+        )
 
 
 def merge_tasks(
@@ -116,6 +125,5 @@ def remap_task_index_table(
 __all__ = [
     "LeRobotTasks",
     "merge_tasks",
-    "parse_tasks_rows",
     "remap_task_index_table",
 ]

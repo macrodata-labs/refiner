@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pyarrow as pa
 
-from refiner.pipeline.data.row import ArrowRowView
+from refiner.pipeline.data.row import Row
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.lerobot._lerobot_stats import _feature_stats
 
 
 def frame_table(
     *,
-    frames: Sequence[Mapping[str, Any]],
+    frames: Sequence[Mapping[str, Any]] | Tabular,
     episode_index: int,
     start_index: int,
     task_index: int | None,
 ) -> pa.Table:
-    table = _rows_to_table(frames)
-    row_count = len(frames)
+    table = frames.table if isinstance(frames, Tabular) else _rows_to_table(frames)
+    row_count = int(table.num_rows)
 
     table = _set_or_append(
         table,
@@ -46,7 +47,7 @@ def frame_table(
 
 def compute_episode_stats(
     *,
-    frames: list[Mapping[str, Any]],
+    frames: Sequence[Mapping[str, Any]] | Tabular,
     video_stats: Mapping[str, dict[str, np.ndarray]] | None = None,
     quantile_bins: int = 5000,
 ) -> dict[str, dict[str, np.ndarray]]:
@@ -57,14 +58,17 @@ def compute_episode_stats(
 
 
 def _frame_stats(
-    frames: list[Mapping[str, Any]],
+    frames: Sequence[Mapping[str, Any]] | Tabular,
     *,
     quantile_bins: int = 5000,
 ) -> dict[str, dict[str, np.ndarray]]:
-    if not frames:
+    if isinstance(frames, Tabular):
+        if frames.num_rows <= 0:
+            return {}
+    elif not frames:
         return {}
 
-    table = _rows_to_table(frames)
+    table = frames.table if isinstance(frames, Tabular) else _rows_to_table(frames)
     if table.num_rows <= 0:
         return {}
 
@@ -89,25 +93,8 @@ def _frame_stats(
 def _rows_to_table(rows: Sequence[Mapping[str, Any]]) -> pa.Table:
     if not rows:
         return pa.table({})
-
-    first = rows[0]
-    arrow_rows = [row for row in rows if isinstance(row, ArrowRowView)]
-    if (
-        isinstance(first, ArrowRowView)
-        and len(arrow_rows) == len(rows)
-        and all(
-            row.names == first.names and row.columns == first.columns
-            for row in arrow_rows
-        )
-    ):
-        take_idx = pa.array([row.row_idx for row in arrow_rows], type=pa.int64())
-        return pa.table(
-            {
-                name: first.columns[first.index_by_name[name]].take(take_idx)
-                for name in first
-            }
-        )
-
+    if all(isinstance(row, Row) for row in rows):
+        return Tabular.from_rows(cast(Sequence[Row], rows)).table
     return pa.Table.from_pylist([dict(row) for row in rows])
 
 
