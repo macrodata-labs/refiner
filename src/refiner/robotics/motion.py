@@ -79,7 +79,7 @@ def motion_trim(
                     continue
                 base_from_ts = value.from_timestamp_s or 0.0
                 updates[key] = VideoFile(
-                    uri=value.uri,
+                    data_file=value.data_file,
                     from_timestamp_s=base_from_ts,
                     to_timestamp_s=base_from_ts,
                 )
@@ -128,7 +128,7 @@ def motion_trim(
             )
 
             updates[key] = VideoFile(
-                uri=value.uri,
+                data_file=value.data_file,
                 from_timestamp_s=trimmed_from_ts,
                 to_timestamp_s=trimmed_to_ts,
             )

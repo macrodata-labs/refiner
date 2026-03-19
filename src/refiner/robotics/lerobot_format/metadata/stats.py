@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
-from typing import TypeAlias
+from dataclasses import dataclass, field
+from typing import Any, TypeAlias
 
 import numpy as np
 import pyarrow as pa
@@ -56,6 +56,12 @@ class LeRobotFeatureStats:
             "q99": self.q99,
         }
 
+    def _require_array(self, field_name: str) -> np.ndarray:
+        value = getattr(self, field_name)
+        if value is None:
+            raise ValueError(f"missing required stats field: {field_name}")
+        return np.asarray(value, dtype=np.float64)
+
 
 @dataclass(frozen=True, slots=True)
 class LeRobotStatsFile(Mapping[str, LeRobotFeatureStats]):
@@ -95,6 +101,172 @@ class LeRobotStatsFile(Mapping[str, LeRobotFeatureStats]):
             feature: feature_stats.to_json_dict()
             for feature, feature_stats in self.items()
         }
+
+    @classmethod
+    def from_flat_fields(cls, row: Mapping[str, Any]) -> "LeRobotStatsFile":
+        features: dict[str, dict[str, StatValue | None]] = {}
+        for key, value in row.items():
+            if not isinstance(key, str) or not key.startswith("stats/"):
+                continue
+            _, feature, stat_name = key.split("/", 2)
+            if isinstance(value, np.ndarray):
+                plain_value: StatValue | None = value.tolist()
+            elif isinstance(value, np.generic):
+                plain_value = value.item()
+            else:
+                plain_value = value
+            features.setdefault(feature, {})[stat_name] = plain_value
+        return cls.from_json_dict(features)
+
+    @classmethod
+    def aggregate(cls, stats_files: list["LeRobotStatsFile"]) -> "LeRobotStatsFile":
+        if not stats_files:
+            return cls({})
+
+        feature_keys = {key for stats_file in stats_files for key in stats_file}
+        out: dict[str, LeRobotFeatureStats] = {}
+        for feature in sorted(feature_keys):
+            items = [
+                stats_file[feature]
+                for stats_file in stats_files
+                if feature in stats_file
+            ]
+            means = np.stack([item._require_array("mean") for item in items])
+            stds = np.stack([item._require_array("std") for item in items])
+            counts = np.stack([item._require_array("count") for item in items])
+            mins = np.stack([item._require_array("min") for item in items])
+            maxs = np.stack([item._require_array("max") for item in items])
+
+            total_count = counts.sum(axis=0)
+            weights = counts.reshape(counts.shape + (1,) * (means.ndim - counts.ndim))
+            total_mean = (means * weights).sum(axis=0) / np.maximum(total_count, 1e-12)
+            total_var = (((stds**2) + ((means - total_mean) ** 2)) * weights).sum(
+                axis=0
+            ) / np.maximum(total_count, 1e-12)
+
+            out_feature: dict[str, StatValue | None] = {
+                "min": np.min(mins, axis=0).tolist(),
+                "max": np.max(maxs, axis=0).tolist(),
+                "mean": total_mean.tolist(),
+                "std": np.sqrt(total_var).tolist(),
+                "count": total_count.tolist(),
+            }
+            for q_key in ("q01", "q10", "q50", "q90", "q99"):
+                quantile_values = [getattr(item, q_key) for item in items]
+                if any(value is None for value in quantile_values):
+                    continue
+                q_vals = np.stack(
+                    [np.asarray(value, dtype=np.float64) for value in quantile_values]
+                )
+                out_feature[q_key] = (
+                    (q_vals * weights).sum(axis=0) / np.maximum(total_count, 1e-12)
+                ).tolist()
+            out[feature] = LeRobotFeatureStats.from_json_dict(out_feature)
+        return cls(out)
+
+    @classmethod
+    def aggregate_flat_table(cls, table: pa.Table) -> "LeRobotStatsFile":
+        features: dict[str, dict[str, pa.ChunkedArray]] = {}
+        for key in table.column_names:
+            if not key.startswith("stats/"):
+                continue
+            _, feature, stat_name = key.split("/", 2)
+            features.setdefault(feature, {})[stat_name] = table.column(key)
+
+        out: dict[str, LeRobotFeatureStats] = {}
+        for feature in sorted(features):
+            columns = features[feature]
+            if not {"min", "max", "mean", "std", "count"}.issubset(columns):
+                continue
+            means = _require_stat_column(columns["mean"], "mean")
+            stds = _require_stat_column(columns["std"], "std")
+            counts = _require_stat_column(columns["count"], "count")
+            mins = _require_stat_column(columns["min"], "min")
+            maxs = _require_stat_column(columns["max"], "max")
+
+            total_count = counts.sum(axis=0)
+            weights = counts.reshape(counts.shape + (1,) * (means.ndim - counts.ndim))
+            total_mean = (means * weights).sum(axis=0) / np.maximum(total_count, 1e-12)
+            total_var = (((stds**2) + ((means - total_mean) ** 2)) * weights).sum(
+                axis=0
+            ) / np.maximum(total_count, 1e-12)
+
+            out_feature: dict[str, StatValue | None] = {
+                "min": np.min(mins, axis=0).tolist(),
+                "max": np.max(maxs, axis=0).tolist(),
+                "mean": total_mean.tolist(),
+                "std": np.sqrt(total_var).tolist(),
+                "count": total_count.tolist(),
+            }
+            for q_key in ("q01", "q10", "q50", "q90", "q99"):
+                column = columns.get(q_key)
+                if column is None:
+                    continue
+                q_vals = _stat_column_array(column)
+                if q_vals is None:
+                    continue
+                out_feature[q_key] = (
+                    (q_vals * weights).sum(axis=0) / np.maximum(total_count, 1e-12)
+                ).tolist()
+            out[feature] = LeRobotFeatureStats.from_json_dict(out_feature)
+        return cls(out)
+
+
+@dataclass(slots=True)
+class LeRobotVideoStatsAccumulator:
+    frame_count: int
+    quantile_bins: int = 5000
+    _tracker: "_RunningQuantileStats" = field(init=False)
+    _sample_stride: int = field(init=False)
+    _sampled_frame_count: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "_tracker",
+            _RunningQuantileStats(
+                quantile_list=list(_DEFAULT_QUANTILES),
+                num_quantile_bins=self.quantile_bins,
+            ),
+        )
+        object.__setattr__(
+            self, "_sample_stride", _estimate_sample_stride(self.frame_count)
+        )
+
+    def observe_rgb_frame(self, frame_index: int, rgb_frame: np.ndarray) -> None:
+        if frame_index % self._sample_stride != 0 or rgb_frame.ndim != 3:
+            return
+        image_chw = np.transpose(rgb_frame, (2, 0, 1))
+        _update_video_stats_tracker(
+            tracker=self._tracker,
+            image_chw=_auto_downsample_height_width(image_chw),
+        )
+        self._sampled_frame_count += 1
+
+    def stats(self) -> LeRobotFeatureStats | None:
+        if self._tracker._count <= 0 or self._sampled_frame_count <= 0:
+            return None
+        stats = self._tracker.get_statistics()
+        normalized: dict[str, np.ndarray] = {}
+        for key, value in stats.items():
+            if key == "count":
+                normalized[key] = np.array([self._sampled_frame_count], dtype=np.int64)
+            else:
+                normalized[key] = (
+                    np.asarray(value, dtype=np.float64).reshape(3, 1, 1) / 255.0
+                )
+        return LeRobotFeatureStats(
+            min=normalized["min"].tolist(),
+            max=normalized["max"].tolist(),
+            mean=normalized["mean"].tolist(),
+            std=normalized["std"].tolist(),
+            count=normalized["count"].tolist(),
+            q01=normalized["q01"].tolist(),
+            q10=normalized["q10"].tolist(),
+            q50=normalized["q50"].tolist(),
+            q90=normalized["q90"].tolist(),
+            q99=normalized["q99"].tolist(),
+        )
 
 
 def compute_feature_stats(array: np.ndarray) -> LeRobotFeatureStats:
@@ -217,6 +389,63 @@ def _stack_numeric_values(values: list[object]) -> np.ndarray | None:
     if any(array.shape != shape for array in arrays):
         return None
     return np.stack(arrays, axis=0)
+
+
+def _require_stat_column(column: pa.ChunkedArray, name: str) -> np.ndarray:
+    values = _stat_column_array(column)
+    if values is None:
+        raise ValueError(f"LeRobot stats column is not numeric: {name}")
+    return values
+
+
+def _stat_column_array(column: pa.ChunkedArray) -> np.ndarray | None:
+    numeric = _numeric_column(column)
+    if numeric is not None:
+        return numeric
+    return _stack_numeric_values(column.to_pylist())
+
+
+def _estimate_num_samples(
+    data_len: int,
+    *,
+    min_num_samples: int = 100,
+    max_num_samples: int = 10_000,
+    power: float = 0.75,
+) -> int:
+    if data_len < min_num_samples:
+        min_num_samples = data_len
+    return max(min_num_samples, min(int(data_len**power), max_num_samples))
+
+
+def _estimate_sample_stride(frame_count: int) -> int:
+    if frame_count <= 1:
+        return 1
+    target_samples = _estimate_num_samples(frame_count)
+    return max(1, (frame_count + target_samples - 1) // target_samples)
+
+
+def _update_video_stats_tracker(
+    *,
+    tracker: "_RunningQuantileStats",
+    image_chw: np.ndarray,
+) -> None:
+    if image_chw.ndim != 3:
+        return
+    pixels = np.transpose(image_chw, (1, 2, 0)).reshape(-1, image_chw.shape[0])
+    tracker.update(pixels)
+
+
+def _auto_downsample_height_width(
+    image_chw: np.ndarray,
+    *,
+    target_size: int = 150,
+    max_size_threshold: int = 300,
+) -> np.ndarray:
+    _, height, width = image_chw.shape
+    if max(width, height) < max_size_threshold:
+        return image_chw
+    factor = max(1, int((width if width > height else height) / target_size))
+    return image_chw[:, ::factor, ::factor]
 
 
 @dataclass(slots=True)
@@ -400,6 +629,7 @@ __all__ = [
     "compute_table_stats",
     "LeRobotFeatureStats",
     "LeRobotStatsFile",
+    "LeRobotVideoStatsAccumulator",
     "StatValue",
     "compute_feature_stats",
 ]

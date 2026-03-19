@@ -1,7 +1,7 @@
 import refiner.robotics as robotics
 from refiner.io import DataFile, DataFileSet, DataFolder
 from refiner.launchers import LaunchStats, LocalLauncher
-from refiner.media import MediaFile, VideoFile
+from refiner.media import VideoFile
 from refiner.pipeline import (
     RefinerPipeline,
     Row,
@@ -15,7 +15,6 @@ from refiner.pipeline import (
     task,
 )
 from refiner.pipeline.expressions import coalesce, col, if_else, lit
-from refiner.pipeline.sinks.lerobot import LeRobotStatsConfig, LeRobotVideoConfig
 from refiner.worker.metrics.api import (
     log_gauge,
     log_gauges,
@@ -50,10 +49,7 @@ __all__ = [
     "lit",
     "coalesce",
     "if_else",
-    "MediaFile",
     "VideoFile",
     "Video",
-    "LeRobotVideoConfig",
-    "LeRobotStatsConfig",
     "robotics",
 ]

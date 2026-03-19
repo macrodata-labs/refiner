@@ -14,7 +14,7 @@ from refiner.io import DataFolder
 from refiner.io.datafolder import DataFolderLike
 from refiner.io.fileset import DataFileSet
 from refiner.pipeline.data.shard import FilePartsDescriptor, Shard
-from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.parquet import ParquetReader
 from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
@@ -268,13 +268,7 @@ class LeRobotEpisodeReader(ParquetReader):
         episode_index_column = pa.array(
             [episode_index] * table.num_rows, type=pa.int64()
         )
-        if "episode_index" in table.schema.names:
-            return table.set_column(
-                table.schema.get_field_index("episode_index"),
-                "episode_index",
-                episode_index_column,
-            )
-        return table.append_column("episode_index", episode_index_column)
+        return set_or_append_column(table, "episode_index", episode_index_column)
 
     @staticmethod
     def _episode_value(

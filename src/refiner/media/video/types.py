@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import IO
 
 from refiner.io import DataFile
-from refiner.media.types import MediaFile
 
 
 @dataclass(frozen=True, slots=True)
-class VideoFile(MediaFile):
-    uri: str
+class VideoFile:
+    data_file: DataFile
     from_timestamp_s: float | None = None
     to_timestamp_s: float | None = None
-    _data_file: DataFile = field(init=False, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "_data_file", DataFile.resolve(self.uri))
+    @property
+    def uri(self) -> str:
+        return str(self.data_file)
+
+    def open(self, mode: str = "rb") -> IO[bytes]:
+        return self.data_file.open(mode=mode)
 
 
 __all__ = ["VideoFile"]

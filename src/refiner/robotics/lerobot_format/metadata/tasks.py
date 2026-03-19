@@ -39,6 +39,28 @@ class LeRobotTasks(Mapping[int, str]):
             }
         )
 
+    @classmethod
+    def from_table(cls, table: pa.Table) -> "LeRobotTasks":
+        index_field = (
+            "__index_level_0__" if "__index_level_0__" in table.column_names else "task"
+        )
+        if (
+            "task_index" not in table.column_names
+            or index_field not in table.column_names
+        ):
+            return cls({})
+        return cls(
+            {
+                int(task_index): str(task_name)
+                for task_index, task_name in zip(
+                    table.column("task_index").to_pylist(),
+                    table.column(index_field).to_pylist(),
+                    strict=True,
+                )
+                if task_index is not None and isinstance(task_name, str)
+            }
+        )
+
     def to_table(self) -> pa.Table:
         ordered_tasks = sorted(self.index_to_task.items())
         return pa.Table.from_pydict(

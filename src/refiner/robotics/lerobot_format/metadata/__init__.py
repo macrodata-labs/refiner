@@ -12,6 +12,7 @@ from refiner.robotics.lerobot_format.metadata.metadata import (
 from refiner.robotics.lerobot_format.metadata.stats import (
     LeRobotFeatureStats,
     LeRobotStatsFile,
+    LeRobotVideoStatsAccumulator,
     compute_feature_stats,
     compute_table_stats,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "LeRobotInfo",
     "LeRobotMetadata",
     "LeRobotStatsFile",
+    "LeRobotVideoStatsAccumulator",
     "LeRobotTasks",
     "LeRobotVideoInfo",
     "compute_feature_stats",

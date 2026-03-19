@@ -102,6 +102,7 @@ class LeRobotInfo:
     video_path: str = DEFAULT_VIDEO_PATH
     features: Mapping[str, LeRobotFeatureInfo] = field(default_factory=dict)
     splits: Mapping[str, str] = field(default_factory=dict)
+    episode_ids_in_sync: bool = True
 
     @property
     def video_keys(self) -> tuple[str, ...]:
@@ -168,6 +169,7 @@ class LeRobotInfo:
                 for key, value in payload.get("splits", {}).items()
                 if isinstance(key, str) and value is not None
             },
+            episode_ids_in_sync=bool(payload.get("episode_ids_in_sync", True)),
         )
 
     def to_json_dict(self) -> dict[str, Any]:
@@ -187,6 +189,7 @@ class LeRobotInfo:
                 key: feature.to_json_dict() for key, feature in self.features.items()
             },
             "splits": dict(self.splits),
+            "episode_ids_in_sync": self.episode_ids_in_sync,
         }
 
 

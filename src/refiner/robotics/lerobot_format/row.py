@@ -76,12 +76,19 @@ class LeRobotStatsView(Mapping[str, LeRobotFeatureStats]):
 
     def __getitem__(self, feature: str) -> LeRobotFeatureStats:
         prefix = f"stats/{feature}/"
+        if not any(key.startswith(prefix) for key in self._row):
+            raise KeyError(feature)
         return LeRobotFeatureStats(
             min=self._row.get(f"{prefix}min"),
             max=self._row.get(f"{prefix}max"),
             mean=self._row.get(f"{prefix}mean"),
             std=self._row.get(f"{prefix}std"),
             count=self._row.get(f"{prefix}count"),
+            q01=self._row.get(f"{prefix}q01"),
+            q10=self._row.get(f"{prefix}q10"),
+            q50=self._row.get(f"{prefix}q50"),
+            q90=self._row.get(f"{prefix}q90"),
+            q99=self._row.get(f"{prefix}q99"),
         )
 
     def __iter__(self) -> Iterator[str]:
@@ -182,8 +189,10 @@ class LeRobotRow(Row):
         if to_timestamp is None:
             raise KeyError(key)
         from_timestamp = self._row.get(f"videos/{key}/from_timestamp")
+        if self.root is None:
+            raise KeyError(key)
         return VideoFile(
-            uri=str(uri),
+            data_file=self.root.file(str(uri)),
             from_timestamp_s=float(from_timestamp)
             if from_timestamp is not None
             else 0.0,
@@ -193,17 +202,12 @@ class LeRobotRow(Row):
     def _build_default_video_uri(self, key: str) -> str:
         chunk = self._row.get(f"videos/{key}/chunk_index")
         file_idx = self._row.get(f"videos/{key}/file_index")
-        root = self.root
-        if chunk is None or file_idx is None or root is None:
+        if chunk is None or file_idx is None or self.root is None:
             raise KeyError(key)
-        return str(
-            root.abs_paths(
-                DEFAULT_VIDEO_PATH.format(
-                    video_key=key,
-                    chunk_index=chunk,
-                    file_index=file_idx,
-                )
-            )
+        return DEFAULT_VIDEO_PATH.format(
+            video_key=key,
+            chunk_index=chunk,
+            file_index=file_idx,
         )
 
     @property

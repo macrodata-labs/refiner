@@ -12,18 +12,13 @@ import pyarrow.parquet as pq
 import pytest
 
 import refiner as mdr
-from refiner.pipeline import (
-    LeRobotStatsConfig as PipelineLeRobotStatsConfig,
-)
-from refiner.pipeline import (
-    LeRobotVideoConfig as PipelineLeRobotVideoConfig,
-)
+from refiner.io import DataFolder
+from refiner.media.video.remux import reset_opened_video_source_cache
+from refiner.media.video.transcode import VideoTranscodeConfig
+from refiner.media.video.writer import VideoStreamWriter
 from refiner.pipeline.data.row import DictRow
-from refiner.pipeline.sinks.lerobot import (
-    LeRobotMetaReduceSink,
-    LeRobotWriterConfig,
-    LeRobotWriterSink,
-)
+from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
+from refiner.pipeline.sinks.lerobot_reducer import LeRobotMetaReduceSink
 from refiner.robotics.lerobot_format import (
     LEROBOT_TASKS,
     LeRobotInfo,
@@ -31,13 +26,7 @@ from refiner.robotics.lerobot_format import (
     LeRobotStatsFile,
     LeRobotTasks,
 )
-from refiner.pipeline.sinks.lerobot._lerobot_video_transcode import (
-    _estimate_sample_stride,
-)
-from refiner.pipeline.sinks.lerobot._lerobot_video_remux import (
-    reset_opened_video_source_cache,
-)
-from refiner.pipeline.sinks.lerobot._lerobot_video_writer import LeRobotVideoWriter
+from refiner.robotics.lerobot_format.metadata.stats import _estimate_sample_stride
 from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.lifecycle import RuntimeLifecycle
@@ -189,12 +178,6 @@ def _dummy_video_stats(*, count: int) -> dict[str, np.ndarray]:
     }
 
 
-def test_lerobot_configs_export_from_pipeline() -> None:
-    assert PipelineLeRobotVideoConfig is mdr.LeRobotVideoConfig
-    assert PipelineLeRobotStatsConfig is mdr.LeRobotStatsConfig
-    assert mdr.LeRobotStatsConfig().quantile_bins == 5000
-
-
 def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     src_video = tmp_path / "source" / "episode.mp4"
     _write_video(src_video)
@@ -269,7 +252,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     assert stats_json["observation.images.main"]["count"] == [expected_video_count]
 
     out_rows = mdr.read_lerobot(str(out_root)).materialize()
-    assert [row["task"] for row in out_rows] == ["pick", "place"]
+    assert sorted(row["task"] for row in out_rows) == ["pick", "place"]
 
 
 def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> None:
@@ -345,7 +328,7 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
         dst.write(src.read())
 
     remux_module = __import__(
-        "refiner.pipeline.sinks.lerobot._lerobot_video_remux",
+        "refiner.media.video.remux",
         fromlist=["av"],
     )
     original_av_open = remux_module.av.open
@@ -359,31 +342,25 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
 
     monkeypatch.setattr(remux_module.av, "open", _counting_av_open)
 
-    writer = LeRobotVideoWriter(
-        folder=mdr.DataFolder.resolve(str(tmp_path / "out")),
-        chunk_key="000",
-        video_key="observation.images.main",
-        video_config=mdr.LeRobotVideoConfig(),
-        stats_config=mdr.LeRobotStatsConfig(),
+    writer = VideoStreamWriter(
+        folder=DataFolder.resolve(str(tmp_path / "out")),
+        stream_key="observation.images.main",
+        transcode_config=VideoTranscodeConfig(),
         video_bytes_limit=1024 * 1024,
+        output_rel_template="videos/{stream_key}/chunk-{chunk_index}/file-{file_index:03d}.mp4",
+        output_context={"chunk_index": "000"},
     )
     asyncio.run(
         writer.write_video(
             mdr.VideoFile(uri, from_timestamp_s=0.0, to_timestamp_s=0.3),
-            episode_index=0,
-            frame_count=3,
-            source_stats=_dummy_video_stats(count=3),
         )
     )
     asyncio.run(
         writer.write_video(
             mdr.VideoFile(uri, from_timestamp_s=0.3, to_timestamp_s=0.6),
-            episode_index=1,
-            frame_count=3,
-            source_stats=_dummy_video_stats(count=3),
         )
     )
-    writer.finalize()
+    writer.close()
 
     assert read_open_calls == 1
 
@@ -415,7 +392,7 @@ def test_write_lerobot_force_recompute_video_stats_ignores_source_video_stats(
         mdr.from_items([row])
         .write_lerobot(
             str(out_root),
-            stats_config=mdr.LeRobotStatsConfig(force_recompute_video_stats=True),
+            force_recompute_video_stats=True,
         )
         .launch_local(
             name="lerobot-force-recompute-video-stats",
@@ -473,8 +450,8 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
     ).write_lerobot(
         str(out_root),
         video_files_size_in_mb=1,
-        video_config=mdr.LeRobotVideoConfig(encoder_threads=1, decoder_threads=1),
-        stats_config=mdr.LeRobotStatsConfig(quantile_bins=64),
+        transencoding_threads=1,
+        quantile_bins=64,
     )
 
     stats = pipeline.launch_local(
@@ -557,7 +534,7 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
 
 
 def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> None:
-    writer = LeRobotWriterSink(LeRobotWriterConfig(output=str(tmp_path / "out")))
+    writer = LeRobotWriterSink(str(tmp_path / "out"))
     with pytest.raises(
         KeyError,
         match="7",
@@ -604,7 +581,6 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
     tmp_path: Path,
 ) -> None:
     out_root = tmp_path / "cleanup"
-    config = LeRobotWriterConfig(output=str(out_root))
     row = DictRow(
         {
             "episode_index": 0,
@@ -630,7 +606,7 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
     )
 
     for worker_id, values in [("1", [1.0, 2.0]), ("2", [9.0, 10.0])]:
-        writer = LeRobotWriterSink(config)
+        writer = LeRobotWriterSink(str(out_root))
         runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
         worker_row = row.update(
             {
@@ -657,7 +633,7 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
             writer.write_block([worker_row])
             writer.on_shard_complete("shard-1")
 
-    reducer = LeRobotMetaReduceSink(config=config)
+    reducer = LeRobotMetaReduceSink(output=str(out_root))
     runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
     with set_active_run_context(
         run_handle=RunHandle(job_id="job", stage_index=1, worker_id="local"),

@@ -79,6 +79,16 @@ class Tabular:
         return Tabular(table)
 
 
+def set_or_append_column(
+    table: pa.Table,
+    name: str,
+    column: pa.Array | pa.ChunkedArray,
+) -> pa.Table:
+    if name in table.column_names:
+        return table.set_column(table.column_names.index(name), name, column)
+    return table.append_column(name, column)
+
+
 # everything below is for fast from_rows
 def _table_from_rows(rows: Sequence[Row]) -> pa.Table:
     names: list[str] = []
@@ -169,22 +179,12 @@ def _arrow_table_from_group(
         for idx, value in changes:
             values[idx] = value
         column = pa.array(values, type=value_type)
-        if name in table.column_names:
-            table = table.set_column(table.column_names.index(name), name, column)
-        else:
-            table = table.append_column(name, column)
+        table = set_or_append_column(table, name, column)
 
     shard_id = rows[0].shard_id
     if shard_id is not None:
         shard_col = pa.array([shard_id] * len(rows), type=pa.string())
-        if SHARD_ID_COLUMN in table.column_names:
-            table = table.set_column(
-                table.column_names.index(SHARD_ID_COLUMN),
-                SHARD_ID_COLUMN,
-                shard_col,
-            )
-        else:
-            table = table.append_column(SHARD_ID_COLUMN, shard_col)
+        table = set_or_append_column(table, SHARD_ID_COLUMN, shard_col)
     return table
 
 

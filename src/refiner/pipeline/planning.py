@@ -405,7 +405,8 @@ def plan_pipeline_stages(
         raise ValueError("default_num_workers must be > 0")
 
     from refiner.pipeline.pipeline import RefinerPipeline
-    from refiner.pipeline.sinks.lerobot import LeRobotMetaReduceSink, LeRobotWriterSink
+    from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
+    from refiner.pipeline.sinks.lerobot_reducer import LeRobotMetaReduceSink
     from refiner.pipeline.sources.task import TaskSource
 
     if isinstance(pipeline.sink, LeRobotWriterSink):
@@ -413,7 +414,7 @@ def plan_pipeline_stages(
             source=TaskSource(num_tasks=1),
             pipeline_steps=(),
             max_vectorized_block_bytes=pipeline.max_vectorized_block_bytes,
-            sink=LeRobotMetaReduceSink(config=pipeline.sink.config),
+            sink=LeRobotMetaReduceSink(output=pipeline.sink.output),
         )
         return [
             PlannedStage(
