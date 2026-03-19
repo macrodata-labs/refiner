@@ -11,6 +11,7 @@ from fsspec import AbstractFileSystem
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor
 from refiner.pipeline.data.row import DictRow
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -117,7 +118,7 @@ class CsvReader(BaseReader):
         source = self.fileset.resolve_file(part.source_index, part.path)
         if part.end == -1:
             # Whole-file read (e.g. compressed/non-splittable): let Arrow parse
-            # directly and stream RecordBatch objects downstream.
+            # directly and stream tabular chunks downstream.
             with source.open(
                 mode="rb",
                 compression="infer",
@@ -133,7 +134,7 @@ class CsvReader(BaseReader):
                     ),
                 )
                 for batch in reader:
-                    yield batch
+                    yield Tabular.from_batch(batch)
             return
 
         bounded = self._bounded_part(part)
@@ -161,7 +162,7 @@ class CsvReader(BaseReader):
             ),
         )
         for batch in reader:
-            yield batch
+            yield Tabular.from_batch(batch)
 
     def _read_shard_python(self, part: FilePart) -> Iterator[SourceUnit]:
         source = self.fileset.resolve_file(part.source_index, part.path)

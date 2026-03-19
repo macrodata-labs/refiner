@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import pyarrow as pa
 
-from refiner.pipeline.data.block import TabularBlock
+from refiner.pipeline.data.block import Block, StreamItem
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.steps import RefinerStep, VectorizedOp, VectorizedSegmentStep
 from refiner.execution.buffer import RowBuffer
 from refiner.execution.operators.row import ShardDeltaFn, execute_row_steps
@@ -31,8 +33,6 @@ class VectorSegment:
 
 
 Segment = RowSegment | VectorSegment
-Block = list[Row] | TabularBlock
-StreamItem = Row | list[Row] | TabularBlock | pa.Table | pa.RecordBatch
 
 
 def compile_segments(steps: Sequence[RefinerStep]) -> tuple[Segment, ...]:
@@ -95,11 +95,8 @@ def iter_rows(stream: Iterable[StreamItem]) -> Iterator[Row]:
         if isinstance(item, list):
             yield from item
             continue
-        if isinstance(item, TabularBlock):
-            yield from item.iter_rows()
-            continue
-        if isinstance(item, (pa.Table, pa.RecordBatch)):
-            yield from TabularBlock(item.to_table()).iter_rows()
+        if isinstance(item, Tabular):
+            yield from item.to_rows()
             continue
         raise TypeError(f"Unsupported stream item: {type(item)!r}")
 
@@ -109,10 +106,8 @@ def block_num_rows(item: StreamItem) -> int:
         return 1
     if isinstance(item, list):
         return len(item)
-    if isinstance(item, TabularBlock):
-        return int(item.table.num_rows)
-    if isinstance(item, (pa.Table, pa.RecordBatch)):
-        return int(item.num_rows)
+    if isinstance(item, Tabular):
+        return item.num_rows
     raise TypeError(f"Unsupported stream item: {type(item)!r}")
 
 
@@ -144,19 +139,9 @@ def _normalize_blocks(
                 yield item
             continue
 
-        if isinstance(item, TabularBlock):
-            if item.table.num_rows > 0:
+        if isinstance(item, Tabular):
+            if item.num_rows > 0:
                 yield item
-            continue
-
-        if isinstance(item, pa.RecordBatch):
-            if item.num_rows > 0:
-                yield TabularBlock(item.to_table())
-            continue
-
-        if isinstance(item, pa.Table):
-            if item.num_rows > 0:
-                yield TabularBlock(item)
             continue
 
         raise TypeError(f"Unsupported stream item: {type(item)!r}")
@@ -194,18 +179,18 @@ def _execute_vector_segment(
     vectorized_chunk_rows: int,
     max_vectorized_block_bytes: int | None,
     on_shard_delta: ShardDeltaFn | None,
-) -> Iterator[TabularBlock]:
+) -> Iterator[Tabular]:
     pending_rows = RowBuffer()
     current_chunk_rows = max(1, int(vectorized_chunk_rows))
     estimated_row_bytes: float | None = None
 
-    def _run_block(block: TabularBlock) -> TabularBlock:
+    def _run_block(block: Tabular) -> Tabular:
         out = block
         for op in ops:
             out = apply_vectorized_op(out, op)
         return out
 
-    def _emit_tabular_delta(*, produced: TabularBlock, consumed: TabularBlock) -> None:
+    def _emit_tabular_delta(*, produced: Tabular, consumed: Tabular) -> None:
         if on_shard_delta is None:
             return
         delta = counts_delta(
@@ -225,7 +210,7 @@ def _execute_vector_segment(
         budget_rows = int(max_vectorized_block_bytes / estimated_row_bytes)
         return max(1, min(current_chunk_rows, budget_rows))
 
-    def _run_pending_chunk(target_rows: int) -> Iterator[TabularBlock]:
+    def _run_pending_chunk(target_rows: int) -> Iterator[Tabular]:
         nonlocal current_chunk_rows, estimated_row_bytes
         rows_for_try = max(1, target_rows)
         while True:
@@ -271,16 +256,16 @@ def _execute_vector_segment(
                 yield out
             return
 
-    def _drain_rows(*, force: bool) -> Iterator[TabularBlock]:
+    def _drain_rows(*, force: bool) -> Iterator[Tabular]:
         while len(pending_rows) > 0:
             desired_rows = _chunk_rows_for_budget()
             if not force and len(pending_rows) < desired_rows:
                 return
             yield from _run_pending_chunk(min(len(pending_rows), desired_rows))
 
-    def _yield_tabular_chunks(block: TabularBlock) -> Iterator[TabularBlock]:
+    def _yield_tabular_chunks(block: Tabular) -> Iterator[Tabular]:
         nonlocal current_chunk_rows, estimated_row_bytes
-        queue: deque[TabularBlock] = deque([block])
+        queue: deque[Tabular] = deque([block])
         while queue:
             chunk = queue.popleft()
             chunk_rows = int(chunk.table.num_rows)
@@ -323,8 +308,9 @@ def _execute_vector_segment(
                 yield out
 
     for item in stream:
-        if isinstance(item, list):
-            pending_rows.extend(item)
+        if not isinstance(item, Tabular):
+            row_block = cast(list[Row], item)
+            pending_rows.extend(row_block)
             yield from _drain_rows(force=False)
             continue
 

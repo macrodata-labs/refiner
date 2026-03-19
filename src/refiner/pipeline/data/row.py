@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from typing import Any
+
+import pyarrow as pa
+
+if TYPE_CHECKING:
+    from refiner.pipeline.data.tabular import Tabular
 
 _MISSING = object()
 _SHARD_ID_KEY = "__shard_id"
@@ -36,6 +42,12 @@ class Row(Mapping[str, Any]):
         if self.shard_id is None:
             raise ValueError("row is missing shard_id")
         return self.shard_id
+
+    @property
+    def tabular_type(self) -> type["Tabular"]:
+        from refiner.pipeline.data.tabular import Tabular
+
+        return Tabular
 
     def update(self, patch: Mapping[str, Any] | None = None, /, **kwargs: Any) -> "Row":
         """Return a new Row with the given updates applied (immutable).
@@ -187,7 +199,7 @@ class DictRow(Row):
 
 @dataclass(frozen=True, slots=True)
 class ArrowRowView(Row):
-    """A lightweight view over an Arrow RecordBatch/Table row.
+    """A lightweight view over an Arrow table row.
 
     Notes:
         - `columns` should yield Arrow arrays with __getitem__ returning Arrow Scalars.
@@ -198,6 +210,8 @@ class ArrowRowView(Row):
     columns: tuple[Any, ...]
     index_by_name: Mapping[str, int]
     row_idx: int
+    table: pa.Table | None = None
+    tabular_id: int | None = None
     shard_id: str | None = None
 
     def __getitem__(self, key: str) -> Any:

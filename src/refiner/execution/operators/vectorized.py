@@ -5,7 +5,7 @@ from collections.abc import Iterable
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from refiner.pipeline.data.block import TabularBlock
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.expressions import eval_expr_arrow
 from refiner.pipeline.steps import (
     CastStep,
@@ -19,12 +19,14 @@ from refiner.pipeline.steps import (
 from refiner.pipeline.data.row import Row
 
 
-def rows_to_block(rows: Iterable[Row]) -> TabularBlock:
+def rows_to_block(rows: Iterable[Row]) -> Tabular:
     materialized = list(rows)
-    return TabularBlock.from_rows(materialized)
+    if not materialized:
+        return Tabular.from_rows(materialized)
+    return materialized[0].tabular_type.from_rows(materialized)
 
 
-def apply_vectorized_op(block: TabularBlock, op: VectorizedOp) -> TabularBlock:
+def apply_vectorized_op(block: Tabular, op: VectorizedOp) -> Tabular:
     table = block.table
     if isinstance(op, SelectStep):
         return block.with_table(table.select(list(op.columns)))
@@ -79,7 +81,7 @@ def _broadcast_scalar(
 
 
 __all__ = [
-    "TabularBlock",
+    "Tabular",
     "rows_to_block",
     "apply_vectorized_op",
 ]

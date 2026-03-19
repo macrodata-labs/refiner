@@ -5,7 +5,7 @@ import pyarrow.parquet as pq
 
 from refiner.execution.tracking.shards import SHARD_ID_COLUMN
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.pipeline.data.block import TabularBlock
+from refiner.pipeline.data.tabular import Tabular
 
 from refiner.pipeline.sinks.base import (
     BaseSink,
@@ -50,8 +50,8 @@ class ParquetSink(BaseSink):
         for shard_id, shard_block in blocks_by_shard.items():
             table = (
                 shard_block.table
-                if isinstance(shard_block, TabularBlock)
-                else TabularBlock.from_rows(shard_block).table
+                if isinstance(shard_block, Tabular)
+                else shard_block[0].tabular_type.from_rows(shard_block).table
             )
             if SHARD_ID_COLUMN in table.schema.names:
                 table = table.drop_columns([SHARD_ID_COLUMN])

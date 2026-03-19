@@ -7,7 +7,7 @@ from typing import IO
 import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.pipeline.data.block import TabularBlock
+from refiner.pipeline.data.tabular import Tabular
 
 from refiner.pipeline.sinks.base import (
     BaseSink,
@@ -58,7 +58,7 @@ class JsonlSink(BaseSink):
     def write_block(self, block: Block) -> ShardCounts:
         blocks_by_shard, counts = split_block_by_shard(block)
         for shard_id, shard_block in blocks_by_shard.items():
-            if isinstance(shard_block, TabularBlock):
+            if isinstance(shard_block, Tabular):
                 self._write_table_rows(shard_id, shard_block.table)
             else:
                 self._write_rows(shard_id, (row.to_dict() for row in shard_block))

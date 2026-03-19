@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any
+from typing import cast
 
 import pyarrow as pa
 
 from refiner.execution.tracking.shards import SHARD_ID_COLUMN, count_block_by_shard
 from refiner.io.datafolder import DataFolder
-from refiner.pipeline.data.block import TabularBlock
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.data.row import Row
 
-Block = list[Row] | TabularBlock
-ShardedBlock = list[Row] | TabularBlock
+Block = list[Row] | Tabular
+ShardedBlock = list[Row] | Tabular
 ShardCounts = dict[str, int]
 
 
@@ -41,10 +42,11 @@ def describe_datafolder_path(value: Any) -> str:
 
 
 def split_block_by_shard(block: Block) -> tuple[dict[str, ShardedBlock], ShardCounts]:
-    if isinstance(block, list):
+    if not isinstance(block, Tabular):
         rows_by_shard: dict[str, list[Row]] = {}
         counts: ShardCounts = {}
-        for row in block:
+        row_block = cast(list[Row], block)
+        for row in row_block:
             shard_id = row.require_shard_id()
             rows_by_shard.setdefault(shard_id, []).append(row)
             counts[shard_id] = counts.get(shard_id, 0) + 1
@@ -61,7 +63,7 @@ def split_block_by_shard(block: Block) -> tuple[dict[str, ShardedBlock], ShardCo
         shard_indices.setdefault(shard_id, []).append(idx)
 
     data_table = table.drop_columns([SHARD_ID_COLUMN])
-    tables_by_shard: dict[str, TabularBlock] = {}
+    tables_by_shard: dict[str, Tabular] = {}
     counts: ShardCounts = {}
     for shard_id, indices in shard_indices.items():
         counts[shard_id] = len(indices)

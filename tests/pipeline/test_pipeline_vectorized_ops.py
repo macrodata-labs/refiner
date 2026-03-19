@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pyarrow as pa
 import pytest
 
-from refiner.pipeline.data.block import TabularBlock
+from refiner.pipeline.data.tabular import Tabular
 import refiner.pipeline.pipeline as pipeline_module
 import refiner.execution.engine as engine_module
 from refiner.pipeline import from_items
@@ -73,7 +73,7 @@ def test_execute_blocks_keeps_arrow_for_vectorized_segment() -> None:
     pipeline = from_items([{"x": 1}, {"x": 2}]).with_column("y", col("x") + 1)
     blocks = list(pipeline.execute(pipeline.source.read()))
     assert blocks
-    tabular_blocks = [block for block in blocks if isinstance(block, TabularBlock)]
+    tabular_blocks = [block for block in blocks if isinstance(block, Tabular)]
     assert len(tabular_blocks) == len(blocks)
     assert sum(int(block.table.num_rows) for block in tabular_blocks) == 2
 
@@ -87,7 +87,7 @@ def test_execute_blocks_switches_back_to_arrow_after_row_segment() -> None:
     )
     blocks = list(pipeline.execute(pipeline.source.read()))
     assert blocks
-    tabular_blocks = [block for block in blocks if isinstance(block, TabularBlock)]
+    tabular_blocks = [block for block in blocks if isinstance(block, Tabular)]
     assert len(tabular_blocks) == len(blocks)
     assert sum(int(block.table.num_rows) for block in tabular_blocks) == 2
 
@@ -118,7 +118,7 @@ def test_max_vectorized_block_bytes_can_force_smaller_blocks() -> None:
     )
     blocks = list(pipeline.execute(pipeline.source.read()))
     assert blocks
-    tabular_blocks = [block for block in blocks if isinstance(block, TabularBlock)]
+    tabular_blocks = [block for block in blocks if isinstance(block, Tabular)]
     assert len(tabular_blocks) == len(blocks)
     assert all(int(block.table.num_rows) <= 1 for block in tabular_blocks)
 

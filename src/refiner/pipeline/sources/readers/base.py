@@ -256,7 +256,7 @@ class BaseReader(BaseSource):
         Contract:
             - Must accept shards returned by `list_shards()`.
             - Should be safe to call sequentially (single-worker, no concurrent calls).
-            - Units can be `Row` or Arrow tabular blocks (`RecordBatch`/`Table`).
+            - Units can be `Row` or `Tabular`.
         """
         raise NotImplementedError
 

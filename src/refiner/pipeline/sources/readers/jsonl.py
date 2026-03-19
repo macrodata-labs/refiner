@@ -8,6 +8,7 @@ import pyarrow.json as pa_json
 
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.shard import FilePartsDescriptor
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -69,7 +70,7 @@ class JsonlReader(BaseReader):
                         ),
                     )
                     for batch in reader:
-                        yield batch
+                        yield Tabular.from_batch(batch)
                 continue
 
             aligned = self._open_aligned_byte_span(part)
@@ -81,7 +82,7 @@ class JsonlReader(BaseReader):
                 read_options=pa_json.ReadOptions(use_threads=self.parse_use_threads),
             )
             for batch in reader:
-                yield batch
+                yield Tabular.from_batch(batch)
 
 
 __all__ = ["JsonlReader"]

@@ -6,13 +6,13 @@ from typing import Any, TypeAlias
 
 import pyarrow as pa
 
-from refiner.pipeline.data.block import TabularBlock
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import Shard
 from refiner.worker.metrics.api import log_throughput
 
 _INTERNAL_SHARD_ID_KEY = "__shard_id"
-SourceUnit: TypeAlias = Row | TabularBlock | pa.Table | pa.RecordBatch
+SourceUnit: TypeAlias = Row | Tabular
 
 
 class BaseSource(ABC):
@@ -50,11 +50,7 @@ __all__ = ["BaseSource"]
 def _unit_num_rows(unit: SourceUnit) -> int:
     if isinstance(unit, Row):
         return 1
-    if isinstance(unit, TabularBlock):
-        return int(unit.table.num_rows)
-    if isinstance(unit, pa.RecordBatch):
-        return int(unit.num_rows)
-    if isinstance(unit, pa.Table):
+    if isinstance(unit, Tabular):
         return int(unit.num_rows)
     raise TypeError(f"Unsupported source unit type: {type(unit)!r}")
 
@@ -63,7 +59,7 @@ def _with_shard_id(unit: SourceUnit, shard_id: str) -> SourceUnit:
     if isinstance(unit, Row):
         return unit.update(**{_INTERNAL_SHARD_ID_KEY: shard_id})
 
-    if isinstance(unit, TabularBlock):
+    if isinstance(unit, Tabular):
         table = unit.table
         if table.num_rows == 0:
             return unit
@@ -76,11 +72,5 @@ def _with_shard_id(unit: SourceUnit, shard_id: str) -> SourceUnit:
                 table.set_column(idx, _INTERNAL_SHARD_ID_KEY, shard_col)
             )
         return unit.with_table(table.append_column(_INTERNAL_SHARD_ID_KEY, shard_col))
-
-    if isinstance(unit, pa.RecordBatch):
-        return _with_shard_id(TabularBlock(unit.to_table()), shard_id)
-
-    if isinstance(unit, pa.Table):
-        return _with_shard_id(TabularBlock(unit), shard_id)
 
     raise TypeError(f"Unsupported source unit type: {type(unit)!r}")

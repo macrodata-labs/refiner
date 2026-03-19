@@ -11,6 +11,7 @@ from loguru import logger
 
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.shard import FilePartsDescriptor
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -55,7 +56,7 @@ class ParquetReader(BaseReader):
             storage_options: Optional fsspec init options (used only when `fs` is not provided).
             recursive: If a directory input is provided, whether to list recursively.
             target_shard_bytes: Target approximate shard size for planned byte-range shards.
-            arrow_batch_size: Max rows per Arrow `RecordBatch` yielded while reading.
+            arrow_batch_size: Max rows per streamed Arrow batch before wrapping as `Tabular`.
             columns_to_read: Optional subset of column names to read (projection pushdown).
             split_row_groups: If True, `read_shard()` can refine planned byte spans into
                 deterministic row ranges inside the file. Otherwise reads expand to row groups.
@@ -121,18 +122,19 @@ class ParquetReader(BaseReader):
         return self._open_metadata
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
-        """Read one planned parquet shard and yield Arrow RecordBatches."""
+        """Read one planned parquet shard and yield Arrow-backed tabular units."""
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
         for part in descriptor.parts:
             source = self.fileset.resolve_file(part.source_index, part.path)
             pf = self._get_parquet_file(source)
             if part.end == -1:
-                yield from pf.iter_batches(
+                for batch in pf.iter_batches(
                     row_groups=None,
                     batch_size=self.arrow_batch_size,
                     columns=self.columns_to_read,
-                )
+                ):
+                    yield Tabular.from_batch(batch)
                 continue
 
             if self.split_row_groups:
@@ -149,7 +151,7 @@ class ParquetReader(BaseReader):
                 batch_size=self.arrow_batch_size,
                 columns=self.columns_to_read,
             ):
-                yield batch
+                yield Tabular.from_batch(batch)
 
     def _row_groups_for_span(self, pf: pq.ParquetFile, part) -> list[int] | None:
         """Map a planned byte span to the row groups whose starts fall inside that span."""
@@ -195,11 +197,12 @@ class ParquetReader(BaseReader):
         """Read a planned parquet span as a deterministic row fraction within relevant row groups."""
         metadata = self._metadata(pf)
         if metadata is None:
-            yield from pf.iter_batches(
+            for batch in pf.iter_batches(
                 row_groups=None,
                 batch_size=self.arrow_batch_size,
                 columns=self.columns_to_read,
-            )
+            ):
+                yield Tabular.from_batch(batch)
             return
 
         file_size = self.fileset.size(part.source_index, part.path)
@@ -239,7 +242,7 @@ class ParquetReader(BaseReader):
             begin = max(0, row_start - offset)
             length = min(batch_rows - begin, remaining)
             if length > 0:
-                yield batch.slice(begin, length)
+                yield Tabular.from_batch(batch.slice(begin, length))
                 remaining -= length
             offset += batch_rows
             if remaining <= 0:
