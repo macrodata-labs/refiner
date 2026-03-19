@@ -18,17 +18,18 @@ writer, and robotics transforms.
 
 `read_lerobot(...)` yields one row per episode.
 
-Those rows include:
+Those rows are `LeRobotRow` objects: episode-oriented rows with LeRobot-specific
+helpers for frames, videos, stats, and metadata.
 
-- `frames`
-- per-episode metadata
-- video feature columns as handles
-- dataset and episode stats metadata
+The programming model is still the normal Refiner one:
 
-So the programming model is the same as the rest of Refiner: you read rows,
-transform rows, and then write rows through a sink. The difference is that the
-rows are episode-oriented and the writer understands how to materialize a
-LeRobot dataset back out.
+- read rows
+- transform rows
+- write rows through a sink
+
+The difference is that the row represents one episode rather than one flat
+record, and the LeRobot writer knows how to materialize that episode-shaped data
+back into a LeRobot dataset.
 
 ## Quick Toc
 
