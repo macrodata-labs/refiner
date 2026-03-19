@@ -18,10 +18,15 @@ writer, and robotics transforms.
 
 - [reading datasets](#reading-datasets)
 - [working with lerobotrow](#working-with-lerobotrow)
+  - [frames](#frames)
+  - [videos](#videos)
+  - [stats](#stats)
+  - [metadata](#metadata)
+  - [updating rows](#updating-rows)
 - [transforming rows](#transforming-rows)
 - [writing datasets](#writing-datasets)
-- [stage-1 writes and stage-2 reduction](#stage-1-writes-and-stage-2-reduction)
-- [performance notes](#lerobot-performance-notes)
+  - [stage-1 writes and stage-2 reduction](#stage-1-writes-and-stage-2-reduction)
+  - [performance notes](#lerobot-performance-notes)
 - [motion trimming](#motion-trimming)
 - [merging datasets](#merging-datasets)
 
@@ -266,7 +271,7 @@ Current writer tuning is passed directly on `write_lerobot(...)`, including:
 - `force_recompute_video_stats`
   - force decoded-frame video stats recomputation even when compatible source stats already exist
 
-## Stage-1 Writes And Stage-2 Reduction
+### Stage-1 Writes And Stage-2 Reduction
 
 `write_lerobot(...)` is a two-stage write.
 
@@ -293,7 +298,7 @@ During reduction, Refiner also:
 This is why the writer can stay fast during stage 1 while still producing a
 single normal LeRobot dataset layout at the end.
 
-## LeRobot Performance Notes
+### LeRobot Performance Notes
 
 Current LeRobot output is optimized for:
 
