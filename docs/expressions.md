@@ -56,7 +56,7 @@ Do not use Python `and`, `or`, or `not` with expressions. Those operators try to
 | --- | --- |
 | `expr.is_null()` | true where the value is null |
 | `expr.is_not_null()` | true where the value is present |
-| `expr.is_in(values)` | true where the value appears in the provided list or tuple |
+| `expr.is_in(values)` | true where the scalar value appears in the provided set, or where a list-valued column contains any element from that set |
 | `expr.between(lower, upper)` | true where the value is between the two bounds |
 | `expr.fill_null(value)` | replaces nulls with the provided fallback |
 | `expr.null_if(value)` | turns matching values into null |
@@ -71,6 +71,16 @@ Expressions also support arithmetic and comparisons directly:
 ```python
 score = (mdr.col("correct") / mdr.col("total")).clip(min_value=0, max_value=1)
 ```
+
+For list-valued columns, `.is_in(...)` is a membership check against the list
+contents, not whole-list equality:
+
+```python
+predicate = mdr.col("tasks").is_in(["pick", "place"])
+```
+
+That means the predicate is true if an episode's `tasks` list contains either
+`"pick"` or `"place"`.
 
 ## String namespace
 

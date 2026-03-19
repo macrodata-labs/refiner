@@ -81,6 +81,15 @@ pipeline = pipeline.filter(mdr.col("lang") == "en")
 
 This stays on the vectorized Arrow path and is usually what you want for simple predicates.
 
+That includes list-valued membership checks:
+
+```python
+pipeline = pipeline.filter(~mdr.col("tasks").is_in(["pick"]))
+```
+
+For list-valued columns like `tasks`, this means "keep rows whose list does not
+contain any of these values."
+
 Python filter:
 
 ```python
