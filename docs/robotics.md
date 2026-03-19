@@ -14,23 +14,6 @@ writer, and robotics transforms.
 - write LeRobot-compatible output datasets with `write_lerobot(...)`
 - merge compatible LeRobot datasets into one output dataset
 
-## How Robotics Data Is Read
-
-`read_lerobot(...)` yields one row per episode.
-
-Those rows are `LeRobotRow` objects: episode-oriented rows with LeRobot-specific
-helpers for frames, videos, stats, and metadata.
-
-The programming model is still the normal Refiner one:
-
-- read rows
-- transform rows
-- write rows through a sink
-
-The difference is that the row represents one episode rather than one flat
-record, and the LeRobot writer knows how to materialize that episode-shaped data
-back into a LeRobot dataset.
-
 ## Quick Toc
 
 - [reading datasets](#reading-datasets)
