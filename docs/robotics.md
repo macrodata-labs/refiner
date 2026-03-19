@@ -64,6 +64,10 @@ Because `map(...)` patches rows by default, this is a convenient way to add epis
 `read_lerobot(...)` yields `LeRobotRow` objects, so you usually do not need to
 manually unpack the raw LeRobot transport fields.
 
+`LeRobotRow` is a view over the underlying episode row, not a disconnected copy.
+That means you get LeRobot-specific helpers on top, but you can still access and
+patch the original row columns directly through the normal row API.
+
 Typical things you will touch:
 
 - `row.frames`
@@ -107,6 +111,17 @@ def inspect_episode(row):
         }
     )
 ```
+
+The important unit here is:
+
+- one pipeline row = one episode
+
+not:
+
+- one pipeline row = one frame
+
+So transforms like `map(...)` and `motion_trim(...)` operate on an episode row
+whose `frames` field contains that episode's frame table.
 
 ### Frames
 
