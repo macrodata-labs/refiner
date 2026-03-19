@@ -14,7 +14,6 @@ from refiner.execution.buffer import RowBuffer
 from refiner.execution.operators.row import ShardDeltaFn, execute_row_steps
 from refiner.execution.operators.vectorized import (
     apply_vectorized_op,
-    rows_to_block,
 )
 from refiner.execution.tracking.shards import count_tabular_by_shard, counts_delta
 from refiner.pipeline.data.row import Row
@@ -167,7 +166,11 @@ def _execute_row_segment(
         yield from _chunk_output_rows(step_out, output_block_rows)
         return
     for batch in _chunk_output_rows(step_out, output_block_rows):
-        block = rows_to_block(batch)
+        block = (
+            Tabular.from_rows(batch)
+            if not batch
+            else batch[0].tabular_type.from_rows(batch)
+        )
         if block.table.num_rows > 0:
             yield block
 
@@ -216,7 +219,11 @@ def _execute_vector_segment(
         while True:
             batch = pending_rows.peek(rows_for_try)
             try:
-                block = rows_to_block(batch)
+                block = (
+                    Tabular.from_rows(batch)
+                    if not batch
+                    else batch[0].tabular_type.from_rows(batch)
+                )
             except pa.ArrowMemoryError:
                 if rows_for_try <= 1:
                     raise

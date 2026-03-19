@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -16,14 +14,6 @@ from refiner.pipeline.steps import (
     VectorizedOp,
     WithColumnsStep,
 )
-from refiner.pipeline.data.row import Row
-
-
-def rows_to_block(rows: Iterable[Row]) -> Tabular:
-    materialized = list(rows)
-    if not materialized:
-        return Tabular.from_rows(materialized)
-    return materialized[0].tabular_type.from_rows(materialized)
 
 
 def apply_vectorized_op(block: Tabular, op: VectorizedOp) -> Tabular:
@@ -82,6 +72,5 @@ def _broadcast_scalar(
 
 __all__ = [
     "Tabular",
-    "rows_to_block",
     "apply_vectorized_op",
 ]

@@ -51,7 +51,11 @@ class ParquetSink(BaseSink):
             table = (
                 shard_block.table
                 if isinstance(shard_block, Tabular)
-                else shard_block[0].tabular_type.from_rows(shard_block).table
+                else (
+                    Tabular.from_rows(shard_block).table
+                    if not shard_block
+                    else shard_block[0].tabular_type.from_rows(shard_block).table
+                )
             )
             if SHARD_ID_COLUMN in table.schema.names:
                 table = table.drop_columns([SHARD_ID_COLUMN])

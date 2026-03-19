@@ -125,15 +125,15 @@ def test_max_vectorized_block_bytes_can_force_smaller_blocks() -> None:
 
 def test_vectorized_chunk_shrink_is_run_local(monkeypatch) -> None:
     calls: list[int] = []
-    original_rows_to_block = engine_module.rows_to_block
+    original_from_rows = engine_module.Tabular.from_rows
 
-    def _rows_to_block_with_oom(rows):
+    def _from_rows_with_oom(rows):
         calls.append(len(rows))
         if len(rows) > 2:
             raise pa.ArrowMemoryError("oom")
-        return original_rows_to_block(rows)
+        return original_from_rows(rows)
 
-    monkeypatch.setattr(engine_module, "rows_to_block", _rows_to_block_with_oom)
+    monkeypatch.setattr(engine_module.Tabular, "from_rows", _from_rows_with_oom)
 
     pipeline = (
         from_items([{"x": i} for i in range(8)])
