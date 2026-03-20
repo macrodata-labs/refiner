@@ -164,7 +164,7 @@ def test_apply_vectorized_ops_emits_only_final_shard_delta_for_fused_segment() -
     deltas: list[dict[str, int]] = []
 
     apply_vectorized_ops(
-        block,
+        block.table,
         [
             FnTableStep(
                 fn=lambda table: table.set_column(

@@ -10,7 +10,7 @@ from refiner.execution.tracking.shards import (
     count_table_by_shard,
     counts_delta,
 )
-from refiner.pipeline.data.tabular import Tabular, repeat_scalar
+from refiner.pipeline.data.tabular import repeat_scalar
 from refiner.pipeline.expressions import eval_expr_arrow
 from refiner.pipeline.steps import (
     CastStep,
@@ -112,12 +112,11 @@ def apply_vectorized_op(
 
 
 def apply_vectorized_ops(
-    block: Tabular,
+    table: pa.Table,
     ops: Sequence[VectorizedOp],
     *,
     on_shard_delta: ShardDeltaFn | None = None,
-) -> Tabular:
-    table = block.table
+) -> pa.Table:
     initial_shard_counts = count_table_by_shard(table)
     shard_counts = initial_shard_counts
     for op in ops:
@@ -140,11 +139,10 @@ def apply_vectorized_ops(
         delta = counts_delta(produced=shard_counts, consumed=initial_shard_counts)
         if delta:
             on_shard_delta(delta)
-    return block.with_table(table)
+    return table
 
 
 __all__ = [
-    "Tabular",
     "apply_vectorized_op",
     "apply_vectorized_ops",
 ]

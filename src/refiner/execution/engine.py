@@ -187,7 +187,9 @@ def _execute_vector_segment(
     estimated_row_bytes: float | None = None
 
     def _run_block(block: Tabular) -> Tabular:
-        return apply_vectorized_ops(block, ops, on_shard_delta=on_shard_delta)
+        return block.with_table(
+            apply_vectorized_ops(block.table, ops, on_shard_delta=on_shard_delta)
+        )
 
     def _chunk_rows_for_budget() -> int:
         if (
