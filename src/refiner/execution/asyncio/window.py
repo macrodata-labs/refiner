@@ -84,5 +84,8 @@ class AsyncWindow(Generic[T]):
         self._buffered = []
         return out
 
+    def __len__(self) -> int:
+        return len(self._futures)
+
 
 __all__ = ["AsyncWindow"]

@@ -5,6 +5,7 @@ from typing import Any
 
 from refiner.execution.tracking.shards import count_block_by_shard
 from refiner.pipeline.data.block import Block, split_block_by_shard
+from refiner.worker.metrics.api import log_throughput
 
 
 class BaseSink(ABC):
@@ -24,6 +25,12 @@ class BaseSink(ABC):
         blocks_by_shard, counts = split_block_by_shard(block)
         for shard_id, shard_block in blocks_by_shard.items():
             self.write_shard_block(shard_id, shard_block)
+            log_throughput(
+                "rows_written",
+                counts[shard_id],
+                shard_id=shard_id,
+                unit="rows",
+            )
         return counts
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:

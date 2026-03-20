@@ -9,7 +9,6 @@ import shutil
 import statistics
 import subprocess
 import sys
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -364,9 +363,7 @@ def _run_refiner_case(
     source_root = f"hf://datasets/{repo_id}"
     source_episode_count, source_frame_count = _read_lerobot_totals(source_root)
 
-    def _drop_episodes(
-        row: Mapping[str, Any],
-    ) -> list[Mapping[str, Any] | None]:
+    def _drop_episodes(row: mdr.Row) -> list[mdr.Row | dict[str, Any]]:
         if int(row["episode_index"]) in delete_set:
             return []
         return [row]

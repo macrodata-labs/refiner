@@ -5,7 +5,12 @@ from collections.abc import Sequence
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from refiner.pipeline.data.tabular import Tabular
+from refiner.execution.tracking.shards import (
+    ShardDeltaFn,
+    ShardDeltaTracker,
+    count_table_by_shard,
+)
+from refiner.pipeline.data.tabular import Tabular, repeat_scalar
 from refiner.pipeline.expressions import eval_expr_arrow
 from refiner.pipeline.steps import (
     CastStep,
@@ -17,18 +22,28 @@ from refiner.pipeline.steps import (
     VectorizedOp,
     WithColumnsStep,
 )
+from refiner.worker.metrics.api import log_throughput
 
 
-def apply_vectorized_op(table: pa.Table, op: VectorizedOp) -> pa.Table:
+def apply_vectorized_op(
+    table: pa.Table,
+    op: VectorizedOp,
+    *,
+    shard_counts: dict[str, int] | None = None,
+    on_shard_delta: ShardDeltaFn | None = None,
+) -> tuple[pa.Table, dict[str, int] | None]:
+    if shard_counts is None:
+        shard_counts = count_table_by_shard(table)
+
     if isinstance(op, SelectStep):
-        return table.select(list(op.columns))
+        return table.select(list(op.columns)), None
 
     if isinstance(op, DropStep):
-        return table.drop_columns(list(op.columns))
+        return table.drop_columns(list(op.columns)), None
 
     if isinstance(op, RenameStep):
         names = [op.mapping.get(name, name) for name in table.schema.names]
-        return table.rename_columns(names)
+        return table.rename_columns(names), None
 
     if isinstance(op, CastStep):
         out = table
@@ -38,51 +53,100 @@ def apply_vectorized_op(table: pa.Table, op: VectorizedOp) -> pa.Table:
                 raise KeyError(f"Unknown column for cast: {col_name}")
             casted = pc.cast(out.column(col_name), target_type=pa.type_for_alias(dtype))
             out = out.set_column(idx, col_name, casted)
-        return out
+        return out, None
 
     if isinstance(op, WithColumnsStep):
         out = table
         for col_name, expr in op.assignments.items():
             values = eval_expr_arrow(expr, out)
-            # Keep scalar expressions column-shaped for append/set_column.
-            values = _broadcast_scalar(values, out.num_rows)
+            if isinstance(values, pa.Scalar):
+                values = repeat_scalar(values, out.num_rows)
             idx = out.schema.get_field_index(col_name)
             if idx < 0:
                 out = out.append_column(col_name, values)
             else:
                 out = out.set_column(idx, col_name, values)
-        return out
+        return out, None
 
     if isinstance(op, FilterExprStep):
         mask = eval_expr_arrow(op.predicate, table)
-        if isinstance(mask, pa.Scalar):
-            return table if bool(mask.as_py()) else table.slice(0, 0)
-        return table.filter(mask)
+        next_table = (
+            table
+            if isinstance(mask, pa.Scalar) and bool(mask.as_py())
+            else (
+                table.slice(0, 0) if isinstance(mask, pa.Scalar) else table.filter(mask)
+            )
+        )
+        next_shard_counts = count_table_by_shard(next_table)
+        with ShardDeltaTracker(on_shard_delta) as shard_delta:
+            for shard_id in set(shard_counts) | set(next_shard_counts):
+                previous = int(shard_counts.get(shard_id, 0))
+                current = int(next_shard_counts.get(shard_id, 0))
+                if current > 0:
+                    log_throughput(
+                        "rows_kept",
+                        current,
+                        shard_id=shard_id,
+                        unit="rows",
+                        step_index=op.index,
+                    )
+                shard_delta.add(shard_id, current - previous)
+                dropped = previous - current
+                if dropped > 0:
+                    log_throughput(
+                        "rows_dropped",
+                        dropped,
+                        shard_id=shard_id,
+                        unit="rows",
+                        step_index=op.index,
+                    )
+        return next_table, next_shard_counts
 
     if isinstance(op, FnTableStep):
-        out = op.fn(table)
-        if not isinstance(out, pa.Table):
-            raise TypeError(f"map_table() must return pa.Table, got {type(out)!r}")
-        return out
+        next_table = op.fn(table)
+        if not isinstance(next_table, pa.Table):
+            raise TypeError(
+                f"map_table() must return pa.Table, got {type(next_table)!r}"
+            )
+        next_shard_counts = count_table_by_shard(next_table)
+        with ShardDeltaTracker(on_shard_delta) as shard_delta:
+            for shard_id in set(shard_counts) | set(next_shard_counts):
+                shard_delta.add(
+                    shard_id,
+                    int(next_shard_counts.get(shard_id, 0))
+                    - int(shard_counts.get(shard_id, 0)),
+                )
+        return next_table, next_shard_counts
 
     raise TypeError(f"Unsupported vectorized op: {type(op)!r}")
 
 
-def apply_vectorized_ops(block: Tabular, ops: Sequence[VectorizedOp]) -> Tabular:
+def apply_vectorized_ops(
+    block: Tabular,
+    ops: Sequence[VectorizedOp],
+    *,
+    on_shard_delta: ShardDeltaFn | None = None,
+) -> Tabular:
     table = block.table
+    shard_counts = count_table_by_shard(table)
     for op in ops:
-        table = apply_vectorized_op(table, op)
+        for shard_id, count in shard_counts.items():
+            log_throughput(
+                "rows_processed",
+                count,
+                shard_id=shard_id,
+                unit="rows",
+                step_index=op.index,
+            )
+        table, next_shard_counts = apply_vectorized_op(
+            table,
+            op,
+            shard_counts=shard_counts,
+            on_shard_delta=on_shard_delta,
+        )
+        if next_shard_counts is not None:
+            shard_counts = next_shard_counts
     return block.with_table(table)
-
-
-def _broadcast_scalar(
-    values: pa.Array | pa.ChunkedArray | pa.Scalar, num_rows: int
-) -> pa.Array | pa.ChunkedArray:
-    if not isinstance(values, pa.Scalar):
-        return values
-    if num_rows <= 0:
-        return pa.array([], type=values.type)
-    return pa.repeat(values, num_rows)
 
 
 __all__ = [

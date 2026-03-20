@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from collections.abc import Callable
 from typing import Generator, Protocol
 
 
@@ -21,6 +22,16 @@ class UserMetricsEmitter(Protocol):
         *,
         label: str,
         value: float,
+        kind: str | None,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None: ...
+
+    def register_user_gauge(
+        self,
+        *,
+        label: str,
+        callback: Callable[[], float | int],
         kind: str | None,
         step_index: int | None,
         unit: str | None,
@@ -57,6 +68,18 @@ class _NoopUserMetricsEmitter(UserMetricsEmitter):
         unit: str | None,
     ) -> None:
         pass
+
+    def register_user_gauge(
+        self,
+        *,
+        label: str,
+        callback: Callable[[], float | int],
+        kind: str | None,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        del label, callback, kind, step_index, unit
+        return None
 
     def emit_user_gauge(
         self,

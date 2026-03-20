@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
 
+from refiner.worker.metrics.api import log_histogram, log_throughput
+
 if TYPE_CHECKING:
     from refiner.pipeline.data.tabular import Tabular
 
@@ -40,6 +42,31 @@ class Row(Mapping[str, Any]):
         if self.shard_id is None:
             raise ValueError("row is missing shard_id")
         return self.shard_id
+
+    def log_throughput(
+        self,
+        label: str,
+        value: float | int,
+        *,
+        unit: str | None = None,
+    ) -> None:
+        log_throughput(label, value, shard_id=self.require_shard_id(), unit=unit)
+
+    def log_histogram(
+        self,
+        label: str,
+        value: float | int,
+        *,
+        per: str = "row",
+        unit: str | None = None,
+    ) -> None:
+        log_histogram(
+            label,
+            value,
+            shard_id=self.require_shard_id(),
+            per=per,
+            unit=unit,
+        )
 
     @property
     def tabular_type(self) -> type["Tabular"]:

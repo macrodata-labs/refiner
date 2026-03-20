@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from typing import cast
 
+from refiner.execution.asyncio.window import AsyncWindow
+from refiner.execution.buffer import RowBuffer
+from refiner.execution.tracking.shards import ShardDeltaFn, ShardDeltaTracker
+from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import (
     AsyncRowStep,
     BatchStep,
     FilterRowStep,
     FlatMapStep,
+    MapResult,
     RefinerStep,
     RowStep,
-    normalize_batch_item,
-    normalize_row_result,
 )
-from refiner.execution.asyncio.window import AsyncWindow
-from refiner.execution.buffer import RowBuffer
-from refiner.pipeline.data.row import Row
-
-ShardDeltaFn = Callable[[dict[str, int]], None]
+from refiner.worker.context import set_active_step_index
+from refiner.worker.metrics.api import register_gauge
 
 
 def execute_row_steps(
@@ -38,7 +38,6 @@ def execute_row_steps(
         return
 
     queues: list[RowBuffer] = [RowBuffer() for _ in range(len(ordered) + 1)]
-    scratch: list[list[Row]] = [[] for _ in ordered]
     async_windows: list[AsyncWindow[Row] | None] = [
         AsyncWindow[Row](
             max_in_flight=step.max_in_flight,
@@ -48,32 +47,26 @@ def execute_row_steps(
         else None
         for step in ordered
     ]
+    for i, step in enumerate(ordered):
+        window = async_windows[i]
+        if window is not None:
+            register_gauge(
+                "in_flight",
+                lambda window=window: len(window),
+                unit="rows",
+                step_index=step.index,
+            )
 
     async def _run_async_step(*, step: AsyncRowStep, row: Row) -> Row:
         result = step.apply_row_async(row)
         if inspect.isawaitable(result):
             result = await result
-        # TODO (Hynek): Resolve the typing properly.
-        return normalize_row_result(row, cast("Row | dict[str, object]", result))
-
-    def _delta_add(delta: dict[str, int], shard_id: str, amount: int) -> None:
-        if amount == 0:
-            return
-        next_value = delta.get(shard_id, 0) + amount
-        if next_value == 0:
-            delta.pop(shard_id, None)
-        else:
-            delta[shard_id] = next_value
-
-    def _emit_delta(delta: dict[str, int] | None) -> None:
-        if delta and on_shard_delta is not None:
-            on_shard_delta(delta)
-
-    def _delta_remove_rows(delta: dict[str, int] | None, rows: Iterable[Row]) -> None:
-        if delta is None:
-            return
-        for row in rows:
-            _delta_add(delta, row.require_shard_id(), -1)
+        result = cast(MapResult, result)
+        if isinstance(result, Row):
+            return result
+        if isinstance(result, dict):
+            return row.update(result)
+        raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
 
     def _run_step(i: int, *, flush_all: bool) -> None:
         step = ordered[i]
@@ -81,79 +74,85 @@ def execute_row_steps(
         if not inp and not isinstance(step, AsyncRowStep):
             return
         out = queues[i + 1]
-
-        if isinstance(step, RowStep):
-            for row in inp.take_all():
-                normalized = normalize_row_result(row, step.apply_row(row))
-                out.append(normalized)
-            return
-
-        if isinstance(step, AsyncRowStep):
-            window = async_windows[i]
-            if window is None:
+        with set_active_step_index(step.index):
+            if isinstance(step, RowStep):
+                for row in inp.take_all():
+                    row.log_throughput("rows_processed", 1, unit="rows")
+                    result = step.apply_row(row)
+                    if isinstance(result, Row):
+                        out.append(result)
+                    elif isinstance(result, dict):
+                        out.append(row.update(result))
+                    else:
+                        raise TypeError(
+                            f"Unsupported map() result type: {type(result)!r}"
+                        )
                 return
-            tmp = scratch[i]
-            tmp.clear()
-            for row in inp.take_all():
-                window.submit_blocking(_run_async_step(step=step, row=row))
-            tmp.extend(window.poll())
-            if flush_all:
-                tmp.extend(window.flush())
-            if tmp:
-                out.extend(tmp)
-            return
 
-        if isinstance(step, FilterRowStep):
-            delta = {} if on_shard_delta is not None else None
-            for row in inp.take_all():
-                if step.apply_predicate(row):
-                    out.append(row)
-                elif delta is not None:
-                    _delta_add(delta, row.require_shard_id(), -1)
-            _emit_delta(delta)
-            return
-
-        if isinstance(step, FlatMapStep):
-            tmp = scratch[i]
-            tmp.clear()
-            delta = {} if on_shard_delta is not None else None
-            for row in inp.take_all():
-                _delta_remove_rows(delta, (row,))
-                for item in step.apply_row_many(row):
-                    normalized = normalize_batch_item(item)
-                    if normalized is not None:
-                        if delta is not None:
-                            _delta_add(delta, normalized.require_shard_id(), 1)
-                        tmp.append(normalized)
-            out.extend(tmp)
-            _emit_delta(delta)
-            return
-
-        if isinstance(step, BatchStep):
-            if flush_all:
-                batch_in = inp.take_all()
-            else:
-                n = (len(inp) // step.batch_size) * step.batch_size
-                if n == 0:
+            if isinstance(step, AsyncRowStep):
+                window = async_windows[i]
+                if window is None:
                     return
-                batch_in = inp.take(n)
-            if not batch_in:
+                for row in inp.take_all():
+                    row.log_throughput("rows_processed", 1, unit="rows")
+                    window.submit_blocking(_run_async_step(step=step, row=row))
+                out.extend(window.poll())
+                if flush_all:
+                    out.extend(window.flush())
                 return
-            tmp = scratch[i]
-            tmp.clear()
-            delta = {} if on_shard_delta is not None else None
-            _delta_remove_rows(delta, batch_in)
-            for item in step.apply_batch(batch_in):
-                normalized = normalize_batch_item(item)
-                if normalized is not None:
-                    if delta is not None:
-                        _delta_add(delta, normalized.require_shard_id(), 1)
-                    tmp.append(normalized)
-            out.extend(tmp)
-            _emit_delta(delta)
-            return
 
-        raise TypeError(f"Unsupported row-segment step: {type(step)!r}")
+            if isinstance(step, FilterRowStep):
+                with ShardDeltaTracker(on_shard_delta) as delta:
+                    for row in inp.take_all():
+                        row.log_throughput("rows_processed", 1, unit="rows")
+                        if step.apply_predicate(row):
+                            row.log_throughput("rows_kept", 1, unit="rows")
+                            out.append(row)
+                        else:
+                            row.log_throughput("rows_dropped", 1, unit="rows")
+                            delta.add(row.require_shard_id(), -1)
+                return
+
+            if isinstance(step, FlatMapStep):
+                with ShardDeltaTracker(on_shard_delta) as delta:
+                    for row in inp.take_all():
+                        produced = 0
+                        for item in step.apply_row_many(row):
+                            if isinstance(item, Row):
+                                emitted = item
+                            elif isinstance(item, dict):
+                                emitted = row.update(item)
+                            else:
+                                raise TypeError(
+                                    f"Unsupported flat_map result type: {type(item)!r}"
+                                )
+                            produced += 1
+                            out.append(emitted)
+                        delta.add(row.require_shard_id(), produced - 1)
+                        row.log_histogram(
+                            "rows_out", produced, unit="rows", per="input_row"
+                        )
+                return
+
+            if isinstance(step, BatchStep):
+                if flush_all:
+                    batch_in = inp.take_all()
+                else:
+                    n = (len(inp) // step.batch_size) * step.batch_size
+                    if n == 0:
+                        return
+                    batch_in = inp.take(n)
+                if not batch_in:
+                    return
+                with ShardDeltaTracker(on_shard_delta) as delta:
+                    delta.remove_rows(batch_in)
+                    for item in step.apply_batch(batch_in):
+                        item.log_throughput("rows_out", 1, unit="rows")
+                        delta.add(item.require_shard_id(), 1)
+                        out.append(item)
+                return
+
+            raise TypeError(f"Unsupported row-segment step: {type(step)!r}")
 
     def _pump(flush_all: bool) -> None:
         for i in range(len(ordered)):

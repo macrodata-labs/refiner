@@ -73,6 +73,8 @@ def motion_trim(
                 "motion_trim requires LeRobot-format rows with non-empty 'frames' "
                 f"containing 'timestamp', '{action_key}', and '{state_key}'"
             )
+        if row.shard_id is not None:
+            row.log_throughput("frames_in", frames.num_rows, unit="frames")
 
         # timestamps
         timestamp_column = frame_table.column("timestamp")
@@ -89,6 +91,10 @@ def motion_trim(
             _motion_energy(frame_table.column(state_key).to_pylist()) > threshold
         )
         if action_active.size == 0 and state_active.size == 0:
+            if row.shard_id is not None:
+                row.log_throughput("episodes_fully_trimmed", 1, unit="episodes")
+                row.log_throughput("frames_removed", frames.num_rows, unit="frames")
+                row.log_histogram("trim_fraction", 1.0, unit="ratio")
             return row.update(frames=[])
 
         start_candidates = [
@@ -105,6 +111,17 @@ def motion_trim(
         end_idx = min(frame_table.num_rows - 1, max(end_candidates) + pad_frames)
         kept_table = frame_table.slice(start_idx, end_idx - start_idx + 1)
         kept_start_ts = float(timestamps[start_idx])
+        removed_frames = frame_table.num_rows - kept_table.num_rows
+        if row.shard_id is not None:
+            if removed_frames > 0:
+                row.log_throughput("episodes_trimmed", 1, unit="episodes")
+                row.log_throughput("frames_removed", removed_frames, unit="frames")
+            row.log_throughput("frames_out", kept_table.num_rows, unit="frames")
+            row.log_histogram(
+                "trim_fraction",
+                removed_frames / max(1, frame_table.num_rows),
+                unit="ratio",
+            )
         kept_duration_s = (
             float(timestamps[end_idx + 1]) - kept_start_ts
             if end_idx + 1 < frame_table.num_rows

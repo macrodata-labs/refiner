@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 from refiner.io import DataFolder
 from refiner.io.datafolder import DataFolderLike
 from refiner.pipeline.data.block import Block
-from refiner.pipeline.data.tabular import set_or_append_column
+from refiner.pipeline.data.tabular import repeat_scalar, set_or_append_column
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.robotics.lerobot_format import (
     LeRobotInfo,
@@ -115,13 +115,17 @@ class LeRobotMetaReduceSink(BaseSink):
                 "episode_index",
                 pa.array(episode_indices, type=pa.int64()),
             )
-        chunk_index = pa.array([0] * episodes_table.num_rows, type=pa.int64())
+        chunk_index = repeat_scalar(
+            pa.scalar(0, type=pa.int64()), episodes_table.num_rows
+        )
         episodes_table = set_or_append_column(
             episodes_table,
             "meta/episodes/chunk_index",
             chunk_index,
         )
-        file_index = pa.array([0] * episodes_table.num_rows, type=pa.int64())
+        file_index = repeat_scalar(
+            pa.scalar(0, type=pa.int64()), episodes_table.num_rows
+        )
         episodes_table = set_or_append_column(
             episodes_table,
             "meta/episodes/file_index",

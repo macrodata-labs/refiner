@@ -15,7 +15,6 @@ from refiner.execution.operators.row import ShardDeltaFn, execute_row_steps
 from refiner.execution.operators.vectorized import (
     apply_vectorized_ops,
 )
-from refiner.execution.tracking.shards import count_tabular_by_shard, counts_delta
 from refiner.pipeline.data.row import Row
 
 _DEFAULT_VECTORIZED_CHUNK_ROWS = 2048
@@ -188,17 +187,7 @@ def _execute_vector_segment(
     estimated_row_bytes: float | None = None
 
     def _run_block(block: Tabular) -> Tabular:
-        return apply_vectorized_ops(block, ops)
-
-    def _emit_tabular_delta(*, produced: Tabular, consumed: Tabular) -> None:
-        if on_shard_delta is None:
-            return
-        delta = counts_delta(
-            produced=count_tabular_by_shard(produced),
-            consumed=count_tabular_by_shard(consumed),
-        )
-        if delta:
-            on_shard_delta(delta)
+        return apply_vectorized_ops(block, ops, on_shard_delta=on_shard_delta)
 
     def _chunk_rows_for_budget() -> int:
         if (
@@ -255,7 +244,6 @@ def _execute_vector_segment(
                 continue
 
             pending_rows.discard(rows_for_try)
-            _emit_tabular_delta(produced=out, consumed=block)
             if out.table.num_rows > 0:
                 yield out
             return
@@ -307,7 +295,6 @@ def _execute_vector_segment(
                 continue
 
             estimated_row_bytes = chunk.table.nbytes / chunk_rows
-            _emit_tabular_delta(produced=out, consumed=chunk)
             if out.table.num_rows > 0:
                 yield out
 

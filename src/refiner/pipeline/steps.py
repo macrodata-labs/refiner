@@ -8,7 +8,7 @@ from typing import Any, TypeAlias
 import pyarrow as pa
 
 from refiner.pipeline.expressions import Expr
-from refiner.pipeline.data.row import DictRow, Row
+from refiner.pipeline.data.row import Row
 
 
 class RefinerStep(ABC):
@@ -18,14 +18,12 @@ class RefinerStep(ABC):
     op_name: str | None = None
 
 
-MapResult: TypeAlias = Row | Mapping[str, Any]
+MapResult: TypeAlias = Row | dict[str, Any]
 MapFn: TypeAlias = Callable[[Row], MapResult]
 AsyncMapFn: TypeAlias = Callable[[Row], Awaitable[MapResult] | MapResult]
 PredicateFn: TypeAlias = Callable[[Row], bool]
-BatchItem: TypeAlias = Row | Mapping[str, Any] | None
-BatchFn: TypeAlias = Callable[[list[Row]], Iterable[BatchItem]]
-FlatMapFn: TypeAlias = Callable[[Row], Iterable[BatchItem]]
-AsyncMapFn: TypeAlias = Callable[[Row], Awaitable[MapResult] | MapResult]
+BatchFn: TypeAlias = Callable[[list[Row]], Iterable[Row]]
+FlatMapFn: TypeAlias = Callable[[Row], Iterable[MapResult]]
 TableResult: TypeAlias = pa.Table
 TableFn: TypeAlias = Callable[[pa.Table], TableResult]
 
@@ -75,7 +73,7 @@ class BatchStep(RefinerStep, ABC):
     batch_size: int
 
     @abstractmethod
-    def apply_batch(self, rows: list[Row]) -> Iterable[BatchItem]:
+    def apply_batch(self, rows: list[Row]) -> Iterable[Row]:
         raise NotImplementedError
 
 
@@ -90,14 +88,14 @@ class FnBatchStep(BatchStep):
         if self.batch_size <= 1:
             raise ValueError("batch_size for batch steps must be > 1")
 
-    def apply_batch(self, rows: list[Row]) -> Iterable[BatchItem]:
+    def apply_batch(self, rows: list[Row]) -> Iterable[Row]:
         for i in range(0, len(rows), self.batch_size):
             yield from self.fn(rows[i : i + self.batch_size])
 
 
 class FlatMapStep(RefinerStep, ABC):
     @abstractmethod
-    def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
+    def apply_row_many(self, row: Row) -> Iterable[MapResult]:
         raise NotImplementedError
 
 
@@ -107,7 +105,7 @@ class FnFlatMapStep(FlatMapStep):
     index: int
     op_name: str | None = None
 
-    def apply_row_many(self, row: Row) -> Iterable[BatchItem]:
+    def apply_row_many(self, row: Row) -> Iterable[MapResult]:
         return self.fn(row)
 
 
@@ -124,42 +122,49 @@ class FilterRowStep(RefinerStep):
 @dataclass(frozen=True, slots=True)
 class SelectStep(RefinerStep):
     columns: tuple[str, ...]
+    index: int
     op_name: str | None = "select"
 
 
 @dataclass(frozen=True, slots=True)
 class WithColumnsStep(RefinerStep):
     assignments: Mapping[str, Expr]
+    index: int
     op_name: str | None = "with_columns"
 
 
 @dataclass(frozen=True, slots=True)
 class DropStep(RefinerStep):
     columns: tuple[str, ...]
+    index: int
     op_name: str | None = "drop"
 
 
 @dataclass(frozen=True, slots=True)
 class RenameStep(RefinerStep):
     mapping: Mapping[str, str]
+    index: int
     op_name: str | None = "rename"
 
 
 @dataclass(frozen=True, slots=True)
 class CastStep(RefinerStep):
     dtypes: Mapping[str, str]
+    index: int
     op_name: str | None = "cast"
 
 
 @dataclass(frozen=True, slots=True)
 class FilterExprStep(RefinerStep):
     predicate: Expr
+    index: int
     op_name: str | None = "filter"
 
 
 @dataclass(frozen=True, slots=True)
 class FnTableStep(RefinerStep):
     fn: TableFn
+    index: int
     op_name: str | None = "map_table"
 
 
@@ -186,32 +191,6 @@ class VectorizedSegmentStep(RefinerStep):
     op_name: str | None = "vectorized"
 
 
-def normalize_row_result(row: Row, result: MapResult) -> Row:
-    """Normalize a user map() function's output.
-
-    Contract:
-        - Row  => replace the row
-        - Mapping[str, Any] => treated as a patch to merge into the input row
-    """
-
-    if isinstance(result, Row):
-        return result
-    if isinstance(result, Mapping):
-        return row.update(result)
-    raise TypeError(f"Unsupported map() result type: {type(result)!r}")
-
-
-def normalize_batch_item(item: BatchItem) -> Row | None:
-    """Normalize a batch step item into a Row."""
-    if item is None:
-        return None
-    if isinstance(item, Row):
-        return item
-    if isinstance(item, Mapping):
-        return DictRow(item)
-    raise TypeError(f"Unsupported batch item type: {type(item)!r}")
-
-
 __all__ = [
     "RefinerStep",
     "RowStep",
@@ -228,10 +207,8 @@ __all__ = [
     "MapFn",
     "AsyncMapFn",
     "PredicateFn",
-    "BatchItem",
     "BatchFn",
     "FlatMapFn",
-    "AsyncMapFn",
     "TableResult",
     "TableFn",
     "SelectStep",
@@ -243,6 +220,4 @@ __all__ = [
     "FnTableStep",
     "VectorizedOp",
     "VectorizedSegmentStep",
-    "normalize_row_result",
-    "normalize_batch_item",
 ]

@@ -83,6 +83,12 @@ class RefinerPipeline:
             sink=self.sink,
         )
 
+    def _next_step_index(self) -> int:
+        return 1 + sum(
+            len(step.ops) if isinstance(step, VectorizedSegmentStep) else 1
+            for step in self.pipeline_steps
+        )
+
     def _add_vectorized_op(self, op: VectorizedOp) -> "RefinerPipeline":
         # Fuse adjacent expression-backed operations so each fused segment does
         # one row->Arrow and Arrow->row conversion boundary.
@@ -124,7 +130,7 @@ class RefinerPipeline:
 
     def map(self, fn: MapFn) -> "RefinerPipeline":
         return self.add_step(
-            FnRowStep(fn=fn, op_name="map", index=len(self.pipeline_steps) + 1)
+            FnRowStep(fn=fn, op_name="map", index=self._next_step_index())
         )
 
     def map_async(
@@ -140,7 +146,7 @@ class RefinerPipeline:
                 max_in_flight=max_in_flight,
                 preserve_order=preserve_order,
                 op_name="map_async",
-                index=len(self.pipeline_steps) + 1,
+                index=self._next_step_index(),
             )
         )
 
@@ -152,26 +158,30 @@ class RefinerPipeline:
                 fn=fn,
                 batch_size=batch_size,
                 op_name="batch_map",
-                index=len(self.pipeline_steps) + 1,
+                index=self._next_step_index(),
             )
         )
 
     def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
         return self.add_step(
-            FnFlatMapStep(fn=fn, op_name="flat_map", index=len(self.pipeline_steps) + 1)
+            FnFlatMapStep(fn=fn, op_name="flat_map", index=self._next_step_index())
         )
 
     def map_table(self, fn: Callable[[pa.Table], pa.Table]) -> "RefinerPipeline":
-        return self._add_vectorized_op(FnTableStep(fn=fn))
+        return self._add_vectorized_op(
+            FnTableStep(fn=fn, index=self._next_step_index())
+        )
 
     def filter(self, predicate: Callable[[Row], bool] | Expr) -> "RefinerPipeline":
         if isinstance(predicate, Expr):
-            return self._add_vectorized_op(FilterExprStep(predicate=predicate))
+            return self._add_vectorized_op(
+                FilterExprStep(predicate=predicate, index=self._next_step_index())
+            )
         return self.add_step(
             FilterRowStep(
                 predicate=predicate,
                 op_name="filter",
-                index=len(self.pipeline_steps) + 1,
+                index=self._next_step_index(),
             )
         )
 
@@ -181,7 +191,10 @@ class RefinerPipeline:
         if SHARD_ID_COLUMN in columns:
             raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(
-            SelectStep(columns=tuple(columns) + (SHARD_ID_COLUMN,))
+            SelectStep(
+                columns=tuple(columns) + (SHARD_ID_COLUMN,),
+                index=self._next_step_index(),
+            )
         )
 
     def with_columns(self, **assignments: Expr | Any) -> "RefinerPipeline":
@@ -193,34 +206,44 @@ class RefinerPipeline:
             name: value if isinstance(value, Expr) else lit(value)
             for name, value in assignments.items()
         }
-        return self._add_vectorized_op(WithColumnsStep(assignments=exprs))
+        return self._add_vectorized_op(
+            WithColumnsStep(assignments=exprs, index=self._next_step_index())
+        )
 
     def with_column(self, name: str, value: Expr | Any) -> "RefinerPipeline":
         if name == SHARD_ID_COLUMN:
             raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
-        return self._add_vectorized_op(WithColumnsStep(assignments={name: expr}))
+        return self._add_vectorized_op(
+            WithColumnsStep(assignments={name: expr}, index=self._next_step_index())
+        )
 
     def drop(self, *columns: str) -> "RefinerPipeline":
         if not columns:
             raise ValueError("drop requires at least one column")
         if SHARD_ID_COLUMN in columns:
             raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
-        return self._add_vectorized_op(DropStep(columns=tuple(columns)))
+        return self._add_vectorized_op(
+            DropStep(columns=tuple(columns), index=self._next_step_index())
+        )
 
     def rename(self, **mapping: str) -> "RefinerPipeline":
         if not mapping:
             raise ValueError("rename requires at least one mapping")
         if SHARD_ID_COLUMN in mapping or SHARD_ID_COLUMN in mapping.values():
             raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
-        return self._add_vectorized_op(RenameStep(mapping=mapping))
+        return self._add_vectorized_op(
+            RenameStep(mapping=mapping, index=self._next_step_index())
+        )
 
     def cast(self, **dtypes: str) -> "RefinerPipeline":
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
         if SHARD_ID_COLUMN in dtypes:
             raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
-        return self._add_vectorized_op(CastStep(dtypes=dtypes))
+        return self._add_vectorized_op(
+            CastStep(dtypes=dtypes, index=self._next_step_index())
+        )
 
     def execute(
         self,

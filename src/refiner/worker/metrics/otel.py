@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import traceback
 from typing import Any
 
@@ -13,8 +14,8 @@ from refiner.worker.resources.network import (
     network_out_observer_callback,
 )
 
-_USER_METRIC_EXPORT_INTERVAL_MS = 10_000
-_RESOURCE_METRIC_EXPORT_INTERVAL_MS = 10_000
+_USER_METRIC_EXPORT_INTERVAL_MS = 5_000
+_RESOURCE_METRIC_EXPORT_INTERVAL_MS = 5_000
 
 
 class OtelTelemetryEmitter(UserMetricsEmitter):
@@ -52,6 +53,7 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             endpoint=f"{base_url}/api/observability/metrics",
             headers=headers,
         )
+        # user metrics
         user_metric_reader = PeriodicExportingMetricReader(
             exporter=metric_exporter,
             export_interval_millis=_USER_METRIC_EXPORT_INTERVAL_MS,
@@ -61,11 +63,23 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             metric_readers=[user_metric_reader],
         )
 
+        self._user_meter = self._user_meter_provider.get_meter("refiner.worker.user")
+        self._user_counter = self._user_meter.create_counter(
+            "refiner.user.counter", unit="records"
+        )
+        self._user_histogram = self._user_meter.create_histogram(
+            "refiner.user.histogram",
+            explicit_bucket_boundaries_advisory=[],
+        )
+        self._user_gauge = self._user_meter.create_gauge("refiner.user.gauge")
+        self._user_observable_gauges: dict[
+            tuple[str, str | None, str | None, int | None],
+            Any,
+        ] = {}
+
+        # resource metrics
         resource_metric_reader = PeriodicExportingMetricReader(
-            exporter=OTLPMetricExporter(
-                endpoint=f"{base_url}/api/observability/metrics",
-                headers=headers,
-            ),
+            exporter=metric_exporter,
             export_interval_millis=_RESOURCE_METRIC_EXPORT_INTERVAL_MS,
         )
         self._resource_meter_provider = MeterProvider(
@@ -97,16 +111,7 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             unit="B",
         )
 
-        user_meter = self._user_meter_provider.get_meter("refiner.worker.user")
-        self._user_counter = user_meter.create_counter(
-            "refiner.user.counter", unit="records"
-        )
-        self._user_histogram = user_meter.create_histogram(
-            "refiner.user.histogram",
-            explicit_bucket_boundaries_advisory=[],
-        )
-        self._user_gauge = user_meter.create_gauge("refiner.user.gauge")
-
+        # logs
         log_exporter = OTLPLogExporter(
             endpoint=f"{base_url}/api/observability/logs",
             headers=headers,
@@ -248,6 +253,37 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
         self._user_histogram.record(
             value,
             attributes=self._attrs_with_step(attrs=attrs, step_index=step_index),
+        )
+
+    def register_user_gauge(
+        self,
+        *,
+        label: str,
+        callback: Callable[[], float | int],
+        kind: str | None,
+        step_index: int | None,
+        unit: str | None,
+    ) -> None:
+        from opentelemetry.metrics import Observation
+
+        key = (label, kind, unit, step_index)
+        if key in self._user_observable_gauges:
+            return
+
+        attrs: dict[str, str | int] = {"label": label}
+        if kind:
+            attrs["kind"] = kind
+        if unit:
+            attrs["unit"] = unit
+        attrs = self._attrs_with_step(attrs=attrs, step_index=step_index)
+
+        def _observe(_: Any) -> list[Observation]:
+            return [Observation(float(callback()), attrs)]
+
+        self._user_observable_gauges[key] = self._user_meter.create_observable_gauge(
+            "refiner.user.observable_gauge",
+            callbacks=[_observe],
+            unit=unit,
         )
 
     def force_flush_user_metrics(self) -> None:

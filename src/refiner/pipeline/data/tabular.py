@@ -89,6 +89,12 @@ def set_or_append_column(
     return table.append_column(name, column)
 
 
+def repeat_scalar(value: pa.Scalar, num_rows: int) -> pa.Array | pa.ChunkedArray:
+    if num_rows <= 0:
+        return pa.array([], type=value.type)
+    return pa.repeat(value, num_rows)
+
+
 # everything below is for fast from_rows
 def _table_from_rows(rows: Sequence[Row]) -> pa.Table:
     names: list[str] = []

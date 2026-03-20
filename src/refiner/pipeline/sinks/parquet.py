@@ -9,6 +9,7 @@ from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.worker.context import get_active_run_handle
+from refiner.worker.metrics.api import log_throughput
 
 
 class ParquetSink(BaseSink):
@@ -57,6 +58,7 @@ class ParquetSink(BaseSink):
         writer = self._writers.pop(shard_id, None)
         if writer is not None:
             writer.close()
+            log_throughput("files_written", 1, shard_id=shard_id, unit="files")
 
     def close(self) -> None:
         for writer in self._writers.values():

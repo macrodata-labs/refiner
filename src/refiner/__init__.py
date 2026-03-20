@@ -20,6 +20,7 @@ from refiner.worker.metrics.api import (
     log_gauges,
     log_histogram,
     log_throughput,
+    register_gauge,
 )
 from refiner.worker.runner import Worker, WorkerRunStats
 
@@ -44,6 +45,7 @@ __all__ = [
     "log_throughput",
     "log_gauge",
     "log_gauges",
+    "register_gauge",
     "log_histogram",
     "col",
     "lit",

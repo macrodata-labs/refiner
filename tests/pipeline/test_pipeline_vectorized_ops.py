@@ -9,7 +9,9 @@ from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 import refiner.pipeline.pipeline as pipeline_module
 import refiner.execution.engine as engine_module
+from refiner.execution.operators.vectorized import apply_vectorized_op
 from refiner.pipeline import from_items
+from refiner.pipeline.steps import FilterExprStep, FnTableStep
 from refiner import col, if_else
 
 
@@ -103,6 +105,32 @@ def test_map_table_runs_on_vectorized_path() -> None:
 
     assert [int(r["x"]) for r in out] == [1, 2, 3]
     assert [int(r["y"]) for r in out] == [11, 12, 13]
+
+
+def test_apply_vectorized_op_filter_without_explicit_shard_counts() -> None:
+    table = pa.table(
+        {SHARD_ID_COLUMN: pa.array(["s1", "s1", "s2"]), "x": pa.array([1, 2, 3])}
+    )
+    out, counts = apply_vectorized_op(
+        table,
+        FilterExprStep(predicate=col("x") >= 2, index=1),
+    )
+
+    assert out.to_pydict()["x"] == [2, 3]
+    assert counts == {"s1": 1, "s2": 1}
+
+
+def test_apply_vectorized_op_map_table_without_explicit_shard_counts() -> None:
+    table = pa.table({SHARD_ID_COLUMN: pa.array(["s1", "s2"]), "x": pa.array([1, 2])})
+    out, counts = apply_vectorized_op(
+        table,
+        FnTableStep(
+            fn=lambda current: current.append_column("y", pa.array([10, 20])), index=1
+        ),
+    )
+
+    assert out.to_pydict()["y"] == [10, 20]
+    assert counts == {"s1": 1, "s2": 1}
 
 
 def test_map_table_does_not_fall_back_to_row_execution(monkeypatch) -> None:
