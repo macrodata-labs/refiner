@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from types import TracebackType
 from typing import cast
 
 import pyarrow as pa
@@ -23,8 +24,14 @@ class ShardDeltaTracker:
     def __enter__(self) -> ShardDeltaTracker:
         return self
 
-    def __exit__(self, *args: object) -> None:
-        self.emit()
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _tb: TracebackType | None,
+    ) -> None:
+        if exc_type is None:
+            self.emit()
 
     def add(self, shard_id: str, amount: int) -> None:
         if self.emit_fn is None or amount == 0:

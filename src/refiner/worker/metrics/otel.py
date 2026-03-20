@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
+import re
 import traceback
 from typing import Any
 
@@ -16,6 +18,34 @@ from refiner.worker.resources.network import (
 
 _USER_METRIC_EXPORT_INTERVAL_MS = 5_000
 _RESOURCE_METRIC_EXPORT_INTERVAL_MS = 5_000
+
+
+def _observable_gauge_name(
+    *, label: str, kind: str | None, unit: str | None, step_index: int | None
+) -> str:
+    suffix = "__".join(
+        part
+        for part in (
+            label,
+            kind,
+            unit,
+            None if step_index is None else f"step_{step_index}",
+        )
+        if part
+    )
+    suffix = re.sub(r"[^a-zA-Z0-9_]+", "_", suffix).strip("_").lower()
+    name = (
+        f"refiner.user.observable_gauge.{suffix}"
+        if suffix
+        else "refiner.user.observable_gauge"
+    )
+    if len(name) <= 255:
+        return name
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:12]
+    prefix = "refiner.user.observable_gauge."
+    budget = 255 - len(prefix) - len(digest) - 2
+    trimmed = suffix[:budget].rstrip("_")
+    return f"{prefix}{trimmed}__{digest}"
 
 
 class OtelTelemetryEmitter(UserMetricsEmitter):
@@ -49,13 +79,13 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             }
         )
 
-        metric_exporter = OTLPMetricExporter(
+        user_metric_exporter = OTLPMetricExporter(
             endpoint=f"{base_url}/api/observability/metrics",
             headers=headers,
         )
         # user metrics
         user_metric_reader = PeriodicExportingMetricReader(
-            exporter=metric_exporter,
+            exporter=user_metric_exporter,
             export_interval_millis=_USER_METRIC_EXPORT_INTERVAL_MS,
         )
         self._user_meter_provider = MeterProvider(
@@ -77,9 +107,13 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             Any,
         ] = {}
 
+        resource_metric_exporter = OTLPMetricExporter(
+            endpoint=f"{base_url}/api/observability/metrics",
+            headers=headers,
+        )
         # resource metrics
         resource_metric_reader = PeriodicExportingMetricReader(
-            exporter=metric_exporter,
+            exporter=resource_metric_exporter,
             export_interval_millis=_RESOURCE_METRIC_EXPORT_INTERVAL_MS,
         )
         self._resource_meter_provider = MeterProvider(
@@ -281,7 +315,12 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
             return [Observation(float(callback()), attrs)]
 
         self._user_observable_gauges[key] = self._user_meter.create_observable_gauge(
-            "refiner.user.observable_gauge",
+            _observable_gauge_name(
+                label=label,
+                kind=kind,
+                unit=unit,
+                step_index=step_index,
+            ),
             callbacks=[_observe],
             unit=unit,
         )
