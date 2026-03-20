@@ -88,3 +88,15 @@ def test_register_user_gauge_dedupes_same_identity() -> None:
     assert emitter._user_meter.calls == [
         ("refiner.user.observable_gauge.in_flight__rows__step_1", "rows")
     ]
+
+
+def test_observable_gauge_name_is_capped() -> None:
+    name = _observable_gauge_name(
+        label="x" * 400,
+        kind=None,
+        unit="rows",
+        step_index=1,
+    )
+
+    assert len(name) <= 255
+    assert name.startswith("refiner.user.observable_gauge.")

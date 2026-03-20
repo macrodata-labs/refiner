@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from types import TracebackType
 from typing import cast
 
 import pyarrow as pa
@@ -26,10 +27,9 @@ class ShardDeltaTracker:
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: object,
+        _exc: BaseException | None,
+        _tb: TracebackType | None,
     ) -> None:
-        del exc, tb
         if exc_type is None:
             self.emit()
 

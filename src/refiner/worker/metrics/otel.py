@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
 import re
 import traceback
 from typing import Any
@@ -33,11 +34,18 @@ def _observable_gauge_name(
         if part
     )
     suffix = re.sub(r"[^a-zA-Z0-9_]+", "_", suffix).strip("_").lower()
-    return (
+    name = (
         f"refiner.user.observable_gauge.{suffix}"
         if suffix
         else "refiner.user.observable_gauge"
     )
+    if len(name) <= 255:
+        return name
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:12]
+    prefix = "refiner.user.observable_gauge."
+    budget = 255 - len(prefix) - len(digest) - 2
+    trimmed = suffix[:budget].rstrip("_")
+    return f"{prefix}{trimmed}__{digest}"
 
 
 class OtelTelemetryEmitter(UserMetricsEmitter):
@@ -353,4 +361,4 @@ class OtelTelemetryEmitter(UserMetricsEmitter):
                     pass
 
 
-__all__ = ["OtelTelemetryEmitter", "_observable_gauge_name"]
+__all__ = ["OtelTelemetryEmitter"]
