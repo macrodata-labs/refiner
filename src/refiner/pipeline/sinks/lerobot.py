@@ -32,6 +32,7 @@ from refiner.robotics.lerobot_format import (
     infer_feature_info,
 )
 from refiner.worker.context import get_active_run_handle
+from refiner.worker.metrics.api import register_gauge
 
 _DEFAULT_DATA_FILE_SIZE_IN_MB = 100
 _DEFAULT_VIDEO_FILE_SIZE_IN_MB = 200
@@ -111,9 +112,17 @@ class LeRobotWriterSink(BaseSink):
             max_in_flight=max_video_prepare_in_flight,
             preserve_order=False,
         )
+        self._episodes_in_flight_registered = False
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
         """Submit one async write task per episode row in the shard-local block."""
+        if not self._episodes_in_flight_registered:
+            register_gauge(
+                "episodes_in_flight",
+                lambda: len(self._async_window),
+                unit="episodes",
+            )
+            self._episodes_in_flight_registered = True
         state = self._state_for_shard(shard_id)
         for row in block:
             self._async_window.submit_blocking(self._write_row(state, row))
@@ -389,6 +398,11 @@ class LeRobotWriterSink(BaseSink):
             state.features.update(video_features)
         state.episode_rows.append(written_row)
         state.frames.total_rows += frames.num_rows
+        if row.shard_id is not None:
+            row.log_throughput("episodes_written", 1, unit="episodes")
+            row.log_histogram("frames", frame_count, unit="frames", per="episode")
+            if video_inputs:
+                row.log_throughput("videos_written", len(video_inputs), unit="videos")
 
     async def _write_video(
         self,

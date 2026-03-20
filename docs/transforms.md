@@ -16,12 +16,12 @@ Use the expression-backed methods when you can. They are easier to optimize and 
 
 | method | accepted argument | how it runs | effect |
 | --- | --- | --- | --- |
-| `.map(fn)` | `fn(row) -> Mapping \| Row` | Python row-by-row | patches or replaces each row |
+| `.map(fn)` | `fn(row) -> dict[str, object] \| Row` | Python row-by-row | patches or replaces each row |
 | `.map_table(fn)` | `fn(table) -> pa.Table` | vectorized block-by-block | transforms fused Arrow tables directly |
-| `.flat_map(fn)` | `fn(row) -> Iterable[Row]` | Python row-by-row | emits zero, one, or many rows per input row |
+| `.flat_map(fn)` | `fn(row) -> Iterable[dict[str, object] \| Row]` | Python row-by-row | emits zero, one, or many rows per input row |
 | `.filter(predicate)` | `predicate` can be an `Expr` or `fn(row) -> bool` | expression-backed if given an `Expr`, otherwise Python row-by-row | removes rows that do not satisfy the predicate |
 | `.batch_map(fn, batch_size=...)` | `fn(batch) -> Iterable[Row]` | Python batch-by-batch | transforms rows in batches instead of one at a time |
-| `.map_async(fn, max_in_flight=..., preserve_order=...)` | async `fn(row) -> Mapping \| Row` | Python async row-by-row | runs async enrichment or inference with bounded concurrency |
+| `.map_async(fn, max_in_flight=..., preserve_order=...)` | async `fn(row) -> dict[str, object] \| Row` | Python async row-by-row | runs async enrichment or inference with bounded concurrency |
 | `.with_columns(**assignments)` | keyword assignments where each value is an `Expr` or literal | expression-backed | adds or overwrites multiple columns |
 | `.with_column(name, value)` | a column name plus an `Expr` or literal | expression-backed | adds or overwrites one column |
 | `.select(*columns)` | one or more column names | expression-backed | keeps only the named columns |

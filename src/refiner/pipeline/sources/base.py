@@ -6,7 +6,7 @@ from typing import Any, TypeAlias
 
 import pyarrow as pa
 
-from refiner.pipeline.data.tabular import Tabular, set_or_append_column
+from refiner.pipeline.data.tabular import Tabular, repeat_scalar, set_or_append_column
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import Shard
 from refiner.worker.metrics.api import log_throughput
@@ -64,7 +64,7 @@ def _with_shard_id(unit: SourceUnit, shard_id: str) -> SourceUnit:
         if table.num_rows == 0:
             return unit
 
-        shard_col = pa.array([shard_id] * int(table.num_rows), type=pa.string())
+        shard_col = repeat_scalar(pa.scalar(shard_id, type=pa.string()), table.num_rows)
         return unit.with_table(
             set_or_append_column(table, _INTERNAL_SHARD_ID_KEY, shard_col)
         )

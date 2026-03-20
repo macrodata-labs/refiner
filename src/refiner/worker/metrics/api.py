@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from refiner.worker.context import get_active_step_index
 from refiner.worker.metrics.context import get_active_user_metrics_emitter
 
@@ -14,6 +16,7 @@ def log_throughput(
     shard_id: str,
     *,
     unit: str | None = None,
+    step_index: int | None = None,
 ) -> None:
     """
     Used to measure the rate of "label" in "unit" over time.
@@ -34,7 +37,7 @@ def log_throughput(
         label=label,
         value=float(value),
         shard_id=shard_id,
-        step_index=get_active_step_index(),
+        step_index=step_index if step_index is not None else get_active_step_index(),
         unit=unit,
     )
 
@@ -45,6 +48,7 @@ def log_gauge(
     *,
     kind: str | None = None,
     unit: str | None = None,
+    step_index: int | None = None,
 ) -> None:
     """
     Instantaneous measure of "label" in "unit" at the current point in time
@@ -59,14 +63,12 @@ def log_gauge(
     """
     if not is_not_empty(label):
         raise ValueError("label must be non-empty")
-    if kind is not None and not is_not_empty(kind):
-        raise ValueError("kind must be non-empty when provided")
     emitter = get_active_user_metrics_emitter()
     emitter.emit_user_gauge(
         label=label,
         value=float(value),
         kind=kind,
-        step_index=get_active_step_index(),
+        step_index=step_index if step_index is not None else get_active_step_index(),
         unit=unit,
     )
 
@@ -74,6 +76,7 @@ def log_gauge(
 def log_gauges(
     label: str,
     unit: str | None = None,
+    step_index: int | None = None,
     **values: float | int,
 ) -> None:
     """
@@ -81,7 +84,26 @@ def log_gauges(
     log_gauges("memory", unit="GB", used=9, allocated=10)
     """
     for kind, value in values.items():
-        log_gauge(label, value, kind=kind, unit=unit)
+        log_gauge(label, value, kind=kind, unit=unit, step_index=step_index)
+
+
+def register_gauge(
+    label: str,
+    callback: Callable[[], float | int],
+    *,
+    kind: str | None = None,
+    unit: str | None = None,
+    step_index: int | None = None,
+) -> None:
+    if not is_not_empty(label):
+        raise ValueError("label must be non-empty")
+    get_active_user_metrics_emitter().register_user_gauge(
+        label=label,
+        callback=callback,
+        kind=kind,
+        step_index=step_index if step_index is not None else get_active_step_index(),
+        unit=unit,
+    )
 
 
 def log_histogram(
@@ -91,23 +113,28 @@ def log_histogram(
     *,
     per: str = "row",
     unit: str | None = None,
+    step_index: int | None = None,
 ) -> None:
     emitter = get_active_user_metrics_emitter()
     if not is_not_empty(label):
         raise ValueError("label must be non-empty")
     if not is_not_empty(shard_id):
         raise ValueError("shard_id must be non-empty")
-    if not is_not_empty(per):
-        raise ValueError("per must be non-empty")
     value = float(value)
     emitter.emit_user_histogram(
         label=label,
         value=value,
         shard_id=shard_id,
         per=per,
-        step_index=get_active_step_index(),
+        step_index=step_index if step_index is not None else get_active_step_index(),
         unit=unit,
     )
 
 
-__all__ = ["log_throughput", "log_gauge", "log_gauges", "log_histogram"]
+__all__ = [
+    "log_throughput",
+    "log_gauge",
+    "log_gauges",
+    "register_gauge",
+    "log_histogram",
+]

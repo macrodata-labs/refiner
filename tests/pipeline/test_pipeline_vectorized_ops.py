@@ -5,11 +5,17 @@ from datetime import datetime, timezone
 import pyarrow as pa
 import pytest
 
+from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 import refiner.pipeline.pipeline as pipeline_module
 import refiner.execution.engine as engine_module
+from refiner.execution.operators.vectorized import (
+    apply_vectorized_op,
+    apply_vectorized_ops,
+)
 from refiner.pipeline import from_items
+from refiner.pipeline.steps import FilterExprStep, FnTableStep
 from refiner import col, if_else
 
 
@@ -105,6 +111,32 @@ def test_map_table_runs_on_vectorized_path() -> None:
     assert [int(r["y"]) for r in out] == [11, 12, 13]
 
 
+def test_apply_vectorized_op_filter_without_explicit_shard_counts() -> None:
+    table = pa.table(
+        {SHARD_ID_COLUMN: pa.array(["s1", "s1", "s2"]), "x": pa.array([1, 2, 3])}
+    )
+    out, counts = apply_vectorized_op(
+        table,
+        FilterExprStep(predicate=col("x") >= 2, index=1),
+    )
+
+    assert out.to_pydict()["x"] == [2, 3]
+    assert counts == {"s1": 1, "s2": 1}
+
+
+def test_apply_vectorized_op_map_table_without_explicit_shard_counts() -> None:
+    table = pa.table({SHARD_ID_COLUMN: pa.array(["s1", "s2"]), "x": pa.array([1, 2])})
+    out, counts = apply_vectorized_op(
+        table,
+        FnTableStep(
+            fn=lambda current: current.append_column("y", pa.array([10, 20])), index=1
+        ),
+    )
+
+    assert out.to_pydict()["y"] == [10, 20]
+    assert counts == {"s1": 1, "s2": 1}
+
+
 def test_map_table_does_not_fall_back_to_row_execution(monkeypatch) -> None:
     def _unexpected_row_execution(*args, **kwargs):
         raise AssertionError("row execution should not run for fused vectorized ops")
@@ -120,6 +152,41 @@ def test_map_table_does_not_fall_back_to_row_execution(monkeypatch) -> None:
     out = pipeline.materialize()
 
     assert [int(row["z"]) for row in out] == [100, 200, 300]
+
+
+def test_apply_vectorized_ops_emits_only_final_shard_delta_for_fused_segment() -> None:
+    block = Tabular.from_rows(
+        [
+            DictRow({"x": 1}, shard_id="s1"),
+            DictRow({"x": 2}, shard_id="s1"),
+        ]
+    )
+    deltas: list[dict[str, int]] = []
+
+    apply_vectorized_ops(
+        block.table,
+        [
+            FnTableStep(
+                fn=lambda table: table.set_column(
+                    table.schema.get_field_index(SHARD_ID_COLUMN),
+                    SHARD_ID_COLUMN,
+                    pa.array(["s2", "s2"]),
+                ),
+                index=1,
+            ),
+            FnTableStep(
+                fn=lambda table: table.set_column(
+                    table.schema.get_field_index(SHARD_ID_COLUMN),
+                    SHARD_ID_COLUMN,
+                    pa.array(["s1", "s1"]),
+                ),
+                index=2,
+            ),
+        ],
+        on_shard_delta=deltas.append,
+    )
+
+    assert deltas == []
 
 
 def test_datetime_namespace_to_date_and_year() -> None:

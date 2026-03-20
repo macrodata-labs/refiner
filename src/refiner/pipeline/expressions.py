@@ -370,7 +370,7 @@ def _null_scalar_like(value: pa.Array | pa.ChunkedArray | pa.Scalar) -> pa.Scala
 
 
 def eval_expr_arrow(
-    expr: Expr, table: pa.Table | pa.RecordBatch
+    expr: Expr, table: pa.Table
 ) -> pa.Array | pa.ChunkedArray | pa.Scalar:
     op = expr.op
     args = expr.args

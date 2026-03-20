@@ -38,22 +38,23 @@ You can emit user metrics inside pipeline code:
 ```python
 import refiner as mdr
 
-pipeline = mdr.read_parquet("data/*.parquet").map(
-    lambda row: (
-        mdr.log_throughput("rows_seen", 1, shard_id=str(row["__shard_id"]), unit="rows"),
-        mdr.log_gauge("batch_size", 128, unit="rows"),
-        mdr.log_histogram("latency_ms", 42.5, shard_id=str(row["__shard_id"]), unit="ms"),
-        row,
-    )[-1]
-)
+def tag_row(row: mdr.Row) -> mdr.Row:
+    row.log_throughput("rows_seen", 1, unit="rows")
+    row.log_histogram("latency_ms", 42.5, unit="ms")
+    return row.update(tagged=True)
+
+pipeline = mdr.read_parquet("data/*.parquet").map(tag_row)
 ```
 
 Available helpers:
 
+- `row.log_throughput(...)`
+- `row.log_histogram(...)`
 - `mdr.log_throughput(...)`
 - `mdr.log_gauge(...)`
 - `mdr.log_gauges(...)`
 - `mdr.log_histogram(...)`
+- `mdr.register_gauge(...)`
 
 If telemetry is unavailable, these calls are no-ops.
 
