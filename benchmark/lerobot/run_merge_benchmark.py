@@ -19,9 +19,9 @@ from huggingface_hub import get_token
 from refiner.io import DataFolder
 
 
-DEFAULT_REPO_IDS = (
-    "macrodata/aloha_static_battery_ep000_004",
-    "macrodata/aloha_static_battery_ep005_009",
+DEFAULT_INPUT_ROOTS = (
+    "hf://datasets/macrodata/aloha_static_battery_ep000_004",
+    "hf://datasets/macrodata/aloha_static_battery_ep005_009",
 )
 DEFAULT_ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,7 +34,7 @@ class CaseResult:
     iteration: int
     started_at_utc: str
     finished_at_utc: str
-    repo_ids: list[str]
+    input_roots: list[str]
     hf_home: str
     output_root: str
     wall_time_s: float
@@ -53,12 +53,13 @@ def _parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument(
-        "--repo-id",
-        dest="repo_ids",
+        "--input-root",
+        dest="input_roots",
         action="append",
         help=(
-            "Input LeRobot dataset repo ID. Repeat the flag for multiple datasets. "
-            f"Defaults to {', '.join(DEFAULT_REPO_IDS)}."
+            "Input LeRobot dataset root for the Refiner benchmark. Repeat the flag "
+            "for multiple datasets. Accepts either a local path or an "
+            f"'hf://datasets/owner/name' URI. Defaults to {', '.join(DEFAULT_INPUT_ROOTS)}."
         ),
     )
     parser.add_argument(
@@ -213,9 +214,23 @@ def _read_lerobot_totals(output_root: str | Path) -> tuple[int, int]:
     )
 
 
+def _repo_id_from_input_root(input_root: str) -> str:
+    prefix = "hf://datasets/"
+    if not input_root.startswith(prefix):
+        raise ValueError(
+            "official benchmark mode requires --input-root values in the form "
+            "'hf://datasets/owner/name'; "
+            f"got {input_root!r}"
+        )
+    repo_id = input_root.removeprefix(prefix).strip("/")
+    if not repo_id or "/" not in repo_id:
+        raise ValueError(f"Invalid Hugging Face dataset URI: {input_root!r}")
+    return repo_id
+
+
 def _run_official_case(
     *,
-    repo_ids: list[str],
+    input_roots: list[str],
     run_dir: Path,
     iteration: int,
     output_root: str | None,
@@ -234,6 +249,7 @@ def _run_official_case(
     started_at = datetime.now(timezone.utc)
     total_start = perf_counter()
 
+    repo_ids = [_repo_id_from_input_root(input_root) for input_root in input_roots]
     datasets = [
         LeRobotDataset(repo_id=repo_id, download_videos=True) for repo_id in repo_ids
     ]
@@ -263,7 +279,7 @@ def _run_official_case(
         iteration=iteration,
         started_at_utc=started_at.isoformat(),
         finished_at_utc=finished_at.isoformat(),
-        repo_ids=repo_ids,
+        input_roots=input_roots,
         hf_home=str(hf_home),
         output_root=final_output_root,
         wall_time_s=wall_time_s,
@@ -277,7 +293,7 @@ def _run_official_case(
 
 def _run_refiner_case(
     *,
-    repo_ids: list[str],
+    input_roots: list[str],
     run_dir: Path,
     iteration: int,
     num_workers: int,
@@ -301,7 +317,7 @@ def _run_refiner_case(
     total_start = perf_counter()
 
     launch_stats = (
-        mdr.read_lerobot([f"hf://datasets/{repo_id}" for repo_id in repo_ids])
+        mdr.read_lerobot(input_roots)
         .write_lerobot(str(output_root))
         .launch_local(
             name=f"lerobot-benchmark-merge-{iteration}",
@@ -323,7 +339,7 @@ def _run_refiner_case(
         iteration=iteration,
         started_at_utc=started_at.isoformat(),
         finished_at_utc=finished_at.isoformat(),
-        repo_ids=repo_ids,
+        input_roots=input_roots,
         hf_home=str(hf_home),
         output_root=str(output_root),
         wall_time_s=wall_time_s,
@@ -341,10 +357,10 @@ def _run_case_worker(args: argparse.Namespace) -> int:
     if args.run_dir is None or args.result_path is None:
         raise ValueError("worker mode requires --run-dir and --result-path")
 
-    repo_ids = list(args.repo_ids or DEFAULT_REPO_IDS)
+    input_roots = list(args.input_roots or DEFAULT_INPUT_ROOTS)
     args.run_dir.mkdir(parents=True, exist_ok=True)
     args.result_path.parent.mkdir(parents=True, exist_ok=True)
-    _configure_isolated_hf_cache(args.run_dir / "hf-home")
+    # _configure_isolated_hf_cache(args.run_dir / "hf-home")
     upload_bucket_prefix = (
         _normalize_hf_bucket_prefix(args.upload_hf_bucket)
         if args.upload_hf_bucket is not None
@@ -365,14 +381,14 @@ def _run_case_worker(args: argparse.Namespace) -> int:
 
     if args.impl == "official":
         result = _run_official_case(
-            repo_ids=repo_ids,
+            input_roots=input_roots,
             run_dir=args.run_dir,
             iteration=args.iteration_index,
             output_root=upload_output_root,
         )
     elif args.impl == "refiner":
         result = _run_refiner_case(
-            repo_ids=repo_ids,
+            input_roots=input_roots,
             run_dir=args.run_dir,
             iteration=args.iteration_index,
             num_workers=args.num_workers,
@@ -404,7 +420,7 @@ def _subprocess_case(
     *,
     implementation: str,
     iteration: int,
-    repo_ids: list[str],
+    input_roots: list[str],
     artifacts_dir: Path,
     python_executable: str,
     num_workers: int,
@@ -432,8 +448,8 @@ def _subprocess_case(
     ]
     if upload_hf_bucket is not None:
         cmd.extend(["--upload-hf-bucket", upload_hf_bucket])
-    for repo_id in repo_ids:
-        cmd.extend(["--repo-id", repo_id])
+    for input_root in input_roots:
+        cmd.extend(["--input-root", input_root])
 
     completed = subprocess.run(
         cmd,
@@ -539,7 +555,10 @@ def main() -> int:
     if args.__dict__.get(_CASE_COMMAND):
         return _run_case_worker(args)
 
-    repo_ids = list(args.repo_ids or DEFAULT_REPO_IDS)
+    input_roots = list(args.input_roots or DEFAULT_INPUT_ROOTS)
+    if args.mode in {"both", "official"}:
+        for input_root in input_roots:
+            _repo_id_from_input_root(input_root)
     implementations = ["official", "refiner"] if args.mode == "both" else [args.mode]
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     artifacts_dir = args.artifacts_dir / timestamp
@@ -555,7 +574,7 @@ def main() -> int:
             result = _subprocess_case(
                 implementation=implementation,
                 iteration=iteration,
-                repo_ids=repo_ids,
+                input_roots=input_roots,
                 artifacts_dir=artifacts_dir,
                 python_executable=args.python,
                 num_workers=args.num_workers,
