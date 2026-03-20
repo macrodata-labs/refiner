@@ -36,8 +36,11 @@ class ShardDeltaTracker:
             self.values[shard_id] = next_value
 
     def remove_rows(self, rows: Iterable[Row]) -> None:
+        if self.emit_fn is None:
+            return
         for row in rows:
-            self.add(row.require_shard_id(), -1)
+            if row.shard_id is not None:
+                self.add(row.shard_id, -1)
 
     def emit(self) -> None:
         if self.values and self.emit_fn is not None:

@@ -50,6 +50,8 @@ class Row(Mapping[str, Any]):
         *,
         unit: str | None = None,
     ) -> None:
+        if self.shard_id is None:
+            return
         log_throughput(label, value, shard_id=self.require_shard_id(), unit=unit)
 
     def log_histogram(
@@ -60,6 +62,8 @@ class Row(Mapping[str, Any]):
         per: str = "row",
         unit: str | None = None,
     ) -> None:
+        if self.shard_id is None:
+            return
         log_histogram(
             label,
             value,

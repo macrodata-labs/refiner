@@ -110,7 +110,8 @@ def execute_row_steps(
                             out.append(row)
                         else:
                             row.log_throughput("rows_dropped", 1, unit="rows")
-                            delta.add(row.require_shard_id(), -1)
+                            if row.shard_id is not None:
+                                delta.add(row.shard_id, -1)
                 return
 
             if isinstance(step, FlatMapStep):
@@ -128,7 +129,8 @@ def execute_row_steps(
                                 )
                             produced += 1
                             out.append(emitted)
-                        delta.add(row.require_shard_id(), produced - 1)
+                        if row.shard_id is not None:
+                            delta.add(row.shard_id, produced - 1)
                         row.log_histogram(
                             "rows_out", produced, unit="rows", per="input_row"
                         )
@@ -148,7 +150,8 @@ def execute_row_steps(
                     delta.remove_rows(batch_in)
                     for item in step.apply_batch(batch_in):
                         item.log_throughput("rows_out", 1, unit="rows")
-                        delta.add(item.require_shard_id(), 1)
+                        if item.shard_id is not None:
+                            delta.add(item.shard_id, 1)
                         out.append(item)
                 return
 
