@@ -7,8 +7,8 @@ import pyarrow.compute as pc
 
 from refiner.execution.tracking.shards import (
     ShardDeltaFn,
-    ShardDeltaTracker,
     count_table_by_shard,
+    counts_delta,
 )
 from refiner.pipeline.data.tabular import Tabular, repeat_scalar
 from refiner.pipeline.expressions import eval_expr_arrow
@@ -30,7 +30,6 @@ def apply_vectorized_op(
     op: VectorizedOp,
     *,
     shard_counts: dict[str, int] | None = None,
-    on_shard_delta: ShardDeltaFn | None = None,
 ) -> tuple[pa.Table, dict[str, int] | None]:
     if shard_counts is None:
         shard_counts = count_table_by_shard(table)
@@ -78,28 +77,26 @@ def apply_vectorized_op(
             )
         )
         next_shard_counts = count_table_by_shard(next_table)
-        with ShardDeltaTracker(on_shard_delta) as shard_delta:
-            for shard_id in set(shard_counts) | set(next_shard_counts):
-                previous = int(shard_counts.get(shard_id, 0))
-                current = int(next_shard_counts.get(shard_id, 0))
-                if current > 0:
-                    log_throughput(
-                        "rows_kept",
-                        current,
-                        shard_id=shard_id,
-                        unit="rows",
-                        step_index=op.index,
-                    )
-                shard_delta.add(shard_id, current - previous)
-                dropped = previous - current
-                if dropped > 0:
-                    log_throughput(
-                        "rows_dropped",
-                        dropped,
-                        shard_id=shard_id,
-                        unit="rows",
-                        step_index=op.index,
-                    )
+        for shard_id in set(shard_counts) | set(next_shard_counts):
+            previous = int(shard_counts.get(shard_id, 0))
+            current = int(next_shard_counts.get(shard_id, 0))
+            if current > 0:
+                log_throughput(
+                    "rows_kept",
+                    current,
+                    shard_id=shard_id,
+                    unit="rows",
+                    step_index=op.index,
+                )
+            dropped = previous - current
+            if dropped > 0:
+                log_throughput(
+                    "rows_dropped",
+                    dropped,
+                    shard_id=shard_id,
+                    unit="rows",
+                    step_index=op.index,
+                )
         return next_table, next_shard_counts
 
     if isinstance(op, FnTableStep):
@@ -109,13 +106,6 @@ def apply_vectorized_op(
                 f"map_table() must return pa.Table, got {type(next_table)!r}"
             )
         next_shard_counts = count_table_by_shard(next_table)
-        with ShardDeltaTracker(on_shard_delta) as shard_delta:
-            for shard_id in set(shard_counts) | set(next_shard_counts):
-                shard_delta.add(
-                    shard_id,
-                    int(next_shard_counts.get(shard_id, 0))
-                    - int(shard_counts.get(shard_id, 0)),
-                )
         return next_table, next_shard_counts
 
     raise TypeError(f"Unsupported vectorized op: {type(op)!r}")
@@ -128,7 +118,8 @@ def apply_vectorized_ops(
     on_shard_delta: ShardDeltaFn | None = None,
 ) -> Tabular:
     table = block.table
-    shard_counts = count_table_by_shard(table)
+    initial_shard_counts = count_table_by_shard(table)
+    shard_counts = initial_shard_counts
     for op in ops:
         for shard_id, count in shard_counts.items():
             log_throughput(
@@ -142,10 +133,13 @@ def apply_vectorized_ops(
             table,
             op,
             shard_counts=shard_counts,
-            on_shard_delta=on_shard_delta,
         )
         if next_shard_counts is not None:
             shard_counts = next_shard_counts
+    if on_shard_delta is not None:
+        delta = counts_delta(produced=shard_counts, consumed=initial_shard_counts)
+        if delta:
+            on_shard_delta(delta)
     return block.with_table(table)
 
 

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 
+from refiner.execution.operators.row import execute_row_steps
 from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline.sources.readers.base import BaseReader
+from refiner.pipeline.steps import FnFlatMapStep
 
 
 class _LocalFakeReader(BaseReader):
@@ -131,6 +133,28 @@ def test_flat_map_can_expand_rows() -> None:
 
     out = list(pipeline.iter_rows())
     assert [r["x"] for r in out] == [1, 10, 2, 20]
+
+
+def test_flat_map_shard_delta_uses_emitted_row_shards() -> None:
+    deltas: list[dict[str, int]] = []
+    out = list(
+        execute_row_steps(
+            [DictRow({"x": 1}, shard_id="s1")],
+            [
+                FnFlatMapStep(
+                    fn=lambda row: [
+                        row.update(y=10),
+                        DictRow({"x": 2, "y": 20}, shard_id="s2"),
+                    ],
+                    index=1,
+                )
+            ],
+            on_shard_delta=deltas.append,
+        )
+    )
+
+    assert [row.shard_id for row in out] == ["s1", "s2"]
+    assert deltas == [{"s2": 1}]
 
 
 def test_filter_primitive_keeps_matching_rows() -> None:

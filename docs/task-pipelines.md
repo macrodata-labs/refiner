@@ -23,7 +23,7 @@ In practice, task pipelines are often used for rank-aware side effects. The retu
 ```python
 import refiner as mdr
 
-def task_worker(rank: int, world_size: int) -> dict | None:
+def task_worker(rank: int, world_size: int) -> dict[str, object] | None:
     # Do rank-aware work here, for example:
     # - call an external tool
     # - run inference

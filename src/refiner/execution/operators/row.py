@@ -118,6 +118,7 @@ def execute_row_steps(
                 with ShardDeltaTracker(on_shard_delta) as delta:
                     for row in inp.take_all():
                         produced = 0
+                        emitted_by_shard: dict[str, int] = {}
                         for item in step.apply_row_many(row):
                             if isinstance(item, Row):
                                 emitted = item
@@ -128,9 +129,15 @@ def execute_row_steps(
                                     f"Unsupported flat_map result type: {type(item)!r}"
                                 )
                             produced += 1
+                            if emitted.shard_id is not None:
+                                emitted_by_shard[emitted.shard_id] = (
+                                    emitted_by_shard.get(emitted.shard_id, 0) + 1
+                                )
                             out.append(emitted)
                         if row.shard_id is not None:
-                            delta.add(row.shard_id, produced - 1)
+                            delta.add(row.shard_id, -1)
+                        for shard_id, count in emitted_by_shard.items():
+                            delta.add(shard_id, count)
                         row.log_histogram(
                             "rows_out", produced, unit="rows", per="input_row"
                         )
