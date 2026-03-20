@@ -14,8 +14,8 @@ Each benchmark case runs with a fresh isolated Hugging Face cache directory. The
 
 The two implementations start from the Hub differently:
 
-- official `lerobot`: `LeRobotDataset(repo_id=..., download_videos=True)` with an empty isolated HF cache
-- Refiner: `read_lerobot("hf://datasets/...")` with the same empty-cache setup
+- official `lerobot`: repo IDs derived from `--input-root hf://datasets/...`, then `LeRobotDataset(repo_id=..., download_videos=True)` with an empty isolated HF cache
+- Refiner: `read_lerobot(...)` from the `--input-root` values with the same empty-cache setup
 
 The official merge API does not accept a true `hf://datasets/...` root. Passing `hf://...` there is treated as a local filesystem path, so this benchmark uses the closest valid cold-start configuration for the official side.
 

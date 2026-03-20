@@ -9,6 +9,7 @@ from typing import Any, Sequence, cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from refiner.execution.asyncio.runtime import submit
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.media import VideoFile
@@ -172,8 +173,13 @@ class LeRobotWriterSink(BaseSink):
             )
 
         state.frames.close()
-        for writer in state.video_writers.values():
-            writer.close()
+        writers = tuple(state.video_writers.values())
+        if writers:
+
+            async def _close_all_video_writers() -> None:
+                await asyncio.gather(*(writer.close_async() for writer in writers))
+
+            submit(_close_all_video_writers()).result()
         state.video_writers.clear()
 
         episode_count = len(state.episode_rows)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from typing import Iterator, cast
 
@@ -474,6 +475,43 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
         path for directory in video_dirs for path in sorted(directory.glob("*.mp4"))
     ]
     assert any(path.name == "file-001.mp4" for path in video_files)
+
+
+def test_lerobot_sink_closes_video_writers_concurrently(tmp_path: Path) -> None:
+    writer = LeRobotWriterSink(str(tmp_path / "out"))
+    started = 0
+    started_lock = threading.Lock()
+    both_started = threading.Event()
+    closed: list[str] = []
+
+    class _FakeVideoWriter:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close_async(self) -> None:
+            nonlocal started
+            with started_lock:
+                started += 1
+                if started == 2:
+                    both_started.set()
+            await asyncio.to_thread(both_started.wait, 0.5)
+            if not both_started.is_set():
+                raise AssertionError("video writer closes did not overlap")
+            closed.append(self.name)
+
+    state = writer._state_for_shard("shard-1")
+    state.metadata = _metadata()
+    state.video_writers = cast(
+        dict[str, VideoStreamWriter],
+        {
+            "left": _FakeVideoWriter("left"),
+            "right": _FakeVideoWriter("right"),
+        },
+    )
+    writer._commit_shard(state)
+
+    assert started == 2
+    assert sorted(closed) == ["left", "right"]
 
 
 def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> None:
