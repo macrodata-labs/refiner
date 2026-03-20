@@ -23,8 +23,15 @@ class ShardDeltaTracker:
     def __enter__(self) -> ShardDeltaTracker:
         return self
 
-    def __exit__(self, *args: object) -> None:
-        self.emit()
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
+        del exc, tb
+        if exc_type is None:
+            self.emit()
 
     def add(self, shard_id: str, amount: int) -> None:
         if self.emit_fn is None or amount == 0:
