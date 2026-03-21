@@ -18,8 +18,12 @@ def test_build_run_manifest_captures_script_from_argv(
         lambda: "0.2.0",
     )
     monkeypatch.setattr(
-        "refiner.platform.manifest._resolve_refiner_ref",
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
         lambda: "abc123def456",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
     )
 
     manifest = build_run_manifest()
@@ -47,8 +51,12 @@ def test_build_run_manifest_redacts_secret_values(monkeypatch, tmp_path: Path) -
         lambda: "0.2.0",
     )
     monkeypatch.setattr(
-        "refiner.platform.manifest._resolve_refiner_ref",
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
         lambda: "abc123def456",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
     )
 
     manifest = build_run_manifest()
@@ -69,7 +77,11 @@ def test_build_run_manifest_omits_stage_runtimes_by_default(
         lambda: "0.2.0",
     )
     monkeypatch.setattr(
-        "refiner.platform.manifest._resolve_refiner_ref",
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
         lambda: None,
     )
 

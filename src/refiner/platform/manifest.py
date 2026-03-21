@@ -7,7 +7,6 @@ import platform
 import subprocess
 import sys
 from collections.abc import Sequence
-from functools import lru_cache
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
@@ -148,16 +147,11 @@ def _resolve_local_repo_git_sha() -> str | None:
     return sha or None
 
 
-@lru_cache(maxsize=1)
-def _resolve_refiner_ref() -> str | None:
-    return _resolve_direct_url_git_sha() or _resolve_local_repo_git_sha()
-
-
 def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
     refiner_version = _resolve_installed_version()
-    refiner_ref = _resolve_refiner_ref()
+    refiner_ref = _resolve_direct_url_git_sha() or _resolve_local_repo_git_sha()
 
     manifest: dict[str, Any] = {
         "version": 1,
