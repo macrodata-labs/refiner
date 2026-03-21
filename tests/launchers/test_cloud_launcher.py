@@ -71,9 +71,13 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         monkeypatch,
         manifest={
             "version": 1,
-            "environment": {"refiner_ref": "abc123def456"},
+            "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
             "script": {"text": "print('hi')"},
         },
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl")
@@ -103,13 +107,17 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
     assert request.manifest == {
         "version": 1,
-        "environment": {"refiner_ref": "abc123def456"},
+        "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
         "script": {"text": "print('hi')"},
     }
 
 
 def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> None:
     captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
 
     pipeline = read_jsonl("input.jsonl")
     pipeline.launch_cloud(name="demo cloud", sync_local_dependencies=False)
@@ -121,6 +129,10 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
 def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
 
     pipeline = read_jsonl("input.jsonl")
     pipeline.launch_cloud(
@@ -141,6 +153,10 @@ def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> No
     captured = _stub_cloud_submit(
         monkeypatch,
         manifest={"version": 1, "script": {"text": "TOKEN='super-secret-value'"}},
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl").map(
@@ -188,9 +204,16 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
                     secret_values=kwargs.get("secret_values", ()),
                 ),
             },
-            "environment": {"refiner_ref": "super-secret-value-ref"},
+            "environment": {
+                "refiner_version": "0.2.0",
+                "refiner_ref": "super-secret-value-ref",
+            },
             "dependencies": [{"name": "pkg", "version": "super-secret-value-dep"}],
         },
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl").map(
@@ -205,6 +228,7 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
     assert request.manifest["script"]["path"] == "/tmp/super-secret-value_job.py"
     assert "REDACTED_SECRET" in request.manifest["script"]["text"]
     assert secret not in request.manifest["script"]["text"]
+    assert request.manifest["environment"]["refiner_version"] == "0.2.0"
     assert request.manifest["environment"]["refiner_ref"] == "super-secret-value-ref"
     assert request.manifest["dependencies"] == [
         {"name": "pkg", "version": "super-secret-value-dep"}
@@ -303,6 +327,10 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
         "refiner.launchers.base.build_run_manifest",
         lambda **_: {"version": 1},
     )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
 
     pipeline = read_jsonl("input.jsonl")
     pipeline.launch_cloud(name="demo cloud")
@@ -314,3 +342,94 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
         request.stage_payloads[0].pipeline_payload.sha256
         != request.stage_payloads[1].pipeline_payload.sha256
     )
+
+
+def test_pipeline_launch_cloud_interactive_ref_fallback_accepts(monkeypatch) -> None:
+    captured = _stub_cloud_submit(
+        monkeypatch,
+        manifest={
+            "version": 1,
+            "environment": {"refiner_version": "0.2.0", "refiner_ref": "deadbeef"},
+        },
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: False,
+    )
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+
+    read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    request = cast(CloudRunCreateRequest, captured["request"])
+    manifest = cast(dict[str, object], request.manifest)
+    environment = cast(dict[str, object], manifest["environment"])
+    assert environment["refiner_ref"] is None
+    assert environment["refiner_version"] == "0.2.0"
+
+
+def test_pipeline_launch_cloud_interactive_ref_fallback_rejects(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    monkeypatch.setattr(
+        "refiner.launchers.base.build_run_manifest",
+        lambda **_: {
+            "version": 1,
+            "environment": {"refiner_version": "0.2.0", "refiner_ref": "deadbeef"},
+        },
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: False,
+    )
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+
+    with pytest.raises(SystemExit, match="aborted"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+
+def test_pipeline_launch_cloud_noninteractive_ref_fallback_env_override(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(
+        monkeypatch,
+        manifest={
+            "version": 1,
+            "environment": {"refiner_version": "0.2.0", "refiner_ref": "deadbeef"},
+        },
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: False,
+    )
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: False)
+    monkeypatch.setenv("MACRODATA_FALLBACK_TO_LATEST_PYPI", "1")
+
+    read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    request = cast(CloudRunCreateRequest, captured["request"])
+    manifest = cast(dict[str, object], request.manifest)
+    environment = cast(dict[str, object], manifest["environment"])
+    assert environment["refiner_ref"] is None
+
+
+def test_pipeline_launch_cloud_noninteractive_ref_fallback_requires_override(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    monkeypatch.setattr(
+        "refiner.launchers.base.build_run_manifest",
+        lambda **_: {
+            "version": 1,
+            "environment": {"refiner_version": "0.2.0", "refiner_ref": "deadbeef"},
+        },
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: False,
+    )
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: False)
+    monkeypatch.delenv("MACRODATA_FALLBACK_TO_LATEST_PYPI", raising=False)
+
+    with pytest.raises(SystemExit, match="MACRODATA_FALLBACK_TO_LATEST_PYPI=1"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")

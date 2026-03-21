@@ -14,8 +14,16 @@ def test_build_run_manifest_captures_script_from_argv(
 
     monkeypatch.setattr(sys, "argv", [str(script_path)])
     monkeypatch.setattr(
-        "refiner.platform.manifest._resolve_refiner_ref",
+        "refiner.platform.manifest._resolve_installed_version",
+        lambda: "0.2.0",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
         lambda: "abc123def456",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
     )
 
     manifest = build_run_manifest()
@@ -25,6 +33,7 @@ def test_build_run_manifest_captures_script_from_argv(
     assert manifest["script"]["text"] == "print('hello')\n"
     assert isinstance(manifest["script"]["sha256"], str)
     assert manifest["environment"]["python_version"]
+    assert manifest["environment"]["refiner_version"] == "0.2.0"
     assert manifest["environment"]["refiner_ref"] == "abc123def456"
     assert isinstance(manifest["dependencies"], list)
 
@@ -38,8 +47,16 @@ def test_build_run_manifest_redacts_secret_values(monkeypatch, tmp_path: Path) -
 
     monkeypatch.setattr(sys, "argv", [str(script_path)])
     monkeypatch.setattr(
-        "refiner.platform.manifest._resolve_refiner_ref",
+        "refiner.platform.manifest._resolve_installed_version",
+        lambda: "0.2.0",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
         lambda: "abc123def456",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
     )
 
     manifest = build_run_manifest()
@@ -55,7 +72,21 @@ def test_build_run_manifest_omits_stage_runtimes_by_default(
     script_path.write_text("print('hello')\n", encoding="utf-8")
 
     monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_installed_version",
+        lambda: "0.2.0",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
+    )
 
     manifest = build_run_manifest()
 
     assert "macrodata_cloud" not in manifest
+    assert manifest["environment"]["refiner_version"] == "0.2.0"
+    assert manifest["environment"]["refiner_ref"] is None

@@ -7,7 +7,6 @@ import platform
 import subprocess
 import sys
 from collections.abc import Sequence
-from functools import lru_cache
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
@@ -148,19 +147,24 @@ def _resolve_local_repo_git_sha() -> str | None:
     return sha or None
 
 
-@lru_cache(maxsize=1)
-def _resolve_refiner_ref() -> str | None:
-    return (
-        _resolve_direct_url_git_sha()
-        or _resolve_local_repo_git_sha()
-        or _resolve_installed_version()
-    )
+def refiner_ref_exists_on_remote(ref: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "https://github.com/macrodata-labs/refiner.git", ref],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
-    refiner_ref = _resolve_refiner_ref()
+    refiner_version = _resolve_installed_version()
+    refiner_ref = _resolve_direct_url_git_sha() or _resolve_local_repo_git_sha()
 
     manifest: dict[str, Any] = {
         "version": 1,
@@ -173,6 +177,7 @@ def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
         },
         "environment": {
             "python_version": platform.python_version(),
+            "refiner_version": refiner_version,
             "refiner_ref": refiner_ref,
             "platform": f"{platform.system().lower()}-{platform.machine().lower()}",
         },

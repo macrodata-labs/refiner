@@ -14,7 +14,7 @@ def _job_submit_response() -> dict[str, object]:
     }
 
 
-def test_create_job_includes_manifest_refiner_ref(monkeypatch) -> None:
+def test_create_job_includes_manifest_refiner_metadata(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_request_json(**kwargs: object) -> dict[str, object]:
@@ -28,7 +28,13 @@ def test_create_job_includes_manifest_refiner_ref(monkeypatch) -> None:
         name="local job",
         executor={"type": "refiner-local"},
         plan={"stages": [{"name": "stage_0", "steps": []}]},
-        manifest={"version": 1, "environment": {"refiner_ref": "abc123def456"}},
+        manifest={
+            "version": 1,
+            "environment": {
+                "refiner_version": "0.2.0",
+                "refiner_ref": "abc123def456",
+            },
+        },
     )
     assert ctx.job_id == "job-1"
     assert ctx.stage_index == 0
@@ -37,5 +43,8 @@ def test_create_job_includes_manifest_refiner_ref(monkeypatch) -> None:
     assert json_payload["executor"] == {"type": "refiner-local"}
     assert json_payload["manifest"] == {
         "version": 1,
-        "environment": {"refiner_ref": "abc123def456"},
+        "environment": {
+            "refiner_version": "0.2.0",
+            "refiner_ref": "abc123def456",
+        },
     }

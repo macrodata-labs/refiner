@@ -18,7 +18,7 @@ from refiner.platform.client import (
     sanitize_terminal_text,
     verify_api_key,
 )
-from refiner.cli.ui import display_identity, print_banner
+from refiner.cli.ui import display_identity, print_banner, stdin_is_interactive
 
 _TOKEN_SETTINGS_SUFFIX = "/settings/api-keys"
 
@@ -31,7 +31,7 @@ def _read_token(args: argparse.Namespace) -> str:
     if args.token and args.token.strip():
         return args.token.strip()
 
-    read_from_stdin = args.token_stdin or not sys.stdin.isatty()
+    read_from_stdin = args.token_stdin or not stdin_is_interactive()
     if read_from_stdin:
         token = sys.stdin.read().strip()
         if token:
