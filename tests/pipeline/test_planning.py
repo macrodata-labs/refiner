@@ -201,6 +201,30 @@ def test_compile_pipeline_plan_includes_sink_without_describe() -> None:
     assert "args" not in steps[1]
 
 
+def test_compile_pipeline_plan_redacts_sink_callable_args() -> None:
+    secret = "md_secret_value"
+
+    class CallableSink(BaseSink):
+        def write_block(self, block):
+            del block
+            return {}
+
+        def describe(self):
+            return (
+                "callable_sink",
+                "writer",
+                {"fn": lambda: secret},
+            )
+
+    steps = compile_pipeline_plan(
+        RefinerPipeline(FakeReader(), sink=CallableSink()),
+        secret_values=(secret,),
+    )["stages"][0]["steps"]
+
+    assert "md_secret_value" not in steps[1]["args"]["fn"]
+    assert steps[1]["args"]["__meta"]["fn"] == "code"
+
+
 def test_extract_lambda_source_handles_chained_call_fragment() -> None:
     fn = _score_filter_lambda()
     source = '.filter(lambda row: int(row["score"]) >= 15)'
