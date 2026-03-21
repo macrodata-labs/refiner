@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from contextlib import nullcontext
 from email.message import Message
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from urllib import error as urllib_error
 
@@ -120,3 +121,46 @@ def test_refiner_ref_exists_on_remote_returns_false_on_404(monkeypatch) -> None:
     )
 
     assert refiner_ref_exists_on_remote("abc123") is False
+
+
+def test_manifest_prefers_macrodata_refiner_distribution(monkeypatch) -> None:
+    def _version(name: str) -> str:
+        if name == "macrodata-refiner":
+            return "0.2.0"
+        if name == "refiner":  # pragma: no cover - should not be queried
+            raise AssertionError("legacy refiner distribution should not be used")
+        raise importlib_metadata.PackageNotFoundError(name)
+
+    class _Dist:
+        version = "0.2.0"
+
+        @staticmethod
+        def read_text(name: str) -> str | None:
+            if name == "direct_url.json":
+                return '{"vcs_info":{"commit_id":"abc123def456"}}'
+            return None
+
+    def _distribution(name: str):
+        if name == "macrodata-refiner":
+            return _Dist()
+        if name == "refiner":  # pragma: no cover - should not be queried
+            raise AssertionError("legacy refiner distribution should not be used")
+        raise importlib_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(
+        "refiner.platform.manifest.importlib_metadata.version", _version
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest.importlib_metadata.distribution",
+        _distribution,
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
+    )
+    monkeypatch.setattr(sys, "argv", ["-c"])
+
+    manifest = build_run_manifest()
+
+    assert manifest["environment"]["refiner_version"] == "0.2.0"
+    assert manifest["environment"]["refiner_ref"] == "abc123def456"

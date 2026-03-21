@@ -91,36 +91,32 @@ def _collect_dependencies() -> list[dict[str, str]]:
 
 
 def _resolve_installed_version() -> str | None:
-    for package_name in ("refiner", "macrodata-refiner"):
-        try:
-            version = importlib_metadata.version(package_name).strip()
-        except importlib_metadata.PackageNotFoundError:
-            continue
-        if version:
-            return version
-    return None
+    try:
+        version = importlib_metadata.version("macrodata-refiner").strip()
+    except importlib_metadata.PackageNotFoundError:
+        return None
+    return version or None
 
 
 def _resolve_direct_url_git_sha() -> str | None:
-    for package_name in ("refiner", "macrodata-refiner"):
-        try:
-            dist = importlib_metadata.distribution(package_name)
-        except importlib_metadata.PackageNotFoundError:
-            continue
-        raw = dist.read_text("direct_url.json")
-        if not raw:
-            continue
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        vcs_info = data.get("vcs_info")
-        if not isinstance(vcs_info, dict):
-            continue
-        commit = str(vcs_info.get("commit_id", "")).strip()
-        if commit:
-            return commit
-    return None
+    try:
+        dist = importlib_metadata.distribution("macrodata-refiner")
+    except importlib_metadata.PackageNotFoundError:
+        return None
+    raw = dist.read_text("direct_url.json")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    vcs_info = data.get("vcs_info")
+    if not isinstance(vcs_info, dict):
+        return None
+    commit = str(vcs_info.get("commit_id", "")).strip()
+    return commit or None
 
 
 def _resolve_repo_root(start: Path) -> Path | None:
