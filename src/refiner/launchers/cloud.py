@@ -111,7 +111,7 @@ class CloudLauncher(BaseLauncher):
     ) -> dict[str, object]:
         manifest = self._run_manifest(secret_values=secret_values)
         environment = manifest.get("environment")
-        if not isinstance(environment, dict):
+        if environment is None:
             return manifest
         environment_dict = cast(dict[str, object], environment)
         refiner_ref = environment_dict.get("refiner_ref")
