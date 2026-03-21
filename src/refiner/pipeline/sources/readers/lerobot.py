@@ -81,6 +81,10 @@ class LeRobotEpisodeReader(ParquetReader):
             split_row_groups=split_row_groups,
         )
 
+    def describe(self) -> dict[str, Any]:
+        inputs = [str(root.abs_paths("")) for root in self.roots]
+        return {"path": ", ".join(inputs), "inputs": inputs}
+
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read one planned episode shard and emit `LeRobotTabular` blocks."""
         descriptor = shard.descriptor

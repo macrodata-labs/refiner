@@ -313,6 +313,14 @@ def _step_payload(
     return payload
 
 
+def _sink_name_type(sink: Any) -> tuple[str, str, dict[str, Any] | None]:
+    payload = sink.describe()
+    if payload is not None:
+        return payload
+    sink_name = sink.__class__.__name__.replace("Sink", "").lower()
+    return sink_name or "sink", "writer", None
+
+
 def _serialize_args(
     args: dict[str, Any] | None, *, secret_values: tuple[str, ...] = ()
 ) -> dict[str, Any] | None:
@@ -389,16 +397,15 @@ def _compile_stage_steps(
             )
         )
 
-    sink_payload = pipeline.sink.describe() if pipeline.sink is not None else None
-    if sink_payload is not None:
-        base_name, step_type, args = sink_payload
+    if pipeline.sink is not None:
+        base_name, step_type, args = _sink_name_type(pipeline.sink)
         unique_name = _unique_name(base_name)
         steps.append(
             _step_payload(
                 name=unique_name,
                 step_type=step_type,
                 index=len(steps),
-                args=_serialize_args(args),
+                args=_serialize_args(args, secret_values=secret_values),
             )
         )
 

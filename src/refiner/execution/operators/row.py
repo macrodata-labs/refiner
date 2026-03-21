@@ -58,15 +58,16 @@ def execute_row_steps(
             )
 
     async def _run_async_step(*, step: AsyncRowStep, row: Row) -> Row:
-        result = step.apply_row_async(row)
-        if inspect.isawaitable(result):
-            result = await result
-        result = cast(MapResult, result)
-        if isinstance(result, Row):
-            return result
-        if isinstance(result, dict):
-            return row.update(result)
-        raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
+        with set_active_step_index(step.index):
+            result = step.apply_row_async(row)
+            if inspect.isawaitable(result):
+                result = await result
+            result = cast(MapResult, result)
+            if isinstance(result, Row):
+                return result
+            if isinstance(result, dict):
+                return row.update(result)
+            raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
 
     def _run_step(i: int, *, flush_all: bool) -> None:
         step = ordered[i]

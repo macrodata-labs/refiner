@@ -7,6 +7,7 @@ from refiner import col
 from refiner.pipeline import RefinerPipeline, from_items
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
+from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.planning import (
     _extract_lambda_source,
     compile_pipeline_plan,
@@ -15,7 +16,7 @@ from refiner.pipeline.planning import (
 from refiner.robotics import motion_trim
 
 
-class _FakeReader(BaseReader):
+class FakeReader(BaseReader):
     def __init__(self) -> None:
         super().__init__(inputs=[])
 
@@ -33,13 +34,19 @@ class _FakeReader(BaseReader):
         yield DictRow({"x": 1})
 
 
+class UndescribedSink(BaseSink):
+    def write_block(self, block):
+        del block
+        return {}
+
+
 def _score_filter_lambda():
     return lambda row: int(row["score"]) >= 15
 
 
 def test_compile_pipeline_plan_includes_reader_and_steps() -> None:
     pipeline = (
-        RefinerPipeline(_FakeReader())
+        RefinerPipeline(FakeReader())
         .map(lambda row: {"x": row["x"]})
         .batch_map(lambda rows: rows, batch_size=2)
         .flat_map(lambda row: [row])
@@ -61,7 +68,7 @@ def test_compile_pipeline_plan_includes_reader_and_steps() -> None:
 
 def test_compile_pipeline_plan_makes_step_names_unique() -> None:
     pipeline = (
-        RefinerPipeline(_FakeReader())
+        RefinerPipeline(FakeReader())
         .filter(lambda row: True)
         .flat_map(lambda row: [row])
     )
@@ -76,7 +83,7 @@ def test_compile_pipeline_plan_makes_step_names_unique() -> None:
 
 def test_compile_pipeline_plan_dedupes_same_top_level_op_names() -> None:
     pipeline = (
-        RefinerPipeline(_FakeReader()).filter(lambda row: True).filter(lambda row: True)
+        RefinerPipeline(FakeReader()).filter(lambda row: True).filter(lambda row: True)
     )
 
     payload = compile_pipeline_plan(pipeline)
@@ -132,7 +139,7 @@ def test_compile_pipeline_plan_uses_named_callable_for_step_name() -> None:
     def duplicate_selected(row):
         return {"x": row["x"], "dup": True}
 
-    pipeline = RefinerPipeline(_FakeReader()).map(duplicate_selected)
+    pipeline = RefinerPipeline(FakeReader()).map(duplicate_selected)
     payload = compile_pipeline_plan(pipeline)
     steps = payload["stages"][0]["steps"]
     assert steps[1]["name"] == "duplicate_selected"
@@ -140,7 +147,7 @@ def test_compile_pipeline_plan_uses_named_callable_for_step_name() -> None:
 
 
 def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:
-    pipeline = RefinerPipeline(_FakeReader()).map(
+    pipeline = RefinerPipeline(FakeReader()).map(
         motion_trim(threshold=0.25, pad_frames=2)
     )
 
@@ -157,7 +164,7 @@ def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:
 
 def test_compile_pipeline_plan_includes_lerobot_writer_steps() -> None:
     pipeline = (
-        RefinerPipeline(_FakeReader())
+        RefinerPipeline(FakeReader())
         .map(motion_trim(threshold=0.25, pad_frames=2))
         .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_motion")
     )
@@ -181,6 +188,41 @@ def test_compile_pipeline_plan_includes_lerobot_writer_steps() -> None:
         stages[1]["steps"][1]["args"]["path"]
         == "hf://buckets/macrodata/test_bucket/aloha_motion"
     )
+
+
+def test_compile_pipeline_plan_includes_sink_without_describe() -> None:
+    pipeline = RefinerPipeline(FakeReader(), sink=UndescribedSink())
+
+    steps = compile_pipeline_plan(pipeline)["stages"][0]["steps"]
+
+    assert [step["name"] for step in steps] == ["read_fake", "undescribed"]
+    assert steps[1]["type"] == "writer"
+    assert steps[1]["index"] == 1
+    assert "args" not in steps[1]
+
+
+def test_compile_pipeline_plan_redacts_sink_callable_args() -> None:
+    secret = "md_secret_value"
+
+    class CallableSink(BaseSink):
+        def write_block(self, block):
+            del block
+            return {}
+
+        def describe(self):
+            return (
+                "callable_sink",
+                "writer",
+                {"fn": lambda: secret},
+            )
+
+    steps = compile_pipeline_plan(
+        RefinerPipeline(FakeReader(), sink=CallableSink()),
+        secret_values=(secret,),
+    )["stages"][0]["steps"]
+
+    assert "md_secret_value" not in steps[1]["args"]["fn"]
+    assert steps[1]["args"]["__meta"]["fn"] == "code"
 
 
 def test_extract_lambda_source_handles_chained_call_fragment() -> None:
