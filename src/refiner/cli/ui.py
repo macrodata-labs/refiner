@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from refiner.platform.client import UserIdentity
 
 ASCII_BANNER = r"""
@@ -26,3 +28,10 @@ def display_identity(user: UserIdentity) -> str:
     if email:
         return f"{label} ({email})"
     return label
+
+
+def stdin_is_interactive() -> bool:
+    try:
+        return sys.stdin.isatty()
+    except Exception:  # pragma: no cover
+        return False

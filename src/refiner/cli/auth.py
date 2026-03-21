@@ -18,16 +18,9 @@ from refiner.platform.client import (
     sanitize_terminal_text,
     verify_api_key,
 )
-from refiner.cli.ui import display_identity, print_banner
+from refiner.cli.ui import display_identity, print_banner, stdin_is_interactive
 
 _TOKEN_SETTINGS_SUFFIX = "/settings/api-keys"
-
-
-def stdin_is_interactive() -> bool:
-    try:
-        return sys.stdin.isatty()
-    except Exception:  # pragma: no cover
-        return False
 
 
 def _token_settings_url(base_url: str) -> str:

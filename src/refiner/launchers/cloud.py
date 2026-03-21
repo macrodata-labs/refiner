@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from refiner.cli.auth import stdin_is_interactive
+from refiner.cli.ui import stdin_is_interactive
 from refiner.platform.client import (
     CloudRunCreateRequest,
     CloudRuntimeConfig,
