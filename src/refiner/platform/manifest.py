@@ -110,6 +110,8 @@ def _resolve_direct_url_git_sha() -> str | None:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return None
+    if not isinstance(data, dict):
+        return None
     vcs_info = data.get("vcs_info")
     if not isinstance(vcs_info, dict):
         return None
