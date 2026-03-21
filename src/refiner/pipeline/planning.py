@@ -390,8 +390,12 @@ def _compile_stage_steps(
         )
 
     sink_payload = pipeline.sink.describe() if pipeline.sink is not None else None
-    if sink_payload is not None:
-        base_name, step_type, args = sink_payload
+    if pipeline.sink is not None:
+        if sink_payload is None:
+            sink_name = pipeline.sink.__class__.__name__.replace("Sink", "").lower()
+            base_name, step_type, args = sink_name or "sink", "writer", None
+        else:
+            base_name, step_type, args = sink_payload
         unique_name = _unique_name(base_name)
         steps.append(
             _step_payload(
