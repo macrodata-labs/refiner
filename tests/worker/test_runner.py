@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+from collections import defaultdict
 from typing import Any, cast
 
 import pyarrow as pa
@@ -229,6 +230,13 @@ def _run_local_worker(
         _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
     )
     return worker
+
+
+def _steps_by_label(metrics: list[dict[str, Any]]) -> dict[str, list[int]]:
+    out: dict[str, set[int]] = defaultdict(set)
+    for metric in metrics:
+        out[cast(str, metric["label"])].add(cast(int, metric["step_index"]))
+    return {label: sorted(steps) for label, steps in out.items()}
 
 
 def test_pipeline_executes_row_and_batch_steps() -> None:
@@ -528,48 +536,10 @@ def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
     assert stats.completed == 1
     assert stats.output_rows == 2
 
-    counter_steps_by_label = {
-        label: sorted(
-            {
-                cast(int, metric["step_index"])
-                for metric in emitter.counters
-                if metric["label"] == label
-            }
-        )
-        for label in {cast(str, metric["label"]) for metric in emitter.counters}
-    }
-    histogram_steps_by_label = {
-        label: sorted(
-            {
-                cast(int, metric["step_index"])
-                for metric in emitter.histograms
-                if metric["label"] == label
-            }
-        )
-        for label in {cast(str, metric["label"]) for metric in emitter.histograms}
-    }
-    gauge_steps_by_label = {
-        label: sorted(
-            {
-                cast(int, metric["step_index"])
-                for metric in emitter.gauges
-                if metric["label"] == label
-            }
-        )
-        for label in {cast(str, metric["label"]) for metric in emitter.gauges}
-    }
-    registered_gauge_steps_by_label = {
-        label: sorted(
-            {
-                cast(int, metric["step_index"])
-                for metric in emitter.registered_gauges
-                if metric["label"] == label
-            }
-        )
-        for label in {
-            cast(str, metric["label"]) for metric in emitter.registered_gauges
-        }
-    }
+    counter_steps_by_label = _steps_by_label(emitter.counters)
+    histogram_steps_by_label = _steps_by_label(emitter.histograms)
+    gauge_steps_by_label = _steps_by_label(emitter.gauges)
+    registered_gauge_steps_by_label = _steps_by_label(emitter.registered_gauges)
 
     assert counter_steps_by_label["rows_read"] == [0]
     assert counter_steps_by_label["rows_processed"] == [
