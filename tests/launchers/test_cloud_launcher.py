@@ -71,7 +71,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         monkeypatch,
         manifest={
             "version": 1,
-            "environment": {"refiner_ref": "abc123def456"},
+            "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
             "script": {"text": "print('hi')"},
         },
     )
@@ -103,7 +103,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
     assert request.manifest == {
         "version": 1,
-        "environment": {"refiner_ref": "abc123def456"},
+        "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
         "script": {"text": "print('hi')"},
     }
 
@@ -188,7 +188,10 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
                     secret_values=kwargs.get("secret_values", ()),
                 ),
             },
-            "environment": {"refiner_ref": "super-secret-value-ref"},
+            "environment": {
+                "refiner_version": "0.2.0",
+                "refiner_ref": "super-secret-value-ref",
+            },
             "dependencies": [{"name": "pkg", "version": "super-secret-value-dep"}],
         },
     )
@@ -205,6 +208,7 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
     assert request.manifest["script"]["path"] == "/tmp/super-secret-value_job.py"
     assert "REDACTED_SECRET" in request.manifest["script"]["text"]
     assert secret not in request.manifest["script"]["text"]
+    assert request.manifest["environment"]["refiner_version"] == "0.2.0"
     assert request.manifest["environment"]["refiner_ref"] == "super-secret-value-ref"
     assert request.manifest["dependencies"] == [
         {"name": "pkg", "version": "super-secret-value-dep"}

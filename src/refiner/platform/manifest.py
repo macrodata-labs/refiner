@@ -150,16 +150,13 @@ def _resolve_local_repo_git_sha() -> str | None:
 
 @lru_cache(maxsize=1)
 def _resolve_refiner_ref() -> str | None:
-    return (
-        _resolve_direct_url_git_sha()
-        or _resolve_local_repo_git_sha()
-        or _resolve_installed_version()
-    )
+    return _resolve_direct_url_git_sha() or _resolve_local_repo_git_sha()
 
 
 def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
+    refiner_version = _resolve_installed_version()
     refiner_ref = _resolve_refiner_ref()
 
     manifest: dict[str, Any] = {
@@ -173,6 +170,7 @@ def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
         },
         "environment": {
             "python_version": platform.python_version(),
+            "refiner_version": refiner_version,
             "refiner_ref": refiner_ref,
             "platform": f"{platform.system().lower()}-{platform.machine().lower()}",
         },
