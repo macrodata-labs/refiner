@@ -3,10 +3,13 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, cast
 
+import pyarrow as pa
 import pytest
 
 from refiner.pipeline.data.shard import Shard
+from refiner import register_gauge
 from refiner.pipeline import RefinerPipeline
+from refiner.pipeline.expressions import col
 from refiner.execution.engine import iter_rows
 from refiner.pipeline.sinks import BaseSink
 from refiner.platform.client import (
@@ -20,6 +23,7 @@ from refiner.pipeline.data.shard import FilePart
 from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
+from refiner.worker.metrics.api import log_gauge
 from refiner.platform.client.models import FinalizedShardWorker
 
 
@@ -83,6 +87,9 @@ class _NoopTelemetryEmitter:
     def emit_user_gauge(self, **kwargs) -> None:
         del kwargs
 
+    def register_user_gauge(self, **kwargs) -> None:
+        del kwargs
+
     def emit_user_histogram(self, **kwargs) -> None:
         del kwargs
 
@@ -143,6 +150,26 @@ class _RecordingTelemetryEmitter(_NoopTelemetryEmitter):
 
     def force_flush_logs(self) -> None:
         self.log_flushes += 1
+
+
+class _MetricRecordingTelemetryEmitter(_NoopTelemetryEmitter):
+    def __init__(self) -> None:
+        self.counters: list[dict[str, Any]] = []
+        self.histograms: list[dict[str, Any]] = []
+        self.gauges: list[dict[str, Any]] = []
+        self.registered_gauges: list[dict[str, Any]] = []
+
+    def emit_user_counter(self, **kwargs) -> None:
+        self.counters.append(kwargs)
+
+    def emit_user_histogram(self, **kwargs) -> None:
+        self.histograms.append(kwargs)
+
+    def emit_user_gauge(self, **kwargs) -> None:
+        self.gauges.append(kwargs)
+
+    def register_user_gauge(self, **kwargs) -> None:
+        self.registered_gauges.append(kwargs)
 
 
 class _LifecycleClientWithFailingTelemetry:
@@ -420,6 +447,162 @@ def test_worker_completes_shards_only_after_sink_drain() -> None:
     assert sum(batch.get(shard.id, 0) for batch in sink.written_counts) == 2
     assert sink.completed_shards == [shard.id]
     assert runtime_lifecycle.completed_ids == [shard.id]
+
+
+def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    shard = _shard("p", 0, 3)
+    rows_by_shard = {
+        shard.id: [
+            DictRow({"x": 1, "raw": " a ", "dropme": "x"}),
+            DictRow({"x": 2, "raw": " b ", "dropme": "y"}),
+            DictRow({"x": 3, "raw": " c ", "dropme": "z"}),
+        ],
+    }
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    emitter = _MetricRecordingTelemetryEmitter()
+    monkeypatch.setattr("refiner.worker.runner.NOOP_USER_METRICS_EMITTER", emitter)
+
+    async def add_async(row: Row) -> dict[str, int]:
+        log_gauge("async_gauge", int(row["x"]))
+        register_gauge("async_registered", lambda: 1)
+        return {"score_int": int(row["score_int"]) + 1}
+
+    pipeline = (
+        RefinerPipeline(source=_FakeReader(rows_by_shard))
+        .with_column("score", col("x") + 10)
+        .with_columns(clean=col("raw").str.strip(), keep=col("x") >= 2)
+        .filter(col("keep"))
+        .map_table(
+            lambda table: (
+                log_gauge("table_gauge", table.num_rows),
+                register_gauge("table_registered", lambda: table.num_rows),
+                table.append_column("mapped", pa.array(["m"] * table.num_rows)),
+            )[2]
+        )
+        .select("x", "score", "clean", "dropme", "mapped")
+        .drop("dropme")
+        .rename(score="score_int")
+        .cast(score_int="int64")
+        .map(
+            lambda row: (
+                log_gauge("map_gauge", int(row["x"])),
+                register_gauge("map_registered", lambda: 1),
+                row.log_histogram("map_hist", int(row["x"]), unit="rows"),
+                {"score_int": int(row["score_int"]) * 2},
+            )[3]
+        )
+        .map_async(add_async)
+        .filter(lambda row: int(row["x"]) == 2)
+        .flat_map(
+            lambda row: (
+                log_gauge("flat_map_gauge", 2),
+                register_gauge("flat_map_registered", lambda: 2),
+                row.log_throughput("flat_map_counter", 1, unit="rows"),
+                [{"variant": "base"}, {"variant": "extra"}],
+            )[3]
+        )
+        .batch_map(
+            lambda rows: (
+                log_gauge("batch_gauge", len(rows)),
+                register_gauge("batch_registered", lambda: len(rows)),
+                rows,
+            )[2],
+            batch_size=2,
+        )
+        .write_jsonl(tmp_path / "out")
+    )
+
+    worker = Worker(
+        pipeline=pipeline,
+        run_handle=_local_run(),
+    )
+    cast(Any, worker)._start_local_session = lambda: (
+        runtime_lifecycle,
+        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert stats.output_rows == 2
+
+    counter_steps_by_label = {
+        label: sorted(
+            {
+                cast(int, metric["step_index"])
+                for metric in emitter.counters
+                if metric["label"] == label
+            }
+        )
+        for label in {cast(str, metric["label"]) for metric in emitter.counters}
+    }
+    histogram_steps_by_label = {
+        label: sorted(
+            {
+                cast(int, metric["step_index"])
+                for metric in emitter.histograms
+                if metric["label"] == label
+            }
+        )
+        for label in {cast(str, metric["label"]) for metric in emitter.histograms}
+    }
+    gauge_steps_by_label = {
+        label: sorted(
+            {
+                cast(int, metric["step_index"])
+                for metric in emitter.gauges
+                if metric["label"] == label
+            }
+        )
+        for label in {cast(str, metric["label"]) for metric in emitter.gauges}
+    }
+    registered_gauge_steps_by_label = {
+        label: sorted(
+            {
+                cast(int, metric["step_index"])
+                for metric in emitter.registered_gauges
+                if metric["label"] == label
+            }
+        )
+        for label in {
+            cast(str, metric["label"]) for metric in emitter.registered_gauges
+        }
+    }
+
+    assert counter_steps_by_label["rows_read"] == [0]
+    assert counter_steps_by_label["rows_processed"] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+    ]
+    assert counter_steps_by_label["rows_kept"] == [3, 11]
+    assert counter_steps_by_label["rows_dropped"] == [3, 11]
+    assert counter_steps_by_label["flat_map_counter"] == [12]
+    assert counter_steps_by_label["rows_out"] == [13]
+    assert counter_steps_by_label["rows_written"] == [14]
+    assert counter_steps_by_label["files_written"] == [14]
+    assert histogram_steps_by_label["map_hist"] == [9]
+    assert histogram_steps_by_label["rows_out"] == [12]
+    assert gauge_steps_by_label["table_gauge"] == [4]
+    assert gauge_steps_by_label["map_gauge"] == [9]
+    assert gauge_steps_by_label["async_gauge"] == [10]
+    assert gauge_steps_by_label["flat_map_gauge"] == [12]
+    assert gauge_steps_by_label["batch_gauge"] == [13]
+    assert registered_gauge_steps_by_label["table_registered"] == [4]
+    assert registered_gauge_steps_by_label["map_registered"] == [9]
+    assert registered_gauge_steps_by_label["async_registered"] == [10]
+    assert registered_gauge_steps_by_label["flat_map_registered"] == [12]
+    assert registered_gauge_steps_by_label["batch_registered"] == [13]
 
 
 def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:

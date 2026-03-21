@@ -191,6 +191,18 @@ def test_lerobot_reader_exposes_episode_shard_planning_knobs(tmp_path: Path) -> 
     assert len(shards) == 2
 
 
+def test_lerobot_reader_describe_uses_dataset_roots(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    reader = LeRobotEpisodeReader(str(root))
+
+    assert reader.describe() == {
+        "path": str(root),
+        "inputs": [str(root)],
+    }
+
+
 def test_remap_task_index_table_raises_when_index_cannot_be_remapped() -> None:
     table = pa.Table.from_pydict(
         {

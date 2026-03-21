@@ -135,6 +135,9 @@ class Worker:
             runtime_name,
         )
         sink = self.pipeline.sink or NullSink()
+        sink_step_index = (
+            self.pipeline._next_step_index() if self.pipeline.sink is not None else None
+        )
 
         def _heartbeat_once() -> None:
             with inflight_lock:
@@ -166,7 +169,8 @@ class Worker:
                 if shard is None:
                     return
             try:
-                sink.on_shard_complete(shard_id)
+                with set_active_step_index(sink_step_index):
+                    sink.on_shard_complete(shard_id)
                 user_metrics_emitter.force_flush_user_metrics()
                 runtime_lifecycle.complete(shard)
             except Exception:  # noqa: BLE001
@@ -232,21 +236,26 @@ class Worker:
                     shard.start_key,
                     shard.end_key,
                 )
-                with set_active_step_index(0):
-                    obs_logger.info(
-                        "shard source started shard_id={} global_ordinal={}",
-                        shard.id,
-                        shard.global_ordinal,
-                    )
-                    for unit in self.pipeline.source.iter_shard_units(shard):
-                        rows = block_num_rows(unit)
-                        if rows > 0:
-                            rows_read += rows
-                            with inflight_lock:
-                                pending_rows_by_shard[shard.id] = (
-                                    pending_rows_by_shard.get(shard.id, 0) + rows
-                                )
-                        yield unit
+                obs_logger.info(
+                    "shard source started shard_id={} global_ordinal={}",
+                    shard.id,
+                    shard.global_ordinal,
+                )
+                source_iter = iter(self.pipeline.source.iter_shard_units(shard))
+                while True:
+                    with set_active_step_index(0):
+                        try:
+                            unit = next(source_iter)
+                        except StopIteration:
+                            break
+                    rows = block_num_rows(unit)
+                    if rows > 0:
+                        rows_read += rows
+                        with inflight_lock:
+                            pending_rows_by_shard[shard.id] = (
+                                pending_rows_by_shard.get(shard.id, 0) + rows
+                            )
+                    yield unit
                 obs_logger.info(
                     "shard source finished shard_id={} global_ordinal={} rows_read={}",
                     shard.id,
@@ -274,7 +283,8 @@ class Worker:
                     ):
                         if heartbeat_error is not None:
                             raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
-                        written = sink.write_block(block)
+                        with set_active_step_index(sink_step_index):
+                            written = sink.write_block(block)
                         _apply_row_delta(
                             {
                                 shard_id: -count
@@ -334,7 +344,8 @@ class Worker:
                 stop_heartbeat.set()
                 heartbeat_thread.join(timeout=1.0)
                 try:
-                    sink.close()
+                    with set_active_step_index(sink_step_index):
+                        sink.close()
                 except Exception as e:
                     if execution_error is not None or run_exception is not None:
                         obs_logger.warning(

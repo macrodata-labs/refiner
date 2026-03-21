@@ -22,6 +22,7 @@ from refiner.pipeline.steps import (
     VectorizedOp,
     WithColumnsStep,
 )
+from refiner.worker.context import set_active_step_index
 from refiner.worker.metrics.api import log_throughput
 
 
@@ -100,7 +101,8 @@ def apply_vectorized_op(
         return next_table, next_shard_counts
 
     if isinstance(op, FnTableStep):
-        next_table = op.fn(table)
+        with set_active_step_index(op.index):
+            next_table = op.fn(table)
         if not isinstance(next_table, pa.Table):
             raise TypeError(
                 f"map_table() must return pa.Table, got {type(next_table)!r}"
