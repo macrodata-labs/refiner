@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import sys
+from contextlib import nullcontext
+from email.message import Message
 from pathlib import Path
+from urllib import error as urllib_error
 
-from refiner.platform.manifest import build_run_manifest
+from refiner.platform.manifest import build_run_manifest, refiner_ref_exists_on_remote
 
 
 def test_build_run_manifest_captures_script_from_argv(
@@ -90,3 +93,30 @@ def test_build_run_manifest_omits_stage_runtimes_by_default(
     assert "macrodata_cloud" not in manifest
     assert manifest["environment"]["refiner_version"] == "0.2.0"
     assert manifest["environment"]["refiner_ref"] is None
+
+
+def test_refiner_ref_exists_on_remote_returns_true_on_success(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "refiner.platform.manifest.urllib_request.urlopen",
+        lambda request: nullcontext(object()),
+    )
+
+    assert refiner_ref_exists_on_remote("abc123") is True
+
+
+def test_refiner_ref_exists_on_remote_returns_false_on_404(monkeypatch) -> None:
+    def _raise_404(request):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            404,
+            "Not Found",
+            hdrs=Message(),
+            fp=None,
+        )
+
+    monkeypatch.setattr(
+        "refiner.platform.manifest.urllib_request.urlopen",
+        _raise_404,
+    )
+
+    assert refiner_ref_exists_on_remote("abc123") is False

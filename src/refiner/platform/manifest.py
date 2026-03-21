@@ -6,6 +6,8 @@ import json
 import platform
 import subprocess
 import sys
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from collections.abc import Sequence
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -148,16 +150,19 @@ def _resolve_local_repo_git_sha() -> str | None:
 
 
 def refiner_ref_exists_on_remote(ref: str) -> bool:
+    request = urllib_request.Request(
+        f"https://api.github.com/repos/macrodata-labs/refiner/commits/{ref}"
+    )
     try:
-        result = subprocess.run(
-            ["git", "ls-remote", "https://github.com/macrodata-labs/refiner.git", ref],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-    except FileNotFoundError:
+        with urllib_request.urlopen(request):
+            return True
+    except urllib_error.HTTPError as err:
+        if err.code == 404:
+            return False
         return False
-    return result.returncode == 0 and bool(result.stdout.strip())
+    except urllib_error.URLError:
+        return False
+    return False
 
 
 def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
