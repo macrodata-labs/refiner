@@ -147,6 +147,19 @@ def _resolve_local_repo_git_sha() -> str | None:
     return sha or None
 
 
+def refiner_ref_exists_on_remote(ref: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "https://github.com/macrodata-labs/refiner.git", ref],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
 def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)

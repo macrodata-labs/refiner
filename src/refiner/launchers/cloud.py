@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -12,6 +11,7 @@ from refiner.platform.client import (
     StagePayload,
     serialize_pipeline_inline,
 )
+from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.launchers.base import BaseLauncher
 
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
 
 
-_REFINER_REPO_URL = "https://github.com/macrodata-labs/refiner.git"
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
 
 
@@ -103,19 +102,6 @@ class CloudLauncher(BaseLauncher):
         return {**(secrets or {}), **(env or {})} or None
 
     @staticmethod
-    def _remote_ref_exists(ref: str) -> bool:
-        try:
-            result = subprocess.run(
-                ["git", "ls-remote", _REFINER_REPO_URL, ref],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-        except FileNotFoundError:
-            return False
-        return result.returncode == 0 and bool(result.stdout.strip())
-
-    @staticmethod
     def _fallback_to_latest_pypi_enabled() -> bool:
         raw = os.environ.get(_FALLBACK_ENV_VAR, "")
         return raw.strip().lower() in {"1", "true", "yes", "on"}
@@ -132,21 +118,22 @@ class CloudLauncher(BaseLauncher):
         if not isinstance(refiner_ref, str) or not refiner_ref.strip():
             return manifest
         refiner_ref = refiner_ref.strip()
-        if self._remote_ref_exists(refiner_ref):
-            return manifest
-        if self._fallback_to_latest_pypi_enabled():
-            environment_dict["refiner_ref"] = None
+        if refiner_ref_exists_on_remote(refiner_ref):
             return manifest
 
         message = (
             f"Refiner ref {refiner_ref!r} is not available on GitHub. "
             "Launch with the latest PyPI version instead?"
         )
-        if stdin_is_interactive():
+        fallback_allowed = self._fallback_to_latest_pypi_enabled()
+        interactive = stdin_is_interactive()
+        if not fallback_allowed and interactive:
             answer = input(f"{message} [y/N] ")
-            if answer.strip().lower() in {"y", "yes"}:
-                environment_dict["refiner_ref"] = None
-                return manifest
+            fallback_allowed = answer.strip().lower() in {"y", "yes"}
+        if fallback_allowed:
+            environment_dict["refiner_ref"] = None
+            return manifest
+        if interactive:
             raise SystemExit("cloud launch aborted")
 
         raise SystemExit(

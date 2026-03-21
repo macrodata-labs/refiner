@@ -76,8 +76,8 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: True),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl")
@@ -115,8 +115,8 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
 def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> None:
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: True),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl")
@@ -130,8 +130,8 @@ def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: True),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl")
@@ -155,8 +155,8 @@ def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> No
         manifest={"version": 1, "script": {"text": "TOKEN='super-secret-value'"}},
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: True),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl").map(
@@ -212,8 +212,8 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
         },
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: True),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl").map(
@@ -328,8 +328,8 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
         lambda **_: {"version": 1},
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: True),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl")
@@ -353,8 +353,8 @@ def test_pipeline_launch_cloud_interactive_ref_fallback_accepts(monkeypatch) -> 
         },
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: False),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: False,
     )
     monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
@@ -378,8 +378,8 @@ def test_pipeline_launch_cloud_interactive_ref_fallback_rejects(monkeypatch) -> 
         },
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: False),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: False,
     )
     monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": "n")
@@ -399,8 +399,8 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_env_override(
         },
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: False),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: False,
     )
     monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: False)
     monkeypatch.setenv("MACRODATA_FALLBACK_TO_LATEST_PYPI", "1")
@@ -425,8 +425,8 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_requires_override(
         },
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
-        staticmethod(lambda ref: False),
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: False,
     )
     monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: False)
     monkeypatch.delenv("MACRODATA_FALLBACK_TO_LATEST_PYPI", raising=False)
