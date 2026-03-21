@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from refiner.cli.auth import stdin_is_interactive
 from refiner.platform.client import (
     CloudRunCreateRequest,
     CloudRuntimeConfig,
@@ -120,13 +120,6 @@ class CloudLauncher(BaseLauncher):
         raw = os.environ.get(_FALLBACK_ENV_VAR, "")
         return raw.strip().lower() in {"1", "true", "yes", "on"}
 
-    @staticmethod
-    def _stdin_is_interactive() -> bool:
-        try:
-            return sys.stdin.isatty()
-        except Exception:  # pragma: no cover
-            return False
-
     def _resolve_cloud_manifest(
         self, *, secret_values: tuple[str, ...]
     ) -> dict[str, object]:
@@ -149,7 +142,7 @@ class CloudLauncher(BaseLauncher):
             f"Refiner ref {refiner_ref!r} is not available on GitHub. "
             "Launch with the latest PyPI version instead?"
         )
-        if self._stdin_is_interactive():
+        if stdin_is_interactive():
             answer = input(f"{message} [y/N] ")
             if answer.strip().lower() in {"y", "yes"}:
                 environment_dict["refiner_ref"] = None

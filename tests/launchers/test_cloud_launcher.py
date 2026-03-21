@@ -356,10 +356,7 @@ def test_pipeline_launch_cloud_interactive_ref_fallback_accepts(monkeypatch) -> 
         "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
         staticmethod(lambda ref: False),
     )
-    monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._stdin_is_interactive",
-        staticmethod(lambda: True),
-    )
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
 
     read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
@@ -384,10 +381,7 @@ def test_pipeline_launch_cloud_interactive_ref_fallback_rejects(monkeypatch) -> 
         "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
         staticmethod(lambda ref: False),
     )
-    monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._stdin_is_interactive",
-        staticmethod(lambda: True),
-    )
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": "n")
 
     with pytest.raises(SystemExit, match="aborted"):
@@ -408,10 +402,7 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_env_override(
         "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
         staticmethod(lambda ref: False),
     )
-    monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._stdin_is_interactive",
-        staticmethod(lambda: False),
-    )
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: False)
     monkeypatch.setenv("MACRODATA_FALLBACK_TO_LATEST_PYPI", "1")
 
     read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
@@ -437,10 +428,7 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_requires_override(
         "refiner.launchers.cloud.CloudLauncher._remote_ref_exists",
         staticmethod(lambda ref: False),
     )
-    monkeypatch.setattr(
-        "refiner.launchers.cloud.CloudLauncher._stdin_is_interactive",
-        staticmethod(lambda: False),
-    )
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: False)
     monkeypatch.delenv("MACRODATA_FALLBACK_TO_LATEST_PYPI", raising=False)
 
     with pytest.raises(SystemExit, match="MACRODATA_FALLBACK_TO_LATEST_PYPI=1"):
