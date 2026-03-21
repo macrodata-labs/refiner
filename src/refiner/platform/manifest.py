@@ -156,13 +156,8 @@ def refiner_ref_exists_on_remote(ref: str) -> bool:
     try:
         with urllib_request.urlopen(request):
             return True
-    except urllib_error.HTTPError as err:
-        if err.code == 404:
-            return False
+    except (urllib_error.HTTPError, urllib_error.URLError):
         return False
-    except urllib_error.URLError:
-        return False
-    return False
 
 
 def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
