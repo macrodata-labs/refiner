@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from refiner.platform.client import (
     CloudRunCreateRequest,
@@ -15,6 +17,10 @@ from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+
+
+_REFINER_REPO_URL = "https://github.com/macrodata-labs/refiner.git"
+_FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +102,65 @@ class CloudLauncher(BaseLauncher):
                 )
         return {**(secrets or {}), **(env or {})} or None
 
+    @staticmethod
+    def _remote_ref_exists(ref: str) -> bool:
+        try:
+            result = subprocess.run(
+                ["git", "ls-remote", _REFINER_REPO_URL, ref],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except FileNotFoundError:
+            return False
+        return result.returncode == 0 and bool(result.stdout.strip())
+
+    @staticmethod
+    def _fallback_to_latest_pypi_enabled() -> bool:
+        raw = os.environ.get(_FALLBACK_ENV_VAR, "")
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _stdin_is_interactive() -> bool:
+        try:
+            return sys.stdin.isatty()
+        except Exception:  # pragma: no cover
+            return False
+
+    def _resolve_cloud_manifest(
+        self, *, secret_values: tuple[str, ...]
+    ) -> dict[str, object]:
+        manifest = self._run_manifest(secret_values=secret_values)
+        environment = manifest.get("environment")
+        if not isinstance(environment, dict):
+            return manifest
+        environment_dict = cast(dict[str, object], environment)
+        refiner_ref = environment_dict.get("refiner_ref")
+        if not isinstance(refiner_ref, str) or not refiner_ref.strip():
+            return manifest
+        refiner_ref = refiner_ref.strip()
+        if self._remote_ref_exists(refiner_ref):
+            return manifest
+        if self._fallback_to_latest_pypi_enabled():
+            environment_dict["refiner_ref"] = None
+            return manifest
+
+        message = (
+            f"Refiner ref {refiner_ref!r} is not available on GitHub. "
+            "Launch with the latest PyPI version instead?"
+        )
+        if self._stdin_is_interactive():
+            answer = input(f"{message} [y/N] ")
+            if answer.strip().lower() in {"y", "yes"}:
+                environment_dict["refiner_ref"] = None
+                return manifest
+            raise SystemExit("cloud launch aborted")
+
+        raise SystemExit(
+            f"{message} Launch aborted before submission. "
+            f"Set {_FALLBACK_ENV_VAR}=1 to allow fallback to the latest PyPI version."
+        )
+
     def launch(self) -> CloudLaunchResult:
         try:
             client = self._require_platform_client()
@@ -105,6 +170,7 @@ class CloudLauncher(BaseLauncher):
         resolved_env = self._resolve_env_values(self.env)
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
         stages = self._planned_stages()
+        manifest = self._resolve_cloud_manifest(secret_values=secret_values)
         request = CloudRunCreateRequest(
             name=self.name,
             plan=self._compiled_plan(stages, secret_values=secret_values),
@@ -121,7 +187,7 @@ class CloudLauncher(BaseLauncher):
                 )
                 for stage in stages
             ],
-            manifest=self._run_manifest(secret_values=secret_values),
+            manifest=manifest,
             sync_local_dependencies=self.sync_local_dependencies,
             secrets=self._merged_env(resolved_secrets, resolved_env),
         )
