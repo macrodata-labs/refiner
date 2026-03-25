@@ -220,13 +220,20 @@ def _iter_selected_frames(
         try:
             container.seek(seek_ts, stream=stream)
         except Exception:
-            pass
+            try:
+                container.seek(max(0, seek_ts), any_frame=True, stream=stream)
+            except Exception:
+                pass
 
     for frame in container.decode(stream):
-        frame_time = float(frame.time or 0.0)
-        if frame_time + _FRAME_TIMESTAMP_EPSILON_S < clip_from:
+        ts = None
+        if frame.pts is not None and frame.time_base is not None:
+            ts = float(frame.pts * frame.time_base)
+        if ts is None:
             continue
-        if clip_to is not None and frame_time >= clip_to - _FRAME_TIMESTAMP_EPSILON_S:
+        if ts + _FRAME_TIMESTAMP_EPSILON_S < clip_from:
+            continue
+        if clip_to is not None and ts - _FRAME_TIMESTAMP_EPSILON_S >= clip_to:
             break
         yield frame
 

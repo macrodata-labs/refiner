@@ -65,12 +65,11 @@ def _is_package_available(package_name: str) -> bool:
 
 @lru_cache
 def _is_distribution_available(distribution_name: str) -> bool:
-    normalized = distribution_name.lower()
-    for dist in importlib.metadata.distributions():
-        name = dist.metadata["Name"]
-        if name and name.lower() == normalized:
-            return True
-    return False
+    try:
+        importlib.metadata.distribution(distribution_name)
+        return True
+    except importlib.metadata.PackageNotFoundError:
+        return False
 
 
 __all__ = ["check_required_dependencies"]
