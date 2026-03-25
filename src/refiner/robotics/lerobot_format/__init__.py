@@ -1,6 +1,5 @@
 from refiner.robotics.lerobot_format.tabular import LeRobotTabular
 from refiner.robotics.lerobot_format.row import (
-    LEROBOT_TASKS,
     LeRobotRow,
     LeRobotStatsView,
     LeRobotVideoRef,
@@ -25,7 +24,6 @@ from refiner.robotics.lerobot_format.metadata import (
 )
 
 __all__ = [
-    "LEROBOT_TASKS",
     "LeRobotTabular",
     "LeRobotFeatureStats",
     "LeRobotFeatureInfo",

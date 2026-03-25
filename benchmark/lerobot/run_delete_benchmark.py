@@ -363,7 +363,9 @@ def _run_refiner_case(
     source_root = f"hf://datasets/{repo_id}"
     source_episode_count, source_frame_count = _read_lerobot_totals(source_root)
 
-    def _drop_episodes(row: mdr.Row) -> list[mdr.Row | dict[str, Any]]:
+    def _drop_episodes(
+        row: mdr.pipeline.Row,
+    ) -> list[mdr.pipeline.Row | dict[str, Any]]:
         if int(row["episode_index"]) in delete_set:
             return []
         return [row]

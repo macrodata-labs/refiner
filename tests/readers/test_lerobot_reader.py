@@ -9,11 +9,10 @@ import pyarrow.parquet as pq
 import pytest
 from typing import cast
 
-from refiner.media import VideoFile
+from refiner.video import VideoFile
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.robotics.lerobot_format import (
-    LEROBOT_TASKS,
     LeRobotMetadata,
     LeRobotRow,
     remap_task_index_table,
@@ -158,10 +157,10 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
 
     assert int(first["episode_index"]) == 0
     assert int(second["episode_index"]) == 1
-    assert first[LEROBOT_TASKS] == {0: "pick", 1: "place"}
-    assert first[LEROBOT_TASKS] is second[LEROBOT_TASKS]
     assert isinstance(first["metadata"], LeRobotMetadata)
     assert first["metadata"].info is second["metadata"].info
+    assert first["metadata"].tasks.index_to_task == {0: "pick", 1: "place"}
+    assert first["metadata"].tasks is second["metadata"].tasks
     assert first["metadata"].stats["observation.state"].count == 2
     with pytest.raises(FrozenInstanceError):
         first["metadata"].info = first["metadata"].info
@@ -237,7 +236,7 @@ def test_lerobot_reader_offsets_episode_indices_across_multiple_roots(
     assert len(rows) == 4
     assert [int(row["episode_index"]) for row in rows] == [0, 1, 0, 1]
     expected_tasks = {0: "pick", 1: "place", 2: "stack"}
-    assert rows[0][LEROBOT_TASKS] == expected_tasks
-    assert rows[2][LEROBOT_TASKS] == expected_tasks
+    assert rows[0]["metadata"].tasks.index_to_task == expected_tasks
+    assert rows[2]["metadata"].tasks.index_to_task == expected_tasks
     assert [int(frame["task_index"]) for frame in rows[2]["frames"].to_rows()] == [1, 1]
     assert [int(frame["task_index"]) for frame in rows[3]["frames"].to_rows()] == [2, 2]

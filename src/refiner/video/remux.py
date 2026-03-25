@@ -3,10 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import IO, Any
 
-import av
-
 from refiner.io import DataFolder
-from refiner.media.video.types import VideoFile
 from refiner.pipeline.utils.cache.decoder_cache import (
     OpenedVideoSource,
     VideoSourceProbe,
@@ -14,6 +11,8 @@ from refiner.pipeline.utils.cache.decoder_cache import (
     reset_opened_video_source_cache,
 )
 from refiner.pipeline.utils.cache.lease_cache import CacheLease
+from refiner.utils import check_required_dependencies
+from refiner.video.types import VideoFile
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
@@ -69,6 +68,9 @@ class RemuxWriter:
         output_rel: str,
         probe: VideoSourceProbe,
     ) -> "RemuxWriter":
+        check_required_dependencies("video remuxing", ["av"], dist="video")
+        import av
+
         output_abs = folder._join(output_rel)
         folder.fs.makedirs(folder.fs._parent(output_abs), exist_ok=True)
         output_file = folder.open(output_rel, mode="wb")
@@ -183,6 +185,7 @@ async def prepare_video_source(
     cache_key: str,
     video: VideoFile,
 ) -> PreparedVideoSource:
+    check_required_dependencies("video decoding", ["av"], dist="video")
     lease = await get_opened_video_source_cache(name=cache_key).acquire(video.uri)
     source = lease.resource
     try:
@@ -229,7 +232,6 @@ __all__ = [
     "PreparedVideoSource",
     "RemuxWriter",
     "VideoPtsAlignment",
-    "VideoSourceProbe",
     "prepare_video_source",
     "probe_for_remux",
     "probes_are_remux_compatible",

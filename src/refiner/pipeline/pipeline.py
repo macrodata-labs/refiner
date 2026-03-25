@@ -30,7 +30,6 @@ from refiner.pipeline.steps import (
 from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
 from refiner.pipeline.sources import BaseSource, CsvReader, JsonlReader, ParquetReader
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
-from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data.row import Row
@@ -406,6 +405,8 @@ class RefinerPipeline:
         force_recompute_video_stats: bool = False,
     ) -> "RefinerPipeline":
         """Append a deferred LeRobot writer sink and return a pipeline."""
+        from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
+
         return self.with_sink(
             LeRobotWriterSink(
                 output=output,

@@ -5,12 +5,11 @@ from dataclasses import dataclass, replace
 from fractions import Fraction
 import os
 from typing import IO, Any
-
-import av
 import numpy as np
 
 from refiner.io import DataFolder
-from refiner.media.video.remux import (
+from refiner.utils import check_required_dependencies
+from refiner.video.remux import (
     PreparedVideoSource,
     video_from_timestamp_s,
     video_to_timestamp_s,
@@ -73,6 +72,9 @@ class TranscodeWriter:
         config: VideoTranscodeConfig,
         fps: int,
     ) -> "TranscodeWriter":
+        check_required_dependencies("video transcoding", ["av"], dist="video")
+        import av
+
         output_file = folder.open(output_rel, mode="wb")
         writer = cls(config=config, fps=fps, output_file=output_file)
         writer.container = av.open(
@@ -106,7 +108,7 @@ class TranscodeWriter:
         stream.pix_fmt = self.config.pix_fmt
         self.stream = stream
 
-    def write_frame(self, frame: av.VideoFrame) -> None:
+    def write_frame(self, frame: Any) -> None:
         if self.container is None or self.stream is None:
             raise RuntimeError("Video stream was not initialized")
 
@@ -218,20 +220,13 @@ def _iter_selected_frames(
         try:
             container.seek(seek_ts, stream=stream)
         except Exception:
-            try:
-                container.seek(max(0, seek_ts), any_frame=True, stream=stream)
-            except Exception:
-                pass
+            pass
 
     for frame in container.decode(stream):
-        ts = None
-        if frame.pts is not None and frame.time_base is not None:
-            ts = float(frame.pts * frame.time_base)
-        if ts is None:
+        frame_time = float(frame.time or 0.0)
+        if frame_time + _FRAME_TIMESTAMP_EPSILON_S < clip_from:
             continue
-        if ts + _FRAME_TIMESTAMP_EPSILON_S < clip_from:
-            continue
-        if clip_to is not None and ts - _FRAME_TIMESTAMP_EPSILON_S >= clip_to:
+        if clip_to is not None and frame_time >= clip_to - _FRAME_TIMESTAMP_EPSILON_S:
             break
         yield frame
 

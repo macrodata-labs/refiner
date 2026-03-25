@@ -8,19 +8,19 @@ from functools import partial
 
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
-from refiner.media.video.remux import (
+from refiner.video.remux import (
     PreparedVideoSource,
     RemuxWriter,
     VideoSourceProbe,
     prepare_video_source,
     probes_are_remux_compatible,
 )
-from refiner.media.video.transcode import (
+from refiner.video.transcode import (
     FrameObserver,
     TranscodeWriter,
     VideoTranscodeConfig,
 )
-from refiner.media.video.types import VideoFile
+from refiner.video.types import VideoFile
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,26 +225,24 @@ class VideoStreamWriter:
         self._writer = writer
         return writer
 
-    def _rotate_writer(self) -> None:
-        writer = self._writer
-        if writer is None:
-            return
-        writer.close()
-        self._writer = None
-        self._next_file_index += 1
-
     @property
     def _current_output_rel(self) -> str:
         return self.output_rel_template.format(
-            stream_key=self.stream_key,
             file_index=self._next_file_index,
-            **dict(self.output_context),
+            stream_key=self.stream_key,
+            **self.output_context,
         )
+
+    def _rotate_writer(self) -> None:
+        writer = self._writer
+        if writer is not None:
+            writer.close()
+            self._writer = None
+        self._next_file_index += 1
 
 
 __all__ = [
     "VideoStreamWriter",
-    "VideoTranscodeConfig",
     "WrittenVideo",
     "WrittenVideoSegment",
 ]

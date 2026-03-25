@@ -550,12 +550,9 @@ name = "macrodata-refiner"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
-    { name = "av" },
     { name = "cloudpickle" },
     { name = "fsspec" },
-    { name = "hf" },
     { name = "httpx" },
-    { name = "huggingface-hub" },
     { name = "loguru" },
     { name = "msgspec" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -567,24 +564,56 @@ dependencies = [
     { name = "pyarrow" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "pre-commit" },
+[package.optional-dependencies]
+all = [
+    { name = "av" },
+    { name = "hf" },
+    { name = "huggingface-hub" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "warcio" },
+]
+robotics = [
+    { name = "av" },
+    { name = "hf" },
+    { name = "huggingface-hub" },
+]
+testing = [
+    { name = "av" },
+    { name = "hf" },
+    { name = "huggingface-hub" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "warcio" },
+]
+text = [
+    { name = "warcio" },
+]
+video = [
+    { name = "av" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "macrodata-refiner", extra = ["all"] },
+    { name = "pre-commit" },
     { name = "ruff" },
     { name = "ty" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "av" },
+    { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "fsspec" },
-    { name = "hf", specifier = ">=1.7.1" },
+    { name = "hf", marker = "extra == 'robotics'", specifier = ">=1.7.1" },
     { name = "httpx" },
-    { name = "huggingface-hub", specifier = ">=1.4.1" },
+    { name = "huggingface-hub", marker = "extra == 'robotics'", specifier = ">=1.4.1" },
     { name = "loguru" },
+    { name = "macrodata-refiner", extras = ["robotics"], marker = "extra == 'testing'" },
+    { name = "macrodata-refiner", extras = ["testing"], marker = "extra == 'all'" },
+    { name = "macrodata-refiner", extras = ["text"], marker = "extra == 'testing'" },
+    { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'robotics'" },
     { name = "msgspec", specifier = ">=0.20.0" },
     { name = "numpy" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -592,13 +621,16 @@ requires-dist = [
     { name = "orjson" },
     { name = "psutil" },
     { name = "pyarrow" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=8.0.0" },
+    { name = "pytest-cov", marker = "extra == 'testing'", specifier = ">=5.0.0" },
+    { name = "warcio", marker = "extra == 'text'" },
 ]
+provides-extras = ["video", "robotics", "text", "testing", "all"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "macrodata-refiner", extras = ["all"] },
     { name = "pre-commit", specifier = ">=4.0.0" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-cov", specifier = ">=5.0.0" },
     { name = "ruff", specifier = ">=0.14.10" },
     { name = "ty", specifier = ">=0.0.7" },
 ]
@@ -1323,6 +1355,15 @@ wheels = [
 ]
 
 [[package]]
+name = "six"
+version = "1.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
 name = "tomli"
 version = "2.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1459,6 +1500,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/aa/92/58199fe10049f9703c2666e809c4f686c54ef0a68b0f6afccf518c0b1eb9/virtualenv-21.2.0.tar.gz", hash = "sha256:1720dc3a62ef5b443092e3f499228599045d7fea4c79199770499df8becf9098", size = 5840618, upload-time = "2026-03-09T17:24:38.013Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c6/59/7d02447a55b2e55755011a647479041bc92a82e143f96a8195cb33bd0a1c/virtualenv-21.2.0-py3-none-any.whl", hash = "sha256:1bd755b504931164a5a496d217c014d098426cddc79363ad66ac78125f9d908f", size = 5825084, upload-time = "2026-03-09T17:24:35.378Z" },
+]
+
+[[package]]
+name = "warcio"
+version = "1.7.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f2/2b/d825506924cb4508c90cd950dbda2a4dbfa9f5609e2ae76b53deaba656db/warcio-1.7.5.tar.gz", hash = "sha256:7247b57e68074cfd9433cb6dc226f8567d6777052abec2d3c78346cffa4d19b9", size = 61691, upload-time = "2024-12-10T21:31:48.939Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/f0/3f19085980f8a4485f4265cc9dba1099b2fa35ef7552390a8446e149c293/warcio-1.7.5-py2.py3-none-any.whl", hash = "sha256:ca96130bde7747e49da714097d144c6ff939458d4f93e1beb1e42455db4326d4", size = 40568, upload-time = "2024-12-10T21:31:46.291Z" },
 ]
 
 [[package]]

@@ -16,12 +16,10 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "av",
     "cloudpickle==3.1.2",
     "fsspec",
     "httpx",
     "loguru",
-    "huggingface-hub>=1.4.1",
     "opentelemetry-exporter-otlp-proto-http",
     "opentelemetry-sdk",
     "numpy",
@@ -29,7 +27,28 @@ dependencies = [
     "orjson",
     "pyarrow",
     "msgspec>=0.20.0",
+]
+
+[project.optional-dependencies]
+video = [
+    "av",
+]
+robotics = [
+    "macrodata-refiner[video]",
+    "huggingface-hub>=1.4.1",
     "hf>=1.7.1",
+]
+text = [
+    "warcio",
+]
+testing = [
+    "macrodata-refiner[robotics]",
+    "macrodata-refiner[text]",
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+]
+all = [
+    "macrodata-refiner[testing]",
 ]
 
 [project.scripts]
@@ -47,9 +66,8 @@ refiner = ["py.typed"]
 
 [dependency-groups]
 dev = [
+    "macrodata-refiner[all]",
     "pre-commit>=4.0.0",
-    "pytest>=8.0.0",
-    "pytest-cov>=5.0.0",
     "ruff>=0.14.10",
     "ty>=0.0.7",
 ]
