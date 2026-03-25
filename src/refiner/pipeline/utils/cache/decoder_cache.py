@@ -10,6 +10,7 @@ from typing import IO, Any, cast
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFile
 from refiner.pipeline.utils.cache.lease_cache import LeaseCache
+from refiner.utils import check_required_dependencies
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +146,7 @@ def get_opened_video_source_cache(
     name: str = "default",
     max_entries: int | None = None,
 ) -> OpenedVideoSourceCache:
+    check_required_dependencies("video decoding", ["av"], dist="video")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("opened video source cache name must be a non-empty string")
 

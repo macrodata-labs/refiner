@@ -89,12 +89,33 @@ def _write_large_video(
             container.mux(packet)
 
 
-def _sampled_frame_count(*, fps: int, from_ts: float, to_ts: float | None) -> int:
-    if to_ts is None:
-        raise ValueError("test helper requires an explicit video end timestamp")
-    start_frame = int(round(from_ts * fps))
-    end_frame = max(start_frame + 1, int(round(to_ts * fps)))
-    frame_count = end_frame - start_frame
+def _sampled_frame_count(
+    path: Path,
+    *,
+    from_ts: float,
+    to_ts: float | None,
+) -> int:
+    frame_count = 0
+
+    with av.open(str(path), mode="r") as container:
+        stream = next(
+            (item for item in container.streams if item.type == "video"), None
+        )
+        if stream is None:
+            raise ValueError(f"Video source has no video stream: {path}")
+
+        for frame in container.decode(stream):
+            if not isinstance(frame, av.VideoFrame):
+                continue
+            if frame.pts is None or frame.time_base is None:
+                continue
+            timestamp = float(frame.pts * frame.time_base)
+            if timestamp + 1e-6 < from_ts:
+                continue
+            if to_ts is not None and timestamp - 1e-6 >= to_ts:
+                break
+            frame_count += 1
+
     sample_stride = _estimate_sample_stride(frame_count)
     return len(range(0, frame_count, sample_stride))
 
@@ -219,11 +240,11 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     assert "q99" in stats_json["observation.state"]
     assert "observation.images.main" in stats_json
     expected_video_count = _sampled_frame_count(
-        fps=10,
+        src_video,
         from_ts=0.0,
         to_ts=0.3,
     ) + _sampled_frame_count(
-        fps=10,
+        src_video,
         from_ts=0.3,
         to_ts=0.6,
     )
@@ -386,7 +407,7 @@ def test_write_lerobot_force_recompute_video_stats_ignores_source_video_stats(
         stats_json = json.load(fh)
 
     expected_video_count = _sampled_frame_count(
-        fps=10,
+        src_video,
         from_ts=0.0,
         to_ts=0.3,
     )
