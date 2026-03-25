@@ -1,5 +1,6 @@
 import refiner.io as io
 import refiner.pipeline as pipeline
+import refiner.robotics as robotics
 import refiner.robotics as robot
 import refiner.video as video
 from refiner.pipeline import (
@@ -45,4 +46,5 @@ __all__ = [
     "pipeline",
     "video",
     "robot",
+    "robotics",
 ]
