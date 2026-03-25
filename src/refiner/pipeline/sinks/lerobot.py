@@ -12,14 +12,13 @@ import pyarrow.parquet as pq
 from refiner.execution.asyncio.runtime import submit
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.media import VideoFile
-from refiner.media.video.writer import VideoStreamWriter, VideoTranscodeConfig
+from refiner.video import VideoFile
+from refiner.video.writer import VideoStreamWriter, VideoTranscodeConfig
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.robotics.lerobot_format import (
-    LEROBOT_TASKS,
     LeRobotFeatureInfo,
     LeRobotFeatureStats,
     LeRobotInfo,
@@ -31,6 +30,7 @@ from refiner.robotics.lerobot_format import (
     default_feature_info_by_key,
     infer_feature_info,
 )
+from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_run_handle
 from refiner.worker.metrics.api import register_gauge
 
@@ -93,6 +93,7 @@ class LeRobotWriterSink(BaseSink):
         quantile_bins: int = 5000,
         force_recompute_video_stats: bool = False,
     ):
+        check_required_dependencies("write_lerobot", ["av"], dist="robotics")
         self.output = DataFolder.resolve(output)
         self.data_files_size_in_mb = data_files_size_in_mb
         self.video_files_size_in_mb = video_files_size_in_mb
@@ -275,7 +276,7 @@ class LeRobotWriterSink(BaseSink):
                 {
                     key: value
                     for key, value in row.items()
-                    if key not in {"frames", "metadata", LEROBOT_TASKS}
+                    if key not in {"frames", "metadata"}
                     and not isinstance(value, VideoFile)
                 },
                 shard_id=row.shard_id,

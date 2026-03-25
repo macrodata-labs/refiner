@@ -1,11 +1,9 @@
+import refiner.io as io
+import refiner.pipeline as pipeline
 import refiner.robotics as robotics
-from refiner.io import DataFile, DataFileSet, DataFolder
-from refiner.launchers import LaunchStats, LocalLauncher
-from refiner.media import VideoFile
+import refiner.robotics as robot
+import refiner.video as video
 from refiner.pipeline import (
-    RefinerPipeline,
-    Row,
-    Shard,
     from_items,
     from_source,
     read_csv,
@@ -22,19 +20,9 @@ from refiner.worker.metrics.api import (
     log_throughput,
     register_gauge,
 )
-from refiner.worker.runner import Worker, WorkerRunStats
 
 __all__ = [
-    "RefinerPipeline",
-    "LocalLauncher",
-    "LaunchStats",
-    "DataFile",
-    "DataFolder",
-    "DataFileSet",
-    "Shard",
-    "Row",
-    "Worker",
-    "WorkerRunStats",
+    # sources
     "read_csv",
     "read_jsonl",
     "read_lerobot",
@@ -42,16 +30,21 @@ __all__ = [
     "from_items",
     "from_source",
     "task",
+    # metrics
     "log_throughput",
     "log_gauge",
     "log_gauges",
-    "register_gauge",
     "log_histogram",
+    "register_gauge",
+    # expressions
     "col",
     "lit",
     "coalesce",
     "if_else",
-    "VideoFile",
-    "Video",
+    # submodules
+    "io",
+    "pipeline",
+    "video",
+    "robot",
     "robotics",
 ]

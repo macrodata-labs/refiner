@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from refiner.io import DataFolder
-from refiner.media import VideoFile
+from refiner.video import VideoFile
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import Tabular
 from refiner.robotics.lerobot_format.metadata.info import DEFAULT_VIDEO_PATH
@@ -13,8 +13,6 @@ from refiner.robotics.lerobot_format.metadata.metadata import LeRobotMetadata
 from refiner.robotics.lerobot_format.metadata.stats import (
     LeRobotFeatureStats,
 )
-
-LEROBOT_TASKS = "lerobot_tasks"
 
 if TYPE_CHECKING:
     from refiner.robotics.lerobot_format.tabular import LeRobotTabular
@@ -144,21 +142,19 @@ class LeRobotRow(Row):
     def __getitem__(self, key: str) -> Any:
         if key == "metadata":
             return self.metadata
-        if key == LEROBOT_TASKS:
-            return self.task_index_to_text
         if key == "frames":
             return self.frames
         return self._row[key]
 
     def __iter__(self) -> Iterator[str]:
-        fixed_keys = ("metadata", LEROBOT_TASKS, "frames")
+        fixed_keys = ("metadata", "frames")
         yield from fixed_keys
         for key in self._row:
             if key not in fixed_keys:
                 yield key
 
     def __len__(self) -> int:
-        fixed_keys = ("metadata", LEROBOT_TASKS, "frames")
+        fixed_keys = ("metadata", "frames")
         return len(self._row) + sum(1 for key in fixed_keys if key not in self._row)
 
     @property
@@ -176,10 +172,6 @@ class LeRobotRow(Row):
     @property
     def length(self) -> int:
         return int(self._row["length"])
-
-    @property
-    def task_index_to_text(self) -> Mapping[int, str]:
-        return self.metadata.tasks.index_to_task
 
     @property
     def tabular_type(self) -> type["LeRobotTabular"]:
@@ -289,7 +281,6 @@ class LeRobotRow(Row):
 
 
 __all__ = [
-    "LEROBOT_TASKS",
     "LeRobotRow",
     "LeRobotStatsView",
     "LeRobotVideoRef",

@@ -11,7 +11,7 @@ if __name__ == "__main__":
         mdr.read_lerobot(INPUT_DATASET)
         .map(
             # this will compute inactive frames, drop them from the parquet rows and shift video file timestamp markers
-            mdr.robotics.motion_trim(
+            mdr.robot.motion_trim(
                 threshold=0.001,
             )
         )

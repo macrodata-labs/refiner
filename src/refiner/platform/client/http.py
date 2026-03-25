@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.metadata
+import os
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
@@ -7,11 +9,29 @@ import httpx
 import msgspec
 
 T = TypeVar("T")
+PLATFORM_BASE_URL_ENV_VAR = "MACRODATA_BASE_URL"
+_PLATFORM_BASE_URL = "https://macrodata.co"
+
+try:
+    _REFINER_VERSION = importlib.metadata.version("macrodata-refiner").strip()
+except importlib.metadata.PackageNotFoundError:
+    _REFINER_VERSION = ""
+
+_USER_AGENT = (
+    f"macrodata-refiner/{_REFINER_VERSION}" if _REFINER_VERSION else "macrodata-refiner"
+)
 
 
 def sanitize_terminal_text(value: str) -> str:
     # Drop ASCII control chars (including ESC) to avoid terminal escape injection.
     return "".join(ch for ch in value if ch >= " " and ch != "\x7f")
+
+
+def resolve_platform_base_url() -> str:
+    env_value = os.environ.get(PLATFORM_BASE_URL_ENV_VAR)
+    if env_value:
+        return env_value.rstrip("/")
+    return _PLATFORM_BASE_URL
 
 
 @dataclass
@@ -62,17 +82,21 @@ def request_json(
     *,
     method: str,
     path: str,
-    api_key: str,
-    base_url: str,
+    api_key: str | None = None,
+    base_url: str | None = None,
     json_payload: dict[str, Any] | None = None,
     timeout_s: float = 10.0,
 ) -> dict[str, Any]:
-    url = f"{base_url.rstrip('/')}{path}"
+    resolved_base_url = resolve_platform_base_url() if base_url is None else base_url
+    url = f"{resolved_base_url.rstrip('/')}{path}"
+    headers = {"User-Agent": _USER_AGENT}
+    if api_key is not None and api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         resp = httpx.request(
             method,
             url,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=headers,
             json=json_payload,
             timeout=timeout_s,
         )

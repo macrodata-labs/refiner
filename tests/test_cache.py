@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from refiner.io import DataFile
-from refiner.media import VideoFile
+from refiner.video import VideoFile
 from refiner.pipeline.utils.cache.file_cache import get_media_cache
 from refiner.pipeline.utils.cache.lease_cache import LeaseCache
 

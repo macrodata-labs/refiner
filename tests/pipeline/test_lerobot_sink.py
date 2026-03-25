@@ -14,14 +14,13 @@ import pytest
 
 import refiner as mdr
 from refiner.io import DataFile, DataFolder
-from refiner.media.video.remux import reset_opened_video_source_cache
-from refiner.media.video.transcode import VideoTranscodeConfig
-from refiner.media.video.writer import VideoStreamWriter
+from refiner.video.remux import reset_opened_video_source_cache
+from refiner.video.transcode import VideoTranscodeConfig
+from refiner.video.writer import VideoStreamWriter
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
 from refiner.pipeline.sinks.lerobot_reducer import LeRobotMetaReduceSink
 from refiner.robotics.lerobot_format import (
-    LEROBOT_TASKS,
     LeRobotInfo,
     LeRobotMetadata,
     LeRobotStatsFile,
@@ -143,12 +142,11 @@ def _episode(
             }
             for i, v in enumerate(values)
         ],
-        "observation.images.main": mdr.VideoFile(
+        "observation.images.main": mdr.video.VideoFile(
             DataFile.resolve(str(video_path)),
             from_timestamp_s=from_ts,
             to_timestamp_s=to_ts,
         ),
-        LEROBOT_TASKS: {0: "pick", 1: "place"},
         "metadata": _metadata(),
     }
 
@@ -277,7 +275,6 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
                         "observation.state": [2.0],
                     },
                 ],
-                LEROBOT_TASKS: {0: "pick", 1: "place"},
                 "metadata": _metadata(),
             },
             {
@@ -297,7 +294,6 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
                         "observation.state": [4.0],
                     },
                 ],
-                LEROBOT_TASKS: {0: "pick", 1: "place"},
                 "metadata": _metadata(),
             },
         ],
@@ -328,11 +324,7 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
     with src_video.open("rb") as src, memfs.open(uri, "wb") as dst:
         dst.write(src.read())
 
-    remux_module = __import__(
-        "refiner.media.video.remux",
-        fromlist=["av"],
-    )
-    original_av_open = remux_module.av.open
+    original_av_open = av.open
     read_open_calls = 0
 
     def _counting_av_open(*args, **kwargs):
@@ -341,7 +333,7 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
             read_open_calls += 1
         return original_av_open(*args, **kwargs)
 
-    monkeypatch.setattr(remux_module.av, "open", _counting_av_open)
+    monkeypatch.setattr(av, "open", _counting_av_open)
 
     writer = VideoStreamWriter(
         folder=DataFolder.resolve(str(tmp_path / "out")),
@@ -353,7 +345,7 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
     )
     asyncio.run(
         writer.write_video(
-            mdr.VideoFile(
+            mdr.video.VideoFile(
                 DataFile.resolve(uri),
                 from_timestamp_s=0.0,
                 to_timestamp_s=0.3,
@@ -362,7 +354,7 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
     )
     asyncio.run(
         writer.write_video(
-            mdr.VideoFile(
+            mdr.video.VideoFile(
                 DataFile.resolve(uri),
                 from_timestamp_s=0.3,
                 to_timestamp_s=0.6,
@@ -535,7 +527,6 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
                         "observation.state": [2.0],
                     },
                 ],
-                LEROBOT_TASKS: {1: "place", 5: "pick"},
                 "metadata": _metadata({1: "place", 5: "pick"}),
             },
             {
@@ -555,7 +546,6 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
                         "observation.state": [4.0],
                     },
                 ],
-                LEROBOT_TASKS: {1: "place", 5: "pick"},
                 "metadata": _metadata({1: "place", 5: "pick"}),
             },
         ],
@@ -599,7 +589,6 @@ def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> No
                                 "observation.state": [1.0],
                             }
                         ],
-                        LEROBOT_TASKS: {0: "pick", 1: "place"},
                         "metadata": _metadata(),
                     },
                     shard_id="shard-1",
@@ -645,7 +634,6 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
                     "observation.state": [2.0],
                 },
             ],
-            LEROBOT_TASKS: {0: "pick", 1: "place"},
             "metadata": _metadata(),
         },
         shard_id="shard-1",

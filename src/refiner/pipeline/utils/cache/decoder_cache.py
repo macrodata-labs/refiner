@@ -7,11 +7,10 @@ from fractions import Fraction
 from functools import partial
 from typing import IO, Any, cast
 
-import av
-
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFile
 from refiner.pipeline.utils.cache.lease_cache import LeaseCache
+from refiner.utils import check_required_dependencies
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +110,8 @@ def _open_video_source(
     *,
     uri: str,
 ) -> OpenedVideoSource:
+    import av
+
     input_file = DataFile.resolve(uri).open("rb")
     try:
         container = av.open(input_file, mode="r")
@@ -145,6 +146,7 @@ def get_opened_video_source_cache(
     name: str = "default",
     max_entries: int | None = None,
 ) -> OpenedVideoSourceCache:
+    check_required_dependencies("video decoding", ["av"], dist="video")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("opened video source cache name must be a non-empty string")
 
