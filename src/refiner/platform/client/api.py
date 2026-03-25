@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Any
 
 from refiner.platform.auth import current_api_key
-from refiner.platform.client.http import parse_json_response, request_json
+from refiner.platform.client.http import (
+    parse_json_response,
+    request_json,
+    resolve_platform_base_url,
+)
 from refiner.platform.client.models import (
     CloudRunCreateRequest,
     CloudRunCreateResponse,
@@ -21,17 +24,6 @@ from refiner.worker.context import RunHandle
 
 if TYPE_CHECKING:
     from refiner.pipeline.data.shard import Shard
-
-
-PLATFORM_BASE_URL_ENV_VAR = "MACRODATA_BASE_URL"
-_PLATFORM_BASE_URL = "https://macrodata.co"
-
-
-def resolve_platform_base_url() -> str:
-    env_value = os.environ.get(PLATFORM_BASE_URL_ENV_VAR)
-    if env_value:
-        return env_value.rstrip("/")
-    return _PLATFORM_BASE_URL
 
 
 def compile_shard_descriptors(shards: list["Shard"]) -> list[SerializedShard]:

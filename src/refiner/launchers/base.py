@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
-from uuid import uuid4
 import re
 import time
+from uuid import uuid4
 
 from loguru import logger
 
 from refiner.platform.auth import CredentialsError
 from refiner.platform.client.api import MacrodataClient
-from refiner.platform.client.http import sanitize_terminal_text
+from refiner.platform.client.http import request_json, sanitize_terminal_text
 from refiner.platform.manifest import build_run_manifest
 from refiner.worker.context import RunHandle
 from refiner.pipeline.planning import (
@@ -81,6 +81,14 @@ class BaseLauncher(ABC):
         try:
             return MacrodataClient()
         except CredentialsError:
+            try:
+                request_json(
+                    method="GET",
+                    path="/api/me",
+                    timeout_s=2.0,
+                )
+            except Exception:
+                pass
             self._warn(
                 "platform integration disabled: no API key found in "
                 "MACRODATA_API_KEY or local credentials. "
