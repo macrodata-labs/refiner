@@ -89,33 +89,12 @@ def _write_large_video(
             container.mux(packet)
 
 
-def _sampled_frame_count(
-    path: Path,
-    *,
-    from_ts: float,
-    to_ts: float | None,
-) -> int:
-    frame_count = 0
-
-    with av.open(str(path), mode="r") as container:
-        stream = next(
-            (item for item in container.streams if item.type == "video"), None
-        )
-        if stream is None:
-            raise ValueError(f"Video source has no video stream: {path}")
-
-        for frame in container.decode(stream):
-            if not isinstance(frame, av.VideoFrame):
-                continue
-            if frame.pts is None or frame.time_base is None:
-                continue
-            timestamp = float(frame.pts * frame.time_base)
-            if timestamp + 1e-6 < from_ts:
-                continue
-            if to_ts is not None and timestamp - 1e-6 >= to_ts:
-                break
-            frame_count += 1
-
+def _sampled_frame_count(*, fps: int, from_ts: float, to_ts: float | None) -> int:
+    if to_ts is None:
+        raise ValueError("test helper requires an explicit video end timestamp")
+    start_frame = int(round(from_ts * fps))
+    end_frame = max(start_frame + 1, int(round(to_ts * fps)))
+    frame_count = end_frame - start_frame
     sample_stride = _estimate_sample_stride(frame_count)
     return len(range(0, frame_count, sample_stride))
 
@@ -240,11 +219,11 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     assert "q99" in stats_json["observation.state"]
     assert "observation.images.main" in stats_json
     expected_video_count = _sampled_frame_count(
-        src_video,
+        fps=10,
         from_ts=0.0,
         to_ts=0.3,
     ) + _sampled_frame_count(
-        src_video,
+        fps=10,
         from_ts=0.3,
         to_ts=0.6,
     )
@@ -324,11 +303,7 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
     with src_video.open("rb") as src, memfs.open(uri, "wb") as dst:
         dst.write(src.read())
 
-    remux_module = __import__(
-        "refiner.video.remux",
-        fromlist=["av"],
-    )
-    original_av_open = remux_module.av.open
+    original_av_open = av.open
     read_open_calls = 0
 
     def _counting_av_open(*args, **kwargs):
@@ -337,7 +312,7 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
             read_open_calls += 1
         return original_av_open(*args, **kwargs)
 
-    monkeypatch.setattr(remux_module.av, "open", _counting_av_open)
+    monkeypatch.setattr(av, "open", _counting_av_open)
 
     writer = VideoStreamWriter(
         folder=DataFolder.resolve(str(tmp_path / "out")),
@@ -411,7 +386,7 @@ def test_write_lerobot_force_recompute_video_stats_ignores_source_video_stats(
         stats_json = json.load(fh)
 
     expected_video_count = _sampled_frame_count(
-        src_video,
+        fps=10,
         from_ts=0.0,
         to_ts=0.3,
     )
