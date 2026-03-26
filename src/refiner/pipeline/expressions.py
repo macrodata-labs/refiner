@@ -7,6 +7,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.dataset as ds
 
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 
@@ -234,6 +235,38 @@ class Expr:
 
     def to_code(self) -> builtins.str:
         return expr_to_code(self)
+
+    def to_arrow_dataset(self) -> ds.Expression:
+        return expr_to_arrow_dataset(self)
+
+    def extract_pushdown_filter(self) -> ds.Expression | None:
+        if self.op == "and":
+            return _and_arrow_dataset_exprs(
+                self.args[0].extract_pushdown_filter(),
+                self.args[1].extract_pushdown_filter(),
+            )
+        try:
+            return self.to_arrow_dataset()
+        except ValueError:
+            return None
+
+    def referenced_columns(self) -> set[builtins.str]:
+        if self.op == "col":
+            return {str(self.args[0])}
+
+        columns: set[builtins.str] = set()
+        for arg in self.args:
+            if isinstance(arg, Expr):
+                columns.update(arg.referenced_columns())
+            elif isinstance(arg, (list, tuple)):
+                for item in arg:
+                    if isinstance(item, Expr):
+                        columns.update(item.referenced_columns())
+            elif isinstance(arg, dict):
+                for item in arg.values():
+                    if isinstance(item, Expr):
+                        columns.update(item.referenced_columns())
+        return columns
 
     def __add__(self, other: Any) -> "Expr":
         return Expr(op="add", args=(self, _as_expr(other)))
@@ -575,6 +608,58 @@ def eval_expr_arrow(
     raise ValueError(f"Unsupported expression op: {op}")
 
 
+def expr_to_arrow_dataset(expr: Expr) -> ds.Expression:
+    op = expr.op
+    args = expr.args
+
+    if op == "col":
+        return ds.field(str(args[0]))
+    if op == "lit":
+        return ds.scalar(args[0])
+    if op == "is_in":
+        return expr_to_arrow_dataset(args[0]).isin(list(args[1]))
+    if op == "is_null":
+        return expr_to_arrow_dataset(args[0]).is_null()
+    if op == "is_not_null":
+        return ~expr_to_arrow_dataset(args[0]).is_null()
+
+    if op in {"eq", "ne", "lt", "le", "gt", "ge", "and", "or"}:
+        left = expr_to_arrow_dataset(args[0])
+        right = expr_to_arrow_dataset(args[1])
+        if op == "eq":
+            return left == right
+        if op == "ne":
+            return left != right
+        if op == "lt":
+            return left < right
+        if op == "le":
+            return left <= right
+        if op == "gt":
+            return left > right
+        if op == "ge":
+            return left >= right
+        if op == "and":
+            return left & right
+        return left | right
+
+    if op == "not":
+        return ~expr_to_arrow_dataset(args[0])
+
+    raise ValueError(
+        f"Expression cannot be pushed down to parquet filtering: {expr.to_code()}"
+    )
+
+
+def _and_arrow_dataset_exprs(
+    left: ds.Expression | None, right: ds.Expression | None
+) -> ds.Expression | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left & right
+
+
 __all__ = [
     "Expr",
     "StringExpr",
@@ -584,4 +669,5 @@ __all__ = [
     "coalesce",
     "if_else",
     "eval_expr_arrow",
+    "expr_to_arrow_dataset",
 ]

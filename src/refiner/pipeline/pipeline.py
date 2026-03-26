@@ -494,13 +494,15 @@ def read_parquet(
     num_shards: int | None = None,
     arrow_batch_size: int = 65536,
     columns_to_read: Sequence[str] | None = None,
+    filter: Expr | None = None,
     split_row_groups: bool = False,
 ) -> RefinerPipeline:
     """Create a pipeline with a Parquet reader source.
 
     `num_shards` and `target_shard_bytes` affect input shard planning on the
     reader side. Parquet always plans byte/file spans first and resolves them
-    to row groups or row ranges at read time.
+    to row groups or row ranges at read time. `filter` uses Arrow expressions
+    for row-group pruning plus row-level filtering during reads.
     """
     return RefinerPipeline(
         source=ParquetReader(
@@ -512,6 +514,7 @@ def read_parquet(
             num_shards=num_shards,
             arrow_batch_size=arrow_batch_size,
             columns_to_read=columns_to_read,
+            filter=filter,
             split_row_groups=split_row_groups,
         )
     )
@@ -522,11 +525,8 @@ def read_lerobot(
     *,
     fs: AbstractFileSystem | None = None,
     storage_options: Mapping[str, Any] | None = None,
-    limit: int | None = None,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
-    media_max_in_flight: int = 8,
-    media_preserve_order: bool = True,
     split_row_groups: bool = True,
 ) -> RefinerPipeline:
     """Create a pipeline with an episode-granular LeRobot reader source.

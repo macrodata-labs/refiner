@@ -5,13 +5,19 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
 
+import pyarrow as pa
+import pyarrow.dataset as ds
+import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 from fsspec import AbstractFileSystem
 from loguru import logger
 
+from refiner.io import DataFile
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.data.shard import FilePart
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.expressions import Expr, eval_expr_arrow
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -46,6 +52,7 @@ class ParquetReader(BaseReader):
         num_shards: int | None = None,
         arrow_batch_size: int = 65536,
         columns_to_read: Sequence[str] | None = None,
+        filter: Expr | None = None,
         split_row_groups: bool = False,
     ):
         """Create a Parquet reader.
@@ -58,6 +65,8 @@ class ParquetReader(BaseReader):
             target_shard_bytes: Target approximate shard size for planned byte-range shards.
             arrow_batch_size: Max rows per streamed Arrow batch before wrapping as `Tabular`.
             columns_to_read: Optional subset of column names to read (projection pushdown).
+            filter: Optional refiner expression used for parquet row-group
+                pruning where possible, with residual filtering performed in memory.
             split_row_groups: If True, `read_shard()` can refine planned byte spans into
                 deterministic row ranges inside the file. Otherwise reads expand to row groups.
 
@@ -76,21 +85,68 @@ class ParquetReader(BaseReader):
             num_shards=num_shards,
         )
         self.arrow_batch_size = int(arrow_batch_size)
+        self.split_row_groups = split_row_groups
+
+        ## filter
+        # full filter expression
+        self.filter = filter
+        # what we can pass down to scanner. essentially an arrow dataset expression
+        self._pushdown_filter = (
+            filter.extract_pushdown_filter() if filter is not None else None
+        )
+        # the columns we will need to have in order to be able to apply self.filter
+        self._filter_columns = (
+            filter.referenced_columns() if filter is not None else set()
+        )
+
+        ## columns
+        # the columns the parquet reader will return at the end
         self.columns_to_read = (
             tuple(columns_to_read) if columns_to_read is not None else None
         )
-        self.split_row_groups = split_row_groups
+        # the columns we will actually load into memory. requested+needed for filtering
+        self._scan_columns: list[str] | None = (
+            None
+            if self.columns_to_read is None
+            else sorted(set(self.columns_to_read) | self._filter_columns)
+        )
 
         self._open_pf: Optional[pq.ParquetFile] = None
         self._open_metadata: _ParquetMetadata | None = None
+        self._open_fragment_file: DataFile | None = None
+        self._open_fragment: ds.ParquetFileFragment | None = None
 
-    def _get_parquet_file(self, source_file) -> pq.ParquetFile:
+    def _get_parquet_file(self, source_file: DataFile) -> pq.ParquetFile:
         """Get or open a cached ParquetFile for the current path (single-open-file policy)."""
         fh, opened_new = self._get_file_handle(source_file, mode="rb")
         if opened_new or self._open_pf is None:
             self._open_pf = pq.ParquetFile(fh)
             self._open_metadata = None
         return self._open_pf
+
+    def _get_parquet_fragment(self, source_file: DataFile) -> ds.ParquetFileFragment:
+        """Build a Parquet fragment for row-group-aware filter pushdown."""
+        if self._open_fragment is not None and self._open_fragment_file == source_file:
+            return self._open_fragment
+
+        pyfs = pafs.PyFileSystem(pafs.FSSpecHandler(source_file.fs))
+        dataset = ds.dataset(source_file.path, filesystem=pyfs, format="parquet")
+        self._open_fragment_file = source_file
+        self._open_fragment = next(dataset.get_fragments())
+        return self._open_fragment
+
+    def describe(self) -> dict[str, Any]:
+        description = super().describe()
+        description.update(
+            {
+                "columns_to_read": list(self.columns_to_read)
+                if self.columns_to_read is not None
+                else None,
+                "split_row_groups": self.split_row_groups,
+                "filter": self.filter.to_code() if self.filter is not None else None,
+            }
+        )
+        return description
 
     def _metadata(self, pf: pq.ParquetFile) -> _ParquetMetadata | None:
         """Cache row-group byte starts and row starts for the currently open parquet file."""
@@ -126,127 +182,166 @@ class ParquetReader(BaseReader):
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
         for part in descriptor.parts:
-            source = self.fileset.resolve_file(part.source_index, part.path)
-            pf = self._get_parquet_file(source)
+            source: DataFile = self.fileset.resolve_file(part.source_index, part.path)
             if part.end == -1:
-                for batch in pf.iter_batches(
-                    row_groups=None,
-                    batch_size=self.arrow_batch_size,
-                    columns=self.columns_to_read,
-                ):
-                    yield Tabular.from_batch(batch)
+                yield from self._read_fragment_scan(
+                    source,
+                    row_groups=self._filtered_row_groups(source, None),
+                )
                 continue
 
-            if self.split_row_groups:
-                # For explicit intra-file splitting we treat the planned byte span as a deterministic row fraction.
-                yield from self._read_row_fraction(pf, part)
+            pf = self._get_parquet_file(source)
+            row_groups, row_bounds = self._row_bounds_for_span(pf, part)
+            row_groups = self._filtered_row_groups(source, row_groups)
+            if row_groups == []:
                 continue
+            yield from self._read_fragment_scan(
+                source,
+                row_groups=row_groups,
+                row_bounds=row_bounds,
+            )
 
-            # Default parquet behavior expands the planned byte span to the covering row groups.
-            rg_indices = self._row_groups_for_span(pf, part)
-            if rg_indices == []:
-                continue
-            for batch in pf.iter_batches(
-                row_groups=rg_indices,
-                batch_size=self.arrow_batch_size,
-                columns=self.columns_to_read,
-            ):
-                yield Tabular.from_batch(batch)
+    def _read_fragment_scan(
+        self,
+        source_file: DataFile,
+        *,
+        row_groups: list[int] | None,
+        row_bounds: tuple[int, int] | None = None,
+    ) -> Iterator[SourceUnit]:
+        """Scan the selected parquet row groups and optionally trim to a row interval."""
+        row_start = row_end = 0
+        if row_bounds is not None:
+            row_start, row_end = row_bounds
+            if row_groups is None or row_groups == []:
+                return
 
-    def _row_groups_for_span(self, pf: pq.ParquetFile, part) -> list[int] | None:
-        """Map a planned byte span to the row groups whose starts fall inside that span."""
+        fragment = self._get_parquet_fragment(source_file)
+        if row_groups is not None:
+            fragment = fragment.subset(row_group_ids=row_groups)
+        if row_bounds is not None:
+            assert row_groups is not None
+            metadata = self._metadata(self._get_parquet_file(source_file))
+            if metadata is None:
+                return
+            offset = metadata.row_starts[row_groups[0]]
+        else:
+            offset = 0
+        # Row-group pruning already happened before scanning, so scanner only needs
+        # projection and batch sizing here.
+        for batch in fragment.scanner(
+            columns=self._scan_columns,
+            filter=None,
+            batch_size=self.arrow_batch_size,
+        ).to_batches():
+            if row_bounds is not None:
+                # we need to keep track of start/end of our row bounds
+                batch_rows = int(batch.num_rows)
+                if offset + batch_rows <= row_start:
+                    offset += batch_rows
+                    continue
+                # Trim the first/last scanned row groups down to the shard's row interval.
+                begin = max(0, row_start - offset)
+                length = min(batch_rows - begin, row_end - max(row_start, offset))
+                if length <= 0:
+                    offset += batch_rows
+                    if offset >= row_end:
+                        return
+                    continue
+                batch = batch.slice(begin, length)
+                offset += batch_rows
+            table = pa.Table.from_batches([batch])
+            if self.filter is not None:
+                mask = eval_expr_arrow(self.filter, table)
+                if isinstance(mask, pa.ChunkedArray):
+                    mask = mask.combine_chunks()
+                table = table.filter(mask)
+            if self.columns_to_read is not None:
+                table = table.select(self.columns_to_read)
+            if table.num_rows > 0:
+                yield Tabular(table)
+            if row_bounds is not None and offset >= row_end:
+                return
+
+    def _filtered_row_groups(
+        self,
+        source_file: DataFile,
+        row_groups: list[int] | None,
+    ) -> list[int] | None:
+        """Prune row groups via parquet metadata while keeping shard ownership unchanged."""
+        if self._pushdown_filter is None:
+            return row_groups
+
+        fragment = self._get_parquet_fragment(source_file)
+        if row_groups is not None:
+            fragment = fragment.subset(row_group_ids=row_groups)
+        return [
+            row_group.id
+            for row_group_fragment in fragment.split_by_row_group(
+                filter=self._pushdown_filter
+            )
+            for row_group in row_group_fragment.row_groups
+        ]
+
+    def _row_bounds_for_span(
+        self,
+        pf: pq.ParquetFile,
+        part: FilePart,
+    ) -> tuple[list[int] | None, tuple[int, int] | None]:
+        """Map a planned byte span to row groups and optional row bounds within those groups."""
         metadata = self._metadata(pf)
         if metadata is None:
+            logger.warning(
+                "Parquet metadata unavailable for {}; falling back to reading full file for first shard only.",
+                part.path,
+            )
             if part.start == 0:
-                logger.warning(
-                    "Parquet metadata unavailable for {}; falling back to reading full file for first shard only.",
-                    part.path,
-                )
-                return None
-            return []
-
-        row_group_starts = metadata.row_group_starts
-        if not row_group_starts:
-            return []
+                return None, None
+            return [], None
 
         file_size = self.fileset.size(part.source_index, part.path)
         if file_size <= 0:
-            return []
+            return [], None
 
-        start = max(0, part.start)
-        end = min(file_size, part.end)
-        if end <= start:
-            return []
+        if self.split_row_groups:
+            if metadata.num_rows <= 0:
+                return [], None
 
-        # Byte planning stays metadata-free. At read time each row group belongs to the
-        # shard whose planned span contains that row group's start offset.
-        start_rg = bisect.bisect_left(row_group_starts, start)
-        end_rg = bisect.bisect_left(row_group_starts, end)
+            # Row-fraction splitting is an execution-time partitioning heuristic, not a physical byte->row mapping.
+            start = max(0, (metadata.num_rows * max(0, part.start)) // file_size)
+            end = min(
+                metadata.num_rows,
+                (metadata.num_rows * min(file_size, part.end)) // file_size,
+            )
+            if part.end > part.start and end <= start:
+                end = min(metadata.num_rows, start + 1)
+            starts = metadata.row_starts
+            row_bounds = (start, end)
+        else:
+            starts = metadata.row_group_starts
+            start = max(0, part.start)
+            end = min(file_size, part.end)
+            row_bounds = None
+
+        if not starts or end <= start:
+            return [], None
+
+        if row_bounds is not None:
+            start_rg = max(0, bisect.bisect_right(starts, start) - 1)
+        else:
+            # Byte planning stays metadata-free. At read time each row group belongs to the
+            # shard whose planned span contains that row group's start offset.
+            start_rg = bisect.bisect_left(starts, start)
+        end_rg = bisect.bisect_left(starts, end)
         if start_rg >= end_rg:
-            if start == 0:
+            if row_bounds is None and start == 0:
                 logger.warning(
                     "Parquet row-group byte sizes unavailable for {}; falling back to reading full file for first shard only.",
                     part.path,
                 )
-                return None
-            return []
+                return None, None
+            return [], None
 
-        return list(range(start_rg, end_rg))
-
-    def _read_row_fraction(self, pf: pq.ParquetFile, part) -> Iterator[SourceUnit]:
-        """Read a planned parquet span as a deterministic row fraction within relevant row groups."""
-        metadata = self._metadata(pf)
-        if metadata is None:
-            for batch in pf.iter_batches(
-                row_groups=None,
-                batch_size=self.arrow_batch_size,
-                columns=self.columns_to_read,
-            ):
-                yield Tabular.from_batch(batch)
-            return
-
-        file_size = self.fileset.size(part.source_index, part.path)
-        if metadata.num_rows <= 0 or file_size <= 0:
-            return
-
-        # Row-fraction splitting is an execution-time partitioning heuristic, not a physical byte->row mapping.
-        row_start = max(0, (metadata.num_rows * max(0, part.start)) // file_size)
-        row_end = (
-            metadata.num_rows
-            if part.end == -1
-            else min(
-                metadata.num_rows,
-                (metadata.num_rows * min(file_size, part.end)) // file_size,
-            )
-        )
-        if part.end > part.start and row_end <= row_start:
-            row_end = min(metadata.num_rows, row_start + 1)
-        if row_end <= row_start:
-            return
-
-        start_rg = bisect.bisect_right(metadata.row_starts, row_start) - 1
-        end_rg = bisect.bisect_left(metadata.row_starts, row_end)
-        start_rg = max(0, start_rg)
-        row_groups = list(range(start_rg, end_rg)) if start_rg < end_rg else None
-        offset = metadata.row_starts[start_rg] if row_groups else 0
-        remaining = row_end - row_start
-        for batch in pf.iter_batches(
-            row_groups=row_groups,
-            batch_size=self.arrow_batch_size,
-            columns=self.columns_to_read,
-        ):
-            batch_rows = int(batch.num_rows)
-            if offset + batch_rows <= row_start:
-                offset += batch_rows
-                continue
-            begin = max(0, row_start - offset)
-            length = min(batch_rows - begin, remaining)
-            if length > 0:
-                yield Tabular.from_batch(batch.slice(begin, length))
-                remaining -= length
-            offset += batch_rows
-            if remaining <= 0:
-                break
+        return list(range(start_rg, end_rg)), row_bounds
 
 
 __all__ = ["ParquetReader"]
