@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 from refiner.io import DataFile, DataFolder
 from refiner.io.fileset import DataFileSet
 from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl, read_parquet
+from refiner.pipeline.expressions import col
 
 
 def _write_jsonl(path: Path, values: list[int]) -> None:
@@ -109,6 +110,22 @@ def test_parquet_reader_reads_across_mixed_local_and_memory_files() -> None:
 
         assert _pipeline_values(pipeline) == [1, 2]
         assert len(pipeline.source.list_shards()) == 1
+
+
+def test_parquet_reader_filters_across_mixed_local_and_memory_files() -> None:
+    with TemporaryDirectory() as tmp:
+        local_path = Path(tmp) / "local.parquet"
+        _write_parquet(local_path, [1, 2])
+
+        memfs = MemoryFileSystem()
+        memfs.pipe("remote.parquet", _write_parquet_bytes([3, 4]))
+
+        pipeline = read_parquet(
+            [str(local_path), DataFile(fs=memfs, path="remote.parquet")],
+            filter=col("x") > 2,
+        )
+
+        assert _pipeline_values(pipeline) == [3, 4]
 
 
 @pytest.mark.parametrize("split_sources", [False, True])
