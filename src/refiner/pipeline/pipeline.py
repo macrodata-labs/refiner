@@ -525,11 +525,8 @@ def read_lerobot(
     *,
     fs: AbstractFileSystem | None = None,
     storage_options: Mapping[str, Any] | None = None,
-    limit: int | None = None,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
-    media_max_in_flight: int = 8,
-    media_preserve_order: bool = True,
     split_row_groups: bool = True,
 ) -> RefinerPipeline:
     """Create a pipeline with an episode-granular LeRobot reader source.
