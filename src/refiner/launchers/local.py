@@ -12,6 +12,7 @@ from refiner.worker.context import RunHandle
 from refiner.pipeline.planning import PlannedStage
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.resources.cpu import build_cpu_sets
+from refiner.worker.resources.gpu import build_gpu_sets
 from refiner.worker.workdir import resolve_workdir
 
 from refiner.launchers.base import BaseLauncher
@@ -41,6 +42,7 @@ class LocalLauncher(BaseLauncher):
         workdir: str | None = None,
         heartbeat_interval_seconds: int = 30,
         cpus_per_worker: int | None = None,
+        gpus_per_worker: int | None = None,
         runtime_backend: str = "auto",
     ):
         super().__init__(
@@ -49,6 +51,7 @@ class LocalLauncher(BaseLauncher):
             num_workers=num_workers,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             cpus_per_worker=cpus_per_worker,
+            gpus_per_worker=gpus_per_worker,
         )
         if runtime_backend not in {"auto", "platform", "file"}:
             raise ValueError("runtime_backend must be one of: auto, platform, file")
@@ -121,6 +124,7 @@ class LocalLauncher(BaseLauncher):
         payload_path: Path,
         runtime_backend: str,
         cpu_ids: list[int] | None,
+        gpu_ids: list[str] | None,
         platform_run: RunHandle | None,
     ) -> list[str]:
         command = [
@@ -143,6 +147,8 @@ class LocalLauncher(BaseLauncher):
             str(payload_path),
             "--cpu-ids",
             ",".join(str(cpu_id) for cpu_id in cpu_ids or []),
+            "--gpu-ids",
+            ",".join(gpu_ids or []),
         ]
         command.extend(["--stage-index", str(stage_index)])
         if runtime_backend == "platform" and platform_run is not None:
@@ -245,6 +251,14 @@ class LocalLauncher(BaseLauncher):
             if self.cpus_per_worker is not None
             else [None] * stage.compute.num_workers
         )
+        gpu_sets = (
+            build_gpu_sets(
+                num_workers=stage.compute.num_workers,
+                gpus_per_worker=self.gpus_per_worker,
+            )
+            if self.gpus_per_worker is not None
+            else [None] * stage.compute.num_workers
+        )
         shards = list(stage.pipeline.list_shards())
         stage_run = self._stage_run(platform_run, stage_index=stage.index)
         if runtime_backend == "platform":
@@ -264,6 +278,7 @@ class LocalLauncher(BaseLauncher):
                     payload_path=payload_path,
                     runtime_backend=runtime_backend,
                     cpu_ids=cpu_sets[rank],
+                    gpu_ids=gpu_sets[rank],
                     platform_run=stage_run,
                 ),
                 stdout=subprocess.PIPE,

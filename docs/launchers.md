@@ -22,6 +22,7 @@ stats = pipeline.launch_local(
     name="local-job",
     num_workers=2,
     cpus_per_worker=2,
+    gpus_per_worker=1,
 )
 ```
 
@@ -46,6 +47,7 @@ Returned stats include:
 
 - workers always run as subprocesses, even when `num_workers=1`
 - `cpus_per_worker` is optional CPU pinning when the OS supports affinity
+- `gpus_per_worker` is optional local GPU partitioning via `CUDA_VISIBLE_DEVICES`
 - local runtime files live under `<workdir>/runs/<job_id>/...`
 
 ## Cloud Launcher
@@ -66,6 +68,8 @@ result = pipeline.launch_cloud(
     num_workers=8,
     cpus_per_worker=2,
     mem_mb_per_worker=4096,
+    gpus_per_worker=1,
+    gpu_type="h100",
 )
 ```
 
@@ -80,9 +84,14 @@ Returned result includes:
 - `num_workers`: requested logical worker count
 - `cpus_per_worker`: scheduler hint for worker CPU sizing
 - `mem_mb_per_worker`: scheduler hint for worker memory sizing
+- `gpus_per_worker`: scheduler hint for worker GPU count
+- `gpu_type`: scheduler hint for worker GPU type
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
+
+GPU scheduling is cloud-only. When requesting GPUs, set both `gpus_per_worker` and
+`gpu_type`.
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
 

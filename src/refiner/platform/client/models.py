@@ -115,6 +115,8 @@ class CloudRuntimeConfig:
     heartbeat_interval_seconds: int
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
+    gpus_per_worker: int | None = None
+    gpu_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -125,6 +127,10 @@ class CloudRuntimeConfig:
             payload["cpus_per_worker"] = self.cpus_per_worker
         if self.mem_mb_per_worker is not None:
             payload["mem_mb_per_worker"] = self.mem_mb_per_worker
+        if self.gpus_per_worker is not None:
+            payload["gpus_per_worker"] = self.gpus_per_worker
+        if self.gpu_type is not None:
+            payload["gpu_type"] = self.gpu_type
         return payload
 
 

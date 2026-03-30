@@ -87,6 +87,8 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         heartbeat_interval_seconds=12,
         cpus_per_worker=2,
         mem_mb_per_worker=4096,
+        gpus_per_worker=2,
+        gpu_type="h100",
     )
 
     assert result.job_id == "job-123"
@@ -105,11 +107,55 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.heartbeat_interval_seconds == 12
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
+    assert request.stage_payloads[0].runtime.gpus_per_worker == 2
+    assert request.stage_payloads[0].runtime.gpu_type == "h100"
     assert request.manifest == {
         "version": 1,
         "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
         "script": {"text": "print('hi')"},
     }
+
+
+def test_pipeline_launch_cloud_requires_gpu_type_with_gpu_count(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="gpu_type is required"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            gpus_per_worker=2,
+        )
+
+
+def test_pipeline_launch_cloud_requires_gpu_count_with_gpu_type(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="gpus_per_worker is required"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            gpu_type="h100",
+        )
+
+
+def test_pipeline_launch_cloud_rejects_non_positive_gpu_count(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="gpus_per_worker must be > 0"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            gpus_per_worker=0,
+            gpu_type="h100",
+        )
+
+
+def test_pipeline_launch_cloud_rejects_blank_gpu_type(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="gpu_type must be non-empty"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            gpus_per_worker=1,
+            gpu_type="   ",
+        )
 
 
 def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> None:

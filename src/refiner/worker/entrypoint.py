@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import warnings
 
 import cloudpickle
 from loguru import logger
@@ -11,6 +12,7 @@ from refiner.platform.client.http import MacrodataApiError
 from refiner.platform.client.api import MacrodataClient
 from refiner.worker.context import RunHandle
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
+from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
 
 
@@ -29,12 +31,22 @@ def main() -> int:
     parser.add_argument("--heartbeat-interval-seconds", type=int, default=30)
     parser.add_argument("--workdir", type=str, default=None)
     parser.add_argument("--cpu-ids", type=str, default="")
+    parser.add_argument("--gpu-ids", type=str, default="")
     args = parser.parse_args()
 
     try:
         cpu_ids = parse_cpu_ids(args.cpu_ids)
         if cpu_ids:
             set_cpu_affinity(cpu_ids)
+        gpu_ids = parse_gpu_ids(args.gpu_ids)
+        if gpu_ids:
+            set_visible_gpu_ids(gpu_ids)
+        elif args.gpu_ids.strip():
+            warnings.warn(
+                "gpu-ids argument did not resolve to any visible devices",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         with open(args.pipeline_payload, "rb") as f:
             pipeline = cloudpickle.load(f)

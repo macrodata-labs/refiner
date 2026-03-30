@@ -49,6 +49,8 @@ import refiner as mdr
     .launch_cloud(
         name="motion_trim",
         num_workers=4,
+        gpus_per_worker=1,
+        gpu_type="h100",
     )
 )
 ```

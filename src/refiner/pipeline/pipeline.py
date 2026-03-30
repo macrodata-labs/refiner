@@ -324,6 +324,7 @@ class RefinerPipeline:
         workdir: str | None = None,
         heartbeat_interval_seconds: int = 30,
         cpus_per_worker: int | None = None,
+        gpus_per_worker: int | None = None,
         runtime_backend: str = "auto",
     ) -> "LaunchStats":
         """Launch the pipeline locally.
@@ -334,6 +335,7 @@ class RefinerPipeline:
             workdir: Optional working directory for runtime lifecycle and run artifacts.
             heartbeat_interval_seconds: Heartbeat cadence for worker progress reporting.
             cpus_per_worker: Optional CPU cores pinned per worker.
+            gpus_per_worker: Optional GPU devices exposed per worker.
             runtime_backend: Runtime lifecycle backend selection (`auto`, `platform`, or `file`).
         """
         from refiner.launchers.local import LocalLauncher
@@ -345,6 +347,7 @@ class RefinerPipeline:
             workdir=workdir,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             cpus_per_worker=cpus_per_worker,
+            gpus_per_worker=gpus_per_worker,
             runtime_backend=runtime_backend,
         )
         return launcher.launch()
@@ -357,6 +360,8 @@ class RefinerPipeline:
         heartbeat_interval_seconds: int = 30,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
+        gpus_per_worker: int | None = None,
+        gpu_type: str | None = None,
         sync_local_dependencies: bool = True,
         secrets: Mapping[str, object | None] | None = None,
         env: Mapping[str, object | None] | None = None,
@@ -369,6 +374,8 @@ class RefinerPipeline:
             heartbeat_interval_seconds: Worker heartbeat cadence.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
+            gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
+            gpu_type: Optional requested GPU type per worker for cloud scheduling.
             sync_local_dependencies: Sync submitting environment dependencies in cloud image.
             secrets: Extra environment variables to mount inside the cloud image.
                 `None` values are loaded from the submitting environment.
@@ -385,6 +392,8 @@ class RefinerPipeline:
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,
+            gpus_per_worker=gpus_per_worker,
+            gpu_type=gpu_type,
             sync_local_dependencies=sync_local_dependencies,
             secrets=dict(secrets) if secrets is not None else None,
             env=dict(env) if env is not None else None,

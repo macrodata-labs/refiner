@@ -34,6 +34,7 @@ class BaseLauncher(ABC):
         num_workers: int | None = None,
         heartbeat_interval_seconds: int | None = None,
         cpus_per_worker: int | None = None,
+        gpus_per_worker: int | None = None,
     ):
         if not name.strip():
             raise ValueError("name must be non-empty")
@@ -41,6 +42,7 @@ class BaseLauncher(ABC):
         self.name = name
         self.job_id = job_id or self._build_local_job_id(name)
         self.cpus_per_worker: int | None = None
+        self.gpus_per_worker: int | None = None
         if num_workers is not None:
             if num_workers <= 0:
                 raise ValueError("num_workers must be > 0")
@@ -53,6 +55,10 @@ class BaseLauncher(ABC):
             if cpus_per_worker <= 0:
                 raise ValueError("cpus_per_worker must be > 0")
             self.cpus_per_worker = cpus_per_worker
+        if gpus_per_worker is not None:
+            if gpus_per_worker <= 0:
+                raise ValueError("gpus_per_worker must be > 0")
+            self.gpus_per_worker = gpus_per_worker
 
     @staticmethod
     def _build_local_job_id(name: str) -> str:
