@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from os import PathLike
 from typing import IO, Any, TypeAlias, Union, cast
 
@@ -113,6 +113,34 @@ class DataFolder(DirFileSystem):
             return self.abs_path(paths)
         return [self.abs_path(p) for p in paths]
 
+    def find(self, path: str, *args, **kwargs):
+        # Avoid DirFileSystem.find(): some backends (notably HF buckets) can leak
+        # sibling prefix matches like `root-2/...` or return the bare root entry,
+        # and DirFileSystem._relpath() asserts before we can filter them out.
+        """List paths under this folder, skipping backend results outside the base path."""
+        detail = kwargs.get("detail", False)
+        target = self._join(path.rstrip("/"))
+        ret = self.fs.find(target, *args, **kwargs)
+        target = target.rstrip("/")
+        target_prefix = target + self.fs.sep
+        alt_target = target[1:] if target.startswith(self.fs.sep) else None
+        alt_prefix = alt_target + self.fs.sep if alt_target is not None else None
+
+        def rel(p: str) -> str | None:
+            if p == target or (alt_target is not None and p == alt_target):
+                return path.rstrip("/")
+            if p.startswith(target_prefix):
+                suffix = p[len(target_prefix) :]
+            elif alt_prefix is not None and p.startswith(alt_prefix):
+                suffix = p[len(alt_prefix) :]
+            else:
+                return None
+            return suffix if path in {"", "/"} else f"{path.rstrip('/')}/{suffix}"
+
+        if detail:
+            return {r: info for p, info in ret.items() if (r := rel(p)) is not None}
+        return [r for p in ret if (r := rel(p)) is not None]
+
     def open_files(
         self, paths: Iterable[str], mode: str = "rb", **kwargs
     ) -> list[IO[Any]]:
@@ -159,3 +187,29 @@ class DataFolder(DirFileSystem):
 
     def files(self, relpaths: Iterable[str]) -> list[DataFile]:
         return [self.file(p) for p in relpaths]
+
+    def iter_files_with_sizes(
+        self, *, recursive: bool = False, **kwargs: Any
+    ) -> Iterator[tuple[DataFile, int | None]]:
+        if recursive:
+            found = self.find("", detail=True, **kwargs)
+            items: Iterable[tuple[str, Mapping[str, Any]]] = found.items()
+        else:
+            items = (
+                (str(info["name"]), info)
+                for info in self.ls("", detail=True, **kwargs)
+                if isinstance(info, Mapping)
+            )
+
+        for relpath, info in sorted(items, key=lambda item: item[0]):
+            info_dict = dict(info)
+            if info_dict.get("type") != "file":
+                continue
+            size = info_dict.get("size")
+            yield self.file(relpath), size if isinstance(size, int) else None
+
+    def iter_files(
+        self, *, recursive: bool = False, **kwargs: Any
+    ) -> Iterator[DataFile]:
+        for file, _ in self.iter_files_with_sizes(recursive=recursive, **kwargs):
+            yield file

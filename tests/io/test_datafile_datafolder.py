@@ -70,6 +70,27 @@ class _CountingMemoryFS(MemoryFileSystem):
         return super().ls(path, detail=detail, **kwargs)
 
 
+class _PrefixLeakingMemoryFS(MemoryFileSystem):
+    def find(self, path, maxdepth=None, withdirs=False, detail=False, **kwargs):
+        leaked = super().find(
+            path,
+            maxdepth=maxdepth,
+            withdirs=withdirs,
+            detail=detail,
+            **kwargs,
+        )
+        sibling = f"{path.rstrip('/')}-2/other.txt"
+        if detail:
+            leaked[sibling] = {
+                "name": sibling,
+                "size": 1,
+                "type": "file",
+                "created": 0,
+            }
+            return leaked
+        return [*leaked, sibling]
+
+
 def test_datafileset_resolve_does_not_list_folders_eagerly():
     fs = _CountingMemoryFS()
     fs.pipe("root/a.txt", b"a")
@@ -80,6 +101,35 @@ def test_datafileset_resolve_does_not_list_folders_eagerly():
     assert len(fileset.files) == 1
     assert fileset.files[0].open().read() == "a"
     assert fs.ls_calls == 1
+
+
+def test_datafolder_find_filters_prefix_leaks():
+    fs = _PrefixLeakingMemoryFS()
+    fs.pipe("find-root/file.txt", b"ok")
+    folder = DataFolder.resolve(("find-root", fs))
+
+    assert folder.find("") == ["file.txt"]
+    assert folder.find("", withdirs=True) == ["", "file.txt"]
+
+
+def test_datafolder_find_preserves_file_paths():
+    fs = MemoryFileSystem()
+    fs.pipe("find-file-root/file.txt", b"ok")
+    folder = DataFolder.resolve(("find-file-root", fs))
+
+    assert folder.find("file.txt") == ["file.txt"]
+    detailed = folder.find("file.txt", detail=True)
+    assert list(detailed) == ["file.txt"]
+    assert detailed["file.txt"]["type"] == "file"
+
+
+def test_datafolder_find_accepts_backend_paths_without_leading_separator():
+    fs = MemoryFileSystem()
+    fs.pipe("find-slash-root/file.txt", b"ok")
+    folder = DataFolder("/find-slash-root", fs=fs)
+
+    assert folder.find("") == ["file.txt"]
+    assert folder.find("file.txt") == ["file.txt"]
 
 
 def test_datafileset_rejects_nested_filesets():

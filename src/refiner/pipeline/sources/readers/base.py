@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from fsspec import AbstractFileSystem
+import pyarrow as pa
 
 from refiner.io import DataFile, DataFileSet, DataFolder
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.shard import FilePart, Shard
+from refiner.pipeline.data.tabular import repeat_scalar, set_or_append_column
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     BoundedBinaryReader,
@@ -44,6 +46,8 @@ class BaseReader(BaseSource):
         extensions: Sequence[str] = (),
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
+        file_path_column: str | None = "file_path",
+        split_by_bytes: bool = True,
     ):
         """Create a reader over a set of input files.
 
@@ -65,7 +69,8 @@ class BaseReader(BaseSource):
         )
         self.target_shard_bytes = max(1, target_shard_bytes)
         self.num_shards = num_shards
-        self.split_by_bytes = True
+        self.file_path_column = file_path_column
+        self.split_by_bytes = split_by_bytes
         # Single-open-file cache for readers that do byte-based seeks or stream reads.
         self._open_file: DataFile | None = None
         self._open_fh: Any | None = None
@@ -94,7 +99,28 @@ class BaseReader(BaseSource):
                 inputs.append(str(entry.abs_paths("")))
             else:
                 inputs.append(str(entry.fs.unstrip_protocol(entry.path)))
-        return {"path": ", ".join(inputs), "inputs": inputs}
+        return {
+            "path": ", ".join(inputs),
+            "inputs": inputs,
+            "file_path_column": self.file_path_column,
+        }
+
+    def _with_file_path(
+        self, row: dict[str, Any], source_file: DataFile
+    ) -> dict[str, Any]:
+        if self.file_path_column is None or self.file_path_column in row:
+            return row
+        row[self.file_path_column] = source_file.abs_path()
+        return row
+
+    def _table_with_file_path(self, table: pa.Table, source_file: DataFile) -> pa.Table:
+        if self.file_path_column is None or self.file_path_column in table.column_names:
+            return table
+        return set_or_append_column(
+            table,
+            self.file_path_column,
+            repeat_scalar(pa.scalar(source_file.abs_path()), table.num_rows),
+        )
 
     def _get_file_handle(
         self, file: DataFile, *, mode: str = "rb", force_reopen: bool = False

@@ -125,7 +125,7 @@ def test_parquet_filter_preserves_split_row_groups_and_projection(tmp_path):
     assert [row["x"] for row in out] == [
         f"{i:05d}-" + ("v" * 64) for i in range(9500, 9510)
     ]
-    assert all(set(row.keys()) == {"x"} for row in out)
+    assert all(set(row.keys()) == {"x", "file_path"} for row in out)
 
 
 def test_parquet_split_row_groups_has_no_gaps_or_overlaps(tmp_path):

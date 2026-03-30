@@ -5,6 +5,7 @@ from itertools import count
 
 import pyarrow as pa
 
+from refiner.pipeline.expressions import Expr, eval_expr_arrow
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.row import ArrowRowView, Row, _OverlayRow
 
@@ -93,6 +94,15 @@ def repeat_scalar(value: pa.Scalar, num_rows: int) -> pa.Array | pa.ChunkedArray
     if num_rows <= 0:
         return pa.array([], type=value.type)
     return pa.repeat(value, num_rows)
+
+
+def filter_table(table: pa.Table, predicate: Expr) -> pa.Table:
+    mask = eval_expr_arrow(predicate, table)
+    if isinstance(mask, pa.Scalar):
+        return table if bool(mask.as_py()) else table.slice(0, 0)
+    if isinstance(mask, pa.ChunkedArray):
+        mask = mask.combine_chunks()
+    return table.filter(mask)
 
 
 # everything below is for fast from_rows

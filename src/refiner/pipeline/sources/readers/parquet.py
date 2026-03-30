@@ -16,8 +16,8 @@ from refiner.io import DataFile
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.shard import FilePart
 from refiner.pipeline.data.shard import FilePartsDescriptor
-from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline.expressions import Expr, eval_expr_arrow
+from refiner.pipeline.data.tabular import Tabular, filter_table
+from refiner.pipeline.expressions import Expr
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -54,6 +54,7 @@ class ParquetReader(BaseReader):
         columns_to_read: Sequence[str] | None = None,
         filter: Expr | None = None,
         split_row_groups: bool = False,
+        file_path_column: str | None = "file_path",
     ):
         """Create a Parquet reader.
 
@@ -83,6 +84,7 @@ class ParquetReader(BaseReader):
             extensions=(".parquet", ".pq", ".parq"),
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
+            file_path_column=file_path_column,
         )
         self.arrow_batch_size = int(arrow_batch_size)
         self.split_row_groups = split_row_groups
@@ -104,6 +106,15 @@ class ParquetReader(BaseReader):
         self.columns_to_read = (
             tuple(columns_to_read) if columns_to_read is not None else None
         )
+        if (
+            self.columns_to_read is not None
+            and self.file_path_column is not None
+            and self.file_path_column in self.columns_to_read
+        ):
+            raise ValueError(
+                "columns_to_read cannot include the synthetic file_path_column; "
+                "omit it from columns_to_read and let the reader append it"
+            )
         # the columns we will actually load into memory. requested+needed for filtering
         self._scan_columns: list[str] | None = (
             None
@@ -251,12 +262,10 @@ class ParquetReader(BaseReader):
                 offset += batch_rows
             table = pa.Table.from_batches([batch])
             if self.filter is not None:
-                mask = eval_expr_arrow(self.filter, table)
-                if isinstance(mask, pa.ChunkedArray):
-                    mask = mask.combine_chunks()
-                table = table.filter(mask)
+                table = filter_table(table, self.filter)
             if self.columns_to_read is not None:
                 table = table.select(self.columns_to_read)
+            table = self._table_with_file_path(table, source_file)
             if table.num_rows > 0:
                 yield Tabular(table)
             if row_bounds is not None and offset >= row_end:

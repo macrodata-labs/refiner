@@ -10,7 +10,7 @@ from refiner.execution.tracking.shards import (
     count_table_by_shard,
     counts_delta,
 )
-from refiner.pipeline.data.tabular import repeat_scalar
+from refiner.pipeline.data.tabular import filter_table, repeat_scalar
 from refiner.pipeline.expressions import eval_expr_arrow
 from refiner.pipeline.steps import (
     CastStep,
@@ -69,14 +69,7 @@ def apply_vectorized_op(
         return out, None
 
     if isinstance(op, FilterExprStep):
-        mask = eval_expr_arrow(op.predicate, table)
-        next_table = (
-            table
-            if isinstance(mask, pa.Scalar) and bool(mask.as_py())
-            else (
-                table.slice(0, 0) if isinstance(mask, pa.Scalar) else table.filter(mask)
-            )
-        )
+        next_table = filter_table(table, op.predicate)
         next_shard_counts = count_table_by_shard(next_table)
         for shard_id in set(shard_counts) | set(next_shard_counts):
             previous = int(shard_counts.get(shard_id, 0))

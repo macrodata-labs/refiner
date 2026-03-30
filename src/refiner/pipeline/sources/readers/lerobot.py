@@ -79,6 +79,7 @@ class LeRobotEpisodeReader(ParquetReader):
             num_shards=num_shards,
             arrow_batch_size=arrow_batch_size,
             split_row_groups=split_row_groups,
+            file_path_column=None,
         )
 
     def describe(self) -> dict[str, Any]:

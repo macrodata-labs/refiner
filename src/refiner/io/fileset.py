@@ -170,62 +170,77 @@ class DataFileSet:
         exts = tuple(e.lower() for e in self.extensions)
         seen: set[tuple[int, str]] = set()
         expanded: list[tuple[DataFile, ...]] = []
+        sizes = dict(self._sizes)
 
-        def _append_file(out: list[DataFile], file: DataFile) -> None:
-            if exts and not file.path.lower().endswith(exts):
+        def _append_file(
+            out: list[DataFile],
+            file: DataFile,
+            *,
+            size: int | None = None,
+            apply_extensions: bool = True,
+        ) -> None:
+            if apply_extensions and exts and not file.path.lower().endswith(exts):
                 return
             key = (id(file.fs), file.path)
             if key in seen:
                 return
             seen.add(key)
             out.append(file)
+            if size is not None:
+                sizes[(len(expanded), file.abs_path())] = int(size)
 
         for entry in self.entries:
             files: list[DataFile] = []
-            if isinstance(entry, DataFile):
-                _append_file(files, entry)
-            elif isinstance(entry, DataFolder):
-                paths = (
-                    sorted(entry.find(""))
-                    if self.recursive
-                    else sorted(
-                        e["name"] if isinstance(e, dict) else e
-                        for e in entry.ls("", detail=True)
-                        if not isinstance(e, dict) or e.get("type") == "file"
+            if isinstance(entry, _PathSource) and not glob.has_magic(entry.path):
+                try:
+                    info = entry.fs.info(entry.path)
+                except FileNotFoundError:
+                    raise FileNotFoundError(
+                        f"Could not resolve input: {entry.fs.unstrip_protocol(entry.path)!r}"
                     )
-                )
-                for path in paths:
-                    _append_file(files, entry.file(path))
+                item_type = info.get("type")
+                if item_type == "directory":
+                    entry = DataFolder(path=entry.path, fs=entry.fs)
+                elif item_type == "file":
+                    entry = DataFile(fs=entry.fs, path=entry.path)
+                else:
+                    raise TypeError(
+                        f"Unsupported file type {item_type!r} for input: "
+                        f"{entry.fs.unstrip_protocol(entry.path)!r}"
+                    )
+
+            if isinstance(entry, DataFile):
+                _append_file(files, entry, apply_extensions=False)
+            elif isinstance(entry, DataFolder):
+                for file, size in entry.iter_files_with_sizes(recursive=self.recursive):
+                    _append_file(files, file, size=size)
             else:
                 next_fs, path = entry.fs, entry.path
                 if glob.has_magic(path):
-                    for expanded_path in sorted(next_fs.glob(path)):
-                        _append_file(files, DataFile(fs=next_fs, path=expanded_path))
-                elif next_fs.exists(path):
-                    if next_fs.isdir(path):
-                        paths = (
-                            sorted(next_fs.find(path))
-                            if self.recursive
-                            else sorted(
-                                e["name"] if isinstance(e, dict) else e
-                                for e in next_fs.ls(path, detail=True)
-                                if not isinstance(e, dict) or e.get("type") == "file"
-                            )
+                    matched = next_fs.glob(path, detail=True)
+                    items = matched.items()
+                    for expanded_path, info in sorted(items):
+                        if not isinstance(expanded_path, str) or not isinstance(
+                            info, Mapping
+                        ):
+                            continue
+                        if info.get("type") != "file":
+                            continue
+                        size = info.get("size")
+                        _append_file(
+                            files,
+                            DataFile(fs=next_fs, path=expanded_path),
+                            size=size if isinstance(size, int) else None,
                         )
-                        for expanded_path in paths:
-                            _append_file(
-                                files, DataFile(fs=next_fs, path=expanded_path)
-                            )
-                    else:
-                        _append_file(files, DataFile(fs=next_fs, path=path))
                 else:
-                    raise FileNotFoundError(
-                        f"Could not resolve input: {next_fs.unstrip_protocol(path)!r}"
+                    raise AssertionError(
+                        "non-glob _PathSource should have been resolved"
                     )
             expanded.append(tuple(files))
 
         out = tuple(expanded)
         object.__setattr__(self, "_expanded_sources", out)
+        object.__setattr__(self, "_sizes", sizes)
         return out
 
     def resolve_file(self, source_index: int, path: str) -> DataFile:

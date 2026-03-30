@@ -432,6 +432,7 @@ def read_csv(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    file_path_column: str | None = "file_path",
     multiline_rows: bool = False,
     encoding: str = "utf-8",
     parse_use_threads: bool = False,
@@ -449,6 +450,7 @@ def read_csv(
             recursive=recursive,
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
+            file_path_column=file_path_column,
             multiline_rows=multiline_rows,
             encoding=encoding,
             parse_use_threads=parse_use_threads,
@@ -464,6 +466,7 @@ def read_jsonl(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    file_path_column: str | None = "file_path",
     parse_use_threads: bool = False,
 ) -> RefinerPipeline:
     """Create a pipeline with a JSONL reader source.
@@ -479,6 +482,7 @@ def read_jsonl(
             recursive=recursive,
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
+            file_path_column=file_path_column,
             parse_use_threads=parse_use_threads,
         )
     )
@@ -496,6 +500,7 @@ def read_parquet(
     columns_to_read: Sequence[str] | None = None,
     filter: Expr | None = None,
     split_row_groups: bool = False,
+    file_path_column: str | None = "file_path",
 ) -> RefinerPipeline:
     """Create a pipeline with a Parquet reader source.
 
@@ -516,6 +521,7 @@ def read_parquet(
             columns_to_read=columns_to_read,
             filter=filter,
             split_row_groups=split_row_groups,
+            file_path_column=file_path_column,
         )
     )
 
