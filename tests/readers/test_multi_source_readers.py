@@ -27,6 +27,12 @@ def _write_parquet(path: Path, values: list[int]) -> None:
     pq.write_table(pa.table({"x": values}), path)
 
 
+def _write_parquet_with_file_path(
+    path: Path, values: list[int], file_paths: list[str]
+) -> None:
+    pq.write_table(pa.table({"x": values, "file_path": file_paths}), path)
+
+
 def _write_parquet_bytes(values: list[int]) -> bytes:
     buf = io.BytesIO()
     pq.write_table(pa.table({"x": values}), buf)
@@ -66,6 +72,17 @@ def test_datafileset_resolve_accepts_path_fs_tuple() -> None:
     assert fileset.files[0].fs is memfs
 
 
+def test_datafileset_extensions_do_not_filter_explicit_files() -> None:
+    with TemporaryDirectory() as tmp:
+        local_path = Path(tmp) / "local.txt"
+        local_path.write_text("x")
+
+        fileset = DataFileSet.resolve(str(local_path), extensions=(".jsonl",))
+
+        assert len(fileset.files) == 1
+        assert fileset.files[0].path == str(local_path)
+
+
 def test_jsonl_reader_reads_across_multiple_directories() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -94,6 +111,17 @@ def test_csv_reader_reads_across_mixed_local_and_memory_files() -> None:
 
         assert _pipeline_values(pipeline) == [1, 2]
         assert len(pipeline.source.list_shards()) == 1
+
+
+def test_csv_reader_adds_file_path_column_by_default() -> None:
+    with TemporaryDirectory() as tmp:
+        local_path = Path(tmp) / "local.csv"
+        _write_csv(local_path, [1])
+
+        row = read_csv(str(local_path)).take(1)[0].to_dict()
+
+        assert row["x"] == 1
+        assert row["file_path"] == str(local_path)
 
 
 def test_parquet_reader_reads_across_mixed_local_and_memory_files() -> None:
@@ -126,6 +154,36 @@ def test_parquet_reader_filters_across_mixed_local_and_memory_files() -> None:
         )
 
         assert _pipeline_values(pipeline) == [3, 4]
+
+
+def test_parquet_reader_can_disable_file_path_column() -> None:
+    with TemporaryDirectory() as tmp:
+        local_path = Path(tmp) / "local.parquet"
+        _write_parquet(local_path, [1])
+
+        row = read_parquet(str(local_path), file_path_column=None).take(1)[0].to_dict()
+
+        assert row == {"x": 1}
+
+
+def test_parquet_reader_does_not_overwrite_existing_file_path_column() -> None:
+    with TemporaryDirectory() as tmp:
+        local_path = Path(tmp) / "local.parquet"
+        _write_parquet_with_file_path(local_path, [1], ["already-there"])
+
+        row = read_parquet(str(local_path)).take(1)[0].to_dict()
+
+        assert row["x"] == 1
+        assert row["file_path"] == "already-there"
+
+
+def test_parquet_reader_rejects_synthetic_file_path_in_projection() -> None:
+    with TemporaryDirectory() as tmp:
+        local_path = Path(tmp) / "local.parquet"
+        _write_parquet(local_path, [1])
+
+        with pytest.raises(ValueError, match="synthetic file_path_column"):
+            read_parquet(str(local_path), columns_to_read=["x", "file_path"])
 
 
 @pytest.mark.parametrize("split_sources", [False, True])

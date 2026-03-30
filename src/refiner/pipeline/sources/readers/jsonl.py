@@ -4,6 +4,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from fsspec import AbstractFileSystem
+import pyarrow as pa
 import pyarrow.json as pa_json
 
 from refiner.io.fileset import DataFileSetLike
@@ -33,6 +34,7 @@ class JsonlReader(BaseReader):
         recursive: bool = False,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
+        file_path_column: str | None = "file_path",
         parse_use_threads: bool = False,
     ):
         """Create a JSONL reader.
@@ -49,6 +51,7 @@ class JsonlReader(BaseReader):
             extensions=(".jsonl", ".jsonl.gz", ".ndjson", ".jsonlines"),
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
+            file_path_column=file_path_column,
         )
         self.parse_use_threads = parse_use_threads
 
@@ -70,7 +73,11 @@ class JsonlReader(BaseReader):
                         ),
                     )
                     for batch in reader:
-                        yield Tabular.from_batch(batch)
+                        yield Tabular(
+                            self._table_with_file_path(
+                                pa.Table.from_batches([batch]), source
+                            )
+                        )
                 continue
 
             aligned = self._open_aligned_byte_span(part)
@@ -82,7 +89,9 @@ class JsonlReader(BaseReader):
                 read_options=pa_json.ReadOptions(use_threads=self.parse_use_threads),
             )
             for batch in reader:
-                yield Tabular.from_batch(batch)
+                yield Tabular(
+                    self._table_with_file_path(pa.Table.from_batches([batch]), source)
+                )
 
 
 __all__ = ["JsonlReader"]

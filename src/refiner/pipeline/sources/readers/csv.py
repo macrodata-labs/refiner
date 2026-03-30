@@ -5,6 +5,7 @@ import io
 from collections.abc import Iterator, Mapping
 from typing import Any, Optional
 
+import pyarrow as pa
 import pyarrow.csv as pa_csv
 from fsspec import AbstractFileSystem
 
@@ -36,6 +37,7 @@ class CsvReader(BaseReader):
         recursive: bool = False,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
+        file_path_column: str | None = "file_path",
         multiline_rows: bool = False,
         encoding: str = "utf-8",
         parse_use_threads: bool = False,
@@ -56,9 +58,10 @@ class CsvReader(BaseReader):
             extensions=(".csv",),
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
+            file_path_column=file_path_column,
+            split_by_bytes=not multiline_rows,
         )
         self.multiline_rows = multiline_rows
-        self.split_by_bytes = not multiline_rows
         self.encoding = encoding
         self.parse_use_threads = parse_use_threads
         self._open_header: Optional[list[str]] = None
@@ -134,7 +137,11 @@ class CsvReader(BaseReader):
                     ),
                 )
                 for batch in reader:
-                    yield Tabular.from_batch(batch)
+                    yield Tabular(
+                        self._table_with_file_path(
+                            pa.Table.from_batches([batch]), source
+                        )
+                    )
             return
 
         bounded = self._bounded_part(part)
@@ -162,7 +169,9 @@ class CsvReader(BaseReader):
             ),
         )
         for batch in reader:
-            yield Tabular.from_batch(batch)
+            yield Tabular(
+                self._table_with_file_path(pa.Table.from_batches([batch]), source)
+            )
 
     def _read_shard_python(self, part: FilePart) -> Iterator[SourceUnit]:
         source = self.fileset.resolve_file(part.source_index, part.path)
@@ -175,7 +184,7 @@ class CsvReader(BaseReader):
             ) as tf:
                 reader = csv.DictReader(tf)
                 for row in reader:
-                    yield DictRow(row)
+                    yield DictRow(self._with_file_path(dict(row), source))
             return
 
         bounded = self._bounded_part(part)
@@ -198,7 +207,7 @@ class CsvReader(BaseReader):
                 fields = list(fields) + [None] * (len(header) - len(fields))
             if len(fields) > len(header):
                 fields = fields[: len(header)]
-            yield DictRow(dict(zip(header, fields)))
+            yield DictRow(self._with_file_path(dict(zip(header, fields)), source))
 
 
 __all__ = ["CsvReader"]
