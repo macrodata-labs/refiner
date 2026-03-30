@@ -6,6 +6,8 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generator
 
+from refiner.worker.config import WorkerConfig
+
 if TYPE_CHECKING:
     from refiner.platform.client.api import MacrodataClient
     from refiner.worker.lifecycle.base import RuntimeLifecycle
@@ -19,6 +21,7 @@ class RunHandle:
     workspace_slug: str | None = None
     worker_name: str | None = None
     worker_id: str | None = None
+    worker_config: WorkerConfig | None = None
 
     @staticmethod
     def worker_token_for(worker_id: str) -> str:
@@ -43,6 +46,7 @@ class RunHandle:
             workspace_slug=self.workspace_slug,
             worker_name=worker_name if worker_name is not None else self.worker_name,
             worker_id=worker_id if worker_id is not None else self.worker_id,
+            worker_config=self.worker_config,
         )
 
     def with_stage(self, stage_index: int) -> RunHandle:
@@ -53,6 +57,7 @@ class RunHandle:
             workspace_slug=self.workspace_slug,
             worker_name=self.worker_name,
             worker_id=self.worker_id,
+            worker_config=self.worker_config,
         )
 
 

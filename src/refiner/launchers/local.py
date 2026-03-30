@@ -149,6 +149,10 @@ class LocalLauncher(BaseLauncher):
             ",".join(str(cpu_id) for cpu_id in cpu_ids or []),
             "--gpu-ids",
             ",".join(gpu_ids or []),
+            "--cpu-cores",
+            str(self.cpus_per_worker or ""),
+            "--gpu-count",
+            str(self.gpus_per_worker or ""),
         ]
         command.extend(["--stage-index", str(stage_index)])
         if runtime_backend == "platform" and platform_run is not None:

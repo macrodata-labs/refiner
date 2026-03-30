@@ -11,9 +11,41 @@ from loguru import logger
 from refiner.platform.client.http import MacrodataApiError
 from refiner.platform.client.api import MacrodataClient
 from refiner.worker.context import RunHandle
+from refiner.worker.config import WorkerConfig
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
 from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
+
+
+def _parse_optional_int(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    return int(value)
+
+
+def _resolve_worker_config(args: argparse.Namespace) -> WorkerConfig | None:
+    cpu_cores = _parse_optional_int(
+        args.cpu_cores or os.environ.get("REFINER_WORKER_CPU_CORES")
+    )
+    memory_mb = _parse_optional_int(
+        args.memory_mb or os.environ.get("REFINER_WORKER_MEMORY_MB")
+    )
+    gpu_count = _parse_optional_int(
+        args.gpu_count or os.environ.get("REFINER_WORKER_GPU_COUNT")
+    )
+    gpu_type = (
+        args.gpu_type or os.environ.get("REFINER_WORKER_GPU_TYPE") or ""
+    ).strip()
+    config = WorkerConfig(
+        cpu_cores=cpu_cores,
+        memory_mb=memory_mb,
+        gpu_count=gpu_count,
+        gpu_type=gpu_type or None,
+    )
+    return config if config.to_dict() else None
 
 
 def main() -> int:
@@ -32,6 +64,10 @@ def main() -> int:
     parser.add_argument("--workdir", type=str, default=None)
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--gpu-ids", type=str, default="")
+    parser.add_argument("--cpu-cores", type=str, default="")
+    parser.add_argument("--memory-mb", type=str, default="")
+    parser.add_argument("--gpu-count", type=str, default="")
+    parser.add_argument("--gpu-type", type=str, default="")
     args = parser.parse_args()
 
     try:
@@ -55,6 +91,7 @@ def main() -> int:
             job_id=args.job_id,
             stage_index=args.stage_index,
             worker_name=args.worker_name,
+            worker_config=_resolve_worker_config(args),
         )
 
         if args.runtime_backend != "file":
@@ -64,6 +101,7 @@ def main() -> int:
                     job_id=args.job_id,
                     stage_index=args.stage_index,
                     worker_name=args.worker_name,
+                    worker_config=run_handle.worker_config,
                     client=client,
                 )
             except Exception as e:

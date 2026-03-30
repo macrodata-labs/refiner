@@ -18,6 +18,7 @@ from refiner.platform.client.models import (
     WorkerStartedResponse,
 )
 from refiner.worker.context import RunHandle
+from refiner.worker.config import WorkerConfig
 
 if TYPE_CHECKING:
     from refiner.pipeline.data.shard import Shard
@@ -112,12 +113,15 @@ class MacrodataClient:
         stage_index: int,
         host: str | None = None,
         worker_name: str | None = None,
+        config: WorkerConfig | None = None,
     ) -> WorkerStartedResponse:
         request_body: dict[str, Any] = {}
         if host:
             request_body["host"] = host
         if worker_name:
             request_body["name"] = worker_name
+        if config is not None:
+            request_body["config"] = config.to_dict()
 
         response_data = request_json(
             method="POST",
