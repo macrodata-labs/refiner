@@ -337,30 +337,23 @@ class ParquetReader(BaseReader):
         if len(filtered_row_groups) >= len(row_groups):
             return
 
-        kept = set(filtered_row_groups)
-        pruned_groups = [row_group for row_group in row_groups if row_group not in kept]
         pruned_row_groups = len(row_groups) - len(filtered_row_groups)
+        pruned_rows = self._rows_in_row_groups(
+            metadata,
+            row_groups=row_groups,
+            row_bounds=row_bounds,
+        ) - self._rows_in_row_groups(
+            metadata,
+            row_groups=filtered_row_groups,
+            row_bounds=row_bounds,
+        )
         if row_bounds is None:
-            pruned_rows = sum(
-                metadata.row_group_num_rows[row_group] for row_group in pruned_groups
-            )
             log_throughput(
                 "pushdown_row_groups_filtered",
                 pruned_row_groups,
                 shard_id=shard_id,
                 unit="row_groups",
             )
-        else:
-            row_start, row_end = row_bounds
-            pruned_rows = 0
-            for row_group in pruned_groups:
-                group_row_start = metadata.row_starts[row_group]
-                group_row_end = group_row_start + metadata.row_group_num_rows[row_group]
-                pruned_rows += max(
-                    0,
-                    min(row_end, group_row_end) - max(row_start, group_row_start),
-                )
-
         if pruned_rows <= 0:
             return
         log_throughput(
@@ -369,6 +362,28 @@ class ParquetReader(BaseReader):
             shard_id=shard_id,
             unit="rows",
         )
+
+    def _rows_in_row_groups(
+        self,
+        metadata: _ParquetMetadata,
+        *,
+        row_groups: list[int],
+        row_bounds: tuple[int, int] | None,
+    ) -> int:
+        if row_bounds is None:
+            return sum(
+                metadata.row_group_num_rows[row_group] for row_group in row_groups
+            )
+
+        row_start, row_end = row_bounds
+        total = 0
+        for row_group in row_groups:
+            group_row_start = metadata.row_starts[row_group]
+            group_row_end = group_row_start + metadata.row_group_num_rows[row_group]
+            total += max(
+                0, min(row_end, group_row_end) - max(row_start, group_row_start)
+            )
+        return total
 
     def _row_bounds_for_span(
         self,
