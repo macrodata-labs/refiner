@@ -22,12 +22,14 @@ from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
 )
+from refiner.worker.metrics.api import log_throughput
 
 
 @dataclass(frozen=True, slots=True)
 class _ParquetMetadata:
     row_group_starts: tuple[int, ...]
     row_starts: tuple[int, ...]
+    row_group_num_rows: tuple[int, ...]
     num_rows: int
 
 
@@ -171,19 +173,23 @@ class ParquetReader(BaseReader):
 
         row_group_starts: list[int] = []
         row_starts: list[int] = []
+        row_group_num_rows: list[int] = []
         total_bytes = 0
         total_rows = 0
         for index in range(md.num_row_groups):
             row_group_starts.append(total_bytes)
             row_starts.append(total_rows)
+            num_rows = int(md.row_group(index).num_rows)
+            row_group_num_rows.append(num_rows)
             width_raw = md.row_group(index).total_byte_size
             width = int(width_raw) if width_raw is not None else 0
             total_bytes += width
-            total_rows += int(md.row_group(index).num_rows)
+            total_rows += num_rows
 
         self._open_metadata = _ParquetMetadata(
             row_group_starts=tuple(row_group_starts),
             row_starts=tuple(row_starts),
+            row_group_num_rows=tuple(row_group_num_rows),
             num_rows=total_rows,
         )
         return self._open_metadata
@@ -195,19 +201,43 @@ class ParquetReader(BaseReader):
         for part in descriptor.parts:
             source: DataFile = self.fileset.resolve_file(part.source_index, part.path)
             if part.end == -1:
+                pf = self._get_parquet_file(source)
+                metadata = self._metadata(pf)
+                row_groups = (
+                    list(range(len(metadata.row_group_num_rows)))
+                    if metadata is not None
+                    else None
+                )
+                filtered_row_groups = self._filtered_row_groups(source, row_groups)
+                self._log_pushdown_pruning(
+                    shard_id=shard.id,
+                    metadata=metadata,
+                    row_groups=row_groups,
+                    filtered_row_groups=filtered_row_groups,
+                )
                 yield from self._read_fragment_scan(
                     source,
-                    row_groups=self._filtered_row_groups(source, None),
+                    shard_id=shard.id,
+                    row_groups=filtered_row_groups,
                 )
                 continue
 
             pf = self._get_parquet_file(source)
+            metadata = self._metadata(pf)
             row_groups, row_bounds = self._row_bounds_for_span(pf, part)
-            row_groups = self._filtered_row_groups(source, row_groups)
+            filtered_row_groups = self._filtered_row_groups(source, row_groups)
+            self._log_pushdown_pruning(
+                shard_id=shard.id,
+                metadata=metadata,
+                row_groups=row_groups,
+                filtered_row_groups=filtered_row_groups,
+            )
+            row_groups = filtered_row_groups
             if row_groups == []:
                 continue
             yield from self._read_fragment_scan(
                 source,
+                shard_id=shard.id,
                 row_groups=row_groups,
                 row_bounds=row_bounds,
             )
@@ -216,6 +246,7 @@ class ParquetReader(BaseReader):
         self,
         source_file: DataFile,
         *,
+        shard_id: str,
         row_groups: list[int] | None,
         row_bounds: tuple[int, int] | None = None,
     ) -> Iterator[SourceUnit]:
@@ -262,7 +293,16 @@ class ParquetReader(BaseReader):
                 offset += batch_rows
             table = pa.Table.from_batches([batch])
             if self.filter is not None:
+                before = int(table.num_rows)
                 table = filter_table(table, self.filter)
+                filtered = before - int(table.num_rows)
+                if filtered > 0:
+                    log_throughput(
+                        "total_rows_filtered",
+                        filtered,
+                        shard_id=shard_id,
+                        unit="rows",
+                    )
             if self.columns_to_read is not None:
                 table = table.select(self.columns_to_read)
             table = self._table_with_file_path(table, source_file)
@@ -290,6 +330,46 @@ class ParquetReader(BaseReader):
             )
             for row_group in row_group_fragment.row_groups
         ]
+
+    def _log_pushdown_pruning(
+        self,
+        *,
+        shard_id: str,
+        metadata: _ParquetMetadata | None,
+        row_groups: list[int] | None,
+        filtered_row_groups: list[int] | None,
+    ) -> None:
+        if (
+            self._pushdown_filter is None
+            or metadata is None
+            or row_groups is None
+            or filtered_row_groups is None
+        ):
+            return
+        if len(filtered_row_groups) >= len(row_groups):
+            return
+
+        pruned_row_groups = len(row_groups) - len(filtered_row_groups)
+        if pruned_row_groups <= 0:
+            return
+        pruned_rows = sum(
+            metadata.row_group_num_rows[row_group] for row_group in row_groups
+        ) - sum(
+            metadata.row_group_num_rows[row_group] for row_group in filtered_row_groups
+        )
+
+        log_throughput(
+            "pushdown_row_groups_filtered",
+            pruned_row_groups,
+            shard_id=shard_id,
+            unit="row_groups",
+        )
+        log_throughput(
+            "total_rows_filtered",
+            pruned_rows,
+            shard_id=shard_id,
+            unit="rows",
+        )
 
     def _row_bounds_for_span(
         self,
