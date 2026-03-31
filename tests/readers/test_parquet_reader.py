@@ -298,4 +298,4 @@ def test_parquet_does_not_log_pushdown_row_group_metrics_for_split_row_groups(tm
     assert [int(row["id"]) for row in out] == list(range(50)) + list(range(150, 200))
     counters_by_label = _counter_totals(emitter)
     assert "pushdown_row_groups_filtered" not in counters_by_label
-    assert "total_rows_filtered" not in counters_by_label
+    assert counters_by_label["total_rows_filtered"] == 100.0
