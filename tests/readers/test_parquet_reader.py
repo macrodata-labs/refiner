@@ -270,3 +270,32 @@ def test_parquet_logs_total_filtered_for_residual_in_memory_filter(tmp_path):
     assert "pushdown_row_groups_filtered" not in counters_by_label
     assert counters_by_label["total_rows_filtered"] == 45.0
     assert counters_by_label["rows_read"] == 5.0
+
+
+def test_parquet_does_not_log_pushdown_row_group_metrics_for_split_row_groups(tmp_path):
+    p = tmp_path / "many-row-groups.parquet"
+    table = pa.table(
+        {
+            "id": pa.array(list(range(200)), type=pa.int64()),
+            "keep": pa.array([i < 50 or i >= 150 for i in range(200)]),
+        }
+    )
+    pq.write_table(table, p, row_group_size=50)
+
+    reader = ParquetReader(
+        str(p),
+        target_shard_bytes=80,
+        split_row_groups=True,
+        filter=col("keep"),
+    )
+
+    emitter = _RecordingEmitter()
+    with set_active_user_metrics_emitter(emitter):
+        out = []
+        for shard in reader.list_shards():
+            out.extend(list(_rows_from_shard_units(reader.iter_shard_units(shard))))
+
+    assert [int(row["id"]) for row in out] == list(range(50)) + list(range(150, 200))
+    counters_by_label = _counter_totals(emitter)
+    assert "pushdown_row_groups_filtered" not in counters_by_label
+    assert "total_rows_filtered" not in counters_by_label

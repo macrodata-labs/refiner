@@ -200,38 +200,25 @@ class ParquetReader(BaseReader):
         assert isinstance(descriptor, FilePartsDescriptor)
         for part in descriptor.parts:
             source: DataFile = self.fileset.resolve_file(part.source_index, part.path)
+            pf = self._get_parquet_file(source)
+            metadata = self._metadata(pf)
             if part.end == -1:
-                pf = self._get_parquet_file(source)
-                metadata = self._metadata(pf)
                 row_groups = (
                     list(range(len(metadata.row_group_num_rows)))
                     if metadata is not None
                     else None
                 )
-                filtered_row_groups = self._filtered_row_groups(source, row_groups)
+                row_bounds = None
+            else:
+                row_groups, row_bounds = self._row_bounds_for_span(pf, part)
+            filtered_row_groups = self._filtered_row_groups(source, row_groups)
+            if row_bounds is None:
                 self._log_pushdown_pruning(
                     shard_id=shard.id,
                     metadata=metadata,
                     row_groups=row_groups,
                     filtered_row_groups=filtered_row_groups,
                 )
-                yield from self._read_fragment_scan(
-                    source,
-                    shard_id=shard.id,
-                    row_groups=filtered_row_groups,
-                )
-                continue
-
-            pf = self._get_parquet_file(source)
-            metadata = self._metadata(pf)
-            row_groups, row_bounds = self._row_bounds_for_span(pf, part)
-            filtered_row_groups = self._filtered_row_groups(source, row_groups)
-            self._log_pushdown_pruning(
-                shard_id=shard.id,
-                metadata=metadata,
-                row_groups=row_groups,
-                filtered_row_groups=filtered_row_groups,
-            )
             row_groups = filtered_row_groups
             if row_groups == []:
                 continue
@@ -350,8 +337,6 @@ class ParquetReader(BaseReader):
             return
 
         pruned_row_groups = len(row_groups) - len(filtered_row_groups)
-        if pruned_row_groups <= 0:
-            return
         pruned_rows = sum(
             metadata.row_group_num_rows[row_group] for row_group in row_groups
         ) - sum(
