@@ -17,28 +17,11 @@ from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
 
 
-def _parse_optional_int(raw: str | None) -> int | None:
-    if raw is None:
-        return None
-    value = raw.strip()
-    if not value:
-        return None
-    return int(value)
-
-
 def _resolve_worker_config(args: argparse.Namespace) -> WorkerConfig | None:
-    cpu_cores = _parse_optional_int(
-        args.cpu_cores or os.environ.get("REFINER_WORKER_CPU_CORES")
-    )
-    memory_mb = _parse_optional_int(
-        args.memory_mb or os.environ.get("REFINER_WORKER_MEMORY_MB")
-    )
-    gpu_count = _parse_optional_int(
-        args.gpu_count or os.environ.get("REFINER_WORKER_GPU_COUNT")
-    )
-    gpu_type = (
-        args.gpu_type or os.environ.get("REFINER_WORKER_GPU_TYPE") or ""
-    ).strip()
+    cpu_cores = int(args.cpu_cores) if args.cpu_cores.strip() else None
+    memory_mb = int(args.memory_mb) if args.memory_mb.strip() else None
+    gpu_count = int(args.gpu_count) if args.gpu_count.strip() else None
+    gpu_type = args.gpu_type.strip()
     config = WorkerConfig(
         cpu_cores=cpu_cores,
         memory_mb=memory_mb,
