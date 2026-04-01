@@ -49,7 +49,6 @@ Returned stats include:
 - `cpus_per_worker` is optional CPU pinning when the OS supports affinity
 - `gpus_per_worker` is optional local GPU partitioning via `CUDA_VISIBLE_DEVICES`
 - local runtime files live under `<workdir>/runs/<job_id>/...`
-- for a simple GPU smoke test, see [`examples/gpu/verify_visible_gpus.py`](../examples/gpu/verify_visible_gpus.py)
 
 ## Cloud Launcher
 
@@ -91,11 +90,8 @@ Returned result includes:
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
 
-GPU scheduling is cloud-only. When requesting GPUs, set both `gpus_per_worker` and
-`gpu_type`.
-
-For a simple GPU smoke test across either launcher, see
-[`examples/gpu/verify_visible_gpus.py`](../examples/gpu/verify_visible_gpus.py).
+Requesting a specific `gpu_type` is a cloud-only feature. When requesting GPUs in
+the cloud, you must set both `gpus_per_worker` and `gpu_type`.
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
 

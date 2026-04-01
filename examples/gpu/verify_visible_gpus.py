@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
-from pathlib import Path
 from typing import Any
 
 import refiner as mdr
@@ -31,7 +31,7 @@ def _probe_worker(task_rank: int, num_tasks: int) -> dict[str, Any]:
         else:
             gpu_lines = [line.strip() for line in output.splitlines() if line.strip()]
 
-    return {
+    probe = {
         "task_rank": task_rank,
         "num_tasks": num_tasks,
         "pid": os.getpid(),
@@ -44,12 +44,13 @@ def _probe_worker(task_rank: int, num_tasks: int) -> dict[str, Any]:
         "nvidia_smi_gpus": gpu_lines,
         "nvidia_smi_error": nvidia_smi_error,
     }
+    print(json.dumps(probe, sort_keys=True))
+    return probe
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Smoke-test Refiner GPU visibility")
     parser.add_argument("--launcher", choices=("local", "cloud"), default="local")
-    parser.add_argument("--output", default="tmp/gpu_probe")
     parser.add_argument("--name", default="gpu-probe")
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--num-tasks", type=int, default=1)
@@ -59,10 +60,7 @@ def main() -> None:
     parser.add_argument("--gpu-type", default=None)
     args = parser.parse_args()
 
-    output_path = Path(args.output)
-    pipeline = mdr.task(_probe_worker, num_tasks=args.num_tasks).write_jsonl(
-        str(output_path)
-    )
+    pipeline = mdr.task(_probe_worker, num_tasks=args.num_tasks)
 
     if args.launcher == "local":
         stats = pipeline.launch_local(
@@ -72,7 +70,7 @@ def main() -> None:
             gpus_per_worker=args.gpus_per_worker,
         )
         print(f"local launch complete: {stats}")
-        print(f"results written to: {output_path}")
+        print("worker probe results were logged by each worker process")
         return
 
     if not args.gpu_type:
@@ -87,7 +85,7 @@ def main() -> None:
         gpu_type=args.gpu_type,
     )
     print(f"cloud launch submitted: {result}")
-    print(f"results will be written to: {output_path}")
+    print("worker probe results will be emitted in worker logs")
 
 
 if __name__ == "__main__":

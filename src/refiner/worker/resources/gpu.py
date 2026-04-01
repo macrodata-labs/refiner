@@ -33,10 +33,18 @@ def available_gpu_ids() -> list[str]:
             "Unable to determine available GPUs: set CUDA_VISIBLE_DEVICES or install nvidia-smi"
         )
 
-    output = subprocess.check_output(
-        [nvidia_smi, "--query-gpu=index", "--format=csv,noheader"],
-        text=True,
-    )
+    try:
+        output = subprocess.check_output(
+            [nvidia_smi, "--query-gpu=index", "--format=csv,noheader"],
+            text=True,
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as err:
+        stderr = (err.stderr or "").strip()
+        message = f"nvidia-smi failed with exit code {err.returncode}"
+        if stderr:
+            message = f"{message}: {stderr}"
+        raise RuntimeError(message) from err
     gpu_ids = [line.strip() for line in output.splitlines() if line.strip()]
     if not gpu_ids:
         raise RuntimeError("Unable to determine available GPUs from nvidia-smi")
