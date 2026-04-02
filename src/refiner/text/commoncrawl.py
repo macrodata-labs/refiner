@@ -6,7 +6,6 @@ import io
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any, Literal
-from warcio.archiveiterator import ArchiveIterator
 
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.execution.asyncio.window import AsyncWindow
@@ -208,6 +207,8 @@ class CommonCrawlReader(BaseReader):
         file_path_column: object = _DEFAULT_FILE_PATH_COLUMN,
     ) -> None:
         check_required_dependencies("read_commoncrawl", ["warcio"], dist="text")
+        from warcio.archiveiterator import ArchiveIterator
+
         if format not in {"warc", "wet"}:
             raise ValueError("format must be 'warc' or 'wet'")
         if isinstance(dumps, str):
@@ -231,8 +232,8 @@ class CommonCrawlReader(BaseReader):
             if base_url is not None
             else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
         )
-        self.root = DataFolder.resolve(self.base_url)
         self._archive_iterator = ArchiveIterator
+        self.root = DataFolder.resolve(self.base_url)
         if file_path_column is _DEFAULT_FILE_PATH_COLUMN:
             resolved_file_path_column: str | None = (
                 "warc_path" if self.format == "warc" else "wet_path"
@@ -328,6 +329,8 @@ class CommonCrawlWarcIndexSource(BaseSource):
         check_required_dependencies(
             "read_commoncrawl_from_index", ["warcio"], dist="text"
         )
+        from warcio.archiveiterator import ArchiveIterator
+
         if isinstance(dumps, str):
             self.dumps = (dumps,)
         else:
@@ -350,8 +353,8 @@ class CommonCrawlWarcIndexSource(BaseSource):
             if base_url is not None
             else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
         )
-        self.root = DataFolder.resolve(self.base_url)
         self._archive_iterator = ArchiveIterator
+        self.root = DataFolder.resolve(self.base_url)
         self.target_shard_bytes = target_shard_bytes
         self.num_shards = num_shards
         self.file_path_column = file_path_column
