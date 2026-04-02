@@ -6,6 +6,7 @@ import io
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any, Literal
+from warcio.archiveiterator import ArchiveIterator
 
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.execution.asyncio.window import AsyncWindow
@@ -231,6 +232,7 @@ class CommonCrawlReader(BaseReader):
             else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
         )
         self.root = DataFolder.resolve(self.base_url)
+        self._archive_iterator = ArchiveIterator
         if file_path_column is _DEFAULT_FILE_PATH_COLUMN:
             resolved_file_path_column: str | None = (
                 "warc_path" if self.format == "warc" else "wet_path"
@@ -276,9 +278,7 @@ class CommonCrawlReader(BaseReader):
                     stream = gzip.GzipFile(fileobj=raw)
                 else:
                     stream = raw
-                from warcio.archiveiterator import ArchiveIterator
-
-                for record in ArchiveIterator(stream):
+                for record in self._archive_iterator(stream):
                     payload = _warc_record_to_row(
                         record, output_fields=self.output_fields
                     )
@@ -351,6 +351,7 @@ class CommonCrawlWarcIndexSource(BaseSource):
             else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
         )
         self.root = DataFolder.resolve(self.base_url)
+        self._archive_iterator = ArchiveIterator
         self.target_shard_bytes = target_shard_bytes
         self.num_shards = num_shards
         self.file_path_column = file_path_column
@@ -441,7 +442,7 @@ class CommonCrawlWarcIndexSource(BaseSource):
             self._resolve_index_files(),
             target_shard_bytes=self.target_shard_bytes,
             num_shards=self.num_shards,
-            columns_to_read=_INDEX_COLUMNS,
+            columns_to_read=None if self.filter_fn is not None else _INDEX_COLUMNS,
             filter=index_filter,
             file_path_column=None,
         )
@@ -499,9 +500,7 @@ class CommonCrawlWarcIndexSource(BaseSource):
             stream = gzip.GzipFile(fileobj=io.BytesIO(member))
         else:
             stream = io.BytesIO(member)
-        from warcio.archiveiterator import ArchiveIterator
-
-        iterator = ArchiveIterator(stream)
+        iterator = self._archive_iterator(stream)
         return next(iterator)
 
     def _fetch_index_row_payload(self, row: Row) -> dict[str, Any] | None:
@@ -553,11 +552,13 @@ def _warc_record_to_row(
     rec_headers = record.rec_headers
     http_headers = record.http_headers
     if output_fields == "all":
-        payload = dict(rec_headers.headers)
+        payload: dict[str, Any] = {}
+        for field, value in rec_headers.headers:
+            _add_header(payload, field, value)
         payload.setdefault("WARC-Type", record.rec_type)
         if http_headers is not None:
             for field, value in http_headers.headers:
-                payload.setdefault(field, value)
+                _add_header(payload, field, value)
         payload["content_bytes"] = record.content_stream().read()
         return payload
 
@@ -575,6 +576,16 @@ def _warc_record_to_row(
             value = http_headers.get_header(field)
         payload[field] = value
     return payload
+
+
+def _add_header(payload: dict[str, Any], field: str, value: str) -> None:
+    current = payload.get(field)
+    if current is None:
+        payload[field] = value
+    elif isinstance(current, list):
+        current.append(value)
+    else:
+        payload[field] = [current, value]
 
 
 __all__ = [

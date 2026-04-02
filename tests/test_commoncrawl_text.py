@@ -87,6 +87,32 @@ def _write_warc_gz_records(
     return offsets
 
 
+def _write_warc_gz_records_with_headers(
+    path: Path,
+    records: list[tuple[str, bytes, list[tuple[str, str]], dict[str, str] | None]],
+) -> list[tuple[int, int]]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    offsets: list[tuple[int, int]] = []
+    with path.open("wb") as raw:
+        writer = WARCWriter(raw, gzip=True)
+        for url, body, http_headers, warc_headers_dict in records:
+            start = raw.tell()
+            record = writer.create_warc_record(
+                url,
+                "response",
+                payload=io.BytesIO(body),
+                http_headers=StatusAndHeaders(
+                    "200 OK",
+                    http_headers,
+                    protocol="HTTP/1.0",
+                ),
+                warc_headers_dict=warc_headers_dict,
+            )
+            writer.write_record(record)
+            offsets.append((start, raw.tell() - start))
+    return offsets
+
+
 def _write_warc_gz_binary_records(
     path: Path,
     records: list[tuple[str, bytes, str, str]],
@@ -313,8 +339,46 @@ def test_read_commoncrawl_can_return_all_original_fields(tmp_path: Path) -> None
 
     assert row["WARC-Type"] == "response"
     assert row["WARC-Target-URI"] == "https://example.com/a"
-    assert row["Content-Type"] == "application/http; msgtype=response"
+    assert row["Content-Type"] == [
+        "application/http; msgtype=response",
+        "text/html; charset=utf-8",
+    ]
     assert row["content_bytes"]
+    assert row["warc_path"] == str(warc_path)
+
+
+def test_read_commoncrawl_all_preserves_duplicate_http_headers(tmp_path: Path) -> None:
+    dump = "CC-MAIN-TEST"
+    warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"
+    warc_path = tmp_path / warc_rel
+    _write_warc_gz_records_with_headers(
+        warc_path,
+        [
+            (
+                "https://example.com/a",
+                b"<html>a</html>",
+                [
+                    ("Content-Type", "text/html; charset=utf-8"),
+                    ("Link", "</a>; rel=prev"),
+                    ("Link", "</b>; rel=next"),
+                ],
+                None,
+            ),
+        ],
+    )
+
+    row = (
+        mdr.text.read_commoncrawl(
+            dump,
+            output_fields="all",
+            base_url=tmp_path.as_uri(),
+            use_https=True,
+        )
+        .take(1)[0]
+        .to_dict()
+    )
+
+    assert row["Link"] == ["</a>; rel=prev", "</b>; rel=next"]
     assert row["warc_path"] == str(warc_path)
 
 
@@ -495,6 +559,52 @@ def test_read_commoncrawl_filter_fn_restricts_index_rows(tmp_path: Path) -> None
 
     assert len(rows) == 1
     assert rows[0]["WARC-Target-URI"] == "https://example.com/a"
+    assert rows[0]["warc_path"] == str(warc_path)
+
+
+def test_read_commoncrawl_filter_fn_can_use_non_core_index_columns(
+    tmp_path: Path,
+) -> None:
+    dump = "CC-MAIN-TEST"
+    warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"
+    warc_path = tmp_path / warc_rel
+    offsets = _write_warc_gz(warc_path)
+
+    index_rel = (
+        f"cc-index/table/cc-main/warc/crawl={dump}/subset=warc/part-00000.parquet"
+    )
+    index_path = tmp_path / index_rel
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.table(
+            {
+                "url": ["https://example.com/a", "https://example.com/b"],
+                "warc_filename": [warc_rel, warc_rel],
+                "warc_record_offset": [offset for offset, _ in offsets],
+                "warc_record_length": [length for _, length in offsets],
+                "warc_segment": ["00000", "00000"],
+                "content_mime_type": ["text/html", "application/pdf"],
+            }
+        ),
+        index_path,
+    )
+    _write_gzip_lines(
+        tmp_path / "crawl-data" / dump / "cc-index-table.paths.gz",
+        [index_rel],
+    )
+
+    rows = [
+        row.to_dict()
+        for row in mdr.text.read_commoncrawl_from_index(
+            dump,
+            filter_fn=lambda row: row["content_mime_type"] == "application/pdf",
+            base_url=tmp_path.as_uri(),
+            use_https=True,
+        ).take(10)
+    ]
+
+    assert len(rows) == 1
+    assert rows[0]["WARC-Target-URI"] == "https://example.com/b"
     assert rows[0]["warc_path"] == str(warc_path)
 
 
