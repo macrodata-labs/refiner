@@ -22,7 +22,6 @@ from refiner.platform.client.models import (
     WorkspaceIdentity,
     WorkerStartedResponse,
 )
-from refiner.worker.config import WorkerConfig
 from refiner.platform.client.http import MacrodataApiError, sanitize_terminal_text
 from refiner.platform.client.serialize import (
     INLINE_PIPELINE_PAYLOAD_MAX_BYTES,
@@ -47,7 +46,6 @@ __all__ = [
     "StagePayload",
     "UserIdentity",
     "VerifyApiKeyResponse",
-    "WorkerConfig",
     "WorkspaceIdentity",
     "WorkerStartedResponse",
     "compile_shard_descriptors",

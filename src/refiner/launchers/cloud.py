@@ -196,5 +196,18 @@ class CloudLauncher(BaseLauncher):
             status=resp.status,
         )
 
+    def _stage_resource_hints(self, *, stage: object) -> dict[str, object]:
+        del stage
+        hints: dict[str, object] = {}
+        if self.cpus_per_worker is not None:
+            hints["cpus_per_worker"] = self.cpus_per_worker
+        if self.mem_mb_per_worker is not None:
+            hints["memory_mb_per_worker"] = self.mem_mb_per_worker
+        if self.gpus_per_worker is not None:
+            hints["gpus_per_worker"] = self.gpus_per_worker
+        if self.gpu_type is not None:
+            hints["gpu_type"] = self.gpu_type
+        return hints
+
 
 __all__ = ["CloudLauncher", "CloudLaunchResult"]

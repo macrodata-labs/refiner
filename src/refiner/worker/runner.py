@@ -62,7 +62,6 @@ class Worker:
             stage_index=self.run_handle.stage_index,
             host=host,
             worker_name=self.run_handle.worker_name,
-            config=self.run_handle.worker_config,
         )
         run = self.run_handle.with_worker(worker_id=started_resp.worker_id)
         runtime_lifecycle = PlatformRuntimeLifecycle(run=run)

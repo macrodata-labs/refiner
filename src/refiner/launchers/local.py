@@ -149,10 +149,6 @@ class LocalLauncher(BaseLauncher):
             ",".join(str(cpu_id) for cpu_id in cpu_ids or []),
             "--gpu-ids",
             ",".join(gpu_ids or []),
-            "--cpu-cores",
-            str(self.cpus_per_worker or ""),
-            "--gpu-count",
-            str(self.gpus_per_worker or ""),
         ]
         command.extend(["--stage-index", str(stage_index)])
         if runtime_backend == "platform" and platform_run is not None:
@@ -295,6 +291,15 @@ class LocalLauncher(BaseLauncher):
             stage_workers=stage.compute.num_workers,
             processes=processes,
         )
+
+    def _stage_resource_hints(self, *, stage: PlannedStage) -> dict[str, object]:
+        del stage
+        hints: dict[str, object] = {}
+        if self.cpus_per_worker is not None:
+            hints["cpus_per_worker"] = self.cpus_per_worker
+        if self.gpus_per_worker is not None:
+            hints["gpus_per_worker"] = self.gpus_per_worker
+        return hints
 
     def launch(self) -> LaunchStats:
         stages = self._planned_stages()

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from typing import cast
-
 from refiner.platform.client import MacrodataClient
-from refiner.platform.client import WorkerConfig
+from typing import cast
 
 
 def test_create_job_treats_whitespace_workspace_slug_as_none(
@@ -33,7 +31,7 @@ def test_create_job_treats_whitespace_workspace_slug_as_none(
     assert context.workspace_slug is None
 
 
-def test_report_worker_started_sends_worker_config(monkeypatch) -> None:
+def test_report_worker_started_sends_name_and_host(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_request_json(**kwargs: object) -> dict[str, object]:
@@ -48,12 +46,6 @@ def test_report_worker_started_sends_worker_config(monkeypatch) -> None:
         stage_index=2,
         worker_name="cloud-rank-0",
         host="modal",
-        config=WorkerConfig(
-            cpu_cores=1,
-            memory_mb=2048,
-            gpu_count=1,
-            gpu_type="h100",
-        ),
     )
 
     assert resp.worker_id == "worker-1"
@@ -61,10 +53,4 @@ def test_report_worker_started_sends_worker_config(monkeypatch) -> None:
     assert cast(dict[str, object], captured["json_payload"]) == {
         "name": "cloud-rank-0",
         "host": "modal",
-        "config": {
-            "cpu_cores": 1,
-            "memory_mb": 2048,
-            "gpu_count": 1,
-            "gpu_type": "h100",
-        },
     }

@@ -169,8 +169,6 @@ def test_local_launcher_worker_command_includes_gpu_ids(tmp_path) -> None:
 
     assert "--gpu-ids" in command
     assert command[command.index("--gpu-ids") + 1] == "2,3"
-    assert command[command.index("--cpu-cores") + 1] == ""
-    assert command[command.index("--gpu-count") + 1] == "1"
 
 
 def test_local_launcher_file_backend_skips_platform_setup(tmp_path) -> None:

@@ -26,7 +26,6 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
 from refiner.platform.client.models import FinalizedShardWorker
-from refiner.worker.config import WorkerConfig
 
 
 class _FakeReader(BaseReader):
@@ -261,7 +260,7 @@ def test_pipeline_executes_row_and_batch_steps() -> None:
     assert [r["y"] for r in out] == [30, 50]
 
 
-def test_platform_worker_start_reports_worker_config() -> None:
+def test_platform_worker_start_reports_name_and_host() -> None:
     shard = _shard("input.jsonl", 0, 1)
     seen: dict[str, Any] = {}
 
@@ -279,12 +278,6 @@ def test_platform_worker_start_reports_worker_config() -> None:
             job_id="job-1",
             stage_index=0,
             worker_name="cloud-rank-0",
-            worker_config=WorkerConfig(
-                cpu_cores=1,
-                memory_mb=2048,
-                gpu_count=1,
-                gpu_type="h100",
-            ),
             client=cast(Any, _RecordingClient()),
         ),
     )
@@ -293,12 +286,8 @@ def test_platform_worker_start_reports_worker_config() -> None:
 
     assert runtime_lifecycle.run.worker_id == "worker-0"
     assert run.worker_id == "worker-0"
-    assert seen["config"] == WorkerConfig(
-        cpu_cores=1,
-        memory_mb=2048,
-        gpu_count=1,
-        gpu_type="h100",
-    )
+    assert seen["worker_name"] == "cloud-rank-0"
+    assert isinstance(seen["host"], str)
 
 
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:

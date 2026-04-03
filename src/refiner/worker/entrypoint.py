@@ -11,24 +11,9 @@ from loguru import logger
 from refiner.platform.client.http import MacrodataApiError
 from refiner.platform.client.api import MacrodataClient
 from refiner.worker.context import RunHandle
-from refiner.worker.config import WorkerConfig
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
 from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
-
-
-def _resolve_worker_config(args: argparse.Namespace) -> WorkerConfig | None:
-    cpu_cores = int(args.cpu_cores) if args.cpu_cores.strip() else None
-    memory_mb = int(args.memory_mb) if args.memory_mb.strip() else None
-    gpu_count = int(args.gpu_count) if args.gpu_count.strip() else None
-    gpu_type = args.gpu_type.strip()
-    config = WorkerConfig(
-        cpu_cores=cpu_cores,
-        memory_mb=memory_mb,
-        gpu_count=gpu_count,
-        gpu_type=gpu_type or None,
-    )
-    return config if config.to_dict() else None
 
 
 def main() -> int:
@@ -47,10 +32,6 @@ def main() -> int:
     parser.add_argument("--workdir", type=str, default=None)
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--gpu-ids", type=str, default="")
-    parser.add_argument("--cpu-cores", type=str, default="")
-    parser.add_argument("--memory-mb", type=str, default="")
-    parser.add_argument("--gpu-count", type=str, default="")
-    parser.add_argument("--gpu-type", type=str, default="")
     args = parser.parse_args()
 
     try:
@@ -74,7 +55,6 @@ def main() -> int:
             job_id=args.job_id,
             stage_index=args.stage_index,
             worker_name=args.worker_name,
-            worker_config=_resolve_worker_config(args),
         )
 
         if args.runtime_backend != "file":
@@ -84,7 +64,6 @@ def main() -> int:
                     job_id=args.job_id,
                     stage_index=args.stage_index,
                     worker_name=args.worker_name,
-                    worker_config=run_handle.worker_config,
                     client=client,
                 )
             except Exception as e:
