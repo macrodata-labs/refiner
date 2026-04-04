@@ -69,12 +69,12 @@ class CloudLauncher(BaseLauncher):
         )
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
-        if (gpus_per_worker is not None) != (gpu_type is not None):
-            raise ValueError(
-                "gpus_per_worker and gpu_type must be specified together or not at all"
-            )
+        if gpus_per_worker is not None and gpu_type is None:
+            raise ValueError("gpu_type is required when gpus_per_worker is set")
         if gpu_type is not None and not gpu_type.strip():
             raise ValueError("gpu_type must be non-empty")
+        if gpu_type is not None and gpus_per_worker is None:
+            raise ValueError("gpus_per_worker is required when gpu_type is set")
         self.sync_local_dependencies = sync_local_dependencies
         self.mem_mb_per_worker = mem_mb_per_worker
         self.gpus_per_worker = gpus_per_worker
