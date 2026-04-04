@@ -53,6 +53,8 @@ import refiner as mdr
 )
 ```
 
+Need cloud GPUs? See [Launchers](docs/launchers.md) for the GPU-specific cloud options.
+
 ### Local example
 
 Launch a local pipeline:

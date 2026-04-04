@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import TYPE_CHECKING
 import re
 import time
@@ -15,6 +16,7 @@ from refiner.platform.manifest import build_run_manifest
 from refiner.worker.context import RunHandle
 from refiner.pipeline.planning import (
     PlannedStage,
+    StageComputeRequirements,
     compile_planned_stages,
     plan_pipeline_stages,
 )
@@ -34,6 +36,7 @@ class BaseLauncher(ABC):
         num_workers: int | None = None,
         heartbeat_interval_seconds: int | None = None,
         cpus_per_worker: int | None = None,
+        gpus_per_worker: int | None = None,
     ):
         if not name.strip():
             raise ValueError("name must be non-empty")
@@ -41,6 +44,7 @@ class BaseLauncher(ABC):
         self.name = name
         self.job_id = job_id or self._build_local_job_id(name)
         self.cpus_per_worker: int | None = None
+        self.gpus_per_worker: int | None = None
         if num_workers is not None:
             if num_workers <= 0:
                 raise ValueError("num_workers must be > 0")
@@ -53,6 +57,10 @@ class BaseLauncher(ABC):
             if cpus_per_worker <= 0:
                 raise ValueError("cpus_per_worker must be > 0")
             self.cpus_per_worker = cpus_per_worker
+        if gpus_per_worker is not None:
+            if gpus_per_worker <= 0:
+                raise ValueError("gpus_per_worker must be > 0")
+            self.gpus_per_worker = gpus_per_worker
 
     @staticmethod
     def _build_local_job_id(name: str) -> str:
@@ -121,8 +129,22 @@ class BaseLauncher(ABC):
         *,
         secret_values: tuple[str, ...] = (),
     ) -> dict[str, object]:
+        resolved_stages = [
+            replace(stage, compute=self._stage_compute_requirements(stage.compute))
+            for stage in (stages or self._planned_stages())
+        ]
         return compile_planned_stages(
-            stages or self._planned_stages(), secret_values=secret_values
+            resolved_stages,
+            secret_values=secret_values,
+        )
+
+    def _stage_compute_requirements(
+        self, compute: StageComputeRequirements
+    ) -> StageComputeRequirements:
+        return replace(
+            compute,
+            cpus_per_worker=self.cpus_per_worker,
+            gpus_per_worker=self.gpus_per_worker,
         )
 
     def _run_manifest(

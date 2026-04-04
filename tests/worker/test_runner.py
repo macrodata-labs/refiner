@@ -260,6 +260,36 @@ def test_pipeline_executes_row_and_batch_steps() -> None:
     assert [r["y"] for r in out] == [30, 50]
 
 
+def test_platform_worker_start_reports_name_and_host() -> None:
+    shard = _shard("input.jsonl", 0, 1)
+    seen: dict[str, Any] = {}
+
+    class _RecordingClient:
+        base_url = "https://example.com"
+        api_key = "md_test"
+
+        def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
+            seen.update(kwargs)
+            return WorkerStartedResponse(worker_id="worker-0")
+
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader({shard.id: []})),
+        run_handle=RunHandle(
+            job_id="job-1",
+            stage_index=0,
+            worker_name="cloud-rank-0",
+            client=cast(Any, _RecordingClient()),
+        ),
+    )
+
+    runtime_lifecycle, run = worker._start_platform_session()
+
+    assert runtime_lifecycle.run.worker_id == "worker-0"
+    assert run.worker_id == "worker-0"
+    assert seen["worker_name"] == "cloud-rank-0"
+    assert isinstance(seen["host"], str)
+
+
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     shard1 = _shard("p1", 0, 10)
     shard2 = _shard("p2", 0, 10)
