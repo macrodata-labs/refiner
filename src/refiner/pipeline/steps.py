@@ -9,6 +9,7 @@ import pyarrow as pa
 
 from refiner.pipeline.expressions import Expr
 from refiner.pipeline.data.row import Row
+from refiner.services import RuntimeServiceDefinition
 
 
 class RefinerStep(ABC):
@@ -59,6 +60,7 @@ class FnAsyncRowStep(AsyncRowStep):
     index: int
     max_in_flight: int = 16
     preserve_order: bool = True
+    services: tuple[RuntimeServiceDefinition, ...] = ()
     op_name: str | None = None
 
     def __post_init__(self) -> None:

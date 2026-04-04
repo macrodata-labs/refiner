@@ -27,6 +27,7 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
+from refiner.services import RuntimeServiceDefinition
 from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
 from refiner.pipeline.sources import BaseSource, CsvReader, JsonlReader, ParquetReader
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
@@ -136,14 +137,32 @@ class RefinerPipeline:
         self,
         fn: AsyncMapFn,
         *,
-        max_in_flight: int = 16,
-        preserve_order: bool = True,
+        services: Sequence[RuntimeServiceDefinition] = (),
+        max_in_flight: int | None = None,
+        preserve_order: bool | None = None,
     ) -> "RefinerPipeline":
+        normalized_services = tuple(services)
+        bind_runtime_services = getattr(fn, "bind_runtime_services", None)
+        if callable(bind_runtime_services):
+            bind_runtime_services(normalized_services)
+        inferred_max_in_flight = getattr(fn, "__refiner_async_step_max_in_flight__", 16)
+        inferred_preserve_order = getattr(
+            fn, "__refiner_async_step_preserve_order__", True
+        )
         return self.add_step(
             FnAsyncRowStep(
                 fn=fn,
-                max_in_flight=max_in_flight,
-                preserve_order=preserve_order,
+                max_in_flight=(
+                    max_in_flight
+                    if max_in_flight is not None
+                    else inferred_max_in_flight
+                ),
+                preserve_order=(
+                    preserve_order
+                    if preserve_order is not None
+                    else bool(inferred_preserve_order)
+                ),
+                services=normalized_services,
                 op_name="map_async",
                 index=self._next_step_index(),
             )

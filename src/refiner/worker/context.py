@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Generator
 
 if TYPE_CHECKING:
     from refiner.platform.client.api import MacrodataClient
+    from refiner.services import ServiceRegistry
     from refiner.worker.lifecycle.base import RuntimeLifecycle
 
 
@@ -68,6 +69,10 @@ _ACTIVE_STEP_INDEX: ContextVar[int | None] = ContextVar(
     "refiner_active_step_index",
     default=None,
 )
+_ACTIVE_SERVICE_REGISTRY: ContextVar["ServiceRegistry" | None] = ContextVar(
+    "refiner_active_service_registry",
+    default=None,
+)
 
 
 def get_active_run_handle() -> RunHandle:
@@ -85,19 +90,28 @@ def get_active_step_index() -> int | None:
     return _ACTIVE_STEP_INDEX.get()
 
 
+def get_active_service_registry() -> ServiceRegistry | None:
+    return _ACTIVE_SERVICE_REGISTRY.get()
+
+
 @contextmanager
 def set_active_run_context(
     *,
     run_handle: RunHandle,
     runtime_lifecycle: RuntimeLifecycle,
+    service_registry: "ServiceRegistry" | None = None,
 ) -> Generator[None, None, None]:
     run_token: Token[RunHandle | None] = _ACTIVE_RUN_HANDLE.set(run_handle)
     lifecycle_token: Token["RuntimeLifecycle" | None] = _ACTIVE_RUNTIME_LIFECYCLE.set(
         runtime_lifecycle
     )
+    service_registry_token: Token["ServiceRegistry" | None] = (
+        _ACTIVE_SERVICE_REGISTRY.set(service_registry)
+    )
     try:
         yield
     finally:
+        _ACTIVE_SERVICE_REGISTRY.reset(service_registry_token)
         _ACTIVE_RUNTIME_LIFECYCLE.reset(lifecycle_token)
         _ACTIVE_RUN_HANDLE.reset(run_token)
 
@@ -115,6 +129,7 @@ __all__ = [
     "RunHandle",
     "get_active_run_handle",
     "get_active_runtime_lifecycle",
+    "get_active_service_registry",
     "get_active_step_index",
     "set_active_run_context",
     "set_active_step_index",

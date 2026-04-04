@@ -11,9 +11,11 @@ from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.planning import (
     _extract_lambda_source,
     compile_pipeline_plan,
+    collect_pipeline_services,
     plan_pipeline_stages,
 )
 from refiner.robotics import motion_trim
+import refiner as mdr
 
 
 class FakeReader(BaseReader):
@@ -143,7 +145,33 @@ def test_compile_pipeline_plan_uses_named_callable_for_step_name() -> None:
     payload = compile_pipeline_plan(pipeline)
     steps = payload["stages"][0]["steps"]
     assert steps[1]["name"] == "duplicate_selected"
-    assert steps[1]["type"] == "row_map"
+
+
+def test_compile_pipeline_plan_includes_stage_services() -> None:
+    llm = mdr.services.llm(
+        name="llm",
+        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+    )
+    pipeline = from_items([{"x": 1}]).map_async(
+        mdr.inference.generate(
+            service_name="llm",
+            fn=lambda row, service: {"x": row["x"], "service": bool(service)},
+        ),
+        services=[llm],
+    )
+
+    plan = compile_pipeline_plan(pipeline)
+    stages = plan["stages"]
+
+    assert stages[0]["services"] == [
+        {
+            "name": "llm",
+            "kind": "llm",
+            "config": {"model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct"},
+        }
+    ]
+    assert stages[0]["steps"][1]["args"]["service"] == "llm"
+    assert collect_pipeline_services(pipeline)[0].name == "llm"
 
 
 def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:

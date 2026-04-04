@@ -7,6 +7,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 
+import refiner as mdr
 from refiner.pipeline.data.shard import Shard
 from refiner import register_gauge
 from refiner.pipeline import RefinerPipeline
@@ -26,6 +27,7 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
 from refiner.platform.client.models import FinalizedShardWorker
+import refiner.services.base as services_base_module
 
 
 class _FakeReader(BaseReader):
@@ -643,6 +645,71 @@ def test_worker_suppresses_sink_close_errors_after_execution_failure() -> None:
     assert stats.failed == 1
     assert runtime_lifecycle.failed_ids == [shard.id]
     assert runtime_lifecycle.failed_errors == ["kaboom"]
+
+
+def test_worker_executes_service_backed_inference(monkeypatch) -> None:
+    shard = _shard("svc", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"prompt": "hi"})]}
+    seen: dict[str, object] = {}
+
+    async def _fake_generate(self, payload):
+        seen["payload"] = dict(payload)
+        return services_base_module.InferenceResponse(
+            text="hello",
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(
+        services_base_module._OpenAICompatibleGenerationService,
+        "generate",
+        _fake_generate,
+    )
+
+    async def _infer(row: Row, service) -> dict[str, object]:
+        response = await service.generate(
+            {"messages": [{"role": "user", "content": row["prompt"]}]}
+        )
+        return {"output": response.text}
+
+    llm = mdr.services.llm(
+        name="llm",
+        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+    )
+    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map_async(
+        mdr.inference.generate(
+            service_name="llm",
+            fn=_infer,
+            default_generation_params={"temperature": 0.1},
+        ),
+        services=[llm],
+    )
+    worker = Worker(
+        pipeline=pipeline,
+        run_handle=_local_run(),
+        service_bindings=(
+            __import__("refiner").services.RuntimeServiceBinding(
+                name="llm",
+                kind="llm",
+                endpoint="http://127.0.0.1:9000/v1",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_start_local_session",
+        lambda: (runtime_lifecycle, worker.run_handle.with_worker(worker_id="local")),
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert seen["payload"] == {
+        "temperature": 0.1,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
 
 
 def test_worker_suppresses_sink_close_errors_after_run_failure() -> None:

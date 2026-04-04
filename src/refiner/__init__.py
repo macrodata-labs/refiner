@@ -1,7 +1,9 @@
+import refiner.inference as inference
 import refiner.io as io
 import refiner.pipeline as pipeline
 import refiner.robotics as robotics
 import refiner.robotics as robot
+import refiner.services as services
 import refiner.video as video
 from refiner.pipeline import (
     from_items,
@@ -42,8 +44,10 @@ __all__ = [
     "coalesce",
     "if_else",
     # submodules
+    "inference",
     "io",
     "pipeline",
+    "services",
     "video",
     "robot",
     "robotics",

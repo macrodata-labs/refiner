@@ -194,6 +194,25 @@ Async transforms are useful for remote lookups or model calls:
 pipeline = pipeline.map_async(fetch_embedding, max_in_flight=32)
 ```
 
+For service-backed inference, use the dedicated row-oriented helper:
+
+```python
+llm = mdr.services.llm_endpoint(
+    name="llm",
+    base_url="https://api.openai.com",
+    api_key_env="OPENAI_API_KEY",
+)
+
+pipeline = pipeline.map_async(
+    mdr.inference.generate(
+        service_name="llm",
+        fn=my_inference_fn,
+        max_in_flight=64,
+    ),
+    services=[llm],
+)
+```
+
 The same contract applies to richer row subclasses like `LeRobotRow`: the row
 may expose extra helpers, but it still enters your Python function through the
 normal row API.
@@ -201,6 +220,7 @@ normal row API.
 ## Related pages
 
 - [Expressions](expressions.md)
+- [Inference](inference.md)
 - [Reading and writing data](reading-and-writing.md)
 - [Pipeline basics](pipeline-basics.md)
 - [Task pipelines](task-pipelines.md)

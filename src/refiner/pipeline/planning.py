@@ -8,6 +8,7 @@ from types import CodeType
 from typing import TYPE_CHECKING, Any
 
 from refiner.platform.manifest import _redact_captured_text
+from refiner.services import RuntimeServiceDefinition, RuntimeServiceSpec
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -27,6 +28,7 @@ class PlannedStage:
     name: str
     pipeline: "RefinerPipeline"
     compute: StageComputeRequirements
+    services: tuple[RuntimeServiceSpec, ...] = ()
 
 
 def _explicit_callable_name(fn: Any) -> str | None:
@@ -412,6 +414,25 @@ def _compile_stage_steps(
     return steps
 
 
+def collect_pipeline_services(
+    pipeline: "RefinerPipeline",
+) -> tuple[RuntimeServiceDefinition, ...]:
+    from refiner.pipeline.steps import FnAsyncRowStep
+
+    services_by_name: dict[str, RuntimeServiceDefinition] = {}
+    for step in pipeline.pipeline_steps:
+        if not isinstance(step, FnAsyncRowStep):
+            continue
+        for service in step.services:
+            previous = services_by_name.get(service.name)
+            if previous is not None and previous != service:
+                raise ValueError(
+                    f"duplicate service definition name {service.name!r} with mismatched configuration"
+                )
+            services_by_name[service.name] = service
+    return tuple(services_by_name.values())
+
+
 def plan_pipeline_stages(
     pipeline: "RefinerPipeline", *, default_num_workers: int
 ) -> list[PlannedStage]:
@@ -441,12 +462,16 @@ def plan_pipeline_stages(
                 name="write_lerobot_stage_1",
                 pipeline=pipeline,
                 compute=StageComputeRequirements(num_workers=default_num_workers),
+                services=tuple(
+                    service.to_spec() for service in collect_pipeline_services(pipeline)
+                ),
             ),
             PlannedStage(
                 index=1,
                 name="write_lerobot_stage_2",
                 pipeline=reducer_stage,
                 compute=StageComputeRequirements(num_workers=1),
+                services=(),
             ),
         ]
 
@@ -456,6 +481,9 @@ def plan_pipeline_stages(
             name="stage_0",
             pipeline=pipeline,
             compute=StageComputeRequirements(num_workers=default_num_workers),
+            services=tuple(
+                service.to_spec() for service in collect_pipeline_services(pipeline)
+            ),
         )
     ]
 
@@ -469,6 +497,7 @@ def compile_planned_stages(
                 "name": stage.name,
                 "index": stage.index,
                 "requested_num_workers": stage.compute.num_workers,
+                "services": [service.to_dict() for service in stage.services],
                 "steps": _compile_stage_steps(
                     stage.pipeline, secret_values=secret_values
                 ),
@@ -494,5 +523,6 @@ __all__ = [
     "StageComputeRequirements",
     "compile_pipeline_plan",
     "compile_planned_stages",
+    "collect_pipeline_services",
     "plan_pipeline_stages",
 ]

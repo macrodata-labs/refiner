@@ -149,13 +149,17 @@ class StagePayload:
     stage_index: int
     pipeline_payload: CloudPipelinePayload
     runtime: CloudRuntimeConfig
+    services: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "stage_index": self.stage_index,
             "pipeline_payload": self.pipeline_payload.to_dict(),
             "runtime": self.runtime.to_dict(),
         }
+        if self.services:
+            payload["services"] = self.services
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
