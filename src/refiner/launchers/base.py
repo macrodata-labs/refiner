@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import cast
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from uuid import uuid4
 import re
@@ -16,6 +16,7 @@ from refiner.platform.manifest import build_run_manifest
 from refiner.worker.context import RunHandle
 from refiner.pipeline.planning import (
     PlannedStage,
+    StageComputeRequirements,
     compile_planned_stages,
     plan_pipeline_stages,
 )
@@ -120,35 +121,23 @@ class BaseLauncher(ABC):
         *,
         secret_values: tuple[str, ...] = (),
     ) -> dict[str, object]:
-        resolved_stages = stages or self._planned_stages()
-        plan = compile_planned_stages(resolved_stages, secret_values=secret_values)
-        return self._annotate_stage_resource_hints(plan=plan, stages=resolved_stages)
-
-    def _stage_resource_hints(self, *, stage: PlannedStage) -> dict[str, object]:
-        del stage
-        return {}
-
-    def _annotate_stage_resource_hints(
-        self, *, plan: dict[str, object], stages: list[PlannedStage]
-    ) -> dict[str, object]:
-        plan_stages = plan.get("stages")
-        if not isinstance(plan_stages, list):
-            return plan
-        typed_plan_stages = [
-            cast(dict[str, object], stage_payload)
-            for stage_payload in plan_stages
-            if isinstance(stage_payload, dict)
+        resolved_stages = [
+            replace(stage, compute=self._stage_compute_requirements(stage.compute))
+            for stage in (stages or self._planned_stages())
         ]
-        hints_by_stage_index = {
-            stage.index: self._stage_resource_hints(stage=stage) for stage in stages
-        }
-        for stage_payload in typed_plan_stages:
-            stage_index = stage_payload.get("index")
-            if not isinstance(stage_index, int):
-                continue
-            for key, value in (hints_by_stage_index.get(stage_index) or {}).items():
-                stage_payload[key] = value
-        return plan
+        return compile_planned_stages(
+            resolved_stages,
+            secret_values=secret_values,
+        )
+
+    def _stage_compute_requirements(
+        self, compute: StageComputeRequirements
+    ) -> StageComputeRequirements:
+        return replace(
+            compute,
+            cpus_per_worker=self.cpus_per_worker,
+            gpus_per_worker=self.gpus_per_worker,
+        )
 
     def _run_manifest(
         self, *, secret_values: tuple[str, ...] = ()

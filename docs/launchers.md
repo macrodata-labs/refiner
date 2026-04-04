@@ -68,6 +68,17 @@ result = pipeline.launch_cloud(
     num_workers=8,
     cpus_per_worker=2,
     mem_mb_per_worker=4096,
+)
+```
+
+To request GPUs in the cloud:
+
+```python
+gpu_result = pipeline.launch_cloud(
+    name="cloud-gpu-job",
+    num_workers=8,
+    cpus_per_worker=2,
+    mem_mb_per_worker=4096,
     gpus_per_worker=1,
     gpu_type="h100",
 )

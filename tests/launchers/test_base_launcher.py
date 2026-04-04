@@ -5,7 +5,10 @@ from typing import cast
 from refiner.platform.client import MacrodataClient
 from refiner.pipeline import RefinerPipeline
 from refiner.launchers.base import BaseLauncher
-from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
+from refiner.pipeline.planning import (
+    PlannedStage,
+    StageComputeRequirements,
+)
 
 
 class _DummyLauncher(BaseLauncher):
@@ -14,8 +17,14 @@ class _DummyLauncher(BaseLauncher):
 
 
 class _ResourceHintLauncher(_DummyLauncher):
-    def _stage_resource_hints(self, *, stage: PlannedStage) -> dict[str, object]:
-        return {"cpus_per_worker": stage.index + 1, "gpus_per_worker": stage.index + 2}
+    def _stage_compute_requirements(
+        self, compute: StageComputeRequirements
+    ) -> StageComputeRequirements:
+        return StageComputeRequirements(
+            num_workers=compute.num_workers,
+            cpus_per_worker=1,
+            gpus_per_worker=2,
+        )
 
 
 def test_job_tracking_url_sanitizes_terminal_control_characters() -> None:
@@ -88,7 +97,7 @@ def test_compiled_plan_includes_stage_resource_hints(monkeypatch) -> None:
                 {
                     "name": stage.name,
                     "index": stage.index,
-                    "requested_num_workers": stage.compute.num_workers,
+                    **stage.compute.to_stage_plan_dict(),
                     "steps": [],
                 }
                 for stage in stages
@@ -126,8 +135,8 @@ def test_compiled_plan_includes_stage_resource_hints(monkeypatch) -> None:
             "name": "stage-1",
             "index": 1,
             "requested_num_workers": 1,
-            "cpus_per_worker": 2,
-            "gpus_per_worker": 3,
+            "cpus_per_worker": 1,
+            "gpus_per_worker": 2,
             "steps": [],
         },
     ]

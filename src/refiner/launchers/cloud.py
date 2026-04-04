@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
 from refiner.cli.ui import stdin_is_interactive
@@ -14,6 +14,7 @@ from refiner.platform.client import (
 from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.launchers.base import BaseLauncher
+from refiner.pipeline.planning import StageComputeRequirements
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -69,7 +70,9 @@ class CloudLauncher(BaseLauncher):
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
         if (gpus_per_worker is not None) != (gpu_type is not None):
-            raise ValueError("gpus_per_worker and gpu_type must be specified together or not at all")
+            raise ValueError(
+                "gpus_per_worker and gpu_type must be specified together or not at all"
+            )
         if gpu_type is not None and not gpu_type.strip():
             raise ValueError("gpu_type must be non-empty")
         self.sync_local_dependencies = sync_local_dependencies
@@ -194,18 +197,14 @@ class CloudLauncher(BaseLauncher):
             status=resp.status,
         )
 
-    def _stage_resource_hints(self, *, stage: object) -> dict[str, object]:
-        del stage
-        hints: dict[str, object] = {}
-        if self.cpus_per_worker is not None:
-            hints["cpus_per_worker"] = self.cpus_per_worker
-        if self.mem_mb_per_worker is not None:
-            hints["memory_mb_per_worker"] = self.mem_mb_per_worker
-        if self.gpus_per_worker is not None:
-            hints["gpus_per_worker"] = self.gpus_per_worker
-        if self.gpu_type is not None:
-            hints["gpu_type"] = self.gpu_type
-        return hints
+    def _stage_compute_requirements(
+        self, compute: StageComputeRequirements
+    ) -> StageComputeRequirements:
+        return replace(
+            super()._stage_compute_requirements(compute),
+            memory_mb_per_worker=self.mem_mb_per_worker,
+            gpu_type=self.gpu_type,
+        )
 
 
 __all__ = ["CloudLauncher", "CloudLaunchResult"]

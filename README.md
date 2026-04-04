@@ -49,11 +49,11 @@ import refiner as mdr
     .launch_cloud(
         name="motion_trim",
         num_workers=4,
-        gpus_per_worker=1,
-        gpu_type="h100",
     )
 )
 ```
+
+Need cloud GPUs? See [Launchers](docs/launchers.md) for the GPU-specific cloud options.
 
 ### Local example
 

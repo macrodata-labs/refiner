@@ -292,15 +292,6 @@ class LocalLauncher(BaseLauncher):
             processes=processes,
         )
 
-    def _stage_resource_hints(self, *, stage: PlannedStage) -> dict[str, object]:
-        del stage
-        hints: dict[str, object] = {}
-        if self.cpus_per_worker is not None:
-            hints["cpus_per_worker"] = self.cpus_per_worker
-        if self.gpus_per_worker is not None:
-            hints["gpus_per_worker"] = self.gpus_per_worker
-        return hints
-
     def launch(self) -> LaunchStats:
         stages = self._planned_stages()
         platform_run = self._resolve_platform_context(stages=stages)

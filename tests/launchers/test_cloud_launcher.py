@@ -123,7 +123,10 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
 def test_pipeline_launch_cloud_requires_gpu_type_with_gpu_count(monkeypatch) -> None:
     _stub_cloud_submit(monkeypatch, fail_on_submit=True)
 
-    with pytest.raises(ValueError, match="gpu_type is required"):
+    with pytest.raises(
+        ValueError,
+        match="gpus_per_worker and gpu_type must be specified together or not at all",
+    ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
             gpus_per_worker=2,
@@ -133,7 +136,10 @@ def test_pipeline_launch_cloud_requires_gpu_type_with_gpu_count(monkeypatch) -> 
 def test_pipeline_launch_cloud_requires_gpu_count_with_gpu_type(monkeypatch) -> None:
     _stub_cloud_submit(monkeypatch, fail_on_submit=True)
 
-    with pytest.raises(ValueError, match="gpus_per_worker is required"):
+    with pytest.raises(
+        ValueError,
+        match="gpus_per_worker and gpu_type must be specified together or not at all",
+    ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
             gpu_type="h100",
