@@ -11,6 +11,8 @@ import refiner as mdr
 
 
 def _probe_worker(task_rank: int, num_tasks: int) -> dict[str, Any]:
+    from loguru import logger
+
     visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
     nvidia_smi = shutil.which("nvidia-smi")
     gpu_lines: list[str] = []
@@ -44,7 +46,7 @@ def _probe_worker(task_rank: int, num_tasks: int) -> dict[str, Any]:
         "nvidia_smi_gpus": gpu_lines,
         "nvidia_smi_error": nvidia_smi_error,
     }
-    print(json.dumps(probe, sort_keys=True))
+    logger.info("gpu probe {}", json.dumps(probe, sort_keys=True))
     return probe
 
 
