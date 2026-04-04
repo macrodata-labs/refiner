@@ -125,7 +125,7 @@ def test_pipeline_launch_cloud_requires_gpu_type_with_gpu_count(monkeypatch) -> 
 
     with pytest.raises(
         ValueError,
-        match="gpus_per_worker and gpu_type must be specified together or not at all",
+        match="gpu_type is required when gpus_per_worker is set",
     ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
@@ -138,7 +138,7 @@ def test_pipeline_launch_cloud_requires_gpu_count_with_gpu_type(monkeypatch) -> 
 
     with pytest.raises(
         ValueError,
-        match="gpus_per_worker and gpu_type must be specified together or not at all",
+        match="gpus_per_worker is required when gpu_type is set",
     ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
