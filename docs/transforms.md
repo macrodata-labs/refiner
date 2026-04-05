@@ -194,7 +194,9 @@ Async transforms are useful for remote lookups or model calls:
 pipeline = pipeline.map_async(fetch_embedding, max_in_flight=32)
 ```
 
-For endpoint-backed inference, use the dedicated row-oriented helper:
+For inference, use the dedicated row-oriented helper with either a direct endpoint provider or a VLLM provider.
+
+Endpoint-backed example:
 
 ```python
 endpoint = mdr.inference.OpenAIEndpointProvider(
@@ -211,6 +213,26 @@ pipeline = pipeline.map_async(
     max_in_flight=64,
 )
 ```
+
+VLLM-backed example:
+
+```python
+provider = mdr.inference.VLLMProvider(
+    model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+    model_max_context=8192,
+)
+
+pipeline = pipeline.map_async(
+    mdr.inference.generate(
+        fn=my_inference_fn,
+        provider=provider,
+        max_concurrent_requests=64,
+    ),
+    max_in_flight=64,
+)
+```
+
+The VLLM variant requires the executor to provide a matching runtime service binding when the worker starts.
 
 The same contract applies to richer row subclasses like `LeRobotRow`: the row
 may expose extra helpers, but it still enters your Python function through the
