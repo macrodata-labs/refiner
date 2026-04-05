@@ -23,42 +23,6 @@ class RuntimeServiceSpec:
 class RuntimeServiceBinding:
     name: str
     kind: str
-    endpoint: str
-    headers: Mapping[str, str] | None = None
-    metadata: Mapping[str, Any] | None = None
-
-    @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> RuntimeServiceBinding:
-        name = str(payload.get("name", "")).strip()
-        kind = str(payload.get("kind", "")).strip()
-        endpoint = str(payload.get("endpoint", "")).strip()
-        if not name:
-            raise ValueError("service binding name must be non-empty")
-        if not kind:
-            raise ValueError("service binding kind must be non-empty")
-        if not endpoint:
-            raise ValueError(
-                f"service binding {name!r} must include a non-empty endpoint"
-            )
-        headers = payload.get("headers")
-        if headers is not None:
-            if not isinstance(headers, Mapping):
-                raise ValueError(f"service binding {name!r} headers must be an object")
-            normalized_headers = {
-                str(key): str(value) for key, value in headers.items()
-            }
-        else:
-            normalized_headers = None
-        metadata = payload.get("metadata")
-        if metadata is not None and not isinstance(metadata, Mapping):
-            raise ValueError(f"service binding {name!r} metadata must be an object")
-        return cls(
-            name=name,
-            kind=kind,
-            endpoint=endpoint,
-            headers=normalized_headers,
-            metadata=metadata,
-        )
 
 
 def parse_runtime_service_bindings(
@@ -76,7 +40,13 @@ def parse_runtime_service_bindings(
     for item in services:
         if not isinstance(item, Mapping):
             raise ValueError("service bindings entries must be objects")
-        binding = RuntimeServiceBinding.from_dict(item)
+        kind = str(item.get("kind", "")).strip()
+        from refiner.services.vllm import VLLMRuntimeServiceBinding
+
+        if kind == "llm":
+            binding = VLLMRuntimeServiceBinding.from_dict(item)
+        else:
+            raise ValueError(f"unsupported service binding kind {kind!r}")
         if binding.name in seen_names:
             raise ValueError(f"duplicate service binding name {binding.name!r}")
         seen_names.add(binding.name)

@@ -10,6 +10,7 @@ from refiner.inference.providers import OpenAIEndpointProvider, VLLMProvider
 from refiner.pipeline.builtins import REFINER_BUILTIN_CALL_ATTR
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
+from refiner.services import VLLMRuntimeServiceBinding
 from refiner.worker.context import get_active_service_binding
 
 GeneratePayload: TypeAlias = Mapping[str, Any]
@@ -47,15 +48,18 @@ def generate(
                             api_key=provider.api_key,
                         )
                     else:
-                        service_spec = provider.service_spec()
-                        binding = get_active_service_binding(service_spec.name)
+                        service_name = provider.service_definition().name
+                        binding = get_active_service_binding(service_name)
                         if binding is None:
                             raise RuntimeError(
-                                f"VLLM provider requires runtime service binding {service_spec.name!r}"
+                                f"VLLM provider requires runtime service binding {service_name!r}"
+                            )
+                        if not isinstance(binding, VLLMRuntimeServiceBinding):
+                            raise RuntimeError(
+                                f"VLLM provider expected a VLLM runtime binding for {service_name!r}"
                             )
                         client = _OpenAIEndpointClient(
                             base_url=binding.endpoint,
-                            headers=binding.headers,
                         )
             assert client is not None
 
@@ -80,9 +84,9 @@ def generate(
                 "max_concurrent_requests": max_concurrent_requests,
             },
             "services": [
-                service_spec
-                for service_spec in [provider.service_spec()]
-                if service_spec is not None
+                service_definition.to_spec()
+                for service_definition in [provider.service_definition()]
+                if service_definition is not None
             ],
         },
     )

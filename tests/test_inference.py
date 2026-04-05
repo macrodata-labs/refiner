@@ -14,7 +14,7 @@ from refiner.inference import (
 )
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.steps import FnAsyncRowStep
-from refiner.services import RuntimeServiceBinding
+from refiner.services import VLLMRuntimeServiceBinding, VLLMServiceDefinition
 from refiner.worker.context import RunHandle, set_active_run_context
 
 openai_module = importlib.import_module("refiner.inference.openai")
@@ -47,16 +47,34 @@ def test_vllm_provider_accepts_optional_model_max_context() -> None:
     assert provider.model_max_context == 8192
 
 
-def test_vllm_provider_emits_service_spec() -> None:
+def test_vllm_provider_emits_service_definition() -> None:
     provider = VLLMProvider(
         model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
         model_max_context=8192,
     )
 
-    spec = provider.service_spec()
+    definition = provider.service_definition()
+    spec = definition.to_spec()
 
     assert spec.kind == "llm"
-    assert spec.name.startswith("vllm-")
+    assert definition.name.startswith("vllm-")
+    assert spec.name == definition.name
+    assert spec.config == {
+        "model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
+        "model_max_context": 8192,
+    }
+
+
+def test_vllm_service_definition_emits_runtime_service_spec() -> None:
+    definition = VLLMServiceDefinition(
+        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        model_max_context=8192,
+    )
+
+    spec = definition.to_spec()
+
+    assert spec.kind == "llm"
+    assert spec.name == definition.name
     assert spec.config == {
         "model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
         "model_max_context": 8192,
@@ -225,11 +243,10 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
         model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
         model_max_context=8192,
     )
-    binding = RuntimeServiceBinding(
-        name=provider.service_spec().name,
+    binding = VLLMRuntimeServiceBinding(
+        name=provider.service_definition().name,
         kind="llm",
         endpoint="http://127.0.0.1:8000",
-        headers={"Authorization": "Bearer token"},
     )
 
     async def _inference_fn(row, generate):
@@ -253,4 +270,4 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["base_url"] == "http://127.0.0.1:8000"
-    assert seen["headers"] == {"Authorization": "Bearer token"}
+    assert seen["headers"] == {}

@@ -1,10 +1,7 @@
-from __future__ import annotations
-
-import hashlib
 from dataclasses import dataclass
 from typing import Any
 
-from refiner.services import RuntimeServiceSpec
+from refiner.services import VLLMServiceDefinition
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,7 +13,7 @@ class OpenAIEndpointProvider:
         if not self.base_url.strip():
             raise ValueError("base_url must be non-empty")
 
-    def service_spec(self) -> RuntimeServiceSpec | None:
+    def service_definition(self) -> None:
         return None
 
     def to_builtin_args(self) -> dict[str, object]:
@@ -38,13 +35,11 @@ class VLLMProvider:
         if self.model_max_context is not None and self.model_max_context <= 0:
             raise ValueError("model_max_context must be > 0 when provided")
 
-    def service_spec(self) -> RuntimeServiceSpec:
-        name_source = f"{self.model_name_or_path}\0{self.model_max_context}"
-        name = f"vllm-{hashlib.sha1(name_source.encode('utf-8')).hexdigest()[:12]}"
-        config: dict[str, Any] = {"model_name_or_path": self.model_name_or_path}
-        if self.model_max_context is not None:
-            config["model_max_context"] = self.model_max_context
-        return RuntimeServiceSpec(name=name, kind="llm", config=config)
+    def service_definition(self) -> VLLMServiceDefinition:
+        return VLLMServiceDefinition(
+            model_name_or_path=self.model_name_or_path,
+            model_max_context=self.model_max_context,
+        )
 
     def to_builtin_args(self) -> dict[str, object]:
         payload: dict[str, Any] = {

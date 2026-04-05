@@ -27,7 +27,7 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
 from refiner.platform.client.models import FinalizedShardWorker
-from refiner.services import RuntimeServiceBinding
+from refiner.services import VLLMRuntimeServiceBinding
 import importlib
 
 openai_module = importlib.import_module("refiner.inference.openai")
@@ -753,11 +753,10 @@ def test_worker_executes_vllm_backed_inference_with_service_bindings(
         pipeline=pipeline,
         run_handle=_local_run(),
         service_bindings=(
-            RuntimeServiceBinding(
-                name=provider.service_spec().name,
+            VLLMRuntimeServiceBinding(
+                name=provider.service_definition().name,
                 kind="llm",
                 endpoint="http://127.0.0.1:9000",
-                headers={"Authorization": "Bearer token"},
             ),
         ),
     )
@@ -775,7 +774,7 @@ def test_worker_executes_vllm_backed_inference_with_service_bindings(
         "messages": [{"role": "user", "content": "hi"}],
     }
     assert seen["base_url"] == "http://127.0.0.1:9000"
-    assert seen["headers"] == {"Authorization": "Bearer token"}
+    assert seen["headers"] == {}
 
 
 def test_worker_suppresses_sink_close_errors_after_run_failure() -> None:
