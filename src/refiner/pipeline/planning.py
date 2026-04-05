@@ -18,6 +18,22 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class StageComputeRequirements:
     num_workers: int
+    cpus_per_worker: int | None = None
+    memory_mb_per_worker: int | None = None
+    gpus_per_worker: int | None = None
+    gpu_type: str | None = None
+
+    def to_stage_plan_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_num_workers": self.num_workers}
+        if self.cpus_per_worker is not None:
+            payload["cpus_per_worker"] = self.cpus_per_worker
+        if self.memory_mb_per_worker is not None:
+            payload["memory_mb_per_worker"] = self.memory_mb_per_worker
+        if self.gpus_per_worker is not None:
+            payload["gpus_per_worker"] = self.gpus_per_worker
+        if self.gpu_type is not None:
+            payload["gpu_type"] = self.gpu_type
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -508,15 +524,17 @@ def plan_pipeline_stages(
 
 
 def compile_planned_stages(
-    stages: list[PlannedStage], *, secret_values: tuple[str, ...] = ()
+    stages: list[PlannedStage],
+    *,
+    secret_values: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     plan = {
         "stages": [
             {
                 "name": stage.name,
                 "index": stage.index,
-                "requested_num_workers": stage.compute.num_workers,
                 "services": [service.to_dict() for service in stage.services],
+                **stage.compute.to_stage_plan_dict(),
                 "steps": _compile_stage_steps(
                     stage.pipeline, secret_values=secret_values
                 ),

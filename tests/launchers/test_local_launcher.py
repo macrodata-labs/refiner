@@ -12,6 +12,7 @@ from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.resources.cpu import build_cpu_sets
+from refiner.worker.resources.gpu import build_gpu_sets
 
 
 class _FakeReader(BaseReader):
@@ -106,6 +107,26 @@ def test_build_cpu_sets_raises_when_insufficient(
         build_cpu_sets(num_workers=2, cpus_per_worker=2)
 
 
+def test_build_gpu_sets_partitions_gpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "refiner.worker.resources.gpu.available_gpu_ids",
+        lambda: ["0", "1", "2", "3"],
+    )
+    sets = build_gpu_sets(num_workers=2, gpus_per_worker=2)
+    assert sets == [["0", "1"], ["2", "3"]]
+
+
+def test_build_gpu_sets_raises_when_insufficient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "refiner.worker.resources.gpu.available_gpu_ids",
+        lambda: ["0"],
+    )
+    with pytest.raises(ValueError):
+        build_gpu_sets(num_workers=2, gpus_per_worker=1)
+
+
 def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
     p1 = tmp_path / "a.jsonl"
     p2 = tmp_path / "b.jsonl"
@@ -123,6 +144,31 @@ def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
     assert stats.completed == 1
     assert stats.failed == 0
     assert stats.output_rows == 2
+
+
+def test_local_launcher_worker_command_includes_gpu_ids(tmp_path) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    launcher = LocalLauncher(
+        pipeline=read_jsonl(str(path)),
+        name="gpu-worker-command",
+        num_workers=1,
+        workdir=str(tmp_path),
+        gpus_per_worker=1,
+    )
+
+    command = launcher._worker_command(
+        stage_index=0,
+        rank=0,
+        payload_path=tmp_path / "payload.cloudpickle",
+        runtime_backend="file",
+        cpu_ids=[0, 1],
+        gpu_ids=["2", "3"],
+        platform_run=None,
+    )
+
+    assert "--gpu-ids" in command
+    assert command[command.index("--gpu-ids") + 1] == "2,3"
 
 
 def test_local_launcher_file_backend_skips_platform_setup(tmp_path) -> None:

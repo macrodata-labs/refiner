@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
 from refiner.cli.ui import stdin_is_interactive
@@ -14,6 +14,7 @@ from refiner.platform.client import (
 from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.launchers.base import BaseLauncher
+from refiner.pipeline.planning import StageComputeRequirements
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -39,6 +40,8 @@ class CloudLauncher(BaseLauncher):
         heartbeat_interval_seconds: Worker heartbeat cadence.
         cpus_per_worker: Optional requested CPU cores per worker.
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
+        gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
+        gpu_type: Optional requested GPU type per worker for cloud scheduling.
     """
 
     def __init__(
@@ -50,6 +53,8 @@ class CloudLauncher(BaseLauncher):
         heartbeat_interval_seconds: int = 30,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
+        gpus_per_worker: int | None = None,
+        gpu_type: str | None = None,
         sync_local_dependencies: bool = True,
         secrets: dict[str, object | None] | None = None,
         env: dict[str, object | None] | None = None,
@@ -60,11 +65,20 @@ class CloudLauncher(BaseLauncher):
             num_workers=num_workers,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             cpus_per_worker=cpus_per_worker,
+            gpus_per_worker=gpus_per_worker,
         )
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
+        if gpus_per_worker is not None and gpu_type is None:
+            raise ValueError("gpu_type is required when gpus_per_worker is set")
+        if gpu_type is not None and not gpu_type.strip():
+            raise ValueError("gpu_type must be non-empty")
+        if gpu_type is not None and gpus_per_worker is None:
+            raise ValueError("gpus_per_worker is required when gpu_type is set")
         self.sync_local_dependencies = sync_local_dependencies
         self.mem_mb_per_worker = mem_mb_per_worker
+        self.gpus_per_worker = gpus_per_worker
+        self.gpu_type = gpu_type.strip() if gpu_type is not None else None
         self.secrets = secrets
         self.env = env
 
@@ -163,6 +177,8 @@ class CloudLauncher(BaseLauncher):
                         heartbeat_interval_seconds=self.heartbeat_interval_seconds,
                         cpus_per_worker=self.cpus_per_worker,
                         mem_mb_per_worker=self.mem_mb_per_worker,
+                        gpus_per_worker=self.gpus_per_worker,
+                        gpu_type=self.gpu_type,
                     ),
                     services=stage.services,
                 )
@@ -180,6 +196,15 @@ class CloudLauncher(BaseLauncher):
             job_id=resp.job_id,
             stage_index=resp.stage_index,
             status=resp.status,
+        )
+
+    def _stage_compute_requirements(
+        self, compute: StageComputeRequirements
+    ) -> StageComputeRequirements:
+        return replace(
+            super()._stage_compute_requirements(compute),
+            memory_mb_per_worker=self.mem_mb_per_worker,
+            gpu_type=self.gpu_type,
         )
 
 

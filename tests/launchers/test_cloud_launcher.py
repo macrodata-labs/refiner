@@ -92,6 +92,8 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         heartbeat_interval_seconds=12,
         cpus_per_worker=2,
         mem_mb_per_worker=4096,
+        gpus_per_worker=2,
+        gpu_type="h100",
     )
 
     assert result.job_id == "job-123"
@@ -103,6 +105,10 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.sync_local_dependencies is True
     assert request.plan["stages"][0]["name"] == "stage_0"
     assert request.plan["stages"][0]["requested_num_workers"] == 3
+    assert request.plan["stages"][0]["cpus_per_worker"] == 2
+    assert request.plan["stages"][0]["memory_mb_per_worker"] == 4096
+    assert request.plan["stages"][0]["gpus_per_worker"] == 2
+    assert request.plan["stages"][0]["gpu_type"] == "h100"
     assert len(request.stage_payloads) == 1
     assert request.stage_payloads[0].stage_index == 0
     assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
@@ -111,6 +117,8 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
     assert request.stage_payloads[0].services == ()
+    assert request.stage_payloads[0].runtime.gpus_per_worker == 2
+    assert request.stage_payloads[0].runtime.gpu_type == "h100"
     assert request.manifest == {
         "version": 1,
         "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
@@ -143,6 +151,54 @@ def test_pipeline_launch_cloud_includes_stage_services(monkeypatch) -> None:
     request = cast(CloudRunCreateRequest, captured["request"])
     assert request.stage_payloads[0].services
     assert request.stage_payloads[0].services[0].kind == "llm"
+
+
+def test_pipeline_launch_cloud_requires_gpu_type_with_gpu_count(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(
+        ValueError,
+        match="gpu_type is required when gpus_per_worker is set",
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            gpus_per_worker=2,
+        )
+
+
+def test_pipeline_launch_cloud_requires_gpu_count_with_gpu_type(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(
+        ValueError,
+        match="gpus_per_worker is required when gpu_type is set",
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            gpu_type="h100",
+        )
+
+
+def test_pipeline_launch_cloud_rejects_non_positive_gpu_count(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="gpus_per_worker must be > 0"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            gpus_per_worker=0,
+            gpu_type="h100",
+        )
+
+
+def test_pipeline_launch_cloud_rejects_blank_gpu_type(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="gpu_type must be non-empty"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            gpus_per_worker=1,
+            gpu_type="   ",
+        )
 
 
 def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> None:

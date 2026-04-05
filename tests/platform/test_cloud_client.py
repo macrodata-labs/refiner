@@ -30,6 +30,8 @@ def _request() -> CloudRunCreateRequest:
                     heartbeat_interval_seconds=30,
                     cpus_per_worker=4,
                     mem_mb_per_worker=8192,
+                    gpus_per_worker=2,
+                    gpu_type="h100",
                 ),
             )
         ],
@@ -82,6 +84,8 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
                 "heartbeat_interval_seconds": 30,
                 "cpus_per_worker": 4,
                 "mem_mb_per_worker": 8192,
+                "gpus_per_worker": 2,
+                "gpu_type": "h100",
             },
         }
     ]
