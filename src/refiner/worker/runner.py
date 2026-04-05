@@ -25,6 +25,7 @@ from refiner.worker.metrics.context import (
     set_active_user_metrics_emitter,
 )
 from refiner.worker.metrics.otel import OtelTelemetryEmitter
+from refiner.worker.service_control import request_runtime_service_bindings
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,18 +45,24 @@ class Worker:
         heartbeat_interval_seconds: int = 30,
         local_workdir: str | None = None,
         service_bindings: tuple[RuntimeServiceBinding, ...] = (),
+        service_control_url: str | None = None,
     ):
         self.pipeline = pipeline
         self.run_handle = run_handle
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.local_workdir = local_workdir
         self.service_bindings = service_bindings
+        self.service_control_url = service_control_url
         if self.heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be > 0")
 
     def _start_platform_session(self) -> tuple[PlatformRuntimeLifecycle, RunHandle]:
         if self.run_handle.client is None:
             raise ValueError("platform runtime requires a run with a client")
+        if self.run_handle.worker_id:
+            run = self.run_handle
+            runtime_lifecycle = PlatformRuntimeLifecycle(run=run)
+            return runtime_lifecycle, run
         try:
             host = socket.gethostname()
         except Exception:
@@ -137,6 +144,15 @@ class Worker:
             runtime_name,
         )
         sink = self.pipeline.sink or NullSink()
+        active_service_bindings = self.service_bindings
+        if self.service_control_url:
+            if self.run_handle.client is None:
+                raise ValueError("runtime services require a platform runtime")
+            active_service_bindings = request_runtime_service_bindings(
+                control_url=self.service_control_url,
+                worker_id=self.run_handle.worker_id or "",
+            )
+            self.service_bindings = active_service_bindings
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
@@ -275,7 +291,7 @@ class Worker:
                 run_handle=self.run_handle,
                 runtime_lifecycle=runtime_lifecycle,
                 service_bindings={
-                    binding.name: binding for binding in self.service_bindings
+                    binding.name: binding for binding in active_service_bindings
                 },
             ),
         ):

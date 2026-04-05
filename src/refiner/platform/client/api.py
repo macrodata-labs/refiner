@@ -102,10 +102,13 @@ class MacrodataClient:
         *,
         job_id: str,
         stage_index: int,
+        worker_id: str | None = None,
         host: str | None = None,
         worker_name: str | None = None,
     ) -> WorkerStartedResponse:
         request_body: dict[str, Any] = {}
+        if worker_id:
+            request_body["worker_id"] = worker_id
         if host:
             request_body["host"] = host
         if worker_name:

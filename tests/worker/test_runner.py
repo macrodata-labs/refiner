@@ -295,6 +295,94 @@ def test_platform_worker_start_reports_name_and_host() -> None:
     assert isinstance(seen["host"], str)
 
 
+def test_platform_worker_uses_preregistered_worker_id_without_reporting_start() -> None:
+    class _RecordingClient:
+        base_url = "https://example.com"
+        api_key = "md_test"
+
+        def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
+            raise AssertionError(f"unexpected report_worker_started call: {kwargs!r}")
+
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader({})),
+        run_handle=RunHandle(
+            job_id="job-1",
+            stage_index=0,
+            worker_name="cloud-rank-0",
+            worker_id="worker-pre",
+            client=cast(Any, _RecordingClient()),
+        ),
+    )
+
+    runtime_lifecycle, run = worker._start_platform_session()
+
+    assert runtime_lifecycle.run.worker_id == "worker-pre"
+    assert run.worker_id == "worker-pre"
+
+
+def test_platform_worker_starts_runtime_services_after_registration(
+    monkeypatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    class _RecordingClient:
+        base_url = "https://example.com"
+        api_key = "md_test"
+
+        def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
+            del kwargs
+            return WorkerStartedResponse(worker_id="worker-0")
+
+        def report_worker_finished(self, **kwargs):
+            del kwargs
+
+    class _SingleShardLifecycle(_FakeRuntimeLifecycle):
+        pass
+
+    shard = _shard("input.jsonl", 0, 1)
+    runtime_lifecycle = _SingleShardLifecycle([shard])
+    worker = _run_local_worker(
+        rows_by_shard={shard.id: []},
+        runtime_lifecycle=runtime_lifecycle,
+    )
+    worker.run_handle = RunHandle(
+        job_id="job-1",
+        stage_index=0,
+        worker_name="cloud-rank-0",
+        client=cast(Any, _RecordingClient()),
+    )
+    worker.service_control_url = "http://127.0.0.1:9999"
+    monkeypatch.setattr(
+        "refiner.worker.runner.request_runtime_service_bindings",
+        lambda **kwargs: (
+            seen.update(kwargs),
+            (
+                VLLMRuntimeServiceBinding(
+                    name="vllm-test", kind="llm", endpoint="http://127.0.0.1:8000"
+                ),
+            ),
+        )[1],
+    )
+    monkeypatch.setattr(
+        "refiner.worker.runner.OtelTelemetryEmitter",
+        lambda **kwargs: _NoopTelemetryEmitter(),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_start_platform_session",
+        lambda: (
+            cast(Any, runtime_lifecycle),
+            worker.run_handle.with_worker(worker_id="worker-0"),
+        ),
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert seen["worker_id"] == "worker-0"
+    assert seen["control_url"] == "http://127.0.0.1:9999"
+
+
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     shard1 = _shard("p1", 0, 10)
     shard2 = _shard("p2", 0, 10)
