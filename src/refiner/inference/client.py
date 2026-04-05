@@ -29,7 +29,7 @@ class _OpenAIEndpointClient:
         if self.api_key is not None:
             headers["Authorization"] = f"Bearer {self.api_key}"
         async with httpx.AsyncClient(
-            base_url=self.base_url.rstrip("/"),
+            base_url=_normalize_openai_base_url(self.base_url),
             timeout=60.0,
             headers=headers,
         ) as client:
@@ -101,6 +101,13 @@ def _parse_inference_response(
         usage=usage,
         response=response_json,
     )
+
+
+def _normalize_openai_base_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        normalized = normalized[:-3]
+    return normalized
 
 
 __all__ = ["InferenceResponse"]

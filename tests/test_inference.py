@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
+from collections.abc import Mapping
 
 import pytest
 
@@ -203,6 +204,64 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["api_key"] == "secret"
+
+
+def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {"content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {},
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, timeout, headers):
+            seen["base_url"] = str(base_url)
+            seen["timeout"] = timeout
+            seen["headers"] = dict(headers)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, path, *, json):
+            seen["path"] = path
+            seen["payload"] = dict(json)
+            return _FakeResponse()
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+
+    response = asyncio.run(
+        openai_module._OpenAIEndpointClient(
+            base_url="https://openrouter.ai/api/v1",
+            api_key="secret",
+        ).generate(
+            {
+                "model": "openai/gpt-5.2",
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        )
+    )
+
+    assert response.text == "ok"
+    assert seen["base_url"] == "https://openrouter.ai/api"
+    assert seen["path"] == "/v1/chat/completions"
+    assert seen["payload"] == {
+        "model": "openai/gpt-5.2",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
 
 
 def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
