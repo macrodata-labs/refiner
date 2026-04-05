@@ -194,22 +194,21 @@ Async transforms are useful for remote lookups or model calls:
 pipeline = pipeline.map_async(fetch_embedding, max_in_flight=32)
 ```
 
-For service-backed inference, use the dedicated row-oriented helper:
+For endpoint-backed inference, use the dedicated row-oriented helper:
 
 ```python
-llm = mdr.services.llm_endpoint(
-    name="llm",
+endpoint = mdr.inference.OpenAIEndpointProvider(
     base_url="https://api.openai.com",
-    api_key_env="OPENAI_API_KEY",
+    api_key="YOUR_API_KEY",
 )
 
 pipeline = pipeline.map_async(
     mdr.inference.generate(
-        service_name="llm",
         fn=my_inference_fn,
-        max_in_flight=64,
+        provider=endpoint,
+        max_concurrent_requests=64,
     ),
-    services=[llm],
+    max_in_flight=64,
 )
 ```
 

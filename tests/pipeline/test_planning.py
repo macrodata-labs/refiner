@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import refiner as mdr
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner import col
 from refiner.pipeline import RefinerPipeline, from_items
@@ -11,11 +12,9 @@ from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.planning import (
     _extract_lambda_source,
     compile_pipeline_plan,
-    collect_pipeline_services,
     plan_pipeline_stages,
 )
 from refiner.robotics import motion_trim
-import refiner as mdr
 
 
 class FakeReader(BaseReader):
@@ -147,33 +146,6 @@ def test_compile_pipeline_plan_uses_named_callable_for_step_name() -> None:
     assert steps[1]["name"] == "duplicate_selected"
 
 
-def test_compile_pipeline_plan_includes_stage_services() -> None:
-    llm = mdr.services.llm(
-        name="llm",
-        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-    )
-    pipeline = from_items([{"x": 1}]).map_async(
-        mdr.inference.generate(
-            service_name="llm",
-            fn=lambda row, service: {"x": row["x"], "service": bool(service)},
-        ),
-        services=[llm],
-    )
-
-    plan = compile_pipeline_plan(pipeline)
-    stages = plan["stages"]
-
-    assert stages[0]["services"] == [
-        {
-            "name": "llm",
-            "kind": "llm",
-            "config": {"model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct"},
-        }
-    ]
-    assert stages[0]["steps"][1]["args"]["service"] == "llm"
-    assert collect_pipeline_services(pipeline)[0].name == "llm"
-
-
 def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:
     pipeline = RefinerPipeline(FakeReader()).map(
         motion_trim(threshold=0.25, pad_frames=2)
@@ -188,6 +160,31 @@ def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:
         "threshold": 0.25,
         "pad_frames": 2,
     }
+
+
+def test_compile_pipeline_plan_includes_builtin_services() -> None:
+    pipeline = RefinerPipeline(FakeReader()).map_async(
+        mdr.inference.generate(
+            fn=lambda row, generate: row,
+            provider=mdr.inference.VLLMProvider(
+                model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+                model_max_context=8192,
+            ),
+        )
+    )
+
+    stage = compile_pipeline_plan(pipeline)["stages"][0]
+
+    assert stage["services"] == [
+        {
+            "name": stage["services"][0]["name"],
+            "kind": "llm",
+            "config": {
+                "model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
+                "model_max_context": 8192,
+            },
+        }
+    ]
 
 
 def test_compile_pipeline_plan_includes_lerobot_writer_steps() -> None:

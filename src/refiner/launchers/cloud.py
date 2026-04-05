@@ -164,7 +164,7 @@ class CloudLauncher(BaseLauncher):
                         cpus_per_worker=self.cpus_per_worker,
                         mem_mb_per_worker=self.mem_mb_per_worker,
                     ),
-                    services=[service.to_dict() for service in stage.services],
+                    services=stage.services,
                 )
                 for stage in stages
             ],

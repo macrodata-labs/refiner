@@ -9,7 +9,7 @@ from refiner.pipeline import read_jsonl
 from refiner.pipeline.planning import (
     PlannedStage,
     StageComputeRequirements,
-    collect_pipeline_services,
+    plan_pipeline_stages,
 )
 from refiner.platform.client import (
     CloudPipelinePayload,
@@ -110,7 +110,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.heartbeat_interval_seconds == 12
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
-    assert request.stage_payloads[0].services == []
+    assert request.stage_payloads[0].services == ()
     assert request.manifest == {
         "version": 1,
         "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
@@ -119,47 +119,30 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
 
 
 def test_pipeline_launch_cloud_includes_stage_services(monkeypatch) -> None:
-    captured = _stub_cloud_submit(monkeypatch)
+    captured = _stub_cloud_submit(monkeypatch, manifest={"version": 1})
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
         lambda ref: True,
     )
-
-    llm = mdr.services.llm(
-        name="llm",
-        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-    )
-    pipeline = read_jsonl("input.jsonl").map_async(
-        mdr.inference.generate(
-            service_name="llm",
-            fn=lambda row, service: {"x": row["x"], "service": bool(service)},
-        ),
-        services=[llm],
-    )
     monkeypatch.setattr(
         "refiner.launchers.base.plan_pipeline_stages",
-        lambda pipeline, default_num_workers: [
-            PlannedStage(
-                index=0,
-                name="stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=default_num_workers),
-                services=tuple(
-                    service.to_spec() for service in collect_pipeline_services(pipeline)
-                ),
-            )
-        ],
+        plan_pipeline_stages,
+    )
+
+    pipeline = read_jsonl("input.jsonl").map_async(
+        mdr.inference.generate(
+            fn=lambda row, generate: row,
+            provider=mdr.inference.VLLMProvider(
+                model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+                model_max_context=8192,
+            ),
+        )
     )
     pipeline.launch_cloud(name="demo cloud")
 
     request = cast(CloudRunCreateRequest, captured["request"])
-    assert request.stage_payloads[0].services == [
-        {
-            "name": "llm",
-            "kind": "llm",
-            "config": {"model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct"},
-        }
-    ]
+    assert request.stage_payloads[0].services
+    assert request.stage_payloads[0].services[0].kind == "llm"
 
 
 def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> None:

@@ -1,23 +1,22 @@
 ---
 title: "Inference"
-description: "Run row-oriented async inference with managed or direct LLM services"
+description: "Run row-oriented async inference against an OpenAI-compatible endpoint"
 ---
 
-Refiner inference is a row-oriented wrapper around `.map_async(...)` that works with service definitions.
+Refiner inference is a row-oriented wrapper around `.map_async(...)` for direct HTTP generation.
 
-The service-backed API is:
+The API is:
 
 ```python
 import refiner as mdr
 
-llm = mdr.services.llm(
-    name="llm",
-    model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-    model_max_context=8192,
+endpoint = mdr.inference.OpenAIEndpointProvider(
+    base_url="https://api.openai.com",
+    api_key="YOUR_API_KEY",
 )
 
-async def summarize(row, llm):
-    response = await llm.generate(
+async def summarize(row, generate):
+    response = await generate(
         {
             "messages": [
                 {"role": "system", "content": "Summarize the input briefly."},
@@ -30,12 +29,12 @@ async def summarize(row, llm):
 
 pipeline = mdr.read_jsonl("input.jsonl").map_async(
     mdr.inference.generate(
-        service_name="llm",
         fn=summarize,
+        provider=endpoint,
         default_generation_params={"temperature": 0.1, "max_tokens": 256},
-        max_in_flight=64,
+        max_concurrent_requests=64,
     ),
-    services=[llm],
+    max_in_flight=64,
 )
 ```
 
@@ -45,69 +44,36 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 
 `mdr.inference.generate(...)` accepts:
 
-- `service_name`: the name of the service that your inference function should use
-- `fn`: async or sync user function with signature `fn(row, service) -> dict[str, object] | Row`
+- `fn`: async or sync user function with signature `fn(row, generate) -> dict[str, object] | Row`
+- `provider`: an `OpenAIEndpointProvider`
 - `default_generation_params`: default request payload fields merged into each generation call
-- `max_in_flight`: total in-flight HTTP generation requests across all rows
-- `max_concurrent_rows`: optional row-level concurrency cap; defaults to `max_in_flight`
+- `max_concurrent_requests`: total in-flight HTTP generation requests across all rows
 
-Declare the actual service definitions on `.map_async(..., services=[...])`.
+`.map_async(...)` still controls async row execution:
 
-The `service` object passed into your function implements `generate(...)` and returns an `InferenceResponse` with:
+- `max_in_flight`: maximum number of rows processed concurrently
+- `preserve_order`: whether results are emitted in input order
+
+The `generate` callback passed into your function returns an `InferenceResponse` with:
 
 - `text`
 - `finish_reason`
 - `usage`
 - `response`
 
-## Services
+## Provider
 
-Managed service:
-
-```python
-llm = mdr.services.llm(
-    name="llm",
-    model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-    model_max_context=8192,
-)
-```
-
-This is a managed service definition. Refiner does not start the runtime itself. The executor must provide a resolved runtime binding for it at worker startup.
-
-Direct endpoint service:
+Use `OpenAIEndpointProvider` to describe the target endpoint:
 
 ```python
-import refiner as mdr
-
-llm = mdr.services.llm_endpoint(
-    name="llm",
+endpoint = mdr.inference.OpenAIEndpointProvider(
     base_url="https://api.openai.com",
-    api_key_env="OPENAI_API_KEY",
+    api_key="YOUR_API_KEY",
 )
 ```
 
-This is the direct “normal requests” path. It builds its client from the service definition alone and does not require executor-provided bindings.
-
-## Bindings
-
-Managed services are resolved through a bindings file passed to the worker entrypoint. The executor writes JSON like:
-
-```json
-{
-  "services": [
-    {
-      "name": "llm",
-      "kind": "llm",
-      "endpoint": "http://127.0.0.1:9000/v1",
-      "headers": {"Authorization": "Bearer ..."},
-      "metadata": {}
-    }
-  ]
-}
-```
-
-If a managed service such as `llm` is used without a matching binding, Refiner raises an explicit error during client construction.
+Refiner treats this as a direct OpenAI-compatible HTTP endpoint. It does not start or manage a model runtime itself.
 
 ## Internal Notes
 
-Planning hoists unique service definitions onto each stage. Worker startup loads optional service bindings from `--service-bindings-path`, builds service clients, and exposes them through worker context. The inference helper only merges default request parameters and enforces request and row concurrency.
+The inference helper builds a simple OpenAI-compatible HTTP client, merges default request parameters, and enforces request concurrency with a semaphore. It does not use service specs, runtime bindings, or worker-side service registries.

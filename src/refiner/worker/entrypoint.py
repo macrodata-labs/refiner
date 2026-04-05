@@ -3,25 +3,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 
 import cloudpickle
 from loguru import logger
 
 from refiner.platform.client.http import MacrodataApiError
 from refiner.platform.client.api import MacrodataClient
-from refiner.services import RuntimeServiceBinding, parse_runtime_service_bindings
+from refiner.services import parse_runtime_service_bindings
 from refiner.worker.context import RunHandle
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
 from refiner.worker.runner import Worker
 
 
-def _load_service_bindings(
-    service_bindings_path: str | None,
-) -> tuple[RuntimeServiceBinding, ...]:
-    if service_bindings_path is None or not service_bindings_path.strip():
+def _load_service_bindings(path: str | None):
+    if path is None:
         return ()
-    payload = json.loads(Path(service_bindings_path).read_text(encoding="utf-8"))
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
     if not isinstance(payload, dict):
         raise ValueError("service bindings payload must be a JSON object")
     return parse_runtime_service_bindings(payload)
@@ -52,13 +50,13 @@ def main() -> int:
 
         with open(args.pipeline_payload, "rb") as f:
             pipeline = cloudpickle.load(f)
+        service_bindings = _load_service_bindings(args.service_bindings_path)
 
         run_handle = RunHandle(
             job_id=args.job_id,
             stage_index=args.stage_index,
             worker_name=args.worker_name,
         )
-        service_bindings = _load_service_bindings(args.service_bindings_path)
 
         if args.runtime_backend != "file":
             try:

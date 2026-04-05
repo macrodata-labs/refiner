@@ -27,7 +27,10 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
 from refiner.platform.client.models import FinalizedShardWorker
-import refiner.services.base as services_base_module
+from refiner.services import RuntimeServiceBinding
+import importlib
+
+openai_module = importlib.import_module("refiner.inference.openai")
 
 
 class _FakeReader(BaseReader):
@@ -647,7 +650,7 @@ def test_worker_suppresses_sink_close_errors_after_execution_failure() -> None:
     assert runtime_lifecycle.failed_errors == ["kaboom"]
 
 
-def test_worker_executes_service_backed_inference(monkeypatch) -> None:
+def test_worker_executes_endpoint_backed_inference(monkeypatch) -> None:
     shard = _shard("svc", 0, 1)
     runtime_lifecycle = _FakeRuntimeLifecycle([shard])
     rows_by_shard = {shard.id: [DictRow({"prompt": "hi"})]}
@@ -655,7 +658,7 @@ def test_worker_executes_service_backed_inference(monkeypatch) -> None:
 
     async def _fake_generate(self, payload):
         seen["payload"] = dict(payload)
-        return services_base_module.InferenceResponse(
+        return mdr.inference.InferenceResponse(
             text="hello",
             finish_reason="stop",
             usage={},
@@ -663,37 +666,98 @@ def test_worker_executes_service_backed_inference(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(
-        services_base_module._OpenAICompatibleGenerationService,
+        openai_module._OpenAIEndpointClient,
         "generate",
         _fake_generate,
     )
 
-    async def _infer(row: Row, service) -> dict[str, object]:
-        response = await service.generate(
+    async def _infer(row: Row, generate) -> dict[str, object]:
+        response = await generate(
             {"messages": [{"role": "user", "content": row["prompt"]}]}
         )
         return {"output": response.text}
 
-    llm = mdr.services.llm(
-        name="llm",
+    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map_async(
+        mdr.inference.generate(
+            fn=_infer,
+            provider=mdr.inference.OpenAIEndpointProvider(
+                base_url="https://api.example.com"
+            ),
+            default_generation_params={"temperature": 0.1},
+            max_concurrent_requests=16,
+        )
+    )
+    worker = Worker(
+        pipeline=pipeline,
+        run_handle=_local_run(),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_start_local_session",
+        lambda: (runtime_lifecycle, worker.run_handle.with_worker(worker_id="local")),
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert seen["payload"] == {
+        "temperature": 0.1,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+
+def test_worker_executes_vllm_backed_inference_with_service_bindings(
+    monkeypatch,
+) -> None:
+    shard = _shard("svc-vllm", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"prompt": "hi"})]}
+    seen: dict[str, object] = {}
+
+    async def _fake_generate(self, payload):
+        seen["payload"] = dict(payload)
+        seen["base_url"] = self.base_url
+        seen["headers"] = dict(self.headers or {})
+        return mdr.inference.InferenceResponse(
+            text="hello",
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(
+        openai_module._OpenAIEndpointClient,
+        "generate",
+        _fake_generate,
+    )
+
+    async def _infer(row: Row, generate) -> dict[str, object]:
+        response = await generate(
+            {"messages": [{"role": "user", "content": row["prompt"]}]}
+        )
+        return {"output": response.text}
+
+    provider = mdr.inference.VLLMProvider(
         model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        model_max_context=8192,
     )
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map_async(
         mdr.inference.generate(
-            service_name="llm",
             fn=_infer,
+            provider=provider,
             default_generation_params={"temperature": 0.1},
-        ),
-        services=[llm],
+            max_concurrent_requests=16,
+        )
     )
     worker = Worker(
         pipeline=pipeline,
         run_handle=_local_run(),
         service_bindings=(
-            __import__("refiner").services.RuntimeServiceBinding(
-                name="llm",
+            RuntimeServiceBinding(
+                name=provider.service_spec().name,
                 kind="llm",
-                endpoint="http://127.0.0.1:9000/v1",
+                endpoint="http://127.0.0.1:9000",
+                headers={"Authorization": "Bearer token"},
             ),
         ),
     )
@@ -710,6 +774,8 @@ def test_worker_executes_service_backed_inference(monkeypatch) -> None:
         "temperature": 0.1,
         "messages": [{"role": "user", "content": "hi"}],
     }
+    assert seen["base_url"] == "http://127.0.0.1:9000"
+    assert seen["headers"] == {"Authorization": "Bearer token"}
 
 
 def test_worker_suppresses_sink_close_errors_after_run_failure() -> None:

@@ -10,9 +10,8 @@ from loguru import logger
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
-from refiner.pipeline.planning import collect_pipeline_services
 from refiner.pipeline.sinks import NullSink
-from refiner.services import RuntimeServiceBinding, ServiceRegistry
+from refiner.services import RuntimeServiceBinding
 from refiner.worker.context import RunHandle
 from refiner.worker.context import set_active_run_context, set_active_step_index
 from refiner.worker.lifecycle import (
@@ -100,7 +99,6 @@ class Worker:
         execution_error: Exception | None = None
         heartbeat_error: Exception | None = None
 
-        # Runtime services.
         user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
         obs_logger = logger.bind(worker_name=self.run_handle.worker_name)
         stop_heartbeat = threading.Event()
@@ -131,10 +129,6 @@ class Worker:
             # local mode
             runtime_lifecycle, self.run_handle = self._start_local_session()
         runtime_name = "platform" if self.run_handle.client is not None else "file"
-        service_registry = ServiceRegistry.from_definitions(
-            definitions=collect_pipeline_services(self.pipeline),
-            bindings=self.service_bindings,
-        )
         obs_logger.info(
             "worker started job_id={} stage_index={} worker_id={} runtime={}",
             self.run_handle.job_id,
@@ -280,7 +274,9 @@ class Worker:
             set_active_run_context(
                 run_handle=self.run_handle,
                 runtime_lifecycle=runtime_lifecycle,
-                service_registry=service_registry,
+                service_bindings={
+                    binding.name: binding for binding in self.service_bindings
+                },
             ),
         ):
             run_exception: Exception | None = None

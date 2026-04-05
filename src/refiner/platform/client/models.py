@@ -6,6 +6,7 @@ from typing import Any
 import msgspec
 
 from refiner.pipeline.data.shard import Shard
+from refiner.services import RuntimeServiceSpec
 
 
 class WorkspaceIdentity(msgspec.Struct, frozen=True):
@@ -149,16 +150,15 @@ class StagePayload:
     stage_index: int
     pipeline_payload: CloudPipelinePayload
     runtime: CloudRuntimeConfig
-    services: list[dict[str, Any]] | None = None
+    services: tuple[RuntimeServiceSpec, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "stage_index": self.stage_index,
             "pipeline_payload": self.pipeline_payload.to_dict(),
             "runtime": self.runtime.to_dict(),
+            "services": [service.to_dict() for service in self.services],
         }
-        if self.services:
-            payload["services"] = self.services
         return payload
 
 

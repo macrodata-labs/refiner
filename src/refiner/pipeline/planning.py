@@ -7,14 +7,12 @@ from dataclasses import dataclass
 from types import CodeType
 from typing import TYPE_CHECKING, Any
 
+from refiner.pipeline.builtins import REFINER_BUILTIN_CALL_ATTR
 from refiner.platform.manifest import _redact_captured_text
-from refiner.services import RuntimeServiceDefinition, RuntimeServiceSpec
+from refiner.services import RuntimeServiceSpec
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
-
-
-_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,7 +280,7 @@ def _callable_source(fn: Any) -> str:
 
 
 def _builtin_description(fn: Any) -> dict[str, Any] | None:
-    spec = getattr(fn, _REFINER_BUILTIN_CALL_ATTR, None)
+    spec = getattr(fn, REFINER_BUILTIN_CALL_ATTR, None)
     if not isinstance(spec, dict):
         return None
     name = spec.get("name")
@@ -291,15 +289,62 @@ def _builtin_description(fn: Any) -> dict[str, Any] | None:
     args = spec.get("args")
     if not isinstance(args, dict):
         return None
-    return {"name": name, "args": args}
+    services = spec.get("services", ())
+    if not isinstance(services, (list, tuple)):
+        return None
+    parsed_services: list[RuntimeServiceSpec] = []
+    for service in services:
+        if not isinstance(service, RuntimeServiceSpec):
+            return None
+        parsed_services.append(service)
+    return {"name": name, "args": args, "services": tuple(parsed_services)}
 
 
 def describe_builtin(name: str, **args: Any) -> Any:
     def _decorate(fn: Any) -> Any:
-        setattr(fn, _REFINER_BUILTIN_CALL_ATTR, {"name": name, "args": args})
+        setattr(
+            fn, REFINER_BUILTIN_CALL_ATTR, {"name": name, "args": args, "services": ()}
+        )
         return fn
 
     return _decorate
+
+
+def _collect_pipeline_services(
+    pipeline: "RefinerPipeline",
+) -> tuple[RuntimeServiceSpec, ...]:
+    services_by_key: dict[
+        tuple[str, str, tuple[tuple[str, Any], ...]], RuntimeServiceSpec
+    ] = {}
+    from refiner.pipeline.steps import (
+        FnAsyncRowStep,
+        FnBatchStep,
+        FnFlatMapStep,
+        FnRowStep,
+        FnTableStep,
+    )
+
+    for step in pipeline.pipeline_steps:
+        candidates: list[Any] = []
+        if isinstance(
+            step, FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep
+        ):
+            candidates.append(step.fn)
+        elif hasattr(step, "predicate"):
+            candidates.append(getattr(step, "predicate"))
+
+        for candidate in candidates:
+            builtin = _builtin_description(candidate)
+            if builtin is None:
+                continue
+            for service in builtin["services"]:
+                key = (
+                    service.name,
+                    service.kind,
+                    tuple(sorted((str(k), v) for k, v in service.config.items())),
+                )
+                services_by_key.setdefault(key, service)
+    return tuple(services_by_key.values())
 
 
 def _step_payload(
@@ -414,25 +459,6 @@ def _compile_stage_steps(
     return steps
 
 
-def collect_pipeline_services(
-    pipeline: "RefinerPipeline",
-) -> tuple[RuntimeServiceDefinition, ...]:
-    from refiner.pipeline.steps import FnAsyncRowStep
-
-    services_by_name: dict[str, RuntimeServiceDefinition] = {}
-    for step in pipeline.pipeline_steps:
-        if not isinstance(step, FnAsyncRowStep):
-            continue
-        for service in step.services:
-            previous = services_by_name.get(service.name)
-            if previous is not None and previous != service:
-                raise ValueError(
-                    f"duplicate service definition name {service.name!r} with mismatched configuration"
-                )
-            services_by_name[service.name] = service
-    return tuple(services_by_name.values())
-
-
 def plan_pipeline_stages(
     pipeline: "RefinerPipeline", *, default_num_workers: int
 ) -> list[PlannedStage]:
@@ -462,16 +488,13 @@ def plan_pipeline_stages(
                 name="write_lerobot_stage_1",
                 pipeline=pipeline,
                 compute=StageComputeRequirements(num_workers=default_num_workers),
-                services=tuple(
-                    service.to_spec() for service in collect_pipeline_services(pipeline)
-                ),
+                services=_collect_pipeline_services(pipeline),
             ),
             PlannedStage(
                 index=1,
                 name="write_lerobot_stage_2",
                 pipeline=reducer_stage,
                 compute=StageComputeRequirements(num_workers=1),
-                services=(),
             ),
         ]
 
@@ -481,9 +504,7 @@ def plan_pipeline_stages(
             name="stage_0",
             pipeline=pipeline,
             compute=StageComputeRequirements(num_workers=default_num_workers),
-            services=tuple(
-                service.to_spec() for service in collect_pipeline_services(pipeline)
-            ),
+            services=_collect_pipeline_services(pipeline),
         )
     ]
 
@@ -523,6 +544,5 @@ __all__ = [
     "StageComputeRequirements",
     "compile_pipeline_plan",
     "compile_planned_stages",
-    "collect_pipeline_services",
     "plan_pipeline_stages",
 ]
