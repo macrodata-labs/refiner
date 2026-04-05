@@ -17,7 +17,7 @@ from refiner.pipeline.steps import FnAsyncRowStep
 from refiner.services import VLLMRuntimeServiceBinding, VLLMServiceDefinition
 from refiner.worker.context import RunHandle, set_active_run_context
 
-openai_module = importlib.import_module("refiner.inference.openai")
+openai_module = importlib.import_module("refiner.inference.client")
 
 
 def test_openai_endpoint_requires_non_empty_base_url() -> None:

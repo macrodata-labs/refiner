@@ -330,8 +330,6 @@ def _collect_pipeline_services(
             step, FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep
         ):
             candidates.append(step.fn)
-        elif hasattr(step, "predicate"):
-            candidates.append(getattr(step, "predicate"))
 
         for candidate in candidates:
             builtin = _builtin_description(candidate)

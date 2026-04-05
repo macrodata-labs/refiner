@@ -30,7 +30,7 @@ from refiner.platform.client.models import FinalizedShardWorker
 from refiner.services import VLLMRuntimeServiceBinding
 import importlib
 
-openai_module = importlib.import_module("refiner.inference.openai")
+openai_module = importlib.import_module("refiner.inference.client")
 
 
 class _FakeReader(BaseReader):

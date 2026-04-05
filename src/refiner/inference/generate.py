@@ -5,7 +5,7 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeAlias, cast
 
-from refiner.inference.openai import InferenceResponse, _OpenAIEndpointClient
+from refiner.inference.client import InferenceResponse, _OpenAIEndpointClient
 from refiner.inference.providers import OpenAIEndpointProvider, VLLMProvider
 from refiner.pipeline.builtins import REFINER_BUILTIN_CALL_ATTR
 from refiner.pipeline.data.row import Row
