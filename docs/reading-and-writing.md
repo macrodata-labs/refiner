@@ -36,11 +36,22 @@ pipeline = mdr.read_parquet("s3://my-bucket/documents/*.parquet")
 
 ## Common Crawl text readers
 
+[Common Crawl](https://commoncrawl.org/) publishes large public web crawls.
+Refiner supports two Common Crawl text-oriented inputs:
+
+- `warc`
+  - the raw crawl archive files, one WARC record per fetched response or metadata object
+- `wet`
+  - the derived text-extraction files that Common Crawl publishes separately
+
+Use these readers when you want to process public web crawl data directly from a
+Common Crawl dump such as `CC-MAIN-2025-13`.
+
 Common Crawl readers live under the optional `refiner[text]` extra because they
 rely on `warcio`:
 
 ```bash
-uv add "refiner[text]"
+uv add "macrodata-refiner[text]"
 ```
 
 There are two distinct entrypoints:
