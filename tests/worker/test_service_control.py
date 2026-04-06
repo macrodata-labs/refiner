@@ -61,7 +61,7 @@ def test_request_runtime_service_bindings_posts_services_and_parses_response(
         ),
     )
     assert captured["url"] == "http://127.0.0.1:9123/services/start"
-    assert captured["timeout"] == 600.0
+    assert captured["timeout"] == 900.0
     assert captured["body"] == {
         "worker_id": "worker-0",
         "stage_id": "0",

@@ -153,7 +153,7 @@ def test_entrypoint_passes_preregistered_worker_id_to_worker(
     assert run_handle.worker_id == "worker-pre"
 
 
-def test_entrypoint_passes_service_control_url(monkeypatch, tmp_path) -> None:
+def test_entrypoint_passes_parent_provider_call_id(monkeypatch, tmp_path) -> None:
     payload_path = tmp_path / "pipeline.cloudpickle"
     payload_path.write_bytes(cloudpickle.dumps(object()))
     seen: dict[str, object] = {}
@@ -190,10 +190,12 @@ def test_entrypoint_passes_service_control_url(monkeypatch, tmp_path) -> None:
             "0",
             "--runtime-backend",
             "file",
-            "--service-control-url",
-            "http://127.0.0.1:9123",
+            "--parent-provider-call-id",
+            "ap-parent/fc-parent",
         ],
     )
 
     assert entrypoint.main() == 0
-    assert seen["service_control_url"] == "http://127.0.0.1:9123"
+    run_handle = seen["run_handle"]
+    assert isinstance(run_handle, entrypoint.RunHandle)
+    assert run_handle.parent_provider_call_id == "ap-parent/fc-parent"

@@ -40,11 +40,11 @@ def main() -> int:
     )
     parser.add_argument("--worker-name", type=str, default="worker")
     parser.add_argument("--worker-id", type=str, default="")
+    parser.add_argument("--parent-provider-call-id", type=str, default="")
     parser.add_argument("--heartbeat-interval-seconds", type=int, default=30)
     parser.add_argument("--workdir", type=str, default=None)
     parser.add_argument("--cpu-ids", type=str, default="")
     parser.add_argument("--service-bindings-path", type=str, default=None)
-    parser.add_argument("--service-control-url", type=str, default=None)
     parser.add_argument("--gpu-ids", type=str, default="")
     args = parser.parse_args()
 
@@ -71,6 +71,7 @@ def main() -> int:
             stage_index=args.stage_index,
             worker_name=args.worker_name,
             worker_id=args.worker_id.strip() or None,
+            parent_provider_call_id=args.parent_provider_call_id.strip() or None,
         )
 
         if args.runtime_backend != "file":
@@ -81,6 +82,8 @@ def main() -> int:
                     stage_index=args.stage_index,
                     worker_name=args.worker_name,
                     worker_id=args.worker_id.strip() or None,
+                    parent_provider_call_id=args.parent_provider_call_id.strip()
+                    or None,
                     client=client,
                 )
             except Exception as e:
@@ -98,7 +101,6 @@ def main() -> int:
             heartbeat_interval_seconds=args.heartbeat_interval_seconds,
             local_workdir=args.workdir,
             service_bindings=service_bindings,
-            service_control_url=(args.service_control_url or "").strip() or None,
         ).run()
         print(
             json.dumps(

@@ -17,7 +17,7 @@ def request_runtime_service_bindings(
     worker_id: str,
     stage_id: str,
     services: tuple[RuntimeServiceSpec, ...],
-    timeout_seconds: float = 600.0,
+    timeout_seconds: float = 900.0,
 ) -> tuple[RuntimeServiceBinding, ...]:
     if not worker_id.strip():
         raise ValueError("worker_id is required to start runtime services")

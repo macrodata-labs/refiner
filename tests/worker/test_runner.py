@@ -283,6 +283,7 @@ def test_platform_worker_start_reports_name_and_host() -> None:
             job_id="job-1",
             stage_index=0,
             worker_name="cloud-rank-0",
+            parent_provider_call_id="ap-parent/fc-parent",
             client=cast(Any, _RecordingClient()),
         ),
     )
@@ -293,6 +294,7 @@ def test_platform_worker_start_reports_name_and_host() -> None:
     assert run.worker_id == "worker-0"
     assert seen["worker_name"] == "cloud-rank-0"
     assert isinstance(seen["host"], str)
+    assert seen["parent_provider_call_id"] == "ap-parent/fc-parent"
 
 
 def test_platform_worker_uses_preregistered_worker_id_without_reporting_start() -> None:
@@ -330,11 +332,27 @@ def test_platform_worker_starts_runtime_services_after_registration(
         api_key = "md_test"
 
         def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
-            del kwargs
+            seen["report_worker_started"] = kwargs
             return WorkerStartedResponse(worker_id="worker-0")
 
+        def start_worker_services(self, **kwargs):
+            seen["start_worker_services"] = kwargs
+            return {
+                "services": [
+                    {
+                        "name": "vllm-test",
+                        "kind": "llm",
+                        "endpoint": "http://127.0.0.1:8000",
+                    }
+                ]
+            }
+
+        def stop_worker_services(self, **kwargs):
+            seen["stop_worker_services"] = kwargs
+            return OkResponse()
+
         def report_worker_finished(self, **kwargs):
-            del kwargs
+            seen["report_worker_finished"] = kwargs
 
     class _SingleShardLifecycle(_FakeRuntimeLifecycle):
         pass
@@ -349,19 +367,14 @@ def test_platform_worker_starts_runtime_services_after_registration(
         job_id="job-1",
         stage_index=0,
         worker_name="cloud-rank-0",
+        parent_provider_call_id="ap-parent/fc-parent",
         client=cast(Any, _RecordingClient()),
     )
-    worker.service_control_url = "http://127.0.0.1:9999"
     monkeypatch.setattr(
-        "refiner.worker.runner.request_runtime_service_bindings",
-        lambda **kwargs: (
-            seen.update(kwargs),
-            (
-                VLLMRuntimeServiceBinding(
-                    name="vllm-test", kind="llm", endpoint="http://127.0.0.1:8000"
-                ),
-            ),
-        )[1],
+        "refiner.worker.runner._collect_pipeline_services",
+        lambda pipeline: [
+            {"name": "vllm-test", "kind": "llm", "config": {"model": "foo"}}
+        ],
     )
     monkeypatch.setattr(
         "refiner.worker.runner.OtelTelemetryEmitter",
@@ -379,10 +392,12 @@ def test_platform_worker_starts_runtime_services_after_registration(
     stats = worker.run()
 
     assert stats.completed == 1
-    assert seen["worker_id"] == "worker-0"
-    assert seen["stage_id"] == "0"
-    assert seen["control_url"] == "http://127.0.0.1:9999"
-    assert seen["services"] == ()
+    assert seen["start_worker_services"]["worker_id"] == "worker-0"
+    assert seen["start_worker_services"]["services"] == [
+        {"name": "vllm-test", "kind": "llm", "config": {"model": "foo"}}
+    ]
+    assert seen["stop_worker_services"]["worker_id"] == "worker-0"
+    assert seen["report_worker_finished"]["status"] == "completed"
 
 
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:

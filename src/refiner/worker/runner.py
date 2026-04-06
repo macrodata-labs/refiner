@@ -26,7 +26,7 @@ from refiner.worker.metrics.context import (
     set_active_user_metrics_emitter,
 )
 from refiner.worker.metrics.otel import OtelTelemetryEmitter
-from refiner.worker.service_control import request_runtime_service_bindings
+from refiner.services import parse_runtime_service_bindings
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,14 +46,12 @@ class Worker:
         heartbeat_interval_seconds: int = 30,
         local_workdir: str | None = None,
         service_bindings: tuple[RuntimeServiceBinding, ...] = (),
-        service_control_url: str | None = None,
     ):
         self.pipeline = pipeline
         self.run_handle = run_handle
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.local_workdir = local_workdir
         self.service_bindings = service_bindings
-        self.service_control_url = service_control_url
         if self.heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be > 0")
 
@@ -71,6 +69,7 @@ class Worker:
         started_resp = self.run_handle.client.report_worker_started(
             job_id=self.run_handle.job_id,
             stage_index=self.run_handle.stage_index,
+            parent_provider_call_id=self.run_handle.parent_provider_call_id,
             host=host,
             worker_name=self.run_handle.worker_name,
         )
@@ -146,16 +145,25 @@ class Worker:
         )
         sink = self.pipeline.sink or NullSink()
         active_service_bindings = self.service_bindings
-        if self.service_control_url:
+        requested_services = _collect_pipeline_services(self.pipeline)
+        started_runtime_services = False
+        if requested_services and not active_service_bindings:
             if self.run_handle.client is None:
                 raise ValueError("runtime services require a platform runtime")
-            active_service_bindings = request_runtime_service_bindings(
-                control_url=self.service_control_url,
-                worker_id=self.run_handle.worker_id or "",
-                stage_id=str(self.run_handle.stage_index),
-                services=_collect_pipeline_services(self.pipeline),
+            service_specs = [
+                service.to_dict() if hasattr(service, "to_dict") else service
+                for service in requested_services
+            ]
+            active_service_bindings = parse_runtime_service_bindings(
+                self.run_handle.client.start_worker_services(
+                    job_id=self.run_handle.job_id,
+                    stage_index=self.run_handle.stage_index,
+                    worker_id=self.run_handle.worker_id or "",
+                    services=service_specs,
+                )
             )
             self.service_bindings = active_service_bindings
+            started_runtime_services = True
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
@@ -381,6 +389,20 @@ class Worker:
                         raise
 
                 if self.run_handle.client is not None:
+                    if started_runtime_services:
+                        try:
+                            self.run_handle.client.stop_worker_services(
+                                job_id=self.run_handle.job_id,
+                                stage_index=self.run_handle.stage_index,
+                                worker_id=self.run_handle.worker_id or "",
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            obs_logger.warning(
+                                "runtime service shutdown failed: {}: {}",
+                                type(e).__name__,
+                                e,
+                            )
+
                     current_error = execution_error or run_exception
                     status = "failed" if current_error is not None else "completed"
                     error = None

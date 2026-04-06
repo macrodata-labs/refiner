@@ -21,6 +21,7 @@ class RunHandle:
     workspace_slug: str | None = None
     worker_name: str | None = None
     worker_id: str | None = None
+    parent_provider_call_id: str | None = None
 
     @staticmethod
     def worker_token_for(worker_id: str) -> str:
@@ -45,6 +46,7 @@ class RunHandle:
             workspace_slug=self.workspace_slug,
             worker_name=worker_name if worker_name is not None else self.worker_name,
             worker_id=worker_id if worker_id is not None else self.worker_id,
+            parent_provider_call_id=self.parent_provider_call_id,
         )
 
     def with_stage(self, stage_index: int) -> RunHandle:
@@ -55,6 +57,7 @@ class RunHandle:
             workspace_slug=self.workspace_slug,
             worker_name=self.worker_name,
             worker_id=self.worker_id,
+            parent_provider_call_id=self.parent_provider_call_id,
         )
 
 

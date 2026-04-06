@@ -103,12 +103,15 @@ class MacrodataClient:
         job_id: str,
         stage_index: int,
         worker_id: str | None = None,
+        parent_provider_call_id: str | None = None,
         host: str | None = None,
         worker_name: str | None = None,
     ) -> WorkerStartedResponse:
         request_body: dict[str, Any] = {}
         if worker_id:
             request_body["worker_id"] = worker_id
+        if parent_provider_call_id:
+            request_body["parent_provider_call_id"] = parent_provider_call_id
         if host:
             request_body["host"] = host
         if worker_name:
@@ -123,6 +126,43 @@ class MacrodataClient:
             timeout_s=60.0,
         )
         return parse_json_response(response_data, WorkerStartedResponse)
+
+    def start_worker_services(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+        worker_id: str,
+        services: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        response_data = request_json(
+            method="POST",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/services/start",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload={"services": services},
+            timeout_s=900.0,
+        )
+        if not isinstance(response_data, dict):
+            raise ValueError("runtime services response must be a JSON object")
+        return response_data
+
+    def stop_worker_services(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+        worker_id: str,
+    ) -> OkResponse:
+        response_data = request_json(
+            method="POST",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/services/stop",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload={},
+            timeout_s=60.0,
+        )
+        return parse_json_response(response_data, OkResponse)
 
     def report_worker_finished(
         self,
