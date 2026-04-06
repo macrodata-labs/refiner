@@ -8,6 +8,7 @@ from uuid import uuid4
 from loguru import logger
 
 from refiner.execution.engine import block_num_rows
+from refiner.pipeline.planning import _collect_pipeline_services
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
@@ -151,6 +152,8 @@ class Worker:
             active_service_bindings = request_runtime_service_bindings(
                 control_url=self.service_control_url,
                 worker_id=self.run_handle.worker_id or "",
+                stage_id=str(self.run_handle.stage_index),
+                services=_collect_pipeline_services(self.pipeline),
             )
             self.service_bindings = active_service_bindings
         sink_step_index = (

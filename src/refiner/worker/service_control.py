@@ -4,20 +4,30 @@ import json
 import urllib.error
 import urllib.request
 
-from refiner.services import RuntimeServiceBinding, parse_runtime_service_bindings
+from refiner.services import (
+    RuntimeServiceBinding,
+    RuntimeServiceSpec,
+    parse_runtime_service_bindings,
+)
 
 
 def request_runtime_service_bindings(
     *,
     control_url: str,
     worker_id: str,
+    stage_id: str,
+    services: tuple[RuntimeServiceSpec, ...],
     timeout_seconds: float = 600.0,
 ) -> tuple[RuntimeServiceBinding, ...]:
     if not worker_id.strip():
         raise ValueError("worker_id is required to start runtime services")
+    if not stage_id.strip():
+        raise ValueError("stage_id is required to start runtime services")
     request_body = json.dumps(
         {
             "worker_id": worker_id,
+            "stage_id": stage_id,
+            "services": [service.to_dict() for service in services],
         },
         sort_keys=True,
     ).encode("utf-8")

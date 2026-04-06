@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 
-from refiner.services import VLLMRuntimeServiceBinding
+from refiner.services import RuntimeServiceSpec, VLLMRuntimeServiceBinding
 from refiner.worker.service_control import request_runtime_service_bindings
 
 
@@ -43,6 +43,14 @@ def test_request_runtime_service_bindings_posts_services_and_parses_response(
     bindings = request_runtime_service_bindings(
         control_url="http://127.0.0.1:9123",
         worker_id="worker-0",
+        stage_id="0",
+        services=(
+            RuntimeServiceSpec(
+                name="vllm-test",
+                kind="llm",
+                config={"model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct"},
+            ),
+        ),
     )
 
     assert bindings == (
@@ -56,4 +64,12 @@ def test_request_runtime_service_bindings_posts_services_and_parses_response(
     assert captured["timeout"] == 600.0
     assert captured["body"] == {
         "worker_id": "worker-0",
+        "stage_id": "0",
+        "services": [
+            {
+                "name": "vllm-test",
+                "kind": "llm",
+                "config": {"model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct"},
+            }
+        ],
     }

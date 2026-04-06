@@ -380,7 +380,9 @@ def test_platform_worker_starts_runtime_services_after_registration(
 
     assert stats.completed == 1
     assert seen["worker_id"] == "worker-0"
+    assert seen["stage_id"] == "0"
     assert seen["control_url"] == "http://127.0.0.1:9999"
+    assert seen["services"] == ()
 
 
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
