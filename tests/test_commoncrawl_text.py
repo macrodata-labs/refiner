@@ -178,6 +178,27 @@ def test_read_commoncrawl_warc_uses_file_backed_reader(tmp_path: Path) -> None:
     assert all(row["warc_path"] == str(warc_path) for row in rows)
 
 
+def test_read_commoncrawl_num_files_limits_file_backed_inputs(tmp_path: Path) -> None:
+    dump = "CC-MAIN-TEST"
+    first_rel = f"crawl-data/{dump}/segments/00000/warc/first.warc.gz"
+    second_rel = f"crawl-data/{dump}/segments/00000/warc/second.warc.gz"
+    first_path = tmp_path / first_rel
+    second_path = tmp_path / second_rel
+    _write_warc_gz(first_path)
+    _write_warc_gz(second_path)
+
+    pipeline = mdr.text.read_commoncrawl(
+        dump,
+        num_files=1,
+        base_url=tmp_path.as_uri(),
+        use_https=True,
+    )
+    rows = [row.to_dict() for row in pipeline.take(10)]
+
+    assert len(rows) == 2
+    assert {row["warc_path"] for row in rows} == {str(first_path)}
+
+
 def test_read_commoncrawl_warc_supports_parallel_fetch(tmp_path: Path) -> None:
     dump = "CC-MAIN-TEST"
     warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"

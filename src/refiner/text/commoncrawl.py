@@ -99,6 +99,7 @@ def read_commoncrawl(
     segments: str | Sequence[str] | None = None,
     base_url: str | None = None,
     use_https: bool = False,
+    num_files: int | None = None,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
     file_path_column: object = _DEFAULT_FILE_PATH_COLUMN,
@@ -118,6 +119,7 @@ def read_commoncrawl(
         segments: Optional segment ids used to narrow the file globs.
         base_url: Optional Common Crawl root override.
         use_https: If True, default to the HTTPS mirror instead of `s3://commoncrawl`.
+        num_files: Optional cap on the number of resolved WARC/WET files to include.
         target_shard_bytes: Approximate shard size used for file-backed shard planning.
         num_shards: Optional explicit number of planned shards.
         file_path_column: Output column name for the absolute source file path, or `None`.
@@ -129,6 +131,7 @@ def read_commoncrawl(
         output_fields=output_fields,
         base_url=base_url,
         use_https=use_https,
+        num_files=num_files,
         target_shard_bytes=target_shard_bytes,
         num_shards=num_shards,
         file_path_column=file_path_column,
@@ -202,6 +205,7 @@ class CommonCrawlReader(BaseReader):
         output_fields: Literal["all"] | Sequence[str] = _DEFAULT_WARC_OUTPUT_FIELDS,
         base_url: str | None = None,
         use_https: bool = False,
+        num_files: int | None = None,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
         file_path_column: object = _DEFAULT_FILE_PATH_COLUMN,
@@ -234,6 +238,10 @@ class CommonCrawlReader(BaseReader):
         )
         self._archive_iterator = ArchiveIterator
         self.root = DataFolder.resolve(self.base_url)
+        self.num_files = None if num_files is None else int(num_files)
+        self._num_files_applied = False
+        if self.num_files is not None and self.num_files <= 0:
+            raise ValueError("num_files must be positive")
         if file_path_column is _DEFAULT_FILE_PATH_COLUMN:
             resolved_file_path_column: str | None = (
                 "warc_path" if self.format == "warc" else "wet_path"
@@ -250,6 +258,18 @@ class CommonCrawlReader(BaseReader):
             split_by_bytes=False,
         )
 
+    def list_shards(self) -> list[Shard]:
+        if self.num_files is not None and not getattr(
+            self, "_num_files_applied", False
+        ):
+            from refiner.io import DataFileSet
+
+            self.fileset = DataFileSet.resolve(
+                tuple(self.fileset.files[: self.num_files])
+            )
+            self._num_files_applied = True
+        return super().list_shards()
+
     def describe(self) -> dict[str, Any]:
         return {
             "dumps": list(self.dumps),
@@ -258,6 +278,7 @@ class CommonCrawlReader(BaseReader):
             "output_fields": (
                 "all" if self.output_fields == "all" else list(self.output_fields)
             ),
+            "num_files": self.num_files,
             "target_shard_bytes": self.target_shard_bytes,
             "num_shards": self.num_shards,
             "file_path_column": self.file_path_column,
