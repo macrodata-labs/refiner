@@ -316,12 +316,7 @@ class CommonCrawlReader(BaseReader):
                 raise ValueError("Common Crawl files are expected to be atomic")
             source = self.fileset.resolve_file(part.source_index, part.path)
             with source.open(mode="rb") as raw:
-                stream: io.BufferedIOBase
-                if source.path.lower().endswith(".gz"):
-                    stream = gzip.GzipFile(fileobj=raw)
-                else:
-                    stream = raw
-                for record in self._archive_iterator(stream):
+                for record in self._archive_iterator(raw):
                     payload = _warc_record_to_row(
                         record, output_fields=self.output_fields
                     )
