@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -27,6 +28,9 @@ from refiner.worker.metrics.context import (
 )
 from refiner.worker.metrics.otel import OtelTelemetryEmitter
 from refiner.services import parse_runtime_service_bindings
+
+RUNTIME_SERVICE_START_TIMEOUT_SECONDS = 15 * 60
+RUNTIME_SERVICE_POLL_INTERVAL_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +88,111 @@ class Worker:
             workdir=self.local_workdir,
         )
         return runtime_lifecycle, run
+
+    def _start_runtime_services(
+        self,
+        active_service_bindings: tuple[RuntimeServiceBinding, ...],
+    ) -> tuple[tuple[RuntimeServiceBinding, ...], bool]:
+        requested_services = _collect_pipeline_services(self.pipeline)
+        if not requested_services or active_service_bindings:
+            return active_service_bindings, False
+        if self.run_handle.client is None:
+            raise ValueError("runtime services require a platform runtime")
+        service_specs = [
+            service.to_dict() if hasattr(service, "to_dict") else service
+            for service in requested_services
+        ]
+        response = self.run_handle.client.start_worker_services(
+            job_id=self.run_handle.job_id,
+            stage_index=self.run_handle.stage_index,
+            worker_id=self.run_handle.worker_id or "",
+            services=service_specs,
+        )
+        if not isinstance(response.get("services"), list):
+            raise ValueError(
+                "runtime services start response must contain a services list"
+            )
+
+        service_names = {
+            str(service["name"]).strip()
+            for service in service_specs
+            if "name" in service
+        }
+        deadline = time.monotonic() + RUNTIME_SERVICE_START_TIMEOUT_SECONDS
+        while True:
+            listed_services = self.run_handle.client.get_worker_services(
+                job_id=self.run_handle.job_id,
+                stage_index=self.run_handle.stage_index,
+                worker_id=self.run_handle.worker_id or "",
+            )
+            services = listed_services.get("services")
+            if not isinstance(services, list):
+                raise ValueError(
+                    "runtime services status response must contain a services list"
+                )
+
+            ready_names: set[str] = set()
+            bindings_payload: list[dict[str, str]] = []
+            for item in services:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "")).strip()
+                status = str(item.get("status", "")).strip()
+                endpoint = str(item.get("endpoint", "")).strip()
+                if name not in service_names:
+                    continue
+                if status == "failed":
+                    error = str(item.get("error", "")).strip() or "UnknownError"
+                    raise RuntimeError(
+                        f"runtime service {name} failed to start: {error}"
+                    )
+                if status == "stopped":
+                    raise RuntimeError(
+                        f"runtime service {name} stopped before becoming ready"
+                    )
+                if status == "ready":
+                    if not endpoint:
+                        raise RuntimeError(
+                            f"runtime service {name} is ready but missing endpoint"
+                        )
+                    ready_names.add(name)
+                    bindings_payload.append(
+                        {
+                            "name": name,
+                            "kind": str(item.get("kind", "")).strip(),
+                            "endpoint": endpoint,
+                        }
+                    )
+            if ready_names == service_names:
+                started_bindings = parse_runtime_service_bindings(
+                    {"services": bindings_payload}
+                )
+                self.service_bindings = started_bindings
+                return started_bindings, True
+            if time.monotonic() >= deadline:
+                pending_names = sorted(service_names - ready_names)
+                raise RuntimeError(
+                    "runtime services did not become ready in time: "
+                    + ", ".join(pending_names)
+                )
+            time.sleep(RUNTIME_SERVICE_POLL_INTERVAL_SECONDS)
+
+    def _stop_runtime_services(self, obs_logger) -> None:
+        client = self.run_handle.client
+        if client is None:
+            return
+        try:
+            client.stop_worker_services(
+                job_id=self.run_handle.job_id,
+                stage_index=self.run_handle.stage_index,
+                worker_id=self.run_handle.worker_id or "",
+            )
+        except Exception as e:  # noqa: BLE001
+            obs_logger.warning(
+                "runtime service shutdown failed: {}: {}",
+                type(e).__name__,
+                e,
+            )
 
     def run(self) -> WorkerRunStats:
         # Source-claim state.
@@ -145,25 +254,9 @@ class Worker:
         )
         sink = self.pipeline.sink or NullSink()
         active_service_bindings = self.service_bindings
-        requested_services = _collect_pipeline_services(self.pipeline)
-        started_runtime_services = False
-        if requested_services and not active_service_bindings:
-            if self.run_handle.client is None:
-                raise ValueError("runtime services require a platform runtime")
-            service_specs = [
-                service.to_dict() if hasattr(service, "to_dict") else service
-                for service in requested_services
-            ]
-            active_service_bindings = parse_runtime_service_bindings(
-                self.run_handle.client.start_worker_services(
-                    job_id=self.run_handle.job_id,
-                    stage_index=self.run_handle.stage_index,
-                    worker_id=self.run_handle.worker_id or "",
-                    services=service_specs,
-                )
-            )
-            self.service_bindings = active_service_bindings
-            started_runtime_services = True
+        active_service_bindings, started_runtime_services = (
+            self._start_runtime_services(active_service_bindings)
+        )
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
@@ -390,18 +483,7 @@ class Worker:
 
                 if self.run_handle.client is not None:
                     if started_runtime_services:
-                        try:
-                            self.run_handle.client.stop_worker_services(
-                                job_id=self.run_handle.job_id,
-                                stage_index=self.run_handle.stage_index,
-                                worker_id=self.run_handle.worker_id or "",
-                            )
-                        except Exception as e:  # noqa: BLE001
-                            obs_logger.warning(
-                                "runtime service shutdown failed: {}: {}",
-                                type(e).__name__,
-                                e,
-                            )
+                        self._stop_runtime_services(obs_logger)
 
                     current_error = execution_error or run_exception
                     status = "failed" if current_error is not None else "completed"

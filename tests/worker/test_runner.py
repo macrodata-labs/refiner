@@ -343,6 +343,20 @@ def test_platform_worker_starts_runtime_services_after_registration(
                         "name": "vllm-test",
                         "kind": "llm",
                         "endpoint": "http://127.0.0.1:8000",
+                        "status": "starting",
+                    }
+                ]
+            }
+
+        def get_worker_services(self, **kwargs):
+            seen["get_worker_services"] = kwargs
+            return {
+                "services": [
+                    {
+                        "name": "vllm-test",
+                        "kind": "llm",
+                        "endpoint": "http://127.0.0.1:8000",
+                        "status": "ready",
                     }
                 ]
             }
@@ -393,6 +407,7 @@ def test_platform_worker_starts_runtime_services_after_registration(
 
     assert stats.completed == 1
     assert seen["start_worker_services"]["worker_id"] == "worker-0"
+    assert seen["get_worker_services"]["worker_id"] == "worker-0"
     assert seen["start_worker_services"]["services"] == [
         {"name": "vllm-test", "kind": "llm", "config": {"model": "foo"}}
     ]
