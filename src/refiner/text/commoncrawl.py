@@ -98,7 +98,7 @@ def read_commoncrawl(
     output_fields: Literal["all"] | Sequence[str] = _DEFAULT_WARC_OUTPUT_FIELDS,
     segments: str | Sequence[str] | None = None,
     base_url: str | None = None,
-    use_https: bool = False,
+    use_https: bool = True,
     num_files: int | None = None,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
@@ -149,7 +149,7 @@ def read_commoncrawl_from_index(
     filter_fn: Callable[[Row], bool] | None = None,
     output_fields: Literal["all"] | Sequence[str] = _DEFAULT_WARC_OUTPUT_FIELDS,
     base_url: str | None = None,
-    use_https: bool = False,
+    use_https: bool = True,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
     file_path_column: str | None = "warc_path",
@@ -210,13 +210,15 @@ class CommonCrawlReader(BaseReader):
         segments: str | Sequence[str] | None = None,
         output_fields: Literal["all"] | Sequence[str] = _DEFAULT_WARC_OUTPUT_FIELDS,
         base_url: str | None = None,
-        use_https: bool = False,
+        use_https: bool = True,
         num_files: int | None = None,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
         file_path_column: object = _DEFAULT_FILE_PATH_COLUMN,
     ) -> None:
         check_required_dependencies("read_commoncrawl", ["warcio"], dist="text")
+        if not use_https:
+            check_required_dependencies("read_commoncrawl", ["s3fs"], dist="s3")
         from warcio.archiveiterator import ArchiveIterator
 
         if format not in {"warc", "wet"}:
@@ -359,7 +361,7 @@ class CommonCrawlWarcIndexSource(BaseSource):
         filter_fn: Callable[[Row], bool] | None = None,
         output_fields: Literal["all"] | Sequence[str] = _DEFAULT_WARC_OUTPUT_FIELDS,
         base_url: str | None = None,
-        use_https: bool = False,
+        use_https: bool = True,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
         file_path_column: str | None = "warc_path",
@@ -368,6 +370,10 @@ class CommonCrawlWarcIndexSource(BaseSource):
         check_required_dependencies(
             "read_commoncrawl_from_index", ["warcio"], dist="text"
         )
+        if not use_https:
+            check_required_dependencies(
+                "read_commoncrawl_from_index", ["s3fs"], dist="s3"
+            )
         from warcio.archiveiterator import ArchiveIterator
 
         if isinstance(dumps, str):

@@ -115,6 +115,31 @@ def _write_wet_gz(path: Path) -> None:
         writer.write_record(record)
 
 
+def test_read_commoncrawl_defaults_to_https_transport() -> None:
+    source = mdr.text.read_commoncrawl("CC-MAIN-TEST").source
+    assert source.describe()["base_url"] == "https://data.commoncrawl.org"
+
+    index_source = mdr.text.read_commoncrawl_from_index("CC-MAIN-TEST").source
+    assert index_source.describe()["base_url"] == "https://data.commoncrawl.org"
+
+
+def test_read_commoncrawl_s3_transport_checks_s3fs(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[str, ...], str | None]] = []
+
+    def fake_check(name: str, deps: list[str], dist: str | None = None) -> None:
+        calls.append((name, tuple(deps), dist))
+
+    monkeypatch.setattr(
+        "refiner.text.commoncrawl.check_required_dependencies", fake_check
+    )
+
+    mdr.text.read_commoncrawl("CC-MAIN-TEST", use_https=False)
+    mdr.text.read_commoncrawl_from_index("CC-MAIN-TEST", use_https=False)
+
+    assert ("read_commoncrawl", ("s3fs",), "s3") in calls
+    assert ("read_commoncrawl_from_index", ("s3fs",), "s3") in calls
+
+
 def test_read_commoncrawl_warc_uses_file_backed_reader(tmp_path: Path) -> None:
     dump = "CC-MAIN-TEST"
     warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"

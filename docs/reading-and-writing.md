@@ -47,11 +47,16 @@ Refiner supports two Common Crawl text-oriented inputs:
 Use these readers when you want to process public web crawl data directly from a
 Common Crawl dump such as `CC-MAIN-2025-13`.
 
-Common Crawl readers live under the optional `refiner[text]` extra because they
-rely on `warcio`:
+Common Crawl readers live under the optional `macrodata-refiner[text]` extra because they
+rely on `warcio`. HTTPS is the default transport. If you want to read directly
+from `s3://commoncrawl`, install the separate `macrodata-refiner[s3]` extra.
 
 ```bash
 uv add "macrodata-refiner[text]"
+```
+
+```bash
+uv add "macrodata-refiner[s3]"
 ```
 
 There are two distinct entrypoints:
@@ -59,10 +64,12 @@ There are two distinct entrypoints:
 - `mdr.text.read_commoncrawl(...)`
   - direct file-backed reader over Common Crawl `warc` or `wet` files
   - shards over whole files
+  - uses the public HTTPS mirror by default
   - best for dense scans where you expect to read many records from the files you touch
 - `mdr.text.read_commoncrawl_from_index(...)`
   - WARC-only reader backed by Common Crawl's parquet index
   - supports `filter=...` and `filter_fn=...` on index rows before WARC fetches
+  - uses the public HTTPS mirror by default
   - best for sparse targeted retrieval where matching records are scattered across many WARC files
 
 Use the direct reader for sequential scans:
