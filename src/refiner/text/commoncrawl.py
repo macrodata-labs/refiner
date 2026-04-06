@@ -231,6 +231,8 @@ class CommonCrawlReader(BaseReader):
         self.segments = _normalize_segments(segments)
         if output_fields == "all":
             self.output_fields: Literal["all"] | tuple[str, ...] = "all"
+        elif isinstance(output_fields, str):
+            raise TypeError('output_fields must be a sequence of field names or "all"')
         else:
             self.output_fields = tuple(
                 str(field).strip() for field in output_fields if str(field).strip()
@@ -379,6 +381,8 @@ class CommonCrawlWarcIndexSource(BaseSource):
         self.filter_fn = filter_fn
         if output_fields == "all":
             self.output_fields: Literal["all"] | tuple[str, ...] = "all"
+        elif isinstance(output_fields, str):
+            raise TypeError('output_fields must be a sequence of field names or "all"')
         else:
             self.output_fields = tuple(
                 str(field).strip() for field in output_fields if str(field).strip()
@@ -540,12 +544,7 @@ class CommonCrawlWarcIndexSource(BaseSource):
             fh, _ = self._get_thread_file_handle(source, mode="rb", force_reopen=True)
             fh.seek(offset)
         member = fh.read(length)
-        stream: io.BufferedIOBase
-        if warc_filename.lower().endswith(".gz"):
-            stream = gzip.GzipFile(fileobj=io.BytesIO(member))
-        else:
-            stream = io.BytesIO(member)
-        iterator = self._archive_iterator(stream)
+        iterator = self._archive_iterator(io.BytesIO(member))
         return next(iterator)
 
     def _fetch_index_row_payload(self, row: Row) -> dict[str, Any] | None:
@@ -613,6 +612,9 @@ def _warc_record_to_row(
 
     for field in output_fields:
         if field in _SPECIAL_WARC_OUTPUT_FIELDS:
+            continue
+        if field == "Content-Type" and http_headers is not None:
+            payload[field] = http_headers.get_header(field)
             continue
         value = rec_headers.get_header(field)
         if value is None and field == "WARC-Type":

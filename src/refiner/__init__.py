@@ -1,6 +1,5 @@
 import refiner.io as io
 import refiner.pipeline as pipeline
-import refiner.robotics as robot
 import refiner.robotics as robotics
 import refiner.text as text
 import refiner.video as video
@@ -21,6 +20,8 @@ from refiner.worker.metrics.api import (
     log_throughput,
     register_gauge,
 )
+
+robot = robotics
 
 __all__ = [
     # sources

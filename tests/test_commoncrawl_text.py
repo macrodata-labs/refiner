@@ -280,6 +280,94 @@ def test_read_commoncrawl_can_return_binary_pdf_bytes(tmp_path: Path) -> None:
     assert rows[0]["warc_path"] == str(warc_path)
 
 
+def test_read_commoncrawl_rejects_string_output_fields(tmp_path: Path) -> None:
+    dump = "CC-MAIN-TEST"
+    for fn in (
+        lambda: mdr.text.read_commoncrawl(
+            dump,
+            output_fields="WARC-Target-URI",
+            base_url=tmp_path.as_uri(),
+            use_https=True,
+        ),
+        lambda: mdr.text.read_commoncrawl_from_index(
+            dump,
+            output_fields="WARC-Target-URI",
+            base_url=tmp_path.as_uri(),
+            use_https=True,
+        ),
+    ):
+        try:
+            fn()
+        except TypeError as exc:
+            assert (
+                str(exc) == 'output_fields must be a sequence of field names or "all"'
+            )
+        else:
+            raise AssertionError("expected TypeError for bare string output_fields")
+
+
+def test_read_commoncrawl_prefers_http_content_type(tmp_path: Path) -> None:
+    dump = "CC-MAIN-TEST"
+    warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"
+    warc_path = tmp_path / warc_rel
+    _write_warc_gz(warc_path)
+
+    row = (
+        mdr.text.read_commoncrawl(
+            dump,
+            output_fields=("Content-Type",),
+            base_url=tmp_path.as_uri(),
+            use_https=True,
+        )
+        .take(1)[0]
+        .to_dict()
+    )
+    assert row["Content-Type"] == "text/html; charset=utf-8"
+    assert row["warc_path"] == str(warc_path)
+
+
+def test_read_commoncrawl_from_index_prefers_http_content_type(tmp_path: Path) -> None:
+    dump = "CC-MAIN-TEST"
+    warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"
+    warc_path = tmp_path / warc_rel
+    offsets = _write_warc_gz(warc_path)
+
+    index_rel = (
+        f"cc-index/table/cc-main/warc/crawl={dump}/subset=warc/part-00000.parquet"
+    )
+    index_path = tmp_path / index_rel
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.table(
+            {
+                "url": ["https://example.com/a"],
+                "warc_filename": [warc_rel],
+                "warc_record_offset": [offsets[0][0]],
+                "warc_record_length": [offsets[0][1]],
+                "warc_segment": ["00000"],
+            }
+        ),
+        index_path,
+    )
+    _write_gzip_lines(
+        tmp_path / "crawl-data" / dump / "cc-index-table.paths.gz",
+        [index_rel],
+    )
+
+    row = (
+        mdr.text.read_commoncrawl_from_index(
+            dump,
+            output_fields=("Content-Type",),
+            base_url=tmp_path.as_uri(),
+            use_https=True,
+        )
+        .take(1)[0]
+        .to_dict()
+    )
+    assert row["Content-Type"] == "text/html; charset=utf-8"
+    assert row["warc_path"] == str(warc_path)
+
+
 def test_read_commoncrawl_can_return_all_original_fields(tmp_path: Path) -> None:
     dump = "CC-MAIN-TEST"
     warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"
