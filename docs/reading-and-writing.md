@@ -21,6 +21,8 @@ Built-in readers:
 | `read_jsonl(...)` | JSON Lines files | dict-like rows from each JSON object |
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
 | `read_lerobot(...)` | LeRobot robotics datasets | one row per episode, including frame/video metadata |
+| `text.read_commoncrawl(...)` | Common Crawl WARC or WET files | one row per WARC/WET record with selected WARC/HTTP fields |
+| `text.read_commoncrawl_from_index(...)` | Common Crawl WARC records via the parquet index | one row per fetched WARC record, planned from index rows |
 | `from_items(...)` | in-memory Python values | rows from mappings directly, or `{"item": value}` for primitives |
 | `from_source(...)` | a custom source object | whatever row shape your source emits |
 
@@ -31,6 +33,68 @@ import refiner as mdr
 
 pipeline = mdr.read_parquet("s3://my-bucket/documents/*.parquet")
 ```
+
+## Common Crawl text readers
+
+Common Crawl readers live under the optional `refiner[text]` extra because they
+rely on `warcio`:
+
+```bash
+uv add "refiner[text]"
+```
+
+There are two distinct entrypoints:
+
+- `mdr.text.read_commoncrawl(...)`
+  - direct file-backed reader over Common Crawl `warc` or `wet` files
+  - shards over whole files
+  - best for dense scans where you expect to read many records from the files you touch
+- `mdr.text.read_commoncrawl_from_index(...)`
+  - WARC-only reader backed by Common Crawl's parquet index
+  - supports `filter=...` and `filter_fn=...` on index rows before WARC fetches
+  - best for sparse targeted retrieval where matching records are scattered across many WARC files
+
+Use the direct reader for sequential scans:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.text.read_commoncrawl(
+    "CC-MAIN-2025-13",
+    format="warc",
+    output_fields=(
+        "WARC-Target-URI",
+        "Content-Type",
+        "content_bytes",
+    ),
+)
+```
+
+Use the index-backed reader when the hit rate is low and direct scans would waste
+work, for example when fetching only PDFs:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.text.read_commoncrawl_from_index(
+    "CC-MAIN-2025-13",
+    filter=mdr.text.commoncrawl.filter_pdf,
+    output_fields=(
+        "WARC-Target-URI",
+        "Content-Type",
+        "content_bytes",
+    ),
+)
+```
+
+`output_fields` accepts either an explicit field list or `"all"`.
+
+- Explicit fields use original WARC or HTTP header names, plus `content_bytes`
+- `"all"` includes all original WARC headers, all non-conflicting HTTP headers,
+  and `content_bytes`
+
+Common Crawl index metadata and column names are documented by Common Crawl at:
+<https://commoncrawl.org/columnar-index>
 
 ## Sharding
 
