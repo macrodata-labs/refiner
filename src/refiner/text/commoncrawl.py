@@ -38,7 +38,7 @@ _COMMONCRAWL_PDF_MIME_TYPES = (
     "application/pdf",
     "application/x-pdf",
     "application/acrobat",
-    "applications/vnd.pdf",
+    "application/vnd.pdf",
     "text/pdf",
 )
 _DEFAULT_WARC_OUTPUT_FIELDS = (
@@ -107,7 +107,9 @@ def read_commoncrawl(
     """Create a file-backed pipeline over Common Crawl WARC or WET data.
 
     Resolution stays lazy: dump ids are turned into concrete file globs only when
-    `list_shards()` is called.
+    `list_shards()` is called. This is the dense scan path: it shards over whole
+    WARC or WET files and is the better fit when you expect to read many records
+    from the files you touch.
 
     Args:
         dumps: One or more Common Crawl dump ids such as `CC-MAIN-2025-13`.
@@ -156,7 +158,11 @@ def read_commoncrawl_from_index(
     """Create a pipeline over Common Crawl WARC data via the parquet index.
 
     This path uses Common Crawl's columnar index parquet files to plan and filter
-    WARC record fetches directly.
+    WARC record fetches directly. It is meant for sparse targeted retrieval where
+    direct file scans would waste work and where matching records are likely to be
+    scattered across many WARC files. A typical case is PDF retrieval: the index
+    can identify the hits up front, while the direct file-backed reader would have
+    to scan through many non-PDF records sequentially.
 
     Args:
         dumps: One or more Common Crawl dump ids such as `CC-MAIN-2025-13`.
@@ -259,14 +265,29 @@ class CommonCrawlReader(BaseReader):
         )
 
     def list_shards(self) -> list[Shard]:
-        if self.num_files is not None and not getattr(
-            self, "_num_files_applied", False
-        ):
+        if self.num_files is not None and not self._num_files_applied:
             from refiner.io import DataFileSet
 
-            self.fileset = DataFileSet.resolve(
-                tuple(self.fileset.files[: self.num_files])
-            )
+            files: list[DataFile] = []
+            remaining = self.num_files
+            for entry in self.fileset.entries:
+                if remaining <= 0:
+                    break
+                if isinstance(entry, DataFile):
+                    files.append(entry)
+                    remaining -= 1
+                    continue
+                matched = entry.fs.glob(entry.path, detail=True)
+                for expanded_path, info in sorted(matched.items()):
+                    if remaining <= 0:
+                        break
+                    if not isinstance(expanded_path, str) or not isinstance(info, dict):
+                        continue
+                    if info.get("type") != "file":
+                        continue
+                    files.append(DataFile(fs=entry.fs, path=expanded_path))
+                    remaining -= 1
+            self.fileset = DataFileSet.resolve(tuple(files))
             self._num_files_applied = True
         return super().list_shards()
 
@@ -379,7 +400,9 @@ class CommonCrawlWarcIndexSource(BaseSource):
         self.target_shard_bytes = target_shard_bytes
         self.num_shards = num_shards
         self.file_path_column = file_path_column
-        self.max_inflight = max(1, int(max_inflight))
+        self.max_inflight = int(max_inflight)
+        if self.max_inflight <= 0:
+            raise ValueError("max_inflight must be positive")
         self._index_reader: ParquetReader | None = None
         self._thread_local = threading.local()
 
@@ -426,6 +449,7 @@ class CommonCrawlWarcIndexSource(BaseSource):
                 yield DictRow(payload)
 
     def _iter_index_rows(self, shard: Shard) -> Iterator[Row]:
+        filtered_rows = 0
         for unit in self._get_index_reader().read_shard(shard):
             if not isinstance(unit, Tabular):
                 raise TypeError(
@@ -433,20 +457,22 @@ class CommonCrawlWarcIndexSource(BaseSource):
                 )
             for row in unit.to_rows():
                 if self.filter_fn is not None and not self.filter_fn(row):
-                    log_throughput(
-                        "filter_fn_rows_filtered",
-                        1,
-                        shard_id=shard.id,
-                        unit="rows",
-                    )
-                    log_throughput(
-                        "total_rows_filtered",
-                        1,
-                        shard_id=shard.id,
-                        unit="rows",
-                    )
+                    filtered_rows += 1
                     continue
                 yield row
+        if filtered_rows:
+            log_throughput(
+                "filter_fn_rows_filtered",
+                filtered_rows,
+                shard_id=shard.id,
+                unit="rows",
+            )
+            log_throughput(
+                "total_rows_filtered",
+                filtered_rows,
+                shard_id=shard.id,
+                unit="rows",
+            )
 
     def _get_index_reader(self) -> ParquetReader:
         """Lazily build the parquet reader over Common Crawl index partitions."""

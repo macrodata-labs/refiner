@@ -64,77 +64,38 @@ def _write_warc_gz(path: Path) -> list[tuple[int, int]]:
 
 def _write_warc_gz_records(
     path: Path,
-    records: list[tuple[str, str]],
+    records: list[
+        tuple[str, str]
+        | tuple[str, bytes, list[tuple[str, str]], dict[str, str] | None]
+    ],
 ) -> list[tuple[int, int]]:
     path.parent.mkdir(parents=True, exist_ok=True)
     offsets: list[tuple[int, int]] = []
     with path.open("wb") as raw:
         writer = WARCWriter(raw, gzip=True)
-        for url, html in records:
+        for spec in records:
             start = raw.tell()
+            if len(spec) == 2 and isinstance(spec[1], str):
+                url, body = cast(tuple[str, str], spec)
+                payload = io.BytesIO(body.encode("utf-8"))
+                http_headers = [("Content-Type", "text/html; charset=utf-8")]
+                warc_headers_dict = None
+            else:
+                url, body, http_headers, warc_headers_dict = cast(
+                    tuple[str, bytes, list[tuple[str, str]], dict[str, str] | None],
+                    spec,
+                )
+                payload = io.BytesIO(body)
             record = writer.create_warc_record(
                 url,
                 "response",
-                payload=io.BytesIO(html.encode("utf-8")),
-                http_headers=StatusAndHeaders(
-                    "200 OK",
-                    [("Content-Type", "text/html; charset=utf-8")],
-                    protocol="HTTP/1.0",
-                ),
-            )
-            writer.write_record(record)
-            offsets.append((start, raw.tell() - start))
-    return offsets
-
-
-def _write_warc_gz_records_with_headers(
-    path: Path,
-    records: list[tuple[str, bytes, list[tuple[str, str]], dict[str, str] | None]],
-) -> list[tuple[int, int]]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    offsets: list[tuple[int, int]] = []
-    with path.open("wb") as raw:
-        writer = WARCWriter(raw, gzip=True)
-        for url, body, http_headers, warc_headers_dict in records:
-            start = raw.tell()
-            record = writer.create_warc_record(
-                url,
-                "response",
-                payload=io.BytesIO(body),
+                payload=payload,
                 http_headers=StatusAndHeaders(
                     "200 OK",
                     http_headers,
                     protocol="HTTP/1.0",
                 ),
                 warc_headers_dict=warc_headers_dict,
-            )
-            writer.write_record(record)
-            offsets.append((start, raw.tell() - start))
-    return offsets
-
-
-def _write_warc_gz_binary_records(
-    path: Path,
-    records: list[tuple[str, bytes, str, str]],
-) -> list[tuple[int, int]]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    offsets: list[tuple[int, int]] = []
-    with path.open("wb") as raw:
-        writer = WARCWriter(raw, gzip=True)
-        for url, body, http_content_type, identified_payload_type in records:
-            start = raw.tell()
-            record = writer.create_warc_record(
-                url,
-                "response",
-                payload=io.BytesIO(body),
-                http_headers=StatusAndHeaders(
-                    "200 OK",
-                    [("Content-Type", http_content_type)],
-                    protocol="HTTP/1.0",
-                ),
-                warc_headers_dict={
-                    "WARC-Identified-Payload-Type": identified_payload_type,
-                },
             )
             writer.write_record(record)
             offsets.append((start, raw.tell() - start))
@@ -261,14 +222,14 @@ def test_read_commoncrawl_can_return_binary_pdf_bytes(tmp_path: Path) -> None:
     warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"
     warc_path = tmp_path / warc_rel
     pdf_bytes = b"%PDF-1.4\\n1 0 obj\\n<<>>\\nendobj\\n"
-    offsets = _write_warc_gz_binary_records(
+    offsets = _write_warc_gz_records(
         warc_path,
         [
             (
                 "https://example.com/a.pdf",
                 pdf_bytes,
-                "application/pdf",
-                "application/pdf",
+                [("Content-Type", "application/pdf")],
+                {"WARC-Identified-Payload-Type": "application/pdf"},
             ),
         ],
     )
@@ -372,7 +333,7 @@ def test_read_commoncrawl_all_preserves_duplicate_http_headers(tmp_path: Path) -
     dump = "CC-MAIN-TEST"
     warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"
     warc_path = tmp_path / warc_rel
-    _write_warc_gz_records_with_headers(
+    _write_warc_gz_records(
         warc_path,
         [
             (
@@ -629,6 +590,23 @@ def test_read_commoncrawl_filter_fn_can_use_non_core_index_columns(
     assert rows[0]["warc_path"] == str(warc_path)
 
 
+def test_read_commoncrawl_from_index_rejects_non_positive_max_inflight(
+    tmp_path: Path,
+) -> None:
+    dump = "CC-MAIN-TEST"
+    try:
+        mdr.text.read_commoncrawl_from_index(
+            dump,
+            base_url=tmp_path.as_uri(),
+            use_https=True,
+            max_inflight=0,
+        )
+    except ValueError as exc:
+        assert str(exc) == "max_inflight must be positive"
+    else:
+        raise AssertionError("expected ValueError for non-positive max_inflight")
+
+
 def test_read_commoncrawl_filter_fn_logs_dropped_rows(tmp_path: Path) -> None:
     dump = "CC-MAIN-TEST"
     warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"
@@ -722,6 +700,54 @@ def test_filter_commoncrawl_html_filters_index_mime_types(tmp_path: Path) -> Non
         use_https=True,
     )
     rows = [row.to_dict() for row in pipeline.take(10)]
+
+    assert len(rows) == 1
+    assert rows[0]["WARC-Target-URI"] == "https://example.com/a"
+    assert rows[0]["warc_path"] == str(warc_path)
+
+
+def test_filter_commoncrawl_pdf_matches_vendor_mime(tmp_path: Path) -> None:
+    dump = "CC-MAIN-TEST"
+    warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"
+    warc_path = tmp_path / warc_rel
+    offsets = _write_warc_gz_records(
+        warc_path,
+        [("https://example.com/a", "<html>a</html>")],
+    )
+
+    index_rel = (
+        f"cc-index/table/cc-main/warc/crawl={dump}/subset=warc/part-00000.parquet"
+    )
+    index_path = tmp_path / index_rel
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.table(
+            {
+                "url": ["https://example.com/a"],
+                "warc_filename": [warc_rel],
+                "warc_record_offset": [offsets[0][0]],
+                "warc_record_length": [offsets[0][1]],
+                "warc_segment": ["00000"],
+                "content_mime_type": ["application/vnd.pdf"],
+                "content_mime_detected": pa.array([None], type=pa.string()),
+            }
+        ),
+        index_path,
+    )
+    _write_gzip_lines(
+        tmp_path / "crawl-data" / dump / "cc-index-table.paths.gz",
+        [index_rel],
+    )
+
+    rows = [
+        row.to_dict()
+        for row in mdr.text.read_commoncrawl_from_index(
+            dump,
+            filter=mdr.text.commoncrawl.filter_pdf,
+            base_url=tmp_path.as_uri(),
+            use_https=True,
+        ).take(10)
+    ]
 
     assert len(rows) == 1
     assert rows[0]["WARC-Target-URI"] == "https://example.com/a"

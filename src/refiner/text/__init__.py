@@ -1,5 +1,5 @@
-from refiner.text import commoncrawl
-from refiner.text.commoncrawl import (
+from . import commoncrawl
+from .commoncrawl import (
     read_commoncrawl,
     read_commoncrawl_from_index,
 )
