@@ -3,9 +3,9 @@ from __future__ import annotations
 import refiner as mdr
 
 INPUT_PATH = "input.jsonl"
-OUTPUT_PATH = "s3://my-bucket/vllm-inference/"
+OUTPUT_PATH = "output/vllm-inference.jsonl"
 PROVIDER = mdr.inference.VLLMProvider(
-    model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+    model_name_or_path="Qwen/Qwen3.5-9B",
     model_max_context=8192,
 )
 
@@ -24,7 +24,7 @@ async def summarize(row, generate):
 
 if __name__ == "__main__":
     (
-        mdr.read_jsonl(INPUT_PATH)
+        mdr.from_items([{"text": "Hello, world!"}])
         .map_async(
             mdr.inference.generate(
                 fn=summarize,

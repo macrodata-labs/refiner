@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 from refiner.platform.auth import current_api_key
@@ -24,6 +25,11 @@ from refiner.worker.context import RunHandle
 
 if TYPE_CHECKING:
     from refiner.pipeline.data.shard import Shard
+
+
+_RUNTIME_SERVICES_START_TIMEOUT_S = float(
+    os.environ.get("MACRODATA_RUNTIME_SERVICES_START_TIMEOUT_S", "600")
+)
 
 
 def compile_shard_descriptors(shards: list["Shard"]) -> list[SerializedShard]:
@@ -141,7 +147,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"services": services},
-            timeout_s=60.0,
+            timeout_s=_RUNTIME_SERVICES_START_TIMEOUT_S,
         )
         if not isinstance(response_data, dict):
             raise ValueError("runtime services response must be a JSON object")

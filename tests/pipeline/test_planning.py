@@ -187,6 +187,31 @@ def test_compile_pipeline_plan_includes_builtin_services() -> None:
     ]
 
 
+def test_compile_pipeline_plan_preserves_non_default_vllm_modal_mode() -> None:
+    pipeline = RefinerPipeline(FakeReader()).map_async(
+        mdr.inference.generate(
+            fn=lambda row, generate: row,
+            provider=mdr.inference.VLLMProvider(
+                model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+                modal_mode="function",
+            ),
+        )
+    )
+
+    stage = compile_pipeline_plan(pipeline)["stages"][0]
+
+    assert stage["services"] == [
+        {
+            "name": stage["services"][0]["name"],
+            "kind": "llm",
+            "config": {
+                "model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
+                "modal_mode": "function",
+            },
+        }
+    ]
+
+
 def test_compile_pipeline_plan_includes_lerobot_writer_steps() -> None:
     pipeline = (
         RefinerPipeline(FakeReader())

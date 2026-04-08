@@ -48,6 +48,14 @@ def test_vllm_provider_accepts_optional_model_max_context() -> None:
     assert provider.model_max_context == 8192
 
 
+def test_vllm_provider_rejects_invalid_modal_mode() -> None:
+    with pytest.raises(ValueError, match="modal_mode must be one of"):
+        VLLMProvider(
+            model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+            modal_mode="bogus",
+        )
+
+
 def test_vllm_provider_emits_service_definition() -> None:
     provider = VLLMProvider(
         model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
@@ -79,6 +87,18 @@ def test_vllm_service_definition_emits_runtime_service_spec() -> None:
     assert spec.config == {
         "model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
         "model_max_context": 8192,
+    }
+
+
+def test_vllm_service_definition_includes_non_default_modal_mode() -> None:
+    definition = VLLMServiceDefinition(
+        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        modal_mode="function",
+    )
+
+    assert definition.to_spec().config == {
+        "model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
+        "modal_mode": "function",
     }
 
 

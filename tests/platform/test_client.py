@@ -102,6 +102,7 @@ def test_start_worker_services_posts_services(monkeypatch) -> None:
     assert (
         captured["path"] == "/api/jobs/job-1/stages/2/workers/worker-1/services/start"
     )
+    assert captured["timeout_s"] == 600.0
     assert cast(dict[str, object], captured["json_payload"]) == {
         "services": [
             {"name": "vllm", "kind": "llm", "config": {"model": "Qwen/Qwen3.5-9B"}}

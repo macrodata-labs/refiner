@@ -12,6 +12,7 @@ from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
 class VLLMServiceDefinition:
     model_name_or_path: str
     model_max_context: int | None = None
+    modal_mode: str = "endpoint"
     kind: str = "llm"
 
     def __post_init__(self) -> None:
@@ -19,6 +20,8 @@ class VLLMServiceDefinition:
             raise ValueError("model_name_or_path must be non-empty")
         if self.model_max_context is not None and self.model_max_context <= 0:
             raise ValueError("model_max_context must be > 0 when provided")
+        if self.modal_mode not in {"endpoint", "function"}:
+            raise ValueError("modal_mode must be one of {'endpoint', 'function'}")
 
     @property
     def name(self) -> str:
@@ -29,6 +32,8 @@ class VLLMServiceDefinition:
         config: dict[str, Any] = {"model_name_or_path": self.model_name_or_path}
         if self.model_max_context is not None:
             config["model_max_context"] = self.model_max_context
+        if self.modal_mode != "endpoint":
+            config["modal_mode"] = self.modal_mode
         return RuntimeServiceSpec(name=self.name, kind=self.kind, config=config)
 
 
