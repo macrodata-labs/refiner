@@ -24,8 +24,8 @@ def main() -> int:
     parser.add_argument(
         "--runtime-backend",
         type=str,
-        choices=("auto", "platform", "file"),
-        default=os.environ.get("REFINER_RUNTIME_BACKEND", "auto"),
+        choices=("platform",),
+        default=os.environ.get("REFINER_RUNTIME_BACKEND", "platform"),
     )
     parser.add_argument("--worker-name", type=str, default="worker")
     parser.add_argument("--heartbeat-interval-seconds", type=int, default=30)
@@ -51,29 +51,13 @@ def main() -> int:
         with open(args.pipeline_payload, "rb") as f:
             pipeline = cloudpickle.load(f)
 
+        client = MacrodataClient()
         run_handle = RunHandle(
             job_id=args.job_id,
             stage_index=args.stage_index,
             worker_name=args.worker_name,
+            client=client,
         )
-
-        if args.runtime_backend != "file":
-            try:
-                client = MacrodataClient()
-                run_handle = RunHandle(
-                    job_id=args.job_id,
-                    stage_index=args.stage_index,
-                    worker_name=args.worker_name,
-                    client=client,
-                )
-            except Exception as e:
-                if args.runtime_backend == "platform":
-                    raise
-                logger.warning(
-                    "platform runtime unavailable (falling back to file runtime): {}: {}",
-                    type(e).__name__,
-                    e,
-                )
 
         stats = Worker(
             pipeline=pipeline,

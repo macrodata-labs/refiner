@@ -216,6 +216,19 @@ class MacrodataClient:
         )
         return parse_json_response(response_data, OkResponse)
 
+    def shard_start(
+        self, *, job_id: str, stage_index: int, worker_id: str, shard_id: str
+    ) -> OkResponse:
+        response_data = request_json(
+            method="POST",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/{shard_id}/start",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload={"worker_id": worker_id},
+            timeout_s=60.0,
+        )
+        return parse_json_response(response_data, OkResponse)
+
     def shard_finalized_workers(
         self, *, job_id: str, stage_index: int
     ) -> FinalizedShardWorkersResponse:

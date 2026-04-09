@@ -1,21 +1,22 @@
 from __future__ import annotations
 
-import json
-import subprocess
 from dataclasses import dataclass
+import json
 from pathlib import Path
+import subprocess
+import sys
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import cloudpickle
 
-from refiner.worker.context import RunHandle
+from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import PlannedStage
-from refiner.worker.lifecycle import LocalRuntimeLifecycle
-from refiner.worker.resources.cpu import build_cpu_sets
+from refiner.worker.context import logger
+from refiner.worker.lifecycle.local import read_finalized_workers
+from refiner.worker.resources.cpu import available_cpu_ids, build_cpu_sets
 from refiner.worker.resources.gpu import build_gpu_sets
 from refiner.worker.workdir import resolve_workdir
-
-from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -39,193 +40,141 @@ class LocalLauncher(BaseLauncher):
         pipeline: RefinerPipeline,
         name: str,
         num_workers: int = 1,
-        workdir: str | None = None,
-        heartbeat_interval_seconds: int = 30,
-        cpus_per_worker: int | None = None,
+        rundir: str | None = None,
+        cpus_per_worker: int = 1,
         gpus_per_worker: int | None = None,
-        runtime_backend: str = "auto",
     ):
         super().__init__(
             pipeline=pipeline,
             name=name,
             num_workers=num_workers,
-            heartbeat_interval_seconds=heartbeat_interval_seconds,
             cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
-        if runtime_backend not in {"auto", "platform", "file"}:
-            raise ValueError("runtime_backend must be one of: auto, platform, file")
-        self.workdir = resolve_workdir(workdir)
-        self.runtime_backend = runtime_backend
+        self.cpus_per_worker = cpus_per_worker
+        self.gpus_per_worker = gpus_per_worker
+        self.rundir = self._resolve_rundir(rundir)
 
-    def _launcher_run_dir(self) -> Path:
-        return Path(self.workdir) / "runs" / self.job_id / "launcher"
-
-    def _stage_run_dir(self, stage_index: int) -> Path:
-        return self._launcher_run_dir() / f"stage-{stage_index}"
-
-    def _pipeline_payload_path(self, stage_index: int) -> Path:
-        return self._stage_run_dir(stage_index) / "pipeline.cloudpickle"
-
-    def _serialize_pipeline_payload(self, pipeline: RefinerPipeline) -> bytes:
-        return cloudpickle.dumps(pipeline)
-
-    def _write_pipeline_payload(
-        self, *, stage_index: int, pipeline: RefinerPipeline
-    ) -> Path:
-        run_dir = self._stage_run_dir(stage_index)
-        run_dir.mkdir(parents=True, exist_ok=True)
-        payload_path = self._pipeline_payload_path(stage_index)
-        payload_path.write_bytes(self._serialize_pipeline_payload(pipeline))
-        return payload_path
-
-    def _seed_file_runtime_shards(
-        self, *, stage_index: int, shards: list["Shard"]
-    ) -> None:
-        LocalRuntimeLifecycle(
-            run=RunHandle(job_id=self.job_id, stage_index=stage_index),
-            workdir=self.workdir,
-        ).seed_shards(shards)
-
-    def _resolve_platform_context(
-        self, *, stages: list[PlannedStage]
-    ) -> RunHandle | None:
-        if self.runtime_backend == "file":
-            return None
-        return self._create_platform_run(
-            plan=self._compiled_plan(stages),
-            stages=stages,
-            fail_open=self.runtime_backend != "platform",
+    def _resolve_rundir(self, rundir: str | None) -> str:
+        base_workdir = resolve_workdir()
+        path = (
+            Path(rundir).expanduser()
+            if rundir is not None
+            else Path(base_workdir) / "runs" / self.job_id
         )
+        if not path.is_absolute():
+            raise ValueError("rundir must be an absolute path")
+        return str(path)
 
-    def _effective_runtime_backend(self, *, platform_run: RunHandle | None) -> str:
-        if self.runtime_backend != "auto":
-            return self.runtime_backend
-        return "platform" if platform_run is not None else "file"
+    def _max_pinnable_workers(self) -> int:
+        cpus_per_worker = self.cpus_per_worker
+        if cpus_per_worker is None:
+            raise ValueError("local launcher requires cpus_per_worker")
+        return len(available_cpu_ids()) // cpus_per_worker
 
-    def _log_tracking_url(self, platform_run: RunHandle | None) -> None:
-        if platform_run is None or platform_run.client is None:
-            self._info(
-                f"Local launch running without platform integration (job_id={self.job_id})"
+    def _clamp_workers_for_cpu_limit(
+        self, requested_workers: int, *, subject: str
+    ) -> int:
+        max_workers = self._max_pinnable_workers()
+        if max_workers <= 0:
+            raise ValueError(
+                f"cpus_per_worker={self.cpus_per_worker} exceeds available CPUs"
             )
-            return
-        tracking_url = self._job_tracking_url(
-            client=platform_run.client,
-            job_id=platform_run.job_id,
-            workspace_slug=platform_run.workspace_slug,
-        )
-        self._info(f"Track job here: {tracking_url}")
-
-    def _worker_command(
-        self,
-        *,
-        stage_index: int,
-        rank: int,
-        payload_path: Path,
-        runtime_backend: str,
-        cpu_ids: list[int] | None,
-        gpu_ids: list[str] | None,
-        platform_run: RunHandle | None,
-    ) -> list[str]:
-        command = [
-            # Use `uv run` so worker subprocesses import the current checkout/worktree
-            # instead of an installed `refiner` package from some other environment.
-            "uv",
-            "run",
-            "python",
-            "-m",
-            "refiner.worker.entrypoint",
-            "--job-id",
-            self.job_id,
-            "--workdir",
-            self.workdir,
-            "--heartbeat-interval-seconds",
-            str(self.heartbeat_interval_seconds),
-            "--runtime-backend",
-            runtime_backend,
-            "--pipeline-payload",
-            str(payload_path),
-            "--cpu-ids",
-            ",".join(str(cpu_id) for cpu_id in cpu_ids or []),
-            "--gpu-ids",
-            ",".join(gpu_ids or []),
-        ]
-        command.extend(["--stage-index", str(stage_index)])
-        if runtime_backend == "platform" and platform_run is not None:
-            command.extend(
-                [
-                    "--worker-name",
-                    f"stage-{stage_index}-rank-{rank}",
-                ]
+        if requested_workers > max_workers:
+            logger.warning(
+                f"{subject} requested {requested_workers} workers with cpus_per_worker={self.cpus_per_worker}, "
+                f"but only {max_workers} workers can be pinned on this machine. "
+                f"Running {max_workers} workers instead."
             )
-        return command
+            return max_workers
+        return requested_workers
 
-    def _read_worker_stats(
-        self,
+    @staticmethod
+    def _failed_worker_payload(
         *,
-        rank: int,
-        process: subprocess.Popen[str],
-    ) -> tuple[int, int, int, int]:
-        stdout_text, stderr_text = process.communicate()
-        return_code = process.returncode
-        stats_line = ""
-        for line in reversed(stdout_text.splitlines()):
-            if line.strip():
-                stats_line = line
-                break
-        if not stats_line:
-            message = (stderr_text or "").strip() or f"exit code {return_code}"
-            raise RuntimeError(f"worker {rank}: missing stats output ({message})")
-        try:
-            stats = json.loads(stats_line)
-        except json.JSONDecodeError as err:
-            raise RuntimeError(f"worker {rank}: invalid stats output ({err})") from err
+        worker_id: str,
+        stdout: str,
+        stderr: str,
+        returncode: int | None,
+    ) -> dict[str, object]:
+        return {
+            "worker_id": worker_id,
+            "claimed": 0,
+            "completed": 0,
+            "failed": 1,
+            "output_rows": 0,
+            "error": (
+                stderr.strip()
+                or stdout.strip()
+                or f"worker process exited with code {returncode}"
+            ),
+        }
 
-        if return_code != 0 or "error" in stats:
-            stats_error = str(stats.get("error") or "").strip()
-            stderr_lines = [line for line in stderr_text.splitlines() if line.strip()]
-            stderr_tail = "\n".join(stderr_lines[-20:])
-            parts = [part for part in (stats_error, stderr_tail) if part]
-            if len(parts) == 2 and parts[0] == parts[1]:
-                parts.pop()
-            if not parts:
-                parts = [f"exit code {return_code}"]
-            raise RuntimeError(f"worker {rank}: {'; '.join(parts)}")
-
-        return (
-            int(stats["claimed"]),
-            int(stats["completed"]),
-            int(stats["failed"]),
-            int(stats["output_rows"]),
-        )
-
-    def _collect_worker_stats(
+    def _collect_worker_results(
         self,
         *,
         stage_workers: int,
-        processes: list[subprocess.Popen[str]],
+        processes: list[tuple[str, subprocess.Popen[str]]],
     ) -> LaunchStats:
+        errors: list[str] = []
         claimed = 0
         completed = 0
         failed = 0
         output_rows = 0
-        errors: list[str] = []
-
-        for rank, process in enumerate(processes):
+        for worker_id, process in processes:
+            stdout, stderr = process.communicate()
             try:
-                worker_claimed, worker_completed, worker_failed, worker_output_rows = (
-                    self._read_worker_stats(rank=rank, process=process)
+                decoded = json.loads(stdout.strip() or "{}")
+                raw = (
+                    decoded
+                    if isinstance(decoded, dict)
+                    else self._failed_worker_payload(
+                        worker_id=worker_id,
+                        stdout=stdout,
+                        stderr=stderr,
+                        returncode=process.returncode,
+                    )
                 )
-            except RuntimeError as err:
-                errors.append(str(err))
-                continue
-            claimed += worker_claimed
-            completed += worker_completed
-            failed += worker_failed
-            output_rows += worker_output_rows
+            except json.JSONDecodeError:
+                raw = self._failed_worker_payload(
+                    worker_id=worker_id,
+                    stdout=stdout,
+                    stderr=stderr,
+                    returncode=process.returncode,
+                )
+            error = raw.get("error")
+            raw_claimed = raw.get("claimed", 0)
+            raw_completed = raw.get("completed", 0)
+            raw_failed = raw.get("failed", 0)
+            raw_output_rows = raw.get("output_rows", 0)
+            result_worker_id = str(raw.get("worker_id", ""))
+            result_claimed = (
+                int(raw_claimed) if isinstance(raw_claimed, int | float | str) else 0
+            )
+            result_completed = (
+                int(raw_completed)
+                if isinstance(raw_completed, int | float | str)
+                else 0
+            )
+            result_failed = (
+                int(raw_failed) if isinstance(raw_failed, int | float | str) else 0
+            )
+            result_output_rows = (
+                int(raw_output_rows)
+                if isinstance(raw_output_rows, int | float | str)
+                else 0
+            )
+            if error is not None:
+                errors.append(f"worker {result_worker_id}: {error}")
+            if process.returncode not in (0, None):
+                errors.append(f"worker process exited with code {process.returncode}")
+            claimed += result_claimed
+            completed += result_completed
+            failed += result_failed
+            output_rows += result_output_rows
 
         if errors:
-            raise RuntimeError("; ".join(errors))
+            raise RuntimeError("; ".join(sorted(set(errors))))
 
         return LaunchStats(
             job_id=self.job_id,
@@ -236,70 +185,171 @@ class LocalLauncher(BaseLauncher):
             output_rows=output_rows,
         )
 
+    @staticmethod
+    def _ordered_shards(shards: list[Shard]) -> list[Shard]:
+        return sorted(
+            shards,
+            key=lambda shard: (
+                shard.global_ordinal is None,
+                shard.global_ordinal,
+                shard.id,
+            ),
+        )
+
+    @staticmethod
+    def _assign_shards(shards: list[Shard], *, num_workers: int) -> list[list[Shard]]:
+        total = len(shards)
+        base = total // num_workers
+        remainder = total % num_workers
+        starts = [
+            worker_index * base + min(worker_index, remainder)
+            for worker_index in range(num_workers)
+        ]
+        return [
+            shards[start : start + base + (1 if worker_index < remainder else 0)]
+            for worker_index, start in enumerate(starts)
+        ]
+
+    @staticmethod
+    def _spawn_local_worker(
+        *,
+        pipeline_payload: str,
+        job_id: str,
+        stage_index: int,
+        worker_name: str,
+        worker_id: str,
+        rundir: str,
+        cpu_ids: tuple[int, ...],
+        gpu_ids: tuple[str, ...],
+    ) -> subprocess.Popen[str]:
+        cmd = [
+            sys.executable,
+            "-m",
+            "refiner.worker.local_entrypoint",
+            "--pipeline-payload",
+            pipeline_payload,
+            "--job-id",
+            job_id,
+            "--stage-index",
+            str(stage_index),
+            "--worker-name",
+            worker_name,
+            "--worker-id",
+            worker_id,
+            "--rundir",
+            rundir,
+        ]
+        if cpu_ids:
+            cmd.extend(["--cpu-ids", ",".join(str(cpu_id) for cpu_id in cpu_ids)])
+        if gpu_ids:
+            cmd.extend(["--gpu-ids", ",".join(gpu_ids)])
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
     def _launch_stage(
         self,
         *,
         stage: PlannedStage,
-        runtime_backend: str,
-        platform_run: RunHandle | None,
     ) -> LaunchStats:
-        cpu_sets = (
-            build_cpu_sets(
-                num_workers=stage.compute.num_workers,
-                cpus_per_worker=self.cpus_per_worker,
-            )
-            if self.cpus_per_worker is not None
-            else [None] * stage.compute.num_workers
+        stage_workers = self._clamp_workers_for_cpu_limit(
+            stage.compute.num_workers,
+            subject="Stage",
+        )
+        cpus_per_worker = self.cpus_per_worker
+        if cpus_per_worker is None:
+            raise ValueError("local launcher requires cpus_per_worker")
+        cpu_sets = build_cpu_sets(
+            num_workers=stage_workers,
+            cpus_per_worker=cpus_per_worker,
         )
         gpu_sets = (
             build_gpu_sets(
-                num_workers=stage.compute.num_workers,
+                num_workers=stage_workers,
                 gpus_per_worker=self.gpus_per_worker,
             )
             if self.gpus_per_worker is not None
-            else [None] * stage.compute.num_workers
+            else [[] for _ in range(stage_workers)]
         )
-        shards = list(stage.pipeline.list_shards())
-        stage_run = self._stage_run(platform_run, stage_index=stage.index)
-        if runtime_backend == "platform":
-            self._seed_platform_stage(stage_run, stage_index=stage.index, shards=shards)
-        else:
-            self._seed_file_runtime_shards(stage_index=stage.index, shards=shards)
-
-        payload_path = self._write_pipeline_payload(
-            stage_index=stage.index,
-            pipeline=stage.pipeline,
-        )
-        processes = [
-            subprocess.Popen(
-                self._worker_command(
-                    stage_index=stage.index,
-                    rank=rank,
-                    payload_path=payload_path,
-                    runtime_backend=runtime_backend,
-                    cpu_ids=cpu_sets[rank],
-                    gpu_ids=gpu_sets[rank],
-                    platform_run=stage_run,
-                ),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+        completed_shard_ids = {
+            row.shard_id
+            for row in read_finalized_workers(
+                rundir=self.rundir,
+                stage_index=stage.index,
             )
-            for rank in range(stage.compute.num_workers)
+        }
+        shards = [
+            shard
+            for shard in self._ordered_shards(list(stage.pipeline.list_shards()))
+            if shard.id not in completed_shard_ids
         ]
-        return self._collect_worker_stats(
-            stage_workers=stage.compute.num_workers,
+        if not shards:
+            logger.info(
+                f"stage {stage.index}: no remaining local shards in rundir {self.rundir}"
+            )
+            return LaunchStats(
+                job_id=self.job_id,
+                workers=0,
+                claimed=0,
+                completed=0,
+                failed=0,
+                output_rows=0,
+            )
+
+        stage_run_dir = Path(self.rundir) / f"stage-{stage.index}"
+        stage_run_dir.mkdir(parents=True, exist_ok=True)
+        payload_path = stage_run_dir / "pipeline.cloudpickle"
+        payload_path.write_bytes(cloudpickle.dumps(stage.pipeline))
+        shard_assignments = self._assign_shards(
+            shards,
+            num_workers=stage_workers,
+        )
+
+        worker_ids = [uuid4().hex[:12] for _ in range(stage_workers)]
+        processes: list[tuple[str, subprocess.Popen[str]]] = []
+        for rank in range(stage_workers):
+            worker_id = worker_ids[rank]
+            assignments_path = (
+                stage_run_dir / "assignments" / f"worker-{worker_id}.json"
+            )
+            assignments_path.parent.mkdir(parents=True, exist_ok=True)
+            assignments_path.write_text(
+                json.dumps(
+                    [shard.to_dict() for shard in shard_assignments[rank]],
+                    sort_keys=True,
+                )
+            )
+            processes.append(
+                (
+                    worker_id,
+                    self._spawn_local_worker(
+                        pipeline_payload=str(payload_path),
+                        job_id=self.job_id,
+                        stage_index=stage.index,
+                        worker_name=f"stage-{stage.index}-rank-{rank}",
+                        worker_id=worker_id,
+                        rundir=self.rundir,
+                        cpu_ids=tuple(cpu_sets[rank]),
+                        gpu_ids=tuple(gpu_sets[rank]),
+                    ),
+                )
+            )
+
+        return self._collect_worker_results(
+            stage_workers=stage_workers,
             processes=processes,
         )
 
     def launch(self) -> LaunchStats:
+        self.num_workers = self._clamp_workers_for_cpu_limit(
+            self.num_workers,
+            subject="Launch",
+        )
+        self._validate_key()
         stages = self._planned_stages()
-        platform_run = self._resolve_platform_context(stages=stages)
-        runtime_backend = self._effective_runtime_backend(platform_run=platform_run)
-        if runtime_backend == "platform" and platform_run is None:
-            raise RuntimeError("runtime_backend=platform requires a platform context")
-
-        self._log_tracking_url(platform_run)
         totals = LaunchStats(
             job_id=self.job_id,
             workers=0,
@@ -308,27 +358,20 @@ class LocalLauncher(BaseLauncher):
             failed=0,
             output_rows=0,
         )
-        try:
-            for stage in stages:
-                stage_stats = self._launch_stage(
-                    stage=stage,
-                    runtime_backend=runtime_backend,
-                    platform_run=platform_run,
+        for stage in stages:
+            stage_stats = self._launch_stage(stage=stage)
+            totals = LaunchStats(
+                job_id=self.job_id,
+                workers=totals.workers + stage_stats.workers,
+                claimed=totals.claimed + stage_stats.claimed,
+                completed=totals.completed + stage_stats.completed,
+                failed=totals.failed + stage_stats.failed,
+                output_rows=totals.output_rows + stage_stats.output_rows,
+            )
+            if stage_stats.failed > 0:
+                raise RuntimeError(
+                    f"stage {stage.index} failed with {stage_stats.failed} failed shard(s)"
                 )
-                totals = LaunchStats(
-                    job_id=self.job_id,
-                    workers=totals.workers + stage_stats.workers,
-                    claimed=totals.claimed + stage_stats.claimed,
-                    completed=totals.completed + stage_stats.completed,
-                    failed=totals.failed + stage_stats.failed,
-                    output_rows=totals.output_rows + stage_stats.output_rows,
-                )
-                if stage_stats.failed > 0:
-                    raise RuntimeError(
-                        f"stage {stage.index} failed with {stage_stats.failed} failed shard(s)"
-                    )
-        except Exception:
-            raise
 
         return totals
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import socket
 import threading
 from dataclasses import dataclass
-from uuid import uuid4
 
 from loguru import logger
 
@@ -14,7 +13,6 @@ from refiner.pipeline.sinks import NullSink
 from refiner.worker.context import RunHandle
 from refiner.worker.context import set_active_run_context, set_active_step_index
 from refiner.worker.lifecycle import (
-    LocalRuntimeLifecycle,
     PlatformRuntimeLifecycle,
     RuntimeLifecycle,
 )
@@ -67,13 +65,8 @@ class Worker:
         runtime_lifecycle = PlatformRuntimeLifecycle(run=run)
         return runtime_lifecycle, run
 
-    def _start_local_session(self) -> tuple[LocalRuntimeLifecycle, RunHandle]:
-        run = self.run_handle.with_worker(worker_id=uuid4().hex[:12])
-        runtime_lifecycle = LocalRuntimeLifecycle(
-            run=run,
-            workdir=self.local_workdir,
-        )
-        return runtime_lifecycle, run
+    def _start_local_session(self) -> tuple[RuntimeLifecycle, RunHandle]:
+        raise ValueError("worker runtime requires a platform-backed run handle")
 
     def run(self) -> WorkerRunStats:
         # Source-claim state.
@@ -124,9 +117,8 @@ class Worker:
             else:
                 user_metrics_emitter = telemetry_emitter
         else:
-            # local mode
             runtime_lifecycle, self.run_handle = self._start_local_session()
-        runtime_name = "platform" if self.run_handle.client is not None else "file"
+        runtime_name = "platform" if self.run_handle.client is not None else "local"
         obs_logger.info(
             "worker started job_id={} stage_index={} worker_id={} runtime={}",
             self.run_handle.job_id,

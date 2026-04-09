@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Any, cast
 
 import pytest
 
@@ -13,6 +12,14 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.resources.cpu import build_cpu_sets
 from refiner.worker.resources.gpu import build_gpu_sets
+
+
+@pytest.fixture(autouse=True)
+def _disable_local_init_api_ping(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr("refiner.launchers.base.request_json", lambda **kwargs: {})
+    monkeypatch.setattr("refiner.launchers.base.current_api_key", lambda: "md_test")
+    monkeypatch.setattr("refiner.launchers.base.verify_api_key", lambda **kwargs: None)
+    monkeypatch.setenv("REFINER_WORKDIR", str(tmp_path))
 
 
 class _FakeReader(BaseReader):
@@ -32,16 +39,6 @@ class _FakeReader(BaseReader):
         yield from self._rows_by_shard_id.get(shard.id, [])
 
 
-class _FakeProcess:
-    def __init__(self, *, stdout: str, stderr: str, returncode: int) -> None:
-        self._stdout = stdout
-        self._stderr = stderr
-        self.returncode = returncode
-
-    def communicate(self) -> tuple[str, str]:
-        return self._stdout, self._stderr
-
-
 def test_launch_local_single_worker(tmp_path) -> None:
     p1 = tmp_path / "a.jsonl"
     p2 = tmp_path / "b.jsonl"
@@ -57,7 +54,7 @@ def test_launch_local_single_worker(tmp_path) -> None:
     stats = pipeline.launch_local(
         name="unit-test-local",
         num_workers=1,
-        workdir=str(tmp_path),
+        rundir=str(tmp_path / "run"),
     )
 
     assert stats.workers == 1
@@ -80,7 +77,7 @@ def test_launch_local_coalesces_writer_shards(tmp_path) -> None:
     stats = pipeline.launch_local(
         name="unit-test-local-coalesced",
         num_workers=1,
-        workdir=str(tmp_path),
+        rundir=str(tmp_path / "run"),
     )
 
     assert stats.claimed == 1
@@ -127,6 +124,81 @@ def test_build_gpu_sets_raises_when_insufficient(
         build_gpu_sets(num_workers=2, gpus_per_worker=1)
 
 
+def test_local_launcher_clamps_workers_before_planning(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="clamp-before-planning",
+        num_workers=4,
+        cpus_per_worker=2,
+    )
+
+    monkeypatch.setattr(
+        "refiner.launchers.local.available_cpu_ids",
+        lambda: [0, 1, 2, 3],
+    )
+
+    planned_worker_counts: list[int] = []
+
+    def fake_planned_stages() -> list[PlannedStage]:
+        planned_worker_counts.append(launcher.num_workers)
+        return [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=launcher.num_workers),
+            )
+        ]
+
+    monkeypatch.setattr(launcher, "_planned_stages", fake_planned_stages)
+
+    stats = launcher.launch()
+
+    assert planned_worker_counts == [2]
+    assert stats.workers == 2
+
+
+def test_local_launcher_clamps_stage_workers_when_stage_exceeds_cpu_limit(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="clamp-stage-workers",
+        num_workers=1,
+        cpus_per_worker=2,
+    )
+
+    monkeypatch.setattr(
+        "refiner.launchers.local.available_cpu_ids",
+        lambda: [0, 1, 2, 3],
+    )
+
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=3),
+            )
+        ],
+    )
+
+    stats = launcher.launch()
+
+    assert stats.workers == 2
+
+
 def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
     p1 = tmp_path / "a.jsonl"
     p2 = tmp_path / "b.jsonl"
@@ -137,79 +209,13 @@ def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
     stats = pipeline.launch_local(
         name="unit-test-local-subprocess",
         num_workers=2,
-        workdir=str(tmp_path),
+        rundir=str(tmp_path / "run"),
     )
     assert stats.workers == 2
     assert stats.claimed == 1
     assert stats.completed == 1
     assert stats.failed == 0
     assert stats.output_rows == 2
-
-
-def test_local_launcher_worker_command_includes_gpu_ids(tmp_path) -> None:
-    path = tmp_path / "a.jsonl"
-    path.write_text('{"x": 1}\n')
-    launcher = LocalLauncher(
-        pipeline=read_jsonl(str(path)),
-        name="gpu-worker-command",
-        num_workers=1,
-        workdir=str(tmp_path),
-        gpus_per_worker=1,
-    )
-
-    command = launcher._worker_command(
-        stage_index=0,
-        rank=0,
-        payload_path=tmp_path / "payload.cloudpickle",
-        runtime_backend="file",
-        cpu_ids=[0, 1],
-        gpu_ids=["2", "3"],
-        platform_run=None,
-    )
-
-    assert "--gpu-ids" in command
-    assert command[command.index("--gpu-ids") + 1] == "2,3"
-
-
-def test_local_launcher_file_backend_skips_platform_setup(tmp_path) -> None:
-    path = tmp_path / "a.jsonl"
-    path.write_text('{"x": 1}\n')
-    pipeline = read_jsonl(str(path))
-
-    launcher = LocalLauncher(
-        pipeline=pipeline,
-        name="file-backend-no-platform",
-        num_workers=1,
-        workdir=str(tmp_path),
-        runtime_backend="file",
-    )
-
-    def _unexpected_setup(**kwargs):  # noqa: ANN003
-        del kwargs
-        raise AssertionError("_setup_platform should not be called in file mode")
-
-    launcher._setup_platform = _unexpected_setup  # type: ignore[method-assign]
-    stats = launcher.launch()
-    assert stats.completed == 1
-
-
-def test_local_launcher_platform_backend_requires_platform_client(monkeypatch) -> None:
-    shard = Shard.from_file_parts([FilePart(path="a", start=0, end=1)])
-    rows = {shard.id: [DictRow({"x": 1})]}
-    pipeline = RefinerPipeline(source=_FakeReader([shard], rows))
-
-    launcher = LocalLauncher(
-        pipeline=pipeline,
-        name="platform-backend-required",
-        num_workers=1,
-        runtime_backend="platform",
-    )
-
-    monkeypatch.setattr(launcher, "_platform_client_or_none", lambda: None)
-    with pytest.raises(
-        RuntimeError, match="platform runtime requires Macrodata authentication"
-    ):
-        launcher.launch()
 
 
 def test_launch_local_runs_planned_stages_sequentially(
@@ -242,11 +248,11 @@ def test_launch_local_runs_planned_stages_sequentially(
         ],
     )
 
+    rundir = tmp_path / "run"
     stats = pipeline.launch_local(
         name="unit-test-local-multi-stage",
         num_workers=4,
-        workdir=str(tmp_path),
-        runtime_backend="file",
+        rundir=str(rundir),
     )
 
     assert stats.workers == 3
@@ -254,8 +260,44 @@ def test_launch_local_runs_planned_stages_sequentially(
     assert stats.completed == 2
     assert stats.failed == 0
     assert stats.output_rows == 3
-    assert (tmp_path / "runs" / stats.job_id / "launcher" / "stage-0").exists()
-    assert (tmp_path / "runs" / stats.job_id / "launcher" / "stage-1").exists()
+    assert (rundir / "stage-0").exists()
+    assert (rundir / "stage-1").exists()
+
+
+def test_launch_local_uses_explicit_rundir(tmp_path) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    rundir = tmp_path / "custom-run"
+
+    stats = pipeline.launch_local(
+        name="unit-test-local-rundir",
+        num_workers=1,
+        rundir=str(rundir),
+    )
+
+    assert (rundir / "stage-0").exists()
+    assert not (tmp_path / "runs" / stats.job_id).exists()
+
+
+def test_launch_local_resumes_from_existing_rundir(tmp_path) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n{"x": 2}\n')
+    pipeline = read_jsonl(str(path), num_shards=2)
+    rundir = tmp_path / "resume-run"
+    stage_manifest = rundir / "stage-0" / "completed" / "worker-1.jsonl"
+    first_shard = pipeline.list_shards()[0]
+    stage_manifest.parent.mkdir(parents=True, exist_ok=True)
+    stage_manifest.write_text(f'{{"shard_id": "{first_shard.id}"}}\n')
+
+    stats = pipeline.launch_local(
+        name="unit-test-local-resume",
+        num_workers=2,
+        rundir=str(rundir),
+    )
+
+    assert stats.claimed == 1
+    assert stats.completed == 1
 
 
 def test_local_launcher_stops_after_failed_stage(
@@ -266,8 +308,6 @@ def test_local_launcher_stops_after_failed_stage(
         pipeline=pipeline,
         name="local-stop-on-failure",
         num_workers=1,
-        workdir=str(tmp_path),
-        runtime_backend="file",
     )
 
     stages = [
@@ -288,8 +328,7 @@ def test_local_launcher_stops_after_failed_stage(
 
     monkeypatch.setattr(launcher, "_planned_stages", lambda: stages)
 
-    def fake_launch_stage(*, stage, runtime_backend, platform_run):  # noqa: ANN001
-        del runtime_backend, platform_run
+    def fake_launch_stage(*, stage):  # noqa: ANN001
         launched.append(stage.index)
         return LaunchStats(
             job_id="job-1",
@@ -306,76 +345,3 @@ def test_local_launcher_stops_after_failed_stage(
         launcher.launch()
 
     assert launched == [0]
-
-
-def test_local_launcher_does_not_force_platform_terminal_state(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "a.jsonl"
-    path.write_text('{"x": 1}\n')
-    pipeline = read_jsonl(str(path))
-    launcher = LocalLauncher(
-        pipeline=pipeline,
-        name="local-no-forced-platform-finish",
-        num_workers=1,
-        workdir=str(tmp_path),
-        runtime_backend="platform",
-    )
-
-    monkeypatch.setattr(
-        launcher,
-        "_planned_stages",
-        lambda: [
-            PlannedStage(
-                index=0,
-                name="stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=1),
-            )
-        ],
-    )
-
-    class _DummyRun:
-        client = object()
-        job_id = "job-1"
-        workspace_slug = "ws"
-
-    monkeypatch.setattr(
-        launcher, "_resolve_platform_context", lambda *, stages: _DummyRun()
-    )
-    monkeypatch.setattr(launcher, "_log_tracking_url", lambda platform_run: None)
-    monkeypatch.setattr(
-        launcher,
-        "_launch_stage",
-        lambda *, stage, runtime_backend, platform_run: LaunchStats(
-            job_id="job-1",
-            workers=1,
-            claimed=1,
-            completed=1,
-            failed=0,
-            output_rows=1,
-        ),
-    )
-    stats = launcher.launch()
-
-    assert stats.completed == 1
-
-
-def test_read_worker_stats_includes_stderr_tail_on_failure(tmp_path) -> None:
-    launcher = LocalLauncher(
-        pipeline=read_jsonl(str(tmp_path / "missing.jsonl")),
-        name="worker-error-tail",
-        num_workers=1,
-        workdir=str(tmp_path),
-    )
-
-    process = _FakeProcess(
-        stdout='{"error":"RuntimeError"}\n',
-        stderr="line 1\nline 2\nroot cause\n",
-        returncode=1,
-    )
-
-    with pytest.raises(
-        RuntimeError, match=r"worker 0: RuntimeError; line 1\nline 2\nroot cause"
-    ):
-        launcher._read_worker_stats(rank=0, process=cast(Any, process))
