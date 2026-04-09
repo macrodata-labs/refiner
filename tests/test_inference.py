@@ -290,7 +290,7 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
     async def _fake_generate(self, payload):
         seen["payload"] = dict(payload)
         seen["base_url"] = self.base_url
-        seen["headers"] = dict(self.headers or {})
+        seen["api_key"] = self.api_key
         return InferenceResponse(
             text="ok",
             finish_reason="stop",
@@ -326,6 +326,7 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
         name=provider.service_definition().name,
         kind="llm",
         endpoint="http://127.0.0.1:8000",
+        api_key="runtime-secret",
     )
 
     async def _inference_fn(row, generate):
@@ -349,4 +350,4 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["base_url"] == "http://127.0.0.1:8000"
-    assert seen["headers"] == {}
+    assert seen["api_key"] == "runtime-secret"

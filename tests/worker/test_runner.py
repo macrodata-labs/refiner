@@ -343,6 +343,7 @@ def test_platform_worker_starts_runtime_services_after_registration(
                         "name": "vllm-test",
                         "kind": "llm",
                         "endpoint": "http://127.0.0.1:8000",
+                        "api_key": "runtime-secret",
                         "status": "starting",
                     }
                 ]
@@ -356,6 +357,7 @@ def test_platform_worker_starts_runtime_services_after_registration(
                         "name": "vllm-test",
                         "kind": "llm",
                         "endpoint": "http://127.0.0.1:8000",
+                        "api_key": "runtime-secret",
                         "status": "ready",
                     }
                 ]

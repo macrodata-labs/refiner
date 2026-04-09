@@ -60,6 +60,7 @@ def generate(
                             )
                         client = _OpenAIEndpointClient(
                             base_url=binding.endpoint,
+                            api_key=binding.api_key,
                         )
             assert client is not None
 

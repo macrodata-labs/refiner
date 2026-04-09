@@ -29,7 +29,7 @@ from refiner.worker.metrics.context import (
 from refiner.worker.metrics.otel import OtelTelemetryEmitter
 from refiner.services import parse_runtime_service_bindings
 
-RUNTIME_SERVICE_START_TIMEOUT_SECONDS = 15 * 60
+RUNTIME_SERVICE_START_TIMEOUT_SECONDS = 30 * 60
 RUNTIME_SERVICE_POLL_INTERVAL_SECONDS = 2.0
 
 

@@ -40,6 +40,7 @@ class VLLMServiceDefinition:
 @dataclass(frozen=True, slots=True)
 class VLLMRuntimeServiceBinding(RuntimeServiceBinding):
     endpoint: str
+    api_key: str | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> VLLMRuntimeServiceBinding:
@@ -56,7 +57,17 @@ class VLLMRuntimeServiceBinding(RuntimeServiceBinding):
             raise ValueError(
                 f"service binding {name!r} must include a non-empty endpoint"
             )
-        return cls(name=name, kind=kind, endpoint=endpoint)
+        api_key = payload.get("api_key")
+        if api_key is None:
+            normalized_api_key: str | None = None
+        else:
+            normalized_api_key = str(api_key).strip() or None
+        return cls(
+            name=name,
+            kind=kind,
+            endpoint=endpoint,
+            api_key=normalized_api_key,
+        )
 
 
 __all__ = ["VLLMServiceDefinition", "VLLMRuntimeServiceBinding"]
