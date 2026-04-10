@@ -140,6 +140,38 @@ def test_get_worker_services_uses_get(monkeypatch) -> None:
     assert captured["path"] == "/api/jobs/job-1/stages/2/workers/worker-1/services"
 
 
+def test_get_worker_service_uses_get(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "service": {
+                "id": "svc-1",
+                "name": "vllm",
+                "kind": "llm",
+                "endpoint": "http://vllm",
+                "status": "ready",
+            }
+        }
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    response = client.get_worker_service(
+        job_id="job-1",
+        stage_index=2,
+        worker_id="worker-1",
+        service_id="svc-1",
+    )
+
+    assert response["service"]["status"] == "ready"
+    assert captured["method"] == "GET"
+    assert (
+        captured["path"] == "/api/jobs/job-1/stages/2/workers/worker-1/services/svc-1"
+    )
+
+
 def test_stop_worker_services_posts_empty_body(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

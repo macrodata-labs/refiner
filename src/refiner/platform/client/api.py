@@ -171,6 +171,25 @@ class MacrodataClient:
             raise ValueError("runtime services response must be a JSON object")
         return response_data
 
+    def get_worker_service(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+        worker_id: str,
+        service_id: str,
+    ) -> dict[str, Any]:
+        response_data = request_json(
+            method="GET",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/services/{service_id}",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout_s=60.0,
+        )
+        if not isinstance(response_data, dict):
+            raise ValueError("runtime service response must be a JSON object")
+        return response_data
+
     def stop_worker_services(
         self,
         *,

@@ -4,6 +4,7 @@ import socket
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
@@ -112,65 +113,83 @@ class Worker:
             raise ValueError(
                 "runtime services start response must contain a services list"
             )
+        requested_services_by_id: dict[str, dict[str, Any]] = {}
+        for item in response["services"]:
+            if not isinstance(item, dict):
+                continue
+            service_id = str(item.get("id", "")).strip()
+            service_name = str(item.get("name", "")).strip()
+            if not service_id or not service_name:
+                continue
+            requested_spec = next(
+                (
+                    spec
+                    for spec in service_specs
+                    if str(spec.get("name", "")).strip() == service_name
+                ),
+                None,
+            )
+            requested_services_by_id[service_id] = requested_spec or {
+                "name": service_name,
+                "kind": item.get("kind", ""),
+            }
+        if not requested_services_by_id:
+            raise ValueError("runtime services start response must contain service ids")
 
-        service_names = {
-            str(service["name"]).strip()
-            for service in service_specs
-            if "name" in service
-        }
         deadline = time.monotonic() + RUNTIME_SERVICE_START_TIMEOUT_SECONDS
         while True:
-            listed_services = self.run_handle.client.get_worker_services(
-                job_id=self.run_handle.job_id,
-                stage_index=self.run_handle.stage_index,
-                worker_id=self.run_handle.worker_id or "",
-            )
-            services = listed_services.get("services")
-            if not isinstance(services, list):
-                raise ValueError(
-                    "runtime services status response must contain a services list"
-                )
-
-            ready_names: set[str] = set()
+            ready_ids: set[str] = set()
             bindings_payload: list[dict[str, str]] = []
-            for item in services:
+            for service_id, requested_spec in requested_services_by_id.items():
+                polled_service = self.run_handle.client.get_worker_service(
+                    job_id=self.run_handle.job_id,
+                    stage_index=self.run_handle.stage_index,
+                    worker_id=self.run_handle.worker_id or "",
+                    service_id=service_id,
+                )
+                item = polled_service.get("service")
                 if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name", "")).strip()
+                    raise ValueError(
+                        "runtime service status response must contain a service object"
+                    )
+                requested_name = str(requested_spec.get("name", "")).strip()
                 status = str(item.get("status", "")).strip()
                 endpoint = str(item.get("endpoint", "")).strip()
-                if name not in service_names:
-                    continue
                 if status == "failed":
                     error = str(item.get("error", "")).strip() or "UnknownError"
                     raise RuntimeError(
-                        f"runtime service {name} failed to start: {error}"
+                        f"runtime service {requested_name or service_id} failed to start: {error}"
                     )
                 if status == "stopped":
                     raise RuntimeError(
-                        f"runtime service {name} stopped before becoming ready"
+                        f"runtime service {requested_name or service_id} stopped before becoming ready"
                     )
                 if status == "ready":
                     if not endpoint:
                         raise RuntimeError(
-                            f"runtime service {name} is ready but missing endpoint"
+                            f"runtime service {requested_name or service_id} is ready but missing endpoint"
                         )
-                    ready_names.add(name)
+                    ready_ids.add(service_id)
                     bindings_payload.append(
                         {
-                            "name": name,
-                            "kind": str(item.get("kind", "")).strip(),
+                            "name": requested_name,
+                            "kind": str(requested_spec.get("kind", "")).strip()
+                            or str(item.get("kind", "")).strip(),
                             "endpoint": endpoint,
                         }
                     )
-            if ready_names == service_names:
+            if ready_ids == set(requested_services_by_id):
                 started_bindings = parse_runtime_service_bindings(
                     {"services": bindings_payload}
                 )
                 self.service_bindings = started_bindings
                 return started_bindings, True
             if time.monotonic() >= deadline:
-                pending_names = sorted(service_names - ready_names)
+                pending_names = sorted(
+                    str(requested_services_by_id[service_id].get("name", "")).strip()
+                    or service_id
+                    for service_id in (set(requested_services_by_id) - ready_ids)
+                )
                 raise RuntimeError(
                     "runtime services did not become ready in time: "
                     + ", ".join(pending_names)

@@ -340,6 +340,7 @@ def test_platform_worker_starts_runtime_services_after_registration(
             return {
                 "services": [
                     {
+                        "id": "svc-1",
                         "name": "vllm-test",
                         "kind": "llm",
                         "endpoint": "http://127.0.0.1:8000",
@@ -349,18 +350,17 @@ def test_platform_worker_starts_runtime_services_after_registration(
                 ]
             }
 
-        def get_worker_services(self, **kwargs):
-            seen["get_worker_services"] = kwargs
+        def get_worker_service(self, **kwargs):
+            seen["get_worker_service"] = kwargs
             return {
-                "services": [
-                    {
-                        "name": "vllm-test",
-                        "kind": "llm",
-                        "endpoint": "http://127.0.0.1:8000",
-                        "api_key": "runtime-secret",
-                        "status": "ready",
-                    }
-                ]
+                "service": {
+                    "id": "svc-1",
+                    "name": "llm:foo",
+                    "kind": "llm",
+                    "endpoint": "http://127.0.0.1:8000",
+                    "api_key": "runtime-secret",
+                    "status": "ready",
+                }
             }
 
         def stop_worker_services(self, **kwargs):
@@ -409,7 +409,8 @@ def test_platform_worker_starts_runtime_services_after_registration(
 
     assert stats.completed == 1
     assert seen["start_worker_services"]["worker_id"] == "worker-0"
-    assert seen["get_worker_services"]["worker_id"] == "worker-0"
+    assert seen["get_worker_service"]["worker_id"] == "worker-0"
+    assert seen["get_worker_service"]["service_id"] == "svc-1"
     assert seen["start_worker_services"]["services"] == [
         {"name": "vllm-test", "kind": "llm", "config": {"model": "foo"}}
     ]
