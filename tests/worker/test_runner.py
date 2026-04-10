@@ -27,6 +27,7 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
 from refiner.platform.client.models import FinalizedShardWorker
+from refiner.platform.client.http import MacrodataApiError
 from refiner.services import VLLMRuntimeServiceBinding
 import importlib
 
@@ -414,8 +415,43 @@ def test_platform_worker_starts_runtime_services_after_registration(
     assert seen["start_worker_services"]["services"] == [
         {"name": "vllm-test", "kind": "llm", "config": {"model": "foo"}}
     ]
+    assert worker.service_bindings == (
+        VLLMRuntimeServiceBinding(
+            name="vllm-test",
+            kind="llm",
+            endpoint="http://127.0.0.1:8000",
+            api_key="runtime-secret",
+        ),
+    )
     assert seen["stop_worker_services"]["worker_id"] == "worker-0"
     assert seen["report_worker_finished"]["status"] == "completed"
+
+
+def test_stop_runtime_services_ignores_unsupported_stop_route() -> None:
+    warnings: list[str] = []
+
+    class _RecordingLogger:
+        def warning(self, message: str, *args: object) -> None:
+            warnings.append(message.format(*args))
+
+    class _RecordingClient:
+        def stop_worker_services(self, **kwargs) -> None:
+            del kwargs
+            raise MacrodataApiError(status=405, message="Method Not Allowed")
+
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader({})),
+        run_handle=RunHandle(
+            job_id="job-1",
+            stage_index=0,
+            worker_id="worker-0",
+            client=cast(Any, _RecordingClient()),
+        ),
+    )
+
+    worker._stop_runtime_services(_RecordingLogger())
+
+    assert warnings == []
 
 
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:

@@ -14,6 +14,7 @@ from refiner.pipeline.planning import _collect_pipeline_services
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
+from refiner.platform.client.http import MacrodataApiError
 from refiner.services import RuntimeServiceBinding
 from refiner.worker.context import RunHandle
 from refiner.worker.context import set_active_run_context, set_active_step_index
@@ -176,6 +177,7 @@ class Worker:
                             "kind": str(requested_spec.get("kind", "")).strip()
                             or str(item.get("kind", "")).strip(),
                             "endpoint": endpoint,
+                            "api_key": item.get("api_key"),
                         }
                     )
             if ready_ids == set(requested_services_by_id):
@@ -207,6 +209,8 @@ class Worker:
                 worker_id=self.run_handle.worker_id or "",
             )
         except Exception as e:  # noqa: BLE001
+            if isinstance(e, MacrodataApiError) and e.status in {404, 405}:
+                return
             obs_logger.warning(
                 "runtime service shutdown failed: {}: {}",
                 type(e).__name__,
