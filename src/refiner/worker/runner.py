@@ -140,7 +140,7 @@ class Worker:
         deadline = time.monotonic() + RUNTIME_SERVICE_START_TIMEOUT_SECONDS
         while True:
             ready_ids: set[str] = set()
-            bindings_payload: list[dict[str, str]] = []
+            bindings_payload: list[dict[str, Any]] = []
             for service_id, requested_spec in requested_services_by_id.items():
                 polled_service = self.run_handle.client.get_worker_service(
                     job_id=self.run_handle.job_id,
@@ -177,7 +177,7 @@ class Worker:
                             "kind": str(requested_spec.get("kind", "")).strip()
                             or str(item.get("kind", "")).strip(),
                             "endpoint": endpoint,
-                            "api_key": item.get("api_key"),
+                            "api_key": item.get("apiKey", item.get("api_key")),
                         }
                     )
             if ready_ids == set(requested_services_by_id):
