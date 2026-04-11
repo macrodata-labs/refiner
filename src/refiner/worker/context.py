@@ -6,7 +6,10 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generator
 
+from loguru import logger as _base_logger
+
 if TYPE_CHECKING:
+    from loguru import Record
     from refiner.platform.client.api import MacrodataClient
     from refiner.worker.lifecycle.base import RuntimeLifecycle
 
@@ -15,10 +18,10 @@ if TYPE_CHECKING:
 class RunHandle:
     job_id: str
     stage_index: int
+    worker_id: str
     client: "MacrodataClient" | None = None
     workspace_slug: str | None = None
     worker_name: str | None = None
-    worker_id: str | None = None
 
     @staticmethod
     def worker_token_for(worker_id: str) -> str:
@@ -28,32 +31,7 @@ class RunHandle:
 
     @property
     def worker_token(self) -> str:
-        return self.worker_token_for(self.worker_id or "local")
-
-    def with_worker(
-        self,
-        *,
-        worker_name: str | None = None,
-        worker_id: str | None = None,
-    ) -> RunHandle:
-        return RunHandle(
-            job_id=self.job_id,
-            stage_index=self.stage_index,
-            client=self.client,
-            workspace_slug=self.workspace_slug,
-            worker_name=worker_name if worker_name is not None else self.worker_name,
-            worker_id=worker_id if worker_id is not None else self.worker_id,
-        )
-
-    def with_stage(self, stage_index: int) -> RunHandle:
-        return RunHandle(
-            job_id=self.job_id,
-            stage_index=stage_index,
-            client=self.client,
-            workspace_slug=self.workspace_slug,
-            worker_name=self.worker_name,
-            worker_id=self.worker_id,
-        )
+        return self.worker_token_for(self.worker_id)
 
 
 _ACTIVE_RUN_HANDLE: ContextVar[RunHandle | None] = ContextVar(
@@ -70,10 +48,27 @@ _ACTIVE_STEP_INDEX: ContextVar[int | None] = ContextVar(
 )
 
 
+def _patch_log_record(record: "Record") -> None:
+    run_handle = _ACTIVE_RUN_HANDLE.get()
+    if run_handle is None:
+        return
+    extra = record["extra"]
+    if not isinstance(extra, dict):
+        return
+    extra.setdefault("job_id", run_handle.job_id)
+    extra.setdefault("stage_index", int(run_handle.stage_index))
+    extra.setdefault("worker_id", run_handle.worker_id)
+    if run_handle.worker_name is not None:
+        extra.setdefault("worker_name", run_handle.worker_name)
+
+
+logger = _base_logger.patch(_patch_log_record)
+
+
 def get_active_run_handle() -> RunHandle:
     run_handle = _ACTIVE_RUN_HANDLE.get()
     if run_handle is None:
-        return RunHandle(job_id="local", stage_index=0, worker_id="local")
+        raise RuntimeError("no active run context")
     return run_handle
 
 
@@ -116,6 +111,7 @@ __all__ = [
     "get_active_run_handle",
     "get_active_runtime_lifecycle",
     "get_active_step_index",
+    "logger",
     "set_active_run_context",
     "set_active_step_index",
 ]

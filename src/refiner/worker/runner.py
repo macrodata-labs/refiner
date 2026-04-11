@@ -1,27 +1,20 @@
 from __future__ import annotations
 
-import socket
 import threading
 from dataclasses import dataclass
-
-from loguru import logger
 
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
-from refiner.worker.context import RunHandle
+from refiner.worker.context import RunHandle, logger
 from refiner.worker.context import set_active_run_context, set_active_step_index
-from refiner.worker.lifecycle import (
-    PlatformRuntimeLifecycle,
-    RuntimeLifecycle,
-)
+from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.metrics.context import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
     set_active_user_metrics_emitter,
 )
-from refiner.worker.metrics.otel import OtelTelemetryEmitter
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,35 +31,17 @@ class Worker:
         pipeline: RefinerPipeline,
         *,
         run_handle: RunHandle,
-        heartbeat_interval_seconds: int = 30,
+        heartbeat_interval_seconds: int = 0,
         local_workdir: str | None = None,
+        runtime_lifecycle: RuntimeLifecycle,
     ):
         self.pipeline = pipeline
         self.run_handle = run_handle
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.local_workdir = local_workdir
-        if self.heartbeat_interval_seconds <= 0:
-            raise ValueError("heartbeat_interval_seconds must be > 0")
-
-    def _start_platform_session(self) -> tuple[PlatformRuntimeLifecycle, RunHandle]:
-        if self.run_handle.client is None:
-            raise ValueError("platform runtime requires a run with a client")
-        try:
-            host = socket.gethostname()
-        except Exception:
-            host = None
-        started_resp = self.run_handle.client.report_worker_started(
-            job_id=self.run_handle.job_id,
-            stage_index=self.run_handle.stage_index,
-            host=host,
-            worker_name=self.run_handle.worker_name,
-        )
-        run = self.run_handle.with_worker(worker_id=started_resp.worker_id)
-        runtime_lifecycle = PlatformRuntimeLifecycle(run=run)
-        return runtime_lifecycle, run
-
-    def _start_local_session(self) -> tuple[RuntimeLifecycle, RunHandle]:
-        raise ValueError("worker runtime requires a platform-backed run handle")
+        self.runtime_lifecycle = runtime_lifecycle
+        if self.heartbeat_interval_seconds < 0:
+            raise ValueError("heartbeat_interval_seconds must be >= 0")
 
     def run(self) -> WorkerRunStats:
         # Source-claim state.
@@ -91,41 +66,10 @@ class Worker:
 
         # Runtime services.
         user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
-        obs_logger = logger.bind(worker_name=self.run_handle.worker_name)
         stop_heartbeat = threading.Event()
 
-        if self.run_handle.client is not None:
-            # platform
-            runtime_lifecycle, self.run_handle = self._start_platform_session()
-            client = self.run_handle.client
-            if client is None:
-                raise ValueError("platform runtime requires a client")
-            try:
-                telemetry_emitter = OtelTelemetryEmitter(
-                    base_url=client.base_url,
-                    api_key=client.api_key,
-                    job_id=self.run_handle.job_id,
-                    stage_index=self.run_handle.stage_index,
-                    worker_id=self.run_handle.worker_id or "",
-                )
-            except Exception as e:  # noqa: BLE001
-                obs_logger.warning(
-                    "telemetry setup failed: {}: {}",
-                    type(e).__name__,
-                    e,
-                )
-            else:
-                user_metrics_emitter = telemetry_emitter
-        else:
-            runtime_lifecycle, self.run_handle = self._start_local_session()
-        runtime_name = "platform" if self.run_handle.client is not None else "local"
-        obs_logger.info(
-            "worker started job_id={} stage_index={} worker_id={} runtime={}",
-            self.run_handle.job_id,
-            self.run_handle.stage_index,
-            self.run_handle.worker_id,
-            runtime_name,
-        )
+        runtime_lifecycle = self.runtime_lifecycle
+        client = self.run_handle.client
         sink = self.pipeline.sink or NullSink()
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
@@ -145,7 +89,7 @@ class Worker:
                     _heartbeat_once()
                 except Exception as e:  # noqa: BLE001
                     message = str(e).strip() or type(e).__name__
-                    obs_logger.warning(
+                    logger.warning(
                         "heartbeat failed for worker_id={}: {}: {}",
                         self.run_handle.worker_id,
                         type(e).__name__,
@@ -171,7 +115,7 @@ class Worker:
                 inflight_by_id.pop(shard_id, None)
                 source_done_shards.discard(shard_id)
             completed += 1
-            obs_logger.info(
+            logger.info(
                 "shard completed shard_id={} global_ordinal={}",
                 shard.id,
                 shard.global_ordinal,
@@ -197,12 +141,14 @@ class Worker:
             for shard_id in touched:
                 _maybe_complete_shard(shard_id)
 
-        heartbeat_thread = threading.Thread(
-            target=_heartbeat_loop,
-            name=f"refiner-heartbeat-{self.run_handle.worker_name or 'worker'}",
-            daemon=True,
-        )
-        heartbeat_thread.start()
+        heartbeat_thread: threading.Thread | None = None
+        if self.heartbeat_interval_seconds > 0:
+            heartbeat_thread = threading.Thread(
+                target=_heartbeat_loop,
+                name=f"refiner-heartbeat-{self.run_handle.worker_name or 'worker'}",
+                daemon=True,
+            )
+            heartbeat_thread.start()
 
         def _source_rows():
             nonlocal previous, claimed
@@ -211,7 +157,7 @@ class Worker:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                 shard = runtime_lifecycle.claim(previous=previous)
                 if shard is None:
-                    obs_logger.info(
+                    logger.info(
                         "no more shards worker_id={} claimed={}",
                         self.run_handle.worker_id,
                         claimed,
@@ -221,14 +167,14 @@ class Worker:
                 rows_read = 0
                 with inflight_lock:
                     inflight_by_id[shard.id] = shard
-                obs_logger.info(
+                logger.info(
                     "shard claimed shard_id={} global_ordinal={} start_key={} end_key={}",
                     shard.id,
                     shard.global_ordinal,
                     shard.start_key,
                     shard.end_key,
                 )
-                obs_logger.info(
+                logger.info(
                     "shard source started shard_id={} global_ordinal={}",
                     shard.id,
                     shard.global_ordinal,
@@ -248,7 +194,7 @@ class Worker:
                                 pending_rows_by_shard.get(shard.id, 0) + rows
                             )
                     yield unit
-                obs_logger.info(
+                logger.info(
                     "shard source finished shard_id={} global_ordinal={} rows_read={}",
                     shard.id,
                     shard.global_ordinal,
@@ -259,136 +205,163 @@ class Worker:
                 _maybe_complete_shard(shard.id)
                 previous = shard
 
-        with (
-            set_active_user_metrics_emitter(user_metrics_emitter),
-            set_active_run_context(
-                run_handle=self.run_handle,
-                runtime_lifecycle=runtime_lifecycle,
-            ),
+        with set_active_run_context(
+            run_handle=self.run_handle,
+            runtime_lifecycle=runtime_lifecycle,
         ):
-            run_exception: Exception | None = None
-            try:
+            if client is not None:
                 try:
-                    for block in self.pipeline.execute(
-                        _source_rows(),
-                        on_shard_delta=_apply_row_delta,
-                    ):
-                        if heartbeat_error is not None:
-                            raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
-                        with set_active_step_index(sink_step_index):
-                            written = sink.write_block(block)
-                        _apply_row_delta(
-                            {
-                                shard_id: -count
-                                for shard_id, count in written.items()
-                                if count
-                            }
-                        )
-                        output_rows += block_num_rows(block)
-                except Exception as e:
-                    execution_error = e
-                    failed_error = str(e).strip() or type(e).__name__
-                    with inflight_lock:
-                        failed_shards = list(inflight_by_id.values())
-                        inflight_by_id.clear()
-                        pending_rows_by_shard.clear()
-                        source_done_shards.clear()
-                    obs_logger.exception(
-                        "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
-                        self.run_handle.worker_id,
-                        claimed,
-                        completed,
-                        len(failed_shards),
-                        failed_error,
+                    from refiner.worker.metrics.otel import OtelTelemetryEmitter
+
+                    telemetry_emitter = OtelTelemetryEmitter(
+                        base_url=client.base_url,
+                        api_key=client.api_key,
+                        job_id=self.run_handle.job_id,
+                        stage_index=self.run_handle.stage_index,
+                        worker_id=self.run_handle.worker_id,
                     )
-                    user_metrics_emitter.force_flush_logs()
-                    for shard in failed_shards:
-                        obs_logger.warning(
-                            "shard failed shard_id={} global_ordinal={} error={}",
-                            shard.id,
-                            shard.global_ordinal,
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "telemetry setup failed: {}: {}",
+                        type(e).__name__,
+                        e,
+                    )
+                else:
+                    user_metrics_emitter = telemetry_emitter
+            logger.info(
+                "worker started job_id={} stage_index={} worker_id={}",
+                self.run_handle.job_id,
+                self.run_handle.stage_index,
+                self.run_handle.worker_id,
+            )
+            with set_active_user_metrics_emitter(user_metrics_emitter):
+                run_exception: Exception | None = None
+                try:
+                    try:
+                        for block in self.pipeline.execute(
+                            _source_rows(),
+                            on_shard_delta=_apply_row_delta,
+                        ):
+                            if heartbeat_error is not None:
+                                raise RuntimeError(
+                                    f"heartbeat failed: {heartbeat_error}"
+                                )
+                            with set_active_step_index(sink_step_index):
+                                written = sink.write_block(block)
+                            _apply_row_delta(
+                                {
+                                    shard_id: -count
+                                    for shard_id, count in written.items()
+                                    if count
+                                }
+                            )
+                            output_rows += block_num_rows(block)
+                    except Exception as e:
+                        execution_error = e
+                        failed_error = str(e).strip() or type(e).__name__
+                        with inflight_lock:
+                            failed_shards = list(inflight_by_id.values())
+                            inflight_by_id.clear()
+                            pending_rows_by_shard.clear()
+                            source_done_shards.clear()
+                        logger.exception(
+                            "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
+                            self.run_handle.worker_id,
+                            claimed,
+                            completed,
+                            len(failed_shards),
                             failed_error,
                         )
                         user_metrics_emitter.force_flush_logs()
-                        runtime_lifecycle.fail(shard, failed_error)
-                        user_metrics_emitter.force_flush_user_metrics()
-                        failed += 1
-                else:
-                    _heartbeat_once()
-                    with inflight_lock:
-                        remaining_shards = list(inflight_by_id.values())
-                    if remaining_shards:
-                        raise RuntimeError(
-                            "worker finished with unflushed shards: "
-                            + ", ".join(shard.id for shard in remaining_shards)
-                        )
-
-                return WorkerRunStats(
-                    claimed=claimed,
-                    completed=completed,
-                    failed=failed,
-                    output_rows=output_rows,
-                )
-            except Exception as e:
-                run_exception = e
-                raise
-            finally:
-                stop_heartbeat.set()
-                heartbeat_thread.join(timeout=1.0)
-                try:
-                    with set_active_step_index(sink_step_index):
-                        sink.close()
-                except Exception as e:
-                    if execution_error is not None or run_exception is not None:
-                        obs_logger.warning(
-                            "sink close failed during worker failure handling: {}: {}",
-                            type(e).__name__,
-                            e,
-                        )
+                        for shard in failed_shards:
+                            logger.warning(
+                                "shard failed shard_id={} global_ordinal={} error={}",
+                                shard.id,
+                                shard.global_ordinal,
+                                failed_error,
+                            )
+                            user_metrics_emitter.force_flush_logs()
+                            runtime_lifecycle.fail(shard, failed_error)
+                            user_metrics_emitter.force_flush_user_metrics()
+                            failed += 1
                     else:
-                        raise
+                        _heartbeat_once()
+                        with inflight_lock:
+                            remaining_shards = list(inflight_by_id.values())
+                        if remaining_shards:
+                            raise RuntimeError(
+                                "worker finished with unflushed shards: "
+                                + ", ".join(shard.id for shard in remaining_shards)
+                            )
 
-                if self.run_handle.client is not None:
-                    current_error = execution_error or run_exception
-                    status = "failed" if current_error is not None else "completed"
-                    error = None
-                    if current_error is not None:
-                        error = (
-                            str(current_error).strip() or type(current_error).__name__
-                        )
+                    return WorkerRunStats(
+                        claimed=claimed,
+                        completed=completed,
+                        failed=failed,
+                        output_rows=output_rows,
+                    )
+                except Exception as e:
+                    run_exception = e
+                    raise
+                finally:
+                    stop_heartbeat.set()
+                    if heartbeat_thread is not None:
+                        heartbeat_thread.join(timeout=1.0)
                     try:
-                        self.run_handle.client.report_worker_finished(
-                            job_id=self.run_handle.job_id,
-                            stage_index=self.run_handle.stage_index,
-                            worker_id=self.run_handle.worker_id or "",
-                            status=status,
-                            error=error,
-                        )
-                        obs_logger.info(
-                            "worker finished job_id={} stage_index={} worker_id={} status={}",
-                            self.run_handle.job_id,
-                            self.run_handle.stage_index,
-                            self.run_handle.worker_id,
-                            status,
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        obs_logger.warning(
-                            "lifecycle reporting failed: {}: {}",
-                            type(e).__name__,
-                            e,
-                        )
+                        with set_active_step_index(sink_step_index):
+                            sink.close()
+                    except Exception as e:
+                        if execution_error is not None or run_exception is not None:
+                            logger.warning(
+                                "sink close failed during worker failure handling: {}: {}",
+                                type(e).__name__,
+                                e,
+                            )
+                        else:
+                            raise
 
-                if execution_error is None and run_exception is None:
-                    user_metrics_emitter.shutdown()
-                else:
-                    try:
+                    if self.run_handle.client is not None:
+                        current_error = execution_error or run_exception
+                        status = "failed" if current_error is not None else "completed"
+                        error = None
+                        if current_error is not None:
+                            error = (
+                                str(current_error).strip()
+                                or type(current_error).__name__
+                            )
+                        try:
+                            self.run_handle.client.report_worker_finished(
+                                job_id=self.run_handle.job_id,
+                                stage_index=self.run_handle.stage_index,
+                                worker_id=self.run_handle.worker_id,
+                                status=status,
+                                error=error,
+                            )
+                            logger.info(
+                                "worker finished job_id={} stage_index={} worker_id={} status={}",
+                                self.run_handle.job_id,
+                                self.run_handle.stage_index,
+                                self.run_handle.worker_id,
+                                status,
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning(
+                                "lifecycle reporting failed: {}: {}",
+                                type(e).__name__,
+                                e,
+                            )
+
+                    if execution_error is None and run_exception is None:
                         user_metrics_emitter.shutdown()
-                    except Exception as e:  # noqa: BLE001
-                        obs_logger.warning(
-                            "telemetry shutdown failed during worker failure handling: {}: {}",
-                            type(e).__name__,
-                            e,
-                        )
+                    else:
+                        try:
+                            user_metrics_emitter.shutdown()
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning(
+                                "telemetry shutdown failed during worker failure handling: {}: {}",
+                                type(e).__name__,
+                                e,
+                            )
 
 
 __all__ = ["Worker", "WorkerRunStats", "RuntimeLifecycle"]

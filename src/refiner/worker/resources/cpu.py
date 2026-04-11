@@ -4,13 +4,6 @@ import os
 import warnings
 from collections.abc import Generator
 
-from opentelemetry.metrics import CallbackOptions, Observation
-
-try:
-    import psutil
-except ImportError:
-    psutil = None  # type: ignore[assignment]
-
 
 def parse_cpu_ids(raw: str) -> list[int]:
     if not raw.strip():
@@ -46,6 +39,12 @@ def build_cpu_sets(*, num_workers: int, cpus_per_worker: int) -> list[list[int]]
 def set_cpu_affinity(cpu_ids: list[int]) -> None:
     if not cpu_ids:
         return
+    set_process_cpu_affinity(0, cpu_ids)
+
+
+def set_process_cpu_affinity(pid: int, cpu_ids: list[int]) -> None:
+    if not cpu_ids:
+        return
     if not hasattr(os, "sched_setaffinity"):
         warnings.warn(
             "cpus_per_worker requested but os.sched_setaffinity is not available; running without CPU pinning",
@@ -54,7 +53,7 @@ def set_cpu_affinity(cpu_ids: list[int]) -> None:
         )
         return
     try:
-        os.sched_setaffinity(0, set(cpu_ids))
+        os.sched_setaffinity(pid, set(cpu_ids))
     except Exception as e:
         warnings.warn(
             f"Failed to set CPU affinity ({e}); running without CPU pinning",
@@ -98,6 +97,13 @@ def cpu_quota_percent() -> float | None:
 
 
 def cpu_observer_callback():
+    from opentelemetry.metrics import CallbackOptions, Observation
+
+    try:
+        import psutil
+    except ImportError:
+        psutil = None  # type: ignore[assignment]
+
     process = psutil.Process() if psutil else None
     quota_percent = cpu_quota_percent()
 
@@ -120,4 +126,5 @@ __all__ = [
     "cpu_quota_percent",
     "parse_cpu_ids",
     "set_cpu_affinity",
+    "set_process_cpu_affinity",
 ]

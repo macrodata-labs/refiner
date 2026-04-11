@@ -4,7 +4,6 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from fsspec import AbstractFileSystem
-import pyarrow as pa
 import pyarrow.json as pa_json
 
 from refiner.io.fileset import DataFileSetLike
@@ -66,32 +65,24 @@ class JsonlReader(BaseReader):
                     mode="rb",
                     compression="infer",
                 ) as raw:
-                    reader = pa_json.open_json(
+                    table = pa_json.read_json(
                         raw,
                         read_options=pa_json.ReadOptions(
                             use_threads=self.parse_use_threads
                         ),
                     )
-                    for batch in reader:
-                        yield Tabular(
-                            self._table_with_file_path(
-                                pa.Table.from_batches([batch]), source
-                            )
-                        )
+                    yield Tabular(self._table_with_file_path(table, source))
                 continue
 
             aligned = self._open_aligned_byte_span(part)
             if aligned is None:
                 continue
             _, raw, _ = aligned
-            reader = pa_json.open_json(
+            table = pa_json.read_json(
                 raw,
                 read_options=pa_json.ReadOptions(use_threads=self.parse_use_threads),
             )
-            for batch in reader:
-                yield Tabular(
-                    self._table_with_file_path(pa.Table.from_batches([batch]), source)
-                )
+            yield Tabular(self._table_with_file_path(table, source))
 
 
 __all__ = ["JsonlReader"]

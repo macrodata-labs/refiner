@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-
 import pytest
 
 from refiner.pipeline.data.shard import FilePart, Shard
@@ -218,6 +217,70 @@ def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
     assert stats.output_rows == 2
 
 
+def test_local_launcher_launch_pings_api_me(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    verify_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "refiner.launchers.base.verify_api_key",
+        lambda **kwargs: verify_calls.append(kwargs) or None,
+    )
+    monkeypatch.setattr("refiner.launchers.base.current_api_key", lambda: "md_test")
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-launch-api-ping",
+        num_workers=1,
+    )
+    monkeypatch.setattr(launcher, "_planned_stages", lambda: [])
+    launcher.launch()
+
+    assert verify_calls == [
+        {
+            "api_key": "md_test",
+            "timeout_s": 2.0,
+        }
+    ]
+
+
+def test_local_launcher_launch_pings_api_me_without_credentials(
+    monkeypatch, tmp_path
+) -> None:
+    shard = Shard.from_file_parts([FilePart(path="a", start=0, end=1)])
+    rows = {shard.id: [DictRow({"x": 1})]}
+    pipeline = RefinerPipeline(source=_FakeReader([shard], rows))
+    requests: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "refiner.launchers.base.request_json",
+        lambda **kwargs: requests.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.base.current_api_key",
+        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-launch-api-ping-no-creds",
+        num_workers=1,
+    )
+    monkeypatch.setattr(launcher, "_planned_stages", lambda: [])
+    launcher.launch()
+
+    assert requests == [
+        {
+            "method": "GET",
+            "path": "/api/me",
+            "timeout_s": 2.0,
+        }
+    ]
+
+
 def test_launch_local_runs_planned_stages_sequentially(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -345,3 +408,45 @@ def test_local_launcher_stops_after_failed_stage(
         launcher.launch()
 
     assert launched == [0]
+
+
+def test_local_launcher_does_not_force_platform_terminal_state(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-no-forced-platform-finish",
+        num_workers=1,
+    )
+
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        lambda *, stage: LaunchStats(
+            job_id="job-1",
+            workers=1,
+            claimed=1,
+            completed=1,
+            failed=0,
+            output_rows=1,
+        ),
+    )
+    stats = launcher.launch()
+
+    assert stats.completed == 1

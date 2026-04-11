@@ -381,7 +381,7 @@ def _run_refiner_case(
         .launch_local(
             name=f"lerobot-benchmark-delete-{iteration}",
             num_workers=num_workers,
-            workdir=str(workdir),
+            rundir=str(workdir),
         )
     )
     if int(launch_stats.failed) != 0:

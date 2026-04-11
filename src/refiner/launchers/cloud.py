@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from refiner.cli.ui import stdin_is_interactive
+from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudRunCreateRequest,
     CloudRuntimeConfig,
+    MacrodataClient,
     StagePayload,
     serialize_pipeline_inline,
 )
 from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.launchers.base import BaseLauncher
-from refiner.pipeline.planning import StageComputeRequirements
+from refiner.worker.context import logger
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -31,26 +33,12 @@ class CloudLaunchResult:
 
 
 class CloudLauncher(BaseLauncher):
-    """Cloud launcher that submits a compiled run to the cloud controller.
-
-    Args:
-        pipeline: Pipeline to execute.
-        name: Human-readable run name.
-        num_workers: Requested logical worker count for cloud execution.
-        heartbeat_interval_seconds: Worker heartbeat cadence.
-        cpus_per_worker: Optional requested CPU cores per worker.
-        mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
-        gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
-        gpu_type: Optional requested GPU type per worker for cloud scheduling.
-    """
-
     def __init__(
         self,
         *,
         pipeline: "RefinerPipeline",
         name: str,
         num_workers: int = 1,
-        heartbeat_interval_seconds: int = 30,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
@@ -63,8 +51,7 @@ class CloudLauncher(BaseLauncher):
             pipeline=pipeline,
             name=name,
             num_workers=num_workers,
-            heartbeat_interval_seconds=heartbeat_interval_seconds,
-            cpus_per_worker=cpus_per_worker,
+            cpus_per_worker=cpus_per_worker or 1,
             gpus_per_worker=gpus_per_worker,
         )
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
@@ -75,10 +62,11 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("gpu_type must be non-empty")
         if gpu_type is not None and gpus_per_worker is None:
             raise ValueError("gpus_per_worker is required when gpu_type is set")
-        self.sync_local_dependencies = sync_local_dependencies
+        self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.gpus_per_worker = gpus_per_worker
         self.gpu_type = gpu_type.strip() if gpu_type is not None else None
+        self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
 
@@ -157,9 +145,12 @@ class CloudLauncher(BaseLauncher):
 
     def launch(self) -> CloudLaunchResult:
         try:
-            client = self._require_platform_client()
-        except RuntimeError as err:
-            raise SystemExit(str(err)) from err
+            client = MacrodataClient()
+        except MacrodataCredentialsError as err:
+            raise SystemExit(
+                "Launching jobs in the Macrodata cloud requires Macrodata "
+                "authentication. Run `macrodata login` or set MACRODATA_API_KEY."
+            ) from err
         resolved_secrets = self._resolve_env_values(self.secrets)
         resolved_env = self._resolve_env_values(self.env)
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
@@ -174,7 +165,6 @@ class CloudLauncher(BaseLauncher):
                     pipeline_payload=serialize_pipeline_inline(stage.pipeline),
                     runtime=CloudRuntimeConfig(
                         num_workers=stage.compute.num_workers,
-                        heartbeat_interval_seconds=self.heartbeat_interval_seconds,
                         cpus_per_worker=self.cpus_per_worker,
                         mem_mb_per_worker=self.mem_mb_per_worker,
                         gpus_per_worker=self.gpus_per_worker,
@@ -187,23 +177,21 @@ class CloudLauncher(BaseLauncher):
             sync_local_dependencies=self.sync_local_dependencies,
             secrets=self._merged_env(resolved_secrets, resolved_env),
         )
-        resp = client.cloud_submit_job(request=request)
-        self._info(
-            f"Track job here: {self._job_tracking_url(client=client, job_id=resp.job_id, workspace_slug=resp.workspace_slug)}"
+        try:
+            resp = client.cloud_submit_job(request=request)
+        except MacrodataCredentialsError as err:
+            raise SystemExit(
+                "Your Macrodata API key is invalid. Run `macrodata login` "
+                "or set MACRODATA_API_KEY with a valid key."
+            ) from err
+        logger.info(
+            "Cloud job launched. View job:\n  "
+            f"{self._job_tracking_url(client=client, job_id=resp.job_id, workspace_slug=resp.workspace_slug)}"
         )
         return CloudLaunchResult(
             job_id=resp.job_id,
             stage_index=resp.stage_index,
             status=resp.status,
-        )
-
-    def _stage_compute_requirements(
-        self, compute: StageComputeRequirements
-    ) -> StageComputeRequirements:
-        return replace(
-            super()._stage_compute_requirements(compute),
-            memory_mb_per_worker=self.mem_mb_per_worker,
-            gpu_type=self.gpu_type,
         )
 
 

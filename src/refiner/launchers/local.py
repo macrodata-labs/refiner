@@ -113,6 +113,7 @@ class LocalLauncher(BaseLauncher):
     def _collect_worker_results(
         self,
         *,
+        stage_index: int,
         stage_workers: int,
         processes: list[tuple[str, subprocess.Popen[str]]],
     ) -> LaunchStats:
@@ -255,6 +256,7 @@ class LocalLauncher(BaseLauncher):
         *,
         stage: PlannedStage,
     ) -> LaunchStats:
+        # Resolve worker capacity and remaining stage shards.
         stage_workers = self._clamp_workers_for_cpu_limit(
             stage.compute.num_workers,
             subject="Stage",
@@ -299,6 +301,7 @@ class LocalLauncher(BaseLauncher):
                 output_rows=0,
             )
 
+        # Persist the stage payload and worker assignments under the rundir.
         stage_run_dir = Path(self.rundir) / f"stage-{stage.index}"
         stage_run_dir.mkdir(parents=True, exist_ok=True)
         payload_path = stage_run_dir / "pipeline.cloudpickle"
@@ -308,6 +311,7 @@ class LocalLauncher(BaseLauncher):
             num_workers=stage_workers,
         )
 
+        # Spawn one subprocess per worker assignment.
         worker_ids = [uuid4().hex[:12] for _ in range(stage_workers)]
         processes: list[tuple[str, subprocess.Popen[str]]] = []
         for rank in range(stage_workers):
@@ -339,6 +343,7 @@ class LocalLauncher(BaseLauncher):
             )
 
         return self._collect_worker_results(
+            stage_index=stage.index,
             stage_workers=stage_workers,
             processes=processes,
         )
@@ -359,7 +364,9 @@ class LocalLauncher(BaseLauncher):
             output_rows=0,
         )
         for stage in stages:
-            stage_stats = self._launch_stage(stage=stage)
+            stage_stats = self._launch_stage(
+                stage=stage,
+            )
             totals = LaunchStats(
                 job_id=self.job_id,
                 workers=totals.workers + stage_stats.workers,
@@ -372,7 +379,6 @@ class LocalLauncher(BaseLauncher):
                 raise RuntimeError(
                     f"stage {stage.index} failed with {stage_stats.failed} failed shard(s)"
                 )
-
         return totals
 
 
