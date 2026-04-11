@@ -2,7 +2,7 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
 
   "[python]": {
-    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.defaultFormatter": "astral-sh.ruff",
     "editor.formatOnSave": true
   },
 
