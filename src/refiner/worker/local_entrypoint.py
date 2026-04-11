@@ -4,10 +4,9 @@ import argparse
 import json
 
 import cloudpickle
-from loguru import logger
 
 from refiner.pipeline.data.shard import Shard
-from refiner.worker.context import RunHandle
+from refiner.worker.context import RunHandle, logger
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
 from refiner.worker.runner import Worker
