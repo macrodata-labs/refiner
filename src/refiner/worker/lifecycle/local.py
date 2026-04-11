@@ -9,6 +9,34 @@ from refiner.platform.client.models import FinalizedShardWorker
 from refiner.worker.context import RunHandle
 
 
+def read_finalized_workers(
+    *, rundir: str, stage_index: int
+) -> list[FinalizedShardWorker]:
+    directory = Path(rundir) / f"stage-{stage_index}" / "completed"
+    if not directory.exists():
+        return []
+
+    rows: list[FinalizedShardWorker] = []
+    for path in sorted(directory.glob("*.jsonl")):
+        worker_id = path.stem
+        try:
+            lines = path.read_text().splitlines()
+        except Exception:
+            continue
+        for line in lines:
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            shard_id = payload.get("shard_id") if isinstance(payload, dict) else None
+            if isinstance(shard_id, str):
+                rows.append(
+                    FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)
+                )
+    rows.sort(key=lambda row: row.shard_id)
+    return rows
+
+
 class LocalRuntimeLifecycle:
     def __init__(
         self,
@@ -47,32 +75,13 @@ class LocalRuntimeLifecycle:
         self, *, stage_index: int | None = None
     ) -> list[FinalizedShardWorker]:
         target_stage = self.run.stage_index if stage_index is None else stage_index
-        directory = Path(self.rundir) / f"stage-{target_stage}" / "completed"
-        if not directory.exists():
-            return []
-        out: list[FinalizedShardWorker] = []
-        for path in sorted(directory.glob("*.jsonl")):
-            worker_id = path.stem
-            try:
-                lines = path.read_text().splitlines()
-            except Exception:
-                continue
-            for line in lines:
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                shard_id = (
-                    payload.get("shard_id") if isinstance(payload, dict) else None
-                )
-                if isinstance(shard_id, str):
-                    out.append(
-                        FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)
-                    )
-        out.sort(key=lambda row: row.shard_id)
-        return out
+        return read_finalized_workers(
+            rundir=self.rundir,
+            stage_index=target_stage,
+        )
 
 
 __all__ = [
     "LocalRuntimeLifecycle",
+    "read_finalized_workers",
 ]

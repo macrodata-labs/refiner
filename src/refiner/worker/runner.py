@@ -32,13 +32,11 @@ class Worker:
         *,
         run_handle: RunHandle,
         heartbeat_interval_seconds: int = 0,
-        local_workdir: str | None = None,
         runtime_lifecycle: RuntimeLifecycle,
     ):
         self.pipeline = pipeline
         self.run_handle = run_handle
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
-        self.local_workdir = local_workdir
         self.runtime_lifecycle = runtime_lifecycle
         if self.heartbeat_interval_seconds < 0:
             raise ValueError("heartbeat_interval_seconds must be >= 0")

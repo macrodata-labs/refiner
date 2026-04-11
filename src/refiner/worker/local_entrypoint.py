@@ -66,7 +66,6 @@ def main() -> int:
         stats = Worker(
             pipeline=pipeline,
             run_handle=run_handle,
-            local_workdir=args.rundir,
             runtime_lifecycle=runtime_lifecycle,
         ).run()
         payload.update(

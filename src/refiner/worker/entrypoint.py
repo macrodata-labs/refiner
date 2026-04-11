@@ -34,6 +34,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        # temp compatibility for the cloud
         if args.workdir:
             os.environ["REFINER_WORKDIR"] = args.workdir
         cpu_ids = parse_cpu_ids(args.cpu_ids)
