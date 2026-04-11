@@ -4,12 +4,11 @@ import hashlib
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING, Any, Generator
 
 from loguru import logger as _base_logger
 
 if TYPE_CHECKING:
-    from loguru import Record
     from refiner.platform.client.api import MacrodataClient
     from refiner.worker.lifecycle.base import RuntimeLifecycle
 
@@ -46,23 +45,18 @@ _ACTIVE_STEP_INDEX: ContextVar[int | None] = ContextVar(
     "refiner_active_step_index",
     default=None,
 )
+_ACTIVE_LOGGER: ContextVar[Any | None] = ContextVar(
+    "refiner_active_logger",
+    default=None,
+)
 
 
-def _patch_log_record(record: "Record") -> None:
-    run_handle = _ACTIVE_RUN_HANDLE.get()
-    if run_handle is None:
-        return
-    extra = record["extra"]
-    if not isinstance(extra, dict):
-        return
-    extra.setdefault("job_id", run_handle.job_id)
-    extra.setdefault("stage_index", int(run_handle.stage_index))
-    extra.setdefault("worker_id", run_handle.worker_id)
-    if run_handle.worker_name is not None:
-        extra.setdefault("worker_name", run_handle.worker_name)
+class _ContextLogger:
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_ACTIVE_LOGGER.get() or _base_logger, name)
 
 
-logger = _base_logger.patch(_patch_log_record)
+logger = _ContextLogger()
 
 
 def get_active_run_handle() -> RunHandle:
@@ -90,9 +84,18 @@ def set_active_run_context(
     lifecycle_token: Token["RuntimeLifecycle" | None] = _ACTIVE_RUNTIME_LIFECYCLE.set(
         runtime_lifecycle
     )
+    logger_token: Token[Any | None] = _ACTIVE_LOGGER.set(
+        _base_logger.bind(
+            job_id=run_handle.job_id,
+            stage_index=run_handle.stage_index,
+            worker_id=run_handle.worker_id,
+            worker_name=run_handle.worker_name,
+        )
+    )
     try:
         yield
     finally:
+        _ACTIVE_LOGGER.reset(logger_token)
         _ACTIVE_RUNTIME_LIFECYCLE.reset(lifecycle_token)
         _ACTIVE_RUN_HANDLE.reset(run_token)
 
