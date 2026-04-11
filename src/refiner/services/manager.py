@@ -5,6 +5,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 from typing import Any
 
+from loguru import logger
+
 from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
 from refiner.services.vllm import VLLMRuntimeServiceBinding
 
@@ -12,7 +14,7 @@ if TYPE_CHECKING:
     from refiner.platform.client.api import MacrodataClient
 
 _POLL_INTERVAL_SECONDS = 2.0
-_START_TIMEOUT_SECONDS = 10 * 60
+_START_TIMEOUT_SECONDS = 20 * 60
 
 
 class ServiceManager:
@@ -36,6 +38,13 @@ class ServiceManager:
         self,
         services: Sequence[RuntimeServiceSpec],
     ) -> None:
+        if services:
+            for service in services:
+                logger.info(
+                    "Starting runtime service {}:{}",
+                    service.kind,
+                    service.name,
+                )
         if self._client is None:
             raise RuntimeError(
                 "Runtime service creation is only supported with cloud executor."
@@ -68,6 +77,11 @@ class ServiceManager:
         if pending is not None:
             return await pending
 
+        logger.info(
+            "Waiting for runtime service {}:{}",
+            started["kind"],
+            started["name"],
+        )
         task = asyncio.create_task(self._resolve_started_service(started))
         self._pending_by_name[name] = task
         try:
