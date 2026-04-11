@@ -3,11 +3,13 @@ from __future__ import annotations
 import re
 import time
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from refiner.pipeline.planning import (
     PlannedStage,
+    StageComputeRequirements,
     compile_planned_stages,
     plan_pipeline_stages,
 )
@@ -97,8 +99,21 @@ class BaseLauncher(ABC):
         *,
         secret_values: tuple[str, ...] = (),
     ) -> dict[str, object]:
-        return compile_planned_stages(
-            stages or self._planned_stages(), secret_values=secret_values
+        resolved_stages = [
+            replace(stage, compute=self._stage_compute_requirements(stage.compute))
+            for stage in (stages or self._planned_stages())
+        ]
+        return compile_planned_stages(resolved_stages, secret_values=secret_values)
+
+    def _stage_compute_requirements(
+        self, compute: StageComputeRequirements
+    ) -> StageComputeRequirements:
+        return replace(
+            compute,
+            cpus_per_worker=getattr(self, "cpus_per_worker", None),
+            memory_mb_per_worker=getattr(self, "mem_mb_per_worker", None),
+            gpus_per_worker=getattr(self, "gpus_per_worker", None),
+            gpu_type=getattr(self, "gpu_type", None),
         )
 
     def _run_manifest(

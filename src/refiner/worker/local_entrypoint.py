@@ -9,6 +9,7 @@ from refiner.pipeline.data.shard import Shard
 from refiner.worker.context import RunHandle, logger
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
+from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
 
 
@@ -21,6 +22,7 @@ def main() -> int:
     parser.add_argument("--worker-id", type=str, required=True)
     parser.add_argument("--rundir", type=str, required=True)
     parser.add_argument("--cpu-ids", type=str, default="")
+    parser.add_argument("--gpu-ids", type=str, default="")
     args = parser.parse_args()
 
     payload = {
@@ -35,6 +37,9 @@ def main() -> int:
         cpu_ids = tuple(parse_cpu_ids(args.cpu_ids))
         if cpu_ids:
             set_cpu_affinity(list(cpu_ids))
+        gpu_ids = parse_gpu_ids(args.gpu_ids)
+        if gpu_ids:
+            set_visible_gpu_ids(gpu_ids)
 
         with open(args.pipeline_payload, "rb") as f:
             pipeline = cloudpickle.load(f)

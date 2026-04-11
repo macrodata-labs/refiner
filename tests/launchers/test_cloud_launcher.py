@@ -341,6 +341,10 @@ def test_pipeline_launch_cloud_requires_valid_api_key(monkeypatch) -> None:
             raise MacrodataCredentialsError("Invalid API key", missing=False)
 
     monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
 
     with pytest.raises(
         SystemExit,

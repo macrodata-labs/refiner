@@ -123,6 +123,30 @@ def test_build_gpu_sets_raises_when_insufficient(
         build_gpu_sets(num_workers=2, gpus_per_worker=1)
 
 
+def test_launch_local_assigns_visible_gpus(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+
+    monkeypatch.setattr(
+        "refiner.worker.resources.gpu.available_gpu_ids",
+        lambda: ["0"],
+    )
+
+    stats = pipeline.launch_local(
+        name="local-gpu-launch",
+        num_workers=1,
+        gpus_per_worker=1,
+        rundir=str(tmp_path / "run"),
+    )
+
+    assert stats.workers == 1
+    assert stats.completed == 1
+    assert stats.failed == 0
+
+
 def test_local_launcher_clamps_workers_before_planning(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
