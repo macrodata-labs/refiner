@@ -314,17 +314,6 @@ class MacrodataClient:
             timeout_s=60.0,
         )
 
-    def shard_start(
-        self, *, job_id: str, stage_index: int, worker_id: str, shard_id: str
-    ) -> OkResponse:
-        return self._request(
-            method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/{shard_id}/start",
-            response_type=OkResponse,
-            json_payload={"worker_id": worker_id},
-            timeout_s=60.0,
-        )
-
     def shard_finalized_workers(
         self, *, job_id: str, stage_index: int
     ) -> FinalizedShardWorkersResponse:
