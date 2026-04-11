@@ -30,7 +30,6 @@ if __name__ == "__main__":
                 fn=summarize,
                 provider=PROVIDER,
                 default_generation_params={"temperature": 0.1, "max_tokens": 256},
-                max_concurrent_requests=64,
             ),
             max_in_flight=64,
         )
@@ -40,6 +39,3 @@ if __name__ == "__main__":
             num_workers=1,
         )
     )
-
-    # The cloud executor must provision a runtime service binding for the
-    # generated VLLM service spec before workers start processing rows.

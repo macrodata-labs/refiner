@@ -7,11 +7,12 @@ from typing import Any, TypeAlias, cast
 
 from refiner.inference.client import InferenceResponse, _OpenAIEndpointClient
 from refiner.inference.providers import OpenAIEndpointProvider, VLLMProvider
-from refiner.pipeline.builtins import REFINER_BUILTIN_CALL_ATTR
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.services import VLLMRuntimeServiceBinding
-from refiner.worker.context import get_active_service_binding
+from refiner.worker.context import get_active_service_manager
+
+_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 GeneratePayload: TypeAlias = Mapping[str, Any]
 GenerateFn: TypeAlias = Callable[[GeneratePayload], Awaitable[InferenceResponse]]
@@ -26,12 +27,7 @@ def generate(
     fn: InferenceFn,
     provider: OpenAIEndpointProvider | VLLMProvider,
     default_generation_params: Mapping[str, Any] | None = None,
-    max_concurrent_requests: int = 128,
 ) -> Callable[[Row], Awaitable[MapResult]]:
-    if max_concurrent_requests <= 0:
-        raise ValueError("max_concurrent_requests must be > 0")
-
-    request_semaphore = asyncio.Semaphore(max_concurrent_requests)
     client: _OpenAIEndpointClient | None = None
     client_lock = asyncio.Lock()
 
@@ -49,7 +45,10 @@ def generate(
                         )
                     else:
                         service_name = provider.service_definition().name
-                        binding = get_active_service_binding(service_name)
+                        service_manager = get_active_service_manager()
+                        binding = None
+                        if service_manager is not None:
+                            binding = await service_manager.get(service_name)
                         if binding is None:
                             raise RuntimeError(
                                 f"VLLM provider requires runtime service binding {service_name!r}"
@@ -60,12 +59,10 @@ def generate(
                             )
                         client = _OpenAIEndpointClient(
                             base_url=binding.endpoint,
-                            api_key=binding.api_key,
                         )
             assert client is not None
 
-        async with request_semaphore:
-            return await client.generate(request_payload)
+        return await client.generate(request_payload)
 
     async def _wrapped(row: Row) -> MapResult:
         result = fn(row, _generate)
@@ -75,14 +72,13 @@ def generate(
 
     setattr(
         _wrapped,
-        REFINER_BUILTIN_CALL_ATTR,
+        _REFINER_BUILTIN_CALL_ATTR,
         {
             "name": "inference.generate",
             "args": {
                 "fn": fn,
                 "provider": provider.to_builtin_args(),
                 "default_generation_params": dict(default_generation_params or {}),
-                "max_concurrent_requests": max_concurrent_requests,
             },
             "services": [
                 service_definition.to_spec()

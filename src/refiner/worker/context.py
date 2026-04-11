@@ -6,10 +6,9 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generator
 
-from refiner.services import RuntimeServiceBinding
-
 if TYPE_CHECKING:
     from refiner.platform.client.api import MacrodataClient
+    from refiner.services.manager import ServiceManager
     from refiner.worker.lifecycle.base import RuntimeLifecycle
 
 
@@ -21,7 +20,6 @@ class RunHandle:
     workspace_slug: str | None = None
     worker_name: str | None = None
     worker_id: str | None = None
-    parent_provider_call_id: str | None = None
 
     @staticmethod
     def worker_token_for(worker_id: str) -> str:
@@ -46,7 +44,6 @@ class RunHandle:
             workspace_slug=self.workspace_slug,
             worker_name=worker_name if worker_name is not None else self.worker_name,
             worker_id=worker_id if worker_id is not None else self.worker_id,
-            parent_provider_call_id=self.parent_provider_call_id,
         )
 
     def with_stage(self, stage_index: int) -> RunHandle:
@@ -57,7 +54,6 @@ class RunHandle:
             workspace_slug=self.workspace_slug,
             worker_name=self.worker_name,
             worker_id=self.worker_id,
-            parent_provider_call_id=self.parent_provider_call_id,
         )
 
 
@@ -73,11 +69,9 @@ _ACTIVE_STEP_INDEX: ContextVar[int | None] = ContextVar(
     "refiner_active_step_index",
     default=None,
 )
-_ACTIVE_SERVICE_BINDINGS: ContextVar[dict[str, RuntimeServiceBinding] | None] = (
-    ContextVar(
-        "refiner_active_service_bindings",
-        default=None,
-    )
+_ACTIVE_SERVICE_MANAGER: ContextVar[ServiceManager | None] = ContextVar(
+    "refiner_active_service_manager",
+    default=None,
 )
 
 
@@ -96,11 +90,8 @@ def get_active_step_index() -> int | None:
     return _ACTIVE_STEP_INDEX.get()
 
 
-def get_active_service_binding(name: str) -> RuntimeServiceBinding | None:
-    bindings = _ACTIVE_SERVICE_BINDINGS.get()
-    if bindings is None:
-        return None
-    return bindings.get(name)
+def get_active_service_manager() -> ServiceManager | None:
+    return _ACTIVE_SERVICE_MANAGER.get()
 
 
 @contextmanager
@@ -108,19 +99,19 @@ def set_active_run_context(
     *,
     run_handle: RunHandle,
     runtime_lifecycle: RuntimeLifecycle,
-    service_bindings: dict[str, RuntimeServiceBinding] | None = None,
+    service_manager: ServiceManager | None = None,
 ) -> Generator[None, None, None]:
     run_token: Token[RunHandle | None] = _ACTIVE_RUN_HANDLE.set(run_handle)
     lifecycle_token: Token["RuntimeLifecycle" | None] = _ACTIVE_RUNTIME_LIFECYCLE.set(
         runtime_lifecycle
     )
-    bindings_token: Token[dict[str, RuntimeServiceBinding] | None] = (
-        _ACTIVE_SERVICE_BINDINGS.set(service_bindings)
+    service_manager_token: Token[ServiceManager | None] = _ACTIVE_SERVICE_MANAGER.set(
+        service_manager
     )
     try:
         yield
     finally:
-        _ACTIVE_SERVICE_BINDINGS.reset(bindings_token)
+        _ACTIVE_SERVICE_MANAGER.reset(service_manager_token)
         _ACTIVE_RUNTIME_LIFECYCLE.reset(lifecycle_token)
         _ACTIVE_RUN_HANDLE.reset(run_token)
 
@@ -137,7 +128,7 @@ def set_active_step_index(step_index: int | None) -> Generator[None, None, None]
 __all__ = [
     "RunHandle",
     "get_active_run_handle",
-    "get_active_service_binding",
+    "get_active_service_manager",
     "get_active_runtime_lifecycle",
     "get_active_step_index",
     "set_active_run_context",

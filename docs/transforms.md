@@ -208,7 +208,6 @@ pipeline = pipeline.map_async(
     mdr.inference.generate(
         fn=my_inference_fn,
         provider=endpoint,
-        max_concurrent_requests=64,
     ),
     max_in_flight=64,
 )
@@ -226,13 +225,12 @@ pipeline = pipeline.map_async(
     mdr.inference.generate(
         fn=my_inference_fn,
         provider=provider,
-        max_concurrent_requests=64,
     ),
     max_in_flight=64,
 )
 ```
 
-The VLLM variant requires the executor to provide a matching runtime service binding when the worker starts.
+The VLLM variant is cloud-only and relies on Refiner Cloud to manage the server for the job.
 
 The same contract applies to richer row subclasses like `LeRobotRow`: the row
 may expose extra helpers, but it still enters your Python function through the

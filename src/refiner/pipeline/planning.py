@@ -7,12 +7,29 @@ from dataclasses import dataclass
 from types import CodeType
 from typing import TYPE_CHECKING, Any
 
-from refiner.pipeline.builtins import REFINER_BUILTIN_CALL_ATTR
+from refiner.pipeline.steps import (
+    CastStep,
+    DropStep,
+    FilterExprStep,
+    FilterRowStep,
+    FnAsyncRowStep,
+    FnBatchStep,
+    FnFlatMapStep,
+    FnRowStep,
+    FnTableStep,
+    RenameStep,
+    SelectStep,
+    VectorizedSegmentStep,
+    WithColumnsStep,
+)
 from refiner.platform.manifest import _redact_captured_text
 from refiner.services import RuntimeServiceSpec
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+
+
+_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +59,6 @@ class PlannedStage:
     name: str
     pipeline: "RefinerPipeline"
     compute: StageComputeRequirements
-    services: tuple[RuntimeServiceSpec, ...] = ()
 
 
 def _explicit_callable_name(fn: Any) -> str | None:
@@ -77,21 +93,6 @@ def _callable_step_args(
 
 
 def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
-    from refiner.pipeline.steps import (
-        CastStep,
-        DropStep,
-        FilterExprStep,
-        FilterRowStep,
-        FnAsyncRowStep,
-        FnBatchStep,
-        FnFlatMapStep,
-        FnRowStep,
-        FnTableStep,
-        RenameStep,
-        SelectStep,
-        WithColumnsStep,
-    )
-
     explicit_name = getattr(step, "op_name", None)
     if isinstance(step, FnRowStep):
         inferred_name = (
@@ -296,7 +297,7 @@ def _callable_source(fn: Any) -> str:
 
 
 def _builtin_description(fn: Any) -> dict[str, Any] | None:
-    spec = getattr(fn, REFINER_BUILTIN_CALL_ATTR, None)
+    spec = getattr(fn, _REFINER_BUILTIN_CALL_ATTR, None)
     if not isinstance(spec, dict):
         return None
     name = spec.get("name")
@@ -319,46 +320,11 @@ def _builtin_description(fn: Any) -> dict[str, Any] | None:
 def describe_builtin(name: str, **args: Any) -> Any:
     def _decorate(fn: Any) -> Any:
         setattr(
-            fn, REFINER_BUILTIN_CALL_ATTR, {"name": name, "args": args, "services": ()}
+            fn, _REFINER_BUILTIN_CALL_ATTR, {"name": name, "args": args, "services": ()}
         )
         return fn
 
     return _decorate
-
-
-def _collect_pipeline_services(
-    pipeline: "RefinerPipeline",
-) -> tuple[RuntimeServiceSpec, ...]:
-    services_by_key: dict[
-        tuple[str, str, tuple[tuple[str, Any], ...]], RuntimeServiceSpec
-    ] = {}
-    from refiner.pipeline.steps import (
-        FnAsyncRowStep,
-        FnBatchStep,
-        FnFlatMapStep,
-        FnRowStep,
-        FnTableStep,
-    )
-
-    for step in pipeline.pipeline_steps:
-        candidates: list[Any] = []
-        if isinstance(
-            step, FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep
-        ):
-            candidates.append(step.fn)
-
-        for candidate in candidates:
-            builtin = _builtin_description(candidate)
-            if builtin is None:
-                continue
-            for service in builtin["services"]:
-                key = (
-                    service.name,
-                    service.kind,
-                    tuple(sorted((str(k), v) for k, v in service.config.items())),
-                )
-                services_by_key.setdefault(key, service)
-    return tuple(services_by_key.values())
 
 
 def _step_payload(
@@ -431,7 +397,6 @@ def _compile_stage_steps(
             args=_serialize_args(source_args, secret_values=secret_values),
         )
     )
-    from refiner.pipeline.steps import VectorizedSegmentStep
 
     for step in pipeline.pipeline_steps:
         if isinstance(step, VectorizedSegmentStep):
@@ -502,7 +467,6 @@ def plan_pipeline_stages(
                 name="write_lerobot_stage_1",
                 pipeline=pipeline,
                 compute=StageComputeRequirements(num_workers=default_num_workers),
-                services=_collect_pipeline_services(pipeline),
             ),
             PlannedStage(
                 index=1,
@@ -518,7 +482,6 @@ def plan_pipeline_stages(
             name="stage_0",
             pipeline=pipeline,
             compute=StageComputeRequirements(num_workers=default_num_workers),
-            services=_collect_pipeline_services(pipeline),
         )
     ]
 
@@ -533,7 +496,6 @@ def compile_planned_stages(
             {
                 "name": stage.name,
                 "index": stage.index,
-                "services": [service.to_dict() for service in stage.services],
                 **stage.compute.to_stage_plan_dict(),
                 "steps": _compile_stage_steps(
                     stage.pipeline, secret_values=secret_values

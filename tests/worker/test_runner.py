@@ -27,8 +27,6 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
 from refiner.platform.client.models import FinalizedShardWorker
-from refiner.platform.client.http import MacrodataApiError
-from refiner.services import VLLMRuntimeServiceBinding
 import importlib
 
 openai_module = importlib.import_module("refiner.inference.client")
@@ -284,7 +282,6 @@ def test_platform_worker_start_reports_name_and_host() -> None:
             job_id="job-1",
             stage_index=0,
             worker_name="cloud-rank-0",
-            parent_provider_call_id="ap-parent/fc-parent",
             client=cast(Any, _RecordingClient()),
         ),
     )
@@ -295,163 +292,6 @@ def test_platform_worker_start_reports_name_and_host() -> None:
     assert run.worker_id == "worker-0"
     assert seen["worker_name"] == "cloud-rank-0"
     assert isinstance(seen["host"], str)
-    assert seen["parent_provider_call_id"] == "ap-parent/fc-parent"
-
-
-def test_platform_worker_uses_preregistered_worker_id_without_reporting_start() -> None:
-    class _RecordingClient:
-        base_url = "https://example.com"
-        api_key = "md_test"
-
-        def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
-            raise AssertionError(f"unexpected report_worker_started call: {kwargs!r}")
-
-    worker = Worker(
-        pipeline=RefinerPipeline(source=_FakeReader({})),
-        run_handle=RunHandle(
-            job_id="job-1",
-            stage_index=0,
-            worker_name="cloud-rank-0",
-            worker_id="worker-pre",
-            client=cast(Any, _RecordingClient()),
-        ),
-    )
-
-    runtime_lifecycle, run = worker._start_platform_session()
-
-    assert runtime_lifecycle.run.worker_id == "worker-pre"
-    assert run.worker_id == "worker-pre"
-
-
-def test_platform_worker_starts_runtime_services_after_registration(
-    monkeypatch,
-) -> None:
-    seen: dict[str, Any] = {}
-
-    class _RecordingClient:
-        base_url = "https://example.com"
-        api_key = "md_test"
-
-        def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
-            seen["report_worker_started"] = kwargs
-            return WorkerStartedResponse(worker_id="worker-0")
-
-        def start_worker_services(self, **kwargs):
-            seen["start_worker_services"] = kwargs
-            return {
-                "services": [
-                    {
-                        "id": "svc-1",
-                        "name": "vllm-test",
-                        "kind": "llm",
-                        "endpoint": "http://127.0.0.1:8000",
-                        "api_key": "runtime-secret",
-                        "status": "starting",
-                    }
-                ]
-            }
-
-        def get_worker_service(self, **kwargs):
-            seen["get_worker_service"] = kwargs
-            return {
-                "service": {
-                    "id": "svc-1",
-                    "name": "llm:foo",
-                    "kind": "llm",
-                    "endpoint": "http://127.0.0.1:8000",
-                    "apiKey": "runtime-secret",
-                    "status": "ready",
-                }
-            }
-
-        def stop_worker_services(self, **kwargs):
-            seen["stop_worker_services"] = kwargs
-            return OkResponse()
-
-        def report_worker_finished(self, **kwargs):
-            seen["report_worker_finished"] = kwargs
-
-    class _SingleShardLifecycle(_FakeRuntimeLifecycle):
-        pass
-
-    shard = _shard("input.jsonl", 0, 1)
-    runtime_lifecycle = _SingleShardLifecycle([shard])
-    worker = _run_local_worker(
-        rows_by_shard={shard.id: []},
-        runtime_lifecycle=runtime_lifecycle,
-    )
-    worker.run_handle = RunHandle(
-        job_id="job-1",
-        stage_index=0,
-        worker_name="cloud-rank-0",
-        parent_provider_call_id="ap-parent/fc-parent",
-        client=cast(Any, _RecordingClient()),
-    )
-    monkeypatch.setattr(
-        "refiner.worker.runner._collect_pipeline_services",
-        lambda pipeline: [
-            {"name": "vllm-test", "kind": "llm", "config": {"model": "foo"}}
-        ],
-    )
-    monkeypatch.setattr(
-        "refiner.worker.runner.OtelTelemetryEmitter",
-        lambda **kwargs: _NoopTelemetryEmitter(),
-    )
-    monkeypatch.setattr(
-        worker,
-        "_start_platform_session",
-        lambda: (
-            cast(Any, runtime_lifecycle),
-            worker.run_handle.with_worker(worker_id="worker-0"),
-        ),
-    )
-
-    stats = worker.run()
-
-    assert stats.completed == 1
-    assert seen["start_worker_services"]["worker_id"] == "worker-0"
-    assert seen["get_worker_service"]["worker_id"] == "worker-0"
-    assert seen["get_worker_service"]["service_id"] == "svc-1"
-    assert seen["start_worker_services"]["services"] == [
-        {"name": "vllm-test", "kind": "llm", "config": {"model": "foo"}}
-    ]
-    assert worker.service_bindings == (
-        VLLMRuntimeServiceBinding(
-            name="vllm-test",
-            kind="llm",
-            endpoint="http://127.0.0.1:8000",
-            api_key="runtime-secret",
-        ),
-    )
-    assert seen["stop_worker_services"]["worker_id"] == "worker-0"
-    assert seen["report_worker_finished"]["status"] == "completed"
-
-
-def test_stop_runtime_services_ignores_unsupported_stop_route() -> None:
-    warnings: list[str] = []
-
-    class _RecordingLogger:
-        def warning(self, message: str, *args: object) -> None:
-            warnings.append(message.format(*args))
-
-    class _RecordingClient:
-        def stop_worker_services(self, **kwargs) -> None:
-            del kwargs
-            raise MacrodataApiError(status=405, message="Method Not Allowed")
-
-    worker = Worker(
-        pipeline=RefinerPipeline(source=_FakeReader({})),
-        run_handle=RunHandle(
-            job_id="job-1",
-            stage_index=0,
-            worker_id="worker-0",
-            client=cast(Any, _RecordingClient()),
-        ),
-    )
-
-    worker._stop_runtime_services(_RecordingLogger())
-
-    assert warnings == []
 
 
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
@@ -873,7 +713,6 @@ def test_worker_executes_endpoint_backed_inference(monkeypatch) -> None:
                 base_url="https://api.example.com"
             ),
             default_generation_params={"temperature": 0.1},
-            max_concurrent_requests=16,
         )
     )
     worker = Worker(
@@ -893,77 +732,6 @@ def test_worker_executes_endpoint_backed_inference(monkeypatch) -> None:
         "temperature": 0.1,
         "messages": [{"role": "user", "content": "hi"}],
     }
-
-
-def test_worker_executes_vllm_backed_inference_with_service_bindings(
-    monkeypatch,
-) -> None:
-    shard = _shard("svc-vllm", 0, 1)
-    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
-    rows_by_shard = {shard.id: [DictRow({"prompt": "hi"})]}
-    seen: dict[str, object] = {}
-
-    async def _fake_generate(self, payload):
-        seen["payload"] = dict(payload)
-        seen["base_url"] = self.base_url
-        seen["headers"] = dict(self.headers or {})
-        return mdr.inference.InferenceResponse(
-            text="hello",
-            finish_reason="stop",
-            usage={},
-            response={"choices": []},
-        )
-
-    monkeypatch.setattr(
-        openai_module._OpenAIEndpointClient,
-        "generate",
-        _fake_generate,
-    )
-
-    async def _infer(row: Row, generate) -> dict[str, object]:
-        response = await generate(
-            {"messages": [{"role": "user", "content": row["prompt"]}]}
-        )
-        return {"output": response.text}
-
-    provider = mdr.inference.VLLMProvider(
-        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-        model_max_context=8192,
-    )
-    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map_async(
-        mdr.inference.generate(
-            fn=_infer,
-            provider=provider,
-            default_generation_params={"temperature": 0.1},
-            max_concurrent_requests=16,
-        )
-    )
-    worker = Worker(
-        pipeline=pipeline,
-        run_handle=_local_run(),
-        service_bindings=(
-            VLLMRuntimeServiceBinding(
-                name=provider.service_definition().name,
-                kind="llm",
-                endpoint="http://127.0.0.1:9000",
-            ),
-        ),
-    )
-    monkeypatch.setattr(
-        worker,
-        "_start_local_session",
-        lambda: (runtime_lifecycle, worker.run_handle.with_worker(worker_id="local")),
-    )
-
-    stats = worker.run()
-
-    assert stats.completed == 1
-    assert seen["payload"] == {
-        "temperature": 0.1,
-        "messages": [{"role": "user", "content": "hi"}],
-    }
-    assert seen["base_url"] == "http://127.0.0.1:9000"
-    assert seen["headers"] == {}
 
 
 def test_worker_suppresses_sink_close_errors_after_run_failure() -> None:

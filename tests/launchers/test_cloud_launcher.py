@@ -4,12 +4,10 @@ import pytest
 from collections.abc import Callable
 from typing import cast
 
-import refiner as mdr
 from refiner.pipeline import read_jsonl
 from refiner.pipeline.planning import (
     PlannedStage,
     StageComputeRequirements,
-    plan_pipeline_stages,
 )
 from refiner.platform.client import (
     CloudPipelinePayload,
@@ -116,7 +114,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.heartbeat_interval_seconds == 12
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
-    assert request.stage_payloads[0].services == ()
     assert request.stage_payloads[0].runtime.gpus_per_worker == 2
     assert request.stage_payloads[0].runtime.gpu_type == "h100"
     assert request.manifest == {
@@ -124,33 +121,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
         "script": {"text": "print('hi')"},
     }
-
-
-def test_pipeline_launch_cloud_includes_stage_services(monkeypatch) -> None:
-    captured = _stub_cloud_submit(monkeypatch, manifest={"version": 1})
-    monkeypatch.setattr(
-        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
-        lambda ref: True,
-    )
-    monkeypatch.setattr(
-        "refiner.launchers.base.plan_pipeline_stages",
-        plan_pipeline_stages,
-    )
-
-    pipeline = read_jsonl("input.jsonl").map_async(
-        mdr.inference.generate(
-            fn=lambda row, generate: row,
-            provider=mdr.inference.VLLMProvider(
-                model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-                model_max_context=8192,
-            ),
-        )
-    )
-    pipeline.launch_cloud(name="demo cloud")
-
-    request = cast(CloudRunCreateRequest, captured["request"])
-    assert request.stage_payloads[0].services
-    assert request.stage_payloads[0].services[0].kind == "llm"
 
 
 def test_pipeline_launch_cloud_requires_gpu_type_with_gpu_count(monkeypatch) -> None:

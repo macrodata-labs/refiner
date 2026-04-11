@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -15,25 +15,28 @@ class InferenceResponse:
     response: Mapping[str, Any]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _OpenAIEndpointClient:
     base_url: str
     api_key: str | None = None
     headers: Mapping[str, str] | None = None
+    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
 
     async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
-        endpoint_path = (
-            "/v1/chat/completions" if "messages" in payload else "/v1/completions"
-        )
+        use_chat = "messages" in payload
+        endpoint_path = "/v1/chat/completions" if use_chat else "/v1/completions"
         headers = dict(self.headers or {})
         if self.api_key is not None:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        async with httpx.AsyncClient(
-            base_url=_normalize_openai_base_url(self.base_url),
-            timeout=60.0,
-            headers=headers,
-        ) as client:
-            response = await client.post(endpoint_path, json=dict(payload))
+        client = self._client
+        if client is None:
+            client = httpx.AsyncClient(
+                base_url=_normalize_openai_base_url(self.base_url),
+                timeout=60.0,
+                headers=headers,
+            )
+            self._client = client
+        response = await client.post(endpoint_path, json=dict(payload))
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -51,7 +54,7 @@ class _OpenAIEndpointClient:
             raise RuntimeError("generation response must be a JSON object")
         return _parse_inference_response(
             response_json,
-            use_chat="messages" in payload,
+            use_chat=use_chat,
         )
 
 

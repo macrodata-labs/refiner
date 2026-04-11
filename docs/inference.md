@@ -1,14 +1,14 @@
 ---
 title: "Inference"
-description: "Run row-oriented async inference against a direct endpoint or a VLLM-backed runtime"
+description: "Run row-oriented async text generation against a direct endpoint or a cloud-managed VLLM runtime"
 ---
 
-Refiner inference is a row-oriented wrapper around `.map_async(...)` for model generation.
+Refiner inference is a row-oriented wrapper around `.map_async(...)` for text generation.
 
 It supports two provider modes:
 
 - `OpenAIEndpointProvider`: call a direct OpenAI-compatible HTTP endpoint
-- `VLLMProvider`: declare a VLLM-backed runtime requirement and resolve the actual endpoint from executor-provided runtime bindings
+- `VLLMProvider`: ask Refiner Cloud to start and manage a VLLM server for the model you specify
 
 ## Direct endpoint
 
@@ -39,7 +39,6 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
         fn=summarize,
         provider=endpoint,
         default_generation_params={"temperature": 0.1, "max_tokens": 256},
-        max_concurrent_requests=64,
     ),
     max_in_flight=64,
 )
@@ -49,7 +48,7 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 
 ## VLLM-backed runtime
 
-Use `VLLMProvider` when the executor is responsible for provisioning a runtime service and handing workers a resolved endpoint at execution time:
+Use `VLLMProvider` when launching on Refiner Cloud and you want the platform to start and manage a VLLM server for you:
 
 ```python
 import refiner as mdr
@@ -76,13 +75,12 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
         fn=summarize,
         provider=provider,
         default_generation_params={"temperature": 0.1, "max_tokens": 256},
-        max_concurrent_requests=64,
     ),
     max_in_flight=64,
 )
 ```
 
-This provider does not contain an endpoint directly. During planning it emits a runtime service spec, and during execution it expects the worker runtime to provide a matching `VLLMRuntimeServiceBinding`.
+This mode is cloud-only. You provide the model config, and Refiner Cloud handles the VLLM server lifecycle for the job.
 
 ## Configuration
 
@@ -91,7 +89,6 @@ This provider does not contain an endpoint directly. During planning it emits a 
 - `fn`: async or sync user function with signature `fn(row, generate) -> dict[str, object] | Row`
 - `provider`: either an `OpenAIEndpointProvider` or a `VLLMProvider`
 - `default_generation_params`: default request payload fields merged into each generation call
-- `max_concurrent_requests`: total in-flight HTTP generation requests across all rows
 
 `.map_async(...)` still controls async row execution:
 
@@ -104,6 +101,8 @@ The `generate` callback passed into your function returns an `InferenceResponse`
 - `finish_reason`
 - `usage`
 - `response`
+
+This helper is currently text-generation-oriented. It expects text completions or chat completions and returns `response.text`. It is not the right API yet for embeddings or image-generation-style outputs.
 
 ## Provider
 
@@ -131,22 +130,16 @@ provider = mdr.inference.VLLMProvider(
 )
 ```
 
-This provider only carries model configuration. It does not contain a base URL or start a local runtime. Instead:
-
-- planning converts it into a `VLLMServiceDefinition`
-- the service definition emits a runtime service spec
-- the executor provisions the runtime
-- workers resolve the matching `VLLMRuntimeServiceBinding` by service name at execution time
+This provider only carries model configuration. It does not contain a base URL, and it does not start a local runtime. When you launch on cloud, Refiner Cloud starts and manages the matching VLLM server for the job.
 
 ## Examples
 
 - Direct endpoint example: [examples/inference_endpoint.py](/Users/hynky/.codex/worktrees/ab9a/refiner/examples/inference_endpoint.py)
 - VLLM-backed example: [examples/inference_vllm.py](/Users/hynky/.codex/worktrees/ab9a/refiner/examples/inference_vllm.py)
 
-The endpoint example runs locally against an OpenAI-compatible HTTP endpoint.
-The VLLM example declares a managed runtime requirement and is meant for cloud
-execution where the executor provisions the matching runtime service binding.
+The endpoint example runs against an OpenAI-compatible HTTP endpoint.
+The VLLM example is meant for cloud execution, where Refiner Cloud manages the server for you.
 
 ## Internal Notes
 
-The inference helper builds an OpenAI-compatible HTTP client, merges default request parameters, and enforces request concurrency with a semaphore. Endpoint-backed inference uses only the provider config. VLLM-backed inference emits a runtime service spec during planning and resolves a `VLLMRuntimeServiceBinding` from worker context at execution time.
+Refiner sends OpenAI-compatible requests and merges `default_generation_params` into each call. With `OpenAIEndpointProvider`, requests go directly to the configured endpoint. With `VLLMProvider` on cloud, Refiner Cloud manages the server and the step uses that managed endpoint automatically.

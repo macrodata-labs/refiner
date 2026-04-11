@@ -10,21 +10,10 @@ from loguru import logger
 
 from refiner.platform.client.http import MacrodataApiError
 from refiner.platform.client.api import MacrodataClient
-from refiner.services import parse_runtime_service_bindings
 from refiner.worker.context import RunHandle
 from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
 from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
-
-
-def _load_service_bindings(path: str | None):
-    if path is None:
-        return ()
-    with open(path, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-    if not isinstance(payload, dict):
-        raise ValueError("service bindings payload must be a JSON object")
-    return parse_runtime_service_bindings(payload)
 
 
 def main() -> int:
@@ -39,12 +28,9 @@ def main() -> int:
         default=os.environ.get("REFINER_RUNTIME_BACKEND", "auto"),
     )
     parser.add_argument("--worker-name", type=str, default="worker")
-    parser.add_argument("--worker-id", type=str, default="")
-    parser.add_argument("--parent-provider-call-id", type=str, default="")
     parser.add_argument("--heartbeat-interval-seconds", type=int, default=30)
     parser.add_argument("--workdir", type=str, default=None)
     parser.add_argument("--cpu-ids", type=str, default="")
-    parser.add_argument("--service-bindings-path", type=str, default=None)
     parser.add_argument("--gpu-ids", type=str, default="")
     args = parser.parse_args()
 
@@ -64,14 +50,11 @@ def main() -> int:
 
         with open(args.pipeline_payload, "rb") as f:
             pipeline = cloudpickle.load(f)
-        service_bindings = _load_service_bindings(args.service_bindings_path)
 
         run_handle = RunHandle(
             job_id=args.job_id,
             stage_index=args.stage_index,
             worker_name=args.worker_name,
-            worker_id=args.worker_id.strip() or None,
-            parent_provider_call_id=args.parent_provider_call_id.strip() or None,
         )
 
         if args.runtime_backend != "file":
@@ -81,9 +64,6 @@ def main() -> int:
                     job_id=args.job_id,
                     stage_index=args.stage_index,
                     worker_name=args.worker_name,
-                    worker_id=args.worker_id.strip() or None,
-                    parent_provider_call_id=args.parent_provider_call_id.strip()
-                    or None,
                     client=client,
                 )
             except Exception as e:
@@ -100,7 +80,6 @@ def main() -> int:
             run_handle=run_handle,
             heartbeat_interval_seconds=args.heartbeat_interval_seconds,
             local_workdir=args.workdir,
-            service_bindings=service_bindings,
         ).run()
         print(
             json.dumps(

@@ -180,7 +180,6 @@ class CloudLauncher(BaseLauncher):
                         gpus_per_worker=self.gpus_per_worker,
                         gpu_type=self.gpu_type,
                     ),
-                    services=stage.services,
                 )
                 for stage in stages
             ],

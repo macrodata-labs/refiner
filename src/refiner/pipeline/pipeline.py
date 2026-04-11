@@ -136,14 +136,14 @@ class RefinerPipeline:
         self,
         fn: AsyncMapFn,
         *,
-        max_in_flight: int | None = None,
-        preserve_order: bool | None = None,
+        max_in_flight: int = 16,
+        preserve_order: bool = True,
     ) -> "RefinerPipeline":
         return self.add_step(
             FnAsyncRowStep(
                 fn=fn,
-                max_in_flight=max_in_flight if max_in_flight is not None else 16,
-                preserve_order=preserve_order if preserve_order is not None else True,
+                max_in_flight=max_in_flight,
+                preserve_order=preserve_order,
                 op_name="map_async",
                 index=self._next_step_index(),
             )
