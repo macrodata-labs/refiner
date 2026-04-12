@@ -86,7 +86,6 @@ class LocalLauncher(BaseLauncher):
     def _collect_worker_results(
         self,
         *,
-        stage_index: int,
         stage_workers: int,
         processes: list[tuple[str, subprocess.Popen[str]]],
     ) -> LaunchStats:
@@ -311,7 +310,6 @@ class LocalLauncher(BaseLauncher):
             )
 
         return self._collect_worker_results(
-            stage_index=stage.index,
             stage_workers=stage_workers,
             processes=processes,
         )
