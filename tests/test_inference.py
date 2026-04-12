@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
-import inspect
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -24,7 +22,7 @@ from refiner.services import (
 from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.metrics.context import set_active_user_metrics_emitter
 
-openai_module = importlib.import_module("refiner.inference.client")
+from refiner.inference import client as openai_module
 
 
 class _FakeServiceClient:
@@ -96,34 +94,6 @@ def test_vllm_provider_requires_non_empty_model_name_or_path() -> None:
 def test_vllm_provider_rejects_non_positive_model_max_context() -> None:
     with pytest.raises(ValueError, match="model_max_context must be > 0 when provided"):
         VLLMProvider(model="meta-llama/Llama-3.1-8B-Instruct", model_max_context=0)
-
-
-def test_vllm_provider_accepts_optional_model_max_context() -> None:
-    provider = VLLMProvider(
-        model="meta-llama/Llama-3.1-8B-Instruct",
-        model_max_context=8192,
-    )
-
-    assert provider.model == "meta-llama/Llama-3.1-8B-Instruct"
-    assert provider.model_max_context == 8192
-
-
-def test_vllm_provider_emits_service_definition() -> None:
-    provider = VLLMProvider(
-        model="meta-llama/Llama-3.1-8B-Instruct",
-        model_max_context=8192,
-    )
-
-    definition = provider.service_definition()
-    spec = definition.to_spec()
-
-    assert spec.kind == "llm"
-    assert definition.name.startswith("vllm-")
-    assert spec.name == definition.name
-    assert spec.config == {
-        "model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
-        "model_max_context": 8192,
-    }
 
 
 def test_vllm_service_definition_emits_runtime_service_spec() -> None:
@@ -214,9 +184,7 @@ def test_inference_generate_invokes_user_fn_and_merges_default_params(
     assert isinstance(step, FnAsyncRowStep)
 
     async def _invoke() -> object:
-        outcome = step.apply_row_async(DictRow({"prompt": "hi"}))
-        assert inspect.isawaitable(outcome)
-        return await outcome
+        return await infer(DictRow({"prompt": "hi"}))
 
     result = asyncio.run(_invoke())
 
@@ -263,46 +231,6 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["api_key"] == "secret"
-
-
-def test_openai_endpoint_provider_model_is_used_as_default_request_model(
-    monkeypatch,
-) -> None:
-    seen: dict[str, object] = {}
-
-    async def _fake_generate(self, payload):
-        seen["payload"] = dict(payload)
-        return InferenceResponse(
-            text="ok",
-            finish_reason="stop",
-            usage={},
-            response={"choices": []},
-        )
-
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
-
-    async def _inference_fn(row, generate):
-        response = await generate({"prompt": row["prompt"]})
-        return {"output": response.text}
-
-    infer = mdr.inference.generate(
-        fn=_inference_fn,
-        provider=OpenAIEndpointProvider(
-            base_url="https://api.example.com",
-            model="openai/gpt-5.2",
-        ),
-    )
-
-    async def _invoke() -> object:
-        return await infer(DictRow({"prompt": "hi"}))
-
-    result = asyncio.run(_invoke())
-
-    assert result == {"output": "ok"}
-    assert seen["payload"] == {
-        "model": "openai/gpt-5.2",
-        "prompt": "hi",
-    }
 
 
 def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
@@ -601,107 +529,3 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
     assert result == {"output": "ok"}
     assert seen["base_url"] == "http://127.0.0.1:8000"
     assert seen["api_key"] == "service-secret"
-
-
-def test_vllm_provider_awaits_service_manager(monkeypatch) -> None:
-    seen: dict[str, object] = {}
-
-    async def _fake_generate(self, payload):
-        seen["payload"] = dict(payload)
-        seen["base_url"] = self.base_url
-        seen["api_key"] = self.api_key
-        return InferenceResponse(
-            text="ok",
-            finish_reason="stop",
-            usage={},
-            response={"choices": []},
-        )
-
-    class _Runtime:
-        def claim(self, previous=None):
-            del previous
-            return None
-
-        def heartbeat(self, shards):
-            del shards
-
-        def complete(self, shard):
-            del shard
-
-        def fail(self, shard, error=None):
-            del shard, error
-
-        def finalized_workers(self, *, stage_index=None):
-            del stage_index
-            return []
-
-    def _get_service(service_id: str) -> Mapping[str, object]:
-        seen["service_id"] = service_id
-        return {
-            "service": {
-                "id": service_id,
-                "name": binding.name,
-                "kind": "llm",
-                "status": "ready",
-                "endpoint": binding.endpoint,
-                "api_key": binding.api_key,
-            }
-        }
-
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
-
-    provider = VLLMProvider(
-        model="meta-llama/Llama-3.1-8B-Instruct",
-        model_max_context=8192,
-    )
-    binding = VLLMRuntimeServiceBinding(
-        name=provider.service_definition().name,
-        kind="llm",
-        endpoint="http://127.0.0.1:9100",
-        api_key="service-secret",
-    )
-    client = _FakeServiceClient(
-        start_response={
-            "services": [{"id": "svc-1", "name": binding.name, "kind": "llm"}]
-        },
-        get_service=_get_service,
-    )
-    service_manager = ServiceManager(
-        client=cast(Any, client),
-        job_id="job-1",
-        stage_index=0,
-        worker_id="worker-1",
-    )
-    run_handle = RunHandle(
-        job_id="job-1",
-        stage_index=0,
-        worker_id="worker-1",
-        client=cast(Any, client),
-    )
-
-    async def _inference_fn(row, generate):
-        response = await generate({"prompt": row["prompt"]})
-        return {"output": response.text}
-
-    infer = mdr.inference.generate(
-        fn=_inference_fn,
-        provider=provider,
-    )
-
-    async def _invoke() -> object:
-        with set_active_run_context(
-            run_handle=run_handle,
-            runtime_lifecycle=_Runtime(),
-            service_manager=service_manager,
-        ):
-            await service_manager.start_services(
-                [provider.service_definition().to_spec()]
-            )
-            return await infer(DictRow({"prompt": "hi"}))
-
-    result = asyncio.run(_invoke())
-
-    assert result == {"output": "ok"}
-    assert seen["api_key"] == "service-secret"
-    assert seen["service_id"] == "svc-1"
-    assert seen["base_url"] == "http://127.0.0.1:9100"

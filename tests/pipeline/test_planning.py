@@ -143,6 +143,7 @@ def test_compile_pipeline_plan_uses_named_callable_for_step_name() -> None:
     payload = compile_pipeline_plan(pipeline)
     steps = payload["stages"][0]["steps"]
     assert steps[1]["name"] == "duplicate_selected"
+    assert steps[1]["type"] == "row_map"
 
 
 def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:

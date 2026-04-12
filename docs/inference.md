@@ -7,7 +7,7 @@ Models in the loop, are now part of almost every processing step in modern data 
 
 It supports two modes:
 - `OpenAIEndpointProvider`: call a direct OpenAI-compatible HTTP endpoint (OpenAI/OpenRouter etc..)
-- `VLLMProvider`: ask Refiner Cloud to start and manage a VLLM server for you, giving you dedicated endpoint to call. This is typically considreably cheaper and stable ("no rate-limit"). <TODO add some calculation>. As of right now this mode is only supported when running in the cloud.
+- `VLLMProvider`: ask Refiner Cloud to start and manage a VLLM server for you, giving you dedicated endpoint to call. Compared to using inference provider, this allows you to heavily paralelize, unlike with providers where you quickly hit rate-limit. As of right now this mode is only supported when running in the cloud.
 
 ## Usage
 
@@ -72,18 +72,24 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
         fn=summarize,
         provider=provider,
         default_generation_params={"temperature": 0.1, "max_tokens": 256},
+        max_concurrent_requests=512
+        # Your generate function can create multiple generaate requests at a time (e.g video with multiple frames), this ensures we run 256 rows at at a time, but in total we never have more than 512 concurrent requests
     ),
-    max_in_flight=256, # Adjust to prevent overwheliming the endpoint. 256 is recommend.
+    max_in_flight=256, # Sets max in-flight rows
 )
 ```
 
-This mode is cloud-only. You provide the model config, and Refiner Cloud handles the VLLM server lifecycle for the job.
+#### Cold-Starts
+Because we spawn the VLLM on fresh hardware, the VLLM startup can take from 2-20 minutes (depending on model size) due to model complications, model weight downloads and torch initialization. To speed-up this process, we provide a torch compile cache as well as model weights by default for following models:
+- `google/gemma-4-26B-A4B-it`
+- `Qwen/Qwen3-VL-30B-A3B-Instruct`
+- `Qwen/Qwen3-VL-8B-Instruct`
 
-### Supported models
-- `Qwen/Qwen3-VL-30B-A3B-Instruct` 16384
-- `Qwen/Qwen3-VL-8B-Instruct` 24576
-- `google/gemma-4-26B-A4B-it` 32768
+While you can use models beyond the selection above, the startup time will be affected by the absence of the caches (only the first-time).
 
+#### Inference Hardware
+As of now, all VLLM deployments are served from 1x H100, which puts restriction on model sizes. However this is subject to change to allow
+higher variability and availability.
 
 ## Examples
 

@@ -191,17 +191,10 @@ pipeline = pipeline.batch_map(
 Async transforms are useful for remote lookups or model calls:
 
 ```python
-pipeline = pipeline.map_async(fetch_embedding, max_in_flight=32)
-```
-
-For inference, use the dedicated row-oriented helper with either a direct endpoint provider or a VLLM provider.
-
-Endpoint-backed example:
-
-```python
 endpoint = mdr.inference.OpenAIEndpointProvider(
     base_url="https://api.openai.com",
     api_key="YOUR_API_KEY",
+    model="gpt-5-mini"
 )
 
 pipeline = pipeline.map_async(
@@ -212,25 +205,6 @@ pipeline = pipeline.map_async(
     max_in_flight=64,
 )
 ```
-
-VLLM-backed example:
-
-```python
-provider = mdr.inference.VLLMProvider(
-    model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-    model_max_context=8192,
-)
-
-pipeline = pipeline.map_async(
-    mdr.inference.generate(
-        fn=my_inference_fn,
-        provider=provider,
-    ),
-    max_in_flight=64,
-)
-```
-
-The VLLM variant is cloud-only and relies on Refiner Cloud to manage the server for the job.
 
 The same contract applies to richer row subclasses like `LeRobotRow`: the row
 may expose extra helpers, but it still enters your Python function through the

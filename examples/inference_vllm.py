@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import refiner as mdr
 
-INPUT_PATH = "input.jsonl"
 OUTPUT_PATH = "output/vllm-inference.jsonl"
 PROVIDER = mdr.inference.VLLMProvider(
-    model_name_or_path="Qwen/Qwen2.5-0.5B",
+    model="google/gemma-4-26B-A4B-it",
     model_max_context=8192,
 )
 
@@ -24,14 +23,15 @@ async def summarize(row, generate):
 
 if __name__ == "__main__":
     (
-        mdr.from_items([{"text": "Hello, world!"}])
+        mdr.from_items([{"text": "Hello, world!"}] * 10000)
         .map_async(
             mdr.inference.generate(
                 fn=summarize,
                 provider=PROVIDER,
                 default_generation_params={"temperature": 0.1, "max_tokens": 256},
             ),
-            max_in_flight=64,
+            max_in_flight=256,
+            preserve_order=False,
         )
         .write_parquet(OUTPUT_PATH)
         .launch_cloud(

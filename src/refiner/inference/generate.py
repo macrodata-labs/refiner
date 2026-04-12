@@ -39,7 +39,7 @@ def generate(
     waiting_requests = 0
     running_requests = 0
 
-    async def _ensure_metrics_registered() -> None:
+    def _ensure_metrics_registered() -> None:
         nonlocal gauges_registered
         if gauges_registered:
             return
@@ -60,7 +60,7 @@ def generate(
         nonlocal running_requests
         nonlocal waiting_requests
         request_payload: dict[str, Any] = {}
-        if isinstance(provider, OpenAIEndpointProvider) and provider.model is not None:
+        if isinstance(provider, OpenAIEndpointProvider):
             request_payload["model"] = provider.model
         request_payload.update(dict(default_generation_params or {}))
         request_payload.update(dict(payload))
@@ -88,28 +88,23 @@ def generate(
                             )
                         client = _OpenAIEndpointClient(
                             base_url=binding.endpoint,
-                            api_key=getattr(binding, "api_key", None),
+                            api_key=binding.api_key,
                         )
+                    _ensure_metrics_registered()
             assert client is not None
 
-        await _ensure_metrics_registered()
-        acquired = False
         waiting_requests += 1
+        await request_semaphore.acquire()
+        waiting_requests -= 1
+        running_requests += 1
         try:
-            async with request_semaphore:
-                acquired = True
-                waiting_requests -= 1
-                running_requests += 1
-                try:
-                    response = await client.generate(request_payload)
-                except Exception:
-                    row.log_throughput("failed_requests", 1, unit="requests")
-                    raise
-                finally:
-                    running_requests -= 1
+            response = await client.generate(request_payload)
+        except Exception:
+            row.log_throughput("failed_requests", 1, unit="requests")
+            raise
         finally:
-            if not acquired:
-                waiting_requests -= 1
+            running_requests -= 1
+            request_semaphore.release()
         row.log_throughput("successful_requests", 1, unit="requests")
         prompt_tokens = _usage_int(response.usage, "prompt_tokens")
         completion_tokens = _usage_int(response.usage, "completion_tokens")

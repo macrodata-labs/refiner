@@ -6,6 +6,7 @@ INPUT_PATH = "input.jsonl"
 OUTPUT_PATH = "output/endpoint-inference"
 ENDPOINT = mdr.inference.OpenAIEndpointProvider(
     base_url="https://openrouter.ai/api/v1",
+    model="gpt-4o-mini",
 )
 
 
@@ -31,7 +32,6 @@ if __name__ == "__main__":
                 default_generation_params={
                     "temperature": 0.1,
                     "max_tokens": 256,
-                    "model": "gpt-4o-mini",
                 },
             ),
             max_in_flight=64,

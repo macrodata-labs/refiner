@@ -104,17 +104,11 @@ class ServiceManager:
         return binding
 
     def _add_runtime_binding(self, item: Mapping[str, Any]) -> None:
-        name = str(item.get("name", "")).strip()
-        kind = str(item.get("kind", "")).strip()
-        if not name:
-            raise ValueError("runtime binding name must be non-empty")
-        if not kind:
-            raise ValueError(f"runtime binding {name!r} kind must be non-empty")
+        name = _require_string_field(item, "name", "runtime binding")
+        kind = _require_string_field(item, "kind", f"runtime binding {name!r}")
         if name in self._started_by_name or name in self._resolved_by_name:
             raise ValueError(f"duplicate service name {name!r}")
-        service_id = str(item.get("id", "")).strip()
-        if not service_id:
-            raise ValueError(f"runtime binding {name!r} must include an id")
+        service_id = _require_string_field(item, "id", f"runtime binding {name!r}")
         self._started_by_name[name] = {"id": service_id, "name": name, "kind": kind}
 
     async def _resolve_started_service(
@@ -140,13 +134,7 @@ class ServiceManager:
                 if err.status == 401:
                     raise RuntimeError(_CLOUD_ONLY_RUNTIME_SERVICES_MESSAGE) from err
                 raise
-            if not isinstance(response, Mapping):
-                raise ValueError("runtime service response must be a JSON object")
-            item = response.get("service", response)
-            if not isinstance(item, Mapping):
-                raise ValueError(
-                    "runtime service status response must contain a service object"
-                )
+            item = _response_item(response)
             status = str(item.get("status", "")).strip()
             if status == "failed":
                 error = str(item.get("error", "")).strip() or "UnknownError"
@@ -185,10 +173,28 @@ def _parse_started_services_response(
     services = payload.get("services")
     if not isinstance(services, Sequence):
         raise ValueError("runtime bindings response must contain a services list")
-    for item in services:
-        if not isinstance(item, Mapping):
-            raise ValueError("runtime bindings entries must be objects")
-    return tuple(services)
+    parsed = tuple(item for item in services if isinstance(item, Mapping))
+    if len(parsed) != len(services):
+        raise ValueError("runtime bindings entries must be objects")
+    return parsed
+
+
+def _response_item(response: Any) -> Mapping[str, Any]:
+    if not isinstance(response, Mapping):
+        raise ValueError("runtime service response must be a JSON object")
+    item = response.get("service", response)
+    if not isinstance(item, Mapping):
+        raise ValueError(
+            "runtime service status response must contain a service object"
+        )
+    return item
+
+
+def _require_string_field(payload: Mapping[str, Any], key: str, context: str) -> str:
+    value = str(payload.get(key, "")).strip()
+    if not value:
+        raise ValueError(f"{context} {key} must be non-empty")
+    return value
 
 
 __all__ = ["ServiceManager"]
