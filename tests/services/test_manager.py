@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 
+from refiner.platform.client.http import MacrodataApiError
 from refiner.services import (
     ServiceManager,
     VLLMRuntimeServiceBinding,
@@ -71,6 +72,37 @@ def test_service_manager_rejects_missing_client_startup() -> None:
     with pytest.raises(
         RuntimeError,
         match="Runtime service creation is only supported with cloud executor.",
+    ):
+        asyncio.run(
+            manager.start_services(
+                [
+                    VLLMServiceDefinition(
+                        model_name_or_path="meta-llama/Llama-3.1-8B"
+                    ).to_spec()
+                ]
+            )
+        )
+
+
+def test_service_manager_rejects_unauthorized_start_with_cloud_only_message() -> None:
+    client = _FakeClient(
+        start_response=lambda services: (_ for _ in ()).throw(
+            MacrodataApiError(status=401, message="Unauthorized")
+        ),
+        get_service=lambda service_id: {
+            "service": {"id": service_id, "status": "ready"}
+        },
+    )
+    manager = ServiceManager(
+        client=cast(Any, client),
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Runtime services can only be started when running in cloud.",
     ):
         asyncio.run(
             manager.start_services(
@@ -284,3 +316,37 @@ def test_service_manager_can_start_requested_services_lazily() -> None:
     )
     assert seen["start_calls"] == 1
     assert seen["status_calls"] == 1
+
+
+def test_service_manager_rejects_unauthorized_poll_with_cloud_only_message() -> None:
+    client = _FakeClient(
+        start_response={
+            "services": [
+                {"id": "svc-1", "name": "llm-a", "kind": "llm"},
+            ]
+        },
+        get_service=lambda service_id: (_ for _ in ()).throw(
+            MacrodataApiError(status=401, message="Unauthorized")
+        ),
+    )
+    manager = ServiceManager(
+        client=cast(Any, client),
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+    )
+    asyncio.run(
+        manager.start_services(
+            [
+                VLLMServiceDefinition(
+                    model_name_or_path="meta-llama/Llama-3.1-8B"
+                ).to_spec()
+            ]
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Runtime services can only be started when running in cloud.",
+    ):
+        asyncio.run(manager.get("llm-a"))

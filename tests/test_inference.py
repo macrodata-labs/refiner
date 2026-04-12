@@ -22,6 +22,7 @@ from refiner.services import (
     VLLMServiceDefinition,
 )
 from refiner.worker.context import RunHandle, set_active_run_context
+from refiner.worker.metrics.context import set_active_user_metrics_emitter
 
 openai_module = importlib.import_module("refiner.inference.client")
 
@@ -44,6 +45,37 @@ class _FakeServiceClient:
         del kwargs["job_id"], kwargs["stage_index"], kwargs["worker_id"]
         service_id = kwargs["service_id"]
         return self._get_service(service_id)
+
+
+class _MetricRecordingEmitter:
+    def __init__(self) -> None:
+        self.counters: list[dict[str, Any]] = []
+        self.gauges: list[dict[str, Any]] = []
+        self.registered_gauges: list[dict[str, Any]] = []
+
+    def emit_user_counter(self, **kwargs) -> None:
+        self.counters.append(kwargs)
+
+    def emit_user_gauge(self, **kwargs) -> None:
+        self.gauges.append(kwargs)
+
+    def register_user_gauge(self, **kwargs) -> None:
+        self.registered_gauges.append(kwargs)
+
+    def emit_user_histogram(self, **kwargs) -> None:
+        del kwargs
+
+    def force_flush_user_metrics(self) -> None:
+        return None
+
+    def force_flush_resource_metrics(self) -> None:
+        return None
+
+    def force_flush_logs(self) -> None:
+        return None
+
+    def shutdown(self) -> None:
+        return None
 
 
 def test_openai_endpoint_requires_non_empty_base_url() -> None:
@@ -217,6 +249,143 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["api_key"] == "secret"
+
+
+def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
+    emitter = _MetricRecordingEmitter()
+
+    async def _fake_generate(self, payload):
+        del payload
+        return InferenceResponse(
+            text="ok",
+            finish_reason="stop",
+            usage={"prompt_tokens": 11, "completion_tokens": 7},
+            response={"choices": []},
+        )
+
+    class _Runtime:
+        def claim(self, previous=None):
+            del previous
+            return None
+
+        def heartbeat(self, shards):
+            del shards
+
+        def complete(self, shard):
+            del shard
+
+        def fail(self, shard, error=None):
+            del shard, error
+
+        def finalized_workers(self, *, stage_index=None):
+            del stage_index
+            return []
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate):
+        response = await generate({"prompt": row["prompt"]})
+        return {"output": response.text}
+
+    infer = mdr.inference.generate(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(base_url="https://api.example.com"),
+    )
+    run_handle = RunHandle(job_id="job-1", stage_index=0, worker_id="worker-1")
+
+    async def _invoke() -> object:
+        with (
+            set_active_run_context(
+                run_handle=run_handle,
+                runtime_lifecycle=_Runtime(),
+                service_manager=None,
+            ),
+            set_active_user_metrics_emitter(emitter),
+        ):
+            return await infer(DictRow({"prompt": "hi"}).with_shard_id("shard-1"))
+
+    result = asyncio.run(_invoke())
+
+    assert result == {"output": "ok"}
+    counter_totals = {
+        item["label"]: sum(
+            entry["value"]
+            for entry in emitter.counters
+            if entry["label"] == item["label"]
+        )
+        for item in emitter.counters
+    }
+    assert counter_totals["successful_requests"] == 1
+    assert counter_totals["prompt_tokens"] == 11
+    assert counter_totals["completion_tokens"] == 7
+    assert "failed_requests" not in counter_totals
+    assert {item["label"] for item in emitter.registered_gauges} >= {
+        "waiting_requests",
+        "running_requests",
+    }
+
+
+def test_inference_generate_reports_failed_requests(monkeypatch) -> None:
+    emitter = _MetricRecordingEmitter()
+
+    async def _fake_generate(self, payload):
+        del self, payload
+        raise RuntimeError("boom")
+
+    class _Runtime:
+        def claim(self, previous=None):
+            del previous
+            return None
+
+        def heartbeat(self, shards):
+            del shards
+
+        def complete(self, shard):
+            del shard
+
+        def fail(self, shard, error=None):
+            del shard, error
+
+        def finalized_workers(self, *, stage_index=None):
+            del stage_index
+            return []
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate):
+        response = await generate({"prompt": row["prompt"]})
+        return {"output": response.text}
+
+    infer = mdr.inference.generate(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(base_url="https://api.example.com"),
+    )
+    run_handle = RunHandle(job_id="job-1", stage_index=0, worker_id="worker-1")
+
+    async def _invoke() -> object:
+        with (
+            set_active_run_context(
+                run_handle=run_handle,
+                runtime_lifecycle=_Runtime(),
+                service_manager=None,
+            ),
+            set_active_user_metrics_emitter(emitter),
+        ):
+            return await infer(DictRow({"prompt": "hi"}).with_shard_id("shard-1"))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(_invoke())
+
+    counter_totals = {
+        item["label"]: sum(
+            entry["value"]
+            for entry in emitter.counters
+            if entry["label"] == item["label"]
+        )
+        for item in emitter.counters
+    }
+    assert counter_totals["failed_requests"] == 1
+    assert "successful_requests" not in counter_totals
 
 
 def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:

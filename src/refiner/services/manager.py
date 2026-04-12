@@ -7,6 +7,7 @@ from typing import Any
 
 from loguru import logger
 
+from refiner.platform.client.http import MacrodataApiError
 from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
 from refiner.services.vllm import VLLMRuntimeServiceBinding
 
@@ -15,6 +16,9 @@ if TYPE_CHECKING:
 
 _POLL_INTERVAL_SECONDS = 2.0
 _START_TIMEOUT_SECONDS = 20 * 60
+_CLOUD_ONLY_RUNTIME_SERVICES_MESSAGE = (
+    "Runtime services can only be started when running in cloud."
+)
 
 
 class ServiceManager:
@@ -57,13 +61,18 @@ class ServiceManager:
             raise RuntimeError(
                 "Cloud runtime service creation requires an active cloud worker context."
             )
-        response = await asyncio.to_thread(
-            client.start_worker_services,
-            job_id=self._job_id or "",
-            stage_index=self._stage_index or 0,
-            worker_id=worker_id,
-            services=[service.to_dict() for service in services],
-        )
+        try:
+            response = await asyncio.to_thread(
+                client.start_worker_services,
+                job_id=self._job_id or "",
+                stage_index=self._stage_index or 0,
+                worker_id=worker_id,
+                services=[service.to_dict() for service in services],
+            )
+        except MacrodataApiError as err:
+            if err.status == 401:
+                raise RuntimeError(_CLOUD_ONLY_RUNTIME_SERVICES_MESSAGE) from err
+            raise
         for item in _parse_started_services_response(response):
             self._add_runtime_binding(item)
 
@@ -119,13 +128,18 @@ class ServiceManager:
             )
         deadline = asyncio.get_running_loop().time() + _START_TIMEOUT_SECONDS
         while True:
-            response = await asyncio.to_thread(
-                client.get_worker_service,
-                job_id=self._job_id or "",
-                stage_index=self._stage_index or 0,
-                worker_id=worker_id,
-                service_id=started["id"],
-            )
+            try:
+                response = await asyncio.to_thread(
+                    client.get_worker_service,
+                    job_id=self._job_id or "",
+                    stage_index=self._stage_index or 0,
+                    worker_id=worker_id,
+                    service_id=started["id"],
+                )
+            except MacrodataApiError as err:
+                if err.status == 401:
+                    raise RuntimeError(_CLOUD_ONLY_RUNTIME_SERVICES_MESSAGE) from err
+                raise
             if not isinstance(response, Mapping):
                 raise ValueError("runtime service response must be a JSON object")
             item = response.get("service", response)

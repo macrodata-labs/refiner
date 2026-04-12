@@ -11,6 +11,7 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.services import VLLMRuntimeServiceBinding
 from refiner.worker.context import get_active_service_manager
+from refiner.worker.metrics.api import register_gauge
 
 _REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
@@ -27,12 +28,37 @@ def generate(
     fn: InferenceFn,
     provider: OpenAIEndpointProvider | VLLMProvider,
     default_generation_params: Mapping[str, Any] | None = None,
+    max_concurrent_requests: int = 128,
 ) -> Callable[[Row], Awaitable[MapResult]]:
+    if max_concurrent_requests <= 0:
+        raise ValueError("max_concurrent_requests must be > 0")
     client: _OpenAIEndpointClient | None = None
     client_lock = asyncio.Lock()
+    request_semaphore = asyncio.Semaphore(max_concurrent_requests)
+    gauges_registered = False
+    waiting_requests = 0
+    running_requests = 0
 
-    async def _generate(payload: GeneratePayload) -> InferenceResponse:
+    async def _ensure_metrics_registered() -> None:
+        nonlocal gauges_registered
+        if gauges_registered:
+            return
+        register_gauge(
+            "waiting_requests",
+            lambda: waiting_requests,
+            unit="requests",
+        )
+        register_gauge(
+            "running_requests",
+            lambda: running_requests,
+            unit="requests",
+        )
+        gauges_registered = True
+
+    async def _generate(row: Row, payload: GeneratePayload) -> InferenceResponse:
         nonlocal client
+        nonlocal running_requests
+        nonlocal waiting_requests
         request_payload = dict(default_generation_params or {})
         request_payload.update(dict(payload))
         if client is None:
@@ -59,14 +85,37 @@ def generate(
                             )
                         client = _OpenAIEndpointClient(
                             base_url=binding.endpoint,
-                            api_key=binding.api_key,
+                            api_key=getattr(binding, "api_key", None),
                         )
             assert client is not None
 
-        return await client.generate(request_payload)
+        await _ensure_metrics_registered()
+        acquired = False
+        waiting_requests += 1
+        try:
+            async with request_semaphore:
+                acquired = True
+                waiting_requests -= 1
+                running_requests += 1
+                try:
+                    response = await client.generate(request_payload)
+                except Exception:
+                    row.log_throughput("failed_requests", 1, unit="requests")
+                    raise
+                finally:
+                    running_requests -= 1
+        finally:
+            if not acquired:
+                waiting_requests -= 1
+        row.log_throughput("successful_requests", 1, unit="requests")
+        prompt_tokens = _usage_int(response.usage, "prompt_tokens")
+        completion_tokens = _usage_int(response.usage, "completion_tokens")
+        row.log_throughput("prompt_tokens", prompt_tokens, unit="tokens")
+        row.log_throughput("completion_tokens", completion_tokens, unit="tokens")
+        return response
 
     async def _wrapped(row: Row) -> MapResult:
-        result = fn(row, _generate)
+        result = fn(row, lambda payload: _generate(row, payload))
         if inspect.isawaitable(result):
             return cast(MapResult, await result)
         return cast(MapResult, result)
@@ -80,6 +129,7 @@ def generate(
                 "fn": fn,
                 "provider": provider.to_builtin_args(),
                 "default_generation_params": dict(default_generation_params or {}),
+                "max_concurrent_requests": max_concurrent_requests,
             },
             "services": [
                 service_definition.to_spec()
@@ -92,3 +142,11 @@ def generate(
 
 
 __all__ = ["generate"]
+
+
+def _usage_int(usage: Mapping[str, Any], key: str) -> int:
+    raw = usage.get(key, 0)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
