@@ -84,6 +84,7 @@ class Worker:
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
+        runtime_services_started = False
 
         def _heartbeat_once() -> None:
             with inflight_lock:
@@ -161,7 +162,7 @@ class Worker:
             heartbeat_thread.start()
 
         def _source_rows():
-            nonlocal previous, claimed
+            nonlocal previous, claimed, runtime_services_started
             while True:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
@@ -177,6 +178,9 @@ class Worker:
                 rows_read = 0
                 with inflight_lock:
                     inflight_by_id[shard.id] = shard
+                if runtime_services and not runtime_services_started:
+                    asyncio.run(service_manager.start_services(runtime_services))
+                    runtime_services_started = True
                 logger.info(
                     "shard claimed shard_id={} global_ordinal={} start_key={} end_key={}",
                     shard.id,
@@ -249,10 +253,6 @@ class Worker:
                 run_exception: Exception | None = None
                 try:
                     try:
-                        if runtime_services:
-                            asyncio.run(
-                                service_manager.start_services(runtime_services)
-                            )
                         for block in self.pipeline.execute(
                             _source_rows(),
                             on_shard_delta=_apply_row_delta,
