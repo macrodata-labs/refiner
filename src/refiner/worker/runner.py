@@ -257,10 +257,12 @@ class Worker:
                                 shard.global_ordinal,
                                 failed_error,
                             )
+                            user_metrics_emitter.force_flush_logs()
                             runtime_lifecycle.fail(shard, failed_error)
                             user_metrics_emitter.force_flush_user_metrics()
                             failed += 1
                     else:
+                        _heartbeat_once()
                         with inflight_lock:
                             remaining_shards = list(inflight_by_id.values())
                         if remaining_shards:
