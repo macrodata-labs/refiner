@@ -2,7 +2,7 @@ import refiner.inference as inference
 import refiner.io as io
 import refiner.pipeline as pipeline
 import refiner.robotics as robotics
-import refiner.robotics as robot
+import refiner.text as text
 import refiner.video as video
 from refiner.pipeline import (
     from_items,
@@ -21,6 +21,9 @@ from refiner.worker.metrics.api import (
     log_throughput,
     register_gauge,
 )
+from refiner.worker.context import logger
+
+robot = robotics
 
 __all__ = [
     # sources
@@ -37,6 +40,7 @@ __all__ = [
     "log_gauges",
     "log_histogram",
     "register_gauge",
+    "logger",
     # expressions
     "col",
     "lit",
@@ -49,4 +53,5 @@ __all__ = [
     "video",
     "robot",
     "robotics",
+    "text",
 ]

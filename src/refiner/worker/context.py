@@ -4,7 +4,9 @@ import hashlib
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING, Any, Generator
+
+from loguru import logger as _base_logger
 
 if TYPE_CHECKING:
     from refiner.platform.client.api import MacrodataClient
@@ -16,10 +18,10 @@ if TYPE_CHECKING:
 class RunHandle:
     job_id: str
     stage_index: int
+    worker_id: str
     client: "MacrodataClient" | None = None
     workspace_slug: str | None = None
     worker_name: str | None = None
-    worker_id: str | None = None
 
     @staticmethod
     def worker_token_for(worker_id: str) -> str:
@@ -29,32 +31,7 @@ class RunHandle:
 
     @property
     def worker_token(self) -> str:
-        return self.worker_token_for(self.worker_id or "local")
-
-    def with_worker(
-        self,
-        *,
-        worker_name: str | None = None,
-        worker_id: str | None = None,
-    ) -> RunHandle:
-        return RunHandle(
-            job_id=self.job_id,
-            stage_index=self.stage_index,
-            client=self.client,
-            workspace_slug=self.workspace_slug,
-            worker_name=worker_name if worker_name is not None else self.worker_name,
-            worker_id=worker_id if worker_id is not None else self.worker_id,
-        )
-
-    def with_stage(self, stage_index: int) -> RunHandle:
-        return RunHandle(
-            job_id=self.job_id,
-            stage_index=stage_index,
-            client=self.client,
-            workspace_slug=self.workspace_slug,
-            worker_name=self.worker_name,
-            worker_id=self.worker_id,
-        )
+        return self.worker_token_for(self.worker_id)
 
 
 _ACTIVE_RUN_HANDLE: ContextVar[RunHandle | None] = ContextVar(
@@ -73,6 +50,18 @@ _ACTIVE_SERVICE_MANAGER: ContextVar[ServiceManager | None] = ContextVar(
     "refiner_active_service_manager",
     default=None,
 )
+_ACTIVE_LOGGER: ContextVar[Any | None] = ContextVar(
+    "refiner_active_logger",
+    default=None,
+)
+
+
+class _ContextLogger:
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_ACTIVE_LOGGER.get() or _base_logger, name)
+
+
+logger = _ContextLogger()
 
 
 def get_active_run_handle() -> RunHandle:
@@ -108,10 +97,19 @@ def set_active_run_context(
     service_manager_token: Token[ServiceManager | None] = _ACTIVE_SERVICE_MANAGER.set(
         service_manager
     )
+    logger_token: Token[Any | None] = _ACTIVE_LOGGER.set(
+        _base_logger.bind(
+            job_id=run_handle.job_id,
+            stage_index=run_handle.stage_index,
+            worker_id=run_handle.worker_id,
+            worker_name=run_handle.worker_name,
+        )
+    )
     try:
         yield
     finally:
         _ACTIVE_SERVICE_MANAGER.reset(service_manager_token)
+        _ACTIVE_LOGGER.reset(logger_token)
         _ACTIVE_RUNTIME_LIFECYCLE.reset(lifecycle_token)
         _ACTIVE_RUN_HANDLE.reset(run_token)
 
@@ -131,6 +129,7 @@ __all__ = [
     "get_active_service_manager",
     "get_active_runtime_lifecycle",
     "get_active_step_index",
+    "logger",
     "set_active_run_context",
     "set_active_step_index",
 ]

@@ -1,28 +1,28 @@
 from __future__ import annotations
 
+import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from typing import TYPE_CHECKING
-import re
-import time
 from uuid import uuid4
 
-from loguru import logger
-
-from refiner.platform.auth import CredentialsError
-from refiner.platform.client.api import MacrodataClient
-from refiner.platform.client.http import request_json, sanitize_terminal_text
-from refiner.platform.manifest import build_run_manifest
-from refiner.worker.context import RunHandle
 from refiner.pipeline.planning import (
     PlannedStage,
     StageComputeRequirements,
     compile_planned_stages,
     plan_pipeline_stages,
 )
+from refiner.platform.auth import current_api_key
+from refiner.platform.client.api import (
+    MacrodataClient,
+    request_json,
+    sanitize_terminal_text,
+    verify_api_key,
+)
+from refiner.platform.manifest import build_run_manifest
 
 if TYPE_CHECKING:
-    from refiner.pipeline.data.shard import Shard
     from refiner.pipeline import RefinerPipeline
 
 
@@ -33,8 +33,7 @@ class BaseLauncher(ABC):
         pipeline: RefinerPipeline,
         name: str,
         job_id: str | None = None,
-        num_workers: int | None = None,
-        heartbeat_interval_seconds: int | None = None,
+        num_workers: int = 1,
         cpus_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
     ):
@@ -43,35 +42,20 @@ class BaseLauncher(ABC):
         self.pipeline = pipeline
         self.name = name
         self.job_id = job_id or self._build_local_job_id(name)
-        self.cpus_per_worker: int | None = None
-        self.gpus_per_worker: int | None = None
-        if num_workers is not None:
-            if num_workers <= 0:
-                raise ValueError("num_workers must be > 0")
-            self.num_workers = num_workers
-        if heartbeat_interval_seconds is not None:
-            if heartbeat_interval_seconds <= 0:
-                raise ValueError("heartbeat_interval_seconds must be > 0")
-            self.heartbeat_interval_seconds = heartbeat_interval_seconds
-        if cpus_per_worker is not None:
-            if cpus_per_worker <= 0:
-                raise ValueError("cpus_per_worker must be > 0")
-            self.cpus_per_worker = cpus_per_worker
-        if gpus_per_worker is not None:
-            if gpus_per_worker <= 0:
-                raise ValueError("gpus_per_worker must be > 0")
-            self.gpus_per_worker = gpus_per_worker
+        if num_workers <= 0:
+            raise ValueError("num_workers must be > 0")
+        self.num_workers = num_workers
+        if cpus_per_worker is not None and cpus_per_worker <= 0:
+            raise ValueError("cpus_per_worker must be > 0")
+        self.cpus_per_worker = cpus_per_worker
+        if gpus_per_worker is not None and gpus_per_worker <= 0:
+            raise ValueError("gpus_per_worker must be > 0")
+        self.gpus_per_worker = gpus_per_worker
 
     @staticmethod
     def _build_local_job_id(name: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-") or "job"
         return f"{slug}-{int(time.time())}-{uuid4().hex[:8]}"
-
-    def _warn(self, message: str) -> None:
-        logger.warning(message)
-
-    def _info(self, message: str) -> None:
-        logger.info(message)
 
     def _job_tracking_url(
         self, *, client: MacrodataClient, job_id: str, workspace_slug: str | None = None
@@ -85,10 +69,11 @@ class BaseLauncher(ABC):
             return f"{safe_base_url}/jobs/{safe_workspace_slug}/{safe_job_id}"
         return f"{safe_base_url}/jobs/{safe_job_id}"
 
-    def _platform_client_or_none(self) -> MacrodataClient | None:
+    def _validate_key(self) -> None:
         try:
-            return MacrodataClient()
-        except CredentialsError:
+            api_key = current_api_key()
+            verify_api_key(api_key=api_key, timeout_s=2.0)
+        except Exception:
             try:
                 request_json(
                     method="GET",
@@ -96,22 +81,7 @@ class BaseLauncher(ABC):
                     timeout_s=2.0,
                 )
             except Exception:
-                pass
-            self._warn(
-                "platform integration disabled: no API key found in "
-                "MACRODATA_API_KEY or local credentials. "
-                "Run `macrodata login` or set MACRODATA_API_KEY."
-            )
-            return None
-
-    def _require_platform_client(self) -> MacrodataClient:
-        client = self._platform_client_or_none()
-        if client is None:
-            raise RuntimeError(
-                "platform runtime requires Macrodata authentication. "
-                "Run `macrodata login` or set MACRODATA_API_KEY."
-            )
-        return client
+                return
 
     def _planned_stages(self) -> list[PlannedStage]:
         requested_workers = getattr(self, "num_workers", None)
@@ -133,79 +103,23 @@ class BaseLauncher(ABC):
             replace(stage, compute=self._stage_compute_requirements(stage.compute))
             for stage in (stages or self._planned_stages())
         ]
-        return compile_planned_stages(
-            resolved_stages,
-            secret_values=secret_values,
-        )
+        return compile_planned_stages(resolved_stages, secret_values=secret_values)
 
     def _stage_compute_requirements(
         self, compute: StageComputeRequirements
     ) -> StageComputeRequirements:
         return replace(
             compute,
-            cpus_per_worker=self.cpus_per_worker,
-            gpus_per_worker=self.gpus_per_worker,
+            cpus_per_worker=getattr(self, "cpus_per_worker", None),
+            memory_mb_per_worker=getattr(self, "mem_mb_per_worker", None),
+            gpus_per_worker=getattr(self, "gpus_per_worker", None),
+            gpu_type=getattr(self, "gpu_type", None),
         )
 
     def _run_manifest(
         self, *, secret_values: tuple[str, ...] = ()
     ) -> dict[str, object]:
         return build_run_manifest(secret_values=secret_values)
-
-    def _create_platform_run(
-        self,
-        *,
-        plan: dict[str, object],
-        stages: list[PlannedStage],
-        fail_open: bool = True,
-    ) -> RunHandle | None:
-        client = self._platform_client_or_none()
-        if client is None:
-            if not fail_open:
-                raise RuntimeError(
-                    "platform runtime requires Macrodata authentication. "
-                    "Run `macrodata login` or set MACRODATA_API_KEY."
-                )
-            return None
-        try:
-            job = client.create_job(
-                name=self.name,
-                executor={"type": "refiner-local"},
-                plan=plan,
-                manifest=self._run_manifest(),
-            )
-            self.job_id = job.job_id
-            return job
-        except Exception as e:  # noqa: BLE001
-            if fail_open:
-                self._warn(
-                    "platform setup failed (continuing without it): "
-                    f"{type(e).__name__}: {e}"
-                )
-                return None
-            raise
-
-    def _stage_run(
-        self, platform_run: RunHandle | None, *, stage_index: int
-    ) -> RunHandle | None:
-        if platform_run is None:
-            return None
-        return platform_run.with_stage(stage_index)
-
-    def _seed_platform_stage(
-        self,
-        platform_run: RunHandle | None,
-        *,
-        stage_index: int,
-        shards: list["Shard"],
-    ) -> None:
-        if platform_run is None or platform_run.client is None:
-            return
-        platform_run.client.shard_register(
-            job_id=platform_run.job_id,
-            stage_index=stage_index,
-            shards=shards,
-        )
 
     @abstractmethod
     def launch(self):

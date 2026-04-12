@@ -11,8 +11,8 @@ def default_workdir() -> str:
     return str(Path.home() / ".cache" / "macrodata" / "refiner")
 
 
-def resolve_workdir(workdir: str | None) -> str:
-    value = workdir or os.environ.get("REFINER_WORKDIR") or default_workdir()
+def resolve_workdir() -> str:
+    value = os.environ.get("REFINER_WORKDIR") or default_workdir()
     path = Path(os.path.expanduser(value))
     if not path.is_absolute():
         raise ValueError("REFINER_WORKDIR must be an absolute path")

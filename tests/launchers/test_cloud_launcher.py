@@ -6,7 +6,7 @@ from typing import cast
 
 from refiner.pipeline import read_jsonl
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
-from refiner.platform.auth import CredentialsError
+from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
@@ -39,7 +39,7 @@ def _stub_cloud_submit(
 
             return _Resp()
 
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
         "refiner.launchers.cloud.serialize_pipeline_inline",
         lambda pipeline: CloudPipelinePayload(
@@ -300,7 +300,7 @@ def test_pipeline_launch_cloud_requires_missing_env_secret(monkeypatch) -> None:
         def cloud_submit_job(self, *, request):  # pragma: no cover
             raise AssertionError("cloud_submit_job should not be called")
 
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     pipeline = read_jsonl("input.jsonl")
 
     try:
@@ -318,9 +318,9 @@ def test_pipeline_launch_cloud_requires_platform_auth_before_secret_resolution(
 
     class FakeMacrodataClient:
         def __init__(self):
-            raise CredentialsError("No credentials found")
+            raise MacrodataCredentialsError("No credentials found", missing=True)
 
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     pipeline = read_jsonl("input.jsonl")
 
     try:
@@ -329,6 +329,28 @@ def test_pipeline_launch_cloud_requires_platform_auth_before_secret_resolution(
         assert "MACRODATA_API_KEY" in str(err)
     else:  # pragma: no cover
         raise AssertionError("expected SystemExit")
+
+
+def test_pipeline_launch_cloud_requires_valid_api_key(monkeypatch) -> None:
+    class FakeMacrodataClient:
+        def __init__(self):
+            self.base_url = "https://example.com"
+
+        def cloud_submit_job(self, *, request):  # noqa: ANN001
+            del request
+            raise MacrodataCredentialsError("Invalid API key", missing=False)
+
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="Your Macrodata API key is invalid.*with a valid key",
+    ):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
 
 def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
@@ -351,7 +373,7 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
 
             return _Resp()
 
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
         "refiner.launchers.cloud.serialize_pipeline_inline",
         lambda pipeline: CloudPipelinePayload(

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import cloudpickle
+import os
 import sys
-
-from refiner.platform.client.http import MacrodataApiError
+from refiner.platform.client.api import MacrodataApiError
 from refiner.worker import entrypoint
 
 
@@ -37,8 +37,6 @@ def test_entrypoint_exits_cleanly_when_stage_is_already_terminal(
             "job-1",
             "--stage-index",
             "0",
-            "--runtime-backend",
-            "platform",
         ],
     )
 
@@ -49,23 +47,24 @@ def test_entrypoint_exits_cleanly_when_stage_is_already_terminal(
     )
 
 
-def test_entrypoint_sets_visible_gpu_ids(monkeypatch, tmp_path) -> None:
+def test_entrypoint_sets_refiner_workdir_env(monkeypatch, tmp_path) -> None:
     payload_path = tmp_path / "pipeline.cloudpickle"
     payload_path.write_bytes(cloudpickle.dumps(object()))
-    seen: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        entrypoint, "MacrodataClient", lambda: (_ for _ in ()).throw(AssertionError())
-    )
-    monkeypatch.setattr(entrypoint, "set_cpu_affinity", lambda cpu_ids: None)
-    monkeypatch.setattr(
-        entrypoint,
-        "set_visible_gpu_ids",
-        lambda gpu_ids: seen.setdefault("gpu_ids", gpu_ids),
-    )
+    class _Started:
+        worker_id = "worker-1"
+
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "http://localhost"
+            self.api_key = "md_test"
+
+        def report_worker_started(self, **kwargs):
+            del kwargs
+            return _Started()
 
     class _FakeWorker:
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs) -> None:
             del kwargs
 
         def run(self):
@@ -77,6 +76,8 @@ def test_entrypoint_sets_visible_gpu_ids(monkeypatch, tmp_path) -> None:
 
             return _Stats()
 
+    monkeypatch.delenv("REFINER_WORKDIR", raising=False)
+    monkeypatch.setattr(entrypoint, "MacrodataClient", lambda: _Client())
     monkeypatch.setattr(entrypoint, "Worker", _FakeWorker)
     monkeypatch.setattr(
         sys,
@@ -89,12 +90,10 @@ def test_entrypoint_sets_visible_gpu_ids(monkeypatch, tmp_path) -> None:
             "job-1",
             "--stage-index",
             "0",
-            "--runtime-backend",
-            "file",
-            "--gpu-ids",
-            "0,3",
+            "--workdir",
+            str(tmp_path / "workdir"),
         ],
     )
 
     assert entrypoint.main() == 0
-    assert seen["gpu_ids"] == ["0", "3"]
+    assert os.environ["REFINER_WORKDIR"] == str(tmp_path / "workdir")

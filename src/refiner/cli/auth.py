@@ -5,7 +5,7 @@ import getpass
 import sys
 
 from refiner.platform.auth import (
-    CredentialsError,
+    MacrodataCredentialsError,
     clear_api_key,
     credentials_path,
     current_api_key,
@@ -79,17 +79,17 @@ def cmd_login(args: argparse.Namespace) -> int:
         token = _read_token(args)
         payload = verify_api_key(base_url=base_url, api_key=token)
         path = save_api_key(token)
-    except CredentialsError as err:
-        print(f"Credential storage error: {err}", file=sys.stderr)
-        return 1
-    except MacrodataApiError as err:
-        if err.status == 401:
+    except MacrodataCredentialsError as err:
+        if err.missing:
+            print(f"Credential storage error: {err}", file=sys.stderr)
+        else:
             print("Invalid API key.", file=sys.stderr)
             print(
                 f"Create or inspect your key: {_token_settings_url(base_url)}",
                 file=sys.stderr,
             )
-            return 1
+        return 1
+    except MacrodataApiError as err:
         print(
             f"Failed to validate API key via {base_url}/api/me: {err}", file=sys.stderr
         )
@@ -112,16 +112,16 @@ def cmd_whoami(_: argparse.Namespace) -> int:
     try:
         token = current_api_key()
         payload = verify_api_key(base_url=base_url, api_key=token)
-    except CredentialsError as err:
-        print(f"{err}. Run `macrodata login`.", file=sys.stderr)
-        return 1
-    except MacrodataApiError as err:
-        if err.status == 401:
+    except MacrodataCredentialsError as err:
+        if err.missing:
+            print(f"{err}. Run `macrodata login`.", file=sys.stderr)
+        else:
             print(
                 "Stored API key is invalid or expired. Run `macrodata login`.",
                 file=sys.stderr,
             )
-            return 1
+        return 1
+    except MacrodataApiError as err:
         print(f"Failed to verify API key via {base_url}/api/me: {err}", file=sys.stderr)
         return 1
 

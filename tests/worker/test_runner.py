@@ -26,6 +26,7 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
 from refiner.platform.client.models import FinalizedShardWorker
+from refiner.worker.lifecycle import PlatformRuntimeLifecycle
 
 
 class _FakeReader(BaseReader):
@@ -78,7 +79,7 @@ def _shard(path: str, start: int, end: int) -> Shard:
 
 
 def _local_run() -> RunHandle:
-    return RunHandle(job_id="job", stage_index=0)
+    return RunHandle(job_id="job", stage_index=0, worker_id="local")
 
 
 class _NoopTelemetryEmitter:
@@ -224,10 +225,7 @@ def _run_local_worker(
     worker = Worker(
         pipeline=pipeline,
         run_handle=_local_run(),
-    )
-    cast(Any, worker)._start_local_session = lambda: (
-        runtime_lifecycle,
-        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+        runtime_lifecycle=runtime_lifecycle,
     )
     return worker
 
@@ -260,36 +258,6 @@ def test_pipeline_executes_row_and_batch_steps() -> None:
     assert [r["y"] for r in out] == [30, 50]
 
 
-def test_platform_worker_start_reports_name_and_host() -> None:
-    shard = _shard("input.jsonl", 0, 1)
-    seen: dict[str, Any] = {}
-
-    class _RecordingClient:
-        base_url = "https://example.com"
-        api_key = "md_test"
-
-        def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
-            seen.update(kwargs)
-            return WorkerStartedResponse(worker_id="worker-0")
-
-    worker = Worker(
-        pipeline=RefinerPipeline(source=_FakeReader({shard.id: []})),
-        run_handle=RunHandle(
-            job_id="job-1",
-            stage_index=0,
-            worker_name="cloud-rank-0",
-            client=cast(Any, _RecordingClient()),
-        ),
-    )
-
-    runtime_lifecycle, run = worker._start_platform_session()
-
-    assert runtime_lifecycle.run.worker_id == "worker-0"
-    assert run.worker_id == "worker-0"
-    assert seen["worker_name"] == "cloud-rank-0"
-    assert isinstance(seen["host"], str)
-
-
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     shard1 = _shard("p1", 0, 10)
     shard2 = _shard("p2", 0, 10)
@@ -318,11 +286,12 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     worker = Worker(
         pipeline=pipeline,
         heartbeat_interval_seconds=1,
-        run_handle=_local_run(),
-    )
-    cast(Any, worker)._start_local_session = lambda: (
-        runtime_lifecycle,
-        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+        run_handle=RunHandle(
+            job_id="job",
+            stage_index=0,
+            worker_id=runtime_lifecycle.worker_id,
+        ),
+        runtime_lifecycle=runtime_lifecycle,
     )
 
     stats = worker.run()
@@ -356,11 +325,12 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail)
     worker = Worker(
         pipeline=pipeline,
-        run_handle=_local_run(),
-    )
-    cast(Any, worker)._start_local_session = lambda: (
-        runtime_lifecycle,
-        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+        run_handle=RunHandle(
+            job_id="job",
+            stage_index=0,
+            worker_id=runtime_lifecycle.worker_id,
+        ),
+        runtime_lifecycle=runtime_lifecycle,
     )
 
     stats = worker.run()
@@ -384,11 +354,12 @@ def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
 
     worker = Worker(
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(fail),
-        run_handle=_local_run(),
-    )
-    cast(Any, worker)._start_local_session = lambda: (
-        runtime_lifecycle,
-        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+        run_handle=RunHandle(
+            job_id="job",
+            stage_index=0,
+            worker_id=runtime_lifecycle.worker_id,
+        ),
+        runtime_lifecycle=runtime_lifecycle,
     )
 
     stats = worker.run()
@@ -420,11 +391,12 @@ def test_worker_can_batch_across_shards() -> None:
 
     worker = Worker(
         pipeline=pipeline,
-        run_handle=_local_run(),
-    )
-    cast(Any, worker)._start_local_session = lambda: (
-        runtime_lifecycle,
-        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+        run_handle=RunHandle(
+            job_id="job",
+            stage_index=0,
+            worker_id=runtime_lifecycle.worker_id,
+        ),
+        runtime_lifecycle=runtime_lifecycle,
     )
     stats = worker.run()
 
@@ -446,11 +418,12 @@ def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> Non
     runtime_lifecycle = _FailingCompleteRuntimeLifecycle([shard])
     worker = Worker(
         pipeline=pipeline,
-        run_handle=_local_run(),
-    )
-    cast(Any, worker)._start_local_session = lambda: (
-        runtime_lifecycle,
-        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+        run_handle=RunHandle(
+            job_id="job",
+            stage_index=0,
+            worker_id=runtime_lifecycle.worker_id,
+        ),
+        runtime_lifecycle=runtime_lifecycle,
     )
     stats = worker.run()
 
@@ -472,11 +445,12 @@ def test_worker_completes_shards_only_after_sink_drain() -> None:
 
     worker = Worker(
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).with_sink(sink),
-        run_handle=_local_run(),
-    )
-    cast(Any, worker)._start_local_session = lambda: (
-        runtime_lifecycle,
-        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+        run_handle=RunHandle(
+            job_id="job",
+            stage_index=0,
+            worker_id=runtime_lifecycle.worker_id,
+        ),
+        runtime_lifecycle=runtime_lifecycle,
     )
 
     stats = worker.run()
@@ -554,11 +528,12 @@ def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
 
     worker = Worker(
         pipeline=pipeline,
-        run_handle=_local_run(),
-    )
-    cast(Any, worker)._start_local_session = lambda: (
-        runtime_lifecycle,
-        _local_run().with_worker(worker_id=runtime_lifecycle.worker_id),
+        run_handle=RunHandle(
+            job_id="job",
+            stage_index=0,
+            worker_id=runtime_lifecycle.worker_id,
+        ),
+        runtime_lifecycle=runtime_lifecycle,
     )
 
     stats = worker.run()
@@ -610,7 +585,7 @@ def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
     rows_by_shard = {shard.id: [DictRow({"x": 1})]}
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
     monkeypatch.setattr(
-        "refiner.worker.runner.OtelTelemetryEmitter",
+        "refiner.worker.metrics.otel.OtelTelemetryEmitter",
         lambda **_: _FlushFailingTelemetryEmitter(),
     )
 
@@ -620,7 +595,17 @@ def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
             job_id="job",
             stage_index=0,
             client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
+            worker_id="worker-0",
             worker_name="worker-0",
+        ),
+        runtime_lifecycle=PlatformRuntimeLifecycle(
+            run=RunHandle(
+                job_id="job",
+                stage_index=0,
+                client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
+                worker_id="worker-0",
+                worker_name="worker-0",
+            )
         ),
     )
     with pytest.raises(RuntimeError, match="flush failed"):
@@ -636,7 +621,7 @@ def test_worker_flushes_logs_on_failure(monkeypatch) -> None:
         raise RuntimeError("kaboom")
 
     monkeypatch.setattr(
-        "refiner.worker.runner.OtelTelemetryEmitter", lambda **_: emitter
+        "refiner.worker.metrics.otel.OtelTelemetryEmitter", lambda **_: emitter
     )
     worker = Worker(
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail),
@@ -644,7 +629,17 @@ def test_worker_flushes_logs_on_failure(monkeypatch) -> None:
             job_id="job",
             stage_index=0,
             client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
+            worker_id="worker-0",
             worker_name="worker-0",
+        ),
+        runtime_lifecycle=PlatformRuntimeLifecycle(
+            run=RunHandle(
+                job_id="job",
+                stage_index=0,
+                client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
+                worker_id="worker-0",
+                worker_name="worker-0",
+            )
         ),
     )
 

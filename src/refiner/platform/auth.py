@@ -7,8 +7,12 @@ from pathlib import Path
 API_KEY_ENV_VAR = "MACRODATA_API_KEY"
 
 
-class CredentialsError(RuntimeError):
-    """Raised when local credential storage cannot be read or written."""
+class MacrodataCredentialsError(RuntimeError):
+    """Raised when Macrodata credentials are missing or rejected."""
+
+    def __init__(self, message: str, *, missing: bool):
+        super().__init__(message)
+        self.missing = missing
 
 
 def credentials_path() -> Path:
@@ -22,10 +26,16 @@ def load_api_key() -> str:
     """Load the persisted API key from the local credential file."""
     path = credentials_path()
     if not path.exists():
-        raise CredentialsError(f"No credentials found at {path}")
+        raise MacrodataCredentialsError(
+            f"No credentials found at {path}",
+            missing=True,
+        )
     api_key = path.read_text(encoding="utf-8").strip()
     if not api_key:
-        raise CredentialsError(f"Credentials file at {path} is empty")
+        raise MacrodataCredentialsError(
+            f"Credentials file at {path} is empty",
+            missing=True,
+        )
     return api_key
 
 

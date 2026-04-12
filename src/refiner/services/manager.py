@@ -7,7 +7,7 @@ from typing import Any
 
 from loguru import logger
 
-from refiner.platform.client.http import MacrodataApiError
+from refiner.platform.client.api import MacrodataApiError
 from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
 from refiner.services.vllm import VLLMRuntimeServiceBinding
 

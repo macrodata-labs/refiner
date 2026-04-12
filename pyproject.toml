@@ -1,6 +1,6 @@
 [project]
 name = "macrodata-refiner"
-version = "0.2.1"
+version = "0.2.2"
 description = "Refiner by Macrodata Labs, a data processing framework for Machine Learning large scale datasets"
 readme = "README.md"
 license = "Apache-2.0"
@@ -41,9 +41,13 @@ robotics = [
 text = [
     "warcio",
 ]
+s3 = [
+    "s3fs",
+]
 testing = [
     "macrodata-refiner[robotics]",
     "macrodata-refiner[text]",
+    "macrodata-refiner[s3]",
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
 ]

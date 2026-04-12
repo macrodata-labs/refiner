@@ -320,22 +320,16 @@ class RefinerPipeline:
         *,
         name: str,
         num_workers: int = 1,
-        workdir: str | None = None,
-        heartbeat_interval_seconds: int = 30,
-        cpus_per_worker: int | None = None,
+        rundir: str | None = None,
         gpus_per_worker: int | None = None,
-        runtime_backend: str = "auto",
     ) -> "LaunchStats":
         """Launch the pipeline locally.
 
         Args:
             name: Human-readable run name.
             num_workers: Number of local worker processes.
-            workdir: Optional working directory for runtime lifecycle and run artifacts.
-            heartbeat_interval_seconds: Heartbeat cadence for worker progress reporting.
-            cpus_per_worker: Optional CPU cores pinned per worker.
+            rundir: Optional explicit local run directory. Reuse it to resume a prior local run.
             gpus_per_worker: Optional GPU devices exposed per worker.
-            runtime_backend: Runtime lifecycle backend selection (`auto`, `platform`, or `file`).
         """
         from refiner.launchers.local import LocalLauncher
 
@@ -343,11 +337,8 @@ class RefinerPipeline:
             pipeline=self,
             name=name,
             num_workers=num_workers,
-            workdir=workdir,
-            heartbeat_interval_seconds=heartbeat_interval_seconds,
-            cpus_per_worker=cpus_per_worker,
+            rundir=rundir,
             gpus_per_worker=gpus_per_worker,
-            runtime_backend=runtime_backend,
         )
         return launcher.launch()
 
@@ -356,7 +347,6 @@ class RefinerPipeline:
         *,
         name: str,
         num_workers: int = 1,
-        heartbeat_interval_seconds: int = 30,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
@@ -370,7 +360,6 @@ class RefinerPipeline:
         Args:
             name: Human-readable run name.
             num_workers: Requested logical worker count.
-            heartbeat_interval_seconds: Worker heartbeat cadence.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
@@ -388,7 +377,6 @@ class RefinerPipeline:
             pipeline=self,
             name=name,
             num_workers=num_workers,
-            heartbeat_interval_seconds=heartbeat_interval_seconds,
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,
             gpus_per_worker=gpus_per_worker,

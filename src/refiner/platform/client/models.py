@@ -112,7 +112,6 @@ class OkResponse(msgspec.Struct, frozen=True):
 @dataclass(frozen=True, slots=True)
 class CloudRuntimeConfig:
     num_workers: int
-    heartbeat_interval_seconds: int
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpus_per_worker: int | None = None
@@ -121,7 +120,6 @@ class CloudRuntimeConfig:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "num_workers": self.num_workers,
-            "heartbeat_interval_seconds": self.heartbeat_interval_seconds,
         }
         if self.cpus_per_worker is not None:
             payload["cpus_per_worker"] = self.cpus_per_worker
