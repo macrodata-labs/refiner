@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,10 +25,13 @@ class _OpenAIEndpointClient:
 
     async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
         use_chat = "messages" in payload
-        endpoint_path = "/v1/chat/completions" if use_chat else "/v1/completions"
+        endpoint_path = "v1/chat/completions" if use_chat else "v1/completions"
         headers = dict(self.headers or {})
-        if self.api_key is not None:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        resolved_api_key = self.api_key
+        if resolved_api_key is None:
+            resolved_api_key = os.environ.get("OPENAI_API_KEY")
+        if resolved_api_key is not None:
+            headers["Authorization"] = f"Bearer {resolved_api_key}"
         client = self._client
         if client is None:
             client = httpx.AsyncClient(

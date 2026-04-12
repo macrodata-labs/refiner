@@ -193,7 +193,6 @@ Async transforms are useful for remote lookups or model calls:
 ```python
 endpoint = mdr.inference.OpenAIEndpointProvider(
     base_url="https://api.openai.com",
-    api_key="YOUR_API_KEY",
     model="gpt-5-mini",
 )
 
@@ -205,6 +204,8 @@ pipeline = pipeline.map_async(
     max_in_flight=64,
 )
 ```
+
+Set `OPENAI_API_KEY` in the environment before the pipeline runs.
 
 The same contract applies to richer row subclasses like `LeRobotRow`: the row
 may expose extra helpers, but it still enters your Python function through the

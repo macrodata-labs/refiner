@@ -70,7 +70,6 @@ def generate(
                     if isinstance(provider, OpenAIEndpointProvider):
                         client = _OpenAIEndpointClient(
                             base_url=provider.base_url,
-                            api_key=provider.api_key,
                         )
                     else:
                         service_name = provider.service_definition().name

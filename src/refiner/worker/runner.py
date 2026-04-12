@@ -80,8 +80,6 @@ class Worker:
             worker_name=self.run_handle.worker_name,
         )
         runtime_services = collect_pipeline_services(self.pipeline)
-        if runtime_services:
-            asyncio.run(service_manager.start_services(runtime_services))
         sink = self.pipeline.sink or NullSink()
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
@@ -251,6 +249,10 @@ class Worker:
                 run_exception: Exception | None = None
                 try:
                     try:
+                        if runtime_services:
+                            asyncio.run(
+                                service_manager.start_services(runtime_services)
+                            )
                         for block in self.pipeline.execute(
                             _source_rows(),
                             on_shard_delta=_apply_row_delta,

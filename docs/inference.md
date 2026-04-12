@@ -20,7 +20,6 @@ import refiner as mdr
 endpoint = mdr.inference.OpenAIEndpointProvider(
     base_url="https://api.openai.com",
     model="gpt-5-mini",
-    api_key="YOUR_API_KEY",
 )
 
 async def summarize(row, generate):
@@ -44,6 +43,8 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
     max_in_flight=64,  # Adjust to avoid overwhelming your endpoint
 )
 ```
+
+Set `OPENAI_API_KEY` in the worker environment before execution. For cloud jobs, pass it through `secrets={"OPENAI_API_KEY": None}`.
 
 ### Refiner managed VLLM runtime
 
