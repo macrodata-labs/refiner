@@ -3,22 +3,23 @@ title: "Inference"
 description: "(V)LLM inference workflow in Refiner"
 ---
 
-Models in the loop, are now part of almost every processing step in modern data curation workflows. Therefore refiner provides a strong support for such use-cases.
+Model calls are now part of many data curation workflows, so Refiner includes built-in support for endpoint-based and managed inference.
 
 It supports two modes:
-- `OpenAIEndpointProvider`: call a direct OpenAI-compatible HTTP endpoint (OpenAI/OpenRouter etc..)
-- `VLLMProvider`: ask Refiner Cloud to start and manage a VLLM server for you, giving you dedicated endpoint to call. Compared to using inference provider, this allows you to heavily paralelize, unlike with providers where you quickly hit rate-limit. As of right now this mode is only supported when running in the cloud.
+- `OpenAIEndpointProvider`: call any OpenAI-compatible HTTP endpoint such as OpenAI or OpenRouter.
+- `VLLMProvider`: ask Refiner Cloud to start and manage a dedicated VLLM server for your job. This avoids external rate limits and is only supported when running on Refiner Cloud.
 
 ## Usage
 
 ### OpenAIEndpointProvider
-Use `OpenAIEndpointProvider` if you want to use genereric inference provider.
+Use `OpenAIEndpointProvider` when you already have an OpenAI-compatible endpoint.
 
 ```python
 import refiner as mdr
 
 endpoint = mdr.inference.OpenAIEndpointProvider(
     base_url="https://api.openai.com",
+    model="gpt-5-mini",
     api_key="YOUR_API_KEY",
 )
 
@@ -40,19 +41,19 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
         provider=endpoint,
         default_generation_params={"temperature": 0.1, "max_tokens": 256},
     ),
-    max_in_flight=64, # Adjust to prevent overwheling your inference provider
+    max_in_flight=64,  # Adjust to avoid overwhelming your endpoint
 )
 ```
 
 ### Refiner managed VLLM runtime
 
-Use `VLLMProvider` when launching on Refiner Cloud and you want the platform to start and manage a VLLM server for you:
+Use `VLLMProvider` when launching on Refiner Cloud and you want the platform to start and manage a VLLM server for you.
 
 ```python
 import refiner as mdr
 
 provider = mdr.inference.VLLMProvider(
-    model_name_or_path="google/gemma-4-26B-A4B-it",
+    model="google/gemma-4-26B-A4B-it",
 )
 
 async def summarize(row, generate):
@@ -72,24 +73,21 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
         fn=summarize,
         provider=provider,
         default_generation_params={"temperature": 0.1, "max_tokens": 256},
-        max_concurrent_requests=512
-        # Your generate function can create multiple generaate requests at a time (e.g video with multiple frames), this ensures we run 256 rows at at a time, but in total we never have more than 512 concurrent requests
     ),
-    max_in_flight=256, # Sets max in-flight rows
+    max_in_flight=256,
 )
 ```
 
 #### Cold-Starts
-Because we spawn the VLLM on fresh hardware, the VLLM startup can take from 2-20 minutes (depending on model size) due to model complications, model weight downloads and torch initialization. To speed-up this process, we provide a torch compile cache as well as model weights by default for following models:
+Because Refiner Cloud may start VLLM on fresh hardware, startup can take 2 to 20 minutes depending on model size, weight downloads, and torch initialization. To reduce this, Refiner Cloud prewarms a small set of commonly used models:
 - `google/gemma-4-26B-A4B-it`
 - `Qwen/Qwen3-VL-30B-A3B-Instruct`
 - `Qwen/Qwen3-VL-8B-Instruct`
 
-While you can use models beyond the selection above, the startup time will be affected by the absence of the caches (only the first-time).
+Other models can still be used, but the first startup is usually slower.
 
 #### Inference Hardware
-As of now, all VLLM deployments are served from 1x H100, which puts restriction on model sizes. However this is subject to change to allow
-higher variability and availability.
+At the moment, VLLM deployments run on `1x H100`, which limits the model sizes that fit. This may change as the cloud runtime expands.
 
 ## Examples
 

@@ -194,7 +194,7 @@ Async transforms are useful for remote lookups or model calls:
 endpoint = mdr.inference.OpenAIEndpointProvider(
     base_url="https://api.openai.com",
     api_key="YOUR_API_KEY",
-    model="gpt-5-mini"
+    model="gpt-5-mini",
 )
 
 pipeline = pipeline.map_async(
