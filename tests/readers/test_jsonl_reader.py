@@ -1,5 +1,4 @@
 import orjson
-
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers import JsonlReader
 

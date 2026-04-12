@@ -38,7 +38,7 @@ def test_login_with_token_success(monkeypatch, capsys) -> None:
 
 def test_login_invalid_token(monkeypatch, capsys) -> None:
     def _raise(**_: object) -> VerifyApiKeyResponse:
-        raise auth.MacrodataApiError(status=401, message="Invalid API key")
+        raise auth.MacrodataCredentialsError("Invalid API key", missing=False)
 
     monkeypatch.setattr(auth, "verify_api_key", _raise)
     monkeypatch.setattr(
@@ -125,3 +125,16 @@ def test_logout_no_credentials(monkeypatch, capsys) -> None:
 
     assert rc == 0
     assert "No local credentials found." in out.out
+
+
+def test_whoami_missing_credentials_prompts_login(monkeypatch, capsys) -> None:
+    def _raise() -> str:
+        raise auth.MacrodataCredentialsError("No credentials found", missing=True)
+
+    monkeypatch.setattr(auth, "current_api_key", _raise)
+
+    rc = auth.cmd_whoami(Namespace())
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert "Run `macrodata login`." in out.err

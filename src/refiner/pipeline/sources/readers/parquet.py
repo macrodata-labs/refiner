@@ -10,7 +10,6 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 from fsspec import AbstractFileSystem
-from loguru import logger
 
 from refiner.io import DataFile
 from refiner.io.fileset import DataFileSetLike
@@ -22,6 +21,7 @@ from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
 )
+from refiner.worker.context import logger
 from refiner.worker.metrics.api import log_throughput
 
 

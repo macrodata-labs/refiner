@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import importlib.metadata
+import os
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from refiner.platform.auth import current_api_key
-from refiner.platform.client.http import (
-    parse_json_response,
-    request_json,
-    resolve_platform_base_url,
-)
+import httpx
+import msgspec
+
+from refiner.platform.auth import MacrodataCredentialsError, current_api_key
 from refiner.platform.client.models import (
     CloudRunCreateRequest,
     CloudRunCreateResponse,
@@ -15,19 +16,120 @@ from refiner.platform.client.models import (
     CreateJobResponse,
     FinalizedShardWorkersResponse,
     OkResponse,
-    ShardClaimResponse,
     SerializedShard,
+    ShardClaimResponse,
     VerifyApiKeyResponse,
     WorkerStartedResponse,
 )
-from refiner.worker.context import RunHandle
 
 if TYPE_CHECKING:
     from refiner.pipeline.data.shard import Shard
 
+T = TypeVar("T")
+PLATFORM_BASE_URL_ENV_VAR = "MACRODATA_BASE_URL"
+_PLATFORM_BASE_URL = "https://macrodata.co"
 
-def compile_shard_descriptors(shards: list["Shard"]) -> list[SerializedShard]:
-    return [SerializedShard.from_shard(shard) for shard in shards]
+try:
+    _REFINER_VERSION = importlib.metadata.version("macrodata-refiner").strip()
+except importlib.metadata.PackageNotFoundError:
+    _REFINER_VERSION = ""
+
+_USER_AGENT = (
+    f"macrodata-refiner/{_REFINER_VERSION}" if _REFINER_VERSION else "macrodata-refiner"
+)
+
+
+def sanitize_terminal_text(value: str) -> str:
+    return "".join(ch for ch in value if ch >= " " and ch != "\x7f")
+
+
+def resolve_platform_base_url() -> str:
+    env_value = os.environ.get(PLATFORM_BASE_URL_ENV_VAR)
+    if env_value:
+        return env_value.rstrip("/")
+    return _PLATFORM_BASE_URL
+
+
+@dataclass
+class MacrodataApiError(Exception):
+    status: int
+    message: str
+
+    def __str__(self) -> str:
+        return f"HTTP {self.status}: {self.message}"
+
+
+def _decode_json_object(resp: httpx.Response, *, context: str) -> dict[str, Any]:
+    try:
+        payload = resp.json()
+    except ValueError as err:
+        raise MacrodataApiError(
+            status=resp.status_code, message=f"Invalid JSON from {context}"
+        ) from err
+    if not isinstance(payload, dict):
+        raise MacrodataApiError(
+            status=resp.status_code, message=f"Unexpected response from {context}"
+        )
+    return payload
+
+
+def _http_error_message(resp: httpx.Response) -> str:
+    try:
+        payload = resp.json()
+    except ValueError:
+        content_type = resp.headers.get("content-type", "").lower()
+        text = resp.text.strip()
+        if "html" in content_type:
+            return sanitize_terminal_text(resp.reason_phrase or "HTTP error")
+        if not text:
+            return sanitize_terminal_text(resp.reason_phrase or "HTTP error")
+        one_line = " ".join(text.split())
+        if len(one_line) > 200:
+            one_line = f"{one_line[:197]}..."
+        return sanitize_terminal_text(one_line)
+    if isinstance(payload, dict):
+        message = payload.get("error") or payload.get("message")
+        if isinstance(message, str) and message:
+            return sanitize_terminal_text(message)
+    return sanitize_terminal_text(resp.reason_phrase or "HTTP error")
+
+
+def request_json(
+    *,
+    method: str,
+    path: str,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    json_payload: dict[str, Any] | None = None,
+    timeout_s: float = 10.0,
+) -> dict[str, Any]:
+    resolved_base_url = resolve_platform_base_url() if base_url is None else base_url
+    url = f"{resolved_base_url.rstrip('/')}{path}"
+    headers = {"User-Agent": _USER_AGENT}
+    if api_key is not None and api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        resp = httpx.request(
+            method,
+            url,
+            headers=headers,
+            json=json_payload,
+            timeout=timeout_s,
+        )
+    except httpx.RequestError as err:
+        raise MacrodataApiError(status=0, message=str(err)) from err
+
+    if resp.is_error:
+        if resp.status_code == 401:
+            raise MacrodataCredentialsError(
+                _http_error_message(resp),
+                missing=False,
+            )
+        raise MacrodataApiError(
+            status=resp.status_code, message=_http_error_message(resp)
+        )
+
+    return _decode_json_object(resp, context=path)
 
 
 def verify_api_key(
@@ -43,6 +145,28 @@ class MacrodataClient:
         self.api_key = api_key if api_key is not None else current_api_key()
         self.base_url = (base_url or resolve_platform_base_url()).rstrip("/")
 
+    def _request(
+        self,
+        *,
+        method: str,
+        path: str,
+        response_type: type[T],
+        json_payload: dict[str, Any] | None = None,
+        timeout_s: float = 10.0,
+    ) -> T:
+        response_data = request_json(
+            method=method,
+            path=path,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload=json_payload,
+            timeout_s=timeout_s,
+        )
+        try:
+            return msgspec.convert(response_data, type=response_type, strict=True)
+        except (TypeError, msgspec.ValidationError) as err:
+            raise MacrodataApiError(status=200, message=str(err)) from err
+
     def create_job(
         self,
         *,
@@ -50,52 +174,40 @@ class MacrodataClient:
         executor: dict[str, Any],
         plan: dict[str, Any],
         manifest: dict[str, Any],
-    ) -> RunHandle:
+    ) -> CreateJobResponse:
         request_body = {
             "name": name,
             "executor": executor,
             "plan": plan,
             "manifest": manifest,
         }
-        response_data = request_json(
+        job_envelope = self._request(
             method="POST",
             path="/api/jobs/submit",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=CreateJobEnvelope,
             json_payload=request_body,
         )
-        job_envelope = parse_json_response(response_data, CreateJobEnvelope)
-        created_job = CreateJobResponse.from_envelope(job_envelope)
-        return RunHandle(
-            job_id=created_job.job_id,
-            stage_index=created_job.stage_index,
-            client=self,
-            workspace_slug=created_job.workspace_slug,
-        )
+        return CreateJobResponse.from_envelope(job_envelope)
 
     def verify_api_key(self, *, timeout_s: float = 10.0) -> VerifyApiKeyResponse:
-        response_data = request_json(
+        return self._request(
             method="GET",
             path="/api/me",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=VerifyApiKeyResponse,
             timeout_s=timeout_s,
         )
-        return parse_json_response(response_data, VerifyApiKeyResponse)
 
     def shard_register(
         self, *, job_id: str, stage_index: int, shards: list["Shard"]
     ) -> OkResponse:
-        shard_descriptors = compile_shard_descriptors(shards)
-        response_data = request_json(
+        shard_descriptors = [SerializedShard.from_shard(shard) for shard in shards]
+        return self._request(
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/register",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=OkResponse,
             json_payload={"shards": [shard.to_dict() for shard in shard_descriptors]},
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, OkResponse)
 
     def report_worker_started(
         self,
@@ -111,15 +223,13 @@ class MacrodataClient:
         if worker_name:
             request_body["name"] = worker_name
 
-        response_data = request_json(
+        return self._request(
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/start",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=WorkerStartedResponse,
             json_payload=request_body,
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, WorkerStartedResponse)
 
     def report_worker_finished(
         self,
@@ -135,52 +245,44 @@ class MacrodataClient:
             request_body["error"] = (error or "").strip() or "UnknownError"
         elif error:
             request_body["error"] = error
-        response_data = request_json(
+        return self._request(
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/finish",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=OkResponse,
             json_payload=request_body,
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, OkResponse)
 
     def report_stage_finished(
         self, *, job_id: str, stage_index: int, status: str
     ) -> OkResponse:
-        response_data = request_json(
+        return self._request(
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=OkResponse,
             json_payload={"status": status},
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, OkResponse)
 
     def report_job_finished(self, *, job_id: str, status: str) -> OkResponse:
-        response_data = request_json(
+        return self._request(
             method="POST",
             path=f"/api/jobs/{job_id}/finish",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=OkResponse,
             json_payload={"status": status},
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, OkResponse)
 
     def cloud_submit_job(
         self, *, request: CloudRunCreateRequest
     ) -> CloudRunCreateResponse:
-        response_data = request_json(
+        return self._request(
             method="POST",
             path="/api/cloud/runs",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=CloudRunCreateResponse,
             json_payload=request.to_dict(),
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, CloudRunCreateResponse)
 
     def shard_claim(
         self,
@@ -193,40 +295,34 @@ class MacrodataClient:
         request_body: dict[str, Any] = {"worker_id": worker_id}
         if previous_shard_id:
             request_body["previous_shard_id"] = previous_shard_id
-        response_data = request_json(
+        return self._request(
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/claim",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=ShardClaimResponse,
             json_payload=request_body,
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, ShardClaimResponse)
 
     def shard_heartbeat(
         self, *, job_id: str, stage_index: int, worker_id: str, shard_ids: list[str]
     ) -> OkResponse:
-        response_data = request_json(
+        return self._request(
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/heartbeat",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=OkResponse,
             json_payload={"worker_id": worker_id, "shard_ids": shard_ids},
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, OkResponse)
 
     def shard_finalized_workers(
         self, *, job_id: str, stage_index: int
     ) -> FinalizedShardWorkersResponse:
-        response_data = request_json(
+        return self._request(
             method="GET",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/finalized-workers",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=FinalizedShardWorkersResponse,
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, FinalizedShardWorkersResponse)
 
     def shard_finish(
         self,
@@ -243,21 +339,20 @@ class MacrodataClient:
             request_body["error"] = (error or "").strip() or "UnknownError"
         elif error:
             request_body["error"] = error
-        response_data = request_json(
+        return self._request(
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/{shard_id}/finish",
-            api_key=self.api_key,
-            base_url=self.base_url,
+            response_type=OkResponse,
             json_payload=request_body,
             timeout_s=60.0,
         )
-        return parse_json_response(response_data, OkResponse)
 
 
 __all__ = [
+    "MacrodataApiError",
     "MacrodataClient",
-    "RunHandle",
-    "compile_shard_descriptors",
+    "request_json",
     "resolve_platform_base_url",
+    "sanitize_terminal_text",
     "verify_api_key",
 ]

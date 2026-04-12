@@ -21,7 +21,6 @@ pipeline = (
 stats = pipeline.launch_local(
     name="local-job",
     num_workers=2,
-    cpus_per_worker=2,
     gpus_per_worker=1,
 )
 ```
@@ -35,20 +34,13 @@ Returned stats include:
 - `failed`
 - `output_rows`
 
-### Local runtime backends
-
-`launch_local(...)` supports:
-
-- `runtime_backend="auto"`: use platform reporting when auth is available, otherwise fall back to the filesystem runtime
-- `runtime_backend="platform"`: require Macrodata platform lifecycle integration
-- `runtime_backend="file"`: use only the local filesystem runtime
-
 ### Local notes
 
 - workers always run as subprocesses, even when `num_workers=1`
-- `cpus_per_worker` is optional CPU pinning when the OS supports affinity
-- `gpus_per_worker` is optional local GPU partitioning via `CUDA_VISIBLE_DEVICES`
-- local runtime files live under `<workdir>/runs/<job_id>/...`
+- local launch does not pin worker CPUs; if `num_workers` exceeds available CPUs, Refiner logs a warning and still launches the requested worker count
+- `gpus_per_worker` optionally exposes a fixed number of visible GPU devices to each local worker
+- if `rundir` is reused, local launch skips shards already completed there
+- local run files live under `<workdir>/runs/<job_id>/...`
 
 ## Cloud Launcher
 
@@ -68,17 +60,6 @@ result = pipeline.launch_cloud(
     num_workers=8,
     cpus_per_worker=2,
     mem_mb_per_worker=4096,
-)
-```
-
-To request GPUs in the cloud:
-
-```python
-gpu_result = pipeline.launch_cloud(
-    name="cloud-gpu-job",
-    num_workers=8,
-    cpus_per_worker=2,
-    mem_mb_per_worker=4096,
     gpus_per_worker=1,
     gpu_type="h100",
 )
@@ -95,14 +76,11 @@ Returned result includes:
 - `num_workers`: requested logical worker count
 - `cpus_per_worker`: scheduler hint for worker CPU sizing
 - `mem_mb_per_worker`: scheduler hint for worker memory sizing
-- `gpus_per_worker`: scheduler hint for worker GPU count
-- `gpu_type`: scheduler hint for worker GPU type
+- `gpus_per_worker`: scheduler hint for GPU count per worker
+- `gpu_type`: required when `gpus_per_worker` is set
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
-
-Requesting a specific `gpu_type` is a cloud-only feature. When requesting GPUs in
-the cloud, you must set both `gpus_per_worker` and `gpu_type`.
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
 
@@ -115,7 +93,7 @@ Platform integration uses the same auth flow everywhere:
 
 Behavior:
 
-- `launch_local(...)` can run without auth, but platform reporting becomes unavailable
+- `launch_local(...)` can run without auth
 - `launch_cloud(...)` requires auth
 
 ## Related Pages

@@ -210,7 +210,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     stats = pipeline.launch_local(
         name="lerobot-deferred-roundtrip",
         num_workers=1,
-        workdir=str(tmp_path / "workdir"),
+        rundir=str(tmp_path / "workdir"),
     )
     assert stats.failed == 0
 
@@ -303,7 +303,7 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     stats = pipeline.launch_local(
         name="lerobot-two-stage-local",
         num_workers=2,
-        workdir=str(tmp_path / "workdir"),
+        rundir=str(tmp_path / "workdir"),
     )
     assert stats.failed == 0
     assert stats.claimed >= 3
@@ -398,7 +398,7 @@ def test_write_lerobot_force_recompute_video_stats_ignores_source_video_stats(
         .launch_local(
             name="lerobot-force-recompute-video-stats",
             num_workers=1,
-            workdir=str(tmp_path / "workdir-force-recompute"),
+            rundir=str(tmp_path / "workdir-force-recompute"),
         )
     )
     assert stats.failed == 0
@@ -458,7 +458,7 @@ def test_lerobot_writer_rolls_video_file_when_size_limit_is_hit(tmp_path: Path) 
     stats = pipeline.launch_local(
         name="lerobot-video-rotation",
         num_workers=1,
-        workdir=str(tmp_path / "workdir"),
+        rundir=str(tmp_path / "workdir"),
     )
     assert stats.failed == 0
 
@@ -491,16 +491,20 @@ def test_lerobot_sink_closes_video_writers_concurrently(tmp_path: Path) -> None:
                 raise AssertionError("video writer closes did not overlap")
             closed.append(self.name)
 
-    state = writer._state_for_shard("shard-1")
-    state.metadata = _metadata()
-    state.video_writers = cast(
-        dict[str, VideoStreamWriter],
-        {
-            "left": _FakeVideoWriter("left"),
-            "right": _FakeVideoWriter("right"),
-        },
-    )
-    writer._commit_shard(state)
+    with set_active_run_context(
+        run_handle=RunHandle(job_id="job", stage_index=0, worker_id="worker-1"),
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
+    ):
+        state = writer._state_for_shard("shard-1")
+        state.metadata = _metadata()
+        state.video_writers = cast(
+            dict[str, VideoStreamWriter],
+            {
+                "left": _FakeVideoWriter("left"),
+                "right": _FakeVideoWriter("right"),
+            },
+        )
+        writer._commit_shard(state)
 
     assert started == 2
     assert sorted(closed) == ["left", "right"]
@@ -555,7 +559,7 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
     stats = pipeline.launch_local(
         name="lerobot-task-index-stable",
         num_workers=1,
-        workdir=str(tmp_path / "workdir"),
+        rundir=str(tmp_path / "workdir"),
     )
     assert stats.failed == 0
 
@@ -571,31 +575,35 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
 
 def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> None:
     writer = LeRobotWriterSink(str(tmp_path / "out"))
-    with pytest.raises(
-        KeyError,
-        match="7",
+    with set_active_run_context(
+        run_handle=RunHandle(job_id="job", stage_index=0, worker_id="worker-1"),
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
     ):
-        writer.write_block(
-            [
-                DictRow(
-                    {
-                        "episode_index": 0,
-                        "task": "pick",
-                        "frames": [
-                            {
-                                "frame_index": 0,
-                                "timestamp": 0.0,
-                                "task_index": 7,
-                                "observation.state": [1.0],
-                            }
-                        ],
-                        "metadata": _metadata(),
-                    },
-                    shard_id="shard-1",
-                )
-            ]
-        )
-        writer.close()
+        with pytest.raises(
+            KeyError,
+            match="7",
+        ):
+            writer.write_block(
+                [
+                    DictRow(
+                        {
+                            "episode_index": 0,
+                            "task": "pick",
+                            "frames": [
+                                {
+                                    "frame_index": 0,
+                                    "timestamp": 0.0,
+                                    "task_index": 7,
+                                    "observation.state": [1.0],
+                                }
+                            ],
+                            "metadata": _metadata(),
+                        },
+                        shard_id="shard-1",
+                    )
+                ]
+            )
+            writer.close()
 
 
 class _FinalizedWorkersRuntime:
@@ -696,7 +704,7 @@ def test_hub_aloha_merge_uses_remux_and_preserves_episode_count(tmp_path: Path) 
         .launch_local(
             name="lerobot-hub-aloha-merge",
             num_workers=1,
-            workdir=str(tmp_path / "workdir-hub-aloha-merge"),
+            rundir=str(tmp_path / "workdir-hub-aloha-merge"),
         )
     )
     assert stats.failed == 0

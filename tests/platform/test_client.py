@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import MacrodataClient
-from typing import cast
 
 
 def test_create_job_treats_whitespace_workspace_slug_as_none(
@@ -31,26 +33,24 @@ def test_create_job_treats_whitespace_workspace_slug_as_none(
     assert context.workspace_slug is None
 
 
-def test_report_worker_started_sends_name_and_host(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+def test_client_raises_credentials_error_without_env_or_saved_key(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("MACRODATA_API_KEY", raising=False)
 
-    def fake_request_json(**kwargs: object) -> dict[str, object]:
-        captured.update(kwargs)
-        return {"worker_id": "worker-1"}
+    with pytest.raises(MacrodataCredentialsError, match="No credentials found") as exc:
+        MacrodataClient()
 
-    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+    assert exc.value.missing is True
 
-    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
-    resp = client.report_worker_started(
-        job_id="job-1",
-        stage_index=2,
-        worker_name="cloud-rank-0",
-        host="modal",
-    )
 
-    assert resp.worker_id == "worker-1"
-    assert captured["path"] == "/api/jobs/job-1/stages/2/workers/start"
-    assert cast(dict[str, object], captured["json_payload"]) == {
-        "name": "cloud-rank-0",
-        "host": "modal",
-    }
+def test_client_prefers_env_api_key_over_saved_key(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("MACRODATA_API_KEY", "md_env")
+
+    client = MacrodataClient(base_url="https://example.com")
+
+    assert client.api_key == "md_env"

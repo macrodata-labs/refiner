@@ -20,6 +20,7 @@ from refiner.worker.metrics.api import (
     log_throughput,
     register_gauge,
 )
+from refiner.worker.context import logger
 
 robot = robotics
 
@@ -38,6 +39,7 @@ __all__ = [
     "log_gauges",
     "log_histogram",
     "register_gauge",
+    "logger",
     # expressions
     "col",
     "lit",

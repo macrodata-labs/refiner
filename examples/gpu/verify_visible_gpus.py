@@ -68,7 +68,6 @@ def main() -> None:
         stats = pipeline.launch_local(
             name=args.name,
             num_workers=args.num_workers,
-            cpus_per_worker=args.cpus_per_worker,
             gpus_per_worker=args.gpus_per_worker,
         )
         print(f"local launch complete: {stats}")

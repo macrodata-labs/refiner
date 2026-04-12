@@ -27,7 +27,7 @@ def test_launch_local_writes_jsonl_per_shard(tmp_path) -> None:
     )
 
     stats = pipeline.launch_local(
-        name="jsonl-sink", num_workers=1, workdir=str(tmp_path)
+        name="jsonl-sink", num_workers=1, rundir=str(tmp_path / "run")
     )
 
     assert stats.completed == 2
@@ -46,7 +46,7 @@ def test_launch_local_writes_parquet_per_shard(tmp_path) -> None:
     )
 
     stats = pipeline.launch_local(
-        name="parquet-sink", num_workers=1, workdir=str(tmp_path)
+        name="parquet-sink", num_workers=1, rundir=str(tmp_path / "run")
     )
 
     assert stats.completed == 2
@@ -71,7 +71,7 @@ def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> 
     stats = pipeline.launch_local(
         name="vectorized-jsonl-sink",
         num_workers=1,
-        workdir=str(tmp_path),
+        rundir=str(tmp_path / "run"),
     )
 
     assert stats.completed == 2

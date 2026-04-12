@@ -6,6 +6,7 @@ from typing import cast
 
 from refiner.pipeline import read_jsonl
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
+from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
@@ -38,7 +39,7 @@ def _stub_cloud_submit(
 
             return _Resp()
 
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
         "refiner.launchers.cloud.serialize_pipeline_inline",
         lambda pipeline: CloudPipelinePayload(
@@ -84,7 +85,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     result = pipeline.launch_cloud(
         name="demo cloud",
         num_workers=3,
-        heartbeat_interval_seconds=12,
         cpus_per_worker=2,
         mem_mb_per_worker=4096,
         gpus_per_worker=2,
@@ -108,7 +108,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].stage_index == 0
     assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
     assert request.stage_payloads[0].runtime.num_workers == 3
-    assert request.stage_payloads[0].runtime.heartbeat_interval_seconds == 12
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
     assert request.stage_payloads[0].runtime.gpus_per_worker == 2
@@ -301,7 +300,7 @@ def test_pipeline_launch_cloud_requires_missing_env_secret(monkeypatch) -> None:
         def cloud_submit_job(self, *, request):  # pragma: no cover
             raise AssertionError("cloud_submit_job should not be called")
 
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     pipeline = read_jsonl("input.jsonl")
 
     try:
@@ -316,10 +315,12 @@ def test_pipeline_launch_cloud_requires_platform_auth_before_secret_resolution(
     monkeypatch,
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr(
-        "refiner.launchers.base.BaseLauncher._platform_client_or_none",
-        lambda self: None,
-    )
+
+    class FakeMacrodataClient:
+        def __init__(self):
+            raise MacrodataCredentialsError("No credentials found", missing=True)
+
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     pipeline = read_jsonl("input.jsonl")
 
     try:
@@ -328,6 +329,28 @@ def test_pipeline_launch_cloud_requires_platform_auth_before_secret_resolution(
         assert "MACRODATA_API_KEY" in str(err)
     else:  # pragma: no cover
         raise AssertionError("expected SystemExit")
+
+
+def test_pipeline_launch_cloud_requires_valid_api_key(monkeypatch) -> None:
+    class FakeMacrodataClient:
+        def __init__(self):
+            self.base_url = "https://example.com"
+
+        def cloud_submit_job(self, *, request):  # noqa: ANN001
+            del request
+            raise MacrodataCredentialsError("Invalid API key", missing=False)
+
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="Your Macrodata API key is invalid.*with a valid key",
+    ):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
 
 def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
@@ -350,7 +373,7 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
 
             return _Resp()
 
-    monkeypatch.setattr("refiner.launchers.base.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
         "refiner.launchers.cloud.serialize_pipeline_inline",
         lambda pipeline: CloudPipelinePayload(

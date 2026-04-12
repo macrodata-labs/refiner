@@ -3,15 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import warnings
+import socket
 
 import cloudpickle
-from loguru import logger
 
-from refiner.platform.client.http import MacrodataApiError
-from refiner.platform.client.api import MacrodataClient
-from refiner.worker.context import RunHandle
-from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
+from refiner.platform.client.api import MacrodataApiError, MacrodataClient
+from refiner.worker.context import RunHandle, logger
+from refiner.worker.lifecycle import PlatformRuntimeLifecycle
 from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
 
@@ -24,8 +22,8 @@ def main() -> int:
     parser.add_argument(
         "--runtime-backend",
         type=str,
-        choices=("auto", "platform", "file"),
-        default=os.environ.get("REFINER_RUNTIME_BACKEND", "auto"),
+        choices=("platform",),
+        default=os.environ.get("REFINER_RUNTIME_BACKEND", "platform"),
     )
     parser.add_argument("--worker-name", type=str, default="worker")
     parser.add_argument("--heartbeat-interval-seconds", type=int, default=30)
@@ -35,51 +33,41 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        cpu_ids = parse_cpu_ids(args.cpu_ids)
-        if cpu_ids:
-            set_cpu_affinity(cpu_ids)
-        gpu_ids = parse_gpu_ids(args.gpu_ids)
-        if gpu_ids:
-            set_visible_gpu_ids(gpu_ids)
-        elif args.gpu_ids.strip():
-            warnings.warn(
-                "gpu-ids argument did not resolve to any visible devices",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        # temp compatibility for the cloud
+        if args.workdir:
+            os.environ["REFINER_WORKDIR"] = args.workdir
 
         with open(args.pipeline_payload, "rb") as f:
             pipeline = cloudpickle.load(f)
+        gpu_ids = parse_gpu_ids(args.gpu_ids)
+        if gpu_ids:
+            set_visible_gpu_ids(gpu_ids)
 
+        client = MacrodataClient()
+        try:
+            host = socket.gethostname()
+        except Exception:
+            host = None
+        started_resp = client.report_worker_started(
+            job_id=args.job_id,
+            stage_index=args.stage_index,
+            host=host,
+            worker_name=args.worker_name,
+        )
         run_handle = RunHandle(
             job_id=args.job_id,
             stage_index=args.stage_index,
+            worker_id=started_resp.worker_id,
             worker_name=args.worker_name,
+            client=client,
         )
-
-        if args.runtime_backend != "file":
-            try:
-                client = MacrodataClient()
-                run_handle = RunHandle(
-                    job_id=args.job_id,
-                    stage_index=args.stage_index,
-                    worker_name=args.worker_name,
-                    client=client,
-                )
-            except Exception as e:
-                if args.runtime_backend == "platform":
-                    raise
-                logger.warning(
-                    "platform runtime unavailable (falling back to file runtime): {}: {}",
-                    type(e).__name__,
-                    e,
-                )
+        runtime_lifecycle = PlatformRuntimeLifecycle(run=run_handle)
 
         stats = Worker(
             pipeline=pipeline,
             run_handle=run_handle,
             heartbeat_interval_seconds=args.heartbeat_interval_seconds,
-            local_workdir=args.workdir,
+            runtime_lifecycle=runtime_lifecycle,
         ).run()
         print(
             json.dumps(
