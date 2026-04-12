@@ -62,7 +62,7 @@ logger = _ContextLogger()
 def get_active_run_handle() -> RunHandle:
     run_handle = _ACTIVE_RUN_HANDLE.get()
     if run_handle is None:
-        raise RuntimeError("no active run context")
+        return RunHandle(job_id="local", stage_index=0, worker_id="local")
     return run_handle
 
 
