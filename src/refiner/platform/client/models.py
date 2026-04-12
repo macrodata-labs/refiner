@@ -6,6 +6,7 @@ from typing import Any
 import msgspec
 
 from refiner.pipeline.data.shard import Shard
+from refiner.worker.lifecycle import FinalizedShardWorker
 
 
 class WorkspaceIdentity(msgspec.Struct, frozen=True):
@@ -94,11 +95,6 @@ class SerializedShard(msgspec.Struct, frozen=True):
 
 class ShardClaimResponse(msgspec.Struct, frozen=True):
     shard: SerializedShard | None
-
-
-class FinalizedShardWorker(msgspec.Struct, frozen=True):
-    shard_id: str
-    worker_id: str
 
 
 class FinalizedShardWorkersResponse(msgspec.Struct, frozen=True):

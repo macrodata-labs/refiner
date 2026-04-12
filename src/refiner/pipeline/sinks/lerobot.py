@@ -31,7 +31,7 @@ from refiner.robotics.lerobot_format import (
     infer_feature_info,
 )
 from refiner.utils import check_required_dependencies
-from refiner.worker.context import get_active_run_handle
+from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import register_gauge
 
 _DEFAULT_DATA_FILE_SIZE_IN_MB = 100
@@ -147,9 +147,8 @@ class LeRobotWriterSink(BaseSink):
         """Get or create the staged writer state for one output chunk."""
         state = self._states.get(shard_id)
         if state is None:
-            worker_token = get_active_run_handle().worker_token
             state = _LeRobotShardState(
-                chunk_key=f"{shard_id}__w{worker_token}",
+                chunk_key=f"{shard_id}__w{get_active_worker_token()}",
             )
             self._states[shard_id] = state
         return state

@@ -13,13 +13,12 @@ from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.expressions import col
 from refiner.execution.engine import iter_rows
 from refiner.pipeline.sinks import BaseSink
-from refiner.platform.client import RunHandle
 from refiner.pipeline.data.shard import FilePart
 from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
-from refiner.platform.client.models import FinalizedShardWorker
+from refiner.worker.lifecycle import FinalizedShardWorker
 
 
 class _FakeReader(BaseReader):
@@ -69,10 +68,6 @@ class _FakeRuntimeLifecycle:
 
 def _shard(path: str, start: int, end: int) -> Shard:
     return Shard.from_file_parts([FilePart(path=path, start=start, end=end)])
-
-
-def _local_run() -> RunHandle:
-    return RunHandle(job_id="job", stage_index=0, worker_id="local")
 
 
 class _NoopTelemetryEmitter:
@@ -169,7 +164,9 @@ def _run_local_worker(
 
     worker = Worker(
         pipeline=pipeline,
-        run_handle=_local_run(),
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
         runtime_lifecycle=runtime_lifecycle,
     )
     return worker
@@ -230,11 +227,9 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
 
     worker = Worker(
         pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 
@@ -293,11 +288,9 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail)
     worker = Worker(
         pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 
@@ -322,11 +315,9 @@ def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
 
     worker = Worker(
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(fail),
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 
@@ -359,11 +350,9 @@ def test_worker_can_batch_across_shards() -> None:
 
     worker = Worker(
         pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
     stats = worker.run()
@@ -386,11 +375,9 @@ def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> Non
     runtime_lifecycle = _FailingCompleteRuntimeLifecycle([shard])
     worker = Worker(
         pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
     stats = worker.run()
@@ -413,11 +400,9 @@ def test_worker_completes_shards_only_after_sink_drain() -> None:
 
     worker = Worker(
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).with_sink(sink),
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 
@@ -496,11 +481,9 @@ def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
 
     worker = Worker(
         pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 

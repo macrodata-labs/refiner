@@ -2,11 +2,35 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
+
+import msgspec
 
 from refiner.pipeline.data.shard import Shard
-from refiner.platform.client.models import FinalizedShardWorker
-from refiner.worker.context import RunHandle
+from refiner.worker.context import worker_token_for
+
+
+class FinalizedShardWorker(msgspec.Struct, frozen=True):
+    shard_id: str
+    worker_id: str
+
+    @property
+    def worker_token(self) -> str:
+        return worker_token_for(self.worker_id)
+
+
+class RuntimeLifecycle(Protocol):
+    def claim(self, previous: Shard | None = None) -> Shard | None: ...
+
+    def heartbeat(self, shards: list[Shard]) -> None: ...
+
+    def complete(self, shard: Shard) -> None: ...
+
+    def fail(self, shard: Shard, error: str | None = None) -> None: ...
+
+    def finalized_workers(
+        self, *, stage_index: int | None = None
+    ) -> list[FinalizedShardWorker]: ...
 
 
 def read_finalized_workers(
@@ -41,11 +65,13 @@ class LocalRuntimeLifecycle:
     def __init__(
         self,
         *,
-        run: RunHandle,
+        stage_index: int,
+        worker_id: str,
         rundir: str,
         assigned_shards: Iterable[Shard],
     ) -> None:
-        self.run = run
+        self.stage_index = stage_index
+        self.worker_id = worker_id
         self.rundir = rundir
         self._assigned_shards = iter(assigned_shards)
 
@@ -58,9 +84,9 @@ class LocalRuntimeLifecycle:
     def complete(self, shard: Shard) -> None:
         path = (
             Path(self.rundir)
-            / f"stage-{self.run.stage_index}"
+            / f"stage-{self.stage_index}"
             / "completed"
-            / f"{self.run.worker_id}.jsonl"
+            / f"{self.worker_id}.jsonl"
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
@@ -74,7 +100,7 @@ class LocalRuntimeLifecycle:
     def finalized_workers(
         self, *, stage_index: int | None = None
     ) -> list[FinalizedShardWorker]:
-        target_stage = self.run.stage_index if stage_index is None else stage_index
+        target_stage = self.stage_index if stage_index is None else stage_index
         return read_finalized_workers(
             rundir=self.rundir,
             stage_index=target_stage,
@@ -82,6 +108,8 @@ class LocalRuntimeLifecycle:
 
 
 __all__ = [
+    "FinalizedShardWorker",
     "LocalRuntimeLifecycle",
+    "RuntimeLifecycle",
     "read_finalized_workers",
 ]

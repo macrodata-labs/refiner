@@ -27,9 +27,8 @@ from refiner.robotics.lerobot_format import (
     LeRobotTasks,
 )
 from refiner.robotics.lerobot_format.metadata.stats import _estimate_sample_stride
-from refiner.platform.client.models import FinalizedShardWorker
-from refiner.worker.context import RunHandle, set_active_run_context
-from refiner.worker.lifecycle import RuntimeLifecycle
+from refiner.worker.context import set_active_run_context, worker_token_for
+from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 
 _ALOHA_REPO_IDS = (
     "macrodata/aloha_static_battery_ep000_004",
@@ -492,7 +491,10 @@ def test_lerobot_sink_closes_video_writers_concurrently(tmp_path: Path) -> None:
             closed.append(self.name)
 
     with set_active_run_context(
-        run_handle=RunHandle(job_id="job", stage_index=0, worker_id="worker-1"),
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
         runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
     ):
         state = writer._state_for_shard("shard-1")
@@ -576,7 +578,10 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
 def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> None:
     writer = LeRobotWriterSink(str(tmp_path / "out"))
     with set_active_run_context(
-        run_handle=RunHandle(job_id="job", stage_index=0, worker_id="worker-1"),
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
         runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
     ):
         with pytest.raises(
@@ -669,7 +674,10 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
             }
         )
         with set_active_run_context(
-            run_handle=RunHandle(job_id="job", stage_index=0, worker_id=worker_id),
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
             runtime_lifecycle=runtime,
         ):
             writer.write_block([worker_row])
@@ -678,13 +686,16 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
     reducer = LeRobotMetaReduceSink(output=str(out_root))
     runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
     with set_active_run_context(
-        run_handle=RunHandle(job_id="job", stage_index=1, worker_id="local"),
+        job_id="job",
+        stage_index=1,
+        worker_id="local",
+        worker_name=None,
         runtime_lifecycle=runtime,
     ):
         reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
-    worker_1 = RunHandle.worker_token_for("1")
-    worker_2 = RunHandle.worker_token_for("2")
+    worker_1 = worker_token_for("1")
+    worker_2 = worker_token_for("2")
     assert not (out_root / "meta" / f"chunk-shard-1__w{worker_1}").exists()
     assert not (out_root / "meta" / f"chunk-shard-1__w{worker_2}").exists()
     assert not (out_root / "data" / f"chunk-shard-1__w{worker_1}").exists()

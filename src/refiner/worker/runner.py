@@ -7,8 +7,8 @@ from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
-from refiner.worker.context import RunHandle, logger
 from refiner.worker.context import set_active_run_context, set_active_step_index
+from refiner.worker.context import logger
 from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.metrics.context import (
     NOOP_USER_METRICS_EMITTER,
@@ -30,13 +30,19 @@ class Worker:
         self,
         pipeline: RefinerPipeline,
         *,
-        run_handle: RunHandle,
+        job_id: str,
+        stage_index: int,
+        worker_id: str,
+        worker_name: str | None = None,
         heartbeat_interval_seconds: int = 0,
         runtime_lifecycle: RuntimeLifecycle,
         user_metrics_emitter: UserMetricsEmitter | None = None,
     ):
         self.pipeline = pipeline
-        self.run_handle = run_handle
+        self.job_id = job_id
+        self.stage_index = stage_index
+        self.worker_id = worker_id
+        self.worker_name = worker_name
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.runtime_lifecycle = runtime_lifecycle
         self.user_metrics_emitter = (
@@ -93,7 +99,7 @@ class Worker:
                     message = str(e).strip() or type(e).__name__
                     logger.warning(
                         "heartbeat failed for worker_id={}: {}: {}",
-                        self.run_handle.worker_id,
+                        self.worker_id,
                         type(e).__name__,
                         message,
                     )
@@ -147,7 +153,7 @@ class Worker:
         if self.heartbeat_interval_seconds > 0:
             heartbeat_thread = threading.Thread(
                 target=_heartbeat_loop,
-                name=f"refiner-heartbeat-{self.run_handle.worker_name or 'worker'}",
+                name=f"refiner-heartbeat-{self.worker_name or 'worker'}",
                 daemon=True,
             )
             heartbeat_thread.start()
@@ -161,7 +167,7 @@ class Worker:
                 if shard is None:
                     logger.info(
                         "no more shards worker_id={} claimed={}",
-                        self.run_handle.worker_id,
+                        self.worker_id,
                         claimed,
                     )
                     break
@@ -208,14 +214,17 @@ class Worker:
                 previous = shard
 
         with set_active_run_context(
-            run_handle=self.run_handle,
+            job_id=self.job_id,
+            stage_index=self.stage_index,
+            worker_id=self.worker_id,
+            worker_name=self.worker_name,
             runtime_lifecycle=runtime_lifecycle,
         ):
             logger.info(
                 "worker started job_id={} stage_index={} worker_id={}",
-                self.run_handle.job_id,
-                self.run_handle.stage_index,
-                self.run_handle.worker_id,
+                self.job_id,
+                self.stage_index,
+                self.worker_id,
             )
             with set_active_user_metrics_emitter(user_metrics_emitter):
                 run_exception: Exception | None = None
@@ -249,7 +258,7 @@ class Worker:
                             source_done_shards.clear()
                         logger.exception(
                             "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
-                            self.run_handle.worker_id,
+                            self.worker_id,
                             claimed,
                             completed,
                             len(failed_shards),
@@ -313,9 +322,9 @@ class Worker:
                     )
                     logger.info(
                         "worker finished job_id={} stage_index={} worker_id={} status={}",
-                        self.run_handle.job_id,
-                        self.run_handle.stage_index,
-                        self.run_handle.worker_id,
+                        self.job_id,
+                        self.stage_index,
+                        self.worker_id,
                         status,
                     )
 

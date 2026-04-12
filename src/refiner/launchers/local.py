@@ -13,7 +13,7 @@ import cloudpickle
 from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import PlannedStage
 from refiner.worker.context import logger
-from refiner.worker.lifecycle.local import read_finalized_workers
+from refiner.worker.lifecycle import read_finalized_workers
 from refiner.worker.resources.cpu import available_cpu_ids
 from refiner.worker.resources.gpu import build_gpu_sets
 from refiner.worker.workdir import resolve_workdir
@@ -201,7 +201,7 @@ class LocalLauncher(BaseLauncher):
         cmd = [
             sys.executable,
             "-m",
-            "refiner.worker.local_entrypoint",
+            "refiner.worker.entrypoint",
             "--pipeline-payload",
             pipeline_payload,
             "--job-id",

@@ -6,7 +6,7 @@ import json
 import cloudpickle
 
 from refiner.pipeline.data.shard import Shard
-from refiner.worker.context import RunHandle, logger
+from refiner.worker.context import logger
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
@@ -46,15 +46,9 @@ def main() -> int:
         if not isinstance(shard_payload, list):
             raise ValueError("local worker shards payload must be a list")
 
-        run_handle = RunHandle(
-            job_id=args.job_id,
-            stage_index=args.stage_index,
-            worker_name=args.worker_name,
-            worker_id=args.worker_id,
-            client=None,
-        )
         runtime_lifecycle = LocalRuntimeLifecycle(
-            run=run_handle,
+            stage_index=args.stage_index,
+            worker_id=args.worker_id,
             rundir=args.rundir,
             assigned_shards=[
                 Shard.from_dict(item)
@@ -64,7 +58,10 @@ def main() -> int:
         )
         stats = Worker(
             pipeline=pipeline,
-            run_handle=run_handle,
+            job_id=args.job_id,
+            stage_index=args.stage_index,
+            worker_id=args.worker_id,
+            worker_name=args.worker_name,
             runtime_lifecycle=runtime_lifecycle,
         ).run()
         payload.update(
