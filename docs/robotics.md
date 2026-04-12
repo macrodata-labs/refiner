@@ -379,4 +379,3 @@ import refiner as mdr
 - [Pipeline basics](pipeline-basics.md)
 - [Transforms](transforms.md)
 - [Launchers](launchers.md)
-- [Observability](observability.md)

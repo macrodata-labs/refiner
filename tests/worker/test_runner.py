@@ -13,20 +13,13 @@ from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.expressions import col
 from refiner.execution.engine import iter_rows
 from refiner.pipeline.sinks import BaseSink
-from refiner.platform.client import (
-    OkResponse,
-    RunHandle,
-    ShardClaimResponse,
-    SerializedShard,
-    WorkerStartedResponse,
-)
+from refiner.platform.client import RunHandle
 from refiner.pipeline.data.shard import FilePart
 from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
 from refiner.platform.client.models import FinalizedShardWorker
-from refiner.worker.lifecycle import PlatformRuntimeLifecycle
 
 
 class _FakeReader(BaseReader):
@@ -49,16 +42,12 @@ class _FakeRuntimeLifecycle:
         self.completed_ids: list[str] = []
         self.failed_ids: list[str] = []
         self.failed_errors: list[str | None] = []
-        self.heartbeat_batches: list[list[str]] = []
 
     def claim(self, previous: Shard | None = None) -> Shard | None:
         self.claim_previous.append(previous)
         if not self._remaining:
             return None
         return self._remaining.pop(0)
-
-    def heartbeat(self, shards: list[Shard]) -> None:
-        self.heartbeat_batches.append([shard.id for shard in shards])
 
     def complete(self, shard: Shard) -> None:
         self.completed_ids.append(shard.id)
@@ -141,19 +130,6 @@ class _ShortWriteAndCloseFailingSink(_CloseFailingSink):
         return {shard_id: 1 for shard_id in counts}
 
 
-class _FlushFailingTelemetryEmitter(_NoopTelemetryEmitter):
-    def force_flush_user_metrics(self) -> None:
-        raise RuntimeError("flush failed")
-
-
-class _RecordingTelemetryEmitter(_NoopTelemetryEmitter):
-    def __init__(self) -> None:
-        self.log_flushes = 0
-
-    def force_flush_logs(self) -> None:
-        self.log_flushes += 1
-
-
 class _MetricRecordingTelemetryEmitter(_NoopTelemetryEmitter):
     def __init__(self) -> None:
         self.counters: list[dict[str, Any]] = []
@@ -172,41 +148,6 @@ class _MetricRecordingTelemetryEmitter(_NoopTelemetryEmitter):
 
     def register_user_gauge(self, **kwargs) -> None:
         self.registered_gauges.append(kwargs)
-
-
-class _LifecycleClientWithFailingTelemetry:
-    def __init__(self, shard: Shard):
-        self._next_shard = shard
-        self.base_url = "https://example.com"
-        self.api_key = "md_test"
-
-    def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
-        del kwargs
-        return WorkerStartedResponse(worker_id="worker-0")
-
-    def report_worker_finished(self, **kwargs) -> None:
-        del kwargs
-
-    def shard_claim(self, **kwargs):
-        del kwargs
-        if self._next_shard is None:
-            return ShardClaimResponse(shard=None)
-        shard = self._next_shard
-        self._next_shard = None
-        return ShardClaimResponse(
-            shard=SerializedShard(
-                shard_id=shard.id,
-                descriptor=shard.descriptor.to_dict(),
-            )
-        )
-
-    def shard_heartbeat(self, **kwargs):
-        del kwargs
-        return OkResponse()
-
-    def shard_finish(self, **kwargs):
-        del kwargs
-        return OkResponse()
 
 
 def _run_local_worker(
@@ -285,7 +226,6 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
 
     worker = Worker(
         pipeline=pipeline,
-        heartbeat_interval_seconds=1,
         run_handle=RunHandle(
             job_id="job",
             stage_index=0,
@@ -578,75 +518,6 @@ def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
     assert registered_gauge_steps_by_label["async_registered"] == [10]
     assert registered_gauge_steps_by_label["flat_map_registered"] == [12]
     assert registered_gauge_steps_by_label["batch_registered"] == [13]
-
-
-def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
-    shard = _shard("p", 0, 1)
-    rows_by_shard = {shard.id: [DictRow({"x": 1})]}
-    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
-    monkeypatch.setattr(
-        "refiner.worker.metrics.otel.OtelTelemetryEmitter",
-        lambda **_: _FlushFailingTelemetryEmitter(),
-    )
-
-    worker = Worker(
-        pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
-            worker_id="worker-0",
-            worker_name="worker-0",
-        ),
-        runtime_lifecycle=PlatformRuntimeLifecycle(
-            run=RunHandle(
-                job_id="job",
-                stage_index=0,
-                client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
-                worker_id="worker-0",
-                worker_name="worker-0",
-            )
-        ),
-    )
-    with pytest.raises(RuntimeError, match="flush failed"):
-        worker.run()
-
-
-def test_worker_flushes_logs_on_failure(monkeypatch) -> None:
-    shard = _shard("boom", 0, 1)
-    rows_by_shard = {shard.id: [DictRow({"x": 2})]}
-    emitter = _RecordingTelemetryEmitter()
-
-    def maybe_fail(row: Row) -> Row:
-        raise RuntimeError("kaboom")
-
-    monkeypatch.setattr(
-        "refiner.worker.metrics.otel.OtelTelemetryEmitter", lambda **_: emitter
-    )
-    worker = Worker(
-        pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail),
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
-            worker_id="worker-0",
-            worker_name="worker-0",
-        ),
-        runtime_lifecycle=PlatformRuntimeLifecycle(
-            run=RunHandle(
-                job_id="job",
-                stage_index=0,
-                client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
-                worker_id="worker-0",
-                worker_name="worker-0",
-            )
-        ),
-    )
-
-    stats = worker.run()
-
-    assert stats.failed == 1
-    assert emitter.log_flushes == 2
 
 
 def test_worker_suppresses_sink_close_errors_after_execution_failure() -> None:

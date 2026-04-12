@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class RunHandle:
+    # TODO: fold/remove the platform-only fields once cloud/runtime worker code
+    # lives outside the OSS package surface.
     job_id: str
     stage_index: int
     worker_id: str

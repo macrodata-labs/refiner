@@ -49,5 +49,5 @@ Stored credentials live in XDG config:
 
 ## Notes
 
-- `launch_local(...)` can use the stored key for platform lifecycle reporting
+- `launch_local(...)` does not require Macrodata auth
 - `launch_cloud(...)` requires Macrodata auth

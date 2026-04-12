@@ -60,7 +60,7 @@ Use task pipelines when:
 - you want one unit of work per rank
 - you need rank/world-size aware initialization logic
 - the real work is side-effecting and the returned row is just bookkeeping
-- you want to fan out arbitrary work and still use Refiner launchers, sinks, and observability
+- you want to fan out arbitrary work and still use Refiner launchers and sinks
 
 ## Notes
 

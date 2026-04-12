@@ -52,9 +52,6 @@ class LocalRuntimeLifecycle:
     def claim(self, previous: Shard | None = None) -> Shard | None:
         return next(self._assigned_shards, None)
 
-    def heartbeat(self, shards: list[Shard]) -> None:
-        pass
-
     def complete(self, shard: Shard) -> None:
         path = (
             Path(self.rundir)
