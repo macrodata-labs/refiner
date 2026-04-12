@@ -50,11 +50,7 @@ def main() -> int:
             stage_index=args.stage_index,
             worker_id=args.worker_id,
             rundir=args.rundir,
-            assigned_shards=[
-                Shard.from_dict(item)
-                for item in shard_payload
-                if isinstance(item, dict)
-            ],
+            assigned_shards=[Shard.from_dict(item) for item in shard_payload],
         )
         stats = Worker(
             pipeline=pipeline,

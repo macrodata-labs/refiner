@@ -298,9 +298,7 @@ class Worker:
                 finally:
                     stop_heartbeat.set()
                     if heartbeat_thread is not None:
-                        heartbeat_thread.join(
-                            timeout=max(self.heartbeat_interval_seconds, 1)
-                        )
+                        heartbeat_thread.join(timeout=1.0)
 
                     try:
                         with set_active_step_index(sink_step_index):
