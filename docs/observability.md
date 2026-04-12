@@ -75,7 +75,7 @@ result = pipeline.launch_cloud(name="train-data-build", num_workers=4)
 
 ## Notes
 
-- cloud observability is an internal cloud-runtime integration, not part of the local OSS worker surface
+- observability on this page applies to Macrodata Cloud execution
 - user metrics flush at runtime-managed boundaries in cloud workers
 
 ## Related Pages
