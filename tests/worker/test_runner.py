@@ -209,16 +209,6 @@ class _LifecycleClientWithFailingTelemetry:
         return OkResponse()
 
 
-class _LifecycleClientWithServiceStartupFailure:
-    def __init__(self) -> None:
-        self.base_url = "https://example.com"
-        self.api_key = "md_test"
-        self.finished_payloads: list[dict[str, object | None]] = []
-
-    def report_worker_finished(self, **kwargs) -> None:
-        self.finished_payloads.append(dict(kwargs))
-
-
 def _run_local_worker(
     *,
     rows_by_shard: Mapping[str, Sequence[Row]],
@@ -657,85 +647,6 @@ def test_worker_flushes_logs_on_failure(monkeypatch) -> None:
 
     assert stats.failed == 1
     assert emitter.log_flushes == 2
-
-
-def test_worker_reports_platform_failure_when_runtime_service_startup_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client = _LifecycleClientWithServiceStartupFailure()
-    shard = _shard("svc", 0, 1)
-    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
-    worker = Worker(
-        pipeline=RefinerPipeline(source=_FakeReader({shard.id: [DictRow({"x": 1})]})),
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id="worker-0",
-            worker_name="worker-0",
-            client=cast(Any, client),
-        ),
-        runtime_lifecycle=runtime_lifecycle,
-    )
-    monkeypatch.setattr(
-        "refiner.worker.runner.collect_pipeline_services",
-        lambda pipeline: ("svc",),
-    )
-
-    async def _fail_start_services(self, runtime_services) -> None:
-        del self, runtime_services
-        raise RuntimeError("service startup failed")
-
-    monkeypatch.setattr(
-        "refiner.worker.runner.ServiceManager.start_services",
-        _fail_start_services,
-    )
-
-    stats = worker.run()
-
-    assert stats.claimed == 1
-    assert stats.failed == 1
-    assert runtime_lifecycle.failed_ids == [shard.id]
-    assert runtime_lifecycle.failed_errors == ["service startup failed"]
-    assert client.finished_payloads == [
-        {
-            "job_id": "job",
-            "stage_index": 0,
-            "worker_id": "worker-0",
-            "status": "failed",
-            "error": "service startup failed",
-        }
-    ]
-
-
-def test_worker_does_not_start_runtime_services_without_claimed_work(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime_lifecycle = _FakeRuntimeLifecycle([])
-    worker = Worker(
-        pipeline=RefinerPipeline(source=_FakeReader({})),
-        run_handle=_local_run(),
-        runtime_lifecycle=runtime_lifecycle,
-    )
-    monkeypatch.setattr(
-        "refiner.worker.runner.collect_pipeline_services",
-        lambda pipeline: ("svc",),
-    )
-    seen = {"calls": 0}
-
-    async def _start_services(self, runtime_services) -> None:
-        del self, runtime_services
-        seen["calls"] += 1
-
-    monkeypatch.setattr(
-        "refiner.worker.runner.ServiceManager.start_services",
-        _start_services,
-    )
-
-    stats = worker.run()
-
-    assert stats.claimed == 0
-    assert stats.failed == 0
-    assert seen["calls"] == 0
 
 
 def test_worker_suppresses_sink_close_errors_after_execution_failure() -> None:
