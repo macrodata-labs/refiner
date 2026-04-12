@@ -277,6 +277,7 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
     async def _fake_generate(self, payload):
         seen["payload"] = dict(payload)
         seen["base_url"] = self.base_url
+        seen["api_key"] = self.api_key
         return InferenceResponse(
             text="ok",
             finish_reason="stop",
@@ -312,6 +313,7 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
         name=provider.service_definition().name,
         kind="llm",
         endpoint="http://127.0.0.1:8000",
+        api_key="service-secret",
     )
 
     async def _inference_fn(row, generate):
@@ -339,6 +341,7 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
                 "kind": binding.kind,
                 "status": "ready",
                 "endpoint": binding.endpoint,
+                "api_key": binding.api_key,
             }
         },
     )
@@ -370,6 +373,7 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["base_url"] == "http://127.0.0.1:8000"
+    assert seen["api_key"] == "service-secret"
 
 
 def test_vllm_provider_awaits_service_manager(monkeypatch) -> None:
@@ -378,6 +382,7 @@ def test_vllm_provider_awaits_service_manager(monkeypatch) -> None:
     async def _fake_generate(self, payload):
         seen["payload"] = dict(payload)
         seen["base_url"] = self.base_url
+        seen["api_key"] = self.api_key
         return InferenceResponse(
             text="ok",
             finish_reason="stop",
@@ -412,6 +417,7 @@ def test_vllm_provider_awaits_service_manager(monkeypatch) -> None:
                 "kind": "llm",
                 "status": "ready",
                 "endpoint": binding.endpoint,
+                "api_key": binding.api_key,
             }
         }
 
@@ -425,6 +431,7 @@ def test_vllm_provider_awaits_service_manager(monkeypatch) -> None:
         name=provider.service_definition().name,
         kind="llm",
         endpoint="http://127.0.0.1:9100",
+        api_key="service-secret",
     )
     client = _FakeServiceClient(
         start_response={
@@ -468,5 +475,6 @@ def test_vllm_provider_awaits_service_manager(monkeypatch) -> None:
     result = asyncio.run(_invoke())
 
     assert result == {"output": "ok"}
+    assert seen["api_key"] == "service-secret"
     assert seen["service_id"] == "svc-1"
     assert seen["base_url"] == "http://127.0.0.1:9100"

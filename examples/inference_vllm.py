@@ -5,7 +5,7 @@ import refiner as mdr
 INPUT_PATH = "input.jsonl"
 OUTPUT_PATH = "output/vllm-inference.jsonl"
 PROVIDER = mdr.inference.VLLMProvider(
-    model_name_or_path="Qwen/Qwen3.5-9B",
+    model_name_or_path="Qwen/Qwen2.5-0.5B",
     model_max_context=8192,
 )
 

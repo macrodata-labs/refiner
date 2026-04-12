@@ -105,6 +105,7 @@ def test_service_manager_polls_until_service_is_ready() -> None:
                 "kind": "llm",
                 "status": "ready",
                 "endpoint": "http://127.0.0.1:9000",
+                "api_key": "service-secret",
             }
         }
 
@@ -137,6 +138,7 @@ def test_service_manager_polls_until_service_is_ready() -> None:
         name="llm-a",
         kind="llm",
         endpoint="http://127.0.0.1:9000",
+        api_key="service-secret",
     )
     assert seen["service_id"] == "svc-1"
     assert seen["calls"] == 2
@@ -154,6 +156,7 @@ def test_service_manager_caches_resolved_service_binding() -> None:
                 "kind": "llm",
                 "status": "ready",
                 "endpoint": "http://127.0.0.1:9000",
+                "api_key": "service-secret",
             }
         }
 
@@ -259,6 +262,7 @@ def test_service_manager_can_start_requested_services_lazily() -> None:
                 "kind": "llm",
                 "status": "ready",
                 "endpoint": "http://127.0.0.1:9000",
+                "api_key": "service-secret",
             }
         }
 
@@ -276,6 +280,7 @@ def test_service_manager_can_start_requested_services_lazily() -> None:
         name=definition.name,
         kind="llm",
         endpoint="http://127.0.0.1:9000",
+        api_key="service-secret",
     )
     assert seen["start_calls"] == 1
     assert seen["status_calls"] == 1

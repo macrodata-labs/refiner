@@ -25,11 +25,13 @@ class ServiceManager:
         job_id: str | None = None,
         stage_index: int | None = None,
         worker_id: str | None = None,
+        worker_name: str | None = None,
     ) -> None:
         self._client = client
         self._job_id = job_id
         self._stage_index = stage_index
         self._worker_id = worker_id
+        self._logger = logger.bind(worker_name=worker_name or worker_id)
         self._started_by_name: dict[str, dict[str, str]] = {}
         self._resolved_by_name: dict[str, RuntimeServiceBinding] = {}
         self._pending_by_name: dict[str, asyncio.Task[RuntimeServiceBinding]] = {}
@@ -40,7 +42,7 @@ class ServiceManager:
     ) -> None:
         if services:
             for service in services:
-                logger.info(
+                self._logger.info(
                     "Starting runtime service {}:{}",
                     service.kind,
                     service.name,
@@ -55,7 +57,8 @@ class ServiceManager:
             raise RuntimeError(
                 "Cloud runtime service creation requires an active cloud worker context."
             )
-        response = client.start_worker_services(
+        response = await asyncio.to_thread(
+            client.start_worker_services,
             job_id=self._job_id or "",
             stage_index=self._stage_index or 0,
             worker_id=worker_id,
@@ -77,7 +80,7 @@ class ServiceManager:
         if pending is not None:
             return await pending
 
-        logger.info(
+        self._logger.info(
             "Waiting for runtime service {}:{}",
             started["kind"],
             started["name"],
@@ -116,7 +119,8 @@ class ServiceManager:
             )
         deadline = asyncio.get_running_loop().time() + _START_TIMEOUT_SECONDS
         while True:
-            response = client.get_worker_service(
+            response = await asyncio.to_thread(
+                client.get_worker_service,
                 job_id=self._job_id or "",
                 stage_index=self._stage_index or 0,
                 worker_id=worker_id,

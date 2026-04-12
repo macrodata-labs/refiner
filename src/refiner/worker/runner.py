@@ -133,6 +133,7 @@ class Worker:
             job_id=self.run_handle.job_id,
             stage_index=self.run_handle.stage_index,
             worker_id=self.run_handle.worker_id,
+            worker_name=self.run_handle.worker_name,
         )
         runtime_services = collect_pipeline_services(self.pipeline)
         if runtime_services:
