@@ -80,34 +80,37 @@ class _MetricRecordingEmitter:
 
 def test_openai_endpoint_requires_non_empty_base_url() -> None:
     with pytest.raises(ValueError, match="base_url must be non-empty"):
-        OpenAIEndpointProvider(base_url=" ")
+        OpenAIEndpointProvider(base_url=" ", model="gpt-test")
+
+
+def test_openai_endpoint_requires_non_empty_model() -> None:
+    with pytest.raises(ValueError, match="model must be non-empty"):
+        OpenAIEndpointProvider(base_url="https://api.example.com", model=" ")
 
 
 def test_vllm_provider_requires_non_empty_model_name_or_path() -> None:
     with pytest.raises(ValueError, match="model_name_or_path must be non-empty"):
-        VLLMProvider(model_name_or_path=" ")
+        VLLMProvider(model=" ")
 
 
 def test_vllm_provider_rejects_non_positive_model_max_context() -> None:
     with pytest.raises(ValueError, match="model_max_context must be > 0 when provided"):
-        VLLMProvider(
-            model_name_or_path="meta-llama/Llama-3.1-8B-Instruct", model_max_context=0
-        )
+        VLLMProvider(model="meta-llama/Llama-3.1-8B-Instruct", model_max_context=0)
 
 
 def test_vllm_provider_accepts_optional_model_max_context() -> None:
     provider = VLLMProvider(
-        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        model="meta-llama/Llama-3.1-8B-Instruct",
         model_max_context=8192,
     )
 
-    assert provider.model_name_or_path == "meta-llama/Llama-3.1-8B-Instruct"
+    assert provider.model == "meta-llama/Llama-3.1-8B-Instruct"
     assert provider.model_max_context == 8192
 
 
 def test_vllm_provider_emits_service_definition() -> None:
     provider = VLLMProvider(
-        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        model="meta-llama/Llama-3.1-8B-Instruct",
         model_max_context=8192,
     )
 
@@ -142,7 +145,9 @@ def test_vllm_service_definition_emits_runtime_service_spec() -> None:
 def test_inference_generate_does_not_override_async_step_defaults() -> None:
     infer = mdr.inference.generate(
         fn=lambda row, generate: {"value": row["item"], "generate": bool(generate)},
-        provider=OpenAIEndpointProvider(base_url="https://api.example.com"),
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
     )
 
     pipeline = mdr.from_items([1]).map_async(infer)
@@ -150,13 +155,15 @@ def test_inference_generate_does_not_override_async_step_defaults() -> None:
     assert isinstance(step, FnAsyncRowStep)
 
     assert step.max_in_flight == 16
-    assert step.preserve_order is True
+    assert step.preserve_order is False
 
 
 def test_map_async_explicitly_controls_async_step_settings() -> None:
     infer = mdr.inference.generate(
         fn=lambda row, generate: {"value": row["item"], "generate": bool(generate)},
-        provider=OpenAIEndpointProvider(base_url="https://api.example.com"),
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
     )
 
     pipeline = mdr.from_items([1]).map_async(
@@ -196,7 +203,9 @@ def test_inference_generate_invokes_user_fn_and_merges_default_params(
 
     infer = mdr.inference.generate(
         fn=_inference_fn,
-        provider=OpenAIEndpointProvider(base_url="https://api.example.com"),
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
         default_generation_params={"temperature": 0.2},
     )
 
@@ -212,7 +221,11 @@ def test_inference_generate_invokes_user_fn_and_merges_default_params(
     result = asyncio.run(_invoke())
 
     assert result == {"output": "hello", "finish_reason": "stop"}
-    assert seen["payload"] == {"temperature": 0.2, "prompt": "hi"}
+    assert seen["payload"] == {
+        "model": "gpt-test",
+        "temperature": 0.2,
+        "prompt": "hi",
+    }
 
 
 def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
@@ -238,6 +251,7 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
         fn=_inference_fn,
         provider=OpenAIEndpointProvider(
             base_url="https://api.example.com",
+            model="gpt-test",
             api_key="secret",
         ),
     )
@@ -249,6 +263,46 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["api_key"] == "secret"
+
+
+def test_openai_endpoint_provider_model_is_used_as_default_request_model(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate):
+        response = await generate({"prompt": row["prompt"]})
+        return {"output": response.text}
+
+    infer = mdr.inference.generate(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com",
+            model="openai/gpt-5.2",
+        ),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"prompt": "hi"}))
+
+    result = asyncio.run(_invoke())
+
+    assert result == {"output": "ok"}
+    assert seen["payload"] == {
+        "model": "openai/gpt-5.2",
+        "prompt": "hi",
+    }
 
 
 def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
@@ -289,7 +343,9 @@ def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
 
     infer = mdr.inference.generate(
         fn=_inference_fn,
-        provider=OpenAIEndpointProvider(base_url="https://api.example.com"),
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
     )
     run_handle = RunHandle(job_id="job-1", stage_index=0, worker_id="worker-1")
 
@@ -358,7 +414,9 @@ def test_inference_generate_reports_failed_requests(monkeypatch) -> None:
 
     infer = mdr.inference.generate(
         fn=_inference_fn,
-        provider=OpenAIEndpointProvider(base_url="https://api.example.com"),
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
     )
     run_handle = RunHandle(job_id="job-1", stage_index=0, worker_id="worker-1")
 
@@ -475,7 +533,7 @@ def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
     monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     provider = VLLMProvider(
-        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        model="meta-llama/Llama-3.1-8B-Instruct",
         model_max_context=8192,
     )
     binding = VLLMRuntimeServiceBinding(
@@ -593,7 +651,7 @@ def test_vllm_provider_awaits_service_manager(monkeypatch) -> None:
     monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     provider = VLLMProvider(
-        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        model="meta-llama/Llama-3.1-8B-Instruct",
         model_max_context=8192,
     )
     binding = VLLMRuntimeServiceBinding(

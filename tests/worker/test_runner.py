@@ -710,7 +710,8 @@ def test_worker_executes_endpoint_backed_inference(monkeypatch) -> None:
         mdr.inference.generate(
             fn=_infer,
             provider=mdr.inference.OpenAIEndpointProvider(
-                base_url="https://api.example.com"
+                base_url="https://api.example.com",
+                model="gpt-test",
             ),
             default_generation_params={"temperature": 0.1},
         )
@@ -729,6 +730,7 @@ def test_worker_executes_endpoint_backed_inference(monkeypatch) -> None:
 
     assert stats.completed == 1
     assert seen["payload"] == {
+        "model": "gpt-test",
         "temperature": 0.1,
         "messages": [{"role": "user", "content": "hi"}],
     }

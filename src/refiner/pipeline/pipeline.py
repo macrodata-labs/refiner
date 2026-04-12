@@ -137,7 +137,7 @@ class RefinerPipeline:
         fn: AsyncMapFn,
         *,
         max_in_flight: int = 16,
-        preserve_order: bool = True,
+        preserve_order: bool = False,
     ) -> "RefinerPipeline":
         return self.add_step(
             FnAsyncRowStep(

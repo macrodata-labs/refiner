@@ -28,7 +28,7 @@ def generate(
     fn: InferenceFn,
     provider: OpenAIEndpointProvider | VLLMProvider,
     default_generation_params: Mapping[str, Any] | None = None,
-    max_concurrent_requests: int = 128,
+    max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Awaitable[MapResult]]:
     if max_concurrent_requests <= 0:
         raise ValueError("max_concurrent_requests must be > 0")
@@ -59,7 +59,10 @@ def generate(
         nonlocal client
         nonlocal running_requests
         nonlocal waiting_requests
-        request_payload = dict(default_generation_params or {})
+        request_payload: dict[str, Any] = {}
+        if isinstance(provider, OpenAIEndpointProvider) and provider.model is not None:
+            request_payload["model"] = provider.model
+        request_payload.update(dict(default_generation_params or {}))
         request_payload.update(dict(payload))
         if client is None:
             async with client_lock:
