@@ -10,7 +10,7 @@ Refiner cloud jobs report runtime lifecycle and telemetry to Macrodata Cloud.
 This page applies to [`launch_cloud(...)`](launchers.md) only.
 
 - `launch_local(...)` does not provide Macrodata Cloud observability
-- cloud worker runtime packaging, tokens, and OTLP export are managed by the cloud runtime
+- cloud observability is available as part of Macrodata Cloud execution
 
 ## What Cloud Reports
 
