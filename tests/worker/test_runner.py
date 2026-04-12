@@ -39,6 +39,7 @@ class _FakeRuntimeLifecycle:
         self.worker_id = "local"
         self._remaining = list(shards)
         self.claim_previous: list[Shard | None] = []
+        self.heartbeat_snapshots: list[list[str]] = []
         self.completed_ids: list[str] = []
         self.failed_ids: list[str] = []
         self.failed_errors: list[str | None] = []
@@ -51,6 +52,9 @@ class _FakeRuntimeLifecycle:
 
     def complete(self, shard: Shard) -> None:
         self.completed_ids.append(shard.id)
+
+    def heartbeat(self, shards: list[Shard]) -> None:
+        self.heartbeat_snapshots.append([shard.id for shard in shards])
 
     def fail(self, shard: Shard, error: str | None = None) -> None:
         self.failed_ids.append(shard.id)
@@ -245,6 +249,30 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     assert runtime_lifecycle.claim_previous[0] is None
     assert runtime_lifecycle.claim_previous[1] == shard1
     assert emitted == [(shard1.id, 3), (shard1.id, 2), (shard2.id, 11)]
+
+
+def test_worker_sends_heartbeat_for_inflight_shards() -> None:
+    import time
+
+    shard = _shard("slow", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+
+    def slow(row: Row) -> Row:
+        time.sleep(1.1)
+        return row
+
+    worker = _run_local_worker(
+        rows_by_shard={shard.id: [DictRow({"x": 1})]},
+        runtime_lifecycle=runtime_lifecycle,
+        transform=slow,
+    )
+    worker.heartbeat_interval_seconds = 1
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert runtime_lifecycle.heartbeat_snapshots
+    assert runtime_lifecycle.heartbeat_snapshots[0] == [shard.id]
 
 
 def test_worker_fails_entire_claimed_group_on_exception() -> None:

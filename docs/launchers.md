@@ -99,4 +99,5 @@ Behavior:
 ## Related Pages
 
 - [CLI](cli.md)
+- [Observability](observability.md)
 - [Robotics](robotics.md)

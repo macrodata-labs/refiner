@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 from refiner.execution.engine import block_num_rows
@@ -30,11 +31,15 @@ class Worker:
         pipeline: RefinerPipeline,
         *,
         run_handle: RunHandle,
+        heartbeat_interval_seconds: int = 0,
         runtime_lifecycle: RuntimeLifecycle,
     ):
         self.pipeline = pipeline
         self.run_handle = run_handle
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.runtime_lifecycle = runtime_lifecycle
+        if self.heartbeat_interval_seconds < 0:
+            raise ValueError("heartbeat_interval_seconds must be >= 0")
 
     def run(self) -> WorkerRunStats:
         # Source-claim state.
@@ -50,21 +55,44 @@ class Worker:
         inflight_by_id: dict[str, Shard] = {}
         pending_rows_by_shard: dict[str, int] = {}
         source_done_shards: set[str] = set()
-        from threading import Lock
-
-        inflight_lock = Lock()
+        inflight_lock = threading.Lock()
 
         # Error state: worker failures are converted into shard failures.
         execution_error: Exception | None = None
+        heartbeat_error: Exception | None = None
 
         # Runtime services.
         user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
+        stop_heartbeat = threading.Event()
 
         runtime_lifecycle = self.runtime_lifecycle
         sink = self.pipeline.sink or NullSink()
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
+
+        def _heartbeat_once() -> None:
+            with inflight_lock:
+                snapshot = list(inflight_by_id.values())
+            if not snapshot:
+                return
+            runtime_lifecycle.heartbeat(snapshot)
+
+        def _heartbeat_loop() -> None:
+            nonlocal heartbeat_error
+            while not stop_heartbeat.wait(self.heartbeat_interval_seconds):
+                try:
+                    _heartbeat_once()
+                except Exception as e:  # noqa: BLE001
+                    message = str(e).strip() or type(e).__name__
+                    logger.warning(
+                        "heartbeat failed for worker_id={}: {}: {}",
+                        self.run_handle.worker_id,
+                        type(e).__name__,
+                        message,
+                    )
+                    heartbeat_error = e
+                    return
 
         def _complete_shard(shard_id: str) -> None:
             nonlocal completed
@@ -109,9 +137,20 @@ class Worker:
             for shard_id in touched:
                 _maybe_complete_shard(shard_id)
 
+        heartbeat_thread: threading.Thread | None = None
+        if self.heartbeat_interval_seconds > 0:
+            heartbeat_thread = threading.Thread(
+                target=_heartbeat_loop,
+                name=f"refiner-heartbeat-{self.run_handle.worker_name or 'worker'}",
+                daemon=True,
+            )
+            heartbeat_thread.start()
+
         def _source_rows():
             nonlocal previous, claimed
             while True:
+                if heartbeat_error is not None:
+                    raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                 shard = runtime_lifecycle.claim(previous=previous)
                 if shard is None:
                     logger.info(
@@ -180,6 +219,10 @@ class Worker:
                             _source_rows(),
                             on_shard_delta=_apply_row_delta,
                         ):
+                            if heartbeat_error is not None:
+                                raise RuntimeError(
+                                    f"heartbeat failed: {heartbeat_error}"
+                                )
                             with set_active_step_index(sink_step_index):
                                 written = sink.write_block(block)
                             _apply_row_delta(
@@ -236,6 +279,12 @@ class Worker:
                     run_exception = e
                     raise
                 finally:
+                    stop_heartbeat.set()
+                    if heartbeat_thread is not None:
+                        heartbeat_thread.join(
+                            timeout=max(self.heartbeat_interval_seconds, 1)
+                        )
+
                     try:
                         with set_active_step_index(sink_step_index):
                             sink.close()

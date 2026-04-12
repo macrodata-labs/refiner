@@ -75,8 +75,9 @@ result = pipeline.launch_cloud(name="train-data-build", num_workers=4)
 
 ## Notes
 
-- observability on this page applies to Macrodata Cloud execution
-- user metrics flush at runtime-managed boundaries in cloud workers
+- cloud runs report jobs, stages, workers, and shards explicitly
+- user metrics flush on shard end
+- worker resource metrics cover CPU, memory, and network observers
 
 ## Related Pages
 
