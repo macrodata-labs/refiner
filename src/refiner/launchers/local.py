@@ -124,8 +124,12 @@ class LocalLauncher(BaseLauncher):
         output_rows = 0
         for worker_id, process in processes:
             stdout, stderr = process.communicate()
+            final_stdout_line = next(
+                (line for line in reversed(stdout.splitlines()) if line.strip()),
+                "",
+            )
             try:
-                decoded = json.loads(stdout.strip() or "{}")
+                decoded = json.loads(final_stdout_line or "{}")
                 raw = (
                     decoded
                     if isinstance(decoded, dict)

@@ -33,6 +33,21 @@ class CloudLaunchResult:
 
 
 class CloudLauncher(BaseLauncher):
+    """Cloud launcher that submits a compiled run to the cloud controller.
+
+    Args:
+        pipeline: Pipeline to execute.
+        name: Human-readable run name.
+        num_workers: Requested logical worker count for cloud execution.
+        cpus_per_worker: Optional requested CPU cores per worker.
+        mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
+        gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
+        gpu_type: Optional requested GPU type per worker for cloud scheduling.
+        sync_local_dependencies: Whether to sync submitting environment dependencies.
+        secrets: Optional secrets mounted into the cloud runtime.
+        env: Optional plain environment variables mounted into the cloud runtime.
+    """
+
     def __init__(
         self,
         *,
@@ -51,11 +66,13 @@ class CloudLauncher(BaseLauncher):
             pipeline=pipeline,
             name=name,
             num_workers=num_workers,
-            cpus_per_worker=cpus_per_worker or 1,
+            cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
+        if gpus_per_worker is not None and gpus_per_worker <= 0:
+            raise ValueError("gpus_per_worker must be > 0")
         if gpus_per_worker is not None and gpu_type is None:
             raise ValueError("gpu_type is required when gpus_per_worker is set")
         if gpu_type is not None and not gpu_type.strip():

@@ -34,7 +34,7 @@ class BaseLauncher(ABC):
         name: str,
         job_id: str | None = None,
         num_workers: int = 1,
-        cpus_per_worker: int = 1,
+        cpus_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
     ):
         if not name.strip():
@@ -45,7 +45,7 @@ class BaseLauncher(ABC):
         if num_workers <= 0:
             raise ValueError("num_workers must be > 0")
         self.num_workers = num_workers
-        if cpus_per_worker <= 0:
+        if cpus_per_worker is not None and cpus_per_worker <= 0:
             raise ValueError("cpus_per_worker must be > 0")
         self.cpus_per_worker = cpus_per_worker
         if gpus_per_worker is not None and gpus_per_worker <= 0:

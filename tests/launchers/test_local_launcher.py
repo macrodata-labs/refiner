@@ -241,6 +241,28 @@ def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
     assert stats.output_rows == 2
 
 
+def test_launch_local_ignores_non_json_stdout_before_final_stats(tmp_path) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+
+    def noisy_map(row):
+        print(f"processing {row['x']}")
+        return {"x": int(row["x"]) + 1}
+
+    pipeline = read_jsonl(str(path)).map(noisy_map)
+
+    stats = pipeline.launch_local(
+        name="unit-test-local-noisy-stdout",
+        num_workers=1,
+        rundir=str(tmp_path / "run"),
+    )
+
+    assert stats.workers == 1
+    assert stats.completed == 1
+    assert stats.failed == 0
+    assert stats.output_rows == 1
+
+
 def test_local_launcher_launch_pings_api_me(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

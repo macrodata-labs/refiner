@@ -22,6 +22,7 @@ stats = pipeline.launch_local(
     name="local-job",
     num_workers=2,
     cpus_per_worker=2,
+    gpus_per_worker=1,
 )
 ```
 
@@ -38,6 +39,8 @@ Returned stats include:
 
 - workers always run as subprocesses, even when `num_workers=1`
 - `cpus_per_worker` defaults to `1`; local execution clamps worker count to what can be pinned on the current machine
+- `gpus_per_worker` optionally exposes a fixed number of visible GPU devices to each local worker
+- if `rundir` is reused, local launch skips shards already completed there
 - local run files live under `<workdir>/runs/<job_id>/...`
 
 ## Cloud Launcher
@@ -58,6 +61,8 @@ result = pipeline.launch_cloud(
     num_workers=8,
     cpus_per_worker=2,
     mem_mb_per_worker=4096,
+    gpus_per_worker=1,
+    gpu_type="h100",
 )
 ```
 
@@ -72,6 +77,8 @@ Returned result includes:
 - `num_workers`: requested logical worker count
 - `cpus_per_worker`: scheduler hint for worker CPU sizing
 - `mem_mb_per_worker`: scheduler hint for worker memory sizing
+- `gpus_per_worker`: scheduler hint for GPU count per worker
+- `gpu_type`: required when `gpus_per_worker` is set
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
