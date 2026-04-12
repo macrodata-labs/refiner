@@ -10,7 +10,6 @@ import cloudpickle
 from refiner.platform.client.api import MacrodataApiError, MacrodataClient
 from refiner.worker.context import RunHandle, logger
 from refiner.worker.lifecycle import PlatformRuntimeLifecycle
-from refiner.worker.resources.cpu import parse_cpu_ids, set_cpu_affinity
 from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
 
@@ -37,15 +36,12 @@ def main() -> int:
         # temp compatibility for the cloud
         if args.workdir:
             os.environ["REFINER_WORKDIR"] = args.workdir
-        cpu_ids = parse_cpu_ids(args.cpu_ids)
-        if cpu_ids:
-            set_cpu_affinity(cpu_ids)
-        gpu_ids = parse_gpu_ids(args.gpu_ids)
-        if gpu_ids:
-            set_visible_gpu_ids(gpu_ids)
 
         with open(args.pipeline_payload, "rb") as f:
             pipeline = cloudpickle.load(f)
+        gpu_ids = parse_gpu_ids(args.gpu_ids)
+        if gpu_ids:
+            set_visible_gpu_ids(gpu_ids)
 
         client = MacrodataClient()
         try:

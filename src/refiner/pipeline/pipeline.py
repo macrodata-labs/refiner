@@ -321,7 +321,6 @@ class RefinerPipeline:
         name: str,
         num_workers: int = 1,
         rundir: str | None = None,
-        cpus_per_worker: int = 1,
         gpus_per_worker: int | None = None,
     ) -> "LaunchStats":
         """Launch the pipeline locally.
@@ -330,7 +329,6 @@ class RefinerPipeline:
             name: Human-readable run name.
             num_workers: Number of local worker processes.
             rundir: Optional explicit local run directory. Reuse it to resume a prior local run.
-            cpus_per_worker: CPU cores pinned per worker. Defaults to `1`.
             gpus_per_worker: Optional GPU devices exposed per worker.
         """
         from refiner.launchers.local import LocalLauncher
@@ -340,7 +338,6 @@ class RefinerPipeline:
             name=name,
             num_workers=num_workers,
             rundir=rundir,
-            cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
         return launcher.launch()

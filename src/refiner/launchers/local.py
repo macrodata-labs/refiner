@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import subprocess
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -14,7 +14,7 @@ from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import PlannedStage
 from refiner.worker.context import logger
 from refiner.worker.lifecycle.local import read_finalized_workers
-from refiner.worker.resources.cpu import available_cpu_ids, build_cpu_sets
+from refiner.worker.resources.cpu import available_cpu_ids
 from refiner.worker.resources.gpu import build_gpu_sets
 from refiner.worker.workdir import resolve_workdir
 
@@ -41,18 +41,14 @@ class LocalLauncher(BaseLauncher):
         name: str,
         num_workers: int = 1,
         rundir: str | None = None,
-        cpus_per_worker: int = 1,
         gpus_per_worker: int | None = None,
     ):
         super().__init__(
             pipeline=pipeline,
             name=name,
             num_workers=num_workers,
-            cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
-        self.cpus_per_worker = cpus_per_worker
-        self.gpus_per_worker = gpus_per_worker
         self.rundir = self._resolve_rundir(rundir)
 
     def _resolve_rundir(self, rundir: str | None) -> str:
@@ -65,29 +61,6 @@ class LocalLauncher(BaseLauncher):
         if not path.is_absolute():
             raise ValueError("rundir must be an absolute path")
         return str(path)
-
-    def _max_pinnable_workers(self) -> int:
-        cpus_per_worker = self.cpus_per_worker
-        if cpus_per_worker is None:
-            raise ValueError("local launcher requires cpus_per_worker")
-        return len(available_cpu_ids()) // cpus_per_worker
-
-    def _clamp_workers_for_cpu_limit(
-        self, requested_workers: int, *, subject: str
-    ) -> int:
-        max_workers = self._max_pinnable_workers()
-        if max_workers <= 0:
-            raise ValueError(
-                f"cpus_per_worker={self.cpus_per_worker} exceeds available CPUs"
-            )
-        if requested_workers > max_workers:
-            logger.warning(
-                f"{subject} requested {requested_workers} workers with cpus_per_worker={self.cpus_per_worker}, "
-                f"but only {max_workers} workers can be pinned on this machine. "
-                f"Running {max_workers} workers instead."
-            )
-            return max_workers
-        return requested_workers
 
     @staticmethod
     def _failed_worker_payload(
@@ -224,7 +197,6 @@ class LocalLauncher(BaseLauncher):
         worker_name: str,
         worker_id: str,
         rundir: str,
-        cpu_ids: tuple[int, ...],
         gpu_ids: tuple[str, ...],
     ) -> subprocess.Popen[str]:
         cmd = [
@@ -244,8 +216,6 @@ class LocalLauncher(BaseLauncher):
             "--rundir",
             rundir,
         ]
-        if cpu_ids:
-            cmd.extend(["--cpu-ids", ",".join(str(cpu_id) for cpu_id in cpu_ids)])
         if gpu_ids:
             cmd.extend(["--gpu-ids", ",".join(gpu_ids)])
         return subprocess.Popen(
@@ -261,17 +231,12 @@ class LocalLauncher(BaseLauncher):
         stage: PlannedStage,
     ) -> LaunchStats:
         # Resolve worker capacity and remaining stage shards.
-        stage_workers = self._clamp_workers_for_cpu_limit(
-            stage.compute.num_workers,
-            subject="Stage",
-        )
-        cpus_per_worker = self.cpus_per_worker
-        if cpus_per_worker is None:
-            raise ValueError("local launcher requires cpus_per_worker")
-        cpu_sets = build_cpu_sets(
-            num_workers=stage_workers,
-            cpus_per_worker=cpus_per_worker,
-        )
+        stage_workers = stage.compute.num_workers
+        available_cpus = len(available_cpu_ids())
+        if stage_workers > available_cpus:
+            logger.warning(
+                f"stage {stage.index} requested {stage_workers} workers, but only {available_cpus} CPUs are available on this machine."
+            )
         gpu_sets = (
             build_gpu_sets(
                 num_workers=stage_workers,
@@ -340,7 +305,6 @@ class LocalLauncher(BaseLauncher):
                         worker_name=f"stage-{stage.index}-rank-{rank}",
                         worker_id=worker_id,
                         rundir=self.rundir,
-                        cpu_ids=tuple(cpu_sets[rank]),
                         gpu_ids=tuple(gpu_sets[rank]),
                     ),
                 )
@@ -353,10 +317,11 @@ class LocalLauncher(BaseLauncher):
         )
 
     def launch(self) -> LaunchStats:
-        self.num_workers = self._clamp_workers_for_cpu_limit(
-            self.num_workers,
-            subject="Launch",
-        )
+        available_cpus = len(available_cpu_ids())
+        if self.num_workers > available_cpus:
+            logger.warning(
+                f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
+            )
         self._validate_key()
         stages = self._planned_stages()
         totals = LaunchStats(

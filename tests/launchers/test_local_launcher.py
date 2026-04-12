@@ -4,12 +4,11 @@ from collections.abc import Iterator, Mapping, Sequence
 import pytest
 
 from refiner.pipeline.data.shard import FilePart, Shard
-from refiner.pipeline import RefinerPipeline, read_jsonl
+from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
 from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
-from refiner.worker.resources.cpu import build_cpu_sets
 from refiner.worker.resources.gpu import build_gpu_sets
 
 
@@ -63,6 +62,29 @@ def test_launch_local_single_worker(tmp_path) -> None:
     assert stats.output_rows == 2
 
 
+def test_launch_local_single_worker_csv(tmp_path) -> None:
+    path = tmp_path / "a.csv"
+    path.write_text("x\n1\n2\n")
+
+    pipeline = (
+        read_csv(str(path))
+        .map(lambda r: {"x": int(r["x"]) + 1})
+        .filter(lambda r: int(r["x"]) % 2 == 0)
+    )
+
+    stats = pipeline.launch_local(
+        name="unit-test-local-csv",
+        num_workers=1,
+        rundir=str(tmp_path / "run"),
+    )
+
+    assert stats.workers == 1
+    assert stats.claimed == 1
+    assert stats.completed == 1
+    assert stats.failed == 0
+    assert stats.output_rows == 1
+
+
 def test_launch_local_coalesces_writer_shards(tmp_path) -> None:
     p1 = tmp_path / "a.jsonl"
     p2 = tmp_path / "b.jsonl"
@@ -81,26 +103,6 @@ def test_launch_local_coalesces_writer_shards(tmp_path) -> None:
 
     assert stats.claimed == 1
     assert stats.completed == 1
-
-
-def test_build_cpu_sets_partitions_cpus(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "refiner.worker.resources.cpu.available_cpu_ids",
-        lambda: [0, 1, 2, 3, 4, 5],
-    )
-    sets = build_cpu_sets(num_workers=3, cpus_per_worker=2)
-    assert sets == [[0, 1], [2, 3], [4, 5]]
-
-
-def test_build_cpu_sets_raises_when_insufficient(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "refiner.worker.resources.cpu.available_cpu_ids",
-        lambda: [0, 1, 2],
-    )
-    with pytest.raises(ValueError):
-        build_cpu_sets(num_workers=2, cpus_per_worker=2)
 
 
 def test_build_gpu_sets_partitions_gpus(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -145,81 +147,6 @@ def test_launch_local_assigns_visible_gpus(
     assert stats.workers == 1
     assert stats.completed == 1
     assert stats.failed == 0
-
-
-def test_local_launcher_clamps_workers_before_planning(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "a.jsonl"
-    path.write_text('{"x": 1}\n')
-    pipeline = read_jsonl(str(path))
-    launcher = LocalLauncher(
-        pipeline=pipeline,
-        name="clamp-before-planning",
-        num_workers=4,
-        cpus_per_worker=2,
-    )
-
-    monkeypatch.setattr(
-        "refiner.launchers.local.available_cpu_ids",
-        lambda: [0, 1, 2, 3],
-    )
-
-    planned_worker_counts: list[int] = []
-
-    def fake_planned_stages() -> list[PlannedStage]:
-        planned_worker_counts.append(launcher.num_workers)
-        return [
-            PlannedStage(
-                index=0,
-                name="stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=launcher.num_workers),
-            )
-        ]
-
-    monkeypatch.setattr(launcher, "_planned_stages", fake_planned_stages)
-
-    stats = launcher.launch()
-
-    assert planned_worker_counts == [2]
-    assert stats.workers == 2
-
-
-def test_local_launcher_clamps_stage_workers_when_stage_exceeds_cpu_limit(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "a.jsonl"
-    path.write_text('{"x": 1}\n')
-    pipeline = read_jsonl(str(path))
-    launcher = LocalLauncher(
-        pipeline=pipeline,
-        name="clamp-stage-workers",
-        num_workers=1,
-        cpus_per_worker=2,
-    )
-
-    monkeypatch.setattr(
-        "refiner.launchers.local.available_cpu_ids",
-        lambda: [0, 1, 2, 3],
-    )
-
-    monkeypatch.setattr(
-        launcher,
-        "_planned_stages",
-        lambda: [
-            PlannedStage(
-                index=0,
-                name="stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=3),
-            )
-        ],
-    )
-
-    stats = launcher.launch()
-
-    assert stats.workers == 2
 
 
 def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
