@@ -33,11 +33,17 @@ class Worker:
         run_handle: RunHandle,
         heartbeat_interval_seconds: int = 0,
         runtime_lifecycle: RuntimeLifecycle,
+        user_metrics_emitter: UserMetricsEmitter | None = None,
     ):
         self.pipeline = pipeline
         self.run_handle = run_handle
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.runtime_lifecycle = runtime_lifecycle
+        self.user_metrics_emitter = (
+            NOOP_USER_METRICS_EMITTER
+            if user_metrics_emitter is None
+            else user_metrics_emitter
+        )
         if self.heartbeat_interval_seconds < 0:
             raise ValueError("heartbeat_interval_seconds must be >= 0")
 
@@ -62,7 +68,7 @@ class Worker:
         heartbeat_error: Exception | None = None
 
         # Runtime services.
-        user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
+        user_metrics_emitter = self.user_metrics_emitter
         stop_heartbeat = threading.Event()
 
         runtime_lifecycle = self.runtime_lifecycle
