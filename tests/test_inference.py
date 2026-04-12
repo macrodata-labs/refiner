@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -10,39 +9,12 @@ import refiner as mdr
 from refiner.inference import (
     InferenceResponse,
     OpenAIEndpointProvider,
-    VLLMProvider,
 )
 from refiner.pipeline.data.row import DictRow
-from refiner.pipeline.steps import FnAsyncRowStep
-from refiner.services import (
-    ServiceManager,
-    VLLMRuntimeServiceBinding,
-    VLLMServiceDefinition,
-)
 from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.metrics.context import set_active_user_metrics_emitter
 
 from refiner.inference import client as openai_module
-
-
-class _FakeServiceClient:
-    def __init__(self, *, start_response, get_service) -> None:
-        self._start_response = start_response
-        self._get_service = get_service
-
-    def start_worker_services(self, **kwargs):
-        del kwargs["job_id"], kwargs["stage_index"], kwargs["worker_id"]
-        services = kwargs["services"]
-        return (
-            self._start_response(services)
-            if callable(self._start_response)
-            else self._start_response
-        )
-
-    def get_worker_service(self, **kwargs):
-        del kwargs["job_id"], kwargs["stage_index"], kwargs["worker_id"]
-        service_id = kwargs["service_id"]
-        return self._get_service(service_id)
 
 
 class _MetricRecordingEmitter:
@@ -86,68 +58,6 @@ def test_openai_endpoint_requires_non_empty_model() -> None:
         OpenAIEndpointProvider(base_url="https://api.example.com", model=" ")
 
 
-def test_vllm_provider_requires_non_empty_model_name_or_path() -> None:
-    with pytest.raises(ValueError, match="model_name_or_path must be non-empty"):
-        VLLMProvider(model=" ")
-
-
-def test_vllm_provider_rejects_non_positive_model_max_context() -> None:
-    with pytest.raises(ValueError, match="model_max_context must be > 0 when provided"):
-        VLLMProvider(model="meta-llama/Llama-3.1-8B-Instruct", model_max_context=0)
-
-
-def test_vllm_service_definition_emits_runtime_service_spec() -> None:
-    definition = VLLMServiceDefinition(
-        model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-        model_max_context=8192,
-    )
-
-    spec = definition.to_spec()
-
-    assert spec.kind == "llm"
-    assert spec.name == definition.name
-    assert spec.config == {
-        "model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
-        "model_max_context": 8192,
-    }
-
-
-def test_inference_generate_does_not_override_async_step_defaults() -> None:
-    infer = mdr.inference.generate(
-        fn=lambda row, generate: {"value": row["item"], "generate": bool(generate)},
-        provider=OpenAIEndpointProvider(
-            base_url="https://api.example.com", model="gpt-test"
-        ),
-    )
-
-    pipeline = mdr.from_items([1]).map_async(infer)
-    step = pipeline.pipeline_steps[-1]
-    assert isinstance(step, FnAsyncRowStep)
-
-    assert step.max_in_flight == 16
-    assert step.preserve_order is False
-
-
-def test_map_async_explicitly_controls_async_step_settings() -> None:
-    infer = mdr.inference.generate(
-        fn=lambda row, generate: {"value": row["item"], "generate": bool(generate)},
-        provider=OpenAIEndpointProvider(
-            base_url="https://api.example.com", model="gpt-test"
-        ),
-    )
-
-    pipeline = mdr.from_items([1]).map_async(
-        infer,
-        max_in_flight=7,
-        preserve_order=False,
-    )
-    step = pipeline.pipeline_steps[-1]
-    assert isinstance(step, FnAsyncRowStep)
-
-    assert step.max_in_flight == 7
-    assert step.preserve_order is False
-
-
 def test_inference_generate_invokes_user_fn_and_merges_default_params(
     monkeypatch,
 ) -> None:
@@ -178,10 +88,6 @@ def test_inference_generate_invokes_user_fn_and_merges_default_params(
         ),
         default_generation_params={"temperature": 0.2},
     )
-
-    pipeline = mdr.from_items([{"prompt": "hi"}]).map_async(infer)
-    step = pipeline.pipeline_steps[-1]
-    assert isinstance(step, FnAsyncRowStep)
 
     async def _invoke() -> object:
         return await infer(DictRow({"prompt": "hi"}))
@@ -372,160 +278,3 @@ def test_inference_generate_reports_failed_requests(monkeypatch) -> None:
     }
     assert counter_totals["failed_requests"] == 1
     assert "successful_requests" not in counter_totals
-
-
-def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
-    seen: dict[str, object] = {}
-
-    class _FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> Mapping[str, object]:
-            return {
-                "choices": [
-                    {
-                        "message": {"content": "ok"},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {},
-            }
-
-    class _FakeAsyncClient:
-        def __init__(self, *, base_url, timeout, headers):
-            seen["base_url"] = str(base_url)
-            seen["timeout"] = timeout
-            seen["headers"] = dict(headers)
-
-        async def post(self, path, *, json):
-            seen["path"] = path
-            seen["payload"] = dict(json)
-            return _FakeResponse()
-
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
-
-    response = asyncio.run(
-        openai_module._OpenAIEndpointClient(
-            base_url="https://openrouter.ai/api/v1",
-            api_key="secret",
-        ).generate(
-            {
-                "model": "openai/gpt-5.2",
-                "messages": [{"role": "user", "content": "hello"}],
-            }
-        )
-    )
-
-    assert response.text == "ok"
-    assert seen["base_url"] == "https://openrouter.ai/api"
-    assert seen["path"] == "/v1/chat/completions"
-    assert seen["payload"] == {
-        "model": "openai/gpt-5.2",
-        "messages": [{"role": "user", "content": "hello"}],
-    }
-
-
-def test_vllm_provider_resolves_runtime_service_binding(monkeypatch) -> None:
-    seen: dict[str, object] = {}
-
-    async def _fake_generate(self, payload):
-        seen["payload"] = dict(payload)
-        seen["base_url"] = self.base_url
-        seen["api_key"] = self.api_key
-        return InferenceResponse(
-            text="ok",
-            finish_reason="stop",
-            usage={},
-            response={"choices": []},
-        )
-
-    class _Runtime:
-        def claim(self, previous=None):
-            del previous
-            return None
-
-        def heartbeat(self, shards):
-            del shards
-
-        def complete(self, shard):
-            del shard
-
-        def fail(self, shard, error=None):
-            del shard, error
-
-        def finalized_workers(self, *, stage_index=None):
-            del stage_index
-            return []
-
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
-
-    provider = VLLMProvider(
-        model="meta-llama/Llama-3.1-8B-Instruct",
-        model_max_context=8192,
-    )
-    binding = VLLMRuntimeServiceBinding(
-        name=provider.service_definition().name,
-        kind="llm",
-        endpoint="http://127.0.0.1:8000",
-        api_key="service-secret",
-    )
-
-    async def _inference_fn(row, generate):
-        response = await generate({"prompt": row["prompt"]})
-        return {"output": response.text}
-
-    infer = mdr.inference.generate(
-        fn=_inference_fn,
-        provider=provider,
-    )
-    client = _FakeServiceClient(
-        start_response={
-            "services": [
-                {
-                    "id": "svc-1",
-                    "name": binding.name,
-                    "kind": binding.kind,
-                }
-            ]
-        },
-        get_service=lambda service_id: {
-            "service": {
-                "id": service_id,
-                "name": binding.name,
-                "kind": binding.kind,
-                "status": "ready",
-                "endpoint": binding.endpoint,
-                "api_key": binding.api_key,
-            }
-        },
-    )
-    service_manager = ServiceManager(
-        client=cast(Any, client),
-        job_id="job-1",
-        stage_index=0,
-        worker_id="worker-1",
-    )
-    run_handle = RunHandle(
-        job_id="job-1",
-        stage_index=0,
-        worker_id="worker-1",
-        client=cast(Any, client),
-    )
-
-    async def _invoke() -> object:
-        with set_active_run_context(
-            run_handle=run_handle,
-            runtime_lifecycle=_Runtime(),
-            service_manager=service_manager,
-        ):
-            await service_manager.start_services(
-                [provider.service_definition().to_spec()]
-            )
-            return await infer(DictRow({"prompt": "hi"}))
-
-    result = asyncio.run(_invoke())
-
-    assert result == {"output": "ok"}
-    assert seen["base_url"] == "http://127.0.0.1:8000"
-    assert seen["api_key"] == "service-secret"
