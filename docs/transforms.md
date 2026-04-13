@@ -191,8 +191,21 @@ pipeline = pipeline.batch_map(
 Async transforms are useful for remote lookups or model calls:
 
 ```python
-pipeline = pipeline.map_async(fetch_embedding, max_in_flight=32)
+endpoint = mdr.inference.OpenAIEndpointProvider(
+    base_url="https://api.openai.com",
+    model="gpt-5-mini",
+)
+
+pipeline = pipeline.map_async(
+    mdr.inference.generate(
+        fn=my_inference_fn,
+        provider=endpoint,
+    ),
+    max_in_flight=64,
+)
 ```
+
+Set `OPENAI_API_KEY` in the environment before the pipeline runs.
 
 The same contract applies to richer row subclasses like `LeRobotRow`: the row
 may expose extra helpers, but it still enters your Python function through the
@@ -201,6 +214,7 @@ normal row API.
 ## Related pages
 
 - [Expressions](expressions.md)
+- [Inference](inference.md)
 - [Reading and writing data](reading-and-writing.md)
 - [Pipeline basics](pipeline-basics.md)
 - [Task pipelines](task-pipelines.md)
