@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, Generator
 from loguru import logger as _base_logger
 
 if TYPE_CHECKING:
-    from refiner.worker.lifecycle import RuntimeLifecycle
-    from refiner.worker.lifecycle import FinalizedShardWorker
+    from refiner.services.manager import ServiceManager
+    from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 
 
 def worker_token_for(worker_id: str) -> str:
@@ -38,8 +38,12 @@ _ACTIVE_WORKER_NAME: ContextVar[str | None] = ContextVar(
     "refiner_active_worker_name",
     default=None,
 )
-_ACTIVE_RUNTIME_LIFECYCLE: ContextVar["RuntimeLifecycle" | None] = ContextVar(
+_ACTIVE_RUNTIME_LIFECYCLE: ContextVar[RuntimeLifecycle | None] = ContextVar(
     "refiner_active_runtime_lifecycle",
+    default=None,
+)
+_ACTIVE_SERVICE_MANAGER: ContextVar["ServiceManager" | None] = ContextVar(
+    "refiner_active_service_manager",
     default=None,
 )
 _ACTIVE_LOGGER: ContextVar[Any | None] = ContextVar(
@@ -89,6 +93,10 @@ def get_active_step_index() -> int | None:
     return _ACTIVE_STEP_INDEX.get()
 
 
+def get_active_service_manager() -> ServiceManager | None:
+    return _ACTIVE_SERVICE_MANAGER.get()
+
+
 @contextmanager
 def set_active_run_context(
     *,
@@ -97,13 +105,17 @@ def set_active_run_context(
     worker_id: str,
     worker_name: str | None,
     runtime_lifecycle: RuntimeLifecycle,
+    service_manager: ServiceManager | None = None,
 ) -> Generator[None, None, None]:
     job_token: Token[str] = _ACTIVE_JOB_ID.set(job_id)
     stage_token: Token[int] = _ACTIVE_STAGE_INDEX.set(stage_index)
     worker_id_token: Token[str] = _ACTIVE_WORKER_ID.set(worker_id)
     worker_name_token: Token[str | None] = _ACTIVE_WORKER_NAME.set(worker_name)
-    lifecycle_token: Token["RuntimeLifecycle" | None] = _ACTIVE_RUNTIME_LIFECYCLE.set(
+    lifecycle_token: Token[RuntimeLifecycle | None] = _ACTIVE_RUNTIME_LIFECYCLE.set(
         runtime_lifecycle
+    )
+    service_manager_token: Token[ServiceManager | None] = _ACTIVE_SERVICE_MANAGER.set(
+        service_manager
     )
     logger_token: Token[Any | None] = _ACTIVE_LOGGER.set(
         _base_logger.bind(
@@ -116,6 +128,7 @@ def set_active_run_context(
     try:
         yield
     finally:
+        _ACTIVE_SERVICE_MANAGER.reset(service_manager_token)
         _ACTIVE_LOGGER.reset(logger_token)
         _ACTIVE_RUNTIME_LIFECYCLE.reset(lifecycle_token)
         _ACTIVE_WORKER_NAME.reset(worker_name_token)
@@ -135,12 +148,13 @@ def set_active_step_index(step_index: int | None) -> Generator[None, None, None]
 
 __all__ = [
     "get_active_job_id",
-    "get_finalized_workers",
-    "get_active_step_index",
+    "get_active_service_manager",
     "get_active_stage_index",
+    "get_active_step_index",
     "get_active_worker_id",
     "get_active_worker_name",
     "get_active_worker_token",
+    "get_finalized_workers",
     "logger",
     "set_active_run_context",
     "set_active_step_index",

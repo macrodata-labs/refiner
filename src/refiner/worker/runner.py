@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from dataclasses import dataclass
 
@@ -7,8 +8,9 @@ from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
-from refiner.worker.context import set_active_run_context, set_active_step_index
-from refiner.worker.context import logger
+from refiner.services import ServiceManager
+from refiner.services.discovery import collect_pipeline_services
+from refiner.worker.context import logger, set_active_run_context, set_active_step_index
 from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.metrics.context import (
     NOOP_USER_METRICS_EMITTER,
@@ -37,6 +39,7 @@ class Worker:
         heartbeat_interval_seconds: int = 0,
         runtime_lifecycle: RuntimeLifecycle,
         user_metrics_emitter: UserMetricsEmitter | None = None,
+        service_manager: ServiceManager | None = None,
     ):
         self.pipeline = pipeline
         self.job_id = job_id
@@ -50,38 +53,37 @@ class Worker:
             if user_metrics_emitter is None
             else user_metrics_emitter
         )
+        self.service_manager = service_manager or ServiceManager()
         if self.heartbeat_interval_seconds < 0:
             raise ValueError("heartbeat_interval_seconds must be >= 0")
 
     def run(self) -> WorkerRunStats:
-        # Source-claim state.
         previous: Shard | None = None
 
-        # Final worker stats.
         claimed = 0
         completed = 0
         failed = 0
         output_rows = 0
 
-        # In-flight shard bookkeeping.
         inflight_by_id: dict[str, Shard] = {}
         pending_rows_by_shard: dict[str, int] = {}
         source_done_shards: set[str] = set()
         inflight_lock = threading.Lock()
 
-        # Error state: worker failures are converted into shard failures.
         execution_error: Exception | None = None
         heartbeat_error: Exception | None = None
 
-        # Runtime services.
         user_metrics_emitter = self.user_metrics_emitter
         stop_heartbeat = threading.Event()
 
         runtime_lifecycle = self.runtime_lifecycle
+        service_manager = self.service_manager
+        runtime_services = collect_pipeline_services(self.pipeline)
         sink = self.pipeline.sink or NullSink()
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
+        runtime_services_started = False
 
         def _heartbeat_once() -> None:
             with inflight_lock:
@@ -112,13 +114,10 @@ class Worker:
                 shard = inflight_by_id.get(shard_id)
                 if shard is None:
                     return
-            try:
-                with set_active_step_index(sink_step_index):
-                    sink.on_shard_complete(shard_id)
-                user_metrics_emitter.force_flush_user_metrics()
-                runtime_lifecycle.complete(shard)
-            except Exception:  # noqa: BLE001
-                raise
+            with set_active_step_index(sink_step_index):
+                sink.on_shard_complete(shard_id)
+            user_metrics_emitter.force_flush_user_metrics()
+            runtime_lifecycle.complete(shard)
             with inflight_lock:
                 inflight_by_id.pop(shard_id, None)
                 source_done_shards.discard(shard_id)
@@ -159,7 +158,7 @@ class Worker:
             heartbeat_thread.start()
 
         def _source_rows():
-            nonlocal previous, claimed
+            nonlocal previous, claimed, runtime_services_started
             while True:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
@@ -175,6 +174,9 @@ class Worker:
                 rows_read = 0
                 with inflight_lock:
                     inflight_by_id[shard.id] = shard
+                if runtime_services and not runtime_services_started:
+                    asyncio.run(service_manager.start_services(runtime_services))
+                    runtime_services_started = True
                 logger.info(
                     "shard claimed shard_id={} global_ordinal={} start_key={} end_key={}",
                     shard.id,
@@ -219,6 +221,7 @@ class Worker:
             worker_id=self.worker_id,
             worker_name=self.worker_name,
             runtime_lifecycle=runtime_lifecycle,
+            service_manager=service_manager,
         ):
             logger.info(
                 "worker started job_id={} stage_index={} worker_id={}",
@@ -328,15 +331,3 @@ class Worker:
 
                     if execution_error is None and run_exception is None:
                         user_metrics_emitter.shutdown()
-                    else:
-                        try:
-                            user_metrics_emitter.shutdown()
-                        except Exception as e:  # noqa: BLE001
-                            logger.warning(
-                                "metrics shutdown failed during worker failure handling: {}: {}",
-                                type(e).__name__,
-                                e,
-                            )
-
-
-__all__ = ["Worker", "WorkerRunStats", "RuntimeLifecycle"]

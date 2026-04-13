@@ -7,7 +7,23 @@ from dataclasses import dataclass
 from types import CodeType
 from typing import TYPE_CHECKING, Any
 
+from refiner.pipeline.steps import (
+    CastStep,
+    DropStep,
+    FilterExprStep,
+    FilterRowStep,
+    FnAsyncRowStep,
+    FnBatchStep,
+    FnFlatMapStep,
+    FnRowStep,
+    FnTableStep,
+    RenameStep,
+    SelectStep,
+    VectorizedSegmentStep,
+    WithColumnsStep,
+)
 from refiner.platform.manifest import _redact_captured_text
+from refiner.services import RuntimeServiceSpec
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -77,21 +93,6 @@ def _callable_step_args(
 
 
 def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
-    from refiner.pipeline.steps import (
-        CastStep,
-        DropStep,
-        FilterExprStep,
-        FilterRowStep,
-        FnAsyncRowStep,
-        FnBatchStep,
-        FnFlatMapStep,
-        FnRowStep,
-        FnTableStep,
-        RenameStep,
-        SelectStep,
-        WithColumnsStep,
-    )
-
     explicit_name = getattr(step, "op_name", None)
     if isinstance(step, FnRowStep):
         inferred_name = (
@@ -305,12 +306,22 @@ def _builtin_description(fn: Any) -> dict[str, Any] | None:
     args = spec.get("args")
     if not isinstance(args, dict):
         return None
-    return {"name": name, "args": args}
+    services = spec.get("services", ())
+    if not isinstance(services, (list, tuple)):
+        return None
+    parsed_services: list[RuntimeServiceSpec] = []
+    for service in services:
+        if not isinstance(service, RuntimeServiceSpec):
+            return None
+        parsed_services.append(service)
+    return {"name": name, "args": args, "services": tuple(parsed_services)}
 
 
 def describe_builtin(name: str, **args: Any) -> Any:
     def _decorate(fn: Any) -> Any:
-        setattr(fn, _REFINER_BUILTIN_CALL_ATTR, {"name": name, "args": args})
+        setattr(
+            fn, _REFINER_BUILTIN_CALL_ATTR, {"name": name, "args": args, "services": ()}
+        )
         return fn
 
     return _decorate
@@ -386,7 +397,6 @@ def _compile_stage_steps(
             args=_serialize_args(source_args, secret_values=secret_values),
         )
     )
-    from refiner.pipeline.steps import VectorizedSegmentStep
 
     for step in pipeline.pipeline_steps:
         if isinstance(step, VectorizedSegmentStep):

@@ -161,11 +161,12 @@ class StagePayload:
     runtime: CloudRuntimeConfig
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "stage_index": self.stage_index,
             "pipeline_payload": self.pipeline_payload.to_dict(),
             "runtime": self.runtime.to_dict(),
         }
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
