@@ -22,22 +22,27 @@ class _OpenAIEndpointClient:
     api_key: str | None = None
     headers: Mapping[str, str] | None = None
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _resolved_headers: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
-    async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
-        use_chat = "messages" in payload
-        endpoint_path = "v1/chat/completions" if use_chat else "v1/completions"
+    def __post_init__(self) -> None:
         headers = dict(self.headers or {})
         resolved_api_key = self.api_key
         if resolved_api_key is None:
             resolved_api_key = os.environ.get("OPENAI_API_KEY")
         if resolved_api_key is not None:
             headers["Authorization"] = f"Bearer {resolved_api_key}"
+        self._resolved_headers = headers
+
+    async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        use_chat = "messages" in payload
+        endpoint_path = "v1/chat/completions" if use_chat else "v1/completions"
         client = self._client
         if client is None:
             client = httpx.AsyncClient(
                 base_url=_normalize_openai_base_url(self.base_url),
-                timeout=60.0,
-                headers=headers,
+                headers=self._resolved_headers,
             )
             self._client = client
         response = await client.post(endpoint_path, json=dict(payload))

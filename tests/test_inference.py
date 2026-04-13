@@ -122,9 +122,8 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, timeout, headers):
+        def __init__(self, *, base_url, headers):
             seen["base_url"] = str(base_url)
-            seen["timeout"] = timeout
             seen["headers"] = dict(headers)
 
         async def post(self, path, *, json):
@@ -175,9 +174,8 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, timeout, headers):
+        def __init__(self, *, base_url, headers):
             seen["base_url"] = str(base_url)
-            seen["timeout"] = timeout
             seen["headers"] = dict(headers)
 
         async def post(self, path, *, json):
