@@ -236,6 +236,11 @@ class LocalLauncher(BaseLauncher):
                 "No valid Macrodata API key found. Run `macrodata login` to track local jobs."
             )
             return None
+        except Exception as err:
+            logger.warning(
+                f"Failed to load Macrodata credentials for local tracking: {err}"
+            )
+            return None
 
         tracking_client = MacrodataClient(api_key=api_key)
         try:
@@ -359,12 +364,14 @@ class LocalLauncher(BaseLauncher):
                 f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )
         stages = self._planned_stages()
-        self.job_id: str = self._build_local_job_id(self.name)
+        explicit_rundir = self.rundir
+        self.job_id = self._build_local_job_id(self.name)
+        self.rundir = None
         tracking_client = self._register_tracked_job(stages=stages)
-        if self.rundir is None:
+        if explicit_rundir is None:
             self.rundir = str(Path(resolve_workdir()) / "runs" / self.job_id)
         else:
-            self.rundir = str(Path(self.rundir).expanduser().resolve())
+            self.rundir = str(Path(explicit_rundir).expanduser().resolve())
         if self.job_id is None or self.rundir is None:
             raise RuntimeError("local launcher did not initialize job state")
         logger.info(f"Starting local job {self.job_id} with rundir={self.rundir}")

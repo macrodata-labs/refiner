@@ -329,5 +329,4 @@ class Worker:
                         status,
                     )
 
-                    if execution_error is None and run_exception is None:
-                        user_metrics_emitter.shutdown()
+                    user_metrics_emitter.shutdown()
