@@ -52,10 +52,20 @@ class ServiceManager:
         self._job_id = job_id
         self._stage_index = stage_index
         self._worker_id = worker_id
+        self._worker_name = worker_name
         self._logger = logger.bind(worker_name=worker_name or worker_id)
         self._started_by_name: dict[str, dict[str, str]] = {}
         self._resolved_by_name: dict[str, RuntimeServiceBinding] = {}
         self._pending_by_name: dict[str, asyncio.Task[RuntimeServiceBinding]] = {}
+
+    def spawn_fresh(self) -> ServiceManager:
+        return ServiceManager(
+            client=self._client,
+            job_id=self._job_id,
+            stage_index=self._stage_index,
+            worker_id=self._worker_id,
+            worker_name=self._worker_name,
+        )
 
     async def start_services(
         self,

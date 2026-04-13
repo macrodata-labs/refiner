@@ -77,7 +77,7 @@ class Worker:
         stop_heartbeat = threading.Event()
 
         runtime_lifecycle = self.runtime_lifecycle
-        service_manager = self.service_manager
+        service_manager = self.service_manager.spawn_fresh()
         runtime_services = collect_pipeline_services(self.pipeline)
         sink = self.pipeline.sink or NullSink()
         sink_step_index = (

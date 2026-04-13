@@ -190,6 +190,46 @@ def test_service_manager_caches_resolved_service_binding() -> None:
     assert seen["calls"] == 1
 
 
+def test_service_manager_spawn_fresh_resets_runtime_service_state() -> None:
+    client = _FakeClient(
+        start_response={
+            "services": [
+                {"id": "svc-1", "name": "llm-a", "kind": "llm"},
+            ]
+        },
+        get_service=lambda service_id: {
+            "service": {
+                "id": service_id,
+                "name": "llm-a",
+                "kind": "llm",
+                "status": "ready",
+                "endpoint": "http://127.0.0.1:9000",
+                "api_key": "service-secret",
+            }
+        },
+    )
+    manager = ServiceManager(
+        client=cast(Any, client),
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+    )
+    asyncio.run(
+        manager.start_services(
+            [
+                VLLMServiceDefinition(
+                    model_name_or_path="meta-llama/Llama-3.1-8B"
+                ).to_spec()
+            ]
+        )
+    )
+
+    fresh = manager.spawn_fresh()
+
+    with pytest.raises(RuntimeError, match="service 'llm-a' was not started"):
+        asyncio.run(fresh.get("llm-a"))
+
+
 def test_service_manager_times_out_when_service_never_becomes_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
