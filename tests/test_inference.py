@@ -127,9 +127,10 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers):
+        def __init__(self, *, base_url, headers, timeout):
             seen["base_url"] = str(base_url)
             seen["headers"] = dict(headers)
+            seen["timeout"] = timeout
 
         async def post(self, path, *, json):
             seen["path"] = path
@@ -179,9 +180,10 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers):
+        def __init__(self, *, base_url, headers, timeout):
             seen["base_url"] = str(base_url)
             seen["headers"] = dict(headers)
+            seen["timeout"] = timeout
 
         async def post(self, path, *, json):
             seen["path"] = path
@@ -203,6 +205,7 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
 
     assert response.text == "ok"
     assert seen["base_url"] == "https://openrouter.ai/api"
+    assert seen["timeout"] == 600.0
     assert seen["path"] == "v1/chat/completions"
     assert seen["payload"] == {
         "model": "openai/gpt-5.2",

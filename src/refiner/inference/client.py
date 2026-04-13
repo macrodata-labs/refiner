@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+_OPENAI_ENDPOINT_TIMEOUT_SECONDS = 600.0
+
 
 @dataclass(frozen=True, slots=True)
 class InferenceResponse:
@@ -43,6 +45,7 @@ class _OpenAIEndpointClient:
             client = httpx.AsyncClient(
                 base_url=_normalize_openai_base_url(self.base_url),
                 headers=self._resolved_headers,
+                timeout=_OPENAI_ENDPOINT_TIMEOUT_SECONDS,
             )
             self._client = client
         response = await client.post(endpoint_path, json=dict(payload))
