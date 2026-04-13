@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from refiner.platform.client.api import MacrodataClient
 
 
-_POLL_INTERVAL_SECONDS = 2.0
+_POLL_INTERVAL_SECONDS = 10.0
 _START_TIMEOUT_SECONDS = 20 * 60
 _CLOUD_ONLY_RUNTIME_SERVICES_MESSAGE = (
     "Runtime services can only be started when running in cloud."
