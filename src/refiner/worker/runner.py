@@ -43,7 +43,6 @@ class Worker:
         heartbeat_interval_seconds: int = 0,
         runtime_lifecycle: RuntimeLifecycle,
         user_metrics_emitter: UserMetricsEmitter | None = None,
-        service_client: MacrodataClient | None = None,
     ):
         self.pipeline = pipeline
         self.job_id = job_id
@@ -57,11 +56,10 @@ class Worker:
             if user_metrics_emitter is None
             else user_metrics_emitter
         )
-        self.service_client = service_client
         if self.heartbeat_interval_seconds < 0:
             raise ValueError("heartbeat_interval_seconds must be >= 0")
 
-    def run(self) -> WorkerRunStats:
+    def run(self, *, service_client: MacrodataClient | None = None) -> WorkerRunStats:
         # Source-claim state.
         previous: Shard | None = None
 
@@ -89,13 +87,13 @@ class Worker:
         # Service manager is used to start and manage runtime services.
         service_manager = (
             ServiceManager(
-                client=self.service_client,
+                client=service_client,
                 job_id=self.job_id,
                 stage_index=self.stage_index,
                 worker_id=self.worker_id,
                 worker_name=self.worker_name,
             )
-            if self.service_client is not None
+            if service_client is not None
             else ServiceManager(
                 job_id=self.job_id,
                 stage_index=self.stage_index,
