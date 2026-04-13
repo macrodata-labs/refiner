@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -20,15 +19,6 @@ _START_TIMEOUT_SECONDS = 20 * 60
 _CLOUD_ONLY_RUNTIME_SERVICES_MESSAGE = (
     "Runtime services can only be started when running in cloud."
 )
-
-
-@dataclass(frozen=True)
-class ServiceManagerConfig:
-    client: MacrodataClient | None = None
-    job_id: str | None = None
-    stage_index: int | None = None
-    worker_id: str | None = None
-    worker_name: str | None = None
 
 
 class ServiceManager:
@@ -50,16 +40,6 @@ class ServiceManager:
         self._started_by_name: dict[str, dict[str, str]] = {}
         self._resolved_by_name: dict[str, RuntimeServiceBinding] = {}
         self._pending_by_name: dict[str, asyncio.Task[RuntimeServiceBinding]] = {}
-
-    @property
-    def config(self) -> ServiceManagerConfig:
-        return ServiceManagerConfig(
-            client=self._client,
-            job_id=self._job_id,
-            stage_index=self._stage_index,
-            worker_id=self._worker_id,
-            worker_name=self._worker_name,
-        )
 
     async def start_services(
         self,
@@ -218,4 +198,4 @@ def _require_string_field(payload: Mapping[str, Any], key: str, context: str) ->
     return value
 
 
-__all__ = ["ServiceManager", "ServiceManagerConfig"]
+__all__ = ["ServiceManager"]

@@ -53,7 +53,9 @@ class Worker:
             if user_metrics_emitter is None
             else user_metrics_emitter
         )
-        self._service_manager_config = (service_manager or ServiceManager()).config
+        self.service_client = (
+            service_manager._client if service_manager is not None else None
+        )
         if self.heartbeat_interval_seconds < 0:
             raise ValueError("heartbeat_interval_seconds must be >= 0")
 
@@ -77,12 +79,21 @@ class Worker:
         stop_heartbeat = threading.Event()
 
         runtime_lifecycle = self.runtime_lifecycle
-        service_manager = ServiceManager(
-            client=self._service_manager_config.client,
-            job_id=self._service_manager_config.job_id,
-            stage_index=self._service_manager_config.stage_index,
-            worker_id=self._service_manager_config.worker_id,
-            worker_name=self._service_manager_config.worker_name,
+        service_manager = (
+            ServiceManager(
+                client=self.service_client,
+                job_id=self.job_id,
+                stage_index=self.stage_index,
+                worker_id=self.worker_id,
+                worker_name=self.worker_name,
+            )
+            if self.service_client is not None
+            else ServiceManager(
+                job_id=self.job_id,
+                stage_index=self.stage_index,
+                worker_id=self.worker_id,
+                worker_name=self.worker_name,
+            )
         )
         runtime_services = collect_pipeline_services(self.pipeline)
         sink = self.pipeline.sink or NullSink()
