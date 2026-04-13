@@ -207,13 +207,34 @@ class MacrodataClient:
         )
 
     def report_stage_finished(
-        self, *, job_id: str, stage_index: int, status: str
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+        status: str,
+        reason: str | None = None,
     ) -> StageLifecycleResponse:
+        payload: dict[str, Any] = {"status": status}
+        if reason and reason.strip():
+            payload["reason"] = reason.strip()
         return self._request(
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
             response_type=StageLifecycleResponse,
-            json_payload={"status": status},
+            json_payload=payload,
+        )
+
+    def report_stage_heartbeat(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+    ) -> StageLifecycleResponse:
+        return self._request(
+            method="POST",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/heartbeat",
+            response_type=StageLifecycleResponse,
+            json_payload={},
         )
 
     def cloud_submit_job(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+import threading
 import pytest
 
 from refiner.pipeline.data.shard import FilePart, Shard
@@ -521,3 +522,85 @@ def test_local_launcher_reports_failed_stage_to_tracking(
         launcher.launch()
 
     assert finished == [("job-remote", 0, "failed")]
+
+
+def test_local_launcher_reports_interrupted_stage_with_reason(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    finished: list[dict[str, object]] = []
+    heartbeat_started: list[int] = []
+
+    class _FakeClient:
+        base_url = "https://macrodata.co"
+
+        def create_job(self, **kwargs):
+            from refiner.platform.client.models import CreateJobResponse
+
+            return CreateJobResponse(
+                job_id="job-remote",
+                stage_index=0,
+                workspace_slug="workspace",
+            )
+
+        def report_stage_started(self, *, job_id: str, stage_index: int):
+            return None
+
+        def report_stage_finished(self, **kwargs):
+            finished.append(kwargs)
+
+    class _DummyThread:
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
+    monkeypatch.setattr(
+        "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
+    )
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-stage-interrupt-report",
+        num_workers=1,
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_start_stage_heartbeat",
+        lambda *, tracking_client, stage_index: (
+            heartbeat_started.append(stage_index) or threading.Event(),
+            [],
+            _DummyThread(),
+        ),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        lambda **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        launcher.launch()
+
+    assert heartbeat_started == [0]
+    assert finished == [
+        {
+            "job_id": "job-remote",
+            "stage_index": 0,
+            "status": "failed",
+            "reason": "Local launcher interrupted",
+        }
+    ]

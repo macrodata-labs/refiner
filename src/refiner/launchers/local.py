@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -36,6 +37,8 @@ class LaunchStats:
 
 
 class LocalLauncher(BaseLauncher):
+    _STAGE_HEARTBEAT_INTERVAL_SECONDS = 15.0
+
     def __init__(
         self,
         *,
@@ -263,6 +266,63 @@ class LocalLauncher(BaseLauncher):
         )
         return tracking_client
 
+    def _report_stage_finished(
+        self,
+        *,
+        tracking_client: MacrodataClient,
+        stage_index: int,
+        status: str,
+        reason: str | None = None,
+    ) -> None:
+        if self.job_id is None:
+            raise RuntimeError("local launcher job_id is unset")
+        if reason and reason.strip():
+            tracking_client.report_stage_finished(
+                job_id=self.job_id,
+                stage_index=stage_index,
+                status=status,
+                reason=reason.strip(),
+            )
+            return
+        tracking_client.report_stage_finished(
+            job_id=self.job_id,
+            stage_index=stage_index,
+            status=status,
+        )
+
+    def _start_stage_heartbeat(
+        self,
+        *,
+        tracking_client: MacrodataClient,
+        stage_index: int,
+    ) -> tuple[threading.Event, list[BaseException], threading.Thread]:
+        if self.job_id is None:
+            raise RuntimeError("local launcher job_id is unset")
+        job_id = self.job_id
+
+        stop_event = threading.Event()
+        heartbeat_errors: list[BaseException] = []
+
+        def _run() -> None:
+            while not stop_event.wait(self._STAGE_HEARTBEAT_INTERVAL_SECONDS):
+                try:
+                    tracking_client.report_stage_heartbeat(
+                        job_id=job_id,
+                        stage_index=stage_index,
+                    )
+                except BaseException as err:
+                    heartbeat_errors.append(err)
+                    stop_event.set()
+                    return
+
+        thread = threading.Thread(
+            target=_run,
+            name=f"refiner-stage-heartbeat-{stage_index}",
+            daemon=True,
+        )
+        thread.start()
+        return stop_event, heartbeat_errors, thread
+
     def _launch_stage(
         self,
         *,
@@ -384,10 +444,21 @@ class LocalLauncher(BaseLauncher):
             output_rows=0,
         )
         for stage in stages:
+            heartbeat_stop: threading.Event | None = None
+            heartbeat_errors: list[BaseException] | None = None
+            heartbeat_thread: threading.Thread | None = None
             if tracking_client is not None:
                 try:
                     tracking_client.report_stage_started(
                         job_id=self.job_id,
+                        stage_index=stage.index,
+                    )
+                    (
+                        heartbeat_stop,
+                        heartbeat_errors,
+                        heartbeat_thread,
+                    ) = self._start_stage_heartbeat(
+                        tracking_client=tracking_client,
                         stage_index=stage.index,
                     )
                 except Exception as err:
@@ -398,11 +469,29 @@ class LocalLauncher(BaseLauncher):
                 stage_stats = self._launch_stage(
                     stage=stage,
                 )
+                if heartbeat_errors:
+                    raise RuntimeError(
+                        f"stage {stage.index} heartbeat failed: {heartbeat_errors[0]}"
+                    ) from heartbeat_errors[0]
+            except KeyboardInterrupt:
+                if tracking_client is not None:
+                    try:
+                        self._report_stage_finished(
+                            tracking_client=tracking_client,
+                            stage_index=stage.index,
+                            status="failed",
+                            reason="Local launcher interrupted",
+                        )
+                    except Exception as err:
+                        logger.warning(
+                            f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
+                        )
+                raise
             except Exception:
                 if tracking_client is not None:
                     try:
-                        tracking_client.report_stage_finished(
-                            job_id=self.job_id,
+                        self._report_stage_finished(
+                            tracking_client=tracking_client,
                             stage_index=stage.index,
                             status="failed",
                         )
@@ -411,10 +500,15 @@ class LocalLauncher(BaseLauncher):
                             f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
                         )
                 raise
+            finally:
+                if heartbeat_stop is not None:
+                    heartbeat_stop.set()
+                if heartbeat_thread is not None:
+                    heartbeat_thread.join(timeout=1.0)
             if tracking_client is not None:
                 try:
-                    tracking_client.report_stage_finished(
-                        job_id=self.job_id,
+                    self._report_stage_finished(
+                        tracking_client=tracking_client,
                         stage_index=stage.index,
                         status="completed" if stage_stats.failed == 0 else "failed",
                     )
