@@ -13,6 +13,7 @@ writer, and robotics transforms.
 - run robotics-specific transforms under `mdr.robotics.*`
 - write LeRobot-compatible output datasets with `write_lerobot(...)`
 - merge compatible LeRobot datasets into one output dataset
+- prepare LeRobot datasets for LeRobot SARM single-stage training
 
 ## Quick Toc
 
@@ -29,6 +30,7 @@ writer, and robotics transforms.
   - [performance notes](#lerobot-performance-notes)
 - [motion trimming](#motion-trimming)
 - [merging datasets](#merging-datasets)
+- [preparing data for sarm](sarm.md)
 
 ## Reading Datasets
 
