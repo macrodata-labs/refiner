@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -10,25 +10,8 @@ from refiner.platform.client.api import MacrodataApiError
 from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
 from refiner.services.vllm import VLLMRuntimeServiceBinding
 
-
-class RuntimeServiceClient(Protocol):
-    def start_worker_services(
-        self,
-        *,
-        job_id: str,
-        stage_index: int,
-        worker_id: str,
-        services: list[dict[str, Any]],
-    ) -> dict[str, Any]: ...
-
-    def get_worker_service(
-        self,
-        *,
-        job_id: str,
-        stage_index: int,
-        worker_id: str,
-        service_id: str,
-    ) -> dict[str, Any]: ...
+if TYPE_CHECKING:
+    from refiner.platform.client.api import MacrodataClient
 
 
 _POLL_INTERVAL_SECONDS = 2.0
@@ -42,7 +25,7 @@ class ServiceManager:
     def __init__(
         self,
         *,
-        client: RuntimeServiceClient | None = None,
+        client: MacrodataClient | None = None,
         job_id: str | None = None,
         stage_index: int | None = None,
         worker_id: str | None = None,
