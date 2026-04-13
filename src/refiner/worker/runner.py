@@ -62,18 +62,23 @@ class Worker:
             raise ValueError("heartbeat_interval_seconds must be >= 0")
 
     def run(self) -> WorkerRunStats:
+        # Source-claim state.
         previous: Shard | None = None
 
+        # Final worker stats.
         claimed = 0
         completed = 0
         failed = 0
         output_rows = 0
 
+        # In-flight shard bookkeeping shared with the heartbeat thread.
         inflight_by_id: dict[str, Shard] = {}
         pending_rows_by_shard: dict[str, int] = {}
         source_done_shards: set[str] = set()
         inflight_lock = threading.Lock()
 
+        # Error state: worker failures are converted into shard failures, and
+        # heartbeat failures are surfaced from the background thread.
         execution_error: Exception | None = None
         heartbeat_error: Exception | None = None
 
@@ -81,6 +86,7 @@ class Worker:
         stop_heartbeat = threading.Event()
 
         runtime_lifecycle = self.runtime_lifecycle
+        # Service manager is used to start and manage runtime services.
         service_manager = (
             ServiceManager(
                 client=self.service_client,
