@@ -85,6 +85,8 @@ Because Refiner Cloud may start VLLM on fresh hardware, startup can take 2 to 20
 - `Qwen/Qwen3-VL-30B-A3B-Instruct`
 - `Qwen/Qwen3-VL-8B-Instruct`
 
+The two Qwen vision-language models should currently be launched with a single worker because multi-worker cold starts can hit compilation race conditions.
+
 Other models can still be used, but the first startup is usually slower.
 
 #### Inference Hardware
