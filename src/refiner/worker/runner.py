@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
@@ -17,6 +18,9 @@ from refiner.worker.metrics.context import (
     UserMetricsEmitter,
     set_active_user_metrics_emitter,
 )
+
+if TYPE_CHECKING:
+    from refiner.platform.client.api import MacrodataClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +43,7 @@ class Worker:
         heartbeat_interval_seconds: int = 0,
         runtime_lifecycle: RuntimeLifecycle,
         user_metrics_emitter: UserMetricsEmitter | None = None,
-        service_manager: ServiceManager | None = None,
+        service_client: MacrodataClient | None = None,
     ):
         self.pipeline = pipeline
         self.job_id = job_id
@@ -53,9 +57,7 @@ class Worker:
             if user_metrics_emitter is None
             else user_metrics_emitter
         )
-        self.service_client = (
-            service_manager._client if service_manager is not None else None
-        )
+        self.service_client = service_client
         if self.heartbeat_interval_seconds < 0:
             raise ValueError("heartbeat_interval_seconds must be >= 0")
 
