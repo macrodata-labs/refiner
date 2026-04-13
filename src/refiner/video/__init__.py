@@ -1,3 +1,9 @@
+from refiner.video.decode import (
+    DecodedFrameWindow,
+    DecodedVideoFrame,
+    iter_frame_windows,
+    iter_frames,
+)
 from refiner.video.remux import (
     PreparedVideoSource,
     RemuxWriter,
@@ -22,6 +28,8 @@ from refiner.video.writer import (
 )
 
 __all__ = [
+    "DecodedFrameWindow",
+    "DecodedVideoFrame",
     "FrameObserver",
     "PreparedVideoSource",
     "RemuxWriter",
@@ -32,6 +40,8 @@ __all__ = [
     "VideoTranscodeConfig",
     "WrittenVideo",
     "WrittenVideoSegment",
+    "iter_frame_windows",
+    "iter_frames",
     "prepare_video_source",
     "probe_for_remux",
     "probes_are_remux_compatible",
