@@ -82,21 +82,12 @@ class Worker:
         runtime_lifecycle = self.runtime_lifecycle
         service_client = getattr(runtime_lifecycle, "client", None)
         # Service manager is used to start and manage runtime services.
-        service_manager = (
-            ServiceManager(
-                client=service_client,
-                job_id=self.job_id,
-                stage_index=self.stage_index,
-                worker_id=self.worker_id,
-                worker_name=self.worker_name,
-            )
-            if service_client is not None
-            else ServiceManager(
-                job_id=self.job_id,
-                stage_index=self.stage_index,
-                worker_id=self.worker_id,
-                worker_name=self.worker_name,
-            )
+        service_manager = ServiceManager(
+            client=service_client,
+            job_id=self.job_id,
+            stage_index=self.stage_index,
+            worker_id=self.worker_id,
+            worker_name=self.worker_name,
         )
         runtime_services = collect_pipeline_services(self.pipeline)
         sink = self.pipeline.sink or NullSink()
