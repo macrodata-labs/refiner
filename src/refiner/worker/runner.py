@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import threading
 import asyncio
+import threading
 from dataclasses import dataclass
 
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
-from refiner.services.discovery import collect_pipeline_services
 from refiner.pipeline.sinks import NullSink
 from refiner.services import ServiceManager
-from refiner.worker.context import RunHandle, logger
-from refiner.worker.context import set_active_run_context, set_active_step_index
+from refiner.services.discovery import collect_pipeline_services
+from refiner.worker.context import logger, set_active_run_context, set_active_step_index
 from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.metrics.context import (
     NOOP_USER_METRICS_EMITTER,
@@ -33,14 +32,26 @@ class Worker:
         self,
         pipeline: RefinerPipeline,
         *,
-        run_handle: RunHandle,
+        job_id: str,
+        stage_index: int,
+        worker_id: str,
+        worker_name: str | None = None,
         heartbeat_interval_seconds: int = 0,
         runtime_lifecycle: RuntimeLifecycle,
+        user_metrics_emitter: UserMetricsEmitter | None = None,
     ):
         self.pipeline = pipeline
-        self.run_handle = run_handle
+        self.job_id = job_id
+        self.stage_index = stage_index
+        self.worker_id = worker_id
+        self.worker_name = worker_name
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.runtime_lifecycle = runtime_lifecycle
+        self.user_metrics_emitter = (
+            NOOP_USER_METRICS_EMITTER
+            if user_metrics_emitter is None
+            else user_metrics_emitter
+        )
         if self.heartbeat_interval_seconds < 0:
             raise ValueError("heartbeat_interval_seconds must be >= 0")
 
@@ -65,19 +76,18 @@ class Worker:
         execution_error: Exception | None = None
         heartbeat_error: Exception | None = None
 
-        user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
+        user_metrics_emitter = self.user_metrics_emitter
         stop_heartbeat = threading.Event()
 
         runtime_lifecycle = self.runtime_lifecycle
-        client = self.run_handle.client
-
+        service_client = getattr(runtime_lifecycle, "client", None)
         # Service manager is used to start and manage runtime services.
         service_manager = ServiceManager(
-            client=self.run_handle.client,
-            job_id=self.run_handle.job_id,
-            stage_index=self.run_handle.stage_index,
-            worker_id=self.run_handle.worker_id,
-            worker_name=self.run_handle.worker_name,
+            client=service_client,
+            job_id=self.job_id,
+            stage_index=self.stage_index,
+            worker_id=self.worker_id,
+            worker_name=self.worker_name,
         )
         runtime_services = collect_pipeline_services(self.pipeline)
         sink = self.pipeline.sink or NullSink()
@@ -102,7 +112,7 @@ class Worker:
                     message = str(e).strip() or type(e).__name__
                     logger.warning(
                         "heartbeat failed for worker_id={}: {}: {}",
-                        self.run_handle.worker_id,
+                        self.worker_id,
                         type(e).__name__,
                         message,
                     )
@@ -115,13 +125,10 @@ class Worker:
                 shard = inflight_by_id.get(shard_id)
                 if shard is None:
                     return
-            try:
-                with set_active_step_index(sink_step_index):
-                    sink.on_shard_complete(shard_id)
-                user_metrics_emitter.force_flush_user_metrics()
-                runtime_lifecycle.complete(shard)
-            except Exception:  # noqa: BLE001
-                raise
+            with set_active_step_index(sink_step_index):
+                sink.on_shard_complete(shard_id)
+            user_metrics_emitter.force_flush_user_metrics()
+            runtime_lifecycle.complete(shard)
             with inflight_lock:
                 inflight_by_id.pop(shard_id, None)
                 source_done_shards.discard(shard_id)
@@ -156,7 +163,7 @@ class Worker:
         if self.heartbeat_interval_seconds > 0:
             heartbeat_thread = threading.Thread(
                 target=_heartbeat_loop,
-                name=f"refiner-heartbeat-{self.run_handle.worker_name or 'worker'}",
+                name=f"refiner-heartbeat-{self.worker_name or 'worker'}",
                 daemon=True,
             )
             heartbeat_thread.start()
@@ -170,7 +177,7 @@ class Worker:
                 if shard is None:
                     logger.info(
                         "no more shards worker_id={} claimed={}",
-                        self.run_handle.worker_id,
+                        self.worker_id,
                         claimed,
                     )
                     break
@@ -220,34 +227,18 @@ class Worker:
                 previous = shard
 
         with set_active_run_context(
-            run_handle=self.run_handle,
+            job_id=self.job_id,
+            stage_index=self.stage_index,
+            worker_id=self.worker_id,
+            worker_name=self.worker_name,
             runtime_lifecycle=runtime_lifecycle,
             service_manager=service_manager,
         ):
-            if client is not None:
-                try:
-                    from refiner.worker.metrics.otel import OtelTelemetryEmitter
-
-                    telemetry_emitter = OtelTelemetryEmitter(
-                        base_url=client.base_url,
-                        api_key=client.api_key,
-                        job_id=self.run_handle.job_id,
-                        stage_index=self.run_handle.stage_index,
-                        worker_id=self.run_handle.worker_id,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "telemetry setup failed: {}: {}",
-                        type(e).__name__,
-                        e,
-                    )
-                else:
-                    user_metrics_emitter = telemetry_emitter
             logger.info(
                 "worker started job_id={} stage_index={} worker_id={}",
-                self.run_handle.job_id,
-                self.run_handle.stage_index,
-                self.run_handle.worker_id,
+                self.job_id,
+                self.stage_index,
+                self.worker_id,
             )
             with set_active_user_metrics_emitter(user_metrics_emitter):
                 run_exception: Exception | None = None
@@ -281,7 +272,7 @@ class Worker:
                             source_done_shards.clear()
                         logger.exception(
                             "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
-                            self.run_handle.worker_id,
+                            self.worker_id,
                             claimed,
                             completed,
                             len(failed_shards),
@@ -322,6 +313,7 @@ class Worker:
                     stop_heartbeat.set()
                     if heartbeat_thread is not None:
                         heartbeat_thread.join(timeout=1.0)
+
                     try:
                         with set_active_step_index(sink_step_index):
                             sink.close()
@@ -335,48 +327,26 @@ class Worker:
                         else:
                             raise
 
-                    if self.run_handle.client is not None:
-                        current_error = execution_error or run_exception
-                        status = "failed" if current_error is not None else "completed"
-                        error = None
-                        if current_error is not None:
-                            error = (
-                                str(current_error).strip()
-                                or type(current_error).__name__
-                            )
-                        try:
-                            self.run_handle.client.report_worker_finished(
-                                job_id=self.run_handle.job_id,
-                                stage_index=self.run_handle.stage_index,
-                                worker_id=self.run_handle.worker_id,
-                                status=status,
-                                error=error,
-                            )
-                            logger.info(
-                                "worker finished job_id={} stage_index={} worker_id={} status={}",
-                                self.run_handle.job_id,
-                                self.run_handle.stage_index,
-                                self.run_handle.worker_id,
-                                status,
-                            )
-                        except Exception as e:  # noqa: BLE001
-                            logger.warning(
-                                "lifecycle reporting failed: {}: {}",
-                                type(e).__name__,
-                                e,
-                            )
-
-                    if execution_error is None and run_exception is None:
+                    status = (
+                        "failed"
+                        if execution_error is not None or run_exception is not None
+                        else "completed"
+                    )
+                    logger.info(
+                        "worker finished job_id={} stage_index={} worker_id={} status={}",
+                        self.job_id,
+                        self.stage_index,
+                        self.worker_id,
+                        status,
+                    )
+                    try:
                         user_metrics_emitter.shutdown()
-                    else:
-                        try:
-                            user_metrics_emitter.shutdown()
-                        except Exception as e:  # noqa: BLE001
+                    except Exception as e:
+                        if execution_error is not None or run_exception is not None:
                             logger.warning(
-                                "telemetry shutdown failed during worker failure handling: {}: {}",
+                                "metrics emitter shutdown failed during worker failure handling: {}: {}",
                                 type(e).__name__,
                                 e,
                             )
-
-
-__all__ = ["Worker", "WorkerRunStats", "RuntimeLifecycle"]
+                        else:
+                            raise

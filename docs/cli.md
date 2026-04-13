@@ -38,16 +38,9 @@ macrodata logout
 
 ## Credential Lookup
 
-Lookup order:
-
-1. `MACRODATA_API_KEY`
-2. local credential file created by `macrodata login`
-
-Stored credentials live in XDG config:
-
-- Linux default: `~/.config/macrodata/api_key`
+See [Auth](auth.md) for the shared credential lookup order and credential file location.
 
 ## Notes
 
-- `launch_local(...)` can use the stored key for platform lifecycle reporting
+- `launch_local(...)` does not require Macrodata auth
 - `launch_cloud(...)` requires Macrodata auth

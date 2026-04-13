@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, TypeVar
 
 import httpx
 import msgspec
@@ -14,16 +14,9 @@ from refiner.platform.client.models import (
     CloudRunCreateResponse,
     CreateJobEnvelope,
     CreateJobResponse,
-    FinalizedShardWorkersResponse,
-    OkResponse,
-    SerializedShard,
-    ShardClaimResponse,
+    StageLifecycleResponse,
     VerifyApiKeyResponse,
-    WorkerStartedResponse,
 )
-
-if TYPE_CHECKING:
-    from refiner.pipeline.data.shard import Shard
 
 T = TypeVar("T")
 PLATFORM_BASE_URL_ENV_VAR = "MACRODATA_BASE_URL"
@@ -133,7 +126,10 @@ def request_json(
 
 
 def verify_api_key(
-    *, api_key: str, base_url: str | None = None, timeout_s: float = 10.0
+    *,
+    api_key: str,
+    base_url: str | None = None,
+    timeout_s: float = 10.0,
 ) -> VerifyApiKeyResponse:
     return MacrodataClient(api_key=api_key, base_url=base_url).verify_api_key(
         timeout_s=timeout_s
@@ -186,6 +182,7 @@ class MacrodataClient:
             path="/api/jobs/submit",
             response_type=CreateJobEnvelope,
             json_payload=request_body,
+            timeout_s=30.0,
         )
         return CreateJobResponse.from_envelope(job_envelope)
 
@@ -197,38 +194,36 @@ class MacrodataClient:
             timeout_s=timeout_s,
         )
 
-    def shard_register(
-        self, *, job_id: str, stage_index: int, shards: list["Shard"]
-    ) -> OkResponse:
-        shard_descriptors = [SerializedShard.from_shard(shard) for shard in shards]
-        return self._request(
-            method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/register",
-            response_type=OkResponse,
-            json_payload={"shards": [shard.to_dict() for shard in shard_descriptors]},
-            timeout_s=60.0,
-        )
-
-    def report_worker_started(
+    def report_stage_started(
         self,
         *,
         job_id: str,
         stage_index: int,
-        host: str | None = None,
-        worker_name: str | None = None,
-    ) -> WorkerStartedResponse:
-        request_body: dict[str, Any] = {}
-        if host:
-            request_body["host"] = host
-        if worker_name:
-            request_body["name"] = worker_name
-
+    ) -> StageLifecycleResponse:
         return self._request(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/start",
-            response_type=WorkerStartedResponse,
-            json_payload=request_body,
-            timeout_s=60.0,
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/start",
+            response_type=StageLifecycleResponse,
+        )
+
+    def report_stage_finished(
+        self, *, job_id: str, stage_index: int, status: str
+    ) -> StageLifecycleResponse:
+        return self._request(
+            method="POST",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
+            response_type=StageLifecycleResponse,
+            json_payload={"status": status},
+        )
+
+    def cloud_submit_job(
+        self, *, request: CloudRunCreateRequest
+    ) -> CloudRunCreateResponse:
+        return self._request(
+            method="POST",
+            path="/api/cloud/runs",
+            response_type=CloudRunCreateResponse,
+            json_payload=request.to_dict(),
         )
 
     def start_worker_services(
@@ -267,122 +262,6 @@ class MacrodataClient:
         if not isinstance(response_data, dict):
             raise ValueError("runtime service response must be a JSON object")
         return response_data
-
-    def report_worker_finished(
-        self,
-        *,
-        job_id: str,
-        stage_index: int,
-        worker_id: str,
-        status: str,
-        error: str | None = None,
-    ) -> OkResponse:
-        request_body: dict[str, Any] = {"status": status}
-        if status == "failed":
-            request_body["error"] = (error or "").strip() or "UnknownError"
-        elif error:
-            request_body["error"] = error
-        return self._request(
-            method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/finish",
-            response_type=OkResponse,
-            json_payload=request_body,
-            timeout_s=60.0,
-        )
-
-    def report_stage_finished(
-        self, *, job_id: str, stage_index: int, status: str
-    ) -> OkResponse:
-        return self._request(
-            method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
-            response_type=OkResponse,
-            json_payload={"status": status},
-            timeout_s=60.0,
-        )
-
-    def report_job_finished(self, *, job_id: str, status: str) -> OkResponse:
-        return self._request(
-            method="POST",
-            path=f"/api/jobs/{job_id}/finish",
-            response_type=OkResponse,
-            json_payload={"status": status},
-            timeout_s=60.0,
-        )
-
-    def cloud_submit_job(
-        self, *, request: CloudRunCreateRequest
-    ) -> CloudRunCreateResponse:
-        return self._request(
-            method="POST",
-            path="/api/cloud/runs",
-            response_type=CloudRunCreateResponse,
-            json_payload=request.to_dict(),
-            timeout_s=60.0,
-        )
-
-    def shard_claim(
-        self,
-        *,
-        job_id: str,
-        stage_index: int,
-        worker_id: str,
-        previous_shard_id: str | None = None,
-    ) -> ShardClaimResponse:
-        request_body: dict[str, Any] = {"worker_id": worker_id}
-        if previous_shard_id:
-            request_body["previous_shard_id"] = previous_shard_id
-        return self._request(
-            method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/claim",
-            response_type=ShardClaimResponse,
-            json_payload=request_body,
-            timeout_s=60.0,
-        )
-
-    def shard_heartbeat(
-        self, *, job_id: str, stage_index: int, worker_id: str, shard_ids: list[str]
-    ) -> OkResponse:
-        return self._request(
-            method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/heartbeat",
-            response_type=OkResponse,
-            json_payload={"worker_id": worker_id, "shard_ids": shard_ids},
-            timeout_s=60.0,
-        )
-
-    def shard_finalized_workers(
-        self, *, job_id: str, stage_index: int
-    ) -> FinalizedShardWorkersResponse:
-        return self._request(
-            method="GET",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/finalized-workers",
-            response_type=FinalizedShardWorkersResponse,
-            timeout_s=60.0,
-        )
-
-    def shard_finish(
-        self,
-        *,
-        job_id: str,
-        stage_index: int,
-        worker_id: str,
-        shard_id: str,
-        status: str,
-        error: str | None = None,
-    ) -> OkResponse:
-        request_body: dict[str, Any] = {"worker_id": worker_id, "status": status}
-        if status == "failed":
-            request_body["error"] = (error or "").strip() or "UnknownError"
-        elif error:
-            request_body["error"] = error
-        return self._request(
-            method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/shards/{shard_id}/finish",
-            response_type=OkResponse,
-            json_payload=request_body,
-            timeout_s=60.0,
-        )
 
 
 __all__ = [

@@ -8,7 +8,7 @@ from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
-from refiner.worker.context import get_active_run_handle
+from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
 
 
@@ -28,7 +28,7 @@ class ParquetSink(BaseSink):
     def _relpath(self, shard_id: str) -> str:
         return self.filename_template.format(
             shard_id=shard_id,
-            worker_id=get_active_run_handle().worker_token,
+            worker_id=get_active_worker_token(),
         )
 
     def _writer(self, shard_id: str, schema: pa.Schema) -> pq.ParquetWriter:

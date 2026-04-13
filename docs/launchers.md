@@ -86,18 +86,14 @@ Returned result includes:
 
 ## Authentication
 
-Platform integration uses the same auth flow everywhere:
-
-1. `MACRODATA_API_KEY`
-2. local credential file from [`macrodata login`](cli.md)
-
-Behavior:
+See [Auth](auth.md) for credential lookup order. In practice:
 
 - `launch_local(...)` can run without auth
 - `launch_cloud(...)` requires auth
 
 ## Related Pages
 
+- [Auth](auth.md)
 - [CLI](cli.md)
 - [Observability](observability.md)
 - [Robotics](robotics.md)

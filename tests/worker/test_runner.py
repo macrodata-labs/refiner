@@ -13,20 +13,12 @@ from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.expressions import col
 from refiner.execution.engine import iter_rows
 from refiner.pipeline.sinks import BaseSink
-from refiner.platform.client import (
-    OkResponse,
-    RunHandle,
-    ShardClaimResponse,
-    SerializedShard,
-    WorkerStartedResponse,
-)
 from refiner.pipeline.data.shard import FilePart
 from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
-from refiner.platform.client.models import FinalizedShardWorker
-from refiner.worker.lifecycle import PlatformRuntimeLifecycle
+from refiner.worker.lifecycle import FinalizedShardWorker
 
 
 class _FakeReader(BaseReader):
@@ -46,10 +38,10 @@ class _FakeRuntimeLifecycle:
         self.worker_id = "local"
         self._remaining = list(shards)
         self.claim_previous: list[Shard | None] = []
+        self.heartbeat_snapshots: list[list[str]] = []
         self.completed_ids: list[str] = []
         self.failed_ids: list[str] = []
         self.failed_errors: list[str | None] = []
-        self.heartbeat_batches: list[list[str]] = []
 
     def claim(self, previous: Shard | None = None) -> Shard | None:
         self.claim_previous.append(previous)
@@ -57,11 +49,11 @@ class _FakeRuntimeLifecycle:
             return None
         return self._remaining.pop(0)
 
-    def heartbeat(self, shards: list[Shard]) -> None:
-        self.heartbeat_batches.append([shard.id for shard in shards])
-
     def complete(self, shard: Shard) -> None:
         self.completed_ids.append(shard.id)
+
+    def heartbeat(self, shards: list[Shard]) -> None:
+        self.heartbeat_snapshots.append([shard.id for shard in shards])
 
     def fail(self, shard: Shard, error: str | None = None) -> None:
         self.failed_ids.append(shard.id)
@@ -76,10 +68,6 @@ class _FakeRuntimeLifecycle:
 
 def _shard(path: str, start: int, end: int) -> Shard:
     return Shard.from_file_parts([FilePart(path=path, start=start, end=end)])
-
-
-def _local_run() -> RunHandle:
-    return RunHandle(job_id="job", stage_index=0, worker_id="local")
 
 
 class _NoopTelemetryEmitter:
@@ -141,19 +129,6 @@ class _ShortWriteAndCloseFailingSink(_CloseFailingSink):
         return {shard_id: 1 for shard_id in counts}
 
 
-class _FlushFailingTelemetryEmitter(_NoopTelemetryEmitter):
-    def force_flush_user_metrics(self) -> None:
-        raise RuntimeError("flush failed")
-
-
-class _RecordingTelemetryEmitter(_NoopTelemetryEmitter):
-    def __init__(self) -> None:
-        self.log_flushes = 0
-
-    def force_flush_logs(self) -> None:
-        self.log_flushes += 1
-
-
 class _MetricRecordingTelemetryEmitter(_NoopTelemetryEmitter):
     def __init__(self) -> None:
         self.counters: list[dict[str, Any]] = []
@@ -174,39 +149,9 @@ class _MetricRecordingTelemetryEmitter(_NoopTelemetryEmitter):
         self.registered_gauges.append(kwargs)
 
 
-class _LifecycleClientWithFailingTelemetry:
-    def __init__(self, shard: Shard):
-        self._next_shard = shard
-        self.base_url = "https://example.com"
-        self.api_key = "md_test"
-
-    def report_worker_started(self, **kwargs) -> WorkerStartedResponse:
-        del kwargs
-        return WorkerStartedResponse(worker_id="worker-0")
-
-    def report_worker_finished(self, **kwargs) -> None:
-        del kwargs
-
-    def shard_claim(self, **kwargs):
-        del kwargs
-        if self._next_shard is None:
-            return ShardClaimResponse(shard=None)
-        shard = self._next_shard
-        self._next_shard = None
-        return ShardClaimResponse(
-            shard=SerializedShard(
-                shard_id=shard.id,
-                descriptor=shard.descriptor.to_dict(),
-            )
-        )
-
-    def shard_heartbeat(self, **kwargs):
-        del kwargs
-        return OkResponse()
-
-    def shard_finish(self, **kwargs):
-        del kwargs
-        return OkResponse()
+class _ShutdownFailingTelemetryEmitter(_NoopTelemetryEmitter):
+    def shutdown(self) -> None:
+        raise RuntimeError("telemetry shutdown failed")
 
 
 def _run_local_worker(
@@ -224,7 +169,9 @@ def _run_local_worker(
 
     worker = Worker(
         pipeline=pipeline,
-        run_handle=_local_run(),
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
         runtime_lifecycle=runtime_lifecycle,
     )
     return worker
@@ -285,12 +232,9 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
 
     worker = Worker(
         pipeline=pipeline,
-        heartbeat_interval_seconds=1,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 
@@ -305,6 +249,30 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     assert runtime_lifecycle.claim_previous[0] is None
     assert runtime_lifecycle.claim_previous[1] == shard1
     assert emitted == [(shard1.id, 3), (shard1.id, 2), (shard2.id, 11)]
+
+
+def test_worker_sends_heartbeat_for_inflight_shards() -> None:
+    import time
+
+    shard = _shard("slow", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+
+    def slow(row: Row) -> Row:
+        time.sleep(1.1)
+        return row
+
+    worker = _run_local_worker(
+        rows_by_shard={shard.id: [DictRow({"x": 1})]},
+        runtime_lifecycle=runtime_lifecycle,
+        transform=slow,
+    )
+    worker.heartbeat_interval_seconds = 1
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert runtime_lifecycle.heartbeat_snapshots
+    assert runtime_lifecycle.heartbeat_snapshots[0] == [shard.id]
 
 
 def test_worker_fails_entire_claimed_group_on_exception() -> None:
@@ -325,11 +293,9 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail)
     worker = Worker(
         pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 
@@ -354,11 +320,9 @@ def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
 
     worker = Worker(
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(fail),
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 
@@ -391,11 +355,9 @@ def test_worker_can_batch_across_shards() -> None:
 
     worker = Worker(
         pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
     stats = worker.run()
@@ -418,11 +380,9 @@ def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> Non
     runtime_lifecycle = _FailingCompleteRuntimeLifecycle([shard])
     worker = Worker(
         pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
     stats = worker.run()
@@ -445,11 +405,9 @@ def test_worker_completes_shards_only_after_sink_drain() -> None:
 
     worker = Worker(
         pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).with_sink(sink),
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 
@@ -528,11 +486,9 @@ def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
 
     worker = Worker(
         pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            worker_id=runtime_lifecycle.worker_id,
-        ),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
         runtime_lifecycle=runtime_lifecycle,
     )
 
@@ -578,75 +534,6 @@ def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
     assert registered_gauge_steps_by_label["async_registered"] == [10]
     assert registered_gauge_steps_by_label["flat_map_registered"] == [12]
     assert registered_gauge_steps_by_label["batch_registered"] == [13]
-
-
-def test_worker_shard_flush_errors_are_not_swallowed(monkeypatch) -> None:
-    shard = _shard("p", 0, 1)
-    rows_by_shard = {shard.id: [DictRow({"x": 1})]}
-    pipeline = RefinerPipeline(source=_FakeReader(rows_by_shard))
-    monkeypatch.setattr(
-        "refiner.worker.metrics.otel.OtelTelemetryEmitter",
-        lambda **_: _FlushFailingTelemetryEmitter(),
-    )
-
-    worker = Worker(
-        pipeline=pipeline,
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
-            worker_id="worker-0",
-            worker_name="worker-0",
-        ),
-        runtime_lifecycle=PlatformRuntimeLifecycle(
-            run=RunHandle(
-                job_id="job",
-                stage_index=0,
-                client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
-                worker_id="worker-0",
-                worker_name="worker-0",
-            )
-        ),
-    )
-    with pytest.raises(RuntimeError, match="flush failed"):
-        worker.run()
-
-
-def test_worker_flushes_logs_on_failure(monkeypatch) -> None:
-    shard = _shard("boom", 0, 1)
-    rows_by_shard = {shard.id: [DictRow({"x": 2})]}
-    emitter = _RecordingTelemetryEmitter()
-
-    def maybe_fail(row: Row) -> Row:
-        raise RuntimeError("kaboom")
-
-    monkeypatch.setattr(
-        "refiner.worker.metrics.otel.OtelTelemetryEmitter", lambda **_: emitter
-    )
-    worker = Worker(
-        pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(maybe_fail),
-        run_handle=RunHandle(
-            job_id="job",
-            stage_index=0,
-            client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
-            worker_id="worker-0",
-            worker_name="worker-0",
-        ),
-        runtime_lifecycle=PlatformRuntimeLifecycle(
-            run=RunHandle(
-                job_id="job",
-                stage_index=0,
-                client=cast(Any, _LifecycleClientWithFailingTelemetry(shard)),
-                worker_id="worker-0",
-                worker_name="worker-0",
-            )
-        ),
-    )
-
-    stats = worker.run()
-
-    assert stats.failed == 1
-    assert emitter.log_flushes == 2
 
 
 def test_worker_suppresses_sink_close_errors_after_execution_failure() -> None:
@@ -698,6 +585,28 @@ def test_worker_raises_sink_close_errors_after_success() -> None:
 
     with pytest.raises(RuntimeError, match="close failed"):
         worker.run()
+
+
+def test_worker_preserves_execution_failure_when_emitter_shutdown_fails() -> None:
+    shard = _shard("boom", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 2})]}
+
+    def maybe_fail(row: Row) -> Row:
+        raise RuntimeError("kaboom")
+
+    worker = _run_local_worker(
+        rows_by_shard=rows_by_shard,
+        runtime_lifecycle=runtime_lifecycle,
+        transform=maybe_fail,
+    )
+    worker.user_metrics_emitter = _ShutdownFailingTelemetryEmitter()
+
+    stats = worker.run()
+
+    assert stats.failed == 1
+    assert runtime_lifecycle.failed_ids == [shard.id]
+    assert runtime_lifecycle.failed_errors == ["kaboom"]
 
 
 __all__: list[str] = []

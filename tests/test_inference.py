@@ -15,7 +15,7 @@ from refiner.inference import (
 )
 from refiner.services import VLLMRuntimeServiceBinding
 from refiner.pipeline.data.row import DictRow
-from refiner.worker.context import RunHandle, set_active_run_context
+from refiner.worker.context import set_active_run_context
 from refiner.worker.metrics.context import set_active_user_metrics_emitter
 
 from refiner.inference import client as openai_module
@@ -317,12 +317,14 @@ def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
             base_url="https://api.example.com", model="gpt-test"
         ),
     )
-    run_handle = RunHandle(job_id="job-1", stage_index=0, worker_id="worker-1")
 
     async def _invoke() -> object:
         with (
             set_active_run_context(
-                run_handle=run_handle,
+                job_id="job-1",
+                stage_index=0,
+                worker_id="worker-1",
+                worker_name=None,
                 runtime_lifecycle=_Runtime(),
                 service_manager=None,
             ),
@@ -388,12 +390,14 @@ def test_inference_generate_reports_failed_requests(monkeypatch) -> None:
             base_url="https://api.example.com", model="gpt-test"
         ),
     )
-    run_handle = RunHandle(job_id="job-1", stage_index=0, worker_id="worker-1")
 
     async def _invoke() -> object:
         with (
             set_active_run_context(
-                run_handle=run_handle,
+                job_id="job-1",
+                stage_index=0,
+                worker_id="worker-1",
+                worker_name=None,
                 runtime_lifecycle=_Runtime(),
                 service_manager=None,
             ),
