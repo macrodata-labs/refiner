@@ -21,8 +21,6 @@ from refiner.platform.client.models import (
 T = TypeVar("T")
 PLATFORM_BASE_URL_ENV_VAR = "MACRODATA_BASE_URL"
 _PLATFORM_BASE_URL = "https://macrodata.co"
-_DEFAULT_TIMEOUT_SECONDS = 10.0
-_CREATE_JOB_TIMEOUT_SECONDS = 30.0
 
 try:
     _REFINER_VERSION = importlib.metadata.version("macrodata-refiner").strip()
@@ -96,7 +94,7 @@ def request_json(
     api_key: str | None = None,
     base_url: str | None = None,
     json_payload: dict[str, Any] | None = None,
-    timeout_s: float = _DEFAULT_TIMEOUT_SECONDS,
+    timeout_s: float = 10.0,
 ) -> dict[str, Any]:
     resolved_base_url = resolve_platform_base_url() if base_url is None else base_url
     url = f"{resolved_base_url.rstrip('/')}{path}"
@@ -131,7 +129,7 @@ def verify_api_key(
     *,
     api_key: str,
     base_url: str | None = None,
-    timeout_s: float = _DEFAULT_TIMEOUT_SECONDS,
+    timeout_s: float = 10.0,
 ) -> VerifyApiKeyResponse:
     return MacrodataClient(api_key=api_key, base_url=base_url).verify_api_key(
         timeout_s=timeout_s
@@ -150,7 +148,7 @@ class MacrodataClient:
         path: str,
         response_type: type[T],
         json_payload: dict[str, Any] | None = None,
-        timeout_s: float = _DEFAULT_TIMEOUT_SECONDS,
+        timeout_s: float = 10.0,
     ) -> T:
         response_data = request_json(
             method=method,
@@ -184,13 +182,11 @@ class MacrodataClient:
             path="/api/jobs/submit",
             response_type=CreateJobEnvelope,
             json_payload=request_body,
-            timeout_s=_CREATE_JOB_TIMEOUT_SECONDS,
+            timeout_s=30.0,
         )
         return CreateJobResponse.from_envelope(job_envelope)
 
-    def verify_api_key(
-        self, *, timeout_s: float = _DEFAULT_TIMEOUT_SECONDS
-    ) -> VerifyApiKeyResponse:
+    def verify_api_key(self, *, timeout_s: float = 10.0) -> VerifyApiKeyResponse:
         return self._request(
             method="GET",
             path="/api/me",
