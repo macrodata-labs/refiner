@@ -13,7 +13,7 @@ writer, and robotics transforms.
 - run robotics-specific transforms under `mdr.robotics.*`
 - write LeRobot-compatible output datasets with `write_lerobot(...)`
 - merge compatible LeRobot datasets into one output dataset
-- prepare LeRobot datasets for LeRobot SARM single-stage training
+- prepare LeRobot datasets for LeRobot SARM annotation and training
 
 ## Quick Toc
 

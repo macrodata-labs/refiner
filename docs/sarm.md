@@ -1,86 +1,96 @@
 ---
 title: "Preparing Data for SARM"
-description: "Use Refiner to emit LeRobot datasets that train cleanly with LeRobot SARM single-stage mode"
+description: "Use Refiner to annotate LeRobot episodes with model-generated SARM metadata and write the result back out"
 ---
 
-LeRobot SARM does not need a special file format. For the simplest `single_stage`
-setup, the current Hugging Face docs say each training sample needs:
+The useful split for SARM is:
 
-- `task`
-- the configured `policy.image_key`
-- the configured `policy.state_key`
+1. Refiner reads and rewrites the LeRobot dataset.
+2. Refiner uses `map_async(...)` with `mdr.inference.generate(...)` to produce
+   subtask annotations.
+3. Refiner writes those annotation fields back into the episode rows.
+4. After the write, Refiner emits `meta/temporal_proportions_*.json`.
 
-In practice that means Refiner only needs to make sure your LeRobot dataset has:
+This mirrors the practical contract in LeRobot's SARM annotation pipeline:
 
-- a stable task string per episode
-- a camera/video key you plan to train on
-- a frame-level state column you plan to train on
+- episode-level subtask metadata is stored in `meta/episodes/*.parquet`
+- dataset-level temporal priors are stored in `meta/temporal_proportions_*.json`
 
-This page shows the simplest preparation flow for `single_stage`. If you want
-`dense_only` or `dual`, the extra annotation and visualization steps still happen
-in LeRobot after dataset preparation.
+## Dense Annotation Example
 
-## SARM Single-Stage Prep
+The checked-in example lives at [examples/lerobot/sarm_annotation.py](/Users/hynky/.codex/worktrees/d544/refiner/examples/lerobot/sarm_annotation.py).
+
+It does the following:
+
+- reads a LeRobot dataset with `read_lerobot(...)`
+- samples frames from one configured video key
+- sends those frames to a multimodal model through `mdr.inference.generate(...)`
+- parses the returned JSON subtask segmentation
+- writes `dense_subtask_*` fields onto each episode row
+- auto-generates a single sparse `"task"` stage for compatibility with `dense_only`
+- writes the annotated LeRobot dataset
+- computes `meta/temporal_proportions_sparse.json`
+- computes `meta/temporal_proportions_dense.json`
+
+The main flow is:
 
 ```python
-from __future__ import annotations
-
-import refiner as mdr
-
-INPUT_DATASET = "hf://datasets/your-username/your-robot-dataset"
-OUTPUT_DATASET = "hf://buckets/your-username/your-sarm-ready-dataset"
-IMAGE_KEY = "observation.images.main"
-STATE_KEY = "observation.state"
-TASK_DESCRIPTION: str | None = None
-
-
-def prepare_sarm_episode(row):
-    if IMAGE_KEY not in row.videos:
-        raise ValueError(
-            f"Episode {row.episode_index} is missing required video key {IMAGE_KEY!r}"
-        )
-
-    frame_columns = row.frames.table.column_names
-    if STATE_KEY not in frame_columns:
-        raise ValueError(
-            f"Episode {row.episode_index} is missing required state key {STATE_KEY!r}"
-        )
-
-    task = TASK_DESCRIPTION
-    if task is None:
-        task = row.get("task")
-    if task is None and len(row.tasks) == 1:
-        task = row.tasks[0]
-    if task is None:
-        raise ValueError(
-            "SARM single_stage needs a task string per episode. "
-            "Set TASK_DESCRIPTION or add a single task per episode."
-        )
-
-    return row.update(task=str(task))
-
-
 pipeline = (
     mdr.read_lerobot(INPUT_DATASET)
-    .map(prepare_sarm_episode)
+    .map_async(
+        mdr.inference.generate(
+            fn=annotate_dense_subtasks,
+            provider=PROVIDER,
+            default_generation_params={"temperature": 0.1},
+            max_concurrent_requests=MAX_IN_FLIGHT,
+        ),
+        max_in_flight=MAX_IN_FLIGHT,
+    )
     .write_lerobot(OUTPUT_DATASET)
 )
+
+pipeline.launch_local(name="lerobot-sarm-annotation", num_workers=1)
+write_temporal_proportions(OUTPUT_DATASET, prefix="sparse")
+write_temporal_proportions(OUTPUT_DATASET, prefix="dense")
 ```
 
-The checked-in version of this example lives at [examples/lerobot/sarm_single_stage.py](/Users/hynky/.codex/worktrees/d544/refiner/examples/lerobot/sarm_single_stage.py).
+## Output Fields
+
+The example writes these episode-level fields:
+
+- `dense_subtask_names`
+- `dense_subtask_start_times`
+- `dense_subtask_end_times`
+- `dense_subtask_start_frames`
+- `dense_subtask_end_frames`
+- `sparse_subtask_names`
+- `sparse_subtask_start_times`
+- `sparse_subtask_end_times`
+- `sparse_subtask_start_frames`
+- `sparse_subtask_end_frames`
+
+For sparse annotations, it also writes the legacy unprefixed aliases:
+
+- `subtask_names`
+- `subtask_start_times`
+- `subtask_end_times`
+- `subtask_start_frames`
+- `subtask_end_frames`
 
 ## Training
 
-After the dataset is written, train SARM in `single_stage` mode with LeRobot:
+For the example above, the intended LeRobot training mode is `dense_only`,
+because the dense annotations are model-generated and the sparse stage is the
+auto-generated single `"task"` segment:
 
 ```bash
 lerobot-train \
-  --dataset.repo_id=your-username/your-sarm-ready-dataset \
+  --dataset.repo_id=your-username/your-sarm-annotated-dataset \
   --policy.type=sarm \
-  --policy.annotation_mode=single_stage \
+  --policy.annotation_mode=dense_only \
   --policy.image_key=observation.images.main \
   --policy.state_key=observation.state \
-  --output_dir=outputs/train/sarm_single \
+  --output_dir=outputs/train/sarm_dense_only \
   --batch_size=32 \
   --steps=5000 \
   --policy.repo_id=your-username/your-model-name
@@ -88,17 +98,18 @@ lerobot-train \
 
 ## Notes
 
-- If every episode already carries exactly one task, leaving `TASK_DESCRIPTION=None`
-  is fine and the example reuses that task text.
-- If episodes mix multiple tasks, set `TASK_DESCRIPTION` explicitly or write your own
-  mapping function that emits the task string you want SARM to learn against.
-- `single_stage` is the simplest path because it does not require sparse or dense
-  subtask annotations.
+- The example assumes your endpoint accepts OpenAI-style multimodal chat payloads.
+- Frame sampling is intentionally sparse. Shipping every frame through an external
+  endpoint is usually the wrong cost profile.
+- If you want the full dual sparse+dense setup from LeRobot's own annotation
+  script, extend the example to generate both vocabularies and write both
+  temporal-proportion files.
 
 ## Internal Notes
 
-- This workflow intentionally stays inside `read_lerobot(...)` / `write_lerobot(...)`
-  because SARM trains on LeRobot datasets rather than a separate Refiner-specific
-  export format.
-- The example validates the chosen camera and state keys before writing so dataset
-  problems fail early.
+- Refiner's LeRobot writer already preserves arbitrary episode-level row fields,
+  so SARM annotation columns can be attached directly to the rows before
+  `write_lerobot(...)`.
+- Temporal-proportion JSON is a separate post-write step because the current
+  writer finalizes LeRobot metadata files but does not own SARM-specific sidecar
+  artifacts.
