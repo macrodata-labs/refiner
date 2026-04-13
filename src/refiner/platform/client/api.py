@@ -179,6 +179,7 @@ class MacrodataClient:
             path="/api/jobs/submit",
             response_type=CreateJobEnvelope,
             json_payload=request_body,
+            timeout_s=30.0,
         )
         return CreateJobResponse.from_envelope(job_envelope)
 
@@ -200,7 +201,6 @@ class MacrodataClient:
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/start",
             response_type=StageLifecycleResponse,
-            timeout_s=60.0,
         )
 
     def report_stage_finished(
@@ -211,7 +211,6 @@ class MacrodataClient:
             path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
             response_type=StageLifecycleResponse,
             json_payload={"status": status},
-            timeout_s=60.0,
         )
 
     def cloud_submit_job(
@@ -222,7 +221,6 @@ class MacrodataClient:
             path="/api/cloud/runs",
             response_type=CloudRunCreateResponse,
             json_payload=request.to_dict(),
-            timeout_s=60.0,
         )
 
 
