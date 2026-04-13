@@ -339,5 +339,14 @@ class Worker:
                         self.worker_id,
                         status,
                     )
-
-                    user_metrics_emitter.shutdown()
+                    try:
+                        user_metrics_emitter.shutdown()
+                    except Exception as e:
+                        if execution_error is not None or run_exception is not None:
+                            logger.warning(
+                                "metrics emitter shutdown failed during worker failure handling: {}: {}",
+                                type(e).__name__,
+                                e,
+                            )
+                        else:
+                            raise

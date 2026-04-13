@@ -149,6 +149,11 @@ class _MetricRecordingTelemetryEmitter(_NoopTelemetryEmitter):
         self.registered_gauges.append(kwargs)
 
 
+class _ShutdownFailingTelemetryEmitter(_NoopTelemetryEmitter):
+    def shutdown(self) -> None:
+        raise RuntimeError("telemetry shutdown failed")
+
+
 def _run_local_worker(
     *,
     rows_by_shard: Mapping[str, Sequence[Row]],
@@ -580,6 +585,28 @@ def test_worker_raises_sink_close_errors_after_success() -> None:
 
     with pytest.raises(RuntimeError, match="close failed"):
         worker.run()
+
+
+def test_worker_preserves_execution_failure_when_emitter_shutdown_fails() -> None:
+    shard = _shard("boom", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 2})]}
+
+    def maybe_fail(row: Row) -> Row:
+        raise RuntimeError("kaboom")
+
+    worker = _run_local_worker(
+        rows_by_shard=rows_by_shard,
+        runtime_lifecycle=runtime_lifecycle,
+        transform=maybe_fail,
+    )
+    worker.user_metrics_emitter = _ShutdownFailingTelemetryEmitter()
+
+    stats = worker.run()
+
+    assert stats.failed == 1
+    assert runtime_lifecycle.failed_ids == [shard.id]
+    assert runtime_lifecycle.failed_errors == ["kaboom"]
 
 
 __all__: list[str] = []
