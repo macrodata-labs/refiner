@@ -60,7 +60,7 @@ def generate(
         nonlocal running_requests
         nonlocal waiting_requests
         request_payload: dict[str, Any] = {}
-        if isinstance(provider, OpenAIEndpointProvider):
+        if isinstance(provider, (OpenAIEndpointProvider, VLLMProvider)):
             request_payload["model"] = provider.model
         request_payload.update(dict(default_generation_params or {}))
         request_payload.update(dict(payload))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 from collections.abc import Mapping
 from typing import Any
 
@@ -10,12 +11,16 @@ import refiner as mdr
 from refiner.inference import (
     InferenceResponse,
     OpenAIEndpointProvider,
+    VLLMProvider,
 )
+from refiner.services import VLLMRuntimeServiceBinding
 from refiner.pipeline.data.row import DictRow
 from refiner.worker.context import RunHandle, set_active_run_context
 from refiner.worker.metrics.context import set_active_user_metrics_emitter
 
 from refiner.inference import client as openai_module
+
+generate_module = importlib.import_module("refiner.inference.generate")
 
 
 class _MetricRecordingEmitter:
@@ -215,6 +220,55 @@ def test_openai_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
         "type": "openai_endpoint",
         "base_url": "https://api.example.com",
         "model": "gpt-test",
+    }
+
+
+def test_vllm_provider_includes_model_in_requests(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    class _FakeServiceManager:
+        async def get(self, service_name: str) -> VLLMRuntimeServiceBinding:
+            return VLLMRuntimeServiceBinding(
+                name=service_name,
+                kind="llm",
+                endpoint="http://127.0.0.1:8000",
+                api_key="service-secret",
+            )
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(
+        generate_module, "get_active_service_manager", lambda: _FakeServiceManager()
+    )
+
+    provider = VLLMProvider(model="meta-llama/Llama-3.1-8B-Instruct")
+
+    async def _inference_fn(row, generate):
+        response = await generate({"prompt": row["prompt"]})
+        return {"output": response.text}
+
+    infer = mdr.inference.generate(
+        fn=_inference_fn,
+        provider=provider,
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"prompt": "hi"}))
+
+    result = asyncio.run(_invoke())
+
+    assert result == {"output": "ok"}
+    assert seen["payload"] == {
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "prompt": "hi",
     }
 
 
