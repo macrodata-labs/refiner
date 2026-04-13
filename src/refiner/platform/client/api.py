@@ -14,7 +14,7 @@ from refiner.platform.client.models import (
     CloudRunCreateResponse,
     CreateJobEnvelope,
     CreateJobResponse,
-    OkResponse,
+    StageLifecycleResponse,
     VerifyApiKeyResponse,
 )
 
@@ -190,22 +190,26 @@ class MacrodataClient:
             timeout_s=timeout_s,
         )
 
-    def report_stage_finished(
-        self, *, job_id: str, stage_index: int, status: str
-    ) -> OkResponse:
+    def report_stage_started(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+    ) -> StageLifecycleResponse:
         return self._request(
             method="POST",
-            path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
-            response_type=OkResponse,
-            json_payload={"status": status},
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/start",
+            response_type=StageLifecycleResponse,
             timeout_s=60.0,
         )
 
-    def report_job_finished(self, *, job_id: str, status: str) -> OkResponse:
+    def report_stage_finished(
+        self, *, job_id: str, stage_index: int, status: str
+    ) -> StageLifecycleResponse:
         return self._request(
             method="POST",
-            path=f"/api/jobs/{job_id}/finish",
-            response_type=OkResponse,
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
+            response_type=StageLifecycleResponse,
             json_payload={"status": status},
             timeout_s=60.0,
         )

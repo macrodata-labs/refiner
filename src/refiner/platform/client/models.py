@@ -105,6 +105,16 @@ class OkResponse(msgspec.Struct, frozen=True):
     ok: bool = True
 
 
+class StageLifecycleStage(msgspec.Struct, frozen=True):
+    job_id: str
+    index: int
+    status: str
+
+
+class StageLifecycleResponse(msgspec.Struct, frozen=True):
+    stage: StageLifecycleStage
+
+
 @dataclass(frozen=True, slots=True)
 class CloudRuntimeConfig:
     num_workers: int

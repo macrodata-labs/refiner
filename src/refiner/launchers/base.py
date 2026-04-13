@@ -13,13 +13,7 @@ from refiner.pipeline.planning import (
     compile_planned_stages,
     plan_pipeline_stages,
 )
-from refiner.platform.auth import current_api_key
-from refiner.platform.client.api import (
-    MacrodataClient,
-    request_json,
-    sanitize_terminal_text,
-    verify_api_key,
-)
+from refiner.platform.client.api import MacrodataClient, sanitize_terminal_text
 from refiner.platform.manifest import build_run_manifest
 
 if TYPE_CHECKING:
@@ -32,7 +26,6 @@ class BaseLauncher(ABC):
         *,
         pipeline: RefinerPipeline,
         name: str,
-        job_id: str | None = None,
         num_workers: int = 1,
         cpus_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
@@ -41,7 +34,6 @@ class BaseLauncher(ABC):
             raise ValueError("name must be non-empty")
         self.pipeline = pipeline
         self.name = name
-        self.job_id = job_id or self._build_local_job_id(name)
         if num_workers <= 0:
             raise ValueError("num_workers must be > 0")
         self.num_workers = num_workers
@@ -68,20 +60,6 @@ class BaseLauncher(ABC):
         if safe_workspace_slug:
             return f"{safe_base_url}/jobs/{safe_workspace_slug}/{safe_job_id}"
         return f"{safe_base_url}/jobs/{safe_job_id}"
-
-    def _validate_key(self) -> None:
-        try:
-            api_key = current_api_key()
-            verify_api_key(api_key=api_key, timeout_s=2.0)
-        except Exception:
-            try:
-                request_json(
-                    method="GET",
-                    path="/api/me",
-                    timeout_s=2.0,
-                )
-            except Exception:
-                return
 
     def _planned_stages(self) -> list[PlannedStage]:
         requested_workers = getattr(self, "num_workers", None)
