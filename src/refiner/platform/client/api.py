@@ -231,6 +231,43 @@ class MacrodataClient:
             timeout_s=60.0,
         )
 
+    def start_worker_services(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+        worker_id: str,
+        services: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        response_data = request_json(
+            method="POST",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/services/start",
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload={"services": services},
+        )
+        if not isinstance(response_data, dict):
+            raise ValueError("runtime services response must be a JSON object")
+        return response_data
+
+    def get_worker_service(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+        worker_id: str,
+        service_id: str,
+    ) -> dict[str, Any]:
+        response_data = request_json(
+            method="GET",
+            path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/services/{service_id}",
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
+        if not isinstance(response_data, dict):
+            raise ValueError("runtime service response must be a JSON object")
+        return response_data
+
     def report_worker_finished(
         self,
         *,

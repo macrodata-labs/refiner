@@ -1,3 +1,4 @@
+import refiner.inference as inference
 import refiner.io as io
 import refiner.pipeline as pipeline
 import refiner.robotics as robotics
@@ -46,6 +47,7 @@ __all__ = [
     "coalesce",
     "if_else",
     # submodules
+    "inference",
     "io",
     "pipeline",
     "video",

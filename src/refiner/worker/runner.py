@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import threading
+import asyncio
 from dataclasses import dataclass
 
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
+from refiner.services.discovery import collect_pipeline_services
 from refiner.pipeline.sinks import NullSink
+from refiner.services import ServiceManager
 from refiner.worker.context import RunHandle, logger
 from refiner.worker.context import set_active_run_context, set_active_step_index
 from refiner.worker.lifecycle import RuntimeLifecycle
@@ -62,16 +65,26 @@ class Worker:
         execution_error: Exception | None = None
         heartbeat_error: Exception | None = None
 
-        # Runtime services.
         user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER
         stop_heartbeat = threading.Event()
 
         runtime_lifecycle = self.runtime_lifecycle
         client = self.run_handle.client
+
+        # Service manager is used to start and manage runtime services.
+        service_manager = ServiceManager(
+            client=self.run_handle.client,
+            job_id=self.run_handle.job_id,
+            stage_index=self.run_handle.stage_index,
+            worker_id=self.run_handle.worker_id,
+            worker_name=self.run_handle.worker_name,
+        )
+        runtime_services = collect_pipeline_services(self.pipeline)
         sink = self.pipeline.sink or NullSink()
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
+        runtime_services_started = False
 
         def _heartbeat_once() -> None:
             with inflight_lock:
@@ -149,7 +162,7 @@ class Worker:
             heartbeat_thread.start()
 
         def _source_rows():
-            nonlocal previous, claimed
+            nonlocal previous, claimed, runtime_services_started
             while True:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
@@ -165,6 +178,9 @@ class Worker:
                 rows_read = 0
                 with inflight_lock:
                     inflight_by_id[shard.id] = shard
+                if runtime_services and not runtime_services_started:
+                    asyncio.run(service_manager.start_services(runtime_services))
+                    runtime_services_started = True
                 logger.info(
                     "shard claimed shard_id={} global_ordinal={} start_key={} end_key={}",
                     shard.id,
@@ -206,6 +222,7 @@ class Worker:
         with set_active_run_context(
             run_handle=self.run_handle,
             runtime_lifecycle=runtime_lifecycle,
+            service_manager=service_manager,
         ):
             if client is not None:
                 try:

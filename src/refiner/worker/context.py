@@ -10,6 +10,7 @@ from loguru import logger as _base_logger
 
 if TYPE_CHECKING:
     from refiner.platform.client.api import MacrodataClient
+    from refiner.services.manager import ServiceManager
     from refiner.worker.lifecycle.base import RuntimeLifecycle
 
 
@@ -45,6 +46,10 @@ _ACTIVE_STEP_INDEX: ContextVar[int | None] = ContextVar(
     "refiner_active_step_index",
     default=None,
 )
+_ACTIVE_SERVICE_MANAGER: ContextVar[ServiceManager | None] = ContextVar(
+    "refiner_active_service_manager",
+    default=None,
+)
 _ACTIVE_LOGGER: ContextVar[Any | None] = ContextVar(
     "refiner_active_logger",
     default=None,
@@ -74,15 +79,23 @@ def get_active_step_index() -> int | None:
     return _ACTIVE_STEP_INDEX.get()
 
 
+def get_active_service_manager() -> ServiceManager | None:
+    return _ACTIVE_SERVICE_MANAGER.get()
+
+
 @contextmanager
 def set_active_run_context(
     *,
     run_handle: RunHandle,
     runtime_lifecycle: RuntimeLifecycle,
+    service_manager: ServiceManager | None = None,
 ) -> Generator[None, None, None]:
     run_token: Token[RunHandle | None] = _ACTIVE_RUN_HANDLE.set(run_handle)
     lifecycle_token: Token["RuntimeLifecycle" | None] = _ACTIVE_RUNTIME_LIFECYCLE.set(
         runtime_lifecycle
+    )
+    service_manager_token: Token[ServiceManager | None] = _ACTIVE_SERVICE_MANAGER.set(
+        service_manager
     )
     logger_token: Token[Any | None] = _ACTIVE_LOGGER.set(
         _base_logger.bind(
@@ -95,6 +108,7 @@ def set_active_run_context(
     try:
         yield
     finally:
+        _ACTIVE_SERVICE_MANAGER.reset(service_manager_token)
         _ACTIVE_LOGGER.reset(logger_token)
         _ACTIVE_RUNTIME_LIFECYCLE.reset(lifecycle_token)
         _ACTIVE_RUN_HANDLE.reset(run_token)
@@ -112,6 +126,7 @@ def set_active_step_index(step_index: int | None) -> Generator[None, None, None]
 __all__ = [
     "RunHandle",
     "get_active_run_handle",
+    "get_active_service_manager",
     "get_active_runtime_lifecycle",
     "get_active_step_index",
     "logger",
