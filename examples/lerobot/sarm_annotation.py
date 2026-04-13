@@ -21,9 +21,8 @@ SUBTASKS = [
     "place object",
 ]
 
-PROVIDER = mdr.inference.OpenAIEndpointProvider(
-    base_url="https://api.openai.com",
-    model="gpt-4.1-mini",
+PROVIDER = mdr.inference.VLLMProvider(
+    model="Qwen/Qwen3-VL-30B-A3B-Instruct",
 )
 
 
@@ -288,6 +287,6 @@ if __name__ == "__main__":
         .write_lerobot(OUTPUT_DATASET)
     )
 
-    pipeline.launch_local(name="lerobot-sarm-annotation", num_workers=1)
+    pipeline.launch_cloud(name="lerobot-sarm-annotation", num_workers=1)
     write_temporal_proportions(OUTPUT_DATASET, prefix="sparse")
     write_temporal_proportions(OUTPUT_DATASET, prefix="dense")

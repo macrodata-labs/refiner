@@ -25,7 +25,7 @@ It does the following:
 - reads a LeRobot dataset with `read_lerobot(...)`
 - extracts one full bounded episode clip from the configured video key
 - encodes that clip as a base64 `data:video/mp4` URL
-- sends that video to a multimodal model through `mdr.inference.generate(...)`
+- sends that video to Qwen3-VL through `mdr.inference.generate(...)` with `VLLMProvider`
 - parses the returned JSON subtask segmentation
 - writes `dense_subtask_*` fields onto each episode row
 - auto-generates a single sparse `"task"` stage for compatibility with `dense_only`
@@ -50,7 +50,7 @@ pipeline = (
     .write_lerobot(OUTPUT_DATASET)
 )
 
-pipeline.launch_local(name="lerobot-sarm-annotation", num_workers=1)
+pipeline.launch_cloud(name="lerobot-sarm-annotation", num_workers=1)
 write_temporal_proportions(OUTPUT_DATASET, prefix="sparse")
 write_temporal_proportions(OUTPUT_DATASET, prefix="dense")
 ```
@@ -99,8 +99,8 @@ lerobot-train \
 
 ## Notes
 
-- The example assumes your endpoint accepts OpenAI-style multimodal chat payloads
-  with `video_url` content items.
+- The example is configured for Refiner-managed VLLM with
+  `Qwen/Qwen3-VL-30B-A3B-Instruct`.
 - The video clip is produced from the episode-local `VideoFile` bounds, so this
   works even when the source MP4 stores multiple concatenated episodes.
 - If you want the full dual sparse+dense setup from LeRobot's own annotation
