@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
@@ -18,9 +17,6 @@ from refiner.worker.metrics.context import (
     UserMetricsEmitter,
     set_active_user_metrics_emitter,
 )
-
-if TYPE_CHECKING:
-    from refiner.platform.client.api import MacrodataClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +55,7 @@ class Worker:
         if self.heartbeat_interval_seconds < 0:
             raise ValueError("heartbeat_interval_seconds must be >= 0")
 
-    def run(self, *, service_client: MacrodataClient | None = None) -> WorkerRunStats:
+    def run(self) -> WorkerRunStats:
         # Source-claim state.
         previous: Shard | None = None
 
@@ -84,6 +80,7 @@ class Worker:
         stop_heartbeat = threading.Event()
 
         runtime_lifecycle = self.runtime_lifecycle
+        service_client = getattr(runtime_lifecycle, "client", None)
         # Service manager is used to start and manage runtime services.
         service_manager = (
             ServiceManager(
