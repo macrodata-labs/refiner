@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import io
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -13,7 +12,6 @@ INPUT_DATASET = "hf://datasets/your-username/your-robot-dataset"
 OUTPUT_DATASET = "s3://your-bucket/your-sarm-annotated-dataset"
 VIDEO_KEY = "observation.images.main"
 STATE_KEY = "observation.state"
-FRAME_STRIDE = 30
 MAX_IN_FLIGHT = 8
 
 SUBTASKS = [
@@ -30,14 +28,27 @@ PROVIDER = mdr.inference.OpenAIEndpointProvider(
 
 
 def _annotation_prompt(subtasks: Sequence[str]) -> str:
-    bullet_list = "\n".join(f"- {name}" for name in subtasks)
+    bullet_list = "\n".join(f" - {name}" for name in subtasks)
     return (
-        "Segment this robot demonstration into the fixed subtask list below.\n"
-        "Use every listed subtask exactly once and keep the entire video covered.\n"
-        "Return JSON only with this shape:\n"
-        '{"subtasks":[{"name":"...", "timestamps":{"start":"MM:SS","end":"MM:SS"}}]}\n'
-        "Allowed subtask names:\n"
-        f"{bullet_list}\n"
+        "# Role\n"
+        "You are a robotics vision system for temporal action localization.\n\n"
+        "# Task\n"
+        "Segment one successful demonstration video into distinct, non-overlapping"
+        " atomic actions from the fixed subtask vocabulary below.\n\n"
+        "# Subtask Label Set\n"
+        "Use only these labels exactly as written:\n"
+        f"[\n{bullet_list}\n]\n\n"
+        "# Hard Constraints\n"
+        "1. Cover the full video from 00:00 to the final timestamp.\n"
+        "2. No gaps between subtasks.\n"
+        "3. The end of one subtask must equal the start of the next.\n"
+        "4. Use each subtask exactly once in logical order.\n"
+        "5. Do not split the video into equal chunks unless the visuals truly support it.\n"
+        "6. Timestamps must be MM:SS.\n\n"
+        "# Output\n"
+        "First write a detailed timeline as bullet points.\n"
+        "Then output only valid JSON in this shape:\n"
+        '{"subtasks":[{"name":"EXACT_NAME_FROM_LIST","timestamps":{"start":"MM:SS","end":"MM:SS"}}]}\n'
     )
 
 
@@ -67,29 +78,9 @@ def _seconds_to_frame_index(seconds: float, *, fps: int, max_frame_index: int) -
     return max(0, min(max_frame_index, frame_index))
 
 
-def _image_data_url(image_bytes: bytes) -> str:
-    encoded = base64.b64encode(image_bytes).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}"
-
-
-async def _sample_episode_images(row) -> list[str]:
-    video = row.videos[VIDEO_KEY].video
-    images: list[str] = []
-    async for window in mdr.video.iter_frame_windows(
-        video,
-        offsets=[0],
-        stride=FRAME_STRIDE,
-        drop_incomplete=False,
-    ):
-        frame = window.anchor.frame
-        image = frame.to_image()
-        buffer = io.BytesIO()
-        image.save(buffer, format="JPEG")
-        jpeg_bytes = buffer.getvalue()
-        images.append(_image_data_url(jpeg_bytes))
-    if not images:
-        raise ValueError(f"episode {row.episode_index} yielded no sampled frames")
-    return images
+def _video_data_url(video_bytes: bytes) -> str:
+    encoded = base64.b64encode(video_bytes).decode("ascii")
+    return f"data:video/mp4;base64,{encoded}"
 
 
 def _annotation_patch(
@@ -190,14 +181,20 @@ async def annotate_dense_subtasks(row, generate):
             f"episode {row.episode_index} is missing required state key {STATE_KEY!r}"
         )
 
-    image_urls = await _sample_episode_images(row)
+    video = row.videos[VIDEO_KEY].video
+    clip_bytes = await mdr.video.export_clip_bytes(video, stream_key=VIDEO_KEY)
     content: list[dict[str, Any]] = [
-        {"type": "text", "text": _annotation_prompt(SUBTASKS)}
+        {
+            "type": "video_url",
+            "video_url": {
+                "url": _video_data_url(clip_bytes),
+            },
+        },
+        {
+            "type": "text",
+            "text": _annotation_prompt(SUBTASKS),
+        },
     ]
-    content.extend(
-        {"type": "image_url", "image_url": {"url": image_url}}
-        for image_url in image_urls
-    )
 
     response = await generate(
         {

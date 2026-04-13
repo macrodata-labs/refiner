@@ -23,8 +23,9 @@ The checked-in example lives at [examples/lerobot/sarm_annotation.py](/Users/hyn
 It does the following:
 
 - reads a LeRobot dataset with `read_lerobot(...)`
-- samples frames from one configured video key
-- sends those frames to a multimodal model through `mdr.inference.generate(...)`
+- extracts one full bounded episode clip from the configured video key
+- encodes that clip as a base64 `data:video/mp4` URL
+- sends that video to a multimodal model through `mdr.inference.generate(...)`
 - parses the returned JSON subtask segmentation
 - writes `dense_subtask_*` fields onto each episode row
 - auto-generates a single sparse `"task"` stage for compatibility with `dense_only`
@@ -98,9 +99,10 @@ lerobot-train \
 
 ## Notes
 
-- The example assumes your endpoint accepts OpenAI-style multimodal chat payloads.
-- Frame sampling is intentionally sparse. Shipping every frame through an external
-  endpoint is usually the wrong cost profile.
+- The example assumes your endpoint accepts OpenAI-style multimodal chat payloads
+  with `video_url` content items.
+- The video clip is produced from the episode-local `VideoFile` bounds, so this
+  works even when the source MP4 stores multiple concatenated episodes.
 - If you want the full dual sparse+dense setup from LeRobot's own annotation
   script, extend the example to generate both vocabularies and write both
   temporal-proportion files.

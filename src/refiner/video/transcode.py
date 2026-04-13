@@ -72,17 +72,35 @@ class TranscodeWriter:
         config: VideoTranscodeConfig,
         fps: int,
     ) -> "TranscodeWriter":
+        output_file = folder.open(output_rel, mode="wb")
+        return cls.open_file(
+            output_file=output_file,
+            config=config,
+            fps=fps,
+        )
+
+    @classmethod
+    def open_file(
+        cls,
+        *,
+        output_file: IO[bytes],
+        config: VideoTranscodeConfig,
+        fps: int,
+    ) -> "TranscodeWriter":
         check_required_dependencies("video transcoding", ["av"], dist="video")
         import av
 
-        output_file = folder.open(output_rel, mode="wb")
         writer = cls(config=config, fps=fps, output_file=output_file)
-        writer.container = av.open(
-            output_file,
-            mode="w",
-            format="mp4",
-            options={"movflags": _SEGMENTED_MP4_MOVFLAGS},
-        )
+        try:
+            writer.container = av.open(
+                output_file,
+                mode="w",
+                format="mp4",
+                options={"movflags": _SEGMENTED_MP4_MOVFLAGS},
+            )
+        except Exception:
+            output_file.close()
+            raise
         return writer
 
     @property

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -143,3 +144,30 @@ def test_iter_frame_windows_supports_lookahead_and_partial_tail(tmp_path: Path) 
         [frame.index if frame is not None else None for frame in window.frames]
         for window in windows
     ] == [[0, 2], [2, 4], [4, None]]
+
+
+def test_export_clip_bytes_uses_video_writer_path(tmp_path: Path) -> None:
+    src_video = tmp_path / "source" / "episode.mp4"
+    _write_video(src_video, fps=10, frames=6)
+
+    video = mdr.video.VideoFile(
+        DataFile.resolve(str(src_video)),
+        from_timestamp_s=0.2,
+        to_timestamp_s=0.5,
+    )
+
+    payload = asyncio.run(mdr.video.export_clip_bytes(video))
+
+    assert payload
+
+    with av.open(io.BytesIO(payload), mode="r") as container:
+        stream = next(item for item in container.streams if item.type == "video")
+        timestamps = [
+            float(frame.pts * frame.time_base)
+            for frame in container.decode(stream)
+            if isinstance(frame, av.VideoFrame)
+            and frame.pts is not None
+            and frame.time_base is not None
+        ]
+
+    assert timestamps == pytest.approx([0.0, 0.1, 0.2])

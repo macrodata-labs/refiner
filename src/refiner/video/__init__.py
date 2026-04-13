@@ -1,3 +1,4 @@
+from refiner.video.clip import export_clip_bytes
 from refiner.video.decode import (
     DecodedFrameWindow,
     DecodedVideoFrame,
@@ -40,6 +41,7 @@ __all__ = [
     "VideoTranscodeConfig",
     "WrittenVideo",
     "WrittenVideoSegment",
+    "export_clip_bytes",
     "iter_frame_windows",
     "iter_frames",
     "prepare_video_source",
