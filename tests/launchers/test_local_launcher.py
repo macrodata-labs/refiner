@@ -8,7 +8,7 @@ import pytest
 
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
-from refiner.launchers.local import LaunchStats, LocalLauncher, _WorkerOutput
+from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
@@ -729,11 +729,18 @@ def test_collect_worker_results_uses_reader_output_without_communicate() -> None
         def communicate(self):
             raise AssertionError("communicate should already be running in the reader")
 
-    output = _WorkerOutput(
-        worker_id="worker-1",
-        process=cast("subprocess.Popen[str]", _FakeProcess()),
-        stdout='{"worker_id":"worker-1","claimed":1,"completed":1,"failed":0,"output_rows":2}\n',
-        stderr="",
+    output = (
+        "worker-1",
+        cast("subprocess.Popen[str]", _FakeProcess()),
+        cast(
+            "dict[str, object]",
+            {
+                "stdout": '{"worker_id":"worker-1","claimed":1,"completed":1,"failed":0,"output_rows":2}\n',
+                "stderr": "",
+                "error": None,
+            },
+        ),
+        None,
     )
 
     stats = launcher._collect_worker_results(stage_workers=1, processes=[output])

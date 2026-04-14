@@ -38,14 +38,12 @@ class LaunchStats:
     output_rows: int
 
 
-@dataclass(slots=True)
-class _WorkerOutput:
-    worker_id: str
-    process: subprocess.Popen[str]
-    stdout: str = ""
-    stderr: str = ""
-    error: Exception | None = None
-    reader_thread: threading.Thread | None = None
+_WorkerOutput = tuple[
+    str,
+    subprocess.Popen[str],
+    dict[str, object],
+    threading.Thread | None,
+]
 
 
 class LocalLauncher(BaseLauncher):
@@ -105,14 +103,14 @@ class LocalLauncher(BaseLauncher):
         completed = 0
         failed = 0
         output_rows = 0
-        for output in processes:
-            process = output.process
-            if output.reader_thread is not None:
-                output.reader_thread.join(timeout=1.0)
-            if output.error is not None:
-                errors.append(f"worker {output.worker_id}: {output.error}")
-            stdout = output.stdout
-            stderr = output.stderr
+        for worker_id, process, state, reader_thread in processes:
+            if reader_thread is not None:
+                reader_thread.join()
+            error_state = state.get("error")
+            if error_state is not None:
+                errors.append(f"worker {worker_id}: {error_state}")
+            stdout = str(state.get("stdout", ""))
+            stderr = str(state.get("stderr", ""))
             final_stdout_line = next(
                 (line for line in reversed(stdout.splitlines()) if line.strip()),
                 "",
@@ -123,7 +121,7 @@ class LocalLauncher(BaseLauncher):
                     decoded
                     if isinstance(decoded, dict)
                     else self._failed_worker_payload(
-                        worker_id=output.worker_id,
+                        worker_id=worker_id,
                         stdout=stdout,
                         stderr=stderr,
                         returncode=process.returncode,
@@ -131,7 +129,7 @@ class LocalLauncher(BaseLauncher):
                 )
             except json.JSONDecodeError:
                 raw = self._failed_worker_payload(
-                    worker_id=output.worker_id,
+                    worker_id=worker_id,
                     stdout=stdout,
                     stderr=stderr,
                     returncode=process.returncode,
@@ -354,12 +352,10 @@ class LocalLauncher(BaseLauncher):
     def _terminate_processes(
         processes: list[_WorkerOutput],
     ) -> None:
-        for output in processes:
-            process = output.process
+        for _, process, _, _ in processes:
             if process.poll() is None:
                 process.terminate()
-        for output in processes:
-            process = output.process
+        for _, process, _, _ in processes:
             try:
                 process.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
@@ -367,22 +363,29 @@ class LocalLauncher(BaseLauncher):
                 process.wait(timeout=5.0)
 
     @staticmethod
-    def _start_worker_output_reader(output: _WorkerOutput) -> None:
+    def _start_worker_output_reader(
+        *,
+        worker_id: str,
+        process: subprocess.Popen[str],
+    ) -> tuple[dict[str, object], threading.Thread]:
+        state: dict[str, object] = {"stdout": "", "stderr": "", "error": None}
+
         def _read() -> None:
             try:
-                stdout, stderr = output.process.communicate()
+                stdout, stderr = process.communicate()
             except Exception as err:
-                output.error = err
+                state["error"] = err
                 return
-            output.stdout = stdout
-            output.stderr = stderr
+            state["stdout"] = stdout
+            state["stderr"] = stderr
 
-        output.reader_thread = threading.Thread(
+        thread = threading.Thread(
             target=_read,
-            name=f"refiner-worker-output-{output.worker_id}",
+            name=f"refiner-worker-output-{worker_id}",
             daemon=True,
         )
-        output.reader_thread.start()
+        thread.start()
+        return state, thread
 
     @staticmethod
     def _raise_for_heartbeat_failure(
@@ -409,7 +412,7 @@ class LocalLauncher(BaseLauncher):
                     stage_index=stage_index,
                     heartbeat_errors=heartbeat_errors,
                 )
-            if all(output.process.poll() is not None for output in processes):
+            if all(process.poll() is not None for _, process, _, _ in processes):
                 return
             time.sleep(self._PROCESS_POLL_INTERVAL_SECONDS)
 
@@ -488,20 +491,20 @@ class LocalLauncher(BaseLauncher):
                     sort_keys=True,
                 )
             )
-            output = _WorkerOutput(
+            process = self._spawn_local_worker(
+                pipeline_payload=str(payload_path),
+                job_id=self.job_id,
+                stage_index=stage.index,
+                worker_name=f"stage-{stage.index}-rank-{rank}",
                 worker_id=worker_id,
-                process=self._spawn_local_worker(
-                    pipeline_payload=str(payload_path),
-                    job_id=self.job_id,
-                    stage_index=stage.index,
-                    worker_name=f"stage-{stage.index}-rank-{rank}",
-                    worker_id=worker_id,
-                    rundir=self.rundir,
-                    gpu_ids=tuple(gpu_sets[rank]),
-                ),
+                rundir=self.rundir,
+                gpu_ids=tuple(gpu_sets[rank]),
             )
-            self._start_worker_output_reader(output)
-            processes.append(output)
+            state, reader_thread = self._start_worker_output_reader(
+                worker_id=worker_id,
+                process=process,
+            )
+            processes.append((worker_id, process, state, reader_thread))
 
         self._wait_for_processes(
             processes=processes,
