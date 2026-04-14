@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,6 +38,8 @@ class LaunchStats:
 
 class LocalLauncher(BaseLauncher):
     _STAGE_HEARTBEAT_INTERVAL_SECONDS = 15.0
+    _STAGE_HEARTBEAT_FAILURE_THRESHOLD = 3
+    _PROCESS_POLL_INTERVAL_SECONDS = 1.0
 
     def __init__(
         self,
@@ -196,7 +198,9 @@ class LocalLauncher(BaseLauncher):
         gpu_ids: tuple[str, ...],
     ) -> subprocess.Popen[str]:
         cmd = [
-            sys.executable,
+            "uv",
+            "run",
+            "python",
             "-m",
             "refiner.worker.entrypoint",
             "--pipeline-payload",
@@ -302,18 +306,23 @@ class LocalLauncher(BaseLauncher):
 
         stop_event = threading.Event()
         heartbeat_errors: list[BaseException] = []
+        consecutive_failures = 0
 
         def _run() -> None:
+            nonlocal consecutive_failures
             while not stop_event.wait(self._STAGE_HEARTBEAT_INTERVAL_SECONDS):
                 try:
                     tracking_client.report_stage_heartbeat(
                         job_id=job_id,
                         stage_index=stage_index,
                     )
+                    consecutive_failures = 0
                 except BaseException as err:
-                    heartbeat_errors.append(err)
-                    stop_event.set()
-                    return
+                    consecutive_failures += 1
+                    if consecutive_failures >= self._STAGE_HEARTBEAT_FAILURE_THRESHOLD:
+                        heartbeat_errors.append(err)
+                        stop_event.set()
+                        return
 
         thread = threading.Thread(
             target=_run,
@@ -323,10 +332,42 @@ class LocalLauncher(BaseLauncher):
         thread.start()
         return stop_event, heartbeat_errors, thread
 
+    @staticmethod
+    def _terminate_processes(
+        processes: list[tuple[str, subprocess.Popen[str]]],
+    ) -> None:
+        for _, process in processes:
+            if process.poll() is None:
+                process.terminate()
+        for _, process in processes:
+            try:
+                process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5.0)
+
+    def _wait_for_processes(
+        self,
+        *,
+        processes: list[tuple[str, subprocess.Popen[str]]],
+        stage_index: int,
+        heartbeat_errors: list[BaseException] | None,
+    ) -> None:
+        while True:
+            if heartbeat_errors:
+                self._terminate_processes(processes)
+                raise RuntimeError(
+                    f"stage {stage_index} heartbeat failed: {heartbeat_errors[0]}"
+                ) from heartbeat_errors[0]
+            if all(process.poll() is not None for _, process in processes):
+                return
+            time.sleep(self._PROCESS_POLL_INTERVAL_SECONDS)
+
     def _launch_stage(
         self,
         *,
         stage: PlannedStage,
+        heartbeat_errors: list[BaseException] | None = None,
     ) -> LaunchStats:
         # Resolve worker capacity and remaining stage shards.
         stage_workers = stage.compute.num_workers
@@ -412,6 +453,12 @@ class LocalLauncher(BaseLauncher):
                 )
             )
 
+        self._wait_for_processes(
+            processes=processes,
+            stage_index=stage.index,
+            heartbeat_errors=heartbeat_errors,
+        )
+
         return self._collect_worker_results(
             stage_workers=stage_workers,
             processes=processes,
@@ -468,11 +515,8 @@ class LocalLauncher(BaseLauncher):
             try:
                 stage_stats = self._launch_stage(
                     stage=stage,
+                    heartbeat_errors=heartbeat_errors,
                 )
-                if heartbeat_errors:
-                    raise RuntimeError(
-                        f"stage {stage.index} heartbeat failed: {heartbeat_errors[0]}"
-                    ) from heartbeat_errors[0]
             except KeyboardInterrupt:
                 if tracking_client is not None:
                     try:

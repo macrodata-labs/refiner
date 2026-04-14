@@ -244,7 +244,7 @@ def test_local_launcher_registers_job_and_reports_stage_lifecycle(
     monkeypatch.setattr(
         launcher,
         "_launch_stage",
-        lambda *, stage: LaunchStats(
+        lambda *, stage, heartbeat_errors=None: LaunchStats(
             job_id="job-remote",
             workers=1,
             claimed=1,
@@ -403,7 +403,8 @@ def test_local_launcher_stops_after_failed_stage(
 
     monkeypatch.setattr(launcher, "_planned_stages", lambda: stages)
 
-    def fake_launch_stage(*, stage):  # noqa: ANN001
+    def fake_launch_stage(*, stage, heartbeat_errors=None):  # noqa: ANN001
+        assert heartbeat_errors is None or isinstance(heartbeat_errors, list)
         launched.append(stage.index)
         return LaunchStats(
             job_id="job-1",
@@ -450,7 +451,7 @@ def test_local_launcher_does_not_force_platform_terminal_state(
     monkeypatch.setattr(
         launcher,
         "_launch_stage",
-        lambda *, stage: LaunchStats(
+        lambda *, stage, heartbeat_errors=None: LaunchStats(
             job_id="job-1",
             workers=1,
             claimed=1,
