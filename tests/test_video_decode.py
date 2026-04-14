@@ -4,6 +4,7 @@ import asyncio
 import io
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import av
 import numpy as np
@@ -13,6 +14,11 @@ import refiner as mdr
 from refiner.io import DataFile
 from refiner.pipeline.utils.cache.decoder_cache import get_opened_video_source_cache
 from refiner.video.remux import reset_opened_video_source_cache
+
+try:
+    import cv2
+except ImportError:  # pragma: no cover - optional dependency
+    cv2: Any = None
 
 
 @pytest.fixture(autouse=True)
@@ -171,3 +177,28 @@ def test_export_clip_bytes_uses_video_writer_path(tmp_path: Path) -> None:
         ]
 
     assert timestamps == pytest.approx([0.0, 0.1, 0.2])
+
+
+@pytest.mark.skipif(cv2 is None, reason="opencv-python is not installed")
+def test_export_clip_bytes_is_readable_by_opencv(tmp_path: Path) -> None:
+    src_video = tmp_path / "source" / "episode.mp4"
+    _write_video(src_video, fps=10, frames=6)
+
+    video = mdr.video.VideoFile(
+        DataFile.resolve(str(src_video)),
+        from_timestamp_s=0.0,
+        to_timestamp_s=0.5,
+    )
+
+    payload = asyncio.run(mdr.video.export_clip_bytes(video))
+    exported = tmp_path / "exported.mp4"
+    exported.write_bytes(payload)
+
+    assert cv2 is not None
+    cap = cv2.VideoCapture(str(exported))
+    assert cap.isOpened()
+    try:
+        assert int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) >= 5
+        assert float(cap.get(cv2.CAP_PROP_FPS)) == pytest.approx(10.0)
+    finally:
+        cap.release()

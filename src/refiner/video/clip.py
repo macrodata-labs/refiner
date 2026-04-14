@@ -33,6 +33,7 @@ async def export_clip_bytes(
             writer = RemuxWriter.open_file(
                 output_file=output_file,
                 probe=prepared.probe,
+                movflags=None,
             )
             writer.append_prepared_video(prepared)
         else:
@@ -47,6 +48,7 @@ async def export_clip_bytes(
                 output_file=output_file,
                 config=config,
                 fps=fps,
+                movflags=None,
             )
             writer.append_prepared_video(
                 prepared_source=prepared,

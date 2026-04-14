@@ -82,16 +82,18 @@ class RemuxWriter:
         *,
         output_file: IO[bytes],
         probe: VideoSourceProbe,
+        movflags: str | None = _SEGMENTED_MP4_MOVFLAGS,
     ) -> "RemuxWriter":
         check_required_dependencies("video remuxing", ["av"], dist="video")
         import av
 
         try:
+            options = {"movflags": movflags} if movflags is not None else None
             container = av.open(
                 output_file,
                 mode="w",
                 format="mp4",
-                options={"movflags": _SEGMENTED_MP4_MOVFLAGS},
+                options=options,
             )
         except Exception:
             output_file.close()

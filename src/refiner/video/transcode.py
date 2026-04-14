@@ -86,17 +86,19 @@ class TranscodeWriter:
         output_file: IO[bytes],
         config: VideoTranscodeConfig,
         fps: int,
+        movflags: str | None = _SEGMENTED_MP4_MOVFLAGS,
     ) -> "TranscodeWriter":
         check_required_dependencies("video transcoding", ["av"], dist="video")
         import av
 
         writer = cls(config=config, fps=fps, output_file=output_file)
         try:
+            options = {"movflags": movflags} if movflags is not None else None
             writer.container = av.open(
                 output_file,
                 mode="w",
                 format="mp4",
-                options={"movflags": _SEGMENTED_MP4_MOVFLAGS},
+                options=options,
             )
         except Exception:
             output_file.close()
