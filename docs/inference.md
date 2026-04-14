@@ -5,9 +5,10 @@ description: "(V)LLM inference workflow in Refiner"
 
 Model calls are now part of many data curation workflows, so Refiner includes built-in support for endpoint-based and managed inference.
 
-It supports two modes:
+It supports three modes:
 - `OpenAIEndpointProvider`: call any OpenAI-compatible HTTP endpoint such as OpenAI or OpenRouter.
 - `VLLMProvider`: ask Refiner Cloud to start and manage a dedicated VLLM server for your job. This avoids external rate limits and is only supported when running on Refiner Cloud.
+- `DummyRequestProvider`: start a tiny localhost OpenAI-compatible server that returns a fixed response. This is useful for smoke tests and local pipeline validation without GPUs.
 
 ## Usage
 
@@ -86,13 +87,53 @@ Because Refiner Cloud may start VLLM on fresh hardware, startup can take 2 to 20
 - `Qwen/Qwen3-VL-8B-Instruct`
 
 The two Qwen vision-language models should currently be launched with a single worker because multi-worker cold starts can hit compilation race conditions.
-
 Other models can still be used, but the first startup is usually slower.
 
 #### Inference Hardware
 At the moment, VLLM deployments run on `1x H100`, which limits the model sizes that fit. This may change as the cloud runtime expands.
 
+### Dummy localhost provider
+
+Use `DummyRequestProvider` when you want to exercise the normal inference request path without depending on a real model server.
+
+```python
+import refiner as mdr
+
+provider = mdr.inference.DummyRequestProvider(
+    model="dummy-local",
+    response_text="dummy response",
+)
+
+async def summarize(row, generate):
+    response = await generate(
+        {
+            "messages": [
+                {"role": "system", "content": "Return the canned answer."},
+                {"role": "user", "content": row["text"]},
+            ]
+        }
+    )
+    return {"summary": response.text}
+
+
+pipeline = mdr.from_items([{"text": "Hello, world!"}]).map_async(
+    mdr.inference.generate(
+        fn=summarize,
+        provider=provider,
+    ),
+    max_in_flight=16,
+)
+```
+
+The dummy provider starts a localhost server lazily on first request inside the worker process. Use `port=0` to let the OS choose a free port. This is the right default when you have multiple workers.
+
 ## Examples
 
 - Direct endpoint example: [examples/inference_endpoint.py](/Users/hynky/.codex/worktrees/ab9a/refiner/examples/inference_endpoint.py)
 - VLLM-backed example: [examples/inference_vllm.py](/Users/hynky/.codex/worktrees/ab9a/refiner/examples/inference_vllm.py)
+- Dummy localhost example: [examples/inference_dummy.py](/Users/hynky/.codex/worktrees/d544/refiner/examples/inference_dummy.py)
+
+## Internal Notes
+
+- `DummyRequestProvider` is intentionally local-only and does not register a runtime service with the service manager.
+- It uses the same `_OpenAIEndpointClient` path as the real endpoint providers so local tests exercise request shaping and response parsing.

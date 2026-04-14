@@ -9,6 +9,7 @@ import pytest
 
 import refiner as mdr
 from refiner.inference import (
+    DummyRequestProvider,
     InferenceResponse,
     OpenAIEndpointProvider,
     VLLMProvider,
@@ -224,6 +225,50 @@ def test_openai_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
         "base_url": "https://api.example.com",
         "model": "gpt-test",
     }
+
+
+def test_dummy_request_provider_builtin_args() -> None:
+    provider = DummyRequestProvider(
+        model="dummy-local",
+        response_text="ok",
+    )
+
+    assert provider.service_definition() is None
+    assert provider.to_builtin_args() == {
+        "type": "dummy_request",
+        "model": "dummy-local",
+        "response_text": "ok",
+        "host": "127.0.0.1",
+        "port": 0,
+    }
+
+
+def test_dummy_request_provider_serves_chat_completions() -> None:
+    async def _inference_fn(row, generate):
+        response = await generate(
+            {
+                "messages": [
+                    {"role": "system", "content": "Return the canned answer."},
+                    {"role": "user", "content": row["prompt"]},
+                ]
+            }
+        )
+        return {"output": response.text, "finish_reason": response.finish_reason}
+
+    infer = mdr.inference.generate(
+        fn=_inference_fn,
+        provider=DummyRequestProvider(
+            model="dummy-local",
+            response_text="dummy response",
+        ),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"prompt": "hi"}))
+
+    result = asyncio.run(_invoke())
+
+    assert result == {"output": "dummy response", "finish_reason": "stop"}
 
 
 def test_vllm_provider_includes_model_in_requests(monkeypatch) -> None:
