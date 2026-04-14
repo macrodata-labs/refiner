@@ -50,6 +50,8 @@ class LocalLauncher(BaseLauncher):
     _STAGE_HEARTBEAT_INTERVAL_SECONDS = 15.0
     _STAGE_HEARTBEAT_FAILURE_THRESHOLD = 3
     _PROCESS_POLL_INTERVAL_SECONDS = 1.0
+    _WORKER_OUTPUT_JOIN_TIMEOUT_SECONDS = 5.0
+    _HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS = 5.0
 
     def __init__(
         self,
@@ -105,7 +107,11 @@ class LocalLauncher(BaseLauncher):
         output_rows = 0
         for worker_id, process, state, reader_thread in processes:
             if reader_thread is not None:
-                reader_thread.join()
+                reader_thread.join(timeout=self._WORKER_OUTPUT_JOIN_TIMEOUT_SECONDS)
+                if reader_thread.is_alive():
+                    errors.append(
+                        f"worker {worker_id}: output reader did not finish within {self._WORKER_OUTPUT_JOIN_TIMEOUT_SECONDS:.1f}s"
+                    )
             error_state = state.get("error")
             if error_state is not None:
                 errors.append(f"worker {worker_id}: {error_state}")
@@ -548,6 +554,7 @@ class LocalLauncher(BaseLauncher):
             heartbeat_errors: list[Exception] | None = None
             heartbeat_thread: threading.Thread | None = None
             post_shutdown_error: Exception | None = None
+            stage_error: BaseException | None = None
             if tracking_client is not None:
                 try:
                     tracking_client.report_stage_started(
@@ -571,7 +578,8 @@ class LocalLauncher(BaseLauncher):
                     stage=stage,
                     heartbeat_errors=heartbeat_errors,
                 )
-            except KeyboardInterrupt:
+            except KeyboardInterrupt as err:
+                stage_error = err
                 if tracking_client is not None:
                     try:
                         self._report_stage_finished(
@@ -585,7 +593,8 @@ class LocalLauncher(BaseLauncher):
                             f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
                         )
                 raise
-            except Exception:
+            except Exception as err:
+                stage_error = err
                 if tracking_client is not None:
                     try:
                         self._report_stage_finished(
@@ -602,14 +611,26 @@ class LocalLauncher(BaseLauncher):
                 if heartbeat_stop is not None:
                     heartbeat_stop.set()
                 if heartbeat_thread is not None:
-                    heartbeat_thread.join(timeout=1.0)
-                try:
-                    self._raise_for_heartbeat_failure(
-                        stage_index=stage.index,
-                        heartbeat_errors=heartbeat_errors,
+                    heartbeat_thread.join(
+                        timeout=self._HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS
                     )
-                except Exception as err:
-                    post_shutdown_error = err
+                    thread_alive = getattr(heartbeat_thread, "is_alive", None)
+                    if (
+                        callable(thread_alive)
+                        and thread_alive()
+                        and stage_error is None
+                    ):
+                        post_shutdown_error = RuntimeError(
+                            f"stage {stage.index} heartbeat thread did not stop within {self._HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS:.1f}s"
+                        )
+                if stage_error is None:
+                    try:
+                        self._raise_for_heartbeat_failure(
+                            stage_index=stage.index,
+                            heartbeat_errors=heartbeat_errors,
+                        )
+                    except Exception as err:
+                        post_shutdown_error = err
             if post_shutdown_error is not None:
                 if tracking_client is not None:
                     try:
