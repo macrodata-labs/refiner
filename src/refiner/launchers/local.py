@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -197,10 +199,16 @@ class LocalLauncher(BaseLauncher):
         rundir: str,
         gpu_ids: tuple[str, ...],
     ) -> subprocess.Popen[str]:
+        src_root = str(Path(__file__).resolve().parents[2])
+        env = os.environ.copy()
+        existing_pythonpath = env.get("PYTHONPATH", "").strip()
+        env["PYTHONPATH"] = (
+            f"{src_root}{os.pathsep}{existing_pythonpath}"
+            if existing_pythonpath
+            else src_root
+        )
         cmd = [
-            "uv",
-            "run",
-            "python",
+            sys.executable,
             "-m",
             "refiner.worker.entrypoint",
             "--pipeline-payload",
@@ -223,6 +231,7 @@ class LocalLauncher(BaseLauncher):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
         )
 
     def _register_tracked_job(
@@ -280,18 +289,11 @@ class LocalLauncher(BaseLauncher):
     ) -> None:
         if self.job_id is None:
             raise RuntimeError("local launcher job_id is unset")
-        if reason and reason.strip():
-            tracking_client.report_stage_finished(
-                job_id=self.job_id,
-                stage_index=stage_index,
-                status=status,
-                reason=reason.strip(),
-            )
-            return
         tracking_client.report_stage_finished(
             job_id=self.job_id,
             stage_index=stage_index,
             status=status,
+            reason=reason,
         )
 
     def _start_stage_heartbeat(
@@ -299,13 +301,13 @@ class LocalLauncher(BaseLauncher):
         *,
         tracking_client: MacrodataClient,
         stage_index: int,
-    ) -> tuple[threading.Event, list[BaseException], threading.Thread]:
+    ) -> tuple[threading.Event, list[Exception], threading.Thread]:
         if self.job_id is None:
             raise RuntimeError("local launcher job_id is unset")
         job_id = self.job_id
 
         stop_event = threading.Event()
-        heartbeat_errors: list[BaseException] = []
+        heartbeat_errors: list[Exception] = []
         consecutive_failures = 0
 
         def _run() -> None:
@@ -317,7 +319,7 @@ class LocalLauncher(BaseLauncher):
                         stage_index=stage_index,
                     )
                     consecutive_failures = 0
-                except BaseException as err:
+                except Exception as err:
                     consecutive_failures += 1
                     if consecutive_failures >= self._STAGE_HEARTBEAT_FAILURE_THRESHOLD:
                         heartbeat_errors.append(err)
@@ -351,7 +353,7 @@ class LocalLauncher(BaseLauncher):
         *,
         processes: list[tuple[str, subprocess.Popen[str]]],
         stage_index: int,
-        heartbeat_errors: list[BaseException] | None,
+        heartbeat_errors: list[Exception] | None,
     ) -> None:
         while True:
             if heartbeat_errors:
@@ -367,7 +369,7 @@ class LocalLauncher(BaseLauncher):
         self,
         *,
         stage: PlannedStage,
-        heartbeat_errors: list[BaseException] | None = None,
+        heartbeat_errors: list[Exception] | None = None,
     ) -> LaunchStats:
         # Resolve worker capacity and remaining stage shards.
         stage_workers = stage.compute.num_workers
@@ -492,7 +494,7 @@ class LocalLauncher(BaseLauncher):
         )
         for stage in stages:
             heartbeat_stop: threading.Event | None = None
-            heartbeat_errors: list[BaseException] | None = None
+            heartbeat_errors: list[Exception] | None = None
             heartbeat_thread: threading.Thread | None = None
             if tracking_client is not None:
                 try:

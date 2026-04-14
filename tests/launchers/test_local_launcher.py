@@ -216,7 +216,15 @@ def test_local_launcher_registers_job_and_reports_stage_lifecycle(
         def report_stage_started(self, *, job_id: str, stage_index: int):
             started.append((job_id, stage_index))
 
-        def report_stage_finished(self, *, job_id: str, stage_index: int, status: str):
+        def report_stage_finished(
+            self,
+            *,
+            job_id: str,
+            stage_index: int,
+            status: str,
+            reason: str | None = None,
+        ):
+            assert reason is None
             finished.append((job_id, stage_index, status))
 
     monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
@@ -488,7 +496,15 @@ def test_local_launcher_reports_failed_stage_to_tracking(
         def report_stage_started(self, *, job_id: str, stage_index: int):
             return None
 
-        def report_stage_finished(self, *, job_id: str, stage_index: int, status: str):
+        def report_stage_finished(
+            self,
+            *,
+            job_id: str,
+            stage_index: int,
+            status: str,
+            reason: str | None = None,
+        ):
+            assert reason is None
             finished.append((job_id, stage_index, status))
 
     monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
