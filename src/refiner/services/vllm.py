@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
@@ -12,6 +12,7 @@ from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
 class VLLMServiceDefinition:
     model_name_or_path: str
     model_max_context: int | None = None
+    extra_kwargs: Mapping[str, Any] = field(default_factory=dict)
     kind: str = "llm"
 
     def __post_init__(self) -> None:
@@ -19,16 +20,32 @@ class VLLMServiceDefinition:
             raise ValueError("model_name_or_path must be non-empty")
         if self.model_max_context is not None and self.model_max_context <= 0:
             raise ValueError("model_max_context must be > 0 when provided")
+        for key, value in dict(self.extra_kwargs).items():
+            if not str(key).strip():
+                raise ValueError("extra_kwargs keys must be non-empty")
+            if value is None:
+                raise ValueError("extra_kwargs values must be non-null")
 
     @property
     def name(self) -> str:
-        name_source = f"{self.model_name_or_path}\0{self.model_max_context}"
+        rendered_kwargs = [
+            f"{key}={value}" for key, value in sorted(dict(self.extra_kwargs).items())
+        ]
+        name_source = "\0".join(
+            [
+                self.model_name_or_path,
+                str(self.model_max_context),
+                *rendered_kwargs,
+            ]
+        )
         return f"vllm-{hashlib.sha1(name_source.encode('utf-8')).hexdigest()[:12]}"
 
     def to_spec(self) -> RuntimeServiceSpec:
         config: dict[str, Any] = {"model_name_or_path": self.model_name_or_path}
         if self.model_max_context is not None:
             config["model_max_context"] = self.model_max_context
+        if self.extra_kwargs:
+            config["extra_kwargs"] = dict(self.extra_kwargs)
         return RuntimeServiceSpec(name=self.name, kind=self.kind, config=config)
 
 

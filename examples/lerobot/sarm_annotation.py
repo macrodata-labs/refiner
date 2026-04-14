@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import av
+
 import refiner as mdr
 from refiner.io import DataFolder
 
-INPUT_DATASET = "hf://datasets/your-username/your-robot-dataset"
-OUTPUT_DATASET = "s3://your-bucket/your-sarm-annotated-dataset"
-VIDEO_KEY = "observation.images.main"
+INPUT_DATASET = "hf://datasets/lerobot/aloha_sim_transfer_cube_human"
+OUTPUT_DATASET = (
+    "hf://buckets/macrodata/test_bucket/aloha_sim_insertion_human_sarm_annotated"
+)
+VIDEO_KEY = "observation.images.top"
 STATE_KEY = "observation.state"
 MAX_IN_FLIGHT = 8
+MIN_DECODED_CLIP_FRAMES = 4
+QWEN_VIDEO_PLACEHOLDER = "<|vision_start|><|video_pad|><|vision_end|>"
 
 SUBTASKS = [
     "reach object",
@@ -22,7 +29,9 @@ SUBTASKS = [
 ]
 
 PROVIDER = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen3-VL-30B-A3B-Instruct",
+    model="Qwen/Qwen2.5-VL-7B-Instruct",
+    model_max_context=32768,
+    extra_kwargs={"limit-mm-per-prompt": "video=1"},
 )
 
 
@@ -80,6 +89,48 @@ def _seconds_to_frame_index(seconds: float, *, fps: int, max_frame_index: int) -
 def _video_data_url(video_bytes: bytes) -> str:
     encoded = base64.b64encode(video_bytes).decode("ascii")
     return f"data:video/mp4;base64,{encoded}"
+
+
+def _prompt_text_for_provider(provider: object, prompt: str) -> str:
+    model = getattr(provider, "model", None)
+    if isinstance(model, str) and model.startswith("Qwen/"):
+        return f"{QWEN_VIDEO_PLACEHOLDER}\n{prompt}"
+    return prompt
+
+
+def _inspect_exported_clip(video_bytes: bytes) -> dict[str, float | int]:
+    decoded_frames = 0
+    width = 0
+    height = 0
+    first_timestamp_s: float | None = None
+    last_timestamp_s: float | None = None
+
+    with av.open(io.BytesIO(video_bytes), mode="r") as container:
+        stream = next(item for item in container.streams if item.type == "video")
+        for frame in container.decode(stream):
+            if not isinstance(frame, av.VideoFrame):
+                continue
+            decoded_frames += 1
+            width = frame.width
+            height = frame.height
+            if frame.pts is None or frame.time_base is None:
+                continue
+            timestamp_s = float(frame.pts * frame.time_base)
+            if first_timestamp_s is None:
+                first_timestamp_s = timestamp_s
+            last_timestamp_s = timestamp_s
+
+    duration_s = 0.0
+    if first_timestamp_s is not None and last_timestamp_s is not None:
+        duration_s = max(0.0, last_timestamp_s - first_timestamp_s)
+
+    return {
+        "bytes": len(video_bytes),
+        "decoded_frames": decoded_frames,
+        "width": width,
+        "height": height,
+        "duration_s": duration_s,
+    }
 
 
 def _annotation_patch(
@@ -182,6 +233,21 @@ async def annotate_dense_subtasks(row, generate):
 
     video = row.videos[VIDEO_KEY].video
     clip_bytes = await mdr.video.export_clip_bytes(video, stream_key=VIDEO_KEY)
+    clip_stats = _inspect_exported_clip(clip_bytes)
+    mdr.logger.info(
+        "episode {} exported clip bytes={} decoded_frames={} size={}x{} duration_s={}",
+        row.episode_index,
+        clip_stats["bytes"],
+        clip_stats["decoded_frames"],
+        clip_stats["width"],
+        clip_stats["height"],
+        clip_stats["duration_s"],
+    )
+    if int(clip_stats["decoded_frames"]) < MIN_DECODED_CLIP_FRAMES:
+        raise ValueError(
+            "exported clip decodes to too few frames for VLM video inference: "
+            f"{clip_stats['decoded_frames']} < {MIN_DECODED_CLIP_FRAMES}"
+        )
     content: list[dict[str, Any]] = [
         {
             "type": "video_url",
@@ -191,7 +257,10 @@ async def annotate_dense_subtasks(row, generate):
         },
         {
             "type": "text",
-            "text": _annotation_prompt(SUBTASKS),
+            "text": _prompt_text_for_provider(
+                PROVIDER,
+                _annotation_prompt(SUBTASKS),
+            ),
         },
     ]
 
@@ -287,6 +356,8 @@ if __name__ == "__main__":
         .write_lerobot(OUTPUT_DATASET)
     )
 
-    pipeline.launch_cloud(name="lerobot-sarm-annotation", num_workers=1)
-    write_temporal_proportions(OUTPUT_DATASET, prefix="sparse")
-    write_temporal_proportions(OUTPUT_DATASET, prefix="dense")
+    pipeline.launch_cloud(
+        name="lerobot-sarm-annotation",
+        num_workers=1,
+        secrets={"HF_TOKEN": None},
+    )

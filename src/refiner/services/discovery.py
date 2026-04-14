@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from refiner.pipeline.steps import (
@@ -61,10 +62,27 @@ def collect_pipeline_services(
                 key = (
                     service.name,
                     service.kind,
-                    tuple(sorted((str(k), v) for k, v in service.config.items())),
+                    tuple(
+                        sorted(
+                            (str(k), _freeze_config_value(v))
+                            for k, v in service.config.items()
+                        )
+                    ),
                 )
                 services_by_key.setdefault(key, service)
     return tuple(services_by_key.values())
 
 
 __all__ = ["collect_pipeline_services"]
+
+
+def _freeze_config_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return tuple(
+            sorted(
+                (str(key), _freeze_config_value(item)) for key, item in value.items()
+            )
+        )
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return tuple(_freeze_config_value(item) for item in value)
+    return value

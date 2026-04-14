@@ -80,6 +80,15 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 )
 ```
 
+When a model needs extra vLLM serve flags, pass them through `extra_kwargs`. For example, some Qwen video setups require:
+
+```python
+provider = mdr.inference.VLLMProvider(
+    model="Qwen/Qwen2.5-VL-7B-Instruct",
+    extra_kwargs={"limit-mm-per-prompt": "video=1"},
+)
+```
+
 #### Cold-Starts
 Because Refiner Cloud may start VLLM on fresh hardware, startup can take 2 to 20 minutes depending on model size, weight downloads, and torch initialization. To reduce this, Refiner Cloud prewarms a small set of commonly used models:
 - `google/gemma-4-26B-A4B-it`
