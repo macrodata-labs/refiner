@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+import subprocess
 import threading
+from typing import cast
 import pytest
 
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
-from refiner.launchers.local import LaunchStats, LocalLauncher
+from refiner.launchers.local import LaunchStats, LocalLauncher, _WorkerOutput
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
@@ -621,3 +623,122 @@ def test_local_launcher_reports_interrupted_stage_with_reason(
             "reason": "Local launcher interrupted",
         }
     ]
+
+
+def test_local_launcher_reports_failed_stage_when_heartbeat_dies_during_shutdown(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    finished: list[dict[str, object]] = []
+    heartbeat_errors: list[Exception] = [RuntimeError("heartbeat offline")]
+
+    class _FakeClient:
+        base_url = "https://macrodata.co"
+
+        def create_job(self, **kwargs):
+            from refiner.platform.client.models import CreateJobResponse
+
+            return CreateJobResponse(
+                job_id="job-remote",
+                stage_index=0,
+                workspace_slug="workspace",
+            )
+
+        def report_stage_started(self, *, job_id: str, stage_index: int):
+            return None
+
+        def report_stage_finished(self, **kwargs):
+            finished.append(kwargs)
+
+    class _DummyThread:
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
+    monkeypatch.setattr(
+        "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
+    )
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-stage-heartbeat-shutdown-failure",
+        num_workers=1,
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_start_stage_heartbeat",
+        lambda *, tracking_client, stage_index: (
+            threading.Event(),
+            heartbeat_errors,
+            _DummyThread(),
+        ),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        lambda *, stage, heartbeat_errors=None: LaunchStats(
+            job_id="job-remote",
+            workers=1,
+            claimed=1,
+            completed=1,
+            failed=0,
+            output_rows=1,
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError, match="stage 0 heartbeat failed: heartbeat offline"
+    ):
+        launcher.launch()
+
+    assert finished == [
+        {
+            "job_id": "job-remote",
+            "stage_index": 0,
+            "status": "failed",
+            "reason": None,
+        }
+    ]
+
+
+def test_collect_worker_results_uses_reader_output_without_communicate() -> None:
+    launcher = LocalLauncher(
+        pipeline=RefinerPipeline(source=_FakeReader([], {})),
+        name="local-pipe-drain",
+        num_workers=1,
+    )
+    launcher.job_id = "job-1"
+
+    class _FakeProcess:
+        returncode = 0
+
+        def communicate(self):
+            raise AssertionError("communicate should already be running in the reader")
+
+    output = _WorkerOutput(
+        worker_id="worker-1",
+        process=cast("subprocess.Popen[str]", _FakeProcess()),
+        stdout='{"worker_id":"worker-1","claimed":1,"completed":1,"failed":0,"output_rows":2}\n',
+        stderr="",
+    )
+
+    stats = launcher._collect_worker_results(stage_workers=1, processes=[output])
+
+    assert stats.claimed == 1
+    assert stats.completed == 1
+    assert stats.failed == 0
+    assert stats.output_rows == 2

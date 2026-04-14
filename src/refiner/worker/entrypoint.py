@@ -32,11 +32,11 @@ def main() -> int:
         "error": None,
     }
     try:
-        with open(args.pipeline_payload, "rb") as f:
-            pipeline = cloudpickle.load(f)
         gpu_ids = parse_gpu_ids(args.gpu_ids)
         if gpu_ids:
             set_visible_gpu_ids(gpu_ids)
+        with open(args.pipeline_payload, "rb") as f:
+            pipeline = cloudpickle.load(f)
 
         with open(
             f"{args.rundir}/stage-{args.stage_index}/assignments/worker-{args.worker_id}.json",

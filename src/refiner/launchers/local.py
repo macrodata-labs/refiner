@@ -38,6 +38,16 @@ class LaunchStats:
     output_rows: int
 
 
+@dataclass(slots=True)
+class _WorkerOutput:
+    worker_id: str
+    process: subprocess.Popen[str]
+    stdout: str = ""
+    stderr: str = ""
+    error: Exception | None = None
+    reader_thread: threading.Thread | None = None
+
+
 class LocalLauncher(BaseLauncher):
     _STAGE_HEARTBEAT_INTERVAL_SECONDS = 15.0
     _STAGE_HEARTBEAT_FAILURE_THRESHOLD = 3
@@ -86,7 +96,7 @@ class LocalLauncher(BaseLauncher):
         self,
         *,
         stage_workers: int,
-        processes: list[tuple[str, subprocess.Popen[str]]],
+        processes: list[_WorkerOutput],
     ) -> LaunchStats:
         if self.job_id is None:
             raise RuntimeError("local launcher job_id is unset")
@@ -95,8 +105,14 @@ class LocalLauncher(BaseLauncher):
         completed = 0
         failed = 0
         output_rows = 0
-        for worker_id, process in processes:
-            stdout, stderr = process.communicate()
+        for output in processes:
+            process = output.process
+            if output.reader_thread is not None:
+                output.reader_thread.join(timeout=1.0)
+            if output.error is not None:
+                errors.append(f"worker {output.worker_id}: {output.error}")
+            stdout = output.stdout
+            stderr = output.stderr
             final_stdout_line = next(
                 (line for line in reversed(stdout.splitlines()) if line.strip()),
                 "",
@@ -107,7 +123,7 @@ class LocalLauncher(BaseLauncher):
                     decoded
                     if isinstance(decoded, dict)
                     else self._failed_worker_payload(
-                        worker_id=worker_id,
+                        worker_id=output.worker_id,
                         stdout=stdout,
                         stderr=stderr,
                         returncode=process.returncode,
@@ -115,7 +131,7 @@ class LocalLauncher(BaseLauncher):
                 )
             except json.JSONDecodeError:
                 raw = self._failed_worker_payload(
-                    worker_id=worker_id,
+                    worker_id=output.worker_id,
                     stdout=stdout,
                     stderr=stderr,
                     returncode=process.returncode,
@@ -336,32 +352,64 @@ class LocalLauncher(BaseLauncher):
 
     @staticmethod
     def _terminate_processes(
-        processes: list[tuple[str, subprocess.Popen[str]]],
+        processes: list[_WorkerOutput],
     ) -> None:
-        for _, process in processes:
+        for output in processes:
+            process = output.process
             if process.poll() is None:
                 process.terminate()
-        for _, process in processes:
+        for output in processes:
+            process = output.process
             try:
                 process.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5.0)
 
+    @staticmethod
+    def _start_worker_output_reader(output: _WorkerOutput) -> None:
+        def _read() -> None:
+            try:
+                stdout, stderr = output.process.communicate()
+            except Exception as err:
+                output.error = err
+                return
+            output.stdout = stdout
+            output.stderr = stderr
+
+        output.reader_thread = threading.Thread(
+            target=_read,
+            name=f"refiner-worker-output-{output.worker_id}",
+            daemon=True,
+        )
+        output.reader_thread.start()
+
+    @staticmethod
+    def _raise_for_heartbeat_failure(
+        *,
+        stage_index: int,
+        heartbeat_errors: list[Exception] | None,
+    ) -> None:
+        if heartbeat_errors:
+            raise RuntimeError(
+                f"stage {stage_index} heartbeat failed: {heartbeat_errors[0]}"
+            ) from heartbeat_errors[0]
+
     def _wait_for_processes(
         self,
         *,
-        processes: list[tuple[str, subprocess.Popen[str]]],
+        processes: list[_WorkerOutput],
         stage_index: int,
         heartbeat_errors: list[Exception] | None,
     ) -> None:
         while True:
             if heartbeat_errors:
                 self._terminate_processes(processes)
-                raise RuntimeError(
-                    f"stage {stage_index} heartbeat failed: {heartbeat_errors[0]}"
-                ) from heartbeat_errors[0]
-            if all(process.poll() is not None for _, process in processes):
+                self._raise_for_heartbeat_failure(
+                    stage_index=stage_index,
+                    heartbeat_errors=heartbeat_errors,
+                )
+            if all(output.process.poll() is not None for output in processes):
                 return
             time.sleep(self._PROCESS_POLL_INTERVAL_SECONDS)
 
@@ -427,7 +475,7 @@ class LocalLauncher(BaseLauncher):
 
         # Spawn one subprocess per worker assignment.
         worker_ids = [uuid4().hex[:12] for _ in range(stage_workers)]
-        processes: list[tuple[str, subprocess.Popen[str]]] = []
+        processes: list[_WorkerOutput] = []
         for rank in range(stage_workers):
             worker_id = worker_ids[rank]
             assignments_path = (
@@ -440,20 +488,20 @@ class LocalLauncher(BaseLauncher):
                     sort_keys=True,
                 )
             )
-            processes.append(
-                (
-                    worker_id,
-                    self._spawn_local_worker(
-                        pipeline_payload=str(payload_path),
-                        job_id=self.job_id,
-                        stage_index=stage.index,
-                        worker_name=f"stage-{stage.index}-rank-{rank}",
-                        worker_id=worker_id,
-                        rundir=self.rundir,
-                        gpu_ids=tuple(gpu_sets[rank]),
-                    ),
-                )
+            output = _WorkerOutput(
+                worker_id=worker_id,
+                process=self._spawn_local_worker(
+                    pipeline_payload=str(payload_path),
+                    job_id=self.job_id,
+                    stage_index=stage.index,
+                    worker_name=f"stage-{stage.index}-rank-{rank}",
+                    worker_id=worker_id,
+                    rundir=self.rundir,
+                    gpu_ids=tuple(gpu_sets[rank]),
+                ),
             )
+            self._start_worker_output_reader(output)
+            processes.append(output)
 
         self._wait_for_processes(
             processes=processes,
@@ -496,6 +544,7 @@ class LocalLauncher(BaseLauncher):
             heartbeat_stop: threading.Event | None = None
             heartbeat_errors: list[Exception] | None = None
             heartbeat_thread: threading.Thread | None = None
+            post_shutdown_error: Exception | None = None
             if tracking_client is not None:
                 try:
                     tracking_client.report_stage_started(
@@ -551,6 +600,26 @@ class LocalLauncher(BaseLauncher):
                     heartbeat_stop.set()
                 if heartbeat_thread is not None:
                     heartbeat_thread.join(timeout=1.0)
+                try:
+                    self._raise_for_heartbeat_failure(
+                        stage_index=stage.index,
+                        heartbeat_errors=heartbeat_errors,
+                    )
+                except Exception as err:
+                    post_shutdown_error = err
+            if post_shutdown_error is not None:
+                if tracking_client is not None:
+                    try:
+                        self._report_stage_finished(
+                            tracking_client=tracking_client,
+                            stage_index=stage.index,
+                            status="failed",
+                        )
+                    except Exception as err:
+                        logger.warning(
+                            f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
+                        )
+                raise post_shutdown_error
             if tracking_client is not None:
                 try:
                     self._report_stage_finished(
