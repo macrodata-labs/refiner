@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -8,6 +9,11 @@ from typing import Any
 import httpx
 
 _OPENAI_ENDPOINT_TIMEOUT_SECONDS = 600.0
+_OPENAI_ENDPOINT_MAX_RETRIES = 6
+_OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS = 1.0
+_OPENAI_ENDPOINT_RETRYABLE_STATUS_CODES = frozenset(
+    {408, 409, 425, 429, 500, 502, 503, 504}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,25 +54,53 @@ class _OpenAIEndpointClient:
                 timeout=_OPENAI_ENDPOINT_TIMEOUT_SECONDS,
             )
             self._client = client
-        response = await client.post(endpoint_path, json=dict(payload))
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            detail = ""
+        last_error: Exception | None = None
+        for attempt in range(_OPENAI_ENDPOINT_MAX_RETRIES):
             try:
-                detail = str(err.response.json())
-            except ValueError:
-                detail = err.response.text.strip()
-            message = f"generation request failed with HTTP {err.response.status_code}"
-            if detail:
-                message = f"{message}: {detail}"
-            raise RuntimeError(message) from err
-        response_json = response.json()
-        if not isinstance(response_json, Mapping):
-            raise RuntimeError("generation response must be a JSON object")
-        return _parse_inference_response(
-            response_json,
-            use_chat=use_chat,
+                response = await client.post(endpoint_path, json=dict(payload))
+                response.raise_for_status()
+            except httpx.HTTPStatusError as err:
+                if (
+                    attempt + 1 < _OPENAI_ENDPOINT_MAX_RETRIES
+                    and _is_retryable_http_status(err.response.status_code)
+                ):
+                    await _sleep_before_retry(attempt)
+                    last_error = err
+                    continue
+                detail = ""
+                try:
+                    detail = str(err.response.json())
+                except ValueError:
+                    detail = err.response.text.strip()
+                message = (
+                    f"generation request failed with HTTP {err.response.status_code}"
+                )
+                if detail:
+                    message = f"{message}: {detail}"
+                raise RuntimeError(message) from err
+            except (
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.TimeoutException,
+                OSError,
+            ) as err:
+                if attempt + 1 < _OPENAI_ENDPOINT_MAX_RETRIES:
+                    await _sleep_before_retry(attempt)
+                    last_error = err
+                    continue
+                raise RuntimeError(
+                    f"generation request failed after retries: {type(err).__name__}: {err}"
+                ) from err
+            else:
+                response_json = response.json()
+                if not isinstance(response_json, Mapping):
+                    raise RuntimeError("generation response must be a JSON object")
+                return _parse_inference_response(
+                    response_json,
+                    use_chat=use_chat,
+                )
+        raise RuntimeError(
+            f"generation request failed after retries: {type(last_error).__name__ if last_error is not None else 'unknown'}"
         )
 
 
@@ -123,6 +157,15 @@ def _normalize_openai_base_url(base_url: str) -> str:
     if normalized.endswith("/v1"):
         normalized = normalized[:-3]
     return normalized
+
+
+def _is_retryable_http_status(status_code: int) -> bool:
+    return int(status_code) in _OPENAI_ENDPOINT_RETRYABLE_STATUS_CODES
+
+
+async def _sleep_before_retry(attempt: int) -> None:
+    delay_s = _OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS * (2**attempt)
+    await asyncio.sleep(delay_s)
 
 
 __all__ = ["InferenceResponse"]
