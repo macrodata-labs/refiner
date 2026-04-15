@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-import subprocess
 import threading
-from typing import cast
+import time
 import pytest
 
 from refiner.pipeline.data.shard import FilePart, Shard
@@ -254,7 +253,7 @@ def test_local_launcher_registers_job_and_reports_stage_lifecycle(
     monkeypatch.setattr(
         launcher,
         "_launch_stage",
-        lambda *, stage, heartbeat_errors=None: LaunchStats(
+        lambda *, stage: LaunchStats(
             job_id="job-remote",
             workers=1,
             claimed=1,
@@ -413,8 +412,7 @@ def test_local_launcher_stops_after_failed_stage(
 
     monkeypatch.setattr(launcher, "_planned_stages", lambda: stages)
 
-    def fake_launch_stage(*, stage, heartbeat_errors=None):  # noqa: ANN001
-        assert heartbeat_errors is None or isinstance(heartbeat_errors, list)
+    def fake_launch_stage(*, stage):  # noqa: ANN001
         launched.append(stage.index)
         return LaunchStats(
             job_id="job-1",
@@ -461,7 +459,7 @@ def test_local_launcher_does_not_force_platform_terminal_state(
     monkeypatch.setattr(
         launcher,
         "_launch_stage",
-        lambda *, stage, heartbeat_errors=None: LaunchStats(
+        lambda *, stage: LaunchStats(
             job_id="job-1",
             workers=1,
             claimed=1,
@@ -574,6 +572,9 @@ def test_local_launcher_reports_interrupted_stage_with_reason(
         def join(self, timeout: float | None = None) -> None:
             return None
 
+        def is_alive(self) -> bool:
+            return False
+
     monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
     monkeypatch.setattr(
         "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
@@ -601,7 +602,6 @@ def test_local_launcher_reports_interrupted_stage_with_reason(
         "_start_stage_heartbeat",
         lambda *, tracking_client, stage_index: (
             heartbeat_started.append(stage_index) or threading.Event(),
-            [],
             _DummyThread(),
         ),
     )
@@ -625,14 +625,14 @@ def test_local_launcher_reports_interrupted_stage_with_reason(
     ]
 
 
-def test_local_launcher_reports_failed_stage_when_heartbeat_dies_during_shutdown(
+def test_local_launcher_does_not_fail_stage_when_heartbeat_delivery_fails(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "a.jsonl"
     path.write_text('{"x": 1}\n')
     pipeline = read_jsonl(str(path))
     finished: list[dict[str, object]] = []
-    heartbeat_errors: list[Exception] = [RuntimeError("heartbeat offline")]
+    heartbeat_attempts = 0
 
     class _FakeClient:
         base_url = "https://macrodata.co"
@@ -649,12 +649,13 @@ def test_local_launcher_reports_failed_stage_when_heartbeat_dies_during_shutdown
         def report_stage_started(self, *, job_id: str, stage_index: int):
             return None
 
+        def report_stage_heartbeat(self, *, job_id: str, stage_index: int):
+            nonlocal heartbeat_attempts
+            heartbeat_attempts += 1
+            raise RuntimeError("heartbeat offline")
+
         def report_stage_finished(self, **kwargs):
             finished.append(kwargs)
-
-    class _DummyThread:
-        def join(self, timeout: float | None = None) -> None:
-            return None
 
     monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
     monkeypatch.setattr(
@@ -663,9 +664,11 @@ def test_local_launcher_reports_failed_stage_when_heartbeat_dies_during_shutdown
 
     launcher = LocalLauncher(
         pipeline=pipeline,
-        name="local-stage-heartbeat-shutdown-failure",
+        name="local-stage-heartbeat-delivery-failure",
         num_workers=1,
     )
+    launcher._STAGE_HEARTBEAT_INTERVAL_SECONDS = 0.01
+    launcher._STAGE_HEARTBEAT_FAILURE_THRESHOLD = 2
     monkeypatch.setattr(
         launcher,
         "_planned_stages",
@@ -678,74 +681,33 @@ def test_local_launcher_reports_failed_stage_when_heartbeat_dies_during_shutdown
             )
         ],
     )
-    monkeypatch.setattr(
-        launcher,
-        "_start_stage_heartbeat",
-        lambda *, tracking_client, stage_index: (
-            threading.Event(),
-            heartbeat_errors,
-            _DummyThread(),
-        ),
-    )
-    monkeypatch.setattr(
-        launcher,
-        "_launch_stage",
-        lambda *, stage, heartbeat_errors=None: LaunchStats(
+
+    def fake_launch_stage(*, stage):  # noqa: ANN001
+        time.sleep(0.05)
+        return LaunchStats(
             job_id="job-remote",
             workers=1,
             claimed=1,
             completed=1,
             failed=0,
             output_rows=1,
-        ),
+        )
+
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        fake_launch_stage,
     )
 
-    with pytest.raises(
-        RuntimeError, match="stage 0 heartbeat failed: heartbeat offline"
-    ):
-        launcher.launch()
+    stats = launcher.launch()
 
+    assert stats.completed == 1
+    assert heartbeat_attempts >= 2
     assert finished == [
         {
             "job_id": "job-remote",
             "stage_index": 0,
-            "status": "failed",
+            "status": "completed",
             "reason": None,
         }
     ]
-
-
-def test_collect_worker_results_uses_reader_output_without_communicate() -> None:
-    launcher = LocalLauncher(
-        pipeline=RefinerPipeline(source=_FakeReader([], {})),
-        name="local-pipe-drain",
-        num_workers=1,
-    )
-    launcher.job_id = "job-1"
-
-    class _FakeProcess:
-        returncode = 0
-
-        def communicate(self):
-            raise AssertionError("communicate should already be running in the reader")
-
-    output = (
-        "worker-1",
-        cast("subprocess.Popen[str]", _FakeProcess()),
-        cast(
-            "dict[str, object]",
-            {
-                "stdout": '{"worker_id":"worker-1","claimed":1,"completed":1,"failed":0,"output_rows":2}\n',
-                "stderr": "",
-                "error": None,
-            },
-        ),
-        None,
-    )
-
-    stats = launcher._collect_worker_results(stage_workers=1, processes=[output])
-
-    assert stats.claimed == 1
-    assert stats.completed == 1
-    assert stats.failed == 0
-    assert stats.output_rows == 2

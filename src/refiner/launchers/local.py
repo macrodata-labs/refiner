@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,19 +36,9 @@ class LaunchStats:
     output_rows: int
 
 
-_WorkerOutput = tuple[
-    str,
-    subprocess.Popen[str],
-    dict[str, object],
-    threading.Thread | None,
-]
-
-
 class LocalLauncher(BaseLauncher):
     _STAGE_HEARTBEAT_INTERVAL_SECONDS = 15.0
     _STAGE_HEARTBEAT_FAILURE_THRESHOLD = 3
-    _PROCESS_POLL_INTERVAL_SECONDS = 1.0
-    _WORKER_OUTPUT_JOIN_TIMEOUT_SECONDS = 5.0
     _HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS = 5.0
 
     def __init__(
@@ -96,7 +84,7 @@ class LocalLauncher(BaseLauncher):
         self,
         *,
         stage_workers: int,
-        processes: list[_WorkerOutput],
+        processes: list[tuple[str, subprocess.Popen[str]]],
     ) -> LaunchStats:
         if self.job_id is None:
             raise RuntimeError("local launcher job_id is unset")
@@ -105,18 +93,8 @@ class LocalLauncher(BaseLauncher):
         completed = 0
         failed = 0
         output_rows = 0
-        for worker_id, process, state, reader_thread in processes:
-            if reader_thread is not None:
-                reader_thread.join(timeout=self._WORKER_OUTPUT_JOIN_TIMEOUT_SECONDS)
-                if reader_thread.is_alive():
-                    errors.append(
-                        f"worker {worker_id}: output reader did not finish within {self._WORKER_OUTPUT_JOIN_TIMEOUT_SECONDS:.1f}s"
-                    )
-            error_state = state.get("error")
-            if error_state is not None:
-                errors.append(f"worker {worker_id}: {error_state}")
-            stdout = str(state.get("stdout", ""))
-            stderr = str(state.get("stderr", ""))
+        for worker_id, process in processes:
+            stdout, stderr = process.communicate()
             final_stdout_line = next(
                 (line for line in reversed(stdout.splitlines()) if line.strip()),
                 "",
@@ -219,14 +197,6 @@ class LocalLauncher(BaseLauncher):
         rundir: str,
         gpu_ids: tuple[str, ...],
     ) -> subprocess.Popen[str]:
-        src_root = str(Path(__file__).resolve().parents[2])
-        env = os.environ.copy()
-        existing_pythonpath = env.get("PYTHONPATH", "").strip()
-        env["PYTHONPATH"] = (
-            f"{src_root}{os.pathsep}{existing_pythonpath}"
-            if existing_pythonpath
-            else src_root
-        )
         cmd = [
             sys.executable,
             "-m",
@@ -251,7 +221,6 @@ class LocalLauncher(BaseLauncher):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
         )
 
     def _register_tracked_job(
@@ -321,13 +290,12 @@ class LocalLauncher(BaseLauncher):
         *,
         tracking_client: MacrodataClient,
         stage_index: int,
-    ) -> tuple[threading.Event, list[Exception], threading.Thread]:
+    ) -> tuple[threading.Event, threading.Thread]:
         if self.job_id is None:
             raise RuntimeError("local launcher job_id is unset")
         job_id = self.job_id
 
         stop_event = threading.Event()
-        heartbeat_errors: list[Exception] = []
         consecutive_failures = 0
 
         def _run() -> None:
@@ -342,7 +310,9 @@ class LocalLauncher(BaseLauncher):
                 except Exception as err:
                     consecutive_failures += 1
                     if consecutive_failures >= self._STAGE_HEARTBEAT_FAILURE_THRESHOLD:
-                        heartbeat_errors.append(err)
+                        logger.warning(
+                            f"Stopping local stage {stage_index} heartbeats after {consecutive_failures} consecutive failure(s): {err}"
+                        )
                         stop_event.set()
                         return
 
@@ -352,81 +322,12 @@ class LocalLauncher(BaseLauncher):
             daemon=True,
         )
         thread.start()
-        return stop_event, heartbeat_errors, thread
-
-    @staticmethod
-    def _terminate_processes(
-        processes: list[_WorkerOutput],
-    ) -> None:
-        for _, process, _, _ in processes:
-            if process.poll() is None:
-                process.terminate()
-        for _, process, _, _ in processes:
-            try:
-                process.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5.0)
-
-    @staticmethod
-    def _start_worker_output_reader(
-        *,
-        worker_id: str,
-        process: subprocess.Popen[str],
-    ) -> tuple[dict[str, object], threading.Thread]:
-        state: dict[str, object] = {"stdout": "", "stderr": "", "error": None}
-
-        def _read() -> None:
-            try:
-                stdout, stderr = process.communicate()
-            except Exception as err:
-                state["error"] = err
-                return
-            state["stdout"] = stdout
-            state["stderr"] = stderr
-
-        thread = threading.Thread(
-            target=_read,
-            name=f"refiner-worker-output-{worker_id}",
-            daemon=True,
-        )
-        thread.start()
-        return state, thread
-
-    @staticmethod
-    def _raise_for_heartbeat_failure(
-        *,
-        stage_index: int,
-        heartbeat_errors: list[Exception] | None,
-    ) -> None:
-        if heartbeat_errors:
-            raise RuntimeError(
-                f"stage {stage_index} heartbeat failed: {heartbeat_errors[0]}"
-            ) from heartbeat_errors[0]
-
-    def _wait_for_processes(
-        self,
-        *,
-        processes: list[_WorkerOutput],
-        stage_index: int,
-        heartbeat_errors: list[Exception] | None,
-    ) -> None:
-        while True:
-            if heartbeat_errors:
-                self._terminate_processes(processes)
-                self._raise_for_heartbeat_failure(
-                    stage_index=stage_index,
-                    heartbeat_errors=heartbeat_errors,
-                )
-            if all(process.poll() is not None for _, process, _, _ in processes):
-                return
-            time.sleep(self._PROCESS_POLL_INTERVAL_SECONDS)
+        return stop_event, thread
 
     def _launch_stage(
         self,
         *,
         stage: PlannedStage,
-        heartbeat_errors: list[Exception] | None = None,
     ) -> LaunchStats:
         # Resolve worker capacity and remaining stage shards.
         stage_workers = stage.compute.num_workers
@@ -484,7 +385,7 @@ class LocalLauncher(BaseLauncher):
 
         # Spawn one subprocess per worker assignment.
         worker_ids = [uuid4().hex[:12] for _ in range(stage_workers)]
-        processes: list[_WorkerOutput] = []
+        processes: list[tuple[str, subprocess.Popen[str]]] = []
         for rank in range(stage_workers):
             worker_id = worker_ids[rank]
             assignments_path = (
@@ -497,26 +398,20 @@ class LocalLauncher(BaseLauncher):
                     sort_keys=True,
                 )
             )
-            process = self._spawn_local_worker(
-                pipeline_payload=str(payload_path),
-                job_id=self.job_id,
-                stage_index=stage.index,
-                worker_name=f"stage-{stage.index}-rank-{rank}",
-                worker_id=worker_id,
-                rundir=self.rundir,
-                gpu_ids=tuple(gpu_sets[rank]),
+            processes.append(
+                (
+                    worker_id,
+                    self._spawn_local_worker(
+                        pipeline_payload=str(payload_path),
+                        job_id=self.job_id,
+                        stage_index=stage.index,
+                        worker_name=f"stage-{stage.index}-rank-{rank}",
+                        worker_id=worker_id,
+                        rundir=self.rundir,
+                        gpu_ids=tuple(gpu_sets[rank]),
+                    ),
+                )
             )
-            state, reader_thread = self._start_worker_output_reader(
-                worker_id=worker_id,
-                process=process,
-            )
-            processes.append((worker_id, process, state, reader_thread))
-
-        self._wait_for_processes(
-            processes=processes,
-            stage_index=stage.index,
-            heartbeat_errors=heartbeat_errors,
-        )
 
         return self._collect_worker_results(
             stage_workers=stage_workers,
@@ -551,10 +446,7 @@ class LocalLauncher(BaseLauncher):
         )
         for stage in stages:
             heartbeat_stop: threading.Event | None = None
-            heartbeat_errors: list[Exception] | None = None
             heartbeat_thread: threading.Thread | None = None
-            post_shutdown_error: Exception | None = None
-            stage_error: BaseException | None = None
             if tracking_client is not None:
                 try:
                     tracking_client.report_stage_started(
@@ -563,7 +455,6 @@ class LocalLauncher(BaseLauncher):
                     )
                     (
                         heartbeat_stop,
-                        heartbeat_errors,
                         heartbeat_thread,
                     ) = self._start_stage_heartbeat(
                         tracking_client=tracking_client,
@@ -576,10 +467,8 @@ class LocalLauncher(BaseLauncher):
             try:
                 stage_stats = self._launch_stage(
                     stage=stage,
-                    heartbeat_errors=heartbeat_errors,
                 )
-            except KeyboardInterrupt as err:
-                stage_error = err
+            except KeyboardInterrupt:
                 if tracking_client is not None:
                     try:
                         self._report_stage_finished(
@@ -593,8 +482,7 @@ class LocalLauncher(BaseLauncher):
                             f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
                         )
                 raise
-            except Exception as err:
-                stage_error = err
+            except Exception:
                 if tracking_client is not None:
                     try:
                         self._report_stage_finished(
@@ -614,36 +502,10 @@ class LocalLauncher(BaseLauncher):
                     heartbeat_thread.join(
                         timeout=self._HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS
                     )
-                    thread_alive = getattr(heartbeat_thread, "is_alive", None)
-                    if (
-                        callable(thread_alive)
-                        and thread_alive()
-                        and stage_error is None
-                    ):
-                        post_shutdown_error = RuntimeError(
-                            f"stage {stage.index} heartbeat thread did not stop within {self._HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS:.1f}s"
-                        )
-                if stage_error is None:
-                    try:
-                        self._raise_for_heartbeat_failure(
-                            stage_index=stage.index,
-                            heartbeat_errors=heartbeat_errors,
-                        )
-                    except Exception as err:
-                        post_shutdown_error = err
-            if post_shutdown_error is not None:
-                if tracking_client is not None:
-                    try:
-                        self._report_stage_finished(
-                            tracking_client=tracking_client,
-                            stage_index=stage.index,
-                            status="failed",
-                        )
-                    except Exception as err:
+                    if heartbeat_thread.is_alive():
                         logger.warning(
-                            f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
+                            f"Local stage {stage.index} heartbeat thread did not stop within {self._HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS:.1f}s"
                         )
-                raise post_shutdown_error
             if tracking_client is not None:
                 try:
                     self._report_stage_finished(
