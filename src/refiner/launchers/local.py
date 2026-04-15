@@ -268,23 +268,6 @@ class LocalLauncher(BaseLauncher):
         )
         return tracking_client
 
-    def _report_stage_finished(
-        self,
-        *,
-        tracking_client: MacrodataClient,
-        stage_index: int,
-        status: str,
-        reason: str | None = None,
-    ) -> None:
-        if self.job_id is None:
-            raise RuntimeError("local launcher job_id is unset")
-        tracking_client.report_stage_finished(
-            job_id=self.job_id,
-            stage_index=stage_index,
-            status=status,
-            reason=reason,
-        )
-
     def _start_stage_heartbeat(
         self,
         *,
@@ -471,8 +454,8 @@ class LocalLauncher(BaseLauncher):
             except KeyboardInterrupt:
                 if tracking_client is not None:
                     try:
-                        self._report_stage_finished(
-                            tracking_client=tracking_client,
+                        tracking_client.report_stage_finished(
+                            job_id=self.job_id,
                             stage_index=stage.index,
                             status="failed",
                             reason="Local launcher interrupted",
@@ -485,8 +468,8 @@ class LocalLauncher(BaseLauncher):
             except Exception:
                 if tracking_client is not None:
                     try:
-                        self._report_stage_finished(
-                            tracking_client=tracking_client,
+                        tracking_client.report_stage_finished(
+                            job_id=self.job_id,
                             stage_index=stage.index,
                             status="failed",
                         )
@@ -508,8 +491,8 @@ class LocalLauncher(BaseLauncher):
                         )
             if tracking_client is not None:
                 try:
-                    self._report_stage_finished(
-                        tracking_client=tracking_client,
+                    tracking_client.report_stage_finished(
+                        job_id=self.job_id,
                         stage_index=stage.index,
                         status="completed" if stage_stats.failed == 0 else "failed",
                     )

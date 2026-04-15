@@ -708,6 +708,5 @@ def test_local_launcher_does_not_fail_stage_when_heartbeat_delivery_fails(
             "job_id": "job-remote",
             "stage_index": 0,
             "status": "completed",
-            "reason": None,
         }
     ]
