@@ -4,6 +4,7 @@ import argparse
 import sys
 
 from refiner.cli.auth import cmd_login, cmd_logout, cmd_whoami
+from refiner.cli.run import cmd_run
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +34,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     logout = subparsers.add_parser("logout", help="Remove local Macrodata credentials")
     logout.set_defaults(handler=cmd_logout)
+
+    run = subparsers.add_parser(
+        "run",
+        help="Run a Macrodata Refiner pipeline script",
+    )
+    run.add_argument(
+        "--logs",
+        choices=("all", "none", "one", "errors"),
+        default=None,
+        help="Override local live log display mode via REFINER_LOCAL_LOGS",
+    )
+    run.add_argument("script", help="Python script to execute")
+    run.add_argument(
+        "script_args",
+        nargs=argparse.REMAINDER,
+        help="Arguments passed through to the script",
+    )
+    run.set_defaults(handler=cmd_run)
 
     return parser
 

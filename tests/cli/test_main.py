@@ -9,6 +9,17 @@ def test_parser_has_auth_commands() -> None:
     assert args.command == "whoami"
 
 
+def test_parser_has_run_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["run", "--logs", "one", "script.py", "--", "--rows", "10"]
+    )
+    assert args.command == "run"
+    assert args.logs == "one"
+    assert args.script == "script.py"
+    assert args.script_args == ["--rows", "10"]
+
+
 def test_main_dispatches(monkeypatch) -> None:
     monkeypatch.setattr("refiner.cli.main.cmd_whoami", lambda args: 7)
     rc = main(["whoami"])

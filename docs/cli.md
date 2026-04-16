@@ -36,6 +36,27 @@ macrodata whoami
 macrodata logout
 ```
 
+## Run A Script
+
+Use `macrodata run` to run a Macrodata Refiner pipeline script.
+
+```bash
+macrodata run examples/local_log_stream.py
+```
+
+Optional flags:
+
+```bash
+macrodata run --logs one examples/local_log_stream.py -- --workers 4 --rows 20
+```
+
+`macrodata run` currently supports:
+
+- `--logs all|none|one|errors`
+- `Ctrl+C` exits with code `130`
+- local launcher resume/failure messages are printed cleanly, while ordinary script exceptions still surface normally
+- the script directory is added to `sys.path`, so sibling imports work the same way they do with `python script.py`
+
 ## Credential Lookup
 
 See [Auth](auth.md) for the shared credential lookup order and credential file location.

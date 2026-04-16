@@ -4,13 +4,20 @@ import json
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import cloudpickle
 
+from refiner.cli.local_run import (
+    LaunchStats,
+    collect_local_stage_results,
+    format_resume_message,
+    LocalLaunchInterrupted,
+    LocalLaunchResumeError,
+    stdout_is_interactive,
+)
 from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import PlannedStage
 from refiner.platform.auth import MacrodataCredentialsError, current_api_key
@@ -26,20 +33,11 @@ if TYPE_CHECKING:
     from refiner.pipeline.data.shard import Shard
 
 
-@dataclass(frozen=True, slots=True)
-class LaunchStats:
-    job_id: str
-    workers: int
-    claimed: int
-    completed: int
-    failed: int
-    output_rows: int
-
-
 class LocalLauncher(BaseLauncher):
     _STAGE_HEARTBEAT_INTERVAL_SECONDS = 15.0
     _STAGE_HEARTBEAT_FAILURE_THRESHOLD = 3
     _HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS = 5.0
+    _WORKER_TERMINATE_TIMEOUT_SECONDS = 3.0
 
     def __init__(
         self,
@@ -60,107 +58,42 @@ class LocalLauncher(BaseLauncher):
         self.rundir: str | None = (
             str(Path(rundir).expanduser().resolve()) if rundir is not None else None
         )
-
-    @staticmethod
-    def _failed_worker_payload(
-        *,
-        worker_id: str,
-        stdout: str,
-        stderr: str,
-        returncode: int | None,
-    ) -> dict[str, object]:
-        return {
-            "worker_id": worker_id,
-            "claimed": 0,
-            "completed": 0,
-            "failed": 1,
-            "output_rows": 0,
-            "error": (
-                stderr.strip()
-                or stdout.strip()
-                or f"worker process exited with code {returncode}"
-            ),
-        }
+        self.job_tracking_url: str | None = None
+        self._total_stages = 1
 
     def _collect_worker_results(
         self,
         *,
+        stage_index: int,
+        rundir: str,
         stage_workers: int,
         processes: list[tuple[str, subprocess.Popen[str]]],
     ) -> LaunchStats:
         if self.job_id is None:
             raise RuntimeError("local launcher job_id is unset")
-        errors: list[str] = []
-        claimed = 0
-        completed = 0
-        failed = 0
-        output_rows = 0
-        for worker_id, process in processes:
-            stdout, stderr = process.communicate()
-            final_stdout_line = next(
-                (line for line in reversed(stdout.splitlines()) if line.strip()),
-                "",
-            )
-            try:
-                decoded = json.loads(final_stdout_line or "{}")
-                raw = (
-                    decoded
-                    if isinstance(decoded, dict)
-                    else self._failed_worker_payload(
-                        worker_id=worker_id,
-                        stdout=stdout,
-                        stderr=stderr,
-                        returncode=process.returncode,
-                    )
-                )
-            except json.JSONDecodeError:
-                raw = self._failed_worker_payload(
-                    worker_id=worker_id,
-                    stdout=stdout,
-                    stderr=stderr,
-                    returncode=process.returncode,
-                )
-            error = raw.get("error")
-            raw_claimed = raw.get("claimed", 0)
-            raw_completed = raw.get("completed", 0)
-            raw_failed = raw.get("failed", 0)
-            raw_output_rows = raw.get("output_rows", 0)
-            result_worker_id = str(raw.get("worker_id", ""))
-            result_claimed = (
-                int(raw_claimed) if isinstance(raw_claimed, int | float | str) else 0
-            )
-            result_completed = (
-                int(raw_completed)
-                if isinstance(raw_completed, int | float | str)
-                else 0
-            )
-            result_failed = (
-                int(raw_failed) if isinstance(raw_failed, int | float | str) else 0
-            )
-            result_output_rows = (
-                int(raw_output_rows)
-                if isinstance(raw_output_rows, int | float | str)
-                else 0
-            )
-            if error is not None:
-                errors.append(f"worker {result_worker_id}: {error}")
-            if process.returncode not in (0, None):
-                errors.append(f"worker process exited with code {process.returncode}")
-            claimed += result_claimed
-            completed += result_completed
-            failed += result_failed
-            output_rows += result_output_rows
-
-        if errors:
-            raise RuntimeError("; ".join(sorted(set(errors))))
-
-        return LaunchStats(
+        stats = collect_local_stage_results(
             job_id=self.job_id,
-            workers=stage_workers,
-            claimed=claimed,
-            completed=completed,
-            failed=failed,
-            output_rows=output_rows,
+            job_name=self.name,
+            rundir=rundir,
+            stage_index=stage_index,
+            total_stages=self._total_stages,
+            stage_workers=stage_workers,
+            tracking_url=self.job_tracking_url,
+            processes=processes,
+            log_mode=None,
+            interrupt_message=format_resume_message(
+                "Local job interrupted",
+                rundir=self.rundir,
+            ),
+            terminate_timeout_seconds=self._WORKER_TERMINATE_TIMEOUT_SECONDS,
+        )
+        return stats
+
+    def _resume_failure(self, error: str | BaseException) -> RuntimeError:
+        if isinstance(error, LocalLaunchResumeError):
+            return error
+        return LocalLaunchResumeError(
+            format_resume_message(str(error), rundir=self.rundir)
         )
 
     @staticmethod
@@ -268,13 +201,22 @@ class LocalLauncher(BaseLauncher):
                 plan=self._compiled_plan(stages),
                 manifest=manifest,
             )
+        except MacrodataCredentialsError:
+            logger.warning(
+                "Your Macrodata API key is invalid. Run `macrodata login` "
+                "or set MACRODATA_API_KEY with a valid key. Local execution will continue without job tracking."
+            )
+            return None, None
         except Exception as err:
             logger.warning(f"Failed to register local job with Macrodata: {err}")
             return None, None
-        logger.info(
-            "Local job registered. View job:\n  "
-            f"{self._job_tracking_url(client=tracking_client, job_id=registered_job.job_id, workspace_slug=registered_job.workspace_slug)}"
+        job_tracking_url = self._job_tracking_url(
+            client=tracking_client,
+            job_id=registered_job.job_id,
+            workspace_slug=registered_job.workspace_slug,
         )
+        logger.info("Local job registered. View job:\n  {}", job_tracking_url)
+        self.job_tracking_url = job_tracking_url
         return tracking_client, registered_job.job_id
 
     def _start_stage_heartbeat(
@@ -406,6 +348,8 @@ class LocalLauncher(BaseLauncher):
             )
 
         return self._collect_worker_results(
+            stage_index=stage.index,
+            rundir=self.rundir,
             stage_workers=stage_workers,
             processes=processes,
         )
@@ -416,7 +360,9 @@ class LocalLauncher(BaseLauncher):
             logger.warning(
                 f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )
+        self.job_tracking_url = None
         stages = self._planned_stages()
+        self._total_stages = max(1, len(stages))
         tracking_client, self.job_id = self._register_tracked_job(stages=stages)
         if self.job_id is None:
             self.job_id = self._build_local_job_id(self.name)
@@ -470,8 +416,20 @@ class LocalLauncher(BaseLauncher):
                         logger.warning(
                             f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
                         )
-                raise
-            except Exception:
+                interrupt_error = LocalLaunchInterrupted(
+                    format_resume_message(
+                        "Local job interrupted",
+                        rundir=self.rundir,
+                    )
+                )
+                if not stdout_is_interactive():
+                    logger.warning(
+                        "Local job interrupted during stage {}.",
+                        stage.index,
+                    )
+                    logger.warning("{}", interrupt_error)
+                raise interrupt_error
+            except Exception as err:
                 if tracking_client is not None:
                     try:
                         tracking_client.report_stage_finished(
@@ -483,7 +441,9 @@ class LocalLauncher(BaseLauncher):
                         logger.warning(
                             f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
                         )
-                raise
+                if isinstance(err, BrokenPipeError):
+                    raise
+                raise self._resume_failure(err) from err
             finally:
                 if heartbeat_stop is not None:
                     heartbeat_stop.set()
@@ -515,9 +475,20 @@ class LocalLauncher(BaseLauncher):
                 output_rows=totals.output_rows + stage_stats.output_rows,
             )
             if stage_stats.failed > 0:
-                raise RuntimeError(
-                    f"stage {stage.index} failed with {stage_stats.failed} failed shard(s)"
+                raise self._resume_failure(
+                    f"stage {stage.index} failed with {stage_stats.failed} failed shard(s)",
                 )
+        if not stdout_is_interactive():
+            logger.success(
+                "Local job completed job_id={} workers={} claimed={} completed={} failed={} output_rows={} rundir={}",
+                self.job_id,
+                totals.workers,
+                totals.claimed,
+                totals.completed,
+                totals.failed,
+                totals.output_rows,
+                self.rundir,
+            )
         return totals
 
 
