@@ -6,7 +6,6 @@ from refiner.platform.client.api import (
     sanitize_terminal_text,
     verify_api_key,
 )
-from refiner.worker.context import RunHandle
 from refiner.platform.client.models import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
@@ -41,7 +40,6 @@ __all__ = [
     "MacrodataClient",
     "MacrodataApiError",
     "OkResponse",
-    "RunHandle",
     "ShardClaimResponse",
     "SerializedShard",
     "StagePayload",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+import threading
+import time
 import pytest
 
 from refiner.pipeline.data.shard import FilePart, Shard
@@ -9,14 +11,13 @@ from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
+from refiner.platform.auth import MacrodataCredentialsError
 from refiner.worker.resources.gpu import build_gpu_sets
 
 
 @pytest.fixture(autouse=True)
 def _disable_local_init_api_ping(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    monkeypatch.setattr("refiner.launchers.base.request_json", lambda **kwargs: {})
-    monkeypatch.setattr("refiner.launchers.base.current_api_key", lambda: "md_test")
-    monkeypatch.setattr("refiner.launchers.base.verify_api_key", lambda **kwargs: None)
+    monkeypatch.setattr("refiner.launchers.local.request_json", lambda **kwargs: {})
     monkeypatch.setenv("REFINER_WORKDIR", str(tmp_path))
 
 
@@ -190,67 +191,114 @@ def test_launch_local_ignores_non_json_stdout_before_final_stats(tmp_path) -> No
     assert stats.output_rows == 1
 
 
-def test_local_launcher_launch_pings_api_me(
+def test_local_launcher_registers_job_and_reports_stage_lifecycle(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "a.jsonl"
     path.write_text('{"x": 1}\n')
     pipeline = read_jsonl(str(path))
-    verify_calls: list[dict[str, object]] = []
+    create_calls: list[dict[str, object]] = []
+    started: list[tuple[str, int]] = []
+    finished: list[tuple[str, int, str]] = []
 
+    class _FakeClient:
+        base_url = "https://macrodata.co"
+
+        def create_job(self, **kwargs):
+            create_calls.append(kwargs)
+            from refiner.platform.client.models import CreateJobResponse
+
+            return CreateJobResponse(
+                job_id="job-remote",
+                stage_index=0,
+                workspace_slug="workspace",
+            )
+
+        def report_stage_started(self, *, job_id: str, stage_index: int):
+            started.append((job_id, stage_index))
+
+        def report_stage_finished(
+            self,
+            *,
+            job_id: str,
+            stage_index: int,
+            status: str,
+            reason: str | None = None,
+        ):
+            assert reason is None
+            finished.append((job_id, stage_index, status))
+
+    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
     monkeypatch.setattr(
-        "refiner.launchers.base.verify_api_key",
-        lambda **kwargs: verify_calls.append(kwargs) or None,
+        "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
     )
-    monkeypatch.setattr("refiner.launchers.base.current_api_key", lambda: "md_test")
 
     launcher = LocalLauncher(
         pipeline=pipeline,
-        name="local-launch-api-ping",
+        name="local-launch-register",
         num_workers=1,
     )
-    monkeypatch.setattr(launcher, "_planned_stages", lambda: [])
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        lambda *, stage: LaunchStats(
+            job_id="job-remote",
+            workers=1,
+            claimed=1,
+            completed=1,
+            failed=0,
+            output_rows=1,
+        ),
+    )
     launcher.launch()
 
-    assert verify_calls == [
-        {
-            "api_key": "md_test",
-            "timeout_s": 2.0,
-        }
-    ]
+    assert create_calls
+    assert create_calls[0]["executor"] == {"type": "refiner-local"}
+    assert started == [("job-remote", 0)]
+    assert finished == [("job-remote", 0, "completed")]
 
 
-def test_local_launcher_launch_pings_api_me_without_credentials(
-    monkeypatch, tmp_path
+def test_local_launcher_warns_without_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     shard = Shard.from_file_parts([FilePart(path="a", start=0, end=1)])
     rows = {shard.id: [DictRow({"x": 1})]}
     pipeline = RefinerPipeline(source=_FakeReader([shard], rows))
-    requests: list[dict[str, object]] = []
+    warnings: list[str] = []
 
     monkeypatch.setattr(
-        "refiner.launchers.base.request_json",
-        lambda **kwargs: requests.append(kwargs) or {},
+        "refiner.launchers.local.current_api_key",
+        lambda: (_ for _ in ()).throw(
+            MacrodataCredentialsError("missing", missing=True)
+        ),
     )
     monkeypatch.setattr(
-        "refiner.launchers.base.current_api_key",
-        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        "refiner.launchers.local.logger.warning",
+        lambda message: warnings.append(message),
     )
 
     launcher = LocalLauncher(
         pipeline=pipeline,
-        name="local-launch-api-ping-no-creds",
+        name="local-launch-no-creds",
         num_workers=1,
     )
     monkeypatch.setattr(launcher, "_planned_stages", lambda: [])
     launcher.launch()
 
-    assert requests == [
-        {
-            "method": "GET",
-            "path": "/api/me",
-            "timeout_s": 2.0,
-        }
+    assert warnings == [
+        "No valid Macrodata API key found. Run `macrodata login` to track local jobs."
     ]
 
 
@@ -423,3 +471,242 @@ def test_local_launcher_does_not_force_platform_terminal_state(
     stats = launcher.launch()
 
     assert stats.completed == 1
+
+
+def test_local_launcher_reports_failed_stage_to_tracking(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    finished: list[tuple[str, int, str]] = []
+
+    class _FakeClient:
+        base_url = "https://macrodata.co"
+
+        def create_job(self, **kwargs):
+            from refiner.platform.client.models import CreateJobResponse
+
+            return CreateJobResponse(
+                job_id="job-remote",
+                stage_index=0,
+                workspace_slug="workspace",
+            )
+
+        def report_stage_started(self, *, job_id: str, stage_index: int):
+            return None
+
+        def report_stage_finished(
+            self,
+            *,
+            job_id: str,
+            stage_index: int,
+            status: str,
+            reason: str | None = None,
+        ):
+            assert reason is None
+            finished.append((job_id, stage_index, status))
+
+    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
+    monkeypatch.setattr(
+        "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
+    )
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-stage-fail-report",
+        num_workers=1,
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        launcher.launch()
+
+    assert finished == [("job-remote", 0, "failed")]
+
+
+def test_local_launcher_reports_interrupted_stage_with_reason(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    finished: list[dict[str, object]] = []
+    heartbeat_started: list[int] = []
+
+    class _FakeClient:
+        base_url = "https://macrodata.co"
+
+        def create_job(self, **kwargs):
+            from refiner.platform.client.models import CreateJobResponse
+
+            return CreateJobResponse(
+                job_id="job-remote",
+                stage_index=0,
+                workspace_slug="workspace",
+            )
+
+        def report_stage_started(self, *, job_id: str, stage_index: int):
+            return None
+
+        def report_stage_finished(self, **kwargs):
+            finished.append(kwargs)
+
+    class _DummyThread:
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+        def is_alive(self) -> bool:
+            return False
+
+    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
+    monkeypatch.setattr(
+        "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
+    )
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-stage-interrupt-report",
+        num_workers=1,
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_start_stage_heartbeat",
+        lambda *, tracking_client, stage_index: (
+            heartbeat_started.append(stage_index) or threading.Event(),
+            _DummyThread(),
+        ),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        lambda **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        launcher.launch()
+
+    assert heartbeat_started == [0]
+    assert finished == [
+        {
+            "job_id": "job-remote",
+            "stage_index": 0,
+            "status": "failed",
+            "reason": "Local launcher interrupted",
+        }
+    ]
+
+
+def test_local_launcher_does_not_fail_stage_when_heartbeat_delivery_fails(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    finished: list[dict[str, object]] = []
+    heartbeat_attempts = 0
+
+    class _FakeClient:
+        base_url = "https://macrodata.co"
+
+        def create_job(self, **kwargs):
+            from refiner.platform.client.models import CreateJobResponse
+
+            return CreateJobResponse(
+                job_id="job-remote",
+                stage_index=0,
+                workspace_slug="workspace",
+            )
+
+        def report_stage_started(self, *, job_id: str, stage_index: int):
+            return None
+
+        def report_stage_heartbeat(self, *, job_id: str, stage_index: int):
+            nonlocal heartbeat_attempts
+            heartbeat_attempts += 1
+            raise RuntimeError("heartbeat offline")
+
+        def report_stage_finished(self, **kwargs):
+            finished.append(kwargs)
+
+    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
+    monkeypatch.setattr(
+        "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
+    )
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-stage-heartbeat-delivery-failure",
+        num_workers=1,
+    )
+    launcher._STAGE_HEARTBEAT_INTERVAL_SECONDS = 0.01
+    launcher._STAGE_HEARTBEAT_FAILURE_THRESHOLD = 2
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+
+    def fake_launch_stage(*, stage):  # noqa: ANN001
+        time.sleep(0.05)
+        return LaunchStats(
+            job_id="job-remote",
+            workers=1,
+            claimed=1,
+            completed=1,
+            failed=0,
+            output_rows=1,
+        )
+
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        fake_launch_stage,
+    )
+
+    stats = launcher.launch()
+
+    assert stats.completed == 1
+    assert heartbeat_attempts >= 2
+    assert finished == [
+        {
+            "job_id": "job-remote",
+            "stage_index": 0,
+            "status": "completed",
+        }
+    ]

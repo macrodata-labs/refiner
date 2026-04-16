@@ -1,31 +1,23 @@
 ---
 title: "Observability"
-description: "What Refiner reports to Macrodata during launched execution"
+description: "Cloud observability available when running Refiner on Macrodata Cloud"
 ---
 
-When Macrodata auth is available, Refiner reports runtime lifecycle and telemetry back to the platform.
+Refiner cloud jobs report runtime lifecycle and telemetry to Macrodata Cloud.
 
-## How It Enables
+## Scope
 
-Auth lookup order:
+This page applies to [`launch_cloud(...)`](launchers.md) only.
 
-1. `MACRODATA_API_KEY`
-2. local key file from [`macrodata login`](cli.md)
+- `launch_local(...)` does not provide Macrodata Cloud observability
+- cloud observability is available as part of Macrodata Cloud execution
 
-If auth is unavailable:
+## What Cloud Reports
 
-- `launch_local(...)` still runs, but without platform reporting
-- `launch_cloud(...)` cannot submit
+Cloud execution reports:
 
-## What Gets Reported
-
-Current launched execution reports:
-
-- job creation
-- manifest capture
-- stage shard registration
 - worker start / finish
-- shard claim / heartbeat / finish
+- shard claim / finish
 - stage finish
 - job finish
 - OTEL logs
@@ -56,11 +48,11 @@ Available helpers:
 - `mdr.log_histogram(...)`
 - `mdr.register_gauge(...)`
 
-If telemetry is unavailable, these calls are no-ops.
+When running on Macrodata Cloud, these metrics are exported into the cloud observability pipeline.
 
 ## Logging
 
-Loguru records are forwarded into platform OTLP logs when observability is enabled.
+Application logs emitted during cloud execution are forwarded into cloud observability.
 
 ```python
 from loguru import logger
@@ -78,12 +70,12 @@ macrodata login
 import refiner as mdr
 
 pipeline = mdr.read_parquet("data/*.parquet").write_jsonl("out/")
-stats = pipeline.launch_local(name="train-data-build", num_workers=4)
+result = pipeline.launch_cloud(name="train-data-build", num_workers=4)
 ```
 
 ## Notes
 
-- current Refiner launches typically submit a single compiled plan, but lifecycle still reports jobs, stages, workers, and shards explicitly
+- cloud runs report jobs, stages, workers, and shards explicitly
 - user metrics flush on shard end
 - worker resource metrics cover CPU, memory, and network observers
 
@@ -91,5 +83,4 @@ stats = pipeline.launch_local(name="train-data-build", num_workers=4)
 
 - [Launchers](launchers.md)
 - [CLI](cli.md)
-- [Reading and writing data](reading-and-writing.md)
 - [Robotics](robotics.md)

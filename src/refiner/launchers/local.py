@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,8 +13,10 @@ import cloudpickle
 
 from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import PlannedStage
+from refiner.platform.auth import MacrodataCredentialsError, current_api_key
+from refiner.platform.client.api import MacrodataClient, request_json
 from refiner.worker.context import logger
-from refiner.worker.lifecycle.local import read_finalized_workers
+from refiner.worker.lifecycle import read_finalized_workers
 from refiner.worker.resources.cpu import available_cpu_ids
 from refiner.worker.resources.gpu import build_gpu_sets
 from refiner.worker.workdir import resolve_workdir
@@ -34,6 +37,10 @@ class LaunchStats:
 
 
 class LocalLauncher(BaseLauncher):
+    _STAGE_HEARTBEAT_INTERVAL_SECONDS = 15.0
+    _STAGE_HEARTBEAT_FAILURE_THRESHOLD = 3
+    _HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS = 5.0
+
     def __init__(
         self,
         *,
@@ -49,18 +56,8 @@ class LocalLauncher(BaseLauncher):
             num_workers=num_workers,
             gpus_per_worker=gpus_per_worker,
         )
-        self.rundir = self._resolve_rundir(rundir)
-
-    def _resolve_rundir(self, rundir: str | None) -> str:
-        base_workdir = resolve_workdir()
-        path = (
-            Path(rundir).expanduser()
-            if rundir is not None
-            else Path(base_workdir) / "runs" / self.job_id
-        )
-        if not path.is_absolute():
-            raise ValueError("rundir must be an absolute path")
-        return str(path)
+        self.job_id: str | None = None
+        self.rundir: str | None = rundir
 
     @staticmethod
     def _failed_worker_payload(
@@ -89,6 +86,8 @@ class LocalLauncher(BaseLauncher):
         stage_workers: int,
         processes: list[tuple[str, subprocess.Popen[str]]],
     ) -> LaunchStats:
+        if self.job_id is None:
+            raise RuntimeError("local launcher job_id is unset")
         errors: list[str] = []
         claimed = 0
         completed = 0
@@ -201,7 +200,7 @@ class LocalLauncher(BaseLauncher):
         cmd = [
             sys.executable,
             "-m",
-            "refiner.worker.local_entrypoint",
+            "refiner.worker.entrypoint",
             "--pipeline-payload",
             pipeline_payload,
             "--job-id",
@@ -224,6 +223,90 @@ class LocalLauncher(BaseLauncher):
             text=True,
         )
 
+    def _register_tracked_job(
+        self, *, stages: list[PlannedStage]
+    ) -> MacrodataClient | None:
+        try:
+            api_key = current_api_key()
+        except MacrodataCredentialsError:
+            try:
+                request_json(
+                    method="GET",
+                    path="/api/me",
+                    timeout_s=2.0,
+                )
+            except Exception:
+                pass
+            logger.warning(
+                "No valid Macrodata API key found. Run `macrodata login` to track local jobs."
+            )
+            return None
+        except Exception as err:
+            logger.warning(
+                f"Failed to load Macrodata credentials for local tracking: {err}"
+            )
+            return None
+
+        tracking_client = MacrodataClient(api_key=api_key)
+        try:
+            registered_job = tracking_client.create_job(
+                name=self.name,
+                executor={"type": "refiner-local"},
+                plan=self._compiled_plan(stages),
+                manifest=self._run_manifest(),
+            )
+        except Exception as err:
+            logger.warning(f"Failed to register local job with Macrodata: {err}")
+            return None
+
+        self.job_id = registered_job.job_id
+        if self.rundir is None:
+            self.rundir = str(Path(resolve_workdir()) / "runs" / self.job_id)
+        logger.info(
+            "Local job registered. View job:\n  "
+            f"{self._job_tracking_url(client=tracking_client, job_id=self.job_id, workspace_slug=registered_job.workspace_slug)}"
+        )
+        return tracking_client
+
+    def _start_stage_heartbeat(
+        self,
+        *,
+        tracking_client: MacrodataClient,
+        stage_index: int,
+    ) -> tuple[threading.Event, threading.Thread]:
+        if self.job_id is None:
+            raise RuntimeError("local launcher job_id is unset")
+        job_id = self.job_id
+
+        stop_event = threading.Event()
+        consecutive_failures = 0
+
+        def _run() -> None:
+            nonlocal consecutive_failures
+            while not stop_event.wait(self._STAGE_HEARTBEAT_INTERVAL_SECONDS):
+                try:
+                    tracking_client.report_stage_heartbeat(
+                        job_id=job_id,
+                        stage_index=stage_index,
+                    )
+                    consecutive_failures = 0
+                except Exception as err:
+                    consecutive_failures += 1
+                    if consecutive_failures >= self._STAGE_HEARTBEAT_FAILURE_THRESHOLD:
+                        logger.warning(
+                            f"Stopping local stage {stage_index} heartbeats after {consecutive_failures} consecutive failure(s): {err}"
+                        )
+                        stop_event.set()
+                        return
+
+        thread = threading.Thread(
+            target=_run,
+            name=f"refiner-stage-heartbeat-{stage_index}",
+            daemon=True,
+        )
+        thread.start()
+        return stop_event, thread
+
     def _launch_stage(
         self,
         *,
@@ -231,6 +314,10 @@ class LocalLauncher(BaseLauncher):
     ) -> LaunchStats:
         # Resolve worker capacity and remaining stage shards.
         stage_workers = stage.compute.num_workers
+        if self.job_id is None or self.rundir is None:
+            raise RuntimeError(
+                "local launcher must be initialized in launch() before running stages"
+            )
         available_cpus = len(available_cpu_ids())
         if stage_workers > available_cpus:
             logger.warning(
@@ -320,8 +407,18 @@ class LocalLauncher(BaseLauncher):
             logger.warning(
                 f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )
-        self._validate_key()
         stages = self._planned_stages()
+        explicit_rundir = self.rundir
+        self.job_id = self._build_local_job_id(self.name)
+        self.rundir = None
+        tracking_client = self._register_tracked_job(stages=stages)
+        if explicit_rundir is None:
+            self.rundir = str(Path(resolve_workdir()) / "runs" / self.job_id)
+        else:
+            self.rundir = str(Path(explicit_rundir).expanduser().resolve())
+        if self.job_id is None or self.rundir is None:
+            raise RuntimeError("local launcher did not initialize job state")
+        logger.info(f"Starting local job {self.job_id} with rundir={self.rundir}")
         totals = LaunchStats(
             job_id=self.job_id,
             workers=0,
@@ -331,9 +428,78 @@ class LocalLauncher(BaseLauncher):
             output_rows=0,
         )
         for stage in stages:
-            stage_stats = self._launch_stage(
-                stage=stage,
-            )
+            heartbeat_stop: threading.Event | None = None
+            heartbeat_thread: threading.Thread | None = None
+            if tracking_client is not None:
+                try:
+                    tracking_client.report_stage_started(
+                        job_id=self.job_id,
+                        stage_index=stage.index,
+                    )
+                    (
+                        heartbeat_stop,
+                        heartbeat_thread,
+                    ) = self._start_stage_heartbeat(
+                        tracking_client=tracking_client,
+                        stage_index=stage.index,
+                    )
+                except Exception as err:
+                    logger.warning(
+                        f"Failed to report local stage {stage.index} start to Macrodata: {err}"
+                    )
+            try:
+                stage_stats = self._launch_stage(
+                    stage=stage,
+                )
+            except KeyboardInterrupt:
+                if tracking_client is not None:
+                    try:
+                        tracking_client.report_stage_finished(
+                            job_id=self.job_id,
+                            stage_index=stage.index,
+                            status="failed",
+                            reason="Local launcher interrupted",
+                        )
+                    except Exception as err:
+                        logger.warning(
+                            f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
+                        )
+                raise
+            except Exception:
+                if tracking_client is not None:
+                    try:
+                        tracking_client.report_stage_finished(
+                            job_id=self.job_id,
+                            stage_index=stage.index,
+                            status="failed",
+                        )
+                    except Exception as err:
+                        logger.warning(
+                            f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
+                        )
+                raise
+            finally:
+                if heartbeat_stop is not None:
+                    heartbeat_stop.set()
+                if heartbeat_thread is not None:
+                    heartbeat_thread.join(
+                        timeout=self._HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS
+                    )
+                    if heartbeat_thread.is_alive():
+                        logger.warning(
+                            f"Local stage {stage.index} heartbeat thread did not stop within {self._HEARTBEAT_THREAD_JOIN_TIMEOUT_SECONDS:.1f}s"
+                        )
+            if tracking_client is not None:
+                try:
+                    tracking_client.report_stage_finished(
+                        job_id=self.job_id,
+                        stage_index=stage.index,
+                        status="completed" if stage_stats.failed == 0 else "failed",
+                    )
+                except Exception as err:
+                    logger.warning(
+                        f"Failed to report local stage {stage.index} finish to Macrodata: {err}"
+                    )
             totals = LaunchStats(
                 job_id=self.job_id,
                 workers=totals.workers + stage_stats.workers,

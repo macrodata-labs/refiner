@@ -54,3 +54,21 @@ def test_client_prefers_env_api_key_over_saved_key(
     client = MacrodataClient(base_url="https://example.com")
 
     assert client.api_key == "md_env"
+
+
+def test_report_stage_heartbeat_posts_to_stage_heartbeat_route(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"stage": {"job_id": "job-1", "index": 2, "status": "running"}}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    response = client.report_stage_heartbeat(job_id="job-1", stage_index=2)
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/jobs/job-1/stages/2/heartbeat"
+    assert captured["json_payload"] == {}
+    assert response.stage.status == "running"

@@ -6,6 +6,7 @@ from typing import Any
 import msgspec
 
 from refiner.pipeline.data.shard import Shard
+from refiner.worker.lifecycle import FinalizedShardWorker
 
 
 class WorkspaceIdentity(msgspec.Struct, frozen=True):
@@ -96,17 +97,22 @@ class ShardClaimResponse(msgspec.Struct, frozen=True):
     shard: SerializedShard | None
 
 
-class FinalizedShardWorker(msgspec.Struct, frozen=True):
-    shard_id: str
-    worker_id: str
-
-
 class FinalizedShardWorkersResponse(msgspec.Struct, frozen=True):
     shards: list[FinalizedShardWorker]
 
 
 class OkResponse(msgspec.Struct, frozen=True):
     ok: bool = True
+
+
+class StageLifecycleStage(msgspec.Struct, frozen=True):
+    job_id: str
+    index: int
+    status: str
+
+
+class StageLifecycleResponse(msgspec.Struct, frozen=True):
+    stage: StageLifecycleStage
 
 
 @dataclass(frozen=True, slots=True)

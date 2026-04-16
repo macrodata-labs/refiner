@@ -21,9 +21,8 @@ from refiner.robotics.lerobot_format import (
     LeRobotTasks,
 )
 from refiner.worker.context import (
-    RunHandle,
-    get_active_run_handle,
-    get_active_runtime_lifecycle,
+    get_finalized_workers,
+    get_active_stage_index,
 )
 
 
@@ -263,13 +262,12 @@ class LeRobotMetaReduceSink(BaseSink):
 
     @staticmethod
     def _finalized_chunk_keys() -> list[str]:
-        runtime_lifecycle = get_active_runtime_lifecycle()
-        stage_index = get_active_run_handle().stage_index
-        if runtime_lifecycle is None or stage_index is None or stage_index <= 0:
+        stage_index = get_active_stage_index()
+        if stage_index is None or stage_index <= 0:
             raise ValueError("LeRobot stage-2 reduce requires active runtime context")
         return [
-            f"{row.shard_id}__w{RunHandle.worker_token_for(row.worker_id)}"
-            for row in runtime_lifecycle.finalized_workers(stage_index=stage_index - 1)
+            f"{row.shard_id}__w{row.worker_token}"
+            for row in get_finalized_workers(stage_index=stage_index - 1)
         ]
 
 

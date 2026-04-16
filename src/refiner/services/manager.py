@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -14,7 +13,8 @@ from refiner.services.vllm import VLLMRuntimeServiceBinding
 if TYPE_CHECKING:
     from refiner.platform.client.api import MacrodataClient
 
-_POLL_INTERVAL_SECONDS = 2.0
+
+_POLL_INTERVAL_SECONDS = 10.0
 _START_TIMEOUT_SECONDS = 20 * 60
 _CLOUD_ONLY_RUNTIME_SERVICES_MESSAGE = (
     "Runtime services can only be started when running in cloud."
@@ -25,7 +25,7 @@ class ServiceManager:
     def __init__(
         self,
         *,
-        client: "MacrodataClient" | None = None,
+        client: MacrodataClient | None = None,
         job_id: str | None = None,
         stage_index: int | None = None,
         worker_id: str | None = None,
@@ -35,6 +35,7 @@ class ServiceManager:
         self._job_id = job_id
         self._stage_index = stage_index
         self._worker_id = worker_id
+        self._worker_name = worker_name
         self._logger = logger.bind(worker_name=worker_name or worker_id)
         self._started_by_name: dict[str, dict[str, str]] = {}
         self._resolved_by_name: dict[str, RuntimeServiceBinding] = {}
