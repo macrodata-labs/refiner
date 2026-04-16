@@ -6,7 +6,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import cloudpickle
@@ -57,7 +57,9 @@ class LocalLauncher(BaseLauncher):
             gpus_per_worker=gpus_per_worker,
         )
         self.job_id: str | None = None
-        self.rundir: str | None = rundir
+        self.rundir: str | None = (
+            str(Path(rundir).expanduser().resolve()) if rundir is not None else None
+        )
 
     @staticmethod
     def _failed_worker_payload(
@@ -225,7 +227,7 @@ class LocalLauncher(BaseLauncher):
 
     def _register_tracked_job(
         self, *, stages: list[PlannedStage]
-    ) -> MacrodataClient | None:
+    ) -> tuple[MacrodataClient | None, str | None]:
         try:
             api_key = current_api_key()
         except MacrodataCredentialsError:
@@ -240,33 +242,40 @@ class LocalLauncher(BaseLauncher):
             logger.warning(
                 "No valid Macrodata API key found. Run `macrodata login` to track local jobs."
             )
-            return None
+            return None, None
         except Exception as err:
             logger.warning(
                 f"Failed to load Macrodata credentials for local tracking: {err}"
             )
-            return None
+            return None, None
 
         tracking_client = MacrodataClient(api_key=api_key)
         try:
+            manifest = self._run_manifest()
+            manifest_environment = cast(
+                dict[str, Any], manifest.setdefault("environment", {})
+            )
+            if not isinstance(manifest_environment, dict):
+                raise RuntimeError("run manifest environment must be a dict")
+            manifest_environment["rundir"] = (
+                self.rundir
+                if self.rundir is not None
+                else str(Path(resolve_workdir()) / "runs" / "<jobid>")
+            )
             registered_job = tracking_client.create_job(
                 name=self.name,
                 executor={"type": "refiner-local"},
                 plan=self._compiled_plan(stages),
-                manifest=self._run_manifest(),
+                manifest=manifest,
             )
         except Exception as err:
             logger.warning(f"Failed to register local job with Macrodata: {err}")
-            return None
-
-        self.job_id = registered_job.job_id
-        if self.rundir is None:
-            self.rundir = str(Path(resolve_workdir()) / "runs" / self.job_id)
+            return None, None
         logger.info(
             "Local job registered. View job:\n  "
-            f"{self._job_tracking_url(client=tracking_client, job_id=self.job_id, workspace_slug=registered_job.workspace_slug)}"
+            f"{self._job_tracking_url(client=tracking_client, job_id=registered_job.job_id, workspace_slug=registered_job.workspace_slug)}"
         )
-        return tracking_client
+        return tracking_client, registered_job.job_id
 
     def _start_stage_heartbeat(
         self,
@@ -408,14 +417,11 @@ class LocalLauncher(BaseLauncher):
                 f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )
         stages = self._planned_stages()
-        explicit_rundir = self.rundir
-        self.job_id = self._build_local_job_id(self.name)
-        self.rundir = None
-        tracking_client = self._register_tracked_job(stages=stages)
-        if explicit_rundir is None:
+        tracking_client, self.job_id = self._register_tracked_job(stages=stages)
+        if self.job_id is None:
+            self.job_id = self._build_local_job_id(self.name)
+        if self.rundir is None:
             self.rundir = str(Path(resolve_workdir()) / "runs" / self.job_id)
-        else:
-            self.rundir = str(Path(explicit_rundir).expanduser().resolve())
         if self.job_id is None or self.rundir is None:
             raise RuntimeError("local launcher did not initialize job state")
         logger.info(f"Starting local job {self.job_id} with rundir={self.rundir}")
