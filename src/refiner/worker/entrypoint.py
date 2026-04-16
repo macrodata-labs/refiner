@@ -8,6 +8,7 @@ import cloudpickle
 from refiner.pipeline.data.shard import Shard
 from refiner.worker.context import logger
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
+from refiner.worker.metrics.emitter import LocalLogEmitter
 from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
 
@@ -52,14 +53,23 @@ def main() -> int:
             rundir=args.rundir,
             assigned_shards=[Shard.from_dict(item) for item in shard_payload],
         )
-        stats = Worker(
-            pipeline=pipeline,
-            job_id=args.job_id,
+        log_emitter = LocalLogEmitter(
+            rundir=args.rundir,
             stage_index=args.stage_index,
             worker_id=args.worker_id,
-            worker_name=args.worker_name,
-            runtime_lifecycle=runtime_lifecycle,
-        ).run()
+        )
+        try:
+            stats = Worker(
+                pipeline=pipeline,
+                job_id=args.job_id,
+                stage_index=args.stage_index,
+                worker_id=args.worker_id,
+                worker_name=args.worker_name,
+                runtime_lifecycle=runtime_lifecycle,
+                user_metrics_emitter=log_emitter,
+            ).run()
+        finally:
+            log_emitter.shutdown()
         payload.update(
             {
                 "claimed": stats.claimed,

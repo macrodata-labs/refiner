@@ -41,6 +41,7 @@ Returned stats include:
 - `gpus_per_worker` optionally exposes a fixed number of visible GPU devices to each local worker
 - if `rundir` is reused, local launch skips shards already completed there
 - local run files live under `<workdir>/runs/<job_id>/...`
+- worker Loguru output is written to `stage-<index>/logs/worker-<worker_id>.log` under the local rundir
 
 ## Cloud Launcher
 

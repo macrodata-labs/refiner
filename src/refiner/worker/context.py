@@ -6,6 +6,7 @@ from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, Generator
 
 from loguru import logger as _base_logger
+from refiner.worker.metrics.emitter import NOOP_USER_METRICS_EMITTER, UserMetricsEmitter
 
 if TYPE_CHECKING:
     from refiner.services.manager import ServiceManager
@@ -49,6 +50,10 @@ _ACTIVE_SERVICE_MANAGER: ContextVar["ServiceManager" | None] = ContextVar(
 _ACTIVE_LOGGER: ContextVar[Any | None] = ContextVar(
     "refiner_active_logger",
     default=None,
+)
+_ACTIVE_USER_METRICS_EMITTER: ContextVar[UserMetricsEmitter] = ContextVar(
+    "refiner_active_user_metrics_emitter",
+    default=NOOP_USER_METRICS_EMITTER,
 )
 
 
@@ -97,6 +102,10 @@ def get_active_service_manager() -> ServiceManager | None:
     return _ACTIVE_SERVICE_MANAGER.get()
 
 
+def get_active_user_metrics_emitter() -> UserMetricsEmitter:
+    return _ACTIVE_USER_METRICS_EMITTER.get()
+
+
 @contextmanager
 def set_active_run_context(
     *,
@@ -106,6 +115,7 @@ def set_active_run_context(
     worker_name: str | None,
     runtime_lifecycle: RuntimeLifecycle,
     service_manager: ServiceManager | None = None,
+    user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER,
 ) -> Generator[None, None, None]:
     job_token: Token[str] = _ACTIVE_JOB_ID.set(job_id)
     stage_token: Token[int] = _ACTIVE_STAGE_INDEX.set(stage_index)
@@ -116,6 +126,9 @@ def set_active_run_context(
     )
     service_manager_token: Token[ServiceManager | None] = _ACTIVE_SERVICE_MANAGER.set(
         service_manager
+    )
+    metrics_emitter_token: Token[UserMetricsEmitter] = _ACTIVE_USER_METRICS_EMITTER.set(
+        user_metrics_emitter
     )
     logger_token: Token[Any | None] = _ACTIVE_LOGGER.set(
         _base_logger.bind(
@@ -129,6 +142,7 @@ def set_active_run_context(
         yield
     finally:
         _ACTIVE_SERVICE_MANAGER.reset(service_manager_token)
+        _ACTIVE_USER_METRICS_EMITTER.reset(metrics_emitter_token)
         _ACTIVE_LOGGER.reset(logger_token)
         _ACTIVE_RUNTIME_LIFECYCLE.reset(lifecycle_token)
         _ACTIVE_WORKER_NAME.reset(worker_name_token)
@@ -151,6 +165,7 @@ __all__ = [
     "get_active_service_manager",
     "get_active_stage_index",
     "get_active_step_index",
+    "get_active_user_metrics_emitter",
     "get_active_worker_id",
     "get_active_worker_name",
     "get_active_worker_token",

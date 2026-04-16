@@ -4,10 +4,11 @@ import pyarrow.parquet as pq
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.expressions import col
 from refiner.pipeline.sources.readers import ParquetReader
-from refiner.worker.metrics.context import set_active_user_metrics_emitter
+from refiner.worker.context import set_active_run_context
+from refiner.worker.metrics.emitter import UserMetricsEmitter
 
 
-class _RecordingEmitter:
+class _RecordingEmitter(UserMetricsEmitter):
     def __init__(self) -> None:
         self.counters: list[dict[str, object]] = []
 
@@ -31,6 +32,25 @@ class _RecordingEmitter:
 
     def force_flush_logs(self) -> None:
         return None
+
+
+class _Runtime:
+    def claim(self, previous=None):
+        del previous
+        return None
+
+    def heartbeat(self, shards):
+        del shards
+
+    def complete(self, shard):
+        del shard
+
+    def fail(self, shard, error=None):
+        del shard, error
+
+    def finalized_workers(self, *, stage_index=None):
+        del stage_index
+        return []
 
     def shutdown(self) -> None:
         return None
@@ -239,7 +259,14 @@ def test_parquet_logs_pushdown_and_total_filtered_metrics(tmp_path):
     )
 
     emitter = _RecordingEmitter()
-    with set_active_user_metrics_emitter(emitter):
+    with set_active_run_context(
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=_Runtime(),
+        user_metrics_emitter=emitter,
+    ):
         out = []
         for shard in reader.list_shards():
             out.extend(list(_rows_from_shard_units(reader.iter_shard_units(shard))))
@@ -260,7 +287,14 @@ def test_parquet_logs_total_filtered_for_residual_in_memory_filter(tmp_path):
     )
 
     emitter = _RecordingEmitter()
-    with set_active_user_metrics_emitter(emitter):
+    with set_active_run_context(
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=_Runtime(),
+        user_metrics_emitter=emitter,
+    ):
         out = []
         for shard in reader.list_shards():
             out.extend(list(_rows_from_shard_units(reader.iter_shard_units(shard))))
@@ -290,7 +324,14 @@ def test_parquet_does_not_log_pushdown_row_group_metrics_for_split_row_groups(tm
     )
 
     emitter = _RecordingEmitter()
-    with set_active_user_metrics_emitter(emitter):
+    with set_active_run_context(
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=_Runtime(),
+        user_metrics_emitter=emitter,
+    ):
         out = []
         for shard in reader.list_shards():
             out.extend(list(_rows_from_shard_units(reader.iter_shard_units(shard))))
