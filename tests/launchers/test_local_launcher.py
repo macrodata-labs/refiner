@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 import threading
 import time
+from typing import cast
 import pytest
 
 from refiner.pipeline.data.shard import FilePart, Shard
@@ -257,6 +258,11 @@ def test_local_launcher_registers_job_and_reports_stage_lifecycle(
     monkeypatch.setattr(
         "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
     )
+    monkeypatch.setattr(
+        LocalLauncher,
+        "_build_local_job_id",
+        staticmethod(lambda name: "job-local"),
+    )
 
     launcher = LocalLauncher(
         pipeline=pipeline,
@@ -291,6 +297,9 @@ def test_local_launcher_registers_job_and_reports_stage_lifecycle(
 
     assert create_calls
     assert create_calls[0]["executor"] == {"type": "refiner-local"}
+    manifest = cast(dict[str, object], create_calls[0]["manifest"])
+    environment = cast(dict[str, object], manifest["environment"])
+    assert environment["rundir"] == str(tmp_path / "runs" / "<jobid>")
     assert started == [("job-remote", 0)]
     assert finished == [("job-remote", 0, "completed")]
 
@@ -313,6 +322,11 @@ def test_local_launcher_warns_without_credentials(
         "refiner.launchers.local.logger.warning",
         lambda message: warnings.append(message),
     )
+    monkeypatch.setattr(
+        LocalLauncher,
+        "_build_local_job_id",
+        staticmethod(lambda name: "job-local"),
+    )
 
     launcher = LocalLauncher(
         pipeline=pipeline,
@@ -325,6 +339,28 @@ def test_local_launcher_warns_without_credentials(
     assert warnings == [
         "No valid Macrodata API key found. Run `macrodata login` to track local jobs."
     ]
+    assert launcher.job_id == "job-local"
+
+
+def test_local_launcher_normalizes_explicit_rundir_on_init(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    monkeypatch.chdir(tmp_path)
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-explicit-rundir-normalized",
+        num_workers=1,
+        rundir="custom-run",
+    )
+
+    monkeypatch.setattr(launcher, "_planned_stages", lambda: [])
+    launcher.launch()
+
+    assert launcher.rundir == str((tmp_path / "custom-run").resolve())
 
 
 def test_launch_local_runs_planned_stages_sequentially(

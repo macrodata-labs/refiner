@@ -96,6 +96,31 @@ def test_build_run_manifest_omits_stage_runtimes_by_default(
     assert manifest["environment"]["refiner_ref"] is None
 
 
+def test_build_run_manifest_environment_does_not_include_rundir_by_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_installed_version",
+        lambda: "0.2.0",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
+    )
+
+    manifest = build_run_manifest()
+
+    assert "rundir" not in manifest["environment"]
+
+
 def test_refiner_ref_exists_on_remote_returns_true_on_success(monkeypatch) -> None:
     monkeypatch.setattr(
         "refiner.platform.manifest.urllib_request.urlopen",
