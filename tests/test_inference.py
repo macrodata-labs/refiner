@@ -16,14 +16,14 @@ from refiner.inference import (
 from refiner.services import VLLMRuntimeServiceBinding
 from refiner.pipeline.data.row import DictRow
 from refiner.worker.context import set_active_run_context
-from refiner.worker.metrics.context import set_active_user_metrics_emitter
+from refiner.worker.metrics.emitter import UserMetricsEmitter
 
 from refiner.inference import client as openai_module
 
 generate_module = importlib.import_module("refiner.inference.generate")
 
 
-class _MetricRecordingEmitter:
+class _MetricRecordingEmitter(UserMetricsEmitter):
     def __init__(self) -> None:
         self.counters: list[dict[str, Any]] = []
         self.gauges: list[dict[str, Any]] = []
@@ -327,8 +327,8 @@ def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
                 worker_name=None,
                 runtime_lifecycle=_Runtime(),
                 service_manager=None,
+                user_metrics_emitter=emitter,
             ),
-            set_active_user_metrics_emitter(emitter),
         ):
             return await infer(DictRow({"prompt": "hi"}).with_shard_id("shard-1"))
 
@@ -400,8 +400,8 @@ def test_inference_generate_reports_failed_requests(monkeypatch) -> None:
                 worker_name=None,
                 runtime_lifecycle=_Runtime(),
                 service_manager=None,
+                user_metrics_emitter=emitter,
             ),
-            set_active_user_metrics_emitter(emitter),
         ):
             return await infer(DictRow({"prompt": "hi"}).with_shard_id("shard-1"))
 

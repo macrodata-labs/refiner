@@ -8,6 +8,7 @@ import cloudpickle
 from refiner.pipeline.data.shard import Shard
 from refiner.worker.context import logger
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
+from refiner.worker.metrics.emitter import LocalLogEmitter
 from refiner.worker.resources.gpu import parse_gpu_ids, set_visible_gpu_ids
 from refiner.worker.runner import Worker
 
@@ -31,7 +32,13 @@ def main() -> int:
         "output_rows": 0,
         "error": None,
     }
+    log_emitter: LocalLogEmitter | None = None
     try:
+        log_emitter = LocalLogEmitter(
+            rundir=args.rundir,
+            stage_index=args.stage_index,
+            worker_id=args.worker_id,
+        )
         gpu_ids = parse_gpu_ids(args.gpu_ids)
         if gpu_ids:
             set_visible_gpu_ids(gpu_ids)
@@ -59,6 +66,7 @@ def main() -> int:
             worker_id=args.worker_id,
             worker_name=args.worker_name,
             runtime_lifecycle=runtime_lifecycle,
+            user_metrics_emitter=log_emitter,
         ).run()
         payload.update(
             {
@@ -73,6 +81,9 @@ def main() -> int:
         logger.exception("local worker entrypoint failed: {}", message)
         payload["failed"] = 1
         payload["error"] = message
+    finally:
+        if log_emitter is not None:
+            log_emitter.shutdown()
     print(json.dumps(payload, sort_keys=True), flush=True)
     return 0 if payload["error"] is None else 1
 

@@ -191,6 +191,31 @@ def test_launch_local_ignores_non_json_stdout_before_final_stats(tmp_path) -> No
     assert stats.output_rows == 1
 
 
+def test_launch_local_writes_worker_loguru_logs_to_stage_log_files(tmp_path) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+
+    def logged_map(row):
+        from refiner import logger
+
+        logger.info("processing row {}", row["x"])
+        return {"x": int(row["x"]) + 1}
+
+    pipeline = read_jsonl(str(path)).map(logged_map)
+    rundir = tmp_path / "run"
+
+    stats = pipeline.launch_local(
+        name="unit-test-local-loguru-file",
+        num_workers=1,
+        rundir=str(rundir),
+    )
+
+    assert stats.completed == 1
+    log_files = list((rundir / "stage-0" / "logs").glob("worker-*.log"))
+    assert len(log_files) == 1
+    assert "processing row 1" in log_files[0].read_text()
+
+
 def test_local_launcher_registers_job_and_reports_stage_lifecycle(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

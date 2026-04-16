@@ -13,10 +13,11 @@ from warcio.warcwriter import WARCWriter
 import refiner as mdr
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import FilePartsDescriptor
-from refiner.worker.metrics.context import set_active_user_metrics_emitter
+from refiner.worker.context import set_active_run_context
+from refiner.worker.metrics.emitter import UserMetricsEmitter
 
 
-class _RecordingEmitter:
+class _RecordingEmitter(UserMetricsEmitter):
     def __init__(self) -> None:
         self.counters: list[dict[str, object]] = []
 
@@ -40,6 +41,25 @@ class _RecordingEmitter:
 
     def force_flush_logs(self) -> None:
         return None
+
+
+class _Runtime:
+    def claim(self, previous=None):
+        del previous
+        return None
+
+    def heartbeat(self, shards):
+        del shards
+
+    def complete(self, shard):
+        del shard
+
+    def fail(self, shard, error=None):
+        del shard, error
+
+    def finalized_workers(self, *, stage_index=None):
+        del stage_index
+        return []
 
     def shutdown(self) -> None:
         return None
@@ -748,7 +768,14 @@ def test_read_commoncrawl_filter_fn_logs_dropped_rows(tmp_path: Path) -> None:
     )
 
     emitter = _RecordingEmitter()
-    with set_active_user_metrics_emitter(emitter):
+    with set_active_run_context(
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=_Runtime(),
+        user_metrics_emitter=emitter,
+    ):
         rows = [
             row.to_dict()
             for row in mdr.text.read_commoncrawl_from_index(
@@ -1109,7 +1136,14 @@ def test_read_commoncrawl_logs_pushdown_pruning_metrics(tmp_path: Path) -> None:
     )
 
     emitter = _RecordingEmitter()
-    with set_active_user_metrics_emitter(emitter):
+    with set_active_run_context(
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=_Runtime(),
+        user_metrics_emitter=emitter,
+    ):
         rows = [
             row.to_dict()
             for row in mdr.text.read_commoncrawl_from_index(
@@ -1156,7 +1190,14 @@ def test_read_commoncrawl_logs_in_memory_filter_metrics(tmp_path: Path) -> None:
     )
 
     emitter = _RecordingEmitter()
-    with set_active_user_metrics_emitter(emitter):
+    with set_active_run_context(
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=_Runtime(),
+        user_metrics_emitter=emitter,
+    ):
         rows = [
             row.to_dict()
             for row in mdr.text.read_commoncrawl_from_index(

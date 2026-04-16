@@ -12,10 +12,9 @@ from refiner.services import ServiceManager
 from refiner.services.discovery import collect_pipeline_services
 from refiner.worker.context import logger, set_active_run_context, set_active_step_index
 from refiner.worker.lifecycle import RuntimeLifecycle
-from refiner.worker.metrics.context import (
+from refiner.worker.metrics.emitter import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
-    set_active_user_metrics_emitter,
 )
 
 
@@ -76,11 +75,9 @@ class Worker:
         execution_error: Exception | None = None
         heartbeat_error: Exception | None = None
 
-        user_metrics_emitter = self.user_metrics_emitter
         stop_heartbeat = threading.Event()
 
-        runtime_lifecycle = self.runtime_lifecycle
-        service_client = getattr(runtime_lifecycle, "client", None)
+        service_client = getattr(self.runtime_lifecycle, "client", None)
         # Service manager is used to start and manage runtime services.
         service_manager = ServiceManager(
             client=service_client,
@@ -101,7 +98,7 @@ class Worker:
                 snapshot = list(inflight_by_id.values())
             if not snapshot:
                 return
-            runtime_lifecycle.heartbeat(snapshot)
+            self.runtime_lifecycle.heartbeat(snapshot)
 
         def _heartbeat_loop() -> None:
             nonlocal heartbeat_error
@@ -127,8 +124,8 @@ class Worker:
                     return
             with set_active_step_index(sink_step_index):
                 sink.on_shard_complete(shard_id)
-            user_metrics_emitter.force_flush_user_metrics()
-            runtime_lifecycle.complete(shard)
+            self.user_metrics_emitter.force_flush_user_metrics()
+            self.runtime_lifecycle.complete(shard)
             with inflight_lock:
                 inflight_by_id.pop(shard_id, None)
                 source_done_shards.discard(shard_id)
@@ -173,7 +170,7 @@ class Worker:
             while True:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
-                shard = runtime_lifecycle.claim(previous=previous)
+                shard = self.runtime_lifecycle.claim(previous=previous)
                 if shard is None:
                     logger.info(
                         "no more shards worker_id={} claimed={}",
@@ -231,8 +228,9 @@ class Worker:
             stage_index=self.stage_index,
             worker_id=self.worker_id,
             worker_name=self.worker_name,
-            runtime_lifecycle=runtime_lifecycle,
+            runtime_lifecycle=self.runtime_lifecycle,
             service_manager=service_manager,
+            user_metrics_emitter=self.user_metrics_emitter,
         ):
             logger.info(
                 "worker started job_id={} stage_index={} worker_id={}",
@@ -240,113 +238,99 @@ class Worker:
                 self.stage_index,
                 self.worker_id,
             )
-            with set_active_user_metrics_emitter(user_metrics_emitter):
-                run_exception: Exception | None = None
+            run_exception: Exception | None = None
+            try:
                 try:
-                    try:
-                        for block in self.pipeline.execute(
-                            _source_rows(),
-                            on_shard_delta=_apply_row_delta,
-                        ):
-                            if heartbeat_error is not None:
-                                raise RuntimeError(
-                                    f"heartbeat failed: {heartbeat_error}"
-                                )
-                            with set_active_step_index(sink_step_index):
-                                written = sink.write_block(block)
-                            _apply_row_delta(
-                                {
-                                    shard_id: -count
-                                    for shard_id, count in written.items()
-                                    if count
-                                }
-                            )
-                            output_rows += block_num_rows(block)
-                    except Exception as e:
-                        execution_error = e
-                        failed_error = str(e).strip() or type(e).__name__
-                        with inflight_lock:
-                            failed_shards = list(inflight_by_id.values())
-                            inflight_by_id.clear()
-                            pending_rows_by_shard.clear()
-                            source_done_shards.clear()
-                        logger.exception(
-                            "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
-                            self.worker_id,
-                            claimed,
-                            completed,
-                            len(failed_shards),
+                    for block in self.pipeline.execute(
+                        _source_rows(),
+                        on_shard_delta=_apply_row_delta,
+                    ):
+                        if heartbeat_error is not None:
+                            raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
+                        with set_active_step_index(sink_step_index):
+                            written = sink.write_block(block)
+                        _apply_row_delta(
+                            {
+                                shard_id: -count
+                                for shard_id, count in written.items()
+                                if count
+                            }
+                        )
+                        output_rows += block_num_rows(block)
+                except Exception as e:
+                    execution_error = e
+                    failed_error = str(e).strip() or type(e).__name__
+                    with inflight_lock:
+                        failed_shards = list(inflight_by_id.values())
+                        inflight_by_id.clear()
+                        pending_rows_by_shard.clear()
+                        source_done_shards.clear()
+                    logger.exception(
+                        "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
+                        self.worker_id,
+                        claimed,
+                        completed,
+                        len(failed_shards),
+                        failed_error,
+                    )
+                    self.user_metrics_emitter.force_flush_logs()
+                    for shard in failed_shards:
+                        logger.warning(
+                            "shard failed shard_id={} global_ordinal={} error={}",
+                            shard.id,
+                            shard.global_ordinal,
                             failed_error,
                         )
-                        user_metrics_emitter.force_flush_logs()
-                        for shard in failed_shards:
-                            logger.warning(
-                                "shard failed shard_id={} global_ordinal={} error={}",
-                                shard.id,
-                                shard.global_ordinal,
-                                failed_error,
-                            )
-                            user_metrics_emitter.force_flush_logs()
-                            runtime_lifecycle.fail(shard, failed_error)
-                            user_metrics_emitter.force_flush_user_metrics()
-                            failed += 1
-                    else:
-                        _heartbeat_once()
-                        with inflight_lock:
-                            remaining_shards = list(inflight_by_id.values())
-                        if remaining_shards:
-                            raise RuntimeError(
-                                "worker finished with unflushed shards: "
-                                + ", ".join(shard.id for shard in remaining_shards)
-                            )
+                        self.user_metrics_emitter.force_flush_logs()
+                        self.runtime_lifecycle.fail(shard, failed_error)
+                        self.user_metrics_emitter.force_flush_user_metrics()
+                        failed += 1
+                else:
+                    _heartbeat_once()
+                    with inflight_lock:
+                        remaining_shards = list(inflight_by_id.values())
+                    if remaining_shards:
+                        raise RuntimeError(
+                            "worker finished with unflushed shards: "
+                            + ", ".join(shard.id for shard in remaining_shards)
+                        )
 
-                    return WorkerRunStats(
-                        claimed=claimed,
-                        completed=completed,
-                        failed=failed,
-                        output_rows=output_rows,
-                    )
+                return WorkerRunStats(
+                    claimed=claimed,
+                    completed=completed,
+                    failed=failed,
+                    output_rows=output_rows,
+                )
+            except Exception as e:
+                run_exception = e
+                raise
+            finally:
+                stop_heartbeat.set()
+                if heartbeat_thread is not None:
+                    heartbeat_thread.join(timeout=1.0)
+
+                try:
+                    with set_active_step_index(sink_step_index):
+                        sink.close()
                 except Exception as e:
-                    run_exception = e
-                    raise
-                finally:
-                    stop_heartbeat.set()
-                    if heartbeat_thread is not None:
-                        heartbeat_thread.join(timeout=1.0)
+                    if execution_error is not None or run_exception is not None:
+                        logger.warning(
+                            "sink close failed during worker failure handling: {}: {}",
+                            type(e).__name__,
+                            e,
+                        )
+                    else:
+                        raise
 
-                    try:
-                        with set_active_step_index(sink_step_index):
-                            sink.close()
-                    except Exception as e:
-                        if execution_error is not None or run_exception is not None:
-                            logger.warning(
-                                "sink close failed during worker failure handling: {}: {}",
-                                type(e).__name__,
-                                e,
-                            )
-                        else:
-                            raise
-
-                    status = (
-                        "failed"
-                        if execution_error is not None or run_exception is not None
-                        else "completed"
-                    )
-                    logger.info(
-                        "worker finished job_id={} stage_index={} worker_id={} status={}",
-                        self.job_id,
-                        self.stage_index,
-                        self.worker_id,
-                        status,
-                    )
-                    try:
-                        user_metrics_emitter.shutdown()
-                    except Exception as e:
-                        if execution_error is not None or run_exception is not None:
-                            logger.warning(
-                                "metrics emitter shutdown failed during worker failure handling: {}: {}",
-                                type(e).__name__,
-                                e,
-                            )
-                        else:
-                            raise
+                status = (
+                    "failed"
+                    if execution_error is not None or run_exception is not None
+                    else "completed"
+                )
+                logger.info(
+                    "worker finished job_id={} stage_index={} worker_id={} status={}",
+                    self.job_id,
+                    self.stage_index,
+                    self.worker_id,
+                    status,
+                )
