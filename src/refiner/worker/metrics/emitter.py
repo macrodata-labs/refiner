@@ -74,6 +74,7 @@ NOOP_USER_METRICS_EMITTER: UserMetricsEmitter = UserMetricsEmitter()
 
 class LocalLogEmitter(UserMetricsEmitter):
     def __init__(self, *, rundir: str, stage_index: int, worker_id: str) -> None:
+        self._sink_id: int | None = None
         log_path = (
             Path(rundir).expanduser().resolve()
             / f"stage-{stage_index}"
@@ -98,7 +99,8 @@ class LocalLogEmitter(UserMetricsEmitter):
             pass
         finally:
             try:
-                self._logger.remove(self._sink_id)
+                if self._sink_id is not None:
+                    self._logger.remove(self._sink_id)
             except Exception:
                 pass
 

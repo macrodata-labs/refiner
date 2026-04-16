@@ -32,6 +32,7 @@ def main() -> int:
         "output_rows": 0,
         "error": None,
     }
+    log_emitter: LocalLogEmitter | None = None
     try:
         gpu_ids = parse_gpu_ids(args.gpu_ids)
         if gpu_ids:
@@ -58,18 +59,15 @@ def main() -> int:
             stage_index=args.stage_index,
             worker_id=args.worker_id,
         )
-        try:
-            stats = Worker(
-                pipeline=pipeline,
-                job_id=args.job_id,
-                stage_index=args.stage_index,
-                worker_id=args.worker_id,
-                worker_name=args.worker_name,
-                runtime_lifecycle=runtime_lifecycle,
-                user_metrics_emitter=log_emitter,
-            ).run()
-        finally:
-            log_emitter.shutdown()
+        stats = Worker(
+            pipeline=pipeline,
+            job_id=args.job_id,
+            stage_index=args.stage_index,
+            worker_id=args.worker_id,
+            worker_name=args.worker_name,
+            runtime_lifecycle=runtime_lifecycle,
+            user_metrics_emitter=log_emitter,
+        ).run()
         payload.update(
             {
                 "claimed": stats.claimed,
@@ -83,6 +81,9 @@ def main() -> int:
         logger.exception("local worker entrypoint failed: {}", message)
         payload["failed"] = 1
         payload["error"] = message
+    finally:
+        if log_emitter is not None:
+            log_emitter.shutdown()
     print(json.dumps(payload, sort_keys=True), flush=True)
     return 0 if payload["error"] is None else 1
 
