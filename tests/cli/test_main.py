@@ -20,6 +20,14 @@ def test_parser_has_run_command() -> None:
     assert args.script_args == ["--rows", "10"]
 
 
+def test_parser_has_jobs_commands() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["jobs", "list", "--kind", "cloud"])
+    assert args.command == "jobs"
+    assert args.jobs_command == "list"
+    assert args.kind == "cloud"
+
+
 def test_main_dispatches(monkeypatch) -> None:
     monkeypatch.setattr("refiner.cli.main.cmd_whoami", lambda args: 7)
     rc = main(["whoami"])
