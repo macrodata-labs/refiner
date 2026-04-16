@@ -34,6 +34,11 @@ def main() -> int:
     }
     log_emitter: LocalLogEmitter | None = None
     try:
+        log_emitter = LocalLogEmitter(
+            rundir=args.rundir,
+            stage_index=args.stage_index,
+            worker_id=args.worker_id,
+        )
         gpu_ids = parse_gpu_ids(args.gpu_ids)
         if gpu_ids:
             set_visible_gpu_ids(gpu_ids)
@@ -53,11 +58,6 @@ def main() -> int:
             worker_id=args.worker_id,
             rundir=args.rundir,
             assigned_shards=[Shard.from_dict(item) for item in shard_payload],
-        )
-        log_emitter = LocalLogEmitter(
-            rundir=args.rundir,
-            stage_index=args.stage_index,
-            worker_id=args.worker_id,
         )
         stats = Worker(
             pipeline=pipeline,
