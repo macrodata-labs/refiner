@@ -39,3 +39,10 @@ def test_main_no_args_shows_help(capsys) -> None:
     out = capsys.readouterr()
     assert rc == 0
     assert "Macrodata CLI" in out.out
+
+
+def test_main_jobs_without_subcommand_shows_jobs_help(capsys) -> None:
+    rc = main(["jobs"])
+    out = capsys.readouterr()
+    assert rc == 0
+    assert "usage: macrodata jobs" in out.out
