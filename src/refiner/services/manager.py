@@ -71,8 +71,20 @@ class ServiceManager:
                 services=[service.to_dict() for service in services],
             )
         except MacrodataApiError as err:
+            self._logger.exception(
+                "Runtime service startup request failed for worker {} with HTTP {}: {}",
+                worker_id,
+                err.status,
+                err,
+            )
             if err.status == 401:
                 raise RuntimeError(_CLOUD_ONLY_RUNTIME_SERVICES_MESSAGE) from err
+            raise
+        except Exception:
+            self._logger.exception(
+                "Runtime service startup request failed for worker {}",
+                worker_id,
+            )
             raise
         for item in _parse_started_services_response(response):
             self._add_runtime_binding(item)
@@ -132,23 +144,61 @@ class ServiceManager:
                     service_id=started["id"],
                 )
             except MacrodataApiError as err:
+                self._logger.exception(
+                    "Runtime service status request failed for {}:{} (service_id={}) with HTTP {}: {}",
+                    started["kind"],
+                    started["name"],
+                    started["id"],
+                    err.status,
+                    err,
+                )
                 if err.status == 401:
                     raise RuntimeError(_CLOUD_ONLY_RUNTIME_SERVICES_MESSAGE) from err
+                raise
+            except Exception:
+                self._logger.exception(
+                    "Runtime service status request failed for {}:{} (service_id={})",
+                    started["kind"],
+                    started["name"],
+                    started["id"],
+                )
                 raise
             item = _response_item(response)
             status = str(item.get("status", "")).strip()
             if status == "failed":
                 error = str(item.get("error", "")).strip() or "UnknownError"
+                self._logger.error(
+                    "Runtime service {}:{} failed to start (service_id={}): {} payload={}",
+                    started["kind"],
+                    started["name"],
+                    started["id"],
+                    error,
+                    item,
+                )
                 raise RuntimeError(
                     f"runtime service {started['name']!r} failed to start: {error}"
                 )
             if status == "stopped":
+                self._logger.error(
+                    "Runtime service {}:{} stopped before ready (service_id={}) payload={}",
+                    started["kind"],
+                    started["name"],
+                    started["id"],
+                    item,
+                )
                 raise RuntimeError(
                     f"runtime service {started['name']!r} stopped before becoming ready"
                 )
             if status == "ready":
                 return _parse_runtime_service_binding(item, fallback=started)
             if asyncio.get_running_loop().time() >= deadline:
+                self._logger.error(
+                    "Runtime service {}:{} timed out before ready (service_id={}) last_payload={}",
+                    started["kind"],
+                    started["name"],
+                    started["id"],
+                    item,
+                )
                 raise RuntimeError(
                     "runtime service "
                     f"{started['name']!r} did not become ready within {_START_TIMEOUT_SECONDS} seconds"
