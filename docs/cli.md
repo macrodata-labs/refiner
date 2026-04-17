@@ -13,11 +13,14 @@ Create a Macrodata API key:
 
 ### Login
 
+Options:
+
+- `--token <api_key>`
+- `--token-stdin`
+
 ```bash
 macrodata login
 ```
-
-Non-interactive options:
 
 ```bash
 macrodata login --token md_xxx
@@ -40,22 +43,24 @@ macrodata logout
 
 Use `macrodata run` to run a Macrodata Refiner pipeline script.
 
+Options:
+
+- `--logs all|none|one|errors`
+- script arguments after `--`
+
+Behavior:
+
+- `Ctrl+C` exits with code `130`
+- local launcher resume/failure messages are printed cleanly, while ordinary script exceptions still surface normally
+- the script directory is added to `sys.path`, so sibling imports work the same way they do with `python script.py`
+
 ```bash
 macrodata run path/to/pipeline.py
 ```
 
-Optional flags:
-
 ```bash
 macrodata run --logs one path/to/pipeline.py -- --workers 4 --rows 20
 ```
-
-`macrodata run` currently supports:
-
-- `--logs all|none|one|errors`
-- `Ctrl+C` exits with code `130`
-- local launcher resume/failure messages are printed cleanly, while ordinary script exceptions still surface normally
-- the script directory is added to `sys.path`, so sibling imports work the same way they do with `python script.py`
 
 ## Credential Lookup
 
@@ -65,20 +70,54 @@ See [Auth](auth.md) for the shared credential lookup order and credential file l
 
 Inspect jobs in the workspace attached to your current API key:
 
+### `macrodata jobs list`
+
+Options:
+
+- `--status <status>`
+- `--kind local|cloud`
+- `--limit <count>`
+- `--me`
+- `--cursor <opaque_cursor>`
+- `--json`
+
 ```bash
 macrodata jobs list --kind cloud
 macrodata jobs list --me
+```
+
+### `macrodata jobs get`
+
+Options:
+
+- `--json`
+
+```bash
 macrodata jobs get <job_id>
 ```
 
-Read the captured run manifest:
+### `macrodata jobs manifest`
+
+Options:
+
+- `--show-runtime`
+- `--show-deps`
+- `--show-code`
+- `--json`
 
 ```bash
 macrodata jobs manifest <job_id>
 macrodata jobs manifest <job_id> --show-runtime --show-deps
 ```
 
-Inspect workers for a specific stage:
+### `macrodata jobs workers`
+
+Options:
+
+- `--stage <stage_index>`
+- `--limit <count>`
+- `--cursor <opaque_cursor>`
+- `--json`
 
 ```bash
 macrodata jobs workers <job_id> --stage 0
@@ -86,28 +125,59 @@ macrodata jobs workers <job_id> --limit 50
 macrodata jobs workers <job_id> --cursor <opaque_cursor>
 ```
 
-Fetch cloud-job logs from the last hour:
+### `macrodata jobs logs`
+
+Options:
+
+- `--stage <stage_index>`
+- `--worker <worker_id>`
+- `--source-type worker|service`
+- `--source-name <name>`
+- `--severity info|warning|error`
+- `--search <text>`
+- `--start-ms <epoch_ms>`
+- `--end-ms <epoch_ms>`
+- `--limit <count>`
+- `--json`
 
 ```bash
 macrodata jobs logs <job_id>
 macrodata jobs logs <job_id> --stage 0 --severity error
 ```
 
-Fetch cloud step metrics:
+### `macrodata jobs metrics`
+
+Options:
+
+- `--step <step_index>`
+- `--json`
 
 ```bash
 macrodata jobs metrics <job_id> <stage_index>
 macrodata jobs metrics <job_id> <stage_index> --step 2
 ```
 
-Fetch cloud resource metrics:
+### `macrodata jobs resource-metrics`
+
+Options:
+
+- `--range 5m|15m|1h|4h|6h|24h|7d`
+- `--worker-id <worker_id>`; may be repeated
+- `--start-ms <epoch_ms>`
+- `--end-ms <epoch_ms>`
+- `--bucket-count <count>`
+- `--json`
 
 ```bash
 macrodata jobs resource-metrics <job_id> <stage_index>
 macrodata jobs resource-metrics <job_id> <stage_index> --worker-id worker-1
 ```
 
-Cancel a running or pending cloud job:
+### `macrodata jobs cancel`
+
+Options:
+
+- `--json`
 
 ```bash
 macrodata jobs cancel <job_id>
