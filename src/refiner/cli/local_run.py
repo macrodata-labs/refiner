@@ -17,7 +17,7 @@ from typing import TypedDict
 
 from loguru import logger
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _WORKER_COLORS = (
     "\x1b[38;5;81m",
     "\x1b[38;5;75m",
@@ -264,8 +264,9 @@ def stop_worker_monitors(
             except Exception:
                 pass
     for monitor in monitors:
-        monitor.stdout_thread.join(timeout=terminate_timeout_seconds)
-        monitor.stderr_thread.join(timeout=terminate_timeout_seconds)
+        for thread in (monitor.stdout_thread, monitor.stderr_thread):
+            remaining = max(0.0, deadline - time.monotonic())
+            thread.join(timeout=remaining)
         try:
             monitor.process.wait(timeout=0)
         except Exception:
@@ -479,6 +480,8 @@ def collect_local_stage_results(
 
 
 class LocalStageLogTail:
+    _READ_CHUNK_BYTES = 1024 * 1024
+
     def __init__(self, *, path: Path) -> None:
         self.path = path
         self._offset = 0
@@ -491,7 +494,7 @@ class LocalStageLogTail:
                 return []
             self._handle = self.path.open(encoding="utf-8")
             self._handle.seek(self._offset)
-        chunk = self._handle.read()
+        chunk = self._handle.read(self._READ_CHUNK_BYTES)
         self._offset = self._handle.tell()
         if not chunk:
             return []
@@ -512,6 +515,11 @@ class LocalStageLogTail:
             lines.append(self._partial)
             self._partial = ""
         return lines
+
+    def close(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
 
 
 class LocalStageConsole:
@@ -545,8 +553,11 @@ class LocalStageConsole:
         self._lines: deque[str] = deque(maxlen=self._MAX_BUFFERED_LINES)
         self._last_rendered_at = 0.0
         self._last_rendered_line_count = 0
+        self._alternate_screen = False
         self._cursor_hidden = False
         if self._interactive:
+            self._write("\x1b[?1049h")
+            self._alternate_screen = True
             self._write("\x1b[?25l")
             self._cursor_hidden = True
             self._render(force=True)
@@ -591,7 +602,7 @@ class LocalStageConsole:
             or self._worker_failed != previous_failed
             or int(self._elapsed_seconds) != previous_elapsed_seconds
         ):
-            self._render(force=True)
+            self._render()
 
     def close(self) -> None:
         try:
@@ -600,11 +611,14 @@ class LocalStageConsole:
                 if self._last_rendered_line_count > 0:
                     self._write(f"\x1b[{self._last_rendered_line_count};1H")
                 self._write("\x1b[?25h")
-                self._write("\n")
+            if self._alternate_screen:
+                self._write("\x1b[?1049l")
+            self._write("\n")
         except BrokenPipeError:
             pass
         finally:
             self._cursor_hidden = False
+            self._alternate_screen = False
 
     def _build_header_lines(self, *, width: int) -> list[str]:
         title = "Macrodata Refiner".center(width)
@@ -880,12 +894,40 @@ def stream_local_stage_logs(
         for worker_id in tailed_worker_ids
     }
     sleep_interval = poll_interval_seconds
-    while True:
-        emitted_any = False
+    try:
+        while True:
+            emitted_any = False
+            for worker_id, log_tail in log_tails.items():
+                lines = [
+                    line
+                    for line in log_tail.poll()
+                    if should_emit_worker_line(
+                        log_mode=normalized_log_mode,
+                        worker_id=worker_id,
+                        selected_worker_id=selected_worker_id,
+                        line=line,
+                    )
+                ]
+                if lines:
+                    console.emit_lines(worker_id=worker_id, lines=lines)
+                    emitted_any = True
+            if on_tick is not None:
+                on_tick()
+            if not is_stage_running():
+                break
+            sleep_interval = (
+                poll_interval_seconds
+                if emitted_any
+                else min(
+                    max(poll_interval_seconds, 0.05) * 8,
+                    max(sleep_interval * 2, 0.1),
+                )
+            )
+            time.sleep(sleep_interval)
         for worker_id, log_tail in log_tails.items():
             lines = [
                 line
-                for line in log_tail.poll()
+                for line in log_tail.flush()
                 if should_emit_worker_line(
                     log_mode=normalized_log_mode,
                     worker_id=worker_id,
@@ -895,31 +937,12 @@ def stream_local_stage_logs(
             ]
             if lines:
                 console.emit_lines(worker_id=worker_id, lines=lines)
-                emitted_any = True
-        if on_tick is not None:
-            on_tick()
-        if not is_stage_running():
-            break
-        sleep_interval = (
-            poll_interval_seconds
-            if emitted_any
-            else min(max(poll_interval_seconds, 0.05) * 8, max(sleep_interval * 2, 0.1))
-        )
-        time.sleep(sleep_interval)
-    for worker_id, log_tail in log_tails.items():
-        lines = [
-            line
-            for line in log_tail.flush()
-            if should_emit_worker_line(
-                log_mode=normalized_log_mode,
-                worker_id=worker_id,
-                selected_worker_id=selected_worker_id,
-                line=line,
-            )
-        ]
-        if lines:
-            console.emit_lines(worker_id=worker_id, lines=lines)
-    console.refresh()
+        console.refresh()
+    finally:
+        for log_tail in log_tails.values():
+            close = getattr(log_tail, "close", None)
+            if callable(close):
+                close()
 
 
 def run_local_stage_ui(
