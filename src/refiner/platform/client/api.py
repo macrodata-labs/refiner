@@ -300,12 +300,21 @@ class MacrodataClient:
         return self._request_raw(method="GET", path=f"/api/cli/jobs/{job_id}/manifest")
 
     def cli_get_job_workers(
-        self, *, job_id: str, stage_index: int | None = None
+        self,
+        *,
+        job_id: str,
+        stage_index: int | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         return self._request_raw(
             method="GET",
             path=f"/api/cli/jobs/{job_id}/workers",
-            query_params={"stageIndex": stage_index},
+            query_params={
+                "stageIndex": stage_index,
+                "limit": limit,
+                "cursor": cursor,
+            },
         )
 
     def cli_get_job_logs(

@@ -56,9 +56,14 @@ class _FakeClient:
         return {"jobId": job_id, "manifest": {"version": 1}}
 
     def cli_get_job_workers(
-        self, *, job_id: str, stage_index: int | None
+        self,
+        *,
+        job_id: str,
+        stage_index: int | None,
+        limit: int | None = None,
+        cursor: str | None = None,
     ) -> dict[str, object]:
-        _ = (job_id, stage_index)
+        _ = (job_id, stage_index, limit, cursor)
         return {
             "items": [
                 {
@@ -70,7 +75,8 @@ class _FakeClient:
                     "startedAt": 1_700_000_001_000,
                     "host": "worker-host",
                 }
-            ]
+            ],
+            "page": {"nextCursor": "20", "loaded": 1, "total": 2},
         }
 
     def cli_get_job_logs(self, **_: object) -> dict[str, object]:
@@ -219,6 +225,19 @@ def test_jobs_cancel_plain_output(monkeypatch, capsys) -> None:
     assert "Requested: 2" in out.out
 
 
+def test_jobs_workers_plain_output_shows_next_cursor(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_workers(
+        Namespace(job_id="job-1", stage=0, limit=20, cursor=None, json=False)
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "worker-1" in out.out
+    assert "Next cursor: 20" in out.out
+
+
 def test_jobs_get_missing_payload_reports_to_stderr(monkeypatch, capsys) -> None:
     class _MissingJobClient(_FakeClient):
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
@@ -258,6 +277,55 @@ def test_jobs_metrics_missing_payload_reports_to_stderr(monkeypatch, capsys) -> 
     assert rc == 1
     assert out.out == ""
     assert "Metrics unavailable." in out.err
+
+
+def test_jobs_metrics_rejects_too_many_worker_ids(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_metrics(
+        Namespace(
+            job_id="job-1",
+            stage=0,
+            worker_id=[f"worker-{index}" for index in range(51)],
+            range="1h",
+            start_ms=None,
+            end_ms=None,
+            bucket_count=None,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert "Too many --worker-id values; maximum is 50." in out.err
+
+
+def test_jobs_metrics_deduplicates_worker_ids(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    class _CapturingClient(_FakeClient):
+        def cli_get_job_metrics(self, **kwargs: object) -> dict[str, object]:
+            observed.update(kwargs)
+            return super().cli_get_job_metrics(**kwargs)
+
+    monkeypatch.setattr(jobs, "_client", lambda: _CapturingClient())
+
+    rc = jobs.cmd_jobs_metrics(
+        Namespace(
+            job_id="job-1",
+            stage=0,
+            worker_id=["worker-1", "worker-1", "worker-2"],
+            range="1h",
+            start_ms=None,
+            end_ms=None,
+            bucket_count=None,
+            json=False,
+        )
+    )
+
+    assert rc == 0
+    assert observed["worker_ids"] == ["worker-1", "worker-2"]
 
 
 def test_jobs_error_reports_to_stderr(monkeypatch, capsys) -> None:

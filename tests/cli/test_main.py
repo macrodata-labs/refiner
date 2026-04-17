@@ -36,6 +36,18 @@ def test_parser_has_jobs_cancel_command() -> None:
     assert args.job_id == "job-1"
 
 
+def test_parser_has_jobs_workers_pagination_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["jobs", "workers", "job-1", "--limit", "50", "--cursor", "20"]
+    )
+    assert args.command == "jobs"
+    assert args.jobs_command == "workers"
+    assert args.job_id == "job-1"
+    assert args.limit == 50
+    assert args.cursor == "20"
+
+
 def test_main_dispatches(monkeypatch) -> None:
     monkeypatch.setattr("refiner.cli.main.cmd_whoami", lambda args: 7)
     rc = main(["whoami"])

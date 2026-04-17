@@ -11,6 +11,7 @@ from refiner.platform.client import MacrodataApiError, MacrodataClient
 from refiner.platform.client.api import sanitize_terminal_text
 
 _DEFAULT_LOG_WINDOW_MS = 60 * 60 * 1000
+_MAX_METRICS_WORKER_IDS = 50
 
 
 def _client() -> MacrodataClient:
@@ -178,6 +179,11 @@ def _render_workers(payload: dict[str, Any]) -> int:
             ]
         )
     _print_table(rows)
+    page = payload.get("page")
+    if isinstance(page, dict):
+        next_cursor = page.get("nextCursor")
+        if isinstance(next_cursor, str) and next_cursor:
+            print(f"\nNext cursor: {next_cursor}")
     return 0
 
 
@@ -289,6 +295,8 @@ def cmd_jobs_workers(args: Namespace) -> int:
         payload = _client().cli_get_job_workers(
             job_id=args.job_id,
             stage_index=args.stage,
+            limit=args.limit,
+            cursor=args.cursor,
         )
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)
@@ -319,6 +327,13 @@ def cmd_jobs_logs(args: Namespace) -> int:
 
 
 def cmd_jobs_metrics(args: Namespace) -> int:
+    worker_ids = list(dict.fromkeys(args.worker_id))
+    if len(worker_ids) > _MAX_METRICS_WORKER_IDS:
+        print(
+            f"Too many --worker-id values; maximum is {_MAX_METRICS_WORKER_IDS}.",
+            file=sys.stderr,
+        )
+        return 1
     try:
         payload = _client().cli_get_job_metrics(
             job_id=args.job_id,
@@ -327,7 +342,7 @@ def cmd_jobs_metrics(args: Namespace) -> int:
             end_ms=args.end_ms,
             bucket_count=args.bucket_count,
             stage_index=args.stage,
-            worker_ids=args.worker_id,
+            worker_ids=worker_ids,
         )
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)

@@ -80,6 +80,8 @@ Inspect workers for a specific stage:
 
 ```bash
 macrodata jobs workers <job_id> --stage 0
+macrodata jobs workers <job_id> --limit 50
+macrodata jobs workers <job_id> --cursor <opaque_cursor>
 ```
 
 Fetch cloud-job logs from the last hour:
@@ -94,6 +96,7 @@ Fetch cloud-job metrics:
 ```bash
 macrodata jobs metrics <job_id>
 macrodata jobs metrics <job_id> --stage 0 --range 6h
+macrodata jobs metrics <job_id> --worker-id worker-1 --worker-id worker-2
 ```
 
 Cancel a running or pending cloud job:
@@ -109,6 +112,7 @@ Every job-inspection command supports `--json`. That mode prints the raw API res
 - `launch_local(...)` does not require Macrodata auth
 - `launch_cloud(...)` requires Macrodata auth
 - `macrodata jobs logs ...` and `macrodata jobs metrics ...` are only available for cloud jobs
+- `macrodata jobs metrics ...` accepts at most 50 distinct `--worker-id` filters per request
 - `macrodata jobs cancel ...` is only available for cloud jobs in `pending` or `running` state
 
 ## Internal Notes

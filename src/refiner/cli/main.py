@@ -103,6 +103,10 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_workers.add_argument("job_id", help="Job identifier")
     jobs_workers.add_argument("--stage", type=int, help="Filter by stage index")
     jobs_workers.add_argument(
+        "--limit", type=int, default=20, help="Maximum workers to return"
+    )
+    jobs_workers.add_argument("--cursor", help="Opaque pagination cursor")
+    jobs_workers.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
     jobs_workers.set_defaults(handler=cmd_jobs_workers)
