@@ -325,6 +325,26 @@ def test_jobs_cancel_plain_output(monkeypatch, capsys) -> None:
     assert "Requested: 2" in out.out
 
 
+def test_jobs_cancel_plain_output_accepts_camel_case(monkeypatch, capsys) -> None:
+    class _CamelCancelClient(_FakeClient):
+        def cli_cancel_job(self, *, job_id: str) -> dict[str, object]:
+            return {
+                "jobId": job_id,
+                "requestedOperations": 2,
+                "canceledOperations": 2,
+                "failedOperations": 0,
+            }
+
+    monkeypatch.setattr(jobs, "_client", lambda: _CamelCancelClient())
+
+    rc = jobs.cmd_jobs_cancel(Namespace(job_id="job-1", json=False))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "Canceled: job-1" in out.out
+    assert "Requested: 2" in out.out
+
+
 def test_jobs_workers_plain_output_shows_next_cursor(monkeypatch, capsys) -> None:
     monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
 

@@ -421,12 +421,16 @@ def _render_manifest(
 
 
 def _render_cancel(payload: dict[str, Any]) -> int:
+    job_id = payload.get("jobId", payload.get("job_id"))
+    requested = payload.get("requestedOperations", payload.get("requested_operations"))
+    canceled = payload.get("canceledOperations", payload.get("canceled_operations"))
+    failed = payload.get("failedOperations", payload.get("failed_operations"))
     print(
         "Canceled:"
-        f" {_safe_text(payload.get('job_id'))}"
-        f"  Requested: {_safe_text(payload.get('requested_operations'))}"
-        f"  Canceled: {_safe_text(payload.get('canceled_operations'))}"
-        f"  Failed: {_safe_text(payload.get('failed_operations'))}"
+        f" {_safe_text(job_id)}"
+        f"  Requested: {_safe_text(requested)}"
+        f"  Canceled: {_safe_text(canceled)}"
+        f"  Failed: {_safe_text(failed)}"
     )
     return 0
 
