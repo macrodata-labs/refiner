@@ -11,6 +11,7 @@ from refiner.platform.client import MacrodataApiError, MacrodataClient
 from refiner.platform.client.api import sanitize_terminal_text
 
 _DEFAULT_LOG_WINDOW_MS = 60 * 60 * 1000
+_MAX_LOG_SEARCH_LIMIT = 100
 _MAX_METRICS_WORKER_IDS = 50
 
 
@@ -295,6 +296,9 @@ def _render_metrics(payload: dict[str, Any]) -> int:
 
     print(f"Job: {_safe_text(payload.get('jobId'))}")
     print(f"Stage: {_safe_text(payload.get('stageIndex'))}")
+    detail_level = _safe_text(payload.get("detailLevel"))
+    if detail_level != "-":
+        print(f"Detail: {detail_level}")
     for step in steps:
         if not isinstance(step, dict):
             continue
@@ -326,14 +330,22 @@ def _render_metrics(payload: dict[str, Any]) -> int:
 def _metric_details_text(metric: dict[str, Any]) -> str:
     kind = metric.get("metricKind")
     if kind == "counter":
+        if "total" not in metric:
+            return _safe_text(f"unit={metric.get('unit')}")
         return _safe_text(
             f"total={metric.get('total')} rate={metric.get('rateSinceStart')} per_worker={metric.get('perWorker')}"
         )
     if kind == "gauge":
+        if "avgAllTime" not in metric:
+            return _safe_text(
+                f"kind={metric.get('kind') or '-'} unit={metric.get('unit')}"
+            )
         return _safe_text(
             f"avg_all={metric.get('avgAllTime')} avg_5m={metric.get('avgLast5m')} max_5m={metric.get('maxLast5m')}"
         )
     if kind == "histogram":
+        if "average" not in metric:
+            return _safe_text(f"per={metric.get('per')} unit={metric.get('unit')}")
         return _safe_text(
             f"avg={metric.get('average')} total={metric.get('total')} min={metric.get('min')} max={metric.get('max')} count={metric.get('count')}"
         )
@@ -455,10 +467,31 @@ def cmd_jobs_workers(args: Namespace) -> int:
 
 
 def cmd_jobs_logs(args: Namespace) -> int:
-    end_ms = args.end_ms if args.end_ms is not None else _now_ms()
-    start_ms = (
-        args.start_ms if args.start_ms is not None else end_ms - _DEFAULT_LOG_WINDOW_MS
-    )
+    if args.search:
+        if args.stage is None:
+            print("--search requires --stage.", file=sys.stderr)
+            return 1
+        if args.start_ms is None or args.end_ms is None:
+            print(
+                "--search requires explicit --start-ms and --end-ms.",
+                file=sys.stderr,
+            )
+            return 1
+        if args.limit > _MAX_LOG_SEARCH_LIMIT:
+            print(
+                f"--search supports at most {_MAX_LOG_SEARCH_LIMIT} results.",
+                file=sys.stderr,
+            )
+            return 1
+        start_ms = args.start_ms
+        end_ms = args.end_ms
+    else:
+        end_ms = args.end_ms if args.end_ms is not None else _now_ms()
+        start_ms = (
+            args.start_ms
+            if args.start_ms is not None
+            else end_ms - _DEFAULT_LOG_WINDOW_MS
+        )
     try:
         payload = _client().cli_get_job_logs(
             job_id=args.job_id,
@@ -478,11 +511,16 @@ def cmd_jobs_logs(args: Namespace) -> int:
 
 
 def cmd_jobs_metrics(args: Namespace) -> int:
+    metric_labels = list(dict.fromkeys(args.metric))
+    if metric_labels and args.step is None:
+        print("--metric requires --step.", file=sys.stderr)
+        return 1
     try:
         payload = _client().cli_get_job_step_metrics(
             job_id=args.job_id,
             stage_index=args.stage_index,
             step_index=args.step,
+            metric_labels=metric_labels,
         )
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)

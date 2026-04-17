@@ -51,12 +51,15 @@ def test_parser_has_jobs_workers_pagination_flags() -> None:
 
 def test_parser_has_stage_metrics_commands() -> None:
     parser = build_parser()
-    args = parser.parse_args(["jobs", "metrics", "job-1", "2", "--step", "3"])
+    args = parser.parse_args(
+        ["jobs", "metrics", "job-1", "2", "--step", "3", "--metric", "rows"]
+    )
     assert args.command == "jobs"
     assert args.jobs_command == "metrics"
     assert args.job_id == "job-1"
     assert args.stage_index == 2
     assert args.step == 3
+    assert args.metric == ["rows"]
 
 
 def test_parser_has_resource_metrics_command() -> None:

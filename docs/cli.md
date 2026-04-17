@@ -136,6 +136,8 @@ macrodata jobs workers <job_id> --cursor <opaque_cursor>
 ### `macrodata jobs logs`
 
 Fetches cloud worker or service logs for a job. You can narrow by stage, worker, source, severity, search text, and time window.
+Without `--search`, the CLI defaults to the most recent hour if you do not pass a window.
+With `--search`, the window must be explicit and the stage is mandatory so the query shape stays transparent and bounded.
 
 Options:
 
@@ -150,23 +152,34 @@ Options:
 - `--limit <count>`
 - `--json`
 
+Notes:
+
+- `--search` requires `--stage`
+- `--search` requires both `--start-ms` and `--end-ms`
+- `--search` supports at most 100 results per request
+
 ```bash
 macrodata jobs logs <job_id>
 macrodata jobs logs <job_id> --stage 0 --severity error
+macrodata jobs logs <job_id> --stage 0 --search retry --start-ms 1713340800000 --end-ms 1713341700000 --limit 50
 ```
 
 ### `macrodata jobs metrics`
 
-Fetches cloud step metrics for one stage. The response is organized by step and includes counters, histograms, and gauges attributed to each step.
+Fetches cloud step metrics for one stage.
+The default response is inventory only: each step and the metric labels available under it.
+Add `--step` to inspect one step, and add one or more `--metric` labels to fetch actual values for that step.
 
 Options:
 
 - `--step <step_index>`
+- `--metric <label>`; may be repeated and requires `--step`
 - `--json`
 
 ```bash
 macrodata jobs metrics <job_id> <stage_index>
 macrodata jobs metrics <job_id> <stage_index> --step 2
+macrodata jobs metrics <job_id> <stage_index> --step 2 --metric rows_processed --metric queue_depth
 ```
 
 ### `macrodata jobs resource-metrics`

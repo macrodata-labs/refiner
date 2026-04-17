@@ -145,6 +145,7 @@ class _FakeClient:
         return {
             "jobId": "job-1",
             "stageIndex": 0,
+            "detailLevel": "inventory",
             "steps": [
                 {
                     "stepIndex": 2,
@@ -154,9 +155,7 @@ class _FakeClient:
                         {
                             "metricKind": "counter",
                             "label": "rows_processed",
-                            "total": 100,
-                            "rateSinceStart": 2.5,
-                            "perWorker": 50,
+                            "unit": "rows",
                         }
                     ],
                 }
@@ -270,13 +269,14 @@ def test_jobs_metrics_plain_output(monkeypatch, capsys) -> None:
     monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_metrics(
-        Namespace(job_id="job-1", stage_index=0, step=None, json=False)
+        Namespace(job_id="job-1", stage_index=0, step=None, metric=[], json=False)
     )
     out = capsys.readouterr()
 
     assert rc == 0
     assert "Step 2: enrich_records (map)" in out.out
     assert "rows_processed" in out.out
+    assert "Detail: inventory" in out.out
 
 
 def test_jobs_cancel_plain_output(monkeypatch, capsys) -> None:
@@ -351,6 +351,7 @@ def test_jobs_metrics_missing_payload_reports_to_stderr(monkeypatch, capsys) -> 
             job_id="job-1",
             stage_index=0,
             step=None,
+            metric=[],
             json=False,
         )
     )
@@ -359,6 +360,144 @@ def test_jobs_metrics_missing_payload_reports_to_stderr(monkeypatch, capsys) -> 
     assert rc == 1
     assert out.out == ""
     assert "Metrics unavailable." in out.err
+
+
+def test_jobs_metrics_rejects_metric_without_step(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_metrics(
+        Namespace(
+            job_id="job-1",
+            stage_index=0,
+            step=None,
+            metric=["rows_processed"],
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert "--metric requires --step." in out.err
+
+
+def test_jobs_logs_search_requires_explicit_scope(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search="retry",
+            start_ms=None,
+            end_ms=None,
+            limit=10,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert "--search requires --stage." in out.err
+
+
+def test_jobs_logs_search_rejects_large_limits(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=0,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search="retry",
+            start_ms=1,
+            end_ms=2,
+            limit=101,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert "--search supports at most 100 results." in out.err
+
+
+def test_jobs_logs_search_requires_explicit_window(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=0,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search="retry",
+            start_ms=1,
+            end_ms=None,
+            limit=10,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert "--search requires explicit --start-ms and --end-ms." in out.err
+
+
+def test_jobs_metrics_passes_metric_labels(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    class _CapturingClient(_FakeClient):
+        def cli_get_job_step_metrics(self, **kwargs: object) -> dict[str, object]:
+            observed.update(kwargs)
+            return {
+                "jobId": "job-1",
+                "stageIndex": 0,
+                "detailLevel": "values",
+                "steps": [
+                    {
+                        "stepIndex": 2,
+                        "name": "enrich_records",
+                        "type": "map",
+                        "metrics": [
+                            {
+                                "metricKind": "counter",
+                                "label": "rows_processed",
+                                "total": 100,
+                                "rateSinceStart": 2.5,
+                                "perWorker": 50,
+                            }
+                        ],
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(jobs, "_client", lambda: _CapturingClient())
+
+    rc = jobs.cmd_jobs_metrics(
+        Namespace(
+            job_id="job-1",
+            stage_index=0,
+            step=2,
+            metric=["rows_processed", "rows_processed", "queue_depth"],
+            json=False,
+        )
+    )
+
+    assert rc == 0
+    assert observed["metric_labels"] == ["rows_processed", "queue_depth"]
 
 
 def test_jobs_resource_metrics_rejects_too_many_worker_ids(monkeypatch, capsys) -> None:

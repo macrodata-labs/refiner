@@ -382,11 +382,15 @@ class MacrodataClient:
         job_id: str,
         stage_index: int,
         step_index: int | None = None,
+        metric_labels: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._request_raw(
             method="GET",
             path=f"/api/cli/jobs/{job_id}/stages/{stage_index}/metrics",
-            query_params={"stepIndex": step_index},
+            query_params={
+                "stepIndex": step_index,
+                "metricLabels": ",".join(metric_labels) if metric_labels else None,
+            },
             timeout_s=30.0,
         )
 

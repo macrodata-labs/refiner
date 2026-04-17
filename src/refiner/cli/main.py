@@ -154,6 +154,12 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_metrics.add_argument("stage_index", type=int, help="Stage index")
     jobs_metrics.add_argument("--step", type=int, help="Filter to one step index")
     jobs_metrics.add_argument(
+        "--metric",
+        action="append",
+        default=[],
+        help="Metric label to fetch for the selected step; may be repeated",
+    )
+    jobs_metrics.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
     jobs_metrics.set_defaults(handler=cmd_jobs_metrics)
