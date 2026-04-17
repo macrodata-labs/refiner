@@ -435,7 +435,7 @@ def test_jobs_manifest_sanitizes_script_text(monkeypatch, capsys) -> None:
             manifest_data["script"] = {
                 "path": "pipeline.py",
                 "sha256": "abc123",
-                "text": "print('ok')\x1b[31m\nnext_line()",
+                "text": "print('ok')\x1b[31m\x9b31m\nnext_line()",
             }
             return payload
 
@@ -454,6 +454,7 @@ def test_jobs_manifest_sanitizes_script_text(monkeypatch, capsys) -> None:
 
     assert rc == 0
     assert "\x1b" not in out.out
+    assert "\x9b" not in out.out
     assert "print('ok')[31m" in out.out
     assert "next_line()" in out.out
 

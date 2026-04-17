@@ -416,7 +416,12 @@ def _render_manifest(
                 safe_script_text = "".join(
                     ch
                     for ch in script["text"]
-                    if ch in "\n\t" or (ch >= " " and ch != "\x7f")
+                    if ch in "\n\t"
+                    or (
+                        ord(ch) >= 0x20
+                        and ch != "\x7f"
+                        and not (0x80 <= ord(ch) <= 0x9F)
+                    )
                 )
                 print("\n" + safe_script_text)
         else:
