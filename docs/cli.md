@@ -41,13 +41,13 @@ macrodata logout
 Use `macrodata run` to run a Macrodata Refiner pipeline script.
 
 ```bash
-macrodata run examples/local_log_stream.py
+macrodata run path/to/pipeline.py
 ```
 
 Optional flags:
 
 ```bash
-macrodata run --logs one examples/local_log_stream.py -- --workers 4 --rows 20
+macrodata run --logs one path/to/pipeline.py -- --workers 4 --rows 20
 ```
 
 `macrodata run` currently supports:
