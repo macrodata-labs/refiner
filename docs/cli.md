@@ -102,7 +102,7 @@ macrodata jobs get <job_id>
 
 ### `macrodata jobs manifest`
 
-Reads the captured run manifest for a job. Use the optional flags to expand runtime details, dependency information, and captured code metadata from the manifest payload.
+Reads the captured run manifest for a job. By default it prints runtime details. Use the optional flags to additionally show dependency information and captured code metadata.
 
 Options:
 

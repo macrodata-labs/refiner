@@ -320,8 +320,8 @@ def test_jobs_manifest_plain_output(monkeypatch, capsys) -> None:
 
     assert rc == 0
     assert "Runtime" in out.out
-    assert "Dependencies" in out.out
-    assert "Code" in out.out
+    assert "Dependencies" not in out.out
+    assert "Code" not in out.out
 
 
 def test_jobs_get_missing_payload_reports_to_stderr(monkeypatch, capsys) -> None:

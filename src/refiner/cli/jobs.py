@@ -352,7 +352,7 @@ def _render_manifest(
         print("Manifest unavailable.", file=sys.stderr)
         return 1
     if not (show_runtime or show_deps or show_code):
-        show_runtime = show_deps = show_code = True
+        show_runtime = True
     if show_runtime:
         environment = manifest.get("environment")
         print("Runtime")
