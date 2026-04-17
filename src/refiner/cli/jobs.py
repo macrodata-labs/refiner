@@ -83,7 +83,7 @@ def _render_list(payload: dict[str, Any]) -> int:
         print("No jobs found.")
         return 0
 
-    rows = [["ID", "Status", "Kind", "Progress", "Created", "Name"]]
+    rows = [["ID", "Status", "Kind", "Started By", "Progress", "Created", "Name"]]
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -92,6 +92,7 @@ def _render_list(payload: dict[str, Any]) -> int:
                 _safe_text(item.get("id")),
                 _safe_text(item.get("status")),
                 _executor_text(item.get("executorKind")),
+                _safe_text(item.get("startedByIdentity")),
                 _progress_text(item.get("progress")),
                 _format_ts(item.get("createdAt")),
                 _safe_text(item.get("name")),
@@ -123,6 +124,8 @@ def _render_job(payload: dict[str, Any]) -> int:
         f"  Started: {_format_ts(job.get('startedAt'))}"
         f"  Ended: {_format_ts(job.get('endedAt'))}"
     )
+    if isinstance(job.get("startedByIdentity"), str) and job["startedByIdentity"]:
+        print(f"Started By: {_safe_text(job.get('startedByIdentity'))}")
     print(
         "Workers:"
         f" {_safe_text(job.get('runningWorkers'))}/{_safe_text(job.get('totalWorkers'))}"
@@ -154,6 +157,30 @@ def _render_job(payload: dict[str, Any]) -> int:
                 ]
             )
         _print_table(rows)
+        step_rows = [["Stage", "Step", "Type", "Name", "Summary"]]
+        has_steps = False
+        for stage in stages:
+            if not isinstance(stage, dict):
+                continue
+            stage_steps = stage.get("steps")
+            if not isinstance(stage_steps, list):
+                continue
+            for step in stage_steps:
+                if not isinstance(step, dict):
+                    continue
+                has_steps = True
+                step_rows.append(
+                    [
+                        _safe_text(stage.get("index")),
+                        _safe_text(step.get("index")),
+                        _safe_text(step.get("type")),
+                        _safe_text(step.get("name")),
+                        _step_summary_text(step.get("args")),
+                    ]
+                )
+        if has_steps:
+            print("\nSteps")
+            _print_table(step_rows)
     return 0
 
 
@@ -163,13 +190,14 @@ def _render_workers(payload: dict[str, Any]) -> int:
         print("No workers found.")
         return 0
 
-    rows = [["Worker", "Status", "Stage", "Running", "Done", "Started", "Host"]]
+    rows = [["UUID", "Name", "Status", "Stage", "Running", "Done", "Started", "Host"]]
     for item in items:
         if not isinstance(item, dict):
             continue
         rows.append(
             [
                 _safe_text(item.get("id")),
+                _safe_text(item.get("name")),
                 _safe_text(item.get("status")),
                 _safe_text(item.get("stageId")),
                 _safe_text(item.get("runningShardCount")),
@@ -209,7 +237,7 @@ def _render_logs(payload: dict[str, Any]) -> int:
     return 0
 
 
-def _render_metrics(payload: dict[str, Any]) -> int:
+def _render_resource_metrics(payload: dict[str, Any]) -> int:
     metrics = payload.get("metrics")
     if not isinstance(metrics, dict):
         print("Metrics unavailable.", file=sys.stderr)
@@ -226,6 +254,7 @@ def _render_metrics(payload: dict[str, Any]) -> int:
         return 0
 
     print(f"Job: {_safe_text(payload.get('jobId'))}")
+    print(f"Stage: {_safe_text(payload.get('stageIndex'))}")
     print(f"Range: {_safe_text(payload.get('range'))}")
     print(f"Latest sample: {_format_ts(latest.get('t'))}")
     print(
@@ -240,8 +269,120 @@ def _render_metrics(payload: dict[str, Any]) -> int:
     return 0
 
 
-def _render_manifest(payload: dict[str, Any]) -> int:
-    print(json.dumps(payload.get("manifest"), indent=2, sort_keys=True))
+def _step_summary_text(args: Any) -> str:
+    if not isinstance(args, dict) or not args:
+        return "-"
+    parts: list[str] = []
+    for key in sorted(args.keys())[:3]:
+        value = args.get(key)
+        if isinstance(value, (str, int, float, bool)):
+            parts.append(f"{key}={value}")
+        elif isinstance(value, list):
+            parts.append(f"{key}=[{len(value)}]")
+        elif isinstance(value, dict):
+            parts.append(f"{key}={{...}}")
+    return _safe_text(", ".join(parts) if parts else "{...}")
+
+
+def _render_metrics(payload: dict[str, Any]) -> int:
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        print("Metrics unavailable.", file=sys.stderr)
+        return 1
+    if not steps:
+        print("No step metrics found.")
+        return 0
+
+    print(f"Job: {_safe_text(payload.get('jobId'))}")
+    print(f"Stage: {_safe_text(payload.get('stageIndex'))}")
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        print(
+            "\n"
+            f"Step {_safe_text(step.get('stepIndex'))}: "
+            f"{_safe_text(step.get('name'))} "
+            f"({_safe_text(step.get('type'))})"
+        )
+        metrics = step.get("metrics")
+        if not isinstance(metrics, list) or not metrics:
+            print("No metrics.")
+            continue
+        rows = [["Kind", "Label", "Details"]]
+        for metric in metrics:
+            if not isinstance(metric, dict):
+                continue
+            rows.append(
+                [
+                    _safe_text(metric.get("metricKind")),
+                    _safe_text(metric.get("label")),
+                    _metric_details_text(metric),
+                ]
+            )
+        _print_table(rows)
+    return 0
+
+
+def _metric_details_text(metric: dict[str, Any]) -> str:
+    kind = metric.get("metricKind")
+    if kind == "counter":
+        return _safe_text(
+            f"total={metric.get('total')} rate={metric.get('rateSinceStart')} per_worker={metric.get('perWorker')}"
+        )
+    if kind == "gauge":
+        return _safe_text(
+            f"avg_all={metric.get('avgAllTime')} avg_5m={metric.get('avgLast5m')} max_5m={metric.get('maxLast5m')}"
+        )
+    if kind == "histogram":
+        return _safe_text(
+            f"avg={metric.get('average')} total={metric.get('total')} min={metric.get('min')} max={metric.get('max')} count={metric.get('count')}"
+        )
+    return "-"
+
+
+def _render_manifest(
+    payload: dict[str, Any],
+    *,
+    show_runtime: bool,
+    show_deps: bool,
+    show_code: bool,
+) -> int:
+    manifest = payload.get("manifest")
+    if not isinstance(manifest, dict):
+        print("Manifest unavailable.", file=sys.stderr)
+        return 1
+    if not (show_runtime or show_deps or show_code):
+        show_runtime = show_deps = show_code = True
+    if show_runtime:
+        environment = manifest.get("environment")
+        print("Runtime")
+        if isinstance(environment, dict):
+            print(f"Python: {_safe_text(environment.get('python_version'))}")
+            print(f"Refiner: {_safe_text(environment.get('refiner_version'))}")
+            print(f"Platform: {_safe_text(environment.get('platform'))}")
+        else:
+            print("-")
+    if show_deps:
+        dependencies = manifest.get("dependencies")
+        print("\nDependencies")
+        if isinstance(dependencies, list) and dependencies:
+            for dependency in dependencies:
+                if isinstance(dependency, dict):
+                    print(
+                        f"{_safe_text(dependency.get('name'))}=={_safe_text(dependency.get('version'))}"
+                    )
+        else:
+            print("-")
+    if show_code:
+        script = manifest.get("script")
+        print("\nCode")
+        if isinstance(script, dict):
+            print(f"Path: {_safe_text(script.get('path'))}")
+            print(f"SHA256: {_safe_text(script.get('sha256'))}")
+            if isinstance(script.get("text"), str) and script["text"]:
+                print("\n" + script["text"])
+        else:
+            print("-")
     return 0
 
 
@@ -266,6 +407,7 @@ def cmd_jobs_list(args: Namespace) -> int:
         payload = _client().cli_list_jobs(
             status=args.status,
             executor_kind=args.kind,
+            me=args.me,
             limit=args.limit,
             cursor=args.cursor,
         )
@@ -287,7 +429,16 @@ def cmd_jobs_manifest(args: Namespace) -> int:
         payload = _client().cli_get_job_manifest(job_id=args.job_id)
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)
-    return _print_json(payload) if args.json else _render_manifest(payload)
+    return (
+        _print_json(payload)
+        if args.json
+        else _render_manifest(
+            payload,
+            show_runtime=args.show_runtime,
+            show_deps=args.show_deps,
+            show_code=args.show_code,
+        )
+    )
 
 
 def cmd_jobs_workers(args: Namespace) -> int:
@@ -327,6 +478,18 @@ def cmd_jobs_logs(args: Namespace) -> int:
 
 
 def cmd_jobs_metrics(args: Namespace) -> int:
+    try:
+        payload = _client().cli_get_job_step_metrics(
+            job_id=args.job_id,
+            stage_index=args.stage_index,
+            step_index=args.step,
+        )
+    except (MacrodataApiError, MacrodataCredentialsError) as err:
+        return _handle_error(err)
+    return _print_json(payload) if args.json else _render_metrics(payload)
+
+
+def cmd_jobs_resource_metrics(args: Namespace) -> int:
     worker_ids = list(dict.fromkeys(args.worker_id))
     if len(worker_ids) > _MAX_METRICS_WORKER_IDS:
         print(
@@ -341,12 +504,12 @@ def cmd_jobs_metrics(args: Namespace) -> int:
             start_ms=args.start_ms,
             end_ms=args.end_ms,
             bucket_count=args.bucket_count,
-            stage_index=args.stage,
+            stage_index=args.stage_index,
             worker_ids=worker_ids,
         )
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)
-    return _print_json(payload) if args.json else _render_metrics(payload)
+    return _print_json(payload) if args.json else _render_resource_metrics(payload)
 
 
 def cmd_jobs_cancel(args: Namespace) -> int:

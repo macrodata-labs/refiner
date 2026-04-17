@@ -67,6 +67,7 @@ Inspect jobs in the workspace attached to your current API key:
 
 ```bash
 macrodata jobs list --kind cloud
+macrodata jobs list --me
 macrodata jobs get <job_id>
 ```
 
@@ -74,6 +75,7 @@ Read the captured run manifest:
 
 ```bash
 macrodata jobs manifest <job_id>
+macrodata jobs manifest <job_id> --show-runtime --show-deps
 ```
 
 Inspect workers for a specific stage:
@@ -91,12 +93,18 @@ macrodata jobs logs <job_id>
 macrodata jobs logs <job_id> --stage 0 --severity error
 ```
 
-Fetch cloud-job metrics:
+Fetch cloud step metrics:
 
 ```bash
-macrodata jobs metrics <job_id>
-macrodata jobs metrics <job_id> --stage 0 --range 6h
-macrodata jobs metrics <job_id> --worker-id worker-1 --worker-id worker-2
+macrodata jobs metrics <job_id> <stage_index>
+macrodata jobs metrics <job_id> <stage_index> --step 2
+```
+
+Fetch cloud resource metrics:
+
+```bash
+macrodata jobs resource-metrics <job_id> <stage_index>
+macrodata jobs resource-metrics <job_id> <stage_index> --worker-id worker-1
 ```
 
 Cancel a running or pending cloud job:
@@ -111,8 +119,8 @@ Every job-inspection command supports `--json`. That mode prints the raw API res
 
 - `launch_local(...)` does not require Macrodata auth
 - `launch_cloud(...)` requires Macrodata auth
-- `macrodata jobs logs ...` and `macrodata jobs metrics ...` are only available for cloud jobs
-- `macrodata jobs metrics ...` accepts at most 50 distinct `--worker-id` filters per request
+- `macrodata jobs logs ...`, `macrodata jobs metrics ...`, and `macrodata jobs resource-metrics ...` are only available for cloud jobs
+- `macrodata jobs resource-metrics ...` accepts at most 50 distinct `--worker-id` filters per request
 - `macrodata jobs cancel ...` is only available for cloud jobs in `pending` or `running` state
 
 ## Internal Notes

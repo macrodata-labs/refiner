@@ -11,6 +11,7 @@ from refiner.cli.jobs import (
     cmd_jobs_logs,
     cmd_jobs_manifest,
     cmd_jobs_metrics,
+    cmd_jobs_resource_metrics,
     cmd_jobs_workers,
 )
 from refiner.cli.run import cmd_run
@@ -81,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_list.add_argument(
         "--limit", type=int, default=20, help="Maximum jobs to return"
     )
+    jobs_list.add_argument(
+        "--me",
+        action="store_true",
+        help="Only include jobs started by the authenticated user",
+    )
     jobs_list.add_argument("--cursor", help="Opaque pagination cursor")
     jobs_list.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
@@ -94,6 +100,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     jobs_manifest = jobs_subparsers.add_parser("manifest", help="Get job manifest")
     jobs_manifest.add_argument("job_id", help="Job identifier")
+    jobs_manifest.add_argument(
+        "--show-runtime",
+        action="store_true",
+        help="Show runtime information from the manifest",
+    )
+    jobs_manifest.add_argument(
+        "--show-deps",
+        action="store_true",
+        help="Show dependencies from the manifest",
+    )
+    jobs_manifest.add_argument(
+        "--show-code",
+        action="store_true",
+        help="Show captured script metadata from the manifest",
+    )
     jobs_manifest.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
@@ -131,32 +152,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     jobs_logs.set_defaults(handler=cmd_jobs_logs)
 
-    jobs_metrics = jobs_subparsers.add_parser("metrics", help="Fetch cloud job metrics")
+    jobs_metrics = jobs_subparsers.add_parser(
+        "metrics", help="Fetch cloud step metrics for a stage"
+    )
     jobs_metrics.add_argument("job_id", help="Job identifier")
+    jobs_metrics.add_argument("stage_index", type=int, help="Stage index")
+    jobs_metrics.add_argument("--step", type=int, help="Filter to one step index")
     jobs_metrics.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+    jobs_metrics.set_defaults(handler=cmd_jobs_metrics)
+
+    jobs_resource_metrics = jobs_subparsers.add_parser(
+        "resource-metrics", help="Fetch cloud resource metrics for a stage"
+    )
+    jobs_resource_metrics.add_argument("job_id", help="Job identifier")
+    jobs_resource_metrics.add_argument("stage_index", type=int, help="Stage index")
+    jobs_resource_metrics.add_argument(
         "--range",
         choices=("5m", "15m", "1h", "4h", "6h", "24h", "7d"),
         default="1h",
         help="Metrics range",
     )
-    jobs_metrics.add_argument("--stage", type=int, help="Filter by stage index")
-    jobs_metrics.add_argument(
+    jobs_resource_metrics.add_argument(
         "--worker-id",
         action="append",
         default=[],
         help="Filter by worker ID; may be repeated",
     )
-    jobs_metrics.add_argument(
+    jobs_resource_metrics.add_argument(
         "--start-ms", type=int, help="Window start time in epoch ms"
     )
-    jobs_metrics.add_argument("--end-ms", type=int, help="Window end time in epoch ms")
-    jobs_metrics.add_argument(
+    jobs_resource_metrics.add_argument(
+        "--end-ms", type=int, help="Window end time in epoch ms"
+    )
+    jobs_resource_metrics.add_argument(
         "--bucket-count", type=int, help="Requested number of metric buckets"
     )
-    jobs_metrics.add_argument(
+    jobs_resource_metrics.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    jobs_metrics.set_defaults(handler=cmd_jobs_metrics)
+    jobs_resource_metrics.set_defaults(handler=cmd_jobs_resource_metrics)
 
     jobs_cancel = jobs_subparsers.add_parser("cancel", help="Cancel a cloud job")
     jobs_cancel.add_argument("job_id", help="Job identifier")

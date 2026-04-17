@@ -279,6 +279,7 @@ class MacrodataClient:
         *,
         status: str | None = None,
         executor_kind: str | None = None,
+        me: bool | None = None,
         limit: int | None = None,
         cursor: str | None = None,
     ) -> dict[str, Any]:
@@ -288,6 +289,7 @@ class MacrodataClient:
             query_params={
                 "status": status,
                 "executorKind": executor_kind,
+                "me": me,
                 "limit": limit,
                 "cursor": cursor,
             },
@@ -352,24 +354,37 @@ class MacrodataClient:
         self,
         *,
         job_id: str,
+        stage_index: int,
         range_value: str | None = None,
         start_ms: int | None = None,
         end_ms: int | None = None,
         bucket_count: int | None = None,
-        stage_index: int | None = None,
         worker_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._request_raw(
             method="GET",
-            path=f"/api/cli/jobs/{job_id}/metrics",
+            path=f"/api/cli/jobs/{job_id}/stages/{stage_index}/resource-metrics",
             query_params={
                 "range": range_value,
                 "startMs": start_ms,
                 "endMs": end_ms,
                 "bucketCount": bucket_count,
-                "stageIndex": stage_index,
                 "workerIds": worker_ids,
             },
+            timeout_s=30.0,
+        )
+
+    def cli_get_job_step_metrics(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+        step_index: int | None = None,
+    ) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cli/jobs/{job_id}/stages/{stage_index}/metrics",
+            query_params={"stepIndex": step_index},
             timeout_s=30.0,
         )
 

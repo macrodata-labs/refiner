@@ -22,10 +22,11 @@ def test_parser_has_run_command() -> None:
 
 def test_parser_has_jobs_commands() -> None:
     parser = build_parser()
-    args = parser.parse_args(["jobs", "list", "--kind", "cloud"])
+    args = parser.parse_args(["jobs", "list", "--kind", "cloud", "--me"])
     assert args.command == "jobs"
     assert args.jobs_command == "list"
     assert args.kind == "cloud"
+    assert args.me is True
 
 
 def test_parser_has_jobs_cancel_command() -> None:
@@ -46,6 +47,28 @@ def test_parser_has_jobs_workers_pagination_flags() -> None:
     assert args.job_id == "job-1"
     assert args.limit == 50
     assert args.cursor == "20"
+
+
+def test_parser_has_stage_metrics_commands() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["jobs", "metrics", "job-1", "2", "--step", "3"])
+    assert args.command == "jobs"
+    assert args.jobs_command == "metrics"
+    assert args.job_id == "job-1"
+    assert args.stage_index == 2
+    assert args.step == 3
+
+
+def test_parser_has_resource_metrics_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["jobs", "resource-metrics", "job-1", "2", "--worker-id", "worker-1"]
+    )
+    assert args.command == "jobs"
+    assert args.jobs_command == "resource-metrics"
+    assert args.job_id == "job-1"
+    assert args.stage_index == 2
+    assert args.worker_id == ["worker-1"]
 
 
 def test_main_dispatches(monkeypatch) -> None:

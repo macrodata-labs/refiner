@@ -13,6 +13,7 @@ class _FakeClient:
                     "id": "job-1",
                     "status": "running",
                     "executorKind": "cloud",
+                    "startedByIdentity": "alex@example.com",
                     "progress": {"done": 3, "total": 7},
                     "createdAt": 1_700_000_000_000,
                     "name": "cloud pipeline",
@@ -28,6 +29,7 @@ class _FakeClient:
                 "name": "cloud pipeline",
                 "status": "running",
                 "executorKind": "cloud",
+                "startedByIdentity": "alex@example.com",
                 "progress": {"done": 3, "total": 7},
                 "createdAt": 1_700_000_000_000,
                 "startedAt": 1_700_000_001_000,
@@ -47,13 +49,37 @@ class _FakeClient:
                         "runningWorkers": 2,
                         "totalWorkers": 4,
                         "name": "stage-0",
+                        "steps": [
+                            {
+                                "index": 0,
+                                "name": "normalize_rows",
+                                "type": "map",
+                                "args": {"columns": 18},
+                            }
+                        ],
                     }
                 ],
             }
         }
 
     def cli_get_job_manifest(self, *, job_id: str) -> dict[str, object]:
-        return {"jobId": job_id, "manifest": {"version": 1}}
+        return {
+            "jobId": job_id,
+            "manifest": {
+                "version": 1,
+                "environment": {
+                    "python_version": "3.11.0",
+                    "refiner_version": "0.1.0",
+                    "platform": "linux",
+                },
+                "dependencies": [{"name": "pandas", "version": "2.0.0"}],
+                "script": {
+                    "path": "pipeline.py",
+                    "sha256": "abc123",
+                    "text": "print('hello')",
+                },
+            },
+        }
 
     def cli_get_job_workers(
         self,
@@ -68,6 +94,7 @@ class _FakeClient:
             "items": [
                 {
                     "id": "worker-1",
+                    "name": "worker-a",
                     "status": "running",
                     "stageId": "job-1:0",
                     "runningShardCount": 1,
@@ -97,6 +124,7 @@ class _FakeClient:
     def cli_get_job_metrics(self, **_: object) -> dict[str, object]:
         return {
             "jobId": "job-1",
+            "stageIndex": 0,
             "range": "1h",
             "metrics": {
                 "resources": [
@@ -113,6 +141,28 @@ class _FakeClient:
             },
         }
 
+    def cli_get_job_step_metrics(self, **_: object) -> dict[str, object]:
+        return {
+            "jobId": "job-1",
+            "stageIndex": 0,
+            "steps": [
+                {
+                    "stepIndex": 2,
+                    "name": "enrich_records",
+                    "type": "map",
+                    "metrics": [
+                        {
+                            "metricKind": "counter",
+                            "label": "rows_processed",
+                            "total": 100,
+                            "rateSinceStart": 2.5,
+                            "perWorker": 50,
+                        }
+                    ],
+                }
+            ],
+        }
+
     def cli_cancel_job(self, *, job_id: str) -> dict[str, object]:
         return {
             "job_id": job_id,
@@ -126,13 +176,14 @@ def test_jobs_list_plain_output(monkeypatch, capsys) -> None:
     monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_list(
-        Namespace(status=None, kind=None, limit=20, cursor=None, json=False)
+        Namespace(status=None, kind=None, me=False, limit=20, cursor=None, json=False)
     )
     out = capsys.readouterr()
 
     assert rc == 0
     assert "job-1" in out.out
     assert "cloud pipeline" in out.out
+    assert "alex@example.com" in out.out
 
 
 def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
@@ -144,6 +195,7 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert rc == 0
     assert "Job: cloud pipeline (job-1)" in out.out
     assert "Stages" in out.out
+    assert "Steps" in out.out
 
 
 def test_jobs_logs_json_output(monkeypatch, capsys) -> None:
@@ -171,7 +223,7 @@ def test_jobs_logs_json_output(monkeypatch, capsys) -> None:
     assert '"retrying shard"' in out.out
 
 
-def test_jobs_metrics_plain_output_accepts_second_timestamps(
+def test_jobs_resource_metrics_plain_output_accepts_second_timestamps(
     monkeypatch, capsys
 ) -> None:
     class _SecondsClient(_FakeClient):
@@ -196,10 +248,10 @@ def test_jobs_metrics_plain_output_accepts_second_timestamps(
 
     monkeypatch.setattr(jobs, "_client", lambda: _SecondsClient())
 
-    rc = jobs.cmd_jobs_metrics(
+    rc = jobs.cmd_jobs_resource_metrics(
         Namespace(
             job_id="job-1",
-            stage=0,
+            stage_index=0,
             worker_id=[],
             range="1h",
             start_ms=None,
@@ -212,6 +264,19 @@ def test_jobs_metrics_plain_output_accepts_second_timestamps(
 
     assert rc == 0
     assert "Latest sample: 2023-11-14 22:13:21 UTC" in out.out
+
+
+def test_jobs_metrics_plain_output(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_metrics(
+        Namespace(job_id="job-1", stage_index=0, step=None, json=False)
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "Step 2: enrich_records (map)" in out.out
+    assert "rows_processed" in out.out
 
 
 def test_jobs_cancel_plain_output(monkeypatch, capsys) -> None:
@@ -235,7 +300,28 @@ def test_jobs_workers_plain_output_shows_next_cursor(monkeypatch, capsys) -> Non
 
     assert rc == 0
     assert "worker-1" in out.out
+    assert "worker-a" in out.out
     assert "Next cursor: 20" in out.out
+
+
+def test_jobs_manifest_plain_output(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_manifest(
+        Namespace(
+            job_id="job-1",
+            show_runtime=False,
+            show_deps=False,
+            show_code=False,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "Runtime" in out.out
+    assert "Dependencies" in out.out
+    assert "Code" in out.out
 
 
 def test_jobs_get_missing_payload_reports_to_stderr(monkeypatch, capsys) -> None:
@@ -255,7 +341,7 @@ def test_jobs_get_missing_payload_reports_to_stderr(monkeypatch, capsys) -> None
 
 def test_jobs_metrics_missing_payload_reports_to_stderr(monkeypatch, capsys) -> None:
     class _MissingMetricsClient(_FakeClient):
-        def cli_get_job_metrics(self, **_: object) -> dict[str, object]:
+        def cli_get_job_step_metrics(self, **_: object) -> dict[str, object]:
             return {"jobId": "job-1"}
 
     monkeypatch.setattr(jobs, "_client", lambda: _MissingMetricsClient())
@@ -263,12 +349,8 @@ def test_jobs_metrics_missing_payload_reports_to_stderr(monkeypatch, capsys) -> 
     rc = jobs.cmd_jobs_metrics(
         Namespace(
             job_id="job-1",
-            stage=0,
-            worker_id=[],
-            range="1h",
-            start_ms=None,
-            end_ms=None,
-            bucket_count=None,
+            stage_index=0,
+            step=None,
             json=False,
         )
     )
@@ -279,13 +361,13 @@ def test_jobs_metrics_missing_payload_reports_to_stderr(monkeypatch, capsys) -> 
     assert "Metrics unavailable." in out.err
 
 
-def test_jobs_metrics_rejects_too_many_worker_ids(monkeypatch, capsys) -> None:
+def test_jobs_resource_metrics_rejects_too_many_worker_ids(monkeypatch, capsys) -> None:
     monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
 
-    rc = jobs.cmd_jobs_metrics(
+    rc = jobs.cmd_jobs_resource_metrics(
         Namespace(
             job_id="job-1",
-            stage=0,
+            stage_index=0,
             worker_id=[f"worker-{index}" for index in range(51)],
             range="1h",
             start_ms=None,
@@ -301,7 +383,7 @@ def test_jobs_metrics_rejects_too_many_worker_ids(monkeypatch, capsys) -> None:
     assert "Too many --worker-id values; maximum is 50." in out.err
 
 
-def test_jobs_metrics_deduplicates_worker_ids(monkeypatch) -> None:
+def test_jobs_resource_metrics_deduplicates_worker_ids(monkeypatch) -> None:
     observed: dict[str, object] = {}
 
     class _CapturingClient(_FakeClient):
@@ -311,10 +393,10 @@ def test_jobs_metrics_deduplicates_worker_ids(monkeypatch) -> None:
 
     monkeypatch.setattr(jobs, "_client", lambda: _CapturingClient())
 
-    rc = jobs.cmd_jobs_metrics(
+    rc = jobs.cmd_jobs_resource_metrics(
         Namespace(
             job_id="job-1",
-            stage=0,
+            stage_index=0,
             worker_id=["worker-1", "worker-1", "worker-2"],
             range="1h",
             start_ms=None,
@@ -336,7 +418,7 @@ def test_jobs_error_reports_to_stderr(monkeypatch, capsys) -> None:
     monkeypatch.setattr(jobs, "_client", lambda: _FailingClient())
 
     rc = jobs.cmd_jobs_list(
-        Namespace(status=None, kind=None, limit=20, cursor=None, json=False)
+        Namespace(status=None, kind=None, me=False, limit=20, cursor=None, json=False)
     )
     out = capsys.readouterr()
 
