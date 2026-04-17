@@ -102,7 +102,7 @@ macrodata jobs get <job_id>
 
 ### `macrodata jobs manifest`
 
-Reads the captured run manifest for a job. By default it prints runtime details. Use the optional flags to additionally show dependency information and captured code metadata.
+Reads the captured run manifest for a job. Text mode always prints the runtime section first. Use the optional flags to additionally show dependency information and captured code metadata. `--show-runtime` is only there for symmetry with the other section flags.
 
 Options:
 
@@ -113,7 +113,8 @@ Options:
 
 ```bash
 macrodata jobs manifest <job_id>
-macrodata jobs manifest <job_id> --show-runtime --show-deps
+macrodata jobs manifest <job_id> --show-deps
+macrodata jobs manifest <job_id> --show-code
 ```
 
 ### `macrodata jobs workers`
