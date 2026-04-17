@@ -33,7 +33,11 @@ _USER_AGENT = (
 
 
 def sanitize_terminal_text(value: str) -> str:
-    return "".join(ch for ch in value if ch >= " " and ch != "\x7f")
+    return "".join(
+        ch
+        for ch in value
+        if ch >= " " and ch != "\x7f" and not (0x80 <= ord(ch) <= 0x9F)
+    )
 
 
 def resolve_platform_base_url() -> str:

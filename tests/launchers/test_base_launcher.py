@@ -31,7 +31,7 @@ def test_job_tracking_url_sanitizes_terminal_control_characters() -> None:
     launcher = _DummyLauncher(
         pipeline=cast(RefinerPipeline, object()), name="unit-test"
     )
-    client = MacrodataClient(api_key="md_test", base_url="https://app.example.com")
+    client = MacrodataClient(api_key="md_test", base_url="https://app.\x9bexample.com")
 
     url = launcher._job_tracking_url(
         client=client,
@@ -42,6 +42,7 @@ def test_job_tracking_url_sanitizes_terminal_control_characters() -> None:
     assert url == "https://app.example.com/jobs/macrodata/job-[31m"
     assert "\x07" not in url
     assert "\x1b" not in url
+    assert "\x9b" not in url
 
 
 def test_compiled_plan_includes_stage_worker_counts(monkeypatch) -> None:
