@@ -231,6 +231,17 @@ def _render_manifest(payload: dict[str, Any]) -> int:
     return 0
 
 
+def _render_cancel(payload: dict[str, Any]) -> int:
+    print(
+        "Canceled:"
+        f" {_safe_text(payload.get('job_id'))}"
+        f"  Requested: {_safe_text(payload.get('requested_operations'))}"
+        f"  Canceled: {_safe_text(payload.get('canceled_operations'))}"
+        f"  Failed: {_safe_text(payload.get('failed_operations'))}"
+    )
+    return 0
+
+
 def _handle_error(err: Exception) -> int:
     print(_safe_text(str(err)))
     return 1
@@ -313,3 +324,11 @@ def cmd_jobs_metrics(args: Namespace) -> int:
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)
     return _print_json(payload) if args.json else _render_metrics(payload)
+
+
+def cmd_jobs_cancel(args: Namespace) -> int:
+    try:
+        payload = _client().cli_cancel_job(job_id=args.job_id)
+    except (MacrodataApiError, MacrodataCredentialsError) as err:
+        return _handle_error(err)
+    return _print_json(payload) if args.json else _render_cancel(payload)

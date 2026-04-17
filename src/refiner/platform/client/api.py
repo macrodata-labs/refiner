@@ -364,6 +364,9 @@ class MacrodataClient:
             timeout_s=30.0,
         )
 
+    def cli_cancel_job(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(method="POST", path=f"/api/cli/jobs/{job_id}/cancel")
+
     def start_worker_services(
         self,
         *,

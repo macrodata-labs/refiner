@@ -107,6 +107,14 @@ class _FakeClient:
             },
         }
 
+    def cli_cancel_job(self, *, job_id: str) -> dict[str, object]:
+        return {
+            "job_id": job_id,
+            "requested_operations": 2,
+            "canceled_operations": 2,
+            "failed_operations": 0,
+        }
+
 
 def test_jobs_list_plain_output(monkeypatch, capsys) -> None:
     monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
@@ -198,3 +206,14 @@ def test_jobs_metrics_plain_output_accepts_second_timestamps(
 
     assert rc == 0
     assert "Latest sample: 2023-11-14 22:13:21 UTC" in out.out
+
+
+def test_jobs_cancel_plain_output(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_cancel(Namespace(job_id="job-1", json=False))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "Canceled: job-1" in out.out
+    assert "Requested: 2" in out.out

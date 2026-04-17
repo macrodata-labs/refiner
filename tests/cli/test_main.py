@@ -28,6 +28,14 @@ def test_parser_has_jobs_commands() -> None:
     assert args.kind == "cloud"
 
 
+def test_parser_has_jobs_cancel_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["jobs", "cancel", "job-1"])
+    assert args.command == "jobs"
+    assert args.jobs_command == "cancel"
+    assert args.job_id == "job-1"
+
+
 def test_main_dispatches(monkeypatch) -> None:
     monkeypatch.setattr("refiner.cli.main.cmd_whoami", lambda args: 7)
     rc = main(["whoami"])

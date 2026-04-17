@@ -96,6 +96,12 @@ macrodata jobs metrics <job_id>
 macrodata jobs metrics <job_id> --stage 0 --range 6h
 ```
 
+Cancel a running or pending cloud job:
+
+```bash
+macrodata jobs cancel <job_id>
+```
+
 Every job-inspection command supports `--json`. That mode prints the raw API response so scripts and agentic tools can consume the exact payload returned by Macrodata.
 
 ## Notes
@@ -103,8 +109,9 @@ Every job-inspection command supports `--json`. That mode prints the raw API res
 - `launch_local(...)` does not require Macrodata auth
 - `launch_cloud(...)` requires Macrodata auth
 - `macrodata jobs logs ...` and `macrodata jobs metrics ...` are only available for cloud jobs
+- `macrodata jobs cancel ...` is only available for cloud jobs in `pending` or `running` state
 
 ## Internal Notes
 
-- The CLI forwards job-inspection reads to the Macrodata control plane under `/api/cli/jobs/...`
+- The CLI forwards job-inspection reads and cancellation to the Macrodata control plane under `/api/cli/jobs/...`
 - `--json` is intended as the stable machine-readable contract; the default text output is best-effort formatting on top of that raw response

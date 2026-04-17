@@ -5,6 +5,7 @@ import sys
 
 from refiner.cli.auth import cmd_login, cmd_logout, cmd_whoami
 from refiner.cli.jobs import (
+    cmd_jobs_cancel,
     cmd_jobs_get,
     cmd_jobs_list,
     cmd_jobs_logs,
@@ -152,6 +153,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="Print raw JSON response"
     )
     jobs_metrics.set_defaults(handler=cmd_jobs_metrics)
+
+    jobs_cancel = jobs_subparsers.add_parser("cancel", help="Cancel a cloud job")
+    jobs_cancel.add_argument("job_id", help="Job identifier")
+    jobs_cancel.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+    jobs_cancel.set_defaults(handler=cmd_jobs_cancel)
 
     return parser
 
