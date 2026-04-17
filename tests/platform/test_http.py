@@ -21,7 +21,7 @@ def test_http_error_message_uses_reason_phrase_for_html_body() -> None:
 def test_http_error_message_strips_control_chars() -> None:
     resp = httpx.Response(
         500,
-        json={"error": "\x1b[31mboom\x1b[0m"},
+        json={"error": "\x1b[31mboom\x9b[0m"},
         request=httpx.Request("GET", "https://macrodata.co/api/me"),
     )
 
