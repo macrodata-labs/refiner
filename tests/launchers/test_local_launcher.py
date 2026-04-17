@@ -1345,7 +1345,6 @@ def test_local_launcher_prints_abort_message_in_noninteractive_mode(
     path.write_text('{"x": 1}\n')
     pipeline = read_jsonl(str(path))
 
-    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: None)
     monkeypatch.setattr("refiner.launchers.local.stdout_is_interactive", lambda: False)
 
     launcher = LocalLauncher(
@@ -1370,6 +1369,11 @@ def test_local_launcher_prints_abort_message_in_noninteractive_mode(
         launcher,
         "_launch_stage",
         lambda **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_register_tracked_job",
+        lambda *, stages: (None, None),
     )
 
     with pytest.raises(KeyboardInterrupt):
