@@ -4,6 +4,7 @@ import base64
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
+import os
 
 import refiner as mdr
 
@@ -196,5 +197,5 @@ if __name__ == "__main__":
     pipeline.launch_cloud(
         name="lerobot-sarm-annotation",
         num_workers=1,
-        secrets={"HF_TOKEN": None},
+        secrets={"HF_TOKEN": os.environ["HF_TOKEN"]},
     )

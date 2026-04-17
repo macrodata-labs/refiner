@@ -4,7 +4,7 @@ import refiner as mdr
 
 OUTPUT_PATH = "output/vllm-inference.jsonl"
 PROVIDER = mdr.inference.VLLMProvider(
-    model="google/gemma-4-26B-A4B-it",
+    model="Qwen/Qwen3.5-9B",
     model_max_context=8192,
 )
 
