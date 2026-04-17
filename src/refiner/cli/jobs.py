@@ -74,10 +74,6 @@ def _print_table(rows: list[list[str]]) -> None:
             print("  ".join("-" * width for width in widths))
 
 
-def _now_ms() -> int:
-    return int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-
-
 def _render_list(payload: dict[str, Any]) -> int:
     items = payload.get("items")
     if not isinstance(items, list) or not items:
@@ -486,7 +482,11 @@ def cmd_jobs_logs(args: Namespace) -> int:
         start_ms = args.start_ms
         end_ms = args.end_ms
     else:
-        end_ms = args.end_ms if args.end_ms is not None else _now_ms()
+        end_ms = (
+            args.end_ms
+            if args.end_ms is not None
+            else int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        )
         start_ms = (
             args.start_ms
             if args.start_ms is not None

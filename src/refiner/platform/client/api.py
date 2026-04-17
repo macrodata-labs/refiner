@@ -291,7 +291,7 @@ class MacrodataClient:
             query_params={
                 "status": status,
                 "executorKind": executor_kind,
-                "me": me,
+                "me": True if me else None,
                 "limit": limit,
                 "cursor": cursor,
             },
