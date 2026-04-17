@@ -83,6 +83,17 @@ def _render_list(payload: dict[str, Any]) -> int:
         print("No jobs found.")
         return 0
 
+    def started_by_text(item: dict[str, Any]) -> str:
+        email = item.get("startedByEmail")
+        username = item.get("startedByUsername")
+        if isinstance(email, str) and email:
+            if isinstance(username, str) and username:
+                return _safe_text(f"{username} ({email})")
+            return _safe_text(email)
+        if isinstance(username, str) and username:
+            return _safe_text(username)
+        return "-"
+
     rows = [["ID", "Status", "Kind", "Started By", "Progress", "Created", "Name"]]
     for item in items:
         if not isinstance(item, dict):
@@ -92,7 +103,7 @@ def _render_list(payload: dict[str, Any]) -> int:
                 _safe_text(item.get("id")),
                 _safe_text(item.get("status")),
                 _executor_text(item.get("executorKind")),
-                _safe_text(item.get("startedByIdentity")),
+                started_by_text(item),
                 _progress_text(item.get("progress")),
                 _format_ts(item.get("createdAt")),
                 _safe_text(item.get("name")),
@@ -124,8 +135,17 @@ def _render_job(payload: dict[str, Any]) -> int:
         f"  Started: {_format_ts(job.get('startedAt'))}"
         f"  Ended: {_format_ts(job.get('endedAt'))}"
     )
-    if isinstance(job.get("startedByIdentity"), str) and job["startedByIdentity"]:
-        print(f"Started By: {_safe_text(job.get('startedByIdentity'))}")
+    started_by_email = job.get("startedByEmail")
+    started_by_username = job.get("startedByUsername")
+    if isinstance(started_by_email, str) and started_by_email:
+        if isinstance(started_by_username, str) and started_by_username:
+            print(
+                f"Started By: {_safe_text(f'{started_by_username} ({started_by_email})')}"
+            )
+        else:
+            print(f"Started By: {_safe_text(started_by_email)}")
+    elif isinstance(started_by_username, str) and started_by_username:
+        print(f"Started By: {_safe_text(started_by_username)}")
     print(
         "Workers:"
         f" {_safe_text(job.get('runningWorkers'))}/{_safe_text(job.get('totalWorkers'))}"
