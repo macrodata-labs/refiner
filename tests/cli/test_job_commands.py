@@ -217,3 +217,69 @@ def test_jobs_cancel_plain_output(monkeypatch, capsys) -> None:
     assert rc == 0
     assert "Canceled: job-1" in out.out
     assert "Requested: 2" in out.out
+
+
+def test_jobs_get_missing_payload_reports_to_stderr(monkeypatch, capsys) -> None:
+    class _MissingJobClient(_FakeClient):
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            return {"unexpected": job_id}
+
+    monkeypatch.setattr(jobs, "_client", lambda: _MissingJobClient())
+
+    rc = jobs.cmd_jobs_get(Namespace(job_id="job-1", json=False))
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert "Job details unavailable." in out.err
+
+
+def test_jobs_metrics_missing_payload_reports_to_stderr(monkeypatch, capsys) -> None:
+    class _MissingMetricsClient(_FakeClient):
+        def cli_get_job_metrics(self, **_: object) -> dict[str, object]:
+            return {"jobId": "job-1"}
+
+    monkeypatch.setattr(jobs, "_client", lambda: _MissingMetricsClient())
+
+    rc = jobs.cmd_jobs_metrics(
+        Namespace(
+            job_id="job-1",
+            stage=0,
+            worker_id=[],
+            range="1h",
+            start_ms=None,
+            end_ms=None,
+            bucket_count=None,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert "Metrics unavailable." in out.err
+
+
+def test_jobs_error_reports_to_stderr(monkeypatch, capsys) -> None:
+    class _FailingClient(_FakeClient):
+        def cli_list_jobs(self, **_: object) -> dict[str, object]:
+            raise jobs.MacrodataApiError(status=500, message="boom")
+
+    monkeypatch.setattr(jobs, "_client", lambda: _FailingClient())
+
+    rc = jobs.cmd_jobs_list(
+        Namespace(status=None, kind=None, limit=20, cursor=None, json=False)
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert "HTTP 500: boom" in out.err
+
+
+def test_print_table_handles_ragged_rows(capsys) -> None:
+    jobs._print_table([["A", "B", "C"], ["1", "2"], ["3"]])
+    out = capsys.readouterr()
+
+    assert "A  B  C" in out.out
+    assert "1  2" in out.out

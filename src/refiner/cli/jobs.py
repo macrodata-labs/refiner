@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from argparse import Namespace
 from datetime import datetime, timezone
 from typing import Any
@@ -56,9 +57,16 @@ def _executor_text(value: Any) -> str:
 def _print_table(rows: list[list[str]]) -> None:
     if not rows:
         return
-    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    column_count = len(rows[0])
+    widths = [
+        max(len(row[i]) if i < len(row) else 0 for row in rows)
+        for i in range(column_count)
+    ]
     for index, row in enumerate(rows):
-        padded = "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row))
+        padded = "  ".join(
+            (row[i] if i < len(row) else "").ljust(widths[i])
+            for i in range(column_count)
+        )
         print(padded.rstrip())
         if index == 0:
             print("  ".join("-" * width for width in widths))
@@ -98,7 +106,7 @@ def _render_list(payload: dict[str, Any]) -> int:
 def _render_job(payload: dict[str, Any]) -> int:
     job = payload.get("job")
     if not isinstance(job, dict):
-        print("Job details unavailable.")
+        print("Job details unavailable.", file=sys.stderr)
         return 1
 
     print(f"Job: {_safe_text(job.get('name'))} ({_safe_text(job.get('id'))})")
@@ -198,7 +206,7 @@ def _render_logs(payload: dict[str, Any]) -> int:
 def _render_metrics(payload: dict[str, Any]) -> int:
     metrics = payload.get("metrics")
     if not isinstance(metrics, dict):
-        print("Metrics unavailable.")
+        print("Metrics unavailable.", file=sys.stderr)
         return 1
 
     resources = metrics.get("resources")
@@ -243,7 +251,7 @@ def _render_cancel(payload: dict[str, Any]) -> int:
 
 
 def _handle_error(err: Exception) -> int:
-    print(_safe_text(str(err)))
+    print(_safe_text(str(err)), file=sys.stderr)
     return 1
 
 
