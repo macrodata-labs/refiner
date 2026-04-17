@@ -23,7 +23,7 @@ SUBTASKS = [
 ]
 
 PROVIDER = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen3-VL-8B-Instruct",
+    model="Qwen/Qwen3.5-9B",
 )
 
 VLM_TRANSCODE_CONFIG = mdr.video.VideoTranscodeConfig(

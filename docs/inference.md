@@ -83,7 +83,7 @@ Pass extra VLLM server arguments through `extra_kwargs` on the provider:
 
 ```python
 provider = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen3-VL-8B-Instruct",
+    model="Qwen/Qwen3.5-9B",
     extra_kwargs={"limit-mm-per-prompt": '{"video": 1}'},
 )
 ```

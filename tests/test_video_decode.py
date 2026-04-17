@@ -105,3 +105,28 @@ def test_iter_frame_windows_can_drop_incomplete_windows(tmp_path) -> None:
     )
 
     assert [window.anchor.index for window in windows] == [2]
+
+
+def test_iter_frame_windows_supports_positive_offsets_only(tmp_path) -> None:
+    path = tmp_path / "video.mp4"
+    _write_video(path, num_frames=5, fps=5)
+    video = mdr.video.VideoFile(DataFile.resolve(path))
+
+    windows = asyncio.run(
+        _collect_windows(
+            video,
+            offsets=[1],
+            stride=2,
+            drop_incomplete=False,
+        )
+    )
+
+    assert [window.anchor.index for window in windows] == [0, 2, 4]
+    assert [
+        [frame.index if frame is not None else None for frame in window.frames]
+        for window in windows
+    ] == [
+        [1],
+        [3],
+        [None],
+    ]

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import io
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -45,41 +43,6 @@ class DecodedFrameWindow:
 class _NonClosingBytesIO(io.BytesIO):
     def close(self) -> None:
         pass
-
-
-class _FrameDecoderCursor:
-    def __init__(
-        self,
-        *,
-        container: Any,
-        stream: Any,
-        clip_from: float,
-        clip_to: float | None,
-    ) -> None:
-        self._frames = _iter_selected_frames(
-            container=container,
-            stream=stream,
-            clip_from=clip_from,
-            clip_to=clip_to,
-            seek=True,
-        )
-        self._index = 0
-
-    def next_frame(self) -> DecodedVideoFrame | None:
-        frame = next(self._frames, None)
-        if frame is None:
-            return None
-        timestamp_s = _frame_timestamp_s(frame)
-        item = DecodedVideoFrame(
-            index=self._index,
-            pts=None if frame.pts is None else int(frame.pts),
-            timestamp_s=timestamp_s,
-            width=int(frame.width),
-            height=int(frame.height),
-            frame=frame,
-        )
-        self._index += 1
-        return item
 
 
 async def export_clip(
@@ -131,22 +94,24 @@ async def iter_frames(
     video: VideoFile,
 ) -> AsyncIterator[DecodedVideoFrame]:
     prepared = await prepare_video_source(video=video)
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="refiner-video")
-    cursor = _FrameDecoderCursor(
-        container=prepared.container,
-        stream=prepared.stream,
-        clip_from=video_from_timestamp_s(prepared.video),
-        clip_to=video_to_timestamp_s(prepared.video),
-    )
-    loop = asyncio.get_running_loop()
     try:
-        while True:
-            frame = await loop.run_in_executor(executor, cursor.next_frame)
-            if frame is None:
-                break
-            yield frame
+        frames = _iter_selected_frames(
+            container=prepared.container,
+            stream=prepared.stream,
+            clip_from=video_from_timestamp_s(prepared.video),
+            clip_to=video_to_timestamp_s(prepared.video),
+            seek=True,
+        )
+        for index, frame in enumerate(frames):
+            yield DecodedVideoFrame(
+                index=index,
+                pts=None if frame.pts is None else int(frame.pts),
+                timestamp_s=_frame_timestamp_s(frame),
+                width=int(frame.width),
+                height=int(frame.height),
+                frame=frame,
+            )
     finally:
-        executor.shutdown(wait=True, cancel_futures=False)
         prepared.close()
 
 
@@ -190,9 +155,9 @@ async def iter_frame_windows(
                 yield window
 
         keep_from = (
-            pending_anchor_indexes[0] + min_offset
+            pending_anchor_indexes[0] + min(0, min_offset)
             if pending_anchor_indexes
-            else frame.index + 1 + min_offset
+            else _next_anchor_index(frame.index, stride) + min(0, min_offset)
         )
         while buffer and buffer[0].index < keep_from:
             dropped = buffer.popleft()
@@ -233,6 +198,10 @@ def _build_frame_window(
         offsets=offsets,
         frames=tuple(frames),
     )
+
+
+def _next_anchor_index(frame_index: int, stride: int) -> int:
+    return ((frame_index // stride) + 1) * stride
 
 
 def _iter_selected_frames(
