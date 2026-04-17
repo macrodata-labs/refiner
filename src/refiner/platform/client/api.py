@@ -4,6 +4,7 @@ import importlib.metadata
 import os
 from dataclasses import dataclass
 from typing import Any, TypeVar
+from urllib.parse import urlencode
 
 import httpx
 import msgspec
@@ -141,20 +142,48 @@ class MacrodataClient:
         self.api_key = api_key if api_key is not None else current_api_key()
         self.base_url = (base_url or resolve_platform_base_url()).rstrip("/")
 
+    def _request_raw(
+        self,
+        *,
+        method: str,
+        path: str,
+        query_params: dict[str, Any] | None = None,
+        json_payload: dict[str, Any] | None = None,
+        timeout_s: float = 10.0,
+    ) -> dict[str, Any]:
+        resolved_path = path
+        if query_params:
+            filtered_params = {
+                key: value
+                for key, value in query_params.items()
+                if value is not None and value != [] and value != ""
+            }
+            if filtered_params:
+                encoded = urlencode(filtered_params, doseq=True)
+                resolved_path = f"{path}?{encoded}"
+        return request_json(
+            method=method,
+            path=resolved_path,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            json_payload=json_payload,
+            timeout_s=timeout_s,
+        )
+
     def _request(
         self,
         *,
         method: str,
         path: str,
         response_type: type[T],
+        query_params: dict[str, Any] | None = None,
         json_payload: dict[str, Any] | None = None,
         timeout_s: float = 10.0,
     ) -> T:
-        response_data = request_json(
+        response_data = self._request_raw(
             method=method,
             path=path,
-            api_key=self.api_key,
-            base_url=self.base_url,
+            query_params=query_params,
             json_payload=json_payload,
             timeout_s=timeout_s,
         )
@@ -246,6 +275,127 @@ class MacrodataClient:
             response_type=CloudRunCreateResponse,
             json_payload=request.to_dict(),
         )
+
+    def cli_list_jobs(
+        self,
+        *,
+        status: str | None = None,
+        executor_kind: str | None = None,
+        me: bool | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path="/api/cli/jobs",
+            query_params={
+                "status": status,
+                "executorKind": executor_kind,
+                "me": True if me else None,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
+
+    def cli_get_job(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(method="GET", path=f"/api/cli/jobs/{job_id}")
+
+    def cli_get_job_manifest(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(method="GET", path=f"/api/cli/jobs/{job_id}/manifest")
+
+    def cli_get_job_workers(
+        self,
+        *,
+        job_id: str,
+        stage_index: int | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cli/jobs/{job_id}/workers",
+            query_params={
+                "stageIndex": stage_index,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
+
+    def cli_get_job_logs(
+        self,
+        *,
+        job_id: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int | None = None,
+        stage_index: int | None = None,
+        worker_id: str | None = None,
+        source_type: str | None = None,
+        source_name: str | None = None,
+        severity: str | None = None,
+        search: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cli/jobs/{job_id}/logs",
+            query_params={
+                "startMs": start_ms,
+                "endMs": end_ms,
+                "limit": limit,
+                "stageIndex": stage_index,
+                "workerId": worker_id,
+                "sourceType": source_type,
+                "sourceName": source_name,
+                "severity": severity,
+                "search": search,
+            },
+            timeout_s=30.0,
+        )
+
+    def cli_get_job_metrics(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+        range_value: str | None = None,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        bucket_count: int | None = None,
+        worker_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cli/jobs/{job_id}/stages/{stage_index}/resource-metrics",
+            query_params={
+                "range": range_value,
+                "startMs": start_ms,
+                "endMs": end_ms,
+                "bucketCount": bucket_count,
+                "workerIds": worker_ids,
+            },
+            timeout_s=30.0,
+        )
+
+    def cli_get_job_step_metrics(
+        self,
+        *,
+        job_id: str,
+        stage_index: int,
+        step_index: int | None = None,
+        metric_labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cli/jobs/{job_id}/stages/{stage_index}/metrics",
+            query_params={
+                "stepIndex": step_index,
+                "metricLabels": ",".join(metric_labels) if metric_labels else None,
+            },
+            timeout_s=30.0,
+        )
+
+    def cli_cancel_job(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(method="POST", path=f"/api/cli/jobs/{job_id}/cancel")
 
     def start_worker_services(
         self,

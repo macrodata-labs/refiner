@@ -72,3 +72,18 @@ def test_report_stage_heartbeat_posts_to_stage_heartbeat_route(monkeypatch) -> N
     assert captured["path"] == "/api/jobs/job-1/stages/2/heartbeat"
     assert captured["json_payload"] == {}
     assert response.stage.status == "running"
+
+
+def test_cli_list_jobs_omits_me_when_false(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"items": [], "nextCursor": None}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    client.cli_list_jobs(limit=20, me=False)
+
+    assert captured["path"] == "/api/cli/jobs?limit=20"
