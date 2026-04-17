@@ -384,6 +384,8 @@ def test_local_stage_console_close_moves_cursor_below_frame(
 
     assert any(text.startswith("\x1b[") and text.endswith(";1H") for text in writes)
     assert "\x1b[?25h" in writes
+    assert "\x1b[?1049l" in writes
+    assert any("Macrodata Refiner" in text for text in writes)
     assert writes[-1] == "\n"
 
 

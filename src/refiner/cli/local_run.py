@@ -613,7 +613,11 @@ class LocalStageConsole:
                 self._write("\x1b[?25h")
             if self._alternate_screen:
                 self._write("\x1b[?1049l")
-            self._write("\n")
+                terminal_width = shutil.get_terminal_size(fallback=(120, 30)).columns
+                self._write("\n".join(self._build_header_lines(width=terminal_width)))
+                self._write("\n")
+            else:
+                self._write("\n")
         except BrokenPipeError:
             pass
         finally:
