@@ -72,6 +72,8 @@ Inspect jobs in the workspace attached to your current API key:
 
 ### `macrodata jobs list`
 
+Lists jobs visible to the current API key. Use it to find recent jobs, narrow to cloud or local runs, and page through longer result sets.
+
 Options:
 
 - `--status <status>`
@@ -88,6 +90,8 @@ macrodata jobs list --me
 
 ### `macrodata jobs get`
 
+Fetches the main job summary. This includes status, progress, starter identity, stage layout, worker counts, and per-stage step structure.
+
 Options:
 
 - `--json`
@@ -97,6 +101,8 @@ macrodata jobs get <job_id>
 ```
 
 ### `macrodata jobs manifest`
+
+Reads the captured run manifest for a job. Use the optional flags to expand runtime details, dependency information, and captured code metadata from the manifest payload.
 
 Options:
 
@@ -112,6 +118,8 @@ macrodata jobs manifest <job_id> --show-runtime --show-deps
 
 ### `macrodata jobs workers`
 
+Lists workers for a job, optionally scoped to one stage. The response includes worker UUIDs, names, status, host, start/end times, and shard counters.
+
 Options:
 
 - `--stage <stage_index>`
@@ -126,6 +134,8 @@ macrodata jobs workers <job_id> --cursor <opaque_cursor>
 ```
 
 ### `macrodata jobs logs`
+
+Fetches cloud worker or service logs for a job. You can narrow by stage, worker, source, severity, search text, and time window.
 
 Options:
 
@@ -147,6 +157,8 @@ macrodata jobs logs <job_id> --stage 0 --severity error
 
 ### `macrodata jobs metrics`
 
+Fetches cloud step metrics for one stage. The response is organized by step and includes counters, histograms, and gauges attributed to each step.
+
 Options:
 
 - `--step <step_index>`
@@ -158,6 +170,8 @@ macrodata jobs metrics <job_id> <stage_index> --step 2
 ```
 
 ### `macrodata jobs resource-metrics`
+
+Fetches cloud resource telemetry for one stage. This includes time-bucketed CPU, memory, and network usage, plus resource-event activity over the selected time window.
 
 Options:
 
@@ -174,6 +188,8 @@ macrodata jobs resource-metrics <job_id> <stage_index> --worker-id worker-1
 ```
 
 ### `macrodata jobs cancel`
+
+Requests cancellation for a pending or running cloud job and returns the control-plane cancellation result.
 
 Options:
 
