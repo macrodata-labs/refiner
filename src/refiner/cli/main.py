@@ -17,11 +17,6 @@ from refiner.cli.jobs import (
 from refiner.cli.run import cmd_run
 
 
-def _show_parser_help(parser: argparse.ArgumentParser) -> int:
-    parser.print_help()
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="macrodata", description="Macrodata CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -69,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.set_defaults(handler=cmd_run)
 
     jobs = subparsers.add_parser("jobs", help="Inspect Macrodata jobs")
-    jobs.set_defaults(handler=lambda _args: _show_parser_help(jobs))
+    jobs.set_defaults(handler=lambda _args: (jobs.print_help(), 0)[1])
     jobs_subparsers = jobs.add_subparsers(dest="jobs_command")
 
     jobs_list = jobs_subparsers.add_parser(
