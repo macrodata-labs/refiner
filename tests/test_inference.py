@@ -5,6 +5,7 @@ import importlib
 from collections.abc import Mapping
 from typing import Any
 
+import httpx
 import pytest
 
 import refiner as mdr
@@ -213,6 +214,151 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
     }
 
 
+def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
+    seen: dict[str, int] = {"calls": 0, "sleeps": 0}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {"content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {},
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            del base_url, headers, timeout
+
+        async def post(self, path, *, json):
+            del path, json
+            seen["calls"] += 1
+            if seen["calls"] < 3:
+                raise httpx.TimeoutException("timed out")
+            return _FakeResponse()
+
+    async def _fake_sleep(delay: float) -> None:
+        seen["sleeps"] += 1
+        assert delay in (5.0, 10.0)
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_module.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(openai_module.random, "random", lambda: 0.5)
+
+    response = asyncio.run(
+        openai_module._OpenAIEndpointClient(
+            base_url="https://api.example.com",
+        ).generate(
+            {
+                "model": "gpt-test",
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        )
+    )
+
+    assert response.text == "ok"
+    assert seen == {"calls": 3, "sleeps": 2}
+
+
+def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
+    seen: dict[str, int] = {"calls": 0, "sleeps": 0}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, object]:
+            return {
+                "choices": [
+                    {
+                        "text": "ok",
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {},
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            del base_url, headers, timeout
+
+        async def post(self, path, *, json):
+            del path, json
+            seen["calls"] += 1
+            if seen["calls"] == 1:
+                raise httpx.ConnectError("connect failed")
+            return _FakeResponse()
+
+    async def _fake_sleep(delay: float) -> None:
+        seen["sleeps"] += 1
+        assert delay == 5.0
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_module.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(openai_module.random, "random", lambda: 0.5)
+
+    response = asyncio.run(
+        openai_module._OpenAIEndpointClient(
+            base_url="https://api.example.com",
+        ).generate(
+            {
+                "model": "gpt-test",
+                "prompt": "hello",
+            }
+        )
+    )
+
+    assert response.text == "ok"
+    assert seen == {"calls": 2, "sleeps": 1}
+
+
+def test_openai_endpoint_does_not_retry_on_http_503(monkeypatch) -> None:
+    seen: dict[str, int] = {"calls": 0, "sleeps": 0}
+
+    request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+    response = httpx.Response(
+        503,
+        request=request,
+        json={"error": {"message": "Service unavailable"}},
+    )
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            del base_url, headers, timeout
+
+        async def post(self, path, *, json):
+            del path, json
+            seen["calls"] += 1
+            return response
+
+    async def _fake_sleep(delay: float) -> None:
+        del delay
+        seen["sleeps"] += 1
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_module.asyncio, "sleep", _fake_sleep)
+
+    with pytest.raises(RuntimeError, match="generation request failed with HTTP 503"):
+        asyncio.run(
+            openai_module._OpenAIEndpointClient(
+                base_url="https://api.example.com",
+            ).generate(
+                {
+                    "model": "gpt-test",
+                    "messages": [{"role": "user", "content": "hello"}],
+                }
+            )
+        )
+
+    assert seen == {"calls": 1, "sleeps": 0}
+
+
 def test_openai_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
     provider = OpenAIEndpointProvider(
         base_url="https://api.example.com",
@@ -272,6 +418,26 @@ def test_vllm_provider_includes_model_in_requests(monkeypatch) -> None:
     assert seen["payload"] == {
         "model": "meta-llama/Llama-3.1-8B-Instruct",
         "prompt": "hi",
+    }
+
+
+def test_vllm_provider_includes_extra_kwargs_in_service_definition() -> None:
+    provider = VLLMProvider(
+        model="Qwen/Qwen2.5-VL-7B-Instruct",
+        model_max_context=32768,
+        extra_kwargs={"limit-mm-per-prompt": "video=1"},
+    )
+
+    assert provider.to_builtin_args() == {
+        "type": "vllm",
+        "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
+        "model_max_context": 32768,
+        "extra_kwargs": {"limit-mm-per-prompt": "video=1"},
+    }
+    assert provider.service_definition().to_spec().config == {
+        "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
+        "model_max_context": 32768,
+        "extra_kwargs": {"limit-mm-per-prompt": "video=1"},
     }
 
 

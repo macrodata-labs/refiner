@@ -12,6 +12,7 @@ from refiner.video.remux import (
     PreparedVideoSource,
     RemuxWriter,
     VideoSourceProbe,
+    prepared_source_is_remuxable,
     prepare_video_source,
     probes_are_remux_compatible,
 )
@@ -63,7 +64,7 @@ class VideoStreamWriter:
         frame_observer: FrameObserver | None = None,
         force_transcode: bool = False,
     ) -> WrittenVideo:
-        prepared = await prepare_video_source(cache_key=self.stream_key, video=video)
+        prepared = await prepare_video_source(video=video)
         try:
             return await self._commit(
                 prepared,
@@ -174,7 +175,7 @@ class VideoStreamWriter:
         force_transcode: bool,
     ) -> bool:
         _ = frame_observer
-        return force_transcode or prepared.probe is None or prepared.alignment is None
+        return force_transcode or not prepared_source_is_remuxable(prepared)
 
     def _transcode_fps(self, prepared: PreparedVideoSource) -> int | None:
         if prepared.probe is not None and prepared.probe.fps is not None:

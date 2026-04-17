@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -8,6 +10,9 @@ from typing import Any
 import httpx
 
 _OPENAI_ENDPOINT_TIMEOUT_SECONDS = 600.0
+_OPENAI_ENDPOINT_MAX_RETRIES = 6
+_OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS = 5.0
+_OPENAI_ENDPOINT_RETRY_JITTER_FRACTION = 0.1
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +53,27 @@ class _OpenAIEndpointClient:
                 timeout=_OPENAI_ENDPOINT_TIMEOUT_SECONDS,
             )
             self._client = client
-        response = await client.post(endpoint_path, json=dict(payload))
+        for attempt in range(_OPENAI_ENDPOINT_MAX_RETRIES):
+            try:
+                response = await client.post(endpoint_path, json=dict(payload))
+                break
+            except (
+                ConnectionError,
+                OSError,
+                asyncio.TimeoutError,
+                httpx.NetworkError,
+                httpx.TimeoutException,
+            ) as err:
+                if attempt + 1 >= _OPENAI_ENDPOINT_MAX_RETRIES:
+                    message = (
+                        "generation request failed after "
+                        f"{_OPENAI_ENDPOINT_MAX_RETRIES} attempts: "
+                        f"{type(err).__name__}: {err}"
+                    )
+                    raise RuntimeError(message) from err
+                await asyncio.sleep(_retry_delay_seconds(attempt))
+        else:
+            raise RuntimeError("generation request failed without a response")
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -123,6 +148,12 @@ def _normalize_openai_base_url(base_url: str) -> str:
     if normalized.endswith("/v1"):
         normalized = normalized[:-3]
     return normalized
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    base_delay = _OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS * (2**attempt)
+    jitter = (random.random() * 2.0 - 1.0) * _OPENAI_ENDPOINT_RETRY_JITTER_FRACTION
+    return base_delay * (1.0 + jitter)
 
 
 __all__ = ["InferenceResponse"]

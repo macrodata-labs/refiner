@@ -6,7 +6,7 @@ INPUT_PATH = "input.jsonl"
 OUTPUT_PATH = "output/endpoint-inference"
 ENDPOINT = mdr.inference.OpenAIEndpointProvider(
     base_url="https://openrouter.ai/api/v1",
-    model="gpt-4o-mini",
+    model="Qwen/Qwen3.5-9B",
 )
 
 

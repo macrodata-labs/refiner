@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import IO, Any
+from typing import TYPE_CHECKING
 
 from refiner.io import DataFolder
 from refiner.pipeline.utils.cache.decoder_cache import (
@@ -12,7 +13,9 @@ from refiner.pipeline.utils.cache.decoder_cache import (
 )
 from refiner.pipeline.utils.cache.lease_cache import CacheLease
 from refiner.utils import check_required_dependencies
-from refiner.video.types import VideoFile
+
+if TYPE_CHECKING:
+    from refiner.video.types import VideoFile
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
@@ -69,17 +72,32 @@ class RemuxWriter:
         probe: VideoSourceProbe,
     ) -> "RemuxWriter":
         check_required_dependencies("video remuxing", ["av"], dist="video")
-        import av
-
         output_abs = folder._join(output_rel)
         folder.fs.makedirs(folder.fs._parent(output_abs), exist_ok=True)
         output_file = folder.open(output_rel, mode="wb")
+        return cls.open_file(
+            output_file=output_file,
+            probe=probe,
+        )
+
+    @classmethod
+    def open_file(
+        cls,
+        *,
+        output_file: IO[bytes],
+        probe: VideoSourceProbe,
+        movflags: str | None = _SEGMENTED_MP4_MOVFLAGS,
+    ) -> "RemuxWriter":
+        check_required_dependencies("video remuxing", ["av"], dist="video")
+        import av
+
         try:
+            options = {"movflags": movflags} if movflags is not None else None
             container = av.open(
                 output_file,
                 mode="w",
                 format="mp4",
-                options={"movflags": _SEGMENTED_MP4_MOVFLAGS},
+                options=options,
             )
         except Exception:
             output_file.close()
@@ -158,6 +176,15 @@ def probes_are_remux_compatible(
     )
 
 
+def prepared_source_is_remuxable(prepared: PreparedVideoSource) -> bool:
+    probe = prepared.probe
+    if probe is None or prepared.alignment is None:
+        return False
+    if probe.has_audio:
+        return False
+    return probes_are_remux_compatible(probe, probe)
+
+
 def probe_for_remux(
     *,
     probe: VideoSourceProbe | None,
@@ -182,11 +209,10 @@ def probe_for_remux(
 
 async def prepare_video_source(
     *,
-    cache_key: str,
     video: VideoFile,
 ) -> PreparedVideoSource:
     check_required_dependencies("video decoding", ["av"], dist="video")
-    lease = await get_opened_video_source_cache(name=cache_key).acquire(video.uri)
+    lease = await get_opened_video_source_cache().acquire(video.uri)
     source = lease.resource
     try:
         start_pts = 0
@@ -232,6 +258,7 @@ __all__ = [
     "PreparedVideoSource",
     "RemuxWriter",
     "VideoPtsAlignment",
+    "prepared_source_is_remuxable",
     "prepare_video_source",
     "probe_for_remux",
     "probes_are_remux_compatible",

@@ -261,6 +261,7 @@ class MacrodataClient:
             api_key=self.api_key,
             base_url=self.base_url,
             json_payload={"services": services},
+            timeout_s=60.0,
         )
         if not isinstance(response_data, dict):
             raise ValueError("runtime services response must be a JSON object")
