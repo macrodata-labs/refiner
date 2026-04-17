@@ -54,7 +54,7 @@ Use `VLLMProvider` when launching on Refiner Cloud and you want the platform to 
 import refiner as mdr
 
 provider = mdr.inference.VLLMProvider(
-    model="google/gemma-4-26B-A4B-it",
+    model="google/gemma-4-E4B-it",
 )
 
 async def summarize(row, generate):
@@ -79,26 +79,20 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 )
 ```
 
-When a model needs extra vLLM serve flags, pass them through `extra_kwargs`. For example, some Qwen video setups require:
+Pass extra VLLM server arguments through `extra_kwargs` on the provider:
 
 ```python
 provider = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen2.5-VL-7B-Instruct",
-    extra_kwargs={"limit-mm-per-prompt": "video=1"},
+    model="Qwen/Qwen3-VL-8B-Instruct",
+    extra_kwargs={"limit-mm-per-prompt": '{"video": 1}'},
 )
 ```
 
-#### Cold-Starts
-Because Refiner Cloud may start VLLM on fresh hardware, startup can take 2 to 20 minutes depending on model size, weight downloads, and torch initialization. To reduce this, Refiner Cloud prewarms a small set of commonly used models:
-- `google/gemma-4-26B-A4B-it`
-- `Qwen/Qwen3-VL-30B-A3B-Instruct`
-- `Qwen/Qwen3-VL-8B-Instruct`
+#### Supported models
+Only the following models are currently supported. If you are missing one, please create an issue:
+- `Qwen/Qwen3.5-9B`
+- `google/gemma-4-E4B-it`
 
-The two Qwen vision-language models should currently be launched with a single worker because multi-worker cold starts can hit compilation race conditions.
-Other models can still be used, but the first startup is usually slower.
-
-#### Inference Hardware
-At the moment, VLLM deployments run on `1x H100`, which limits the model sizes that fit. This may change as the cloud runtime expands.
 
 ## Examples
 

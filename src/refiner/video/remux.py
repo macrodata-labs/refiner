@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import IO, Any
+from typing import TYPE_CHECKING
 
 from refiner.io import DataFolder
 from refiner.pipeline.utils.cache.decoder_cache import (
@@ -12,7 +13,9 @@ from refiner.pipeline.utils.cache.decoder_cache import (
 )
 from refiner.pipeline.utils.cache.lease_cache import CacheLease
 from refiner.utils import check_required_dependencies
-from refiner.video.types import VideoFile
+
+if TYPE_CHECKING:
+    from refiner.video.types import VideoFile
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
@@ -206,11 +209,10 @@ def probe_for_remux(
 
 async def prepare_video_source(
     *,
-    cache_key: str,
     video: VideoFile,
 ) -> PreparedVideoSource:
     check_required_dependencies("video decoding", ["av"], dist="video")
-    lease = await get_opened_video_source_cache(name=cache_key).acquire(video.uri)
+    lease = await get_opened_video_source_cache().acquire(video.uri)
     source = lease.resource
     try:
         start_pts = 0

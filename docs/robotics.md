@@ -149,6 +149,12 @@ For each video ref, you can access:
 - `video.video`
   - the underlying `VideoFile`
 
+You can also decode a `VideoFile` lazily through methods on the handle itself:
+
+- `video.iter_frames()`
+- `video.iter_frame_windows(offsets=[...], stride=...)`
+- `await video.export_clip()`
+
 Example:
 
 ```python
@@ -160,6 +166,24 @@ def shift_videos_by_half_second(row):
             to_timestamp_s=(video.to_timestamp_s or 0.0) + 0.5,
         )
     return row
+```
+
+Decode frames lazily:
+
+```python
+import asyncio
+import refiner as mdr
+
+async def inspect_video(video):
+    async for frame in video.iter_frames():
+        print(frame.index, frame.timestamp_s, frame.width, frame.height)
+
+    async for window in video.iter_frame_windows(
+        offsets=[-1, 0, 1],
+        stride=4,
+        drop_incomplete=False,
+    ):
+        print(window.anchor.index, window.offsets)
 ```
 
 ### Stats

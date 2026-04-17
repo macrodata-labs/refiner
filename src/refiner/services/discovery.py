@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -43,9 +44,7 @@ def _builtin_description(fn: Any) -> dict[str, Any] | None:
 def collect_pipeline_services(
     pipeline: "RefinerPipeline",
 ) -> tuple[RuntimeServiceSpec, ...]:
-    services_by_key: dict[
-        tuple[str, str, tuple[tuple[str, Any], ...]], RuntimeServiceSpec
-    ] = {}
+    services_by_key: dict[tuple[str, str, str], RuntimeServiceSpec] = {}
 
     for step in pipeline.pipeline_steps:
         candidates: list[Any] = []
@@ -62,12 +61,7 @@ def collect_pipeline_services(
                 key = (
                     service.name,
                     service.kind,
-                    tuple(
-                        sorted(
-                            (str(k), _freeze_config_value(v))
-                            for k, v in service.config.items()
-                        )
-                    ),
+                    _service_config_key(service.config),
                 )
                 services_by_key.setdefault(key, service)
     return tuple(services_by_key.values())
@@ -76,13 +70,17 @@ def collect_pipeline_services(
 __all__ = ["collect_pipeline_services"]
 
 
-def _freeze_config_value(value: Any) -> Any:
+def _service_config_key(config: Mapping[str, Any]) -> str:
+    return json.dumps(
+        _jsonify_config_value(config),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _jsonify_config_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return tuple(
-            sorted(
-                (str(key), _freeze_config_value(item)) for key, item in value.items()
-            )
-        )
+        return {str(key): _jsonify_config_value(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return tuple(_freeze_config_value(item) for item in value)
+        return [_jsonify_config_value(item) for item in value]
     return value

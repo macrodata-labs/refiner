@@ -64,7 +64,7 @@ class VideoStreamWriter:
         frame_observer: FrameObserver | None = None,
         force_transcode: bool = False,
     ) -> WrittenVideo:
-        prepared = await prepare_video_source(cache_key=self.stream_key, video=video)
+        prepared = await prepare_video_source(video=video)
         try:
             return await self._commit(
                 prepared,

@@ -23,8 +23,6 @@ SUBTASKS = [
 
 PROVIDER = mdr.inference.VLLMProvider(
     model="Qwen/Qwen3-VL-8B-Instruct",
-    model_max_context=8192,
-    extra_kwargs={"limit-mm-per-prompt": '{"video": 1}'},
 )
 
 VLM_TRANSCODE_CONFIG = mdr.video.VideoTranscodeConfig(
@@ -86,9 +84,7 @@ async def annotate_dense_subtasks(row, generate):
         )
 
     video = row.videos[VIDEO_KEY].video
-    clip_bytes = await mdr.video.export_clip_bytes(
-        video,
-        stream_key=VIDEO_KEY,
+    clip_bytes = await video.export_clip(
         force_transcode=True,
         transcode_config=VLM_TRANSCODE_CONFIG,
     )

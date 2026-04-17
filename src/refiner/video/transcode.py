@@ -9,6 +9,7 @@ import numpy as np
 
 from refiner.io import DataFolder
 from refiner.utils import check_required_dependencies
+from refiner.video.decode import _iter_selected_frames
 from refiner.video.remux import (
     PreparedVideoSource,
     video_from_timestamp_s,
@@ -16,7 +17,6 @@ from refiner.video.remux import (
 )
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
-_FRAME_TIMESTAMP_EPSILON_S = 1e-6
 
 FrameObserver = Callable[[int, np.ndarray], None]
 
@@ -226,37 +226,6 @@ def _resolve_threads(
     if requested_threads is None:
         requested_threads = _cpu_thread_count()
     return max(1, int(requested_threads) // max(1, int(videos_in_row)))
-
-
-def _iter_selected_frames(
-    *,
-    container: Any,
-    stream: Any,
-    clip_from: float,
-    clip_to: float | None,
-    seek: bool,
-):
-    if seek and stream.time_base is not None:
-        seek_ts = int(clip_from / float(stream.time_base))
-        try:
-            container.seek(seek_ts, stream=stream)
-        except Exception:
-            try:
-                container.seek(max(0, seek_ts), any_frame=True, stream=stream)
-            except Exception:
-                pass
-
-    for frame in container.decode(stream):
-        ts = None
-        if frame.pts is not None and frame.time_base is not None:
-            ts = float(frame.pts * frame.time_base)
-        if ts is None:
-            continue
-        if ts + _FRAME_TIMESTAMP_EPSILON_S < clip_from:
-            continue
-        if clip_to is not None and ts - _FRAME_TIMESTAMP_EPSILON_S >= clip_to:
-            break
-        yield frame
 
 
 __all__ = [

@@ -1,4 +1,10 @@
-from refiner.video.clip import export_clip_bytes
+from refiner.video.decode import (
+    DecodedFrameWindow,
+    DecodedVideoFrame,
+    export_clip,
+    iter_frame_windows,
+    iter_frames,
+)
 from refiner.video.remux import (
     PreparedVideoSource,
     RemuxWriter,
@@ -24,6 +30,8 @@ from refiner.video.writer import (
 )
 
 __all__ = [
+    "DecodedFrameWindow",
+    "DecodedVideoFrame",
     "FrameObserver",
     "PreparedVideoSource",
     "RemuxWriter",
@@ -34,7 +42,9 @@ __all__ = [
     "VideoTranscodeConfig",
     "WrittenVideo",
     "WrittenVideoSegment",
-    "export_clip_bytes",
+    "export_clip",
+    "iter_frame_windows",
+    "iter_frames",
     "prepared_source_is_remuxable",
     "prepare_video_source",
     "probe_for_remux",
