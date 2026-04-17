@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,15 +29,14 @@ class VLLMServiceDefinition:
 
     @property
     def name(self) -> str:
-        rendered_kwargs = [
-            f"{key}={value}" for key, value in sorted(dict(self.extra_kwargs).items())
-        ]
-        name_source = "\0".join(
-            [
-                self.model_name_or_path,
-                str(self.model_max_context),
-                *rendered_kwargs,
-            ]
+        name_source = json.dumps(
+            {
+                "model_name_or_path": self.model_name_or_path,
+                "model_max_context": self.model_max_context,
+                "extra_kwargs": _normalize_service_name_value(dict(self.extra_kwargs)),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
         )
         return f"vllm-{hashlib.sha1(name_source.encode('utf-8')).hexdigest()[:12]}"
 
@@ -80,6 +80,18 @@ class VLLMRuntimeServiceBinding(RuntimeServiceBinding):
             endpoint=endpoint,
             api_key=api_key,
         )
+
+
+def _normalize_service_name_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _normalize_service_name_value(item) for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return [_normalize_service_name_value(item) for item in value]
+    if isinstance(value, list):
+        return [_normalize_service_name_value(item) for item in value]
+    return value
 
 
 __all__ = ["VLLMServiceDefinition", "VLLMRuntimeServiceBinding"]

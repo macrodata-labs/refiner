@@ -6,12 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeAlias, cast
 
 from refiner.inference.client import InferenceResponse, _OpenAIEndpointClient
-from refiner.inference.dummy import _DummyRequestServer
-from refiner.inference.providers import (
-    DummyRequestProvider,
-    OpenAIEndpointProvider,
-    VLLMProvider,
-)
+from refiner.inference.providers import OpenAIEndpointProvider, VLLMProvider
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.services import VLLMRuntimeServiceBinding
@@ -31,14 +26,13 @@ InferenceFn: TypeAlias = Callable[
 def generate(
     *,
     fn: InferenceFn,
-    provider: OpenAIEndpointProvider | VLLMProvider | DummyRequestProvider,
+    provider: OpenAIEndpointProvider | VLLMProvider,
     default_generation_params: Mapping[str, Any] | None = None,
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Awaitable[MapResult]]:
     if max_concurrent_requests <= 0:
         raise ValueError("max_concurrent_requests must be > 0")
     client: _OpenAIEndpointClient | None = None
-    local_resources: list[_DummyRequestServer] = []
     client_lock = asyncio.Lock()
     request_semaphore = asyncio.Semaphore(max_concurrent_requests)
     gauges_registered = False
@@ -66,9 +60,7 @@ def generate(
         nonlocal running_requests
         nonlocal waiting_requests
         request_payload: dict[str, Any] = {}
-        if isinstance(
-            provider, (OpenAIEndpointProvider, VLLMProvider, DummyRequestProvider)
-        ):
+        if isinstance(provider, (OpenAIEndpointProvider, VLLMProvider)):
             request_payload["model"] = provider.model
         request_payload.update(dict(default_generation_params or {}))
         request_payload.update(dict(payload))
@@ -78,17 +70,6 @@ def generate(
                     if isinstance(provider, OpenAIEndpointProvider):
                         client = _OpenAIEndpointClient(
                             base_url=provider.base_url,
-                        )
-                    elif isinstance(provider, DummyRequestProvider):
-                        local_resources.append(
-                            _DummyRequestServer.start(
-                                host=provider.host,
-                                port=provider.port,
-                                response_text=provider.response_text,
-                            )
-                        )
-                        client = _OpenAIEndpointClient(
-                            base_url=local_resources[-1].base_url,
                         )
                     else:
                         service_name = provider.service_definition().name

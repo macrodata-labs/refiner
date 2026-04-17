@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 
-from refiner.video.remux import prepare_video_source
-from refiner.video.transcode import VideoTranscodeConfig
+from refiner.video.remux import (
+    RemuxWriter,
+    prepared_source_is_remuxable,
+    prepare_video_source,
+)
+from refiner.video.transcode import TranscodeWriter, VideoTranscodeConfig
 from refiner.video.types import VideoFile
-from refiner.video.remux import RemuxWriter
-from refiner.video.transcode import TranscodeWriter
 
 
 class _NonClosingBytesIO(io.BytesIO):
@@ -25,14 +27,13 @@ async def export_clip_bytes(
     prepared = await prepare_video_source(cache_key=stream_key, video=video)
     output_file = _NonClosingBytesIO()
     try:
-        if (
-            not force_transcode
-            and prepared.probe is not None
-            and prepared.alignment is not None
-        ):
+        if not force_transcode and prepared_source_is_remuxable(prepared):
+            probe = prepared.probe
+            if probe is None:
+                raise RuntimeError("Remux path selected without a source probe")
             writer = RemuxWriter.open_file(
                 output_file=output_file,
-                probe=prepared.probe,
+                probe=probe,
                 movflags=None,
             )
             writer.append_prepared_video(prepared)

@@ -251,3 +251,26 @@ def test_vllm_service_definition_includes_extra_kwargs_in_name_and_config() -> N
         "extra_kwargs": {"limit-mm-per-prompt": "video=1"},
     }
     assert service.name.startswith("vllm-")
+
+
+def test_vllm_service_definition_name_preserves_extra_kwargs_value_types() -> None:
+    int_service = VLLMServiceDefinition(
+        model_name_or_path="Qwen/Qwen2.5-VL-7B-Instruct",
+        extra_kwargs={"max-num-seqs": 2048},
+    )
+    str_service = VLLMServiceDefinition(
+        model_name_or_path="Qwen/Qwen2.5-VL-7B-Instruct",
+        extra_kwargs={"max-num-seqs": "2048"},
+    )
+
+    assert int_service.name != str_service.name
+
+
+def test_vllm_service_definition_name_accepts_mixed_extra_kwargs_key_types() -> None:
+    extra_kwargs = cast(Mapping[str, Any], {1: "one", "2": "two"})
+    service = VLLMServiceDefinition(
+        model_name_or_path="Qwen/Qwen2.5-VL-7B-Instruct",
+        extra_kwargs=extra_kwargs,
+    )
+
+    assert service.name.startswith("vllm-")

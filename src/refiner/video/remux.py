@@ -68,6 +68,7 @@ class RemuxWriter:
         output_rel: str,
         probe: VideoSourceProbe,
     ) -> "RemuxWriter":
+        check_required_dependencies("video remuxing", ["av"], dist="video")
         output_abs = folder._join(output_rel)
         folder.fs.makedirs(folder.fs._parent(output_abs), exist_ok=True)
         output_file = folder.open(output_rel, mode="wb")
@@ -172,6 +173,15 @@ def probes_are_remux_compatible(
     )
 
 
+def prepared_source_is_remuxable(prepared: PreparedVideoSource) -> bool:
+    probe = prepared.probe
+    if probe is None or prepared.alignment is None:
+        return False
+    if probe.has_audio:
+        return False
+    return probes_are_remux_compatible(probe, probe)
+
+
 def probe_for_remux(
     *,
     probe: VideoSourceProbe | None,
@@ -246,6 +256,7 @@ __all__ = [
     "PreparedVideoSource",
     "RemuxWriter",
     "VideoPtsAlignment",
+    "prepared_source_is_remuxable",
     "prepare_video_source",
     "probe_for_remux",
     "probes_are_remux_compatible",

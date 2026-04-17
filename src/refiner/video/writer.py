@@ -12,6 +12,7 @@ from refiner.video.remux import (
     PreparedVideoSource,
     RemuxWriter,
     VideoSourceProbe,
+    prepared_source_is_remuxable,
     prepare_video_source,
     probes_are_remux_compatible,
 )
@@ -174,7 +175,7 @@ class VideoStreamWriter:
         force_transcode: bool,
     ) -> bool:
         _ = frame_observer
-        return force_transcode or prepared.probe is None or prepared.alignment is None
+        return force_transcode or not prepared_source_is_remuxable(prepared)
 
     def _transcode_fps(self, prepared: PreparedVideoSource) -> int | None:
         if prepared.probe is not None and prepared.probe.fps is not None:

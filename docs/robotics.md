@@ -13,7 +13,6 @@ writer, and robotics transforms.
 - run robotics-specific transforms under `mdr.robotics.*`
 - write LeRobot-compatible output datasets with `write_lerobot(...)`
 - merge compatible LeRobot datasets into one output dataset
-- prepare LeRobot datasets for LeRobot SARM annotation and training
 
 ## Quick Toc
 
@@ -30,7 +29,6 @@ writer, and robotics transforms.
   - [performance notes](#lerobot-performance-notes)
 - [motion trimming](#motion-trimming)
 - [merging datasets](#merging-datasets)
-- [preparing data for sarm](sarm.md)
 
 ## Reading Datasets
 
@@ -150,46 +148,6 @@ For each video ref, you can access:
 - `video.to_timestamp_s`
 - `video.video`
   - the underlying `VideoFile`
-
-If you need decoded frames from a `VideoFile`, use the async iterator:
-
-```python
-import refiner as mdr
-
-async def inspect_frames(row):
-    video = row.videos["observation.images.main"].video
-
-    async for decoded in mdr.video.iter_frames(video):
-        print(decoded.index, decoded.timestamp_s, decoded.width, decoded.height)
-        image = decoded.frame.to_ndarray(format="rgb24")
-        ...
-```
-
-`iter_frames(...)` respects the `VideoFile` time bounds, so LeRobot clip spans are
-applied automatically during decode.
-
-For strided or contextual access, use `iter_frame_windows(...)`:
-
-```python
-import refiner as mdr
-
-async def sample_windows(row):
-    video = row.videos["observation.images.main"].video
-
-    async for window in mdr.video.iter_frame_windows(
-        video,
-        offsets=[-2, 0, 2],
-        stride=4,
-        drop_incomplete=False,
-    ):
-        frames = [item.frame if item is not None else None for item in window.frames]
-        ...
-```
-
-`stride` selects which decoded frames act as anchors. `offsets` are relative to the
-anchor frame index. When `drop_incomplete=True`, windows missing any requested
-offset are skipped. When `drop_incomplete=False`, missing entries are returned as
-`None`.
 
 Example:
 

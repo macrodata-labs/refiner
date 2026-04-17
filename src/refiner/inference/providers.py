@@ -1,6 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from typing import Any
 
 from refiner.services import VLLMServiceDefinition
@@ -65,32 +64,4 @@ class VLLMProvider:
         return payload
 
 
-@dataclass(frozen=True, slots=True)
-class DummyRequestProvider:
-    model: str = "dummy-local"
-    response_text: str = "dummy response"
-    host: str = "127.0.0.1"
-    port: int = 0
-
-    def __post_init__(self) -> None:
-        if not self.model.strip():
-            raise ValueError("model must be non-empty")
-        if not self.host.strip():
-            raise ValueError("host must be non-empty")
-        if self.port < 0:
-            raise ValueError("port must be >= 0")
-
-    def service_definition(self) -> None:
-        return None
-
-    def to_builtin_args(self) -> dict[str, object]:
-        return {
-            "type": "dummy_request",
-            "model": self.model,
-            "response_text": self.response_text,
-            "host": self.host,
-            "port": self.port,
-        }
-
-
-__all__ = ["DummyRequestProvider", "OpenAIEndpointProvider", "VLLMProvider"]
+__all__ = ["OpenAIEndpointProvider", "VLLMProvider"]
