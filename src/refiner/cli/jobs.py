@@ -359,17 +359,15 @@ def _render_manifest(
     if not isinstance(manifest, dict):
         print("Manifest unavailable.", file=sys.stderr)
         return 1
-    if not (show_runtime or show_deps or show_code):
-        show_runtime = True
-    if show_runtime:
-        environment = manifest.get("environment")
-        print("Runtime")
-        if isinstance(environment, dict):
-            print(f"Python: {_safe_text(environment.get('python_version'))}")
-            print(f"Refiner: {_safe_text(environment.get('refiner_version'))}")
-            print(f"Platform: {_safe_text(environment.get('platform'))}")
-        else:
-            print("-")
+    _ = show_runtime
+    environment = manifest.get("environment")
+    print("Runtime")
+    if isinstance(environment, dict):
+        print(f"Python: {_safe_text(environment.get('python_version'))}")
+        print(f"Refiner: {_safe_text(environment.get('refiner_version'))}")
+        print(f"Platform: {_safe_text(environment.get('platform'))}")
+    else:
+        print("-")
     if show_deps:
         dependencies = manifest.get("dependencies")
         print("\nDependencies")
@@ -388,7 +386,12 @@ def _render_manifest(
             print(f"Path: {_safe_text(script.get('path'))}")
             print(f"SHA256: {_safe_text(script.get('sha256'))}")
             if isinstance(script.get("text"), str) and script["text"]:
-                print("\n" + script["text"])
+                safe_script_text = "".join(
+                    ch
+                    for ch in script["text"]
+                    if ch in "\n\t" or (ch >= " " and ch != "\x7f")
+                )
+                print("\n" + safe_script_text)
         else:
             print("-")
     return 0

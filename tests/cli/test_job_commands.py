@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from typing import Any, cast
 
 from refiner.cli import jobs
 
@@ -322,6 +323,60 @@ def test_jobs_manifest_plain_output(monkeypatch, capsys) -> None:
     assert "Runtime" in out.out
     assert "Dependencies" not in out.out
     assert "Code" not in out.out
+
+
+def test_jobs_manifest_keeps_runtime_when_extra_sections_requested(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_manifest(
+        Namespace(
+            job_id="job-1",
+            show_runtime=False,
+            show_deps=True,
+            show_code=False,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "Runtime" in out.out
+    assert "Dependencies" in out.out
+
+
+def test_jobs_manifest_sanitizes_script_text(monkeypatch, capsys) -> None:
+    class _ManifestClient(_FakeClient):
+        def cli_get_job_manifest(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job_manifest(job_id=job_id)
+            manifest = payload["manifest"]
+            assert isinstance(manifest, dict)
+            manifest_data = cast(dict[str, Any], manifest)
+            manifest_data["script"] = {
+                "path": "pipeline.py",
+                "sha256": "abc123",
+                "text": "print('ok')\x1b[31m\nnext_line()",
+            }
+            return payload
+
+    monkeypatch.setattr(jobs, "_client", lambda: _ManifestClient())
+
+    rc = jobs.cmd_jobs_manifest(
+        Namespace(
+            job_id="job-1",
+            show_runtime=False,
+            show_deps=False,
+            show_code=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "\x1b" not in out.out
+    assert "print('ok')[31m" in out.out
+    assert "next_line()" in out.out
 
 
 def test_jobs_get_missing_payload_reports_to_stderr(monkeypatch, capsys) -> None:
