@@ -337,13 +337,13 @@ def build_stage_snapshot(
     completed = 0
     failed = 0
     for monitor in monitors:
-        if monitor.process.poll() is None:
+        returncode = monitor.process.poll()
+        if returncode is None:
             continue
-        outcome = monitor_outcome(monitor)
-        if outcome["failed"] > 0:
-            failed += 1
-        else:
+        if returncode == 0:
             completed += 1
+        else:
+            failed += 1
     running = max(0, total - completed - failed)
     status = "running"
     if running == 0:
@@ -571,13 +571,27 @@ class LocalStageConsole:
         self._render(force=True)
 
     def apply_snapshot(self, snapshot: LocalStageSnapshot) -> None:
+        previous_status = self._status
+        previous_total = self._worker_total
+        previous_running = self._worker_running
+        previous_completed = self._worker_completed
+        previous_failed = self._worker_failed
+        previous_elapsed_seconds = int(self._elapsed_seconds)
         self._status = snapshot.status
         self._worker_total = snapshot.worker_total
         self._worker_running = snapshot.worker_running
         self._worker_completed = snapshot.worker_completed
         self._worker_failed = snapshot.worker_failed
         self._elapsed_seconds = snapshot.elapsed_seconds
-        self._render(force=True)
+        if (
+            self._status != previous_status
+            or self._worker_total != previous_total
+            or self._worker_running != previous_running
+            or self._worker_completed != previous_completed
+            or self._worker_failed != previous_failed
+            or int(self._elapsed_seconds) != previous_elapsed_seconds
+        ):
+            self._render(force=True)
 
     def close(self) -> None:
         try:
@@ -865,7 +879,9 @@ def stream_local_stage_logs(
         worker_id: LocalStageLogTail(path=worker_log_paths[worker_id])
         for worker_id in tailed_worker_ids
     }
+    sleep_interval = poll_interval_seconds
     while True:
+        emitted_any = False
         for worker_id, log_tail in log_tails.items():
             lines = [
                 line
@@ -879,11 +895,17 @@ def stream_local_stage_logs(
             ]
             if lines:
                 console.emit_lines(worker_id=worker_id, lines=lines)
+                emitted_any = True
         if on_tick is not None:
             on_tick()
         if not is_stage_running():
             break
-        time.sleep(poll_interval_seconds)
+        sleep_interval = (
+            poll_interval_seconds
+            if emitted_any
+            else min(max(poll_interval_seconds, 0.05) * 8, max(sleep_interval * 2, 0.1))
+        )
+        time.sleep(sleep_interval)
     for worker_id, log_tail in log_tails.items():
         lines = [
             line
