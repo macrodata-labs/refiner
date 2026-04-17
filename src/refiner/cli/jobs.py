@@ -28,7 +28,10 @@ def _format_ts(value: Any) -> str:
     if not isinstance(value, (int, float)):
         return "-"
     timestamp_ms = value * 1000 if value < 100_000_000_000 else value
-    dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+    try:
+        dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return "-"
     return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 

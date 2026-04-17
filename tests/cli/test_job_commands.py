@@ -266,6 +266,37 @@ def test_jobs_resource_metrics_plain_output_accepts_second_timestamps(
     assert "Latest sample: 2023-11-14 22:13:21 UTC" in out.out
 
 
+def test_jobs_list_plain_output_ignores_invalid_timestamps(monkeypatch, capsys) -> None:
+    class _InvalidTimestampClient(_FakeClient):
+        def cli_list_jobs(self, **_: object) -> dict[str, object]:
+            return {
+                "items": [
+                    {
+                        "id": "job-1",
+                        "status": "running",
+                        "executorKind": "cloud",
+                        "startedByIdentity": "alex@example.com",
+                        "progress": {"done": 1, "total": 2},
+                        "createdAt": float("nan"),
+                        "name": "daily parquet enrich",
+                    }
+                ],
+                "nextCursor": None,
+            }
+
+    monkeypatch.setattr(jobs, "_client", lambda: _InvalidTimestampClient())
+
+    rc = jobs.cmd_jobs_list(
+        Namespace(status=None, kind=None, limit=20, cursor=None, me=False, json=False)
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "job-1" in out.out
+    assert "daily parquet enrich" in out.out
+    assert "alex@example.com" in out.out
+
+
 def test_jobs_metrics_plain_output(monkeypatch, capsys) -> None:
     monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
 
