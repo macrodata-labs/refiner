@@ -50,6 +50,7 @@ class _FakeClient:
                         "shardDone": 3,
                         "shardTotal": 10,
                         "runningWorkers": 2,
+                        "completedWorkers": 1,
                         "totalWorkers": 4,
                         "name": "stage-0",
                         "steps": [
@@ -198,6 +199,7 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "Job: cloud pipeline (job-1)" in out.out
     assert "Stages" in out.out
     assert "Steps" in out.out
+    assert "2/1/4" in out.out
 
 
 def test_jobs_logs_json_output(monkeypatch, capsys) -> None:

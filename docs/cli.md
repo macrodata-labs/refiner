@@ -90,7 +90,7 @@ macrodata jobs list --me
 
 ### `macrodata jobs get`
 
-Fetches the main job summary. This includes status, progress, starter identity, stage layout, worker counts, and per-stage step structure.
+Fetches the main job summary. This includes status, progress, starter identity, stage layout, worker counts, and per-stage step structure. Stage rows include shard completion and worker `running/completed/total` counts.
 
 Options:
 

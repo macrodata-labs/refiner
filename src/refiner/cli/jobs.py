@@ -172,7 +172,11 @@ def _render_job(payload: dict[str, Any]) -> int:
                     _safe_text(stage.get("index")),
                     _safe_text(stage.get("status")),
                     f"{_safe_text(stage.get('shardDone'))}/{_safe_text(stage.get('shardTotal'))}",
-                    f"{_safe_text(stage.get('runningWorkers'))}/{_safe_text(stage.get('totalWorkers'))}",
+                    (
+                        f"{_safe_text(stage.get('runningWorkers'))}"
+                        f"/{_safe_text(stage.get('completedWorkers'))}"
+                        f"/{_safe_text(stage.get('totalWorkers'))}"
+                    ),
                     _safe_text(stage.get("name")),
                 ]
             )
