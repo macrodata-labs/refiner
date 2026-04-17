@@ -5,15 +5,16 @@ import json
 import os
 import re
 import shutil
+import select
 import subprocess
 import sys
 import time
+import ctypes
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 import threading
-from typing import TypedDict
 
 from loguru import logger
 
@@ -135,17 +136,6 @@ class WorkerProcessMonitor:
     stderr_buffer: list[str]
     stdout_thread: threading.Thread
     stderr_thread: threading.Thread
-    summary: dict[str, object] | None = None
-
-
-class WorkerOutcome(TypedDict):
-    worker_id: str
-    claimed: int
-    completed: int
-    failed: int
-    output_rows: int
-    error: str | None
-    returncode: int | None
 
 
 def stdout_is_interactive() -> bool:
@@ -269,134 +259,8 @@ def stop_worker_monitors(
             thread.join(timeout=remaining)
         try:
             monitor.process.wait(timeout=0)
-        except Exception:
+        except subprocess.TimeoutExpired:
             pass
-
-
-def monitor_outcome(monitor: WorkerProcessMonitor) -> WorkerOutcome:
-    if monitor.summary is None:
-        monitor.stdout_thread.join()
-        monitor.stderr_thread.join()
-        monitor.process.wait()
-        stdout = "".join(monitor.stdout_buffer)
-        stderr = "".join(monitor.stderr_buffer)
-        final_stdout_line = next(
-            (line for line in reversed(stdout.splitlines()) if line.strip()),
-            "",
-        )
-        try:
-            decoded = json.loads(final_stdout_line or "{}")
-        except json.JSONDecodeError:
-            decoded = None
-        monitor.summary = (
-            decoded
-            if isinstance(decoded, dict)
-            else {
-                "worker_id": monitor.worker_id,
-                "claimed": 0,
-                "completed": 0,
-                "failed": 1,
-                "output_rows": 0,
-                "error": (
-                    stderr.strip()
-                    or stdout.strip()
-                    or f"worker process exited with code {monitor.process.returncode}"
-                ),
-            }
-        )
-    raw = monitor.summary
-    claimed = raw.get("claimed", 0)
-    completed = raw.get("completed", 0)
-    failed = raw.get("failed", 0)
-    output_rows = raw.get("output_rows", 0)
-    return WorkerOutcome(
-        worker_id=str(raw.get("worker_id", "")),
-        claimed=int(claimed) if isinstance(claimed, int | float | str) else 0,
-        completed=int(completed) if isinstance(completed, int | float | str) else 0,
-        failed=int(failed) if isinstance(failed, int | float | str) else 0,
-        output_rows=int(output_rows)
-        if isinstance(output_rows, int | float | str)
-        else 0,
-        error=str(raw["error"]) if raw.get("error") is not None else None,
-        returncode=monitor.process.returncode,
-    )
-
-
-def build_stage_snapshot(
-    *,
-    job_id: str,
-    job_name: str,
-    rundir: str,
-    stage_index: int,
-    total_stages: int,
-    stage_workers: int,
-    tracking_url: str | None,
-    monitors: list[WorkerProcessMonitor],
-    stage_started_at: float,
-) -> LocalStageSnapshot:
-    total = len(monitors)
-    completed = 0
-    failed = 0
-    for monitor in monitors:
-        returncode = monitor.process.poll()
-        if returncode is None:
-            continue
-        if returncode == 0:
-            completed += 1
-        else:
-            failed += 1
-    running = max(0, total - completed - failed)
-    status = "running"
-    if running == 0:
-        status = "failed" if failed > 0 else "completed"
-    return LocalStageSnapshot(
-        job_id=job_id,
-        job_name=job_name,
-        rundir=rundir,
-        stage_index=stage_index,
-        total_stages=total_stages,
-        stage_workers=stage_workers,
-        tracking_url=tracking_url,
-        status=status,
-        worker_total=total,
-        worker_running=running,
-        worker_completed=completed,
-        worker_failed=failed,
-        elapsed_seconds=time.monotonic() - stage_started_at,
-    )
-
-
-def summarize_worker_monitors(
-    *,
-    job_id: str,
-    stage_workers: int,
-    monitors: list[WorkerProcessMonitor],
-) -> LaunchStats:
-    errors: list[str] = []
-    claimed = 0
-    completed = 0
-    failed = 0
-    output_rows = 0
-    for monitor in monitors:
-        outcome = monitor_outcome(monitor)
-        if outcome["error"] is not None:
-            errors.append(f"worker {outcome['worker_id']}: {outcome['error']}")
-        if outcome["returncode"] not in (0, None):
-            errors.append(f"worker process exited with code {outcome['returncode']}")
-        claimed += outcome["claimed"]
-        completed += outcome["completed"]
-        failed += outcome["failed"]
-        output_rows += outcome["output_rows"]
-    if errors:
-        raise RuntimeError("; ".join(sorted(set(errors))))
-    return LaunchStats(
-        job_id=job_id,
-        workers=stage_workers,
-        claimed=claimed,
-        completed=completed,
-        failed=failed,
-        output_rows=output_rows,
-    )
 
 
 def collect_local_stage_results(
@@ -449,27 +313,116 @@ def collect_local_stage_results(
         for worker_id, _ in processes
     }
     stage_started_at = time.monotonic()
+
+    def snapshot() -> LocalStageSnapshot:
+        completed = 0
+        failed = 0
+        for monitor in monitors:
+            returncode = monitor.process.poll()
+            if returncode is None:
+                continue
+            if returncode == 0:
+                completed += 1
+            else:
+                failed += 1
+        running = max(0, len(monitors) - completed - failed)
+        return LocalStageSnapshot(
+            job_id=job_id,
+            job_name=job_name,
+            rundir=rundir,
+            stage_index=stage_index,
+            total_stages=total_stages,
+            stage_workers=stage_workers,
+            tracking_url=tracking_url,
+            status="running" if running else ("failed" if failed > 0 else "completed"),
+            worker_total=len(monitors),
+            worker_running=running,
+            worker_completed=completed,
+            worker_failed=failed,
+            elapsed_seconds=time.monotonic() - stage_started_at,
+        )
+
     try:
         run_local_stage_ui(
             worker_log_paths=worker_log_paths,
-            snapshot_getter=lambda: build_stage_snapshot(
-                job_id=job_id,
-                job_name=job_name,
-                rundir=rundir,
-                stage_index=stage_index,
-                total_stages=total_stages,
-                stage_workers=stage_workers,
-                tracking_url=tracking_url,
-                monitors=monitors,
-                stage_started_at=stage_started_at,
-            ),
-            log_mode=log_mode if log_mode is not None else resolve_log_mode(None),
+            snapshot_getter=snapshot,
+            log_mode=resolve_log_mode(log_mode),
             interrupt_message=interrupt_message,
         )
-        return summarize_worker_monitors(
+        errors: list[str] = []
+        claimed = 0
+        completed = 0
+        failed = 0
+        output_rows = 0
+        for monitor in monitors:
+            monitor.stdout_thread.join()
+            monitor.stderr_thread.join()
+            monitor.process.wait()
+            stdout = "".join(monitor.stdout_buffer)
+            stderr = "".join(monitor.stderr_buffer)
+            final_stdout_line = next(
+                (line for line in reversed(stdout.splitlines()) if line.strip()),
+                "",
+            )
+            try:
+                decoded = json.loads(final_stdout_line or "{}")
+            except json.JSONDecodeError:
+                decoded = None
+            raw = (
+                decoded
+                if isinstance(decoded, dict)
+                else {
+                    "worker_id": monitor.worker_id,
+                    "claimed": 0,
+                    "completed": 0,
+                    "failed": 1,
+                    "output_rows": 0,
+                    "error": (
+                        stderr.strip()
+                        or stdout.strip()
+                        or f"worker process exited with code {monitor.process.returncode}"
+                    ),
+                }
+            )
+            if raw.get("error") is not None:
+                errors.append(f"worker {raw.get('worker_id', '')}: {raw['error']}")
+            if monitor.process.returncode not in (0, None):
+                errors.append(
+                    f"worker process exited with code {monitor.process.returncode}"
+                )
+            parsed_claimed = raw.get("claimed", 0)
+            parsed_completed = raw.get("completed", 0)
+            parsed_failed = raw.get("failed", 0)
+            parsed_output_rows = raw.get("output_rows", 0)
+            claimed += (
+                int(parsed_claimed)
+                if isinstance(parsed_claimed, int | float | str)
+                else 0
+            )
+            completed += (
+                int(parsed_completed)
+                if isinstance(parsed_completed, int | float | str)
+                else 0
+            )
+            failed += (
+                int(parsed_failed)
+                if isinstance(parsed_failed, int | float | str)
+                else 0
+            )
+            output_rows += (
+                int(parsed_output_rows)
+                if isinstance(parsed_output_rows, int | float | str)
+                else 0
+            )
+        if errors:
+            raise RuntimeError("; ".join(sorted(set(errors))))
+        return LaunchStats(
             job_id=job_id,
-            stage_workers=stage_workers,
-            monitors=monitors,
+            workers=stage_workers,
+            claimed=claimed,
+            completed=completed,
+            failed=failed,
+            output_rows=output_rows,
         )
     except BaseException:
         stop_worker_monitors(
@@ -522,6 +475,86 @@ class LocalStageLogTail:
             self._handle = None
 
 
+class LocalStageLogWatcher:
+    _INOTIFY_EVENT_BUFFER_BYTES = 4096
+    _IN_MODIFY = 0x00000002
+    _IN_CREATE = 0x00000100
+    _IN_MOVED_TO = 0x00000080
+    _IN_CLOSE_WRITE = 0x00000008
+    _IN_ATTRIB = 0x00000004
+
+    def __init__(self, *, paths: dict[str, Path]) -> None:
+        self._directory = next(iter(paths.values())).parent if paths else None
+        self._inotify_fd: int | None = None
+        self._watch_descriptor: int | None = None
+        self._libc: ctypes.CDLL | None = None
+        self._init_inotify()
+
+    def wait(self, timeout_seconds: float) -> None:
+        if self._inotify_fd is None:
+            self._init_inotify()
+        if self._inotify_fd is None:
+            time.sleep(timeout_seconds)
+            return
+        ready, _, _ = select.select([self._inotify_fd], [], [], timeout_seconds)
+        if not ready:
+            return
+        try:
+            os.read(self._inotify_fd, self._INOTIFY_EVENT_BUFFER_BYTES)
+        except BlockingIOError:
+            return
+
+    def close(self) -> None:
+        if self._watch_descriptor is not None and self._inotify_fd is not None:
+            try:
+                assert self._libc is not None
+                self._libc.inotify_rm_watch(self._inotify_fd, self._watch_descriptor)
+            except Exception:
+                pass
+        if self._inotify_fd is not None:
+            try:
+                os.close(self._inotify_fd)
+            except OSError:
+                pass
+        self._watch_descriptor = None
+        self._inotify_fd = None
+        self._libc = None
+
+    def _init_inotify(self) -> None:
+        if (
+            self._directory is None
+            or self._inotify_fd is not None
+            or os.name != "posix"
+            or not self._directory.exists()
+        ):
+            return
+        try:
+            libc = ctypes.CDLL("libc.so.6", use_errno=True)
+            fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+            if fd < 0:
+                return
+            mask = (
+                self._IN_MODIFY
+                | self._IN_CREATE
+                | self._IN_MOVED_TO
+                | self._IN_CLOSE_WRITE
+                | self._IN_ATTRIB
+            )
+            watch_descriptor = libc.inotify_add_watch(
+                fd,
+                os.fsencode(self._directory),
+                mask,
+            )
+            if watch_descriptor < 0:
+                os.close(fd)
+                return
+        except Exception:
+            return
+        self._libc = libc
+        self._inotify_fd = fd
+        self._watch_descriptor = watch_descriptor
+
+
 class LocalStageConsole:
     _REDRAW_INTERVAL_SECONDS = 0.1
     _MAX_BUFFERED_LINES = 2000
@@ -551,6 +584,7 @@ class LocalStageConsole:
         self._worker_failed = 0
         self._elapsed_seconds = 0.0
         self._lines: deque[str] = deque(maxlen=self._MAX_BUFFERED_LINES)
+        self._last_system_message: str | None = None
         self._last_rendered_at = 0.0
         self._last_rendered_line_count = 0
         self._alternate_screen = False
@@ -562,23 +596,30 @@ class LocalStageConsole:
             self._cursor_hidden = True
             self._render(force=True)
 
-    def emit(self, *, worker_id: str, line: str) -> None:
-        self._lines.append(self._format_line(worker_id=worker_id, line=line))
-        self._render()
-
     def emit_lines(self, *, worker_id: str, lines: list[str]) -> None:
-        for line in lines:
-            self._lines.append(self._format_line(worker_id=worker_id, line=line))
-
-    def refresh(self) -> None:
-        self._render()
+        formatted_lines = [
+            self._format_line(worker_id=worker_id, line=line) for line in lines
+        ]
+        if not self._interactive:
+            for line in formatted_lines:
+                self._write(line + "\n")
+            return
+        for line in formatted_lines:
+            if len(self._lines) == self._MAX_BUFFERED_LINES:
+                self._render(force=True)
+            self._lines.append(line)
 
     def set_status(self, status: str) -> None:
         self._status = status
         self._render(force=True)
 
     def emit_system(self, message: str) -> None:
-        self._lines.append(self._format_system_line(message))
+        self._last_system_message = message
+        self._lines.append(
+            f"launcher: {message}"
+            if not self._interactive
+            else f"{_LABEL_COLOR}launcher:{_ANSI_RESET} {_VALUE_COLOR}{message}{_ANSI_RESET}"
+        )
         self._render(force=True)
 
     def apply_snapshot(self, snapshot: LocalStageSnapshot) -> None:
@@ -616,6 +657,8 @@ class LocalStageConsole:
                 terminal_width = shutil.get_terminal_size(fallback=(120, 30)).columns
                 self._write("\n".join(self._build_header_lines(width=terminal_width)))
                 self._write("\n")
+                if self._last_system_message is not None:
+                    self._write(f"launcher: {self._last_system_message}\n")
             else:
                 self._write("\n")
         except BrokenPipeError:
@@ -814,13 +857,6 @@ class LocalStageConsole:
             f"{worker_color}{match.group('rest')}{_ANSI_RESET}"
         )
 
-    def _format_system_line(self, message: str) -> str:
-        return (
-            f"launcher: {message}"
-            if not self._interactive
-            else f"{_LABEL_COLOR}launcher:{_ANSI_RESET} {_VALUE_COLOR}{message}{_ANSI_RESET}"
-        )
-
     def _render(self, *, force: bool = False) -> None:
         now = time.monotonic()
         if not force and now - self._last_rendered_at < self._REDRAW_INTERVAL_SECONDS:
@@ -845,8 +881,20 @@ class LocalStageConsole:
 
     @staticmethod
     def _write(text: str) -> None:
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        try:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        except BrokenPipeError:
+            try:
+                devnull = open(os.devnull, "w", encoding="utf-8")
+            except OSError:
+                raise
+            try:
+                os.dup2(devnull.fileno(), sys.stdout.fileno())
+            except (AttributeError, OSError, io.UnsupportedOperation):
+                pass
+            sys.stdout = devnull
+            raise
 
 
 def _drain_stream(
@@ -872,81 +920,93 @@ def stream_local_stage_logs(
     log_mode: str = "all",
     poll_interval_seconds: float = 0.05,
 ) -> None:
-    normalized_log_mode = log_mode
-    if normalized_log_mode == "none":
-        sleep_interval = max(poll_interval_seconds, 0.25)
+    error_continuation_open: dict[str, bool] = {}
+
+    def _filter_lines(worker_id: str, lines: list[str]) -> list[str]:
+        if log_mode != "errors":
+            return [
+                line
+                for line in lines
+                if should_emit_worker_line(
+                    log_mode=log_mode,
+                    worker_id=worker_id,
+                    selected_worker_id=selected_worker_id,
+                    line=line,
+                )
+            ]
+        emitted: list[str] = []
+        for line in lines:
+            match = _LOGURU_LINE_RE.match(line)
+            if match is None:
+                if error_continuation_open.get(worker_id, False):
+                    emitted.append(line)
+                continue
+            error_continuation_open[worker_id] = match.group("level").upper() in {
+                "ERROR",
+                "CRITICAL",
+            }
+            if error_continuation_open[worker_id]:
+                emitted.append(line)
+        return emitted
+
+    if log_mode == "none":
+        snapshot_interval_seconds = max(poll_interval_seconds, 0.25)
+        next_snapshot_at = time.monotonic()
         while True:
-            if on_tick is not None:
+            now = time.monotonic()
+            if on_tick is not None and now >= next_snapshot_at:
                 on_tick()
+                next_snapshot_at = now + snapshot_interval_seconds
             if not is_stage_running():
                 break
-            time.sleep(sleep_interval)
-        console.refresh()
+            time.sleep(max(0.0, next_snapshot_at - time.monotonic()))
+        console._render()
         return
     selected_worker_id = (
-        sorted(worker_log_paths)[0]
-        if normalized_log_mode == "one" and worker_log_paths
-        else None
+        sorted(worker_log_paths)[0] if log_mode == "one" and worker_log_paths else None
     )
     tailed_worker_ids = (
         [selected_worker_id]
-        if normalized_log_mode == "one" and selected_worker_id is not None
+        if log_mode == "one" and selected_worker_id is not None
         else list(worker_log_paths)
     )
     log_tails = {
         worker_id: LocalStageLogTail(path=worker_log_paths[worker_id])
         for worker_id in tailed_worker_ids
     }
-    sleep_interval = poll_interval_seconds
+    watcher = LocalStageLogWatcher(
+        paths={
+            worker_id: worker_log_paths[worker_id] for worker_id in tailed_worker_ids
+        }
+    )
+    snapshot_interval_seconds = max(poll_interval_seconds, 0.25)
+    next_snapshot_at = time.monotonic()
     try:
         while True:
             emitted_any = False
             for worker_id, log_tail in log_tails.items():
-                lines = [
-                    line
-                    for line in log_tail.poll()
-                    if should_emit_worker_line(
-                        log_mode=normalized_log_mode,
-                        worker_id=worker_id,
-                        selected_worker_id=selected_worker_id,
-                        line=line,
-                    )
-                ]
+                lines = _filter_lines(worker_id, log_tail.poll())
                 if lines:
                     console.emit_lines(worker_id=worker_id, lines=lines)
                     emitted_any = True
-            if on_tick is not None:
+            if emitted_any:
+                console._render()
+            now = time.monotonic()
+            if on_tick is not None and now >= next_snapshot_at:
                 on_tick()
+                next_snapshot_at = now + snapshot_interval_seconds
             if not is_stage_running():
                 break
-            sleep_interval = (
-                poll_interval_seconds
-                if emitted_any
-                else min(
-                    max(poll_interval_seconds, 0.05) * 8,
-                    max(sleep_interval * 2, 0.1),
-                )
-            )
-            time.sleep(sleep_interval)
+            watcher.wait(max(0.0, next_snapshot_at - time.monotonic()))
         for worker_id, log_tail in log_tails.items():
-            lines = [
-                line
-                for line in log_tail.flush()
-                if should_emit_worker_line(
-                    log_mode=normalized_log_mode,
-                    worker_id=worker_id,
-                    selected_worker_id=selected_worker_id,
-                    line=line,
-                )
-            ]
+            lines = _filter_lines(worker_id, log_tail.flush())
             if lines:
                 console.emit_lines(worker_id=worker_id, lines=lines)
-        console.refresh()
+        console._render()
     finally:
+        watcher.close()
         for log_tail in log_tails.values():
-            close = getattr(log_tail, "close", None)
-            if callable(close):
-                close()
+            log_tail.close()
 
 
 def run_local_stage_ui(
@@ -957,38 +1017,37 @@ def run_local_stage_ui(
     interrupt_message: str | None = None,
     poll_interval_seconds: float = 0.05,
 ) -> None:
-    initial_snapshot = snapshot_getter()
-    normalized_log_mode = normalize_log_mode(log_mode)
-    current_snapshot = initial_snapshot
+    snapshot = snapshot_getter()
     console = LocalStageConsole(
-        job_id=initial_snapshot.job_id,
-        job_name=initial_snapshot.job_name,
-        rundir=initial_snapshot.rundir,
-        stage_index=initial_snapshot.stage_index,
-        total_stages=initial_snapshot.total_stages,
-        stage_workers=initial_snapshot.stage_workers,
-        tracking_url=initial_snapshot.tracking_url,
+        job_id=snapshot.job_id,
+        job_name=snapshot.job_name,
+        rundir=snapshot.rundir,
+        stage_index=snapshot.stage_index,
+        total_stages=snapshot.total_stages,
+        stage_workers=snapshot.stage_workers,
+        tracking_url=snapshot.tracking_url,
     )
-    console.apply_snapshot(initial_snapshot)
+    console.apply_snapshot(snapshot)
 
     def _update_snapshot() -> None:
-        nonlocal current_snapshot
-        current_snapshot = snapshot_getter()
-        console.apply_snapshot(current_snapshot)
+        nonlocal snapshot
+        snapshot = snapshot_getter()
+        console.apply_snapshot(snapshot)
 
     try:
         stream_local_stage_logs(
             console=console,
             worker_log_paths=worker_log_paths,
-            is_stage_running=lambda: current_snapshot.status == "running",
+            is_stage_running=lambda: snapshot.status == "running",
             on_tick=_update_snapshot,
-            log_mode=normalized_log_mode,
+            log_mode=normalize_log_mode(log_mode),
             poll_interval_seconds=poll_interval_seconds,
         )
-        console.apply_snapshot(current_snapshot)
+        console.apply_snapshot(snapshot)
     except KeyboardInterrupt:
         console.set_status("failed")
-        console.emit_system(interrupt_message or "Local job interrupted.")
+        if stdout_is_interactive():
+            console.emit_system(interrupt_message or "Local job interrupted.")
         raise
     except BrokenPipeError:
         raise

@@ -89,6 +89,12 @@ class LocalLauncher(BaseLauncher):
         )
         return stats
 
+    @staticmethod
+    def _emit_noninteractive_status(message: str) -> None:
+        if stdout_is_interactive():
+            return
+        print(f"launcher: {message}", file=sys.stderr, flush=True)
+
     def _resume_failure(self, error: str | BaseException) -> RuntimeError:
         if isinstance(error, LocalLaunchResumeError):
             return error
@@ -215,7 +221,9 @@ class LocalLauncher(BaseLauncher):
             job_id=registered_job.job_id,
             workspace_slug=registered_job.workspace_slug,
         )
-        logger.info("Local job registered. View job:\n  {}", job_tracking_url)
+        self._emit_noninteractive_status(
+            f"Local job registered. View job:\n  {job_tracking_url}"
+        )
         self.job_tracking_url = job_tracking_url
         return tracking_client, registered_job.job_id
 
@@ -370,7 +378,9 @@ class LocalLauncher(BaseLauncher):
             self.rundir = str(Path(resolve_workdir()) / "runs" / self.job_id)
         if self.job_id is None or self.rundir is None:
             raise RuntimeError("local launcher did not initialize job state")
-        logger.info(f"Starting local job {self.job_id} with rundir={self.rundir}")
+        self._emit_noninteractive_status(
+            f"Starting local job {self.job_id} with rundir={self.rundir}"
+        )
         totals = LaunchStats(
             job_id=self.job_id,
             workers=0,
@@ -423,11 +433,10 @@ class LocalLauncher(BaseLauncher):
                     )
                 )
                 if not stdout_is_interactive():
-                    logger.warning(
-                        "Local job interrupted during stage {}.",
-                        stage.index,
+                    self._emit_noninteractive_status(
+                        f"Local job interrupted during stage {stage.index}."
                     )
-                    logger.warning("{}", interrupt_error)
+                    self._emit_noninteractive_status(str(interrupt_error))
                 raise interrupt_error
             except Exception as err:
                 if tracking_client is not None:
@@ -478,17 +487,12 @@ class LocalLauncher(BaseLauncher):
                 raise self._resume_failure(
                     f"stage {stage.index} failed with {stage_stats.failed} failed shard(s)",
                 )
-        if not stdout_is_interactive():
-            logger.success(
-                "Local job completed job_id={} workers={} claimed={} completed={} failed={} output_rows={} rundir={}",
-                self.job_id,
-                totals.workers,
-                totals.claimed,
-                totals.completed,
-                totals.failed,
-                totals.output_rows,
-                self.rundir,
-            )
+        self._emit_noninteractive_status(
+            "Local job completed "
+            f"job_id={self.job_id} workers={totals.workers} claimed={totals.claimed} "
+            f"completed={totals.completed} failed={totals.failed} "
+            f"output_rows={totals.output_rows} rundir={self.rundir}"
+        )
         return totals
 
 

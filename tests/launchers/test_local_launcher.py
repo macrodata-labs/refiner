@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
+import io
 from pathlib import Path
 import threading
 import time
@@ -12,6 +14,7 @@ from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
 from refiner.cli.local_run import (
     LocalStageConsole,
+    sys as local_run_sys,
     normalize_log_mode,
     should_emit_worker_line,
 )
@@ -313,6 +316,10 @@ def test_local_stage_console_formats_system_lines_without_worker_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        "refiner.cli.local_run.LocalStageConsole._render",
+        lambda *args, **kwargs: None,
+    )
     console = LocalStageConsole(
         job_id="job-1",
         job_name="local-log-stream-demo",
@@ -323,9 +330,8 @@ def test_local_stage_console_formats_system_lines_without_worker_prefix(
         tracking_url=None,
     )
     try:
-        line = console._format_system_line(
-            "local run interrupted; shutting down workers"
-        )
+        console.emit_system("local run interrupted; shutting down workers")
+        line = console._lines[-1]
     finally:
         console.close()
 
@@ -352,7 +358,7 @@ def test_local_stage_console_bounds_interactive_log_buffer(
     )
     try:
         for index in range(LocalStageConsole._MAX_BUFFERED_LINES + 25):
-            console.emit(worker_id="worker-1", line=f"line {index}")
+            console.emit_lines(worker_id="worker-1", lines=[f"line {index}"])
         assert len(console._lines) == LocalStageConsole._MAX_BUFFERED_LINES
         assert any("line 24" in line for line in console._lines)
         assert not any("line 0" in line for line in console._lines)
@@ -387,6 +393,54 @@ def test_local_stage_console_close_moves_cursor_below_frame(
     assert "\x1b[?1049l" in writes
     assert any("Macrodata Refiner" in text for text in writes)
     assert writes[-1] == "\n"
+
+
+def test_local_stage_console_close_prints_last_system_message_after_alt_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes: list[str] = []
+
+    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        "refiner.cli.local_run.LocalStageConsole._write",
+        staticmethod(lambda text: writes.append(text)),
+    )
+
+    console = LocalStageConsole(
+        job_id="job-1",
+        job_name="local-log-stream-demo",
+        rundir="/tmp/run",
+        stage_index=0,
+        total_stages=1,
+        stage_workers=1,
+        tracking_url=None,
+    )
+    console.emit_system("Local job interrupted.")
+    console.close()
+
+    assert any("launcher: Local job interrupted." in text for text in writes)
+
+
+def test_local_stage_console_write_squelches_broken_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BrokenStdout:
+        def write(self, text: str) -> None:
+            raise BrokenPipeError()
+
+        def flush(self) -> None:
+            return None
+
+        def fileno(self) -> int:
+            raise io.UnsupportedOperation()
+
+    broken = _BrokenStdout()
+    monkeypatch.setattr("refiner.cli.local_run.sys.stdout", broken)
+
+    with pytest.raises(BrokenPipeError):
+        LocalStageConsole._write("hello")
+
+    assert local_run_sys.stdout is not broken
 
 
 def test_run_local_stage_ui_marks_failed_on_interrupt(
@@ -437,7 +491,7 @@ def test_run_local_stage_ui_marks_failed_on_interrupt(
         )
 
     assert statuses[-1] == "failed"
-    assert system_messages[-1] == "Local job interrupted."
+    assert system_messages == []
     assert closed == [True]
 
 
@@ -450,7 +504,8 @@ def test_stream_local_stage_logs_skips_tails_for_none_mode(
         def emit(self, *, worker_id: str, line: str) -> None:
             raise AssertionError(f"unexpected emit from {worker_id}: {line}")
 
-        def refresh(self) -> None:
+        def _render(self, *, force: bool = False) -> None:
+            del force
             return None
 
     monkeypatch.setattr(
@@ -491,11 +546,15 @@ def test_stream_local_stage_logs_only_tails_selected_worker_for_one_mode(
         def flush(self) -> list[str]:
             return []
 
+        def close(self) -> None:
+            return None
+
     class _Console:
         def emit_lines(self, *, worker_id: str, lines: list[str]) -> None:
             raise AssertionError(f"unexpected emit from {worker_id}: {lines}")
 
-        def refresh(self) -> None:
+        def _render(self, *, force: bool = False) -> None:
+            del force
             return None
 
     monkeypatch.setattr("refiner.cli.local_run.LocalStageLogTail", _FakeTail)
@@ -519,6 +578,112 @@ def test_stream_local_stage_logs_only_tails_selected_worker_for_one_mode(
     )
 
     assert tailed == [tmp_path / "worker-a.log"]
+
+
+def test_local_stage_console_flushes_before_batched_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    renders: list[bool] = []
+
+    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    original_render = LocalStageConsole._render
+
+    def _recording_render(self, *, force: bool = False) -> None:
+        renders.append(force)
+
+    monkeypatch.setattr(
+        "refiner.cli.local_run.LocalStageConsole._render",
+        _recording_render,
+    )
+
+    console = LocalStageConsole(
+        job_id="job-1",
+        job_name="demo",
+        rundir="/tmp/run",
+        stage_index=0,
+        total_stages=1,
+        stage_workers=1,
+        tracking_url=None,
+    )
+    try:
+        console._lines = deque(
+            [f"line {index}" for index in range(LocalStageConsole._MAX_BUFFERED_LINES)],
+            maxlen=LocalStageConsole._MAX_BUFFERED_LINES,
+        )
+        console.emit_lines(
+            worker_id="worker-1",
+            lines=["overflow 1", "overflow 2"],
+        )
+    finally:
+        monkeypatch.setattr(
+            "refiner.cli.local_run.LocalStageConsole._render",
+            original_render,
+        )
+        console.close()
+
+    assert True in renders
+
+
+def test_stream_local_stage_logs_errors_mode_keeps_traceback_continuations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: False)
+    emitted: list[str] = []
+
+    class _FakeTail:
+        def __init__(self, *, path: Path) -> None:
+            del path
+            self._emitted = False
+
+        def poll(self) -> list[str]:
+            if self._emitted:
+                return []
+            self._emitted = True
+            return [
+                "2026-04-16 21:00:21.014 | ERROR    | worker:run - failed",
+                "Traceback (most recent call last):",
+                '  File "demo.py", line 1, in <module>',
+                "ValueError: boom",
+                "2026-04-16 21:00:21.015 | INFO     | worker:run - ignored",
+            ]
+
+        def flush(self) -> list[str]:
+            return []
+
+        def close(self) -> None:
+            return None
+
+    class _Console:
+        def emit_lines(self, *, worker_id: str, lines: list[str]) -> None:
+            del worker_id
+            emitted.extend(lines)
+
+        def _render(self, *, force: bool = False) -> None:
+            del force
+            return None
+
+    monkeypatch.setattr("refiner.cli.local_run.LocalStageLogTail", _FakeTail)
+    ticks = 0
+
+    def _is_stage_running() -> bool:
+        nonlocal ticks
+        ticks += 1
+        return ticks == 1
+
+    stream_local_stage_logs(
+        console=cast(Any, _Console()),
+        worker_log_paths={"worker-a": tmp_path / "worker-a.log"},
+        is_stage_running=_is_stage_running,
+        log_mode="errors",
+        poll_interval_seconds=0.0,
+    )
+
+    assert emitted == [
+        "2026-04-16 21:00:21.014 | ERROR    | worker:run - failed",
+        "Traceback (most recent call last):",
+        '  File "demo.py", line 1, in <module>',
+        "ValueError: boom",
+    ]
 
 
 def test_normalize_log_mode_rejects_invalid_values() -> None:
@@ -653,6 +818,97 @@ def test_local_launcher_registers_job_and_reports_stage_lifecycle(
     assert environment["rundir"] == str(tmp_path / "runs" / "<jobid>")
     assert started == [("job-remote", 0)]
     assert finished == [("job-remote", 0, "completed")]
+
+
+def test_local_launcher_suppresses_startup_info_logs_in_interactive_mode(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+    info_messages: list[str] = []
+
+    class _FakeClient:
+        base_url = "https://macrodata.co"
+
+        def create_job(self, **kwargs):
+            from refiner.platform.client.models import CreateJobResponse
+
+            return CreateJobResponse(
+                job_id="job-remote",
+                stage_index=0,
+                workspace_slug="workspace",
+            )
+
+    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
+    monkeypatch.setattr("refiner.launchers.local.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        "refiner.launchers.local.logger.info",
+        lambda *args, **kwargs: info_messages.append(str(args[0])),
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
+    )
+    monkeypatch.setattr(
+        LocalLauncher,
+        "_build_local_job_id",
+        staticmethod(lambda name: "job-local"),
+    )
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-launch-register",
+        num_workers=1,
+    )
+    monkeypatch.setattr(launcher, "_planned_stages", lambda: [])
+    launcher.launch()
+
+    assert info_messages == []
+
+
+def test_local_launcher_prints_plain_status_lines_in_noninteractive_mode(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+
+    class _FakeClient:
+        base_url = "https://macrodata.co"
+
+        def create_job(self, **kwargs):
+            from refiner.platform.client.models import CreateJobResponse
+
+            return CreateJobResponse(
+                job_id="job-remote",
+                stage_index=0,
+                workspace_slug="workspace",
+            )
+
+    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: "md_test")
+    monkeypatch.setattr("refiner.launchers.local.stdout_is_interactive", lambda: False)
+    monkeypatch.setattr(
+        "refiner.launchers.local.MacrodataClient", lambda **kwargs: _FakeClient()
+    )
+    monkeypatch.setattr(
+        LocalLauncher,
+        "_build_local_job_id",
+        staticmethod(lambda name: "job-local"),
+    )
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-launch-register",
+        num_workers=1,
+    )
+    monkeypatch.setattr(launcher, "_planned_stages", lambda: [])
+    launcher.launch()
+
+    err = capsys.readouterr().err
+    assert "launcher: Local job registered. View job:" in err
+    assert "launcher: Starting local job" in err
+    assert "launcher: Local job completed" in err
+    assert "refiner.launchers.local" not in err
 
 
 def test_local_launcher_warns_without_credentials(
@@ -1078,6 +1334,50 @@ def test_local_launcher_reports_interrupted_stage_with_reason(
             "reason": "Local launcher interrupted",
         }
     ]
+
+
+def test_local_launcher_prints_abort_message_in_noninteractive_mode(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    pipeline = read_jsonl(str(path))
+
+    monkeypatch.setattr("refiner.launchers.local.current_api_key", lambda: None)
+    monkeypatch.setattr("refiner.launchers.local.stdout_is_interactive", lambda: False)
+
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-stage-interrupt-output",
+        num_workers=1,
+        rundir=str(tmp_path / "run"),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_planned_stages",
+        lambda: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_launch_stage",
+        lambda **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        launcher.launch()
+
+    err = capsys.readouterr().err
+    assert "launcher: Local job interrupted during stage 0." in err
+    assert "launcher: Local job interrupted." in err
 
 
 def test_local_launcher_resets_stale_tracking_url_between_runs(
