@@ -336,6 +336,29 @@ def test_jobs_workers_plain_output_shows_next_cursor(monkeypatch, capsys) -> Non
     assert "Next cursor: 20" in out.out
 
 
+def test_jobs_workers_plain_output_sanitizes_next_cursor(monkeypatch, capsys) -> None:
+    class _CursorClient(_FakeClient):
+        def cli_get_job_workers(self, **_: object) -> dict[str, object]:
+            payload = super().cli_get_job_workers(job_id="job-1", stage_index=0)
+            payload["page"] = {
+                "nextCursor": "\x1b[31mboom\x1b[0m",
+                "loaded": 1,
+                "total": 2,
+            }
+            return payload
+
+    monkeypatch.setattr(jobs, "_client", lambda: _CursorClient())
+
+    rc = jobs.cmd_jobs_workers(
+        Namespace(job_id="job-1", stage=0, limit=20, cursor=None, json=False)
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "\x1b" not in out.out
+    assert "Next cursor: [31mboom[0m" in out.out
+
+
 def test_jobs_manifest_plain_output(monkeypatch, capsys) -> None:
     monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
 

@@ -101,7 +101,7 @@ def _render_list(payload: dict[str, Any]) -> int:
     _print_table(rows)
     next_cursor = payload.get("nextCursor")
     if isinstance(next_cursor, str) and next_cursor:
-        print(f"\nNext cursor: {next_cursor}")
+        print(f"\nNext cursor: {_safe_text(next_cursor)}")
     return 0
 
 
@@ -211,7 +211,7 @@ def _render_workers(payload: dict[str, Any]) -> int:
     if isinstance(page, dict):
         next_cursor = page.get("nextCursor")
         if isinstance(next_cursor, str) and next_cursor:
-            print(f"\nNext cursor: {next_cursor}")
+            print(f"\nNext cursor: {_safe_text(next_cursor)}")
     return 0
 
 
