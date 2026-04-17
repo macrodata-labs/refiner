@@ -130,7 +130,7 @@ class Worker:
                 inflight_by_id.pop(shard_id, None)
                 source_done_shards.discard(shard_id)
             completed += 1
-            logger.info(
+            logger.success(
                 "shard completed shard_id={} global_ordinal={}",
                 shard.id,
                 shard.global_ordinal,
@@ -327,7 +327,10 @@ class Worker:
                     if execution_error is not None or run_exception is not None
                     else "completed"
                 )
-                logger.info(
+                log_completion = (
+                    logger.success if status == "completed" else logger.info
+                )
+                log_completion(
                     "worker finished job_id={} stage_index={} worker_id={} status={}",
                     self.job_id,
                     self.stage_index,

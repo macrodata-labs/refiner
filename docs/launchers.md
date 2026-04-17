@@ -39,9 +39,22 @@ Returned stats include:
 - workers always run as subprocesses, even when `num_workers=1`
 - local launch does not pin worker CPUs; if `num_workers` exceeds available CPUs, Refiner logs a warning and still launches the requested worker count
 - `gpus_per_worker` optionally exposes a fixed number of visible GPU devices to each local worker
+- `REFINER_LOCAL_LOGS` controls the live local console stream when set:
+  - `all`: stream every worker log line
+  - `none`: suppress live worker log output
+  - `one`: stream one representative worker
+  - `errors`: stream only `ERROR` and `CRITICAL` lines
 - if `rundir` is reused, local launch skips shards already completed there
+- when a local run fails or is interrupted, Refiner prints the `rundir` to reuse if you want to resume completed shards
 - local run files live under `<workdir>/runs/<job_id>/...`
 - worker Loguru output is written to `stage-<index>/logs/worker-<worker_id>.log` under the local rundir
+- during local execution, the launcher tails per-worker log files
+- on interactive terminals, Refiner redraws a pinned terminal header with job metadata, live runtime, and the latest worker log lines beneath it
+- on non-interactive output, Refiner prints plain prefixed log lines
+
+## Internal Notes
+
+- the local launcher keeps worker result JSON on `stdout` reserved for launcher-to-worker control flow and suppresses that final payload from the live log pane
 
 ## Cloud Launcher
 
