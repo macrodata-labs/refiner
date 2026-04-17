@@ -142,34 +142,13 @@ class MacrodataClient:
         self.api_key = api_key if api_key is not None else current_api_key()
         self.base_url = (base_url or resolve_platform_base_url()).rstrip("/")
 
-    def _request(
-        self,
-        *,
-        method: str,
-        path: str,
-        response_type: type[T],
-        json_payload: dict[str, Any] | None = None,
-        timeout_s: float = 10.0,
-    ) -> T:
-        response_data = request_json(
-            method=method,
-            path=path,
-            api_key=self.api_key,
-            base_url=self.base_url,
-            json_payload=json_payload,
-            timeout_s=timeout_s,
-        )
-        try:
-            return msgspec.convert(response_data, type=response_type, strict=True)
-        except (TypeError, msgspec.ValidationError) as err:
-            raise MacrodataApiError(status=200, message=str(err)) from err
-
     def _request_raw(
         self,
         *,
         method: str,
         path: str,
         query_params: dict[str, Any] | None = None,
+        json_payload: dict[str, Any] | None = None,
         timeout_s: float = 10.0,
     ) -> dict[str, Any]:
         resolved_path = path
@@ -187,8 +166,31 @@ class MacrodataClient:
             path=resolved_path,
             api_key=self.api_key,
             base_url=self.base_url,
+            json_payload=json_payload,
             timeout_s=timeout_s,
         )
+
+    def _request(
+        self,
+        *,
+        method: str,
+        path: str,
+        response_type: type[T],
+        query_params: dict[str, Any] | None = None,
+        json_payload: dict[str, Any] | None = None,
+        timeout_s: float = 10.0,
+    ) -> T:
+        response_data = self._request_raw(
+            method=method,
+            path=path,
+            query_params=query_params,
+            json_payload=json_payload,
+            timeout_s=timeout_s,
+        )
+        try:
+            return msgspec.convert(response_data, type=response_type, strict=True)
+        except (TypeError, msgspec.ValidationError) as err:
+            raise MacrodataApiError(status=200, message=str(err)) from err
 
     def create_job(
         self,
