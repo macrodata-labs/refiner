@@ -274,12 +274,13 @@ def _format_log_entry(entry: dict[str, Any]) -> str:
 
 
 def _log_entry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    message_hash = _safe_text(entry.get("messageHash"))
     return (
         _safe_text(entry.get("ts")),
         _safe_text(entry.get("workerId")),
         _safe_text(entry.get("sourceType")),
         _safe_text(entry.get("sourceName")),
-        _safe_text(entry.get("messageHash")),
+        message_hash or _safe_text(entry.get("line")),
     )
 
 
@@ -350,7 +351,8 @@ def _stream_logs(
     current_end_ms = end_ms
     current_cursor: str | None = None
     full_batch_polls = 0
-    retryable_error_count = 0
+    log_retryable_error_count = 0
+    status_retryable_error_count = 0
 
     while True:
         try:
@@ -370,12 +372,12 @@ def _stream_logs(
         except MacrodataApiError as err:
             if not _is_retryable_api_error(err):
                 raise
-            retryable_error_count += 1
-            if retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
+            log_retryable_error_count += 1
+            if log_retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
                 raise
-            time.sleep(_follow_retry_delay(retryable_error_count))
+            time.sleep(_follow_retry_delay(log_retryable_error_count))
             continue
-        retryable_error_count = 0
+        log_retryable_error_count = 0
         entries = payload.get("entries")
         if isinstance(entries, list):
             for entry in entries:
@@ -416,15 +418,15 @@ def _stream_logs(
         except MacrodataApiError as err:
             if not _is_retryable_api_error(err):
                 raise
-            retryable_error_count += 1
-            if retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
+            status_retryable_error_count += 1
+            if status_retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
                 raise
-            time.sleep(_follow_retry_delay(retryable_error_count))
+            time.sleep(_follow_retry_delay(status_retryable_error_count))
             job_payload = {}
             continue
         except MacrodataCredentialsError:
             raise
-        retryable_error_count = 0
+        status_retryable_error_count = 0
         if (
             current_cursor is None
             and _job_status(job_payload) in _TERMINAL_JOB_STATUSES
@@ -697,13 +699,13 @@ def cmd_jobs_logs(args: Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        if args.limit > _MAX_LOG_SEARCH_LIMIT:
+        limit = _effective_log_limit(args)
+        if limit > _MAX_LOG_SEARCH_LIMIT:
             print(
                 f"--search supports at most {_MAX_LOG_SEARCH_LIMIT} results.",
                 file=sys.stderr,
             )
             return 1
-        limit = _effective_log_limit(args)
         start_ms = args.start_ms
         end_ms = args.end_ms
     else:
