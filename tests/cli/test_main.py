@@ -29,6 +29,15 @@ def test_parser_has_jobs_commands() -> None:
     assert args.me is True
 
 
+def test_parser_has_jobs_logs_follow_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["jobs", "logs", "job-1", "--follow"])
+    assert args.command == "jobs"
+    assert args.jobs_command == "logs"
+    assert args.job_id == "job-1"
+    assert args.follow is True
+
+
 def test_parser_has_jobs_cancel_command() -> None:
     parser = build_parser()
     args = parser.parse_args(["jobs", "cancel", "job-1"])

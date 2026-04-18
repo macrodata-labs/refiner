@@ -123,6 +123,7 @@ class _FakeClient:
                 }
             ],
             "hasOlder": False,
+            "nextStartMs": 1_700_000_001_000,
         }
 
     def cli_get_job_metrics(self, **_: object) -> dict[str, object]:
@@ -217,6 +218,7 @@ def test_jobs_logs_json_output(monkeypatch, capsys) -> None:
             start_ms=1,
             end_ms=2,
             limit=10,
+            follow=False,
             json=True,
         )
     )
@@ -225,6 +227,104 @@ def test_jobs_logs_json_output(monkeypatch, capsys) -> None:
     assert rc == 0
     assert '"entries"' in out.out
     assert '"retrying shard"' in out.out
+
+
+def test_jobs_logs_follow_rejects_json(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            limit=10,
+            follow=True,
+            json=True,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert "--follow cannot be combined with --json." in out.err
+
+
+def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None:
+    class _FollowClient(_FakeClient):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_001_000,
+                            "severity": "warning",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": "retrying shard",
+                        }
+                    ],
+                    "hasOlder": False,
+                    "nextStartMs": 1_700_000_001_000,
+                }
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_002_000,
+                        "severity": "error",
+                        "workerId": "worker-2",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": "shard failed",
+                    }
+                ],
+                "hasOlder": False,
+                "nextStartMs": 1_700_000_002_000,
+            }
+
+    client = _FollowClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+
+    sleep_calls = {"count": 0}
+
+    def _fake_sleep(_: float) -> None:
+        sleep_calls["count"] += 1
+        if sleep_calls["count"] >= 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            limit=10,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 130
+    assert "retrying shard" in out.out
+    assert "shard failed" in out.out
+    assert "Stopped following logs." in out.err
 
 
 def test_jobs_resource_metrics_plain_output_accepts_second_timestamps(
@@ -531,6 +631,7 @@ def test_jobs_logs_search_requires_explicit_scope(monkeypatch, capsys) -> None:
             start_ms=None,
             end_ms=None,
             limit=10,
+            follow=False,
             json=False,
         )
     )
@@ -556,6 +657,7 @@ def test_jobs_logs_search_rejects_large_limits(monkeypatch, capsys) -> None:
             start_ms=1,
             end_ms=2,
             limit=101,
+            follow=False,
             json=False,
         )
     )
@@ -581,6 +683,7 @@ def test_jobs_logs_search_requires_explicit_window(monkeypatch, capsys) -> None:
             start_ms=1,
             end_ms=None,
             limit=10,
+            follow=False,
             json=False,
         )
     )

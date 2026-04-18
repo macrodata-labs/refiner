@@ -151,6 +151,7 @@ Options:
 - `--start-ms <epoch_ms>`
 - `--end-ms <epoch_ms>`
 - `--limit <count>`
+- `--follow`
 - `--json`
 
 Notes:
@@ -158,9 +159,12 @@ Notes:
 - `--search` requires `--stage`
 - `--search` requires both `--start-ms` and `--end-ms`
 - `--search` supports at most 100 results per request
+- `--follow` polls for new log entries until interrupted
+- `--follow` cannot be combined with `--json` or `--search`
 
 ```bash
 macrodata jobs logs <job_id>
+macrodata jobs logs <job_id> --follow
 macrodata jobs logs <job_id> --stage 0 --severity error
 macrodata jobs logs <job_id> --stage 0 --search retry --start-ms 1713340800000 --end-ms 1713341700000 --limit 50
 ```

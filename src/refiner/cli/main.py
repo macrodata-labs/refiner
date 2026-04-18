@@ -143,6 +143,11 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_logs.add_argument("--end-ms", type=int, help="Window end time in epoch ms")
     jobs_logs.add_argument("--limit", type=int, default=100, help="Maximum log entries")
     jobs_logs.add_argument(
+        "--follow",
+        action="store_true",
+        help="Poll continuously for new log entries",
+    )
+    jobs_logs.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
     jobs_logs.set_defaults(handler=cmd_jobs_logs)

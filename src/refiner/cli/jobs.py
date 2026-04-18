@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from argparse import Namespace
 from datetime import datetime, timezone
 from typing import Any
@@ -13,6 +14,7 @@ from refiner.platform.client.api import sanitize_terminal_text
 _DEFAULT_LOG_WINDOW_MS = 60 * 60 * 1000
 _MAX_LOG_SEARCH_LIMIT = 100
 _MAX_METRICS_WORKER_IDS = 50
+_FOLLOW_LOG_POLL_INTERVAL_SECONDS = 1.0
 
 
 def _client() -> MacrodataClient:
@@ -248,17 +250,81 @@ def _render_logs(payload: dict[str, Any]) -> int:
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        line = (
-            f"{_format_ts(entry.get('ts'))} "
-            f"{_safe_text(entry.get('severity')).upper():<7} "
-            f"{_safe_text(entry.get('workerId'))} "
-            f"{_safe_text(entry.get('sourceType'))}/{_safe_text(entry.get('sourceName'))} "
-            f"{_safe_text(entry.get('line'))}"
-        )
-        print(line)
+        print(_format_log_entry(entry))
     if payload.get("hasOlder") is True:
         print("\nMore logs are available before this window.")
     return 0
+
+
+def _format_log_entry(entry: dict[str, Any]) -> str:
+    return (
+        f"{_format_ts(entry.get('ts'))} "
+        f"{_safe_text(entry.get('severity')).upper():<7} "
+        f"{_safe_text(entry.get('workerId'))} "
+        f"{_safe_text(entry.get('sourceType'))}/{_safe_text(entry.get('sourceName'))} "
+        f"{_safe_text(entry.get('line'))}"
+    )
+
+
+def _log_entry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    return (
+        _safe_text(entry.get("ts")),
+        _safe_text(entry.get("workerId")),
+        _safe_text(entry.get("sourceType")),
+        _safe_text(entry.get("sourceName")),
+        _safe_text(entry.get("line")),
+    )
+
+
+def _coerce_next_start_ms(value: Any, *, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _stream_logs(
+    *,
+    args: Namespace,
+    start_ms: int,
+    end_ms: int,
+) -> int:
+    seen_keys: set[tuple[str, str, str, str, str]] = set()
+    current_start_ms = start_ms
+    current_end_ms = end_ms
+
+    while True:
+        payload = _client().cli_get_job_logs(
+            job_id=args.job_id,
+            start_ms=current_start_ms,
+            end_ms=current_end_ms,
+            limit=args.limit,
+            stage_index=args.stage,
+            worker_id=args.worker,
+            source_type=args.source_type,
+            source_name=args.source_name,
+            severity=args.severity,
+            search=args.search,
+        )
+        entries = payload.get("entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                key = _log_entry_key(entry)
+                if key in seen_keys:
+                    continue
+                print(_format_log_entry(entry))
+                seen_keys.add(key)
+        if len(seen_keys) > 10_000:
+            seen_keys.clear()
+        current_start_ms = _coerce_next_start_ms(
+            payload.get("nextStartMs"),
+            fallback=current_end_ms,
+        )
+        time.sleep(_FOLLOW_LOG_POLL_INTERVAL_SECONDS)
+        next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        current_end_ms = max(next_end_ms, current_start_ms + 1)
 
 
 def _render_resource_metrics(payload: dict[str, Any]) -> int:
@@ -502,6 +568,12 @@ def cmd_jobs_workers(args: Namespace) -> int:
 
 
 def cmd_jobs_logs(args: Namespace) -> int:
+    if args.follow and args.json:
+        print("--follow cannot be combined with --json.", file=sys.stderr)
+        return 1
+    if args.follow and args.search:
+        print("--follow cannot be combined with --search.", file=sys.stderr)
+        return 1
     if args.search:
         if args.stage is None:
             print("--search requires --stage.", file=sys.stderr)
@@ -532,6 +604,8 @@ def cmd_jobs_logs(args: Namespace) -> int:
             else end_ms - _DEFAULT_LOG_WINDOW_MS
         )
     try:
+        if args.follow:
+            return _stream_logs(args=args, start_ms=start_ms, end_ms=end_ms)
         payload = _client().cli_get_job_logs(
             job_id=args.job_id,
             start_ms=start_ms,
@@ -544,6 +618,9 @@ def cmd_jobs_logs(args: Namespace) -> int:
             severity=args.severity,
             search=args.search,
         )
+    except KeyboardInterrupt:
+        print("Stopped following logs.", file=sys.stderr)
+        return 130
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)
     return _print_json(payload) if args.json else _render_logs(payload)
