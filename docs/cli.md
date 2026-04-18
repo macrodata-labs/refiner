@@ -3,7 +3,7 @@ title: "CLI"
 description: "Macrodata CLI commands used with Refiner"
 ---
 
-Refiner installs the `macrodata` CLI.
+Refiner installs the `macrodata` CLI and the shorter `mdr` alias. They are equivalent, so `mdr jobs list` and `macrodata jobs list` run the same command.
 
 ## Auth
 

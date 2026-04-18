@@ -54,6 +54,7 @@ all = [
 
 [project.scripts]
 macrodata = "refiner.cli.main:main"
+mdr = "refiner.cli.main:main"
 
 [build-system]
 requires = ["setuptools>=77", "wheel"]
