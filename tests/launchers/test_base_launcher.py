@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import cast
 
+from refiner.job_urls import build_job_tracking_url
 from refiner.platform.client import MacrodataClient
 from refiner.pipeline import RefinerPipeline
 from refiner.launchers.base import BaseLauncher
@@ -28,12 +29,9 @@ class _ResourceHintLauncher(_DummyLauncher):
 
 
 def test_job_tracking_url_sanitizes_terminal_control_characters() -> None:
-    launcher = _DummyLauncher(
-        pipeline=cast(RefinerPipeline, object()), name="unit-test"
-    )
     client = MacrodataClient(api_key="md_test", base_url="https://app.\x9bexample.com")
 
-    url = launcher._job_tracking_url(
+    url = build_job_tracking_url(
         client=client,
         workspace_slug="macro\x07data",
         job_id="job-\x1b[31m",

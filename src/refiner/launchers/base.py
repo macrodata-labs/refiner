@@ -13,7 +13,6 @@ from refiner.pipeline.planning import (
     compile_planned_stages,
     plan_pipeline_stages,
 )
-from refiner.platform.client.api import MacrodataClient, sanitize_terminal_text
 from refiner.platform.manifest import build_run_manifest
 
 if TYPE_CHECKING:
@@ -48,18 +47,6 @@ class BaseLauncher(ABC):
     def _build_local_job_id(name: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-") or "job"
         return f"{slug}-{int(time.time())}-{uuid4().hex[:8]}"
-
-    def _job_tracking_url(
-        self, *, client: MacrodataClient, job_id: str, workspace_slug: str | None = None
-    ) -> str:
-        safe_base_url = sanitize_terminal_text(client.base_url).strip().rstrip("/")
-        safe_job_id = sanitize_terminal_text(job_id).strip() or job_id
-        safe_workspace_slug = (
-            sanitize_terminal_text(workspace_slug).strip() if workspace_slug else None
-        )
-        if safe_workspace_slug:
-            return f"{safe_base_url}/jobs/{safe_workspace_slug}/{safe_job_id}"
-        return f"{safe_base_url}/jobs/{safe_job_id}"
 
     def _planned_stages(self) -> list[PlannedStage]:
         requested_workers = getattr(self, "num_workers", None)

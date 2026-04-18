@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import cloudpickle
 
+from refiner.cli.cloud_run import require_cloud_attach_supported
 from refiner.cli.local_run import (
     LaunchStats,
     collect_local_stage_results,
@@ -18,6 +19,7 @@ from refiner.cli.local_run import (
     LocalLaunchResumeError,
     stdout_is_interactive,
 )
+from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import PlannedStage
 from refiner.platform.auth import MacrodataCredentialsError, current_api_key
@@ -216,7 +218,7 @@ class LocalLauncher(BaseLauncher):
         except Exception as err:
             logger.warning(f"Failed to register local job with Macrodata: {err}")
             return None, None
-        job_tracking_url = self._job_tracking_url(
+        job_tracking_url = build_job_tracking_url(
             client=tracking_client,
             job_id=registered_job.job_id,
             workspace_slug=registered_job.workspace_slug,
@@ -363,6 +365,7 @@ class LocalLauncher(BaseLauncher):
         )
 
     def launch(self) -> LaunchStats:
+        require_cloud_attach_supported("local")
         available_cpus = len(available_cpu_ids())
         if self.num_workers > available_cpus:
             logger.warning(

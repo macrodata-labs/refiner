@@ -20,6 +20,7 @@ _DEFAULT_LOG_PAGE_LIMIT = 100
 _DEFAULT_FOLLOW_LOG_PAGE_LIMIT = 500
 _FOLLOW_LOG_DEDUPE_LIMIT = 100_000
 _FOLLOW_LOG_MAX_DRAIN_POLLS = 5
+_FOLLOW_LOG_DRAIN_POLL_DELAY_SECONDS = 0.1
 _FOLLOW_LOG_MAX_RETRYABLE_ERRORS = 5
 _TERMINAL_JOB_STATUSES = frozenset({"completed", "failed", "canceled"})
 
@@ -401,6 +402,7 @@ def _stream_logs(
         if current_cursor is not None:
             full_batch_polls += 1
             if full_batch_polls < _FOLLOW_LOG_MAX_DRAIN_POLLS:
+                time.sleep(_FOLLOW_LOG_DRAIN_POLL_DELAY_SECONDS)
                 continue
             oldest_entry = entries[0] if isinstance(entries, list) and entries else None
             skipped_end_ms = (
@@ -652,6 +654,37 @@ def cmd_jobs_get(args: Namespace) -> int:
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)
     return _print_json(payload) if args.json else _render_job(payload)
+
+
+def cmd_jobs_attach(args: Namespace) -> int:
+    from refiner.cli.cloud_run import CloudAttachDetached, attach_to_cloud_job
+
+    try:
+        client = _client()
+        payload = client.cli_get_job(job_id=args.job_id)
+    except (MacrodataApiError, MacrodataCredentialsError) as err:
+        return _handle_error(err)
+
+    job = payload.get("job")
+    if not isinstance(job, dict):
+        print("Job details unavailable.", file=sys.stderr)
+        return 1
+    if _executor_text(job.get("executorKind")) != "cloud":
+        print(
+            "`macrodata jobs attach` is only supported for cloud jobs.", file=sys.stderr
+        )
+        return 1
+
+    try:
+        return attach_to_cloud_job(
+            client=client,
+            job_id=args.job_id,
+            initial_job_payload=payload,
+        )
+    except CloudAttachDetached:
+        return 130
+    except (MacrodataApiError, MacrodataCredentialsError) as err:
+        return _handle_error(err)
 
 
 def cmd_jobs_manifest(args: Namespace) -> int:

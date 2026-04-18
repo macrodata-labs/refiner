@@ -79,6 +79,13 @@ def test_launch_local_single_worker(tmp_path) -> None:
     assert stats.output_rows == 2
 
 
+def test_launch_local_rejects_attach_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REFINER_ATTACH", "attach")
+
+    with pytest.raises(SystemExit, match="only supported for cloud launches"):
+        read_jsonl("input.jsonl").launch_local(name="unit-test-local")
+
+
 def test_launch_local_single_worker_csv(tmp_path) -> None:
     path = tmp_path / "a.csv"
     path.write_text("x\n1\n2\n")

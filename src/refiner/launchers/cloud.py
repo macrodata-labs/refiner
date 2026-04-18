@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from refiner.cli.cloud_run import (
+    CloudAttachContext,
+    attach_to_cloud_job,
+    emit_cloud_followup_commands,
+    resolve_attach_mode,
+)
 from refiner.cli.ui import stdin_is_interactive
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
@@ -15,6 +22,7 @@ from refiner.platform.client import (
 )
 from refiner.platform.manifest import refiner_ref_exists_on_remote
 
+from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
 from refiner.worker.context import logger
 
@@ -201,10 +209,34 @@ class CloudLauncher(BaseLauncher):
                 "Your Macrodata API key is invalid. Run `macrodata login` "
                 "or set MACRODATA_API_KEY with a valid key."
             ) from err
-        logger.info(
-            "Cloud job launched. View job:\n  "
-            f"{self._job_tracking_url(client=client, job_id=resp.job_id, workspace_slug=resp.workspace_slug)}"
+        tracking_url = build_job_tracking_url(
+            client=client,
+            job_id=resp.job_id,
+            workspace_slug=resp.workspace_slug,
         )
+        context = CloudAttachContext(
+            job_id=resp.job_id,
+            job_name=self.name,
+            tracking_url=tracking_url,
+            stage_index=resp.stage_index,
+        )
+        logger.info(f"Cloud job launched. View job:\n  {tracking_url}")
+        attach_mode = resolve_attach_mode()
+        if attach_mode == "detach":
+            emit_cloud_followup_commands(context=context)
+        else:
+            try:
+                attach_to_cloud_job(
+                    client=client,
+                    job_id=resp.job_id,
+                    stage_index_hint=resp.stage_index,
+                )
+            except Exception:
+                print(
+                    "Cloud job submitted, but attach failed. Continue with:",
+                    file=sys.stderr,
+                )
+                emit_cloud_followup_commands(context=context, file=sys.stderr)
         return CloudLaunchResult(
             job_id=resp.job_id,
             stage_index=resp.stage_index,

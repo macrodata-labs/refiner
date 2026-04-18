@@ -12,9 +12,20 @@ def test_parser_has_auth_commands() -> None:
 def test_parser_has_run_command() -> None:
     parser = build_parser()
     args = parser.parse_args(
-        ["run", "--logs", "one", "script.py", "--", "--rows", "10"]
+        [
+            "run",
+            "--attach",
+            "attach",
+            "--logs",
+            "one",
+            "script.py",
+            "--",
+            "--rows",
+            "10",
+        ]
     )
     assert args.command == "run"
+    assert args.attach == "attach"
     assert args.logs == "one"
     assert args.script == "script.py"
     assert args.script_args == ["--rows", "10"]
@@ -52,6 +63,14 @@ def test_parser_has_jobs_cancel_command() -> None:
     args = parser.parse_args(["jobs", "cancel", "job-1"])
     assert args.command == "jobs"
     assert args.jobs_command == "cancel"
+    assert args.job_id == "job-1"
+
+
+def test_parser_has_jobs_attach_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["jobs", "attach", "job-1"])
+    assert args.command == "jobs"
+    assert args.jobs_command == "attach"
     assert args.job_id == "job-1"
 
 

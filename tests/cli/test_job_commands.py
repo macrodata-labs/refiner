@@ -207,6 +207,62 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "2/1/4" in out.out
 
 
+def test_jobs_attach_calls_cloud_attach(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_attach_to_cloud_job(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    monkeypatch.setattr(
+        "refiner.cli.cloud_run.attach_to_cloud_job",
+        _fake_attach_to_cloud_job,
+    )
+
+    rc = jobs.cmd_jobs_attach(Namespace(job_id="job-1"))
+
+    assert rc == 0
+    assert captured["job_id"] == "job-1"
+    payload = cast(dict[str, object], captured["initial_job_payload"])
+    job = cast(dict[str, object], payload["job"])
+    assert job["executorKind"] == "cloud"
+
+
+def test_jobs_attach_rejects_non_cloud_job(monkeypatch, capsys) -> None:
+    class _LocalClient(_FakeClient):
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            cast(dict[str, object], payload["job"])["executorKind"] = "local"
+            return payload
+
+    monkeypatch.setattr(jobs, "_client", lambda: _LocalClient())
+
+    rc = jobs.cmd_jobs_attach(Namespace(job_id="job-1"))
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert "only supported for cloud jobs" in out.err
+
+
+def test_jobs_attach_routes_attach_api_errors_through_cli_handler(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    monkeypatch.setattr(
+        "refiner.cli.cloud_run.attach_to_cloud_job",
+        lambda **_: (_ for _ in ()).throw(
+            MacrodataApiError(status=503, message="temporary")
+        ),
+    )
+
+    rc = jobs.cmd_jobs_attach(Namespace(job_id="job-1"))
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert "temporary" in out.err
+
+
 def test_jobs_logs_json_output(monkeypatch, capsys) -> None:
     monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
 
@@ -613,7 +669,7 @@ def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
     assert rc == 0
     assert "first" in out.out
     assert "second" in out.out
-    assert sleep_calls["count"] == 0
+    assert sleep_calls["count"] == 1
     assert client.job_calls == 1
 
 
@@ -773,7 +829,7 @@ def test_jobs_logs_follow_sleeps_after_bounded_drain_polls(monkeypatch, capsys) 
     assert rc == 0
     assert "line-1" in out.out
     assert f"line-{jobs._FOLLOW_LOG_MAX_DRAIN_POLLS}" in out.out
-    assert sleep_calls["count"] == 1
+    assert sleep_calls["count"] == jobs._FOLLOW_LOG_MAX_DRAIN_POLLS
     assert client.job_calls == 2
 
 

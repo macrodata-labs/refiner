@@ -5,6 +5,7 @@ import sys
 
 from refiner.cli.auth import cmd_login, cmd_logout, cmd_whoami
 from refiner.cli.jobs import (
+    cmd_jobs_attach,
     cmd_jobs_cancel,
     cmd_jobs_get,
     cmd_jobs_list,
@@ -48,6 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser(
         "run",
         help="Run a Macrodata Refiner pipeline script",
+    )
+    run.add_argument(
+        "--attach",
+        choices=("auto", "attach", "detach"),
+        default=None,
+        help="Override cloud attach mode via REFINER_ATTACH",
     )
     run.add_argument(
         "--logs",
@@ -94,6 +101,12 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_get.add_argument("job_id", help="Job identifier")
     jobs_get.add_argument("--json", action="store_true", help="Print raw JSON response")
     jobs_get.set_defaults(handler=cmd_jobs_get)
+
+    jobs_attach = jobs_subparsers.add_parser(
+        "attach", help="Attach to a running cloud job"
+    )
+    jobs_attach.add_argument("job_id", help="Job identifier")
+    jobs_attach.set_defaults(handler=cmd_jobs_attach)
 
     jobs_manifest = jobs_subparsers.add_parser("manifest", help="Get job manifest")
     jobs_manifest.add_argument("job_id", help="Job identifier")

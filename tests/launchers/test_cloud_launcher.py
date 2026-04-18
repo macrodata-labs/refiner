@@ -512,3 +512,74 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_requires_override(
 
     with pytest.raises(SystemExit, match="MACRODATA_FALLBACK_TO_LATEST_PYPI=1"):
         read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+
+def test_pipeline_launch_cloud_detached_mode_prints_followup_commands(
+    monkeypatch, capsys
+) -> None:
+    _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    monkeypatch.setattr("refiner.launchers.cloud.resolve_attach_mode", lambda: "detach")
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.emit_cloud_followup_commands",
+        lambda *, context, file=None: print(f"attach {context.job_id}", file=file),
+    )
+
+    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+    out = capsys.readouterr()
+
+    assert result.job_id == "job-123"
+    assert "attach job-123" in out.out
+
+
+def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    monkeypatch.setattr("refiner.launchers.cloud.resolve_attach_mode", lambda: "attach")
+    captured: dict[str, object] = {}
+
+    def _fake_attach_to_cloud_job(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.attach_to_cloud_job", _fake_attach_to_cloud_job
+    )
+
+    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert result.job_id == "job-123"
+    assert captured["job_id"] == "job-123"
+    assert captured["stage_index_hint"] == 0
+
+
+def test_pipeline_launch_cloud_attach_failure_prints_fallback(
+    monkeypatch, capsys
+) -> None:
+    _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    monkeypatch.setattr("refiner.launchers.cloud.resolve_attach_mode", lambda: "attach")
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.attach_to_cloud_job",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.emit_cloud_followup_commands",
+        lambda *, context, file=None: print(f"fallback {context.job_id}", file=file),
+    )
+
+    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    out = capsys.readouterr()
+    assert result.job_id == "job-123"
+    assert "attach failed" in out.err
+    assert "fallback job-123" in out.err
