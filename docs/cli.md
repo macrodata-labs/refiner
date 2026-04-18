@@ -3,7 +3,7 @@ title: "CLI"
 description: "Macrodata CLI commands used with Refiner"
 ---
 
-Refiner installs the `macrodata` CLI.
+Refiner installs the `macrodata` CLI and the shorter `mdr` alias. They are equivalent, so `mdr jobs list` and `macrodata jobs list` run the same command.
 
 ## Auth
 
@@ -80,12 +80,14 @@ Options:
 - `--kind local|cloud`
 - `--limit <count>`
 - `--me`
-- `--cursor <opaque_cursor>`
+- `--cursor <cursor>`
 - `--json`
 
 ```bash
 macrodata jobs list --kind cloud
 macrodata jobs list --me
+macrodata jobs list --json
+macrodata jobs list --cursor <next_cursor>
 ```
 
 ### `macrodata jobs get`
@@ -125,13 +127,14 @@ Options:
 
 - `--stage <stage_index>`
 - `--limit <count>`
-- `--cursor <opaque_cursor>`
+- `--cursor <cursor>`
 - `--json`
 
 ```bash
 macrodata jobs workers <job_id> --stage 0
 macrodata jobs workers <job_id> --limit 50
-macrodata jobs workers <job_id> --cursor <opaque_cursor>
+macrodata jobs workers <job_id> --json
+macrodata jobs workers <job_id> --cursor <next_cursor>
 ```
 
 ### `macrodata jobs logs`
@@ -150,7 +153,9 @@ Options:
 - `--search <text>`
 - `--start-ms <epoch_ms>`
 - `--end-ms <epoch_ms>`
+- `--cursor <cursor>`
 - `--limit <count>`
+- `--follow`
 - `--json`
 
 Notes:
@@ -158,9 +163,17 @@ Notes:
 - `--search` requires `--stage`
 - `--search` requires both `--start-ms` and `--end-ms`
 - `--search` supports at most 100 results per request
+- `--cursor` reuses `nextCursor` from a previous response to fetch the next page in the same window
+- one-shot log fetches default to `100` entries per request
+- `--follow` defaults to `500` entries per request
+- `--follow` may skip older backlog under sustained log volume to stay live; when it does, it prints the skipped timestamp range and recovery guidance
+- `--follow` cannot be combined with `--json`, `--cursor`, or `--search`
 
 ```bash
 macrodata jobs logs <job_id>
+macrodata jobs logs <job_id> --json
+macrodata jobs logs <job_id> --start-ms 1713340800000 --end-ms 1713341700000 --cursor <next_cursor>
+macrodata jobs logs <job_id> --follow
 macrodata jobs logs <job_id> --stage 0 --severity error
 macrodata jobs logs <job_id> --stage 0 --search retry --start-ms 1713340800000 --end-ms 1713341700000 --limit 50
 ```
