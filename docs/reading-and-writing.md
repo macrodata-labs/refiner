@@ -155,6 +155,12 @@ Example:
 pipeline = pipeline.write_parquet("s3://my-bucket/clean-output/")
 ```
 
+When you run a writer through `launch_local(...)` or `launch_cloud(...)`, some
+sinks add a reducer stage after the main writer stage. For `write_jsonl(...)`
+and `write_parquet(...)`, that reducer removes stale shard/worker files and
+keeps only finalized outputs. The output prefix should therefore be dedicated to
+Refiner-managed files.
+
 ## What Python Functions Actually See
 
 Reader output eventually flows into Python UDFs as `Row` objects:

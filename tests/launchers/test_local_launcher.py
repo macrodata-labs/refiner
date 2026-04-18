@@ -118,8 +118,8 @@ def test_launch_local_coalesces_writer_shards(tmp_path) -> None:
         rundir=str(tmp_path / "run"),
     )
 
-    assert stats.claimed == 1
-    assert stats.completed == 1
+    assert stats.claimed == 2
+    assert stats.completed == 2
 
 
 def test_build_gpu_sets_partitions_gpus(monkeypatch: pytest.MonkeyPatch) -> None:

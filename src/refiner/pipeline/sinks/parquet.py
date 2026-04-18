@@ -8,6 +8,7 @@ from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
+from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
 
@@ -73,6 +74,13 @@ class ParquetSink(BaseSink):
         if self.compression is not None:
             args["compression"] = self.compression
         return ("write_parquet", "writer", args)
+
+    def build_reducer(self) -> BaseSink:
+        return FileCleanupReducerSink(
+            output=self.output,
+            filename_template=self.filename_template,
+            reducer_name="write_parquet_reduce",
+        )
 
 
 __all__ = ["ParquetSink"]

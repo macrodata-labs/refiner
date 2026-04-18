@@ -98,6 +98,11 @@ Returned result includes:
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
 
+### Launched writer notes
+
+- some sinks add a 1-worker reducer stage after the main writer stage to finalize or clean up shard outputs
+- for launched file sinks such as `write_jsonl(...)` and `write_parquet(...)`, the output prefix should be dedicated to Refiner-managed files so the reducer stage can safely remove stale shard/worker outputs
+
 ## Authentication
 
 See [Auth](auth.md) for credential lookup order. In practice:
