@@ -327,6 +327,147 @@ def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None
     assert "Stopped following logs." in out.err
 
 
+def test_jobs_logs_follow_returns_when_job_is_terminal(monkeypatch, capsys) -> None:
+    class _TerminalClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            if self.log_calls == 1:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_001_000,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": "done",
+                        }
+                    ],
+                    "hasOlder": False,
+                    "nextStartMs": 1_700_000_001_000,
+                }
+            return {"entries": [], "hasOlder": False, "nextStartMs": 1_700_000_001_000}
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            if self.log_calls >= 1:
+                cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    client = _TerminalClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+
+    sleep_calls = {"count": 0}
+
+    def _fake_sleep(_: float) -> None:
+        sleep_calls["count"] += 1
+
+    monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            limit=10,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "done" in out.out
+    assert out.err == ""
+    assert sleep_calls["count"] == 0
+
+
+def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
+    monkeypatch, capsys
+) -> None:
+    class _BusyClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+            self.job_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            if self.log_calls == 1:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_001_000,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": "first",
+                        },
+                        {
+                            "ts": 1_700_000_002_000,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": "second",
+                        },
+                    ],
+                    "hasOlder": False,
+                    "nextStartMs": 1_700_000_002_000,
+                }
+            return {"entries": [], "hasOlder": False, "nextStartMs": 1_700_000_002_000}
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            self.job_calls += 1
+            payload = super().cli_get_job(job_id=job_id)
+            if self.log_calls >= 2:
+                cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    client = _BusyClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+
+    sleep_calls = {"count": 0}
+
+    def _fake_sleep(_: float) -> None:
+        sleep_calls["count"] += 1
+
+    monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            limit=2,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "first" in out.out
+    assert "second" in out.out
+    assert sleep_calls["count"] == 0
+    assert client.job_calls == 1
+
+
 def test_jobs_resource_metrics_plain_output_accepts_second_timestamps(
     monkeypatch, capsys
 ) -> None:

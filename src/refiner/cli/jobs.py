@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import json
 import sys
 import time
@@ -15,6 +16,8 @@ _DEFAULT_LOG_WINDOW_MS = 60 * 60 * 1000
 _MAX_LOG_SEARCH_LIMIT = 100
 _MAX_METRICS_WORKER_IDS = 50
 _FOLLOW_LOG_POLL_INTERVAL_SECONDS = 1.0
+_FOLLOW_LOG_DEDUPE_LIMIT = 100_000
+_TERMINAL_JOB_STATUSES = frozenset({"completed", "failed", "canceled"})
 
 
 def _client() -> MacrodataClient:
@@ -283,6 +286,25 @@ def _coerce_next_start_ms(value: Any, *, fallback: int) -> int:
         return fallback
 
 
+def _job_status(payload: dict[str, Any]) -> str:
+    job = payload.get("job")
+    if not isinstance(job, dict):
+        return ""
+    return _safe_text(job.get("status")).lower()
+
+
+def _remember_seen_key(
+    *,
+    key: tuple[str, str, str, str, str],
+    seen_keys: set[tuple[str, str, str, str, str]],
+    seen_order: deque[tuple[str, str, str, str, str]],
+) -> None:
+    seen_keys.add(key)
+    seen_order.append(key)
+    while len(seen_order) > _FOLLOW_LOG_DEDUPE_LIMIT:
+        seen_keys.discard(seen_order.popleft())
+
+
 def _stream_logs(
     *,
     args: Namespace,
@@ -290,6 +312,7 @@ def _stream_logs(
     end_ms: int,
 ) -> int:
     seen_keys: set[tuple[str, str, str, str, str]] = set()
+    seen_order: deque[tuple[str, str, str, str, str]] = deque()
     current_start_ms = start_ms
     current_end_ms = end_ms
 
@@ -315,16 +338,25 @@ def _stream_logs(
                 if key in seen_keys:
                     continue
                 print(_format_log_entry(entry))
-                seen_keys.add(key)
-        if len(seen_keys) > 10_000:
-            seen_keys.clear()
+                _remember_seen_key(
+                    key=key,
+                    seen_keys=seen_keys,
+                    seen_order=seen_order,
+                )
         current_start_ms = _coerce_next_start_ms(
             payload.get("nextStartMs"),
             fallback=current_end_ms,
         )
-        time.sleep(_FOLLOW_LOG_POLL_INTERVAL_SECONDS)
         next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
         current_end_ms = max(next_end_ms, current_start_ms + 1)
+        if isinstance(entries, list) and len(entries) >= args.limit:
+            continue
+        if (
+            _job_status(_client().cli_get_job(job_id=args.job_id))
+            in _TERMINAL_JOB_STATUSES
+        ):
+            return 0
+        time.sleep(_FOLLOW_LOG_POLL_INTERVAL_SECONDS)
 
 
 def _render_resource_metrics(payload: dict[str, Any]) -> int:
