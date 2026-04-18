@@ -327,6 +327,7 @@ class MacrodataClient:
         job_id: str,
         start_ms: int,
         end_ms: int,
+        cursor: str | None = None,
         limit: int | None = None,
         stage_index: int | None = None,
         worker_id: str | None = None,
@@ -341,6 +342,7 @@ class MacrodataClient:
             query_params={
                 "startMs": start_ms,
                 "endMs": end_ms,
+                "cursor": cursor,
                 "limit": limit,
                 "stageIndex": stage_index,
                 "workerId": worker_id,

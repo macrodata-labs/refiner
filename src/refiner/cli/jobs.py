@@ -16,7 +16,11 @@ _DEFAULT_LOG_WINDOW_MS = 60 * 60 * 1000
 _MAX_LOG_SEARCH_LIMIT = 100
 _MAX_METRICS_WORKER_IDS = 50
 _FOLLOW_LOG_POLL_INTERVAL_SECONDS = 1.0
+_DEFAULT_LOG_PAGE_LIMIT = 100
+_DEFAULT_FOLLOW_LOG_PAGE_LIMIT = 500
 _FOLLOW_LOG_DEDUPE_LIMIT = 100_000
+_FOLLOW_LOG_MAX_DRAIN_POLLS = 5
+_FOLLOW_LOG_MAX_RETRYABLE_ERRORS = 5
 _TERMINAL_JOB_STATUSES = frozenset({"completed", "failed", "canceled"})
 
 
@@ -275,15 +279,13 @@ def _log_entry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str]:
         _safe_text(entry.get("workerId")),
         _safe_text(entry.get("sourceType")),
         _safe_text(entry.get("sourceName")),
-        _safe_text(entry.get("line")),
+        _safe_text(entry.get("messageHash")),
     )
 
 
-def _coerce_next_start_ms(value: Any, *, fallback: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return fallback
+def _next_log_cursor(payload: dict[str, Any]) -> str | None:
+    cursor = payload.get("nextCursor")
+    return cursor if isinstance(cursor, str) and cursor else None
 
 
 def _job_status(payload: dict[str, Any]) -> str:
@@ -291,6 +293,16 @@ def _job_status(payload: dict[str, Any]) -> str:
     if not isinstance(job, dict):
         return ""
     return _safe_text(job.get("status")).lower()
+
+
+def _is_retryable_api_error(err: Exception) -> bool:
+    if isinstance(err, MacrodataApiError):
+        return err.status in {0, 429} or err.status >= 500
+    return False
+
+
+def _follow_retry_delay(error_count: int) -> float:
+    return min(float(2 ** max(0, error_count - 1)), 5.0)
 
 
 def _remember_seen_key(
@@ -305,30 +317,65 @@ def _remember_seen_key(
         seen_keys.discard(seen_order.popleft())
 
 
+def _effective_log_limit(args: Namespace) -> int:
+    if isinstance(args.limit, int):
+        return args.limit
+    return _DEFAULT_FOLLOW_LOG_PAGE_LIMIT if args.follow else _DEFAULT_LOG_PAGE_LIMIT
+
+
+def _warn_follow_skip(*, start_ms: int, end_ms: int) -> None:
+    print(
+        "warning: log volume is high; skipped older backlog"
+        f" from {_format_ts(start_ms)} to {_format_ts(end_ms)} to stay live",
+        file=sys.stderr,
+    )
+    print(
+        "warning: request logs for fewer workers for better visibility,"
+        " or rerun with --start-ms/--end-ms for full coverage",
+        file=sys.stderr,
+    )
+
+
 def _stream_logs(
     *,
     args: Namespace,
     start_ms: int,
     end_ms: int,
+    limit: int,
 ) -> int:
+    client = _client()
     seen_keys: set[tuple[str, str, str, str, str]] = set()
     seen_order: deque[tuple[str, str, str, str, str]] = deque()
     current_start_ms = start_ms
     current_end_ms = end_ms
+    current_cursor: str | None = None
+    full_batch_polls = 0
+    retryable_error_count = 0
 
     while True:
-        payload = _client().cli_get_job_logs(
-            job_id=args.job_id,
-            start_ms=current_start_ms,
-            end_ms=current_end_ms,
-            limit=args.limit,
-            stage_index=args.stage,
-            worker_id=args.worker,
-            source_type=args.source_type,
-            source_name=args.source_name,
-            severity=args.severity,
-            search=args.search,
-        )
+        try:
+            payload = client.cli_get_job_logs(
+                job_id=args.job_id,
+                start_ms=current_start_ms,
+                end_ms=current_end_ms,
+                cursor=current_cursor,
+                limit=limit,
+                stage_index=args.stage,
+                worker_id=args.worker,
+                source_type=args.source_type,
+                source_name=args.source_name,
+                severity=args.severity,
+                search=args.search,
+            )
+        except MacrodataApiError as err:
+            if not _is_retryable_api_error(err):
+                raise
+            retryable_error_count += 1
+            if retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
+                raise
+            time.sleep(_follow_retry_delay(retryable_error_count))
+            continue
+        retryable_error_count = 0
         entries = payload.get("entries")
         if isinstance(entries, list):
             for entry in entries:
@@ -337,25 +384,56 @@ def _stream_logs(
                 key = _log_entry_key(entry)
                 if key in seen_keys:
                     continue
-                print(_format_log_entry(entry))
+                print(_format_log_entry(entry), flush=True)
                 _remember_seen_key(
                     key=key,
                     seen_keys=seen_keys,
                     seen_order=seen_order,
                 )
-        current_start_ms = _coerce_next_start_ms(
-            payload.get("nextStartMs"),
-            fallback=current_end_ms,
-        )
-        next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        current_end_ms = max(next_end_ms, current_start_ms + 1)
-        if isinstance(entries, list) and len(entries) >= args.limit:
+        current_cursor = _next_log_cursor(payload)
+        if current_cursor is not None:
+            full_batch_polls += 1
+            if full_batch_polls < _FOLLOW_LOG_MAX_DRAIN_POLLS:
+                continue
+            oldest_entry = entries[0] if isinstance(entries, list) and entries else None
+            skipped_end_ms = (
+                int(oldest_entry.get("ts"))
+                if isinstance(oldest_entry, dict)
+                and isinstance(oldest_entry.get("ts"), (int, float, str))
+                else current_end_ms
+            )
+            _warn_follow_skip(start_ms=current_start_ms, end_ms=skipped_end_ms)
+            current_cursor = None
+            full_batch_polls = 0
+            current_start_ms = current_end_ms
+            next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+            current_end_ms = max(next_end_ms, current_start_ms + 1)
             continue
+        else:
+            full_batch_polls = 0
+        try:
+            job_payload = client.cli_get_job(job_id=args.job_id)
+        except MacrodataApiError as err:
+            if not _is_retryable_api_error(err):
+                raise
+            retryable_error_count += 1
+            if retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
+                raise
+            time.sleep(_follow_retry_delay(retryable_error_count))
+            job_payload = {}
+            continue
+        except MacrodataCredentialsError:
+            raise
+        retryable_error_count = 0
         if (
-            _job_status(_client().cli_get_job(job_id=args.job_id))
-            in _TERMINAL_JOB_STATUSES
+            current_cursor is None
+            and _job_status(job_payload) in _TERMINAL_JOB_STATUSES
         ):
             return 0
+        if current_cursor is None:
+            current_start_ms = current_end_ms
+            next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+            current_end_ms = max(next_end_ms, current_start_ms + 1)
         time.sleep(_FOLLOW_LOG_POLL_INTERVAL_SECONDS)
 
 
@@ -603,6 +681,9 @@ def cmd_jobs_logs(args: Namespace) -> int:
     if args.follow and args.json:
         print("--follow cannot be combined with --json.", file=sys.stderr)
         return 1
+    if args.follow and args.cursor:
+        print("--follow cannot be combined with --cursor.", file=sys.stderr)
+        return 1
     if args.follow and args.search:
         print("--follow cannot be combined with --search.", file=sys.stderr)
         return 1
@@ -622,9 +703,11 @@ def cmd_jobs_logs(args: Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+        limit = _effective_log_limit(args)
         start_ms = args.start_ms
         end_ms = args.end_ms
     else:
+        limit = _effective_log_limit(args)
         end_ms = (
             args.end_ms
             if args.end_ms is not None
@@ -635,14 +718,23 @@ def cmd_jobs_logs(args: Namespace) -> int:
             if args.start_ms is not None
             else end_ms - _DEFAULT_LOG_WINDOW_MS
         )
+    if args.follow:
+        try:
+            return _stream_logs(
+                args=args, start_ms=start_ms, end_ms=end_ms, limit=limit
+            )
+        except KeyboardInterrupt:
+            print("Stopped following logs.", file=sys.stderr)
+            return 130
+        except (MacrodataApiError, MacrodataCredentialsError) as err:
+            return _handle_error(err)
     try:
-        if args.follow:
-            return _stream_logs(args=args, start_ms=start_ms, end_ms=end_ms)
         payload = _client().cli_get_job_logs(
             job_id=args.job_id,
             start_ms=start_ms,
             end_ms=end_ms,
-            limit=args.limit,
+            cursor=args.cursor,
+            limit=limit,
             stage_index=args.stage,
             worker_id=args.worker,
             source_type=args.source_type,
@@ -651,7 +743,6 @@ def cmd_jobs_logs(args: Namespace) -> int:
             search=args.search,
         )
     except KeyboardInterrupt:
-        print("Stopped following logs.", file=sys.stderr)
         return 130
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)

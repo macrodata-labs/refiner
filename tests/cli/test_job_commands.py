@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import builtins
 from argparse import Namespace
 from typing import Any, cast
 
+
 from refiner.cli import jobs
+from refiner.platform.client.api import MacrodataApiError
 
 
 class _FakeClient:
@@ -120,10 +123,11 @@ class _FakeClient:
                     "sourceType": "worker",
                     "sourceName": "runner",
                     "line": "retrying shard",
+                    "messageHash": "1",
                 }
             ],
             "hasOlder": False,
-            "nextStartMs": 1_700_000_001_000,
+            "nextCursor": None,
         }
 
     def cli_get_job_metrics(self, **_: object) -> dict[str, object]:
@@ -217,7 +221,8 @@ def test_jobs_logs_json_output(monkeypatch, capsys) -> None:
             search=None,
             start_ms=1,
             end_ms=2,
-            limit=10,
+            cursor=None,
+            limit=None,
             follow=False,
             json=True,
         )
@@ -243,7 +248,8 @@ def test_jobs_logs_follow_rejects_json(monkeypatch, capsys) -> None:
             search=None,
             start_ms=1,
             end_ms=2,
-            limit=10,
+            cursor=None,
+            limit=None,
             follow=True,
             json=True,
         )
@@ -252,6 +258,66 @@ def test_jobs_logs_follow_rejects_json(monkeypatch, capsys) -> None:
 
     assert rc == 1
     assert "--follow cannot be combined with --json." in out.err
+
+
+def test_jobs_logs_follow_rejects_cursor(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor="cursor-1",
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert "--follow cannot be combined with --cursor." in out.err
+
+
+def test_jobs_logs_passes_cursor_to_client(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    class _CursorClient(_FakeClient):
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            captured.update(kwargs)
+            return super().cli_get_job_logs(**kwargs)
+
+    monkeypatch.setattr(jobs, "_client", lambda: _CursorClient())
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor="cursor-1",
+            limit=None,
+            follow=False,
+            json=False,
+        )
+    )
+    _ = capsys.readouterr()
+
+    assert rc == 0
+    assert captured["cursor"] == "cursor-1"
+    assert captured["limit"] == jobs._DEFAULT_LOG_PAGE_LIMIT
 
 
 def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None:
@@ -271,10 +337,11 @@ def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None
                             "sourceType": "worker",
                             "sourceName": "runner",
                             "line": "retrying shard",
+                            "messageHash": "1",
                         }
                     ],
                     "hasOlder": False,
-                    "nextStartMs": 1_700_000_001_000,
+                    "nextCursor": None,
                 }
             return {
                 "entries": [
@@ -285,10 +352,11 @@ def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None
                         "sourceType": "worker",
                         "sourceName": "runner",
                         "line": "shard failed",
+                        "messageHash": "2",
                     }
                 ],
                 "hasOlder": False,
-                "nextStartMs": 1_700_000_002_000,
+                "nextCursor": None,
             }
 
     client = _FollowClient()
@@ -314,7 +382,8 @@ def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None
             search=None,
             start_ms=1,
             end_ms=2,
-            limit=10,
+            cursor=None,
+            limit=None,
             follow=True,
             json=False,
         )
@@ -344,12 +413,13 @@ def test_jobs_logs_follow_returns_when_job_is_terminal(monkeypatch, capsys) -> N
                             "sourceType": "worker",
                             "sourceName": "runner",
                             "line": "done",
+                            "messageHash": "1",
                         }
                     ],
                     "hasOlder": False,
-                    "nextStartMs": 1_700_000_001_000,
+                    "nextCursor": None,
                 }
-            return {"entries": [], "hasOlder": False, "nextStartMs": 1_700_000_001_000}
+            return {"entries": [], "hasOlder": False, "nextCursor": None}
 
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
@@ -378,7 +448,8 @@ def test_jobs_logs_follow_returns_when_job_is_terminal(monkeypatch, capsys) -> N
             search=None,
             start_ms=1,
             end_ms=2,
-            limit=10,
+            cursor=None,
+            limit=None,
             follow=True,
             json=False,
         )
@@ -389,6 +460,81 @@ def test_jobs_logs_follow_returns_when_job_is_terminal(monkeypatch, capsys) -> N
     assert "done" in out.out
     assert out.err == ""
     assert sleep_calls["count"] == 0
+
+
+def test_jobs_logs_follow_drains_backlog_before_terminal_exit(
+    monkeypatch, capsys
+) -> None:
+    class _BacklogClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            if self.log_calls == 1:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_001_000,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": "first",
+                            "messageHash": "1",
+                        }
+                    ],
+                    "hasOlder": True,
+                    "nextCursor": "cursor-1",
+                }
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_002_000,
+                        "severity": "info",
+                        "workerId": "worker-1",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": "second",
+                        "messageHash": "2",
+                    }
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            if self.log_calls >= 2:
+                cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    client = _BacklogClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=1,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "first" in out.out
+    assert "second" in out.out
 
 
 def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
@@ -411,6 +557,7 @@ def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
                             "sourceType": "worker",
                             "sourceName": "runner",
                             "line": "first",
+                            "messageHash": "1",
                         },
                         {
                             "ts": 1_700_000_002_000,
@@ -419,12 +566,13 @@ def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
                             "sourceType": "worker",
                             "sourceName": "runner",
                             "line": "second",
+                            "messageHash": "2",
                         },
                     ],
-                    "hasOlder": False,
-                    "nextStartMs": 1_700_000_002_000,
+                    "hasOlder": True,
+                    "nextCursor": "cursor-1",
                 }
-            return {"entries": [], "hasOlder": False, "nextStartMs": 1_700_000_002_000}
+            return {"entries": [], "hasOlder": False, "nextCursor": None}
 
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             self.job_calls += 1
@@ -454,6 +602,7 @@ def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
             search=None,
             start_ms=1,
             end_ms=2,
+            cursor=None,
             limit=2,
             follow=True,
             json=False,
@@ -466,6 +615,451 @@ def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
     assert "second" in out.out
     assert sleep_calls["count"] == 0
     assert client.job_calls == 1
+
+
+def test_jobs_logs_follow_skips_backlog_to_stay_live(monkeypatch, capsys) -> None:
+    class _SkippingClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            self.log_calls += 1
+            cursor = kwargs.get("cursor")
+            if self.log_calls <= jobs._FOLLOW_LOG_MAX_DRAIN_POLLS:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_000_000 + self.log_calls,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": f"backlog-{self.log_calls}",
+                            "messageHash": str(self.log_calls),
+                        }
+                    ],
+                    "hasOlder": True,
+                    "nextCursor": f"cursor-{self.log_calls}",
+                }
+            if cursor is None:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_010_000,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": "live-now",
+                            "messageHash": "live",
+                        }
+                    ],
+                    "hasOlder": False,
+                    "nextCursor": None,
+                }
+            raise AssertionError("expected cursor reset after backlog skip")
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            if self.log_calls > jobs._FOLLOW_LOG_MAX_DRAIN_POLLS:
+                cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    monkeypatch.setattr(jobs, "_client", lambda: _SkippingClient())
+    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=1,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "backlog-1" in out.out
+    assert "live-now" in out.out
+    assert "skipped older backlog" in out.err
+    assert "request logs for fewer workers" in out.err
+
+
+def test_jobs_logs_follow_sleeps_after_bounded_drain_polls(monkeypatch, capsys) -> None:
+    class _HotClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+            self.job_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            if self.log_calls > jobs._FOLLOW_LOG_MAX_DRAIN_POLLS:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_000_000 + self.log_calls,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": f"line-{self.log_calls}",
+                            "messageHash": str(self.log_calls),
+                        }
+                    ],
+                    "hasOlder": False,
+                    "nextCursor": None,
+                }
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_000_000 + self.log_calls,
+                        "severity": "info",
+                        "workerId": "worker-1",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": f"line-{self.log_calls}",
+                        "messageHash": str(self.log_calls),
+                    }
+                ],
+                "hasOlder": True,
+                "nextCursor": f"cursor-{self.log_calls}",
+            }
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            self.job_calls += 1
+            payload = super().cli_get_job(job_id=job_id)
+            if self.job_calls >= 2:
+                cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    client = _HotClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+
+    sleep_calls = {"count": 0}
+
+    def _fake_sleep(_: float) -> None:
+        sleep_calls["count"] += 1
+
+    monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=1,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "line-1" in out.out
+    assert f"line-{jobs._FOLLOW_LOG_MAX_DRAIN_POLLS}" in out.out
+    assert sleep_calls["count"] == 1
+    assert client.job_calls == 2
+
+
+def test_jobs_logs_follow_ignores_transient_status_probe_errors(
+    monkeypatch, capsys
+) -> None:
+    class _FlakyStatusClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+            self.job_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            if self.log_calls == 1:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_001_000,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": "first",
+                            "messageHash": "1",
+                        }
+                    ],
+                    "hasOlder": False,
+                    "nextCursor": None,
+                }
+            return {"entries": [], "hasOlder": False, "nextCursor": None}
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            self.job_calls += 1
+            if self.job_calls == 1:
+                raise MacrodataApiError(status=503, message="temporary")
+            payload = super().cli_get_job(job_id=job_id)
+            cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    monkeypatch.setattr(jobs, "_client", lambda: _FlakyStatusClient())
+    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "first" in out.out
+
+
+def test_jobs_logs_follow_retries_transient_log_fetch_errors(
+    monkeypatch, capsys
+) -> None:
+    class _FlakyLogsClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            if self.log_calls == 1:
+                raise MacrodataApiError(status=503, message="temporary")
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_001_000,
+                        "severity": "info",
+                        "workerId": "worker-1",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": "recovered",
+                        "messageHash": "1",
+                    }
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            if self.log_calls >= 2:
+                cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    monkeypatch.setattr(jobs, "_client", lambda: _FlakyLogsClient())
+    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "recovered" in out.out
+
+
+def test_jobs_logs_follow_flushes_stream_output(monkeypatch) -> None:
+    class _TerminalClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_001_000,
+                        "severity": "info",
+                        "workerId": "worker-1",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": "flushed",
+                        "messageHash": "1",
+                    }
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    client = _TerminalClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+
+    recorded_flushes: list[bool] = []
+    original_print = builtins.print
+
+    def _recording_print(*args: Any, **kwargs: Any) -> None:
+        recorded_flushes.append(bool(kwargs.get("flush")))
+        original_print(*args, **kwargs)
+
+    monkeypatch.setattr(builtins, "print", _recording_print)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+
+    assert rc == 0
+    assert True in recorded_flushes
+
+
+def test_jobs_logs_non_follow_returns_clean_interrupt_exit(monkeypatch) -> None:
+    class _InterruptClient(_FakeClient):
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(jobs, "_client", lambda: _InterruptClient())
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=False,
+            json=False,
+        )
+    )
+
+    assert rc == 130
+
+
+def test_jobs_logs_follow_surfaces_permanent_status_probe_errors(monkeypatch) -> None:
+    class _PermanentStatusErrorClient(_FakeClient):
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            return {"entries": [], "hasOlder": False, "nextCursor": None}
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            raise MacrodataApiError(status=404, message="missing")
+
+    monkeypatch.setattr(jobs, "_client", lambda: _PermanentStatusErrorClient())
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+
+    assert rc == 1
+
+
+def test_jobs_logs_follow_uses_larger_default_limit(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    class _LimitClient(_FakeClient):
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            captured.update(kwargs)
+            return {
+                "entries": [],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    monkeypatch.setattr(jobs, "_client", lambda: _LimitClient())
+    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+    _ = capsys.readouterr()
+
+    assert rc == 0
+    assert captured["limit"] == jobs._DEFAULT_FOLLOW_LOG_PAGE_LIMIT
 
 
 def test_jobs_resource_metrics_plain_output_accepts_second_timestamps(
