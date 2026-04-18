@@ -49,6 +49,20 @@ class BaseSink(ABC):
         """
         return None
 
+    def build_reducer(self) -> "BaseSink | None":
+        """Return an optional 1-worker reducer sink for launched execution.
+
+        Reducers run as a follow-up stage after the main writer stage. Use this
+        when a sink needs a final cleanup or reduction pass once all shard-local
+        writer outputs are known.
+        """
+        return None
+
+    @property
+    def counts_output_rows(self) -> bool:
+        """Whether blocks written into this sink should count toward output_rows."""
+        return True
+
     def on_shard_complete(self, shard_id: str) -> None:
         """Flush or finalize state for one shard after upstream completion.
 

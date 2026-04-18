@@ -19,7 +19,7 @@ from refiner.video.transcode import VideoTranscodeConfig
 from refiner.video.writer import VideoStreamWriter
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
-from refiner.pipeline.sinks.lerobot_reducer import LeRobotMetaReduceSink
+from refiner.pipeline.sinks.reducer.lerobot import LeRobotMetaReduceSink
 from refiner.robotics.lerobot_format import (
     LeRobotInfo,
     LeRobotMetadata,

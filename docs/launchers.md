@@ -39,6 +39,7 @@ Returned stats include:
 - workers always run as subprocesses, even when `num_workers=1`
 - local launch does not pin worker CPUs; if `num_workers` exceeds available CPUs, Refiner logs a warning and still launches the requested worker count
 - `gpus_per_worker` optionally exposes a fixed number of visible GPU devices to each local worker
+- some sinks add a 1-worker reducer stage after the main writer stage to finalize or clean up shard outputs
 - `REFINER_LOCAL_LOGS` controls the live local console stream when set:
   - `all`: stream every worker log line
   - `none`: suppress live worker log output
@@ -48,6 +49,7 @@ Returned stats include:
 - when a local run fails or is interrupted, Refiner prints the `rundir` to reuse if you want to resume completed shards
 - local run files live under `<workdir>/runs/<job_id>/...`
 - worker Loguru output is written to `stage-<index>/logs/worker-<worker_id>.log` under the local rundir
+- for launched file sinks such as `write_jsonl(...)` and `write_parquet(...)`, the output prefix should be dedicated to Refiner-managed files so the reducer stage can safely remove stale shard/worker outputs
 - during local execution, the launcher tails per-worker log files
 - on interactive terminals, Refiner redraws a pinned terminal header with job metadata, live runtime, and the latest worker log lines beneath it
 - on non-interactive output, Refiner prints plain prefixed log lines
@@ -97,6 +99,11 @@ Returned result includes:
 - `env`: env vars sent as plain runtime environment values
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
+
+### Cloud notes
+
+- some sinks add a 1-worker reducer stage after the main writer stage to finalize or clean up shard outputs
+- for launched file sinks such as `write_jsonl(...)` and `write_parquet(...)`, the output prefix should be dedicated to Refiner-managed files so the reducer stage can safely remove stale shard/worker outputs
 
 ## Authentication
 

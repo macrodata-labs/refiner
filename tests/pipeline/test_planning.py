@@ -190,6 +190,26 @@ def test_compile_pipeline_plan_includes_lerobot_writer_steps() -> None:
     )
 
 
+def test_compile_pipeline_plan_includes_jsonl_reducer_steps() -> None:
+    pipeline = RefinerPipeline(FakeReader()).write_jsonl("/tmp/output")
+
+    stages = compile_pipeline_plan(pipeline)["stages"]
+
+    assert len(stages) == 2
+    assert stages[0]["name"] == "write_jsonl_stage_0"
+    assert stages[1]["name"] == "write_jsonl_stage_1"
+    assert [step["name"] for step in stages[1]["steps"]] == [
+        "task",
+        "write_jsonl_reduce",
+    ]
+    assert stages[1]["steps"][1]["type"] == "writer"
+    assert stages[1]["steps"][1]["args"]["path"] == "/tmp/output"
+    assert (
+        stages[1]["steps"][1]["args"]["filename_template"]
+        == "{shard_id}__w{worker_id}.jsonl"
+    )
+
+
 def test_compile_pipeline_plan_includes_sink_without_describe() -> None:
     pipeline = RefinerPipeline(FakeReader(), sink=UndescribedSink())
 
@@ -249,3 +269,18 @@ def test_plan_pipeline_stages_returns_single_placeholder_stage() -> None:
     assert stages[0].name == "stage_0"
     assert stages[0].pipeline is pipeline
     assert stages[0].compute.num_workers == 3
+
+
+def test_plan_pipeline_stages_adds_writer_reducer_stage() -> None:
+    pipeline = from_items([{"x": 1}]).write_parquet("/tmp/output")
+    stages = plan_pipeline_stages(pipeline, default_num_workers=3)
+
+    assert len(stages) == 2
+    assert stages[0].index == 0
+    assert stages[0].name == "write_parquet_stage_0"
+    assert stages[0].pipeline is pipeline
+    assert stages[0].compute.num_workers == 3
+    assert stages[1].index == 1
+    assert stages[1].name == "write_parquet_stage_1"
+    assert stages[1].compute.num_workers == 1
+    assert stages[1].pipeline.source.name == "task"

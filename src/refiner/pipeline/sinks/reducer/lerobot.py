@@ -31,9 +31,21 @@ class LeRobotMetaReduceSink(BaseSink):
 
     def __init__(self, output: DataFolderLike):
         self.output = DataFolder.resolve(output)
+        self._reduce_ran = False
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
         del shard_id, block
+        self._reduce()
+
+    @property
+    def counts_output_rows(self) -> bool:
+        return False
+
+    def _reduce(self) -> None:
+        if self._reduce_ran:
+            return
+        self._reduce_ran = True
+
         finalized_chunk_keys = self._finalized_chunk_keys()
         finalized_chunk_key_set = set(finalized_chunk_keys)
 

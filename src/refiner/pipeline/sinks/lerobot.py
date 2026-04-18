@@ -18,6 +18,7 @@ from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.sinks.base import BaseSink
+from refiner.pipeline.sinks.reducer.lerobot import LeRobotMetaReduceSink
 from refiner.robotics.lerobot_format import (
     LeRobotFeatureInfo,
     LeRobotFeatureStats,
@@ -548,6 +549,9 @@ class LeRobotWriterSink(BaseSink):
                 "max_video_prepare_in_flight": self.max_video_prepare_in_flight,
             },
         )
+
+    def build_reducer(self) -> BaseSink:
+        return LeRobotMetaReduceSink(output=self.output)
 
 
 __all__ = [

@@ -256,7 +256,8 @@ class Worker:
                                 if count
                             }
                         )
-                        output_rows += block_num_rows(block)
+                        if sink.counts_output_rows:
+                            output_rows += block_num_rows(block)
                 except Exception as e:
                     execution_error = e
                     failed_error = str(e).strip() or type(e).__name__
