@@ -50,11 +50,16 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="Run a Macrodata Refiner pipeline script",
     )
-    run.add_argument(
+    attach_mode = run.add_mutually_exclusive_group()
+    attach_mode.add_argument(
         "--attach",
-        choices=("auto", "attach", "detach"),
-        default=None,
-        help="Override cloud attach mode via REFINER_ATTACH",
+        action="store_true",
+        help="Force attached mode for cloud launches",
+    )
+    attach_mode.add_argument(
+        "--detach",
+        action="store_true",
+        help="Force detached mode for cloud launches",
     )
     run.add_argument(
         "--logs",

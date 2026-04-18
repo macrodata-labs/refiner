@@ -103,3 +103,86 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
     assert rc == 0
     assert client.logged_stage_indexes[-1] == 1
     assert fake_console.closed == 1
+
+
+def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls: list[dict[str, object]] = []
+            self.job_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            self.job_calls += 1
+            if self.job_calls == 1:
+                return _job_payload(stage_index=1, status="running")
+            return _job_payload(stage_index=1, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            self.log_calls.append(dict(kwargs))
+            if len(self.log_calls) == 1:
+                return {"entries": [], "hasOlder": True, "nextCursor": "cursor-1"}
+            return {"entries": [], "hasOlder": False, "nextCursor": None}
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    client = _Client()
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, client),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert client.log_calls[0]["stage_index"] == 0
+    assert client.log_calls[0]["cursor"] is None
+    assert client.log_calls[1]["stage_index"] == 1
+    assert client.log_calls[1]["cursor"] is None
+
+
+def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="running")
+
+    sleep_calls: list[float] = []
+    fake_console = _FakeConsole()
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: 0.0)
+
+    def _fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+        raise cloud_run.CloudAttachDetached()
+
+    monkeypatch.setattr(cloud_run.time, "sleep", _fake_sleep)
+
+    payload = _job_payload(stage_index=0, status="running")
+    job = cast(dict[str, object], payload["job"])
+    job["logsAvailable"] = False
+
+    try:
+        cloud_run.attach_to_cloud_job(
+            client=cast(MacrodataClient, _Client()),
+            job_id="job-1",
+            initial_job_payload=payload,
+            stage_index_hint=0,
+        )
+    except cloud_run.CloudAttachDetached:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected CloudAttachDetached")
+
+    assert sleep_calls
+    assert sleep_calls[0] >= cloud_run._ATTACH_LOGS_INTERVAL_SECONDS

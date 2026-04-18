@@ -45,7 +45,8 @@ Use `macrodata run` to run a Macrodata Refiner pipeline script.
 
 Options:
 
-- `--attach auto|attach|detach`
+- `--attach`
+- `--detach`
 - `--logs all|none|one|errors`
 - script arguments after `--`
 
@@ -54,8 +55,9 @@ Behavior:
 - `Ctrl+C` exits with code `130`
 - local launcher resume/failure messages are printed cleanly, while ordinary script exceptions still surface normally
 - the script directory is added to `sys.path`, so sibling imports work the same way they do with `python script.py`
-- `--attach` only applies to cloud launches; passing it to a script that launches local jobs exits with an error
 - cloud launches default to attach in interactive terminals and detach in non-interactive output
+- `--attach` forces attached mode for cloud launches and is accepted for local launches
+- `--detach` forces detached mode for cloud launches and errors for local launches
 - detached cloud launches print the exact follow-up commands to inspect, attach, or cancel the job
 - attached cloud launches exit automatically when the job reaches a terminal state
 - `Ctrl+C` during an attached cloud launch detaches the local CLI only; the cloud job keeps running and the CLI prints the job URL plus reattach and cancel commands
@@ -66,7 +68,8 @@ macrodata run path/to/pipeline.py
 
 ```bash
 macrodata run --logs one path/to/pipeline.py -- --workers 4 --rows 20
-macrodata run --attach detach path/to/cloud_pipeline.py
+macrodata run --detach path/to/cloud_pipeline.py
+macrodata run --attach path/to/cloud_pipeline.py
 ```
 
 ## Credential Lookup

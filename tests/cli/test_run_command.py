@@ -32,7 +32,8 @@ def test_cmd_run_sets_env_overrides_and_forwards_args(monkeypatch, tmp_path) -> 
             script=str(script),
             script_args=["--", "--rows", "10"],
             logs="one",
-            attach="attach",
+            attach=True,
+            detach=False,
         )
     )
 
@@ -61,7 +62,8 @@ def test_cmd_run_restores_attach_env(monkeypatch, tmp_path) -> None:
             script=str(script),
             script_args=[],
             logs=None,
-            attach="attach",
+            attach=True,
+            detach=False,
         )
     )
 
@@ -76,7 +78,8 @@ def test_cmd_run_missing_script_returns_error(capsys, tmp_path) -> None:
             script=str(tmp_path / "missing.py"),
             script_args=[],
             logs=None,
-            attach=None,
+            attach=False,
+            detach=False,
         )
     )
     out = capsys.readouterr()
@@ -106,7 +109,8 @@ def test_cmd_run_prints_runtime_error_without_traceback(
             script=str(script),
             script_args=[],
             logs=None,
-            attach=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -133,7 +137,8 @@ def test_cmd_run_suppresses_resume_error_print_on_tty(
             script=str(script),
             script_args=[],
             logs=None,
-            attach=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -158,7 +163,8 @@ def test_cmd_run_does_not_swallow_plain_runtime_error(monkeypatch, tmp_path) -> 
                 script=str(script),
                 script_args=[],
                 logs=None,
-                attach=None,
+                attach=False,
+                detach=False,
             )
         )
 
@@ -182,7 +188,8 @@ def test_cmd_run_returns_130_for_launcher_interrupt(
             script=str(script),
             script_args=[],
             logs=None,
-            attach=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -208,7 +215,8 @@ def test_cmd_run_suppresses_generic_interrupt_message_for_cloud_detach(
             script=str(script),
             script_args=[],
             logs=None,
-            attach=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -232,7 +240,8 @@ def test_cmd_run_returns_141_for_broken_pipe(monkeypatch, tmp_path) -> None:
             script=str(script),
             script_args=[],
             logs=None,
-            attach=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -256,7 +265,8 @@ def test_cmd_run_prepends_script_directory_to_sys_path(monkeypatch, tmp_path) ->
             script=str(script),
             script_args=[],
             logs=None,
-            attach=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -284,7 +294,8 @@ def test_cmd_run_drops_cwd_entry_from_sys_path(monkeypatch, tmp_path) -> None:
             script=str(script),
             script_args=[],
             logs=None,
-            attach=None,
+            attach=False,
+            detach=False,
         )
     )
 

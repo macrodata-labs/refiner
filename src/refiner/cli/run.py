@@ -14,6 +14,14 @@ from refiner.cli.cloud_run import (
 from refiner.cli.local_run import LocalLaunchResumeError
 
 
+def _attach_mode_arg(args: argparse.Namespace) -> str | None:
+    if getattr(args, "attach", False):
+        return "attach"
+    if getattr(args, "detach", False):
+        return "detach"
+    return None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     script = Path(args.script).expanduser()
     if not script.exists():
@@ -32,8 +40,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     original_attach = os.environ.get(_ATTACH_MODE_ENV_VAR)
     cwd_entries = {"", str(Path.cwd())}
     try:
-        if args.attach is not None:
-            os.environ[_ATTACH_MODE_ENV_VAR] = normalize_attach_mode(args.attach)
+        attach_mode = _attach_mode_arg(args)
+        if attach_mode is not None:
+            os.environ[_ATTACH_MODE_ENV_VAR] = normalize_attach_mode(attach_mode)
         elif original_attach is None:
             os.environ.pop(_ATTACH_MODE_ENV_VAR, None)
         if args.logs is not None:

@@ -15,7 +15,6 @@ def test_parser_has_run_command() -> None:
         [
             "run",
             "--attach",
-            "attach",
             "--logs",
             "one",
             "script.py",
@@ -25,10 +24,20 @@ def test_parser_has_run_command() -> None:
         ]
     )
     assert args.command == "run"
-    assert args.attach == "attach"
+    assert args.attach is True
+    assert args.detach is False
     assert args.logs == "one"
     assert args.script == "script.py"
     assert args.script_args == ["--rows", "10"]
+
+
+def test_parser_has_run_detach_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["run", "--detach", "script.py"])
+    assert args.command == "run"
+    assert args.attach is False
+    assert args.detach is True
+    assert args.script == "script.py"
 
 
 def test_parser_has_jobs_commands() -> None:
