@@ -117,18 +117,20 @@ class FileCleanupReducerSink(BaseSink):
         # Extra template fields are treated as structure only. Authority is decided
         # solely from the finalized (shard_id, worker_id) pair extracted from each
         # managed path.
-        managed_matches = sorted(
-            (
-                path,
-                match,
-            )
-            for path in listed_paths
-            if isinstance(path, str)
-            and path
-            and path != "."
-            and (match := self._managed_path_pattern.fullmatch(path)) is not None
+        managed_paths = sorted(
+            {
+                path
+                for path in listed_paths
+                if isinstance(path, str)
+                and path
+                and path != "."
+                and self._managed_path_pattern.fullmatch(path) is not None
+            }
         )
-        for rel_path, match in managed_matches:
+        for rel_path in managed_paths:
+            match = self._managed_path_pattern.fullmatch(rel_path)
+            if match is None:
+                continue
             if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
                 continue
             try:

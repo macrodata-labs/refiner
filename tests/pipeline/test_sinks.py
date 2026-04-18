@@ -243,3 +243,47 @@ def test_file_cleanup_reducer_ignores_extra_template_fields(tmp_path) -> None:
     assert all(path.exists() for path in winner_files)
     assert not loser_file.exists()
     assert unmanaged_file.exists()
+
+
+def test_file_cleanup_reducer_tolerates_duplicate_listed_paths(
+    tmp_path, monkeypatch
+) -> None:
+    output_dir = tmp_path / "jsonl-cleanup-duplicates"
+    shard_id = "0123456789ab"
+    winner_worker_id = "worker-2"
+    loser_worker_id = "worker-1"
+    winner_path = (
+        output_dir / f"{shard_id}__w{worker_token_for(winner_worker_id)}.jsonl"
+    )
+    loser_path = output_dir / f"{shard_id}__w{worker_token_for(loser_worker_id)}.jsonl"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    winner_path.write_text("{}", encoding="utf-8")
+    loser_path.write_text("{}", encoding="utf-8")
+
+    reducer = FileCleanupReducerSink(
+        output_dir,
+        filename_template="{shard_id}__w{worker_id}.jsonl",
+        reducer_name="cleanup_jsonl",
+    )
+    monkeypatch.setattr(
+        reducer.output,
+        "find",
+        lambda _: [winner_path.name, winner_path.name, loser_path.name],
+    )
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(
+            RuntimeLifecycle,
+            _FinalizedWorkersRuntime(
+                [FinalizedShardWorker(shard_id=shard_id, worker_id=winner_worker_id)]
+            ),
+        ),
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert winner_path.exists()
+    assert not loser_path.exists()
