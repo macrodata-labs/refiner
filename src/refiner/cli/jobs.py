@@ -274,7 +274,12 @@ def _format_log_entry(entry: dict[str, Any]) -> str:
 
 
 def _log_entry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str]:
-    message_hash = _safe_text(entry.get("messageHash"))
+    raw_message_hash = entry.get("messageHash")
+    message_hash = (
+        str(raw_message_hash)
+        if isinstance(raw_message_hash, (str, int, float)) and str(raw_message_hash)
+        else ""
+    )
     return (
         _safe_text(entry.get("ts")),
         _safe_text(entry.get("workerId")),
