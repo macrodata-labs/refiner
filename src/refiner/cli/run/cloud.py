@@ -21,8 +21,8 @@ from refiner.cli.jobs.follow import (
     safe_text as _safe_text,
 )
 from refiner.cli.ui.console import (
-    LocalStageConsole,
-    LocalStageSnapshot,
+    StageConsole,
+    StageSnapshot,
     resolve_log_mode,
     should_emit_worker_line,
 )
@@ -51,7 +51,7 @@ def _warn_follow_skip(
     context: CloudAttachContext,
     start_ms: int,
     end_ms: int,
-    console: LocalStageConsole,
+    console: StageConsole,
 ) -> None:
     console.emit_system(follow_skip_message(start_ms=start_ms, end_ms=end_ms))
     if context.stage_index is None:
@@ -87,7 +87,7 @@ def _format_attach_log_line(entry: dict[str, Any]) -> str:
 
 def _emit_attach_entries(
     *,
-    console: LocalStageConsole,
+    console: StageConsole,
     log_mode: str,
     selected_worker_ids: tuple[str, ...],
 ) -> tuple[Callable[[dict[str, Any]], None], Callable[[], tuple[str, ...]]]:
@@ -136,7 +136,7 @@ def _emit_attach_entries(
 
 def _emit_cloud_log_mode_banner(
     *,
-    console: LocalStageConsole,
+    console: StageConsole,
     log_mode: str,
     running_workers: int,
 ) -> None:
@@ -194,7 +194,7 @@ def _build_snapshot(
     *,
     context: CloudAttachContext,
     job_payload: dict[str, Any],
-) -> LocalStageSnapshot:
+) -> StageSnapshot:
     job = job_payload.get("job")
     if not isinstance(job, dict):
         raise RuntimeError("job details unavailable")
@@ -218,7 +218,7 @@ def _build_snapshot(
         if isinstance(current_stage, dict)
         else total_workers
     )
-    return LocalStageSnapshot(
+    return StageSnapshot(
         job_id=context.job_id,
         job_name=context.job_name,
         rundir=None,
@@ -263,7 +263,7 @@ def _snapshot_and_context(
     job_id: str,
     job_payload: dict[str, Any],
     stage_index_hint: int | None,
-) -> tuple[CloudAttachContext, LocalStageSnapshot]:
+) -> tuple[CloudAttachContext, StageSnapshot]:
     context = _cloud_context_from_job_payload(
         client=client,
         job_id=job_id,
@@ -304,7 +304,7 @@ def attach_to_cloud_job(
         log_mode = resolve_log_mode(None)
     except ValueError as err:
         raise SystemExit(str(err)) from err
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id=context.job_id,
         job_name=context.job_name,
         rundir=None,

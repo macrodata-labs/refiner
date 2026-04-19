@@ -9,9 +9,9 @@ from pathlib import Path
 import threading
 
 from refiner.cli.ui.console import (
-    LocalStageSnapshot,
+    StageSnapshot,
     resolve_log_mode,
-    run_local_stage_ui,
+    run_stage_ui,
 )
 
 
@@ -134,7 +134,7 @@ def collect_local_stage_results(
     }
     stage_started_at = time.monotonic()
 
-    def snapshot() -> LocalStageSnapshot:
+    def snapshot() -> StageSnapshot:
         completed = 0
         failed = 0
         for monitor in monitors:
@@ -146,7 +146,7 @@ def collect_local_stage_results(
             else:
                 failed += 1
         running = max(0, len(monitors) - completed - failed)
-        return LocalStageSnapshot(
+        return StageSnapshot(
             job_id=job_id,
             job_name=job_name,
             rundir=rundir,
@@ -167,7 +167,7 @@ def collect_local_stage_results(
             resolved_log_mode = resolve_log_mode(log_mode)
         except ValueError as err:
             raise SystemExit(str(err)) from err
-        run_local_stage_ui(
+        run_stage_ui(
             worker_log_paths=worker_log_paths,
             snapshot_getter=snapshot,
             log_mode=resolved_log_mode,
@@ -274,7 +274,7 @@ __all__ = [
     "LocalLaunchInterrupted",
     "LocalLaunchResumeError",
     "LaunchStats",
-    "LocalStageSnapshot",
+    "StageSnapshot",
     "collect_local_stage_results",
     "format_resume_message",
 ]

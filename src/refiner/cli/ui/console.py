@@ -90,11 +90,11 @@ _LOGURU_LINE_RE = re.compile(
 )
 _LOGURU_TAG_RE = re.compile(r"<([^>]+)>")
 _VALID_LOG_MODES = {"all", "none", "one", "errors"}
-_LOCAL_LOG_MODE_ENV_VAR = "REFINER_LOCAL_LOGS"
+_LOG_MODE_ENV_VAR = "REFINER_LOGS"
 
 
 @dataclass(frozen=True, slots=True)
-class LocalStageSnapshot:
+class StageSnapshot:
     job_id: str
     job_name: str
     rundir: str | None
@@ -151,16 +151,14 @@ def normalize_log_mode(mode: str) -> str:
     normalized = mode.strip().lower()
     if normalized not in _VALID_LOG_MODES:
         allowed = ", ".join(sorted(_VALID_LOG_MODES))
-        raise ValueError(
-            f"unsupported local log mode {mode!r}; expected one of: {allowed}"
-        )
+        raise ValueError(f"unsupported log mode {mode!r}; expected one of: {allowed}")
     return normalized
 
 
 def resolve_log_mode(mode: str | None) -> str:
     if mode is not None:
         return normalize_log_mode(mode)
-    env_mode = os.environ.get(_LOCAL_LOG_MODE_ENV_VAR)
+    env_mode = os.environ.get(_LOG_MODE_ENV_VAR)
     if env_mode:
         return normalize_log_mode(env_mode)
     return "all"
@@ -191,7 +189,7 @@ def should_emit_worker_line(
     return True
 
 
-class LocalStageLogTail:
+class StageLogTail:
     _READ_CHUNK_BYTES = 1024 * 1024
 
     def __init__(self, *, path: Path) -> None:
@@ -234,7 +232,7 @@ class LocalStageLogTail:
             self._handle = None
 
 
-class LocalStageLogWatcher:
+class StageLogWatcher:
     _INOTIFY_EVENT_BUFFER_BYTES = 4096
     _IN_MODIFY = 0x00000002
     _IN_CREATE = 0x00000100
@@ -314,7 +312,7 @@ class LocalStageLogWatcher:
         self._watch_descriptor = watch_descriptor
 
 
-class LocalStageConsole:
+class StageConsole:
     _REDRAW_INTERVAL_SECONDS = 0.1
     _MAX_BUFFERED_LINES = 2000
 
@@ -381,7 +379,7 @@ class LocalStageConsole:
         )
         self._render(force=True)
 
-    def apply_snapshot(self, snapshot: LocalStageSnapshot) -> None:
+    def apply_snapshot(self, snapshot: StageSnapshot) -> None:
         previous_stage_index = self._stage_index
         previous_total_stages = self._total_stages
         previous_status = self._status
@@ -669,9 +667,9 @@ class LocalStageConsole:
             raise
 
 
-def stream_local_stage_logs(
+def stream_stage_logs(
     *,
-    console: LocalStageConsole,
+    console: StageConsole,
     worker_log_paths: dict[str, Path],
     is_stage_running: Callable[[], bool],
     on_tick: Callable[[], None] | None = None,
@@ -729,10 +727,10 @@ def stream_local_stage_logs(
         else list(worker_log_paths)
     )
     log_tails = {
-        worker_id: LocalStageLogTail(path=worker_log_paths[worker_id])
+        worker_id: StageLogTail(path=worker_log_paths[worker_id])
         for worker_id in tailed_worker_ids
     }
-    watcher = LocalStageLogWatcher(
+    watcher = StageLogWatcher(
         paths={
             worker_id: worker_log_paths[worker_id] for worker_id in tailed_worker_ids
         }
@@ -767,16 +765,16 @@ def stream_local_stage_logs(
             log_tail.close()
 
 
-def run_local_stage_ui(
+def run_stage_ui(
     *,
     worker_log_paths: dict[str, Path],
-    snapshot_getter: Callable[[], LocalStageSnapshot],
+    snapshot_getter: Callable[[], StageSnapshot],
     log_mode: str = "all",
     interrupt_message: str | None = None,
     poll_interval_seconds: float = 0.05,
 ) -> None:
     snapshot = snapshot_getter()
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id=snapshot.job_id,
         job_name=snapshot.job_name,
         rundir=snapshot.rundir,
@@ -793,7 +791,7 @@ def run_local_stage_ui(
         console.apply_snapshot(snapshot)
 
     try:
-        stream_local_stage_logs(
+        stream_stage_logs(
             console=console,
             worker_log_paths=worker_log_paths,
             is_stage_running=lambda: snapshot.status == "running",
@@ -818,13 +816,13 @@ def run_local_stage_ui(
 
 
 __all__ = [
-    "LocalStageConsole",
-    "LocalStageLogTail",
-    "LocalStageLogWatcher",
-    "LocalStageSnapshot",
+    "StageConsole",
+    "StageLogTail",
+    "StageLogWatcher",
+    "StageSnapshot",
     "normalize_log_mode",
     "resolve_log_mode",
-    "run_local_stage_ui",
+    "run_stage_ui",
     "should_emit_worker_line",
-    "stream_local_stage_logs",
+    "stream_stage_logs",
 ]

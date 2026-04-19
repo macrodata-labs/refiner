@@ -36,15 +36,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         script_args = script_args[1:]
     original_argv = sys.argv
     original_sys_path = list(sys.path)
-    original_logs = os.environ.get("REFINER_LOCAL_LOGS")
+    original_logs = os.environ.get("REFINER_LOGS")
     original_attach = os.environ.get(_ATTACH_MODE_ENV_VAR)
     cwd_entries = {"", str(Path.cwd())}
     try:
         os.environ[_ATTACH_MODE_ENV_VAR] = normalize_attach_mode(_attach_mode_arg(args))
         if args.logs is not None:
-            os.environ["REFINER_LOCAL_LOGS"] = args.logs
+            os.environ["REFINER_LOGS"] = args.logs
         elif original_logs is None:
-            os.environ.pop("REFINER_LOCAL_LOGS", None)
+            os.environ.pop("REFINER_LOGS", None)
         sys.argv = [str(script), *script_args]
         sys.path = [
             str(script.parent.resolve()),
@@ -78,9 +78,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         sys.argv = original_argv
         sys.path = original_sys_path
         if original_logs is None:
-            os.environ.pop("REFINER_LOCAL_LOGS", None)
+            os.environ.pop("REFINER_LOGS", None)
         else:
-            os.environ["REFINER_LOCAL_LOGS"] = original_logs
+            os.environ["REFINER_LOGS"] = original_logs
         if original_attach is None:
             os.environ.pop(_ATTACH_MODE_ENV_VAR, None)
         else:

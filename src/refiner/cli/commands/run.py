@@ -27,7 +27,7 @@ def register_run_command(
         "--logs",
         choices=("all", "none", "one", "errors"),
         default=None,
-        help="Override attached live log display mode via REFINER_LOCAL_LOGS",
+        help="Override attached live log display mode via REFINER_LOGS",
     )
     run.add_argument("script", help="Python script to execute")
     run.add_argument(

@@ -39,7 +39,7 @@ Returned stats include:
 - workers always run as subprocesses, even when `num_workers=1`
 - local launch does not pin worker CPUs; if `num_workers` exceeds available CPUs, Refiner logs a warning and still launches the requested worker count
 - `gpus_per_worker` optionally exposes a fixed number of visible GPU devices to each local worker
-- `REFINER_LOCAL_LOGS` controls the live local console stream when set:
+- `REFINER_LOGS` controls the live local console stream when set:
   - `all`: stream every worker log line
   - `none`: suppress live worker log output
   - `one`: stream one representative worker

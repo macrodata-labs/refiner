@@ -310,14 +310,14 @@ def test_jobs_attach_routes_attach_system_exit_through_cli_handler(
     _patch_job_client(monkeypatch, lambda: _FakeClient())
     monkeypatch.setattr(
         "refiner.cli.run.cloud.attach_to_cloud_job",
-        lambda **_: (_ for _ in ()).throw(SystemExit("unsupported local log mode")),
+        lambda **_: (_ for _ in ()).throw(SystemExit("unsupported log mode")),
     )
 
     rc = jobs.cmd_jobs_attach(Namespace(job_id="job-1"))
     out = capsys.readouterr()
 
     assert rc == 1
-    assert "unsupported local log mode" in out.err
+    assert "unsupported log mode" in out.err
 
 
 def test_jobs_logs_json_output(monkeypatch, capsys) -> None:

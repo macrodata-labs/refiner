@@ -12,12 +12,12 @@ from loguru import logger as _base_logger
 
 import sys as local_run_sys
 from refiner.cli.ui.console import (
-    LocalStageConsole,
-    LocalStageSnapshot,
+    StageConsole,
+    StageSnapshot,
     normalize_log_mode,
-    run_local_stage_ui,
+    run_stage_ui,
     should_emit_worker_line,
-    stream_local_stage_logs,
+    stream_stage_logs,
 )
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
@@ -269,7 +269,7 @@ def test_local_stage_console_colors_timestamp_level_and_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: True)
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id="job-1",
         job_name="local-log-stream-demo",
         rundir="/tmp/run",
@@ -321,7 +321,7 @@ def test_local_stage_console_omits_rundir_row_when_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: True)
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id="job-1",
         job_name="cloud-attach-demo",
         rundir=None,
@@ -343,7 +343,7 @@ def test_local_stage_console_apply_snapshot_updates_stage_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id="job-1",
         job_name="demo",
         rundir=None,
@@ -354,7 +354,7 @@ def test_local_stage_console_apply_snapshot_updates_stage_metadata(
     )
     try:
         console.apply_snapshot(
-            LocalStageSnapshot(
+            StageSnapshot(
                 job_id="job-1",
                 job_name="demo",
                 rundir=None,
@@ -382,10 +382,10 @@ def test_local_stage_console_formats_system_lines_without_worker_prefix(
 ) -> None:
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: True)
     monkeypatch.setattr(
-        "refiner.cli.ui.console.LocalStageConsole._render",
+        "refiner.cli.ui.console.StageConsole._render",
         lambda *args, **kwargs: None,
     )
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id="job-1",
         job_name="local-log-stream-demo",
         rundir="/tmp/run",
@@ -409,10 +409,10 @@ def test_local_stage_console_bounds_interactive_log_buffer(
 ) -> None:
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: True)
     monkeypatch.setattr(
-        "refiner.cli.ui.console.LocalStageConsole._render",
+        "refiner.cli.ui.console.StageConsole._render",
         lambda *args, **kwargs: None,
     )
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id="job-1",
         job_name="local-log-stream-demo",
         rundir="/tmp/run",
@@ -422,9 +422,9 @@ def test_local_stage_console_bounds_interactive_log_buffer(
         tracking_url=None,
     )
     try:
-        for index in range(LocalStageConsole._MAX_BUFFERED_LINES + 25):
+        for index in range(StageConsole._MAX_BUFFERED_LINES + 25):
             console.emit_lines(worker_id="worker-1", lines=[f"line {index}"])
-        assert len(console._lines) == LocalStageConsole._MAX_BUFFERED_LINES
+        assert len(console._lines) == StageConsole._MAX_BUFFERED_LINES
         assert any("line 24" in line for line in console._lines)
         assert not any("line 0" in line for line in console._lines)
     finally:
@@ -438,11 +438,11 @@ def test_local_stage_console_close_moves_cursor_below_frame(
 
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: True)
     monkeypatch.setattr(
-        "refiner.cli.ui.console.LocalStageConsole._write",
+        "refiner.cli.ui.console.StageConsole._write",
         staticmethod(lambda text: writes.append(text)),
     )
 
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id="job-1",
         job_name="local-log-stream-demo",
         rundir="/tmp/run",
@@ -467,11 +467,11 @@ def test_local_stage_console_close_prints_last_system_message_after_alt_screen(
 
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: True)
     monkeypatch.setattr(
-        "refiner.cli.ui.console.LocalStageConsole._write",
+        "refiner.cli.ui.console.StageConsole._write",
         staticmethod(lambda text: writes.append(text)),
     )
 
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id="job-1",
         job_name="local-log-stream-demo",
         rundir="/tmp/run",
@@ -503,12 +503,12 @@ def test_local_stage_console_write_squelches_broken_stdout(
     monkeypatch.setattr("refiner.cli.ui.console.sys.stdout", broken)
 
     with pytest.raises(BrokenPipeError):
-        LocalStageConsole._write("hello")
+        StageConsole._write("hello")
 
     assert local_run_sys.stdout is not broken
 
 
-def test_run_local_stage_ui_marks_failed_on_interrupt(
+def test_run_stage_ui_marks_failed_on_interrupt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     statuses: list[str] = []
@@ -517,23 +517,23 @@ def test_run_local_stage_ui_marks_failed_on_interrupt(
 
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
     monkeypatch.setattr(
-        "refiner.cli.ui.console.stream_local_stage_logs",
+        "refiner.cli.ui.console.stream_stage_logs",
         lambda **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
     monkeypatch.setattr(
-        "refiner.cli.ui.console.LocalStageConsole.set_status",
+        "refiner.cli.ui.console.StageConsole.set_status",
         lambda self, status: statuses.append(status),
     )
     monkeypatch.setattr(
-        "refiner.cli.ui.console.LocalStageConsole.emit_system",
+        "refiner.cli.ui.console.StageConsole.emit_system",
         lambda self, message: system_messages.append(message),
     )
     monkeypatch.setattr(
-        "refiner.cli.ui.console.LocalStageConsole.close",
+        "refiner.cli.ui.console.StageConsole.close",
         lambda self: closed.append(True),
     )
 
-    snapshot = LocalStageSnapshot(
+    snapshot = StageSnapshot(
         job_id="job-1",
         job_name="demo",
         rundir="/tmp/run",
@@ -550,7 +550,7 @@ def test_run_local_stage_ui_marks_failed_on_interrupt(
     )
 
     with pytest.raises(KeyboardInterrupt):
-        run_local_stage_ui(
+        run_stage_ui(
             worker_log_paths={},
             snapshot_getter=lambda: snapshot,
         )
@@ -560,7 +560,7 @@ def test_run_local_stage_ui_marks_failed_on_interrupt(
     assert closed == [True]
 
 
-def test_stream_local_stage_logs_skips_tails_for_none_mode(
+def test_stream_stage_logs_skips_tails_for_none_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
@@ -574,7 +574,7 @@ def test_stream_local_stage_logs_skips_tails_for_none_mode(
             return None
 
     monkeypatch.setattr(
-        "refiner.cli.ui.console.LocalStageLogTail",
+        "refiner.cli.ui.console.StageLogTail",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("tail should not be created")
         ),
@@ -586,7 +586,7 @@ def test_stream_local_stage_logs_skips_tails_for_none_mode(
         ticks += 1
         return ticks == 1
 
-    stream_local_stage_logs(
+    stream_stage_logs(
         console=cast(Any, _Console()),
         worker_log_paths={"worker-1": tmp_path / "worker-1.log"},
         is_stage_running=_is_stage_running,
@@ -595,7 +595,7 @@ def test_stream_local_stage_logs_skips_tails_for_none_mode(
     )
 
 
-def test_stream_local_stage_logs_only_tails_selected_worker_for_one_mode(
+def test_stream_stage_logs_only_tails_selected_worker_for_one_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
@@ -622,7 +622,7 @@ def test_stream_local_stage_logs_only_tails_selected_worker_for_one_mode(
             del force
             return None
 
-    monkeypatch.setattr("refiner.cli.ui.console.LocalStageLogTail", _FakeTail)
+    monkeypatch.setattr("refiner.cli.ui.console.StageLogTail", _FakeTail)
     ticks = 0
 
     def _is_stage_running() -> bool:
@@ -630,7 +630,7 @@ def test_stream_local_stage_logs_only_tails_selected_worker_for_one_mode(
         ticks += 1
         return ticks == 1
 
-    stream_local_stage_logs(
+    stream_stage_logs(
         console=cast(Any, _Console()),
         worker_log_paths={
             "worker-b": tmp_path / "worker-b.log",
@@ -651,17 +651,17 @@ def test_local_stage_console_flushes_before_batched_truncation(
     renders: list[bool] = []
 
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: True)
-    original_render = LocalStageConsole._render
+    original_render = StageConsole._render
 
     def _recording_render(self, *, force: bool = False) -> None:
         renders.append(force)
 
     monkeypatch.setattr(
-        "refiner.cli.ui.console.LocalStageConsole._render",
+        "refiner.cli.ui.console.StageConsole._render",
         _recording_render,
     )
 
-    console = LocalStageConsole(
+    console = StageConsole(
         job_id="job-1",
         job_name="demo",
         rundir="/tmp/run",
@@ -672,8 +672,8 @@ def test_local_stage_console_flushes_before_batched_truncation(
     )
     try:
         console._lines = deque(
-            [f"line {index}" for index in range(LocalStageConsole._MAX_BUFFERED_LINES)],
-            maxlen=LocalStageConsole._MAX_BUFFERED_LINES,
+            [f"line {index}" for index in range(StageConsole._MAX_BUFFERED_LINES)],
+            maxlen=StageConsole._MAX_BUFFERED_LINES,
         )
         console.emit_lines(
             worker_id="worker-1",
@@ -681,7 +681,7 @@ def test_local_stage_console_flushes_before_batched_truncation(
         )
     finally:
         monkeypatch.setattr(
-            "refiner.cli.ui.console.LocalStageConsole._render",
+            "refiner.cli.ui.console.StageConsole._render",
             original_render,
         )
         console.close()
@@ -689,7 +689,7 @@ def test_local_stage_console_flushes_before_batched_truncation(
     assert True in renders
 
 
-def test_stream_local_stage_logs_errors_mode_keeps_traceback_continuations(
+def test_stream_stage_logs_errors_mode_keeps_traceback_continuations(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
@@ -727,7 +727,7 @@ def test_stream_local_stage_logs_errors_mode_keeps_traceback_continuations(
             del force
             return None
 
-    monkeypatch.setattr("refiner.cli.ui.console.LocalStageLogTail", _FakeTail)
+    monkeypatch.setattr("refiner.cli.ui.console.StageLogTail", _FakeTail)
     ticks = 0
 
     def _is_stage_running() -> bool:
@@ -735,7 +735,7 @@ def test_stream_local_stage_logs_errors_mode_keeps_traceback_continuations(
         ticks += 1
         return ticks == 1
 
-    stream_local_stage_logs(
+    stream_stage_logs(
         console=cast(Any, _Console()),
         worker_log_paths={"worker-a": tmp_path / "worker-a.log"},
         is_stage_running=_is_stage_running,
@@ -752,7 +752,7 @@ def test_stream_local_stage_logs_errors_mode_keeps_traceback_continuations(
 
 
 def test_normalize_log_mode_rejects_invalid_values() -> None:
-    with pytest.raises(ValueError, match="unsupported local log mode"):
+    with pytest.raises(ValueError, match="unsupported log mode"):
         normalize_log_mode("bad")
 
 

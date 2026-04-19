@@ -19,7 +19,7 @@ def test_cmd_run_sets_env_overrides_and_forwards_args(monkeypatch, tmp_path) -> 
         captured["path"] = path
         captured["run_name"] = run_name
         captured["argv"] = list(run.sys.argv)
-        captured["logs"] = run.os.environ.get("REFINER_LOCAL_LOGS")
+        captured["logs"] = run.os.environ.get("REFINER_LOGS")
         captured["attach"] = run.os.environ.get("REFINER_ATTACH")
 
     monkeypatch.setattr(run.runpy, "run_path", _fake_run_path)
@@ -111,7 +111,7 @@ def test_cmd_run_missing_script_returns_error(capsys, tmp_path) -> None:
 
 
 def test_resolve_log_mode_uses_env(monkeypatch) -> None:
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
+    monkeypatch.setenv("REFINER_LOGS", "errors")
     assert resolve_log_mode(None) == "errors"
 
 

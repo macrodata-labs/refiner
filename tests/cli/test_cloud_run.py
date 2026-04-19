@@ -166,7 +166,7 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
     created_consoles: list[_FakeConsole] = []
     monkeypatch.setattr(
         cloud_run,
-        "LocalStageConsole",
+        "StageConsole",
         lambda **kwargs: (
             created_consoles.append(_FakeConsole(**kwargs)) or created_consoles[-1]
         ),
@@ -218,7 +218,7 @@ def test_attach_to_cloud_job_uses_console_without_tty(monkeypatch) -> None:
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -242,9 +242,9 @@ def test_attach_to_cloud_job_rejects_invalid_log_mode_env(monkeypatch) -> None:
             del job_id
             return _job_payload(stage_index=0, status="running")
 
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "bogus")
+    monkeypatch.setenv("REFINER_LOGS", "bogus")
 
-    with pytest.raises(SystemExit, match="unsupported local log mode"):
+    with pytest.raises(SystemExit, match="unsupported log mode"):
         cloud_run.attach_to_cloud_job(
             client=cast(MacrodataClient, _Client()),
             job_id="job-1",
@@ -275,7 +275,7 @@ def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -305,7 +305,7 @@ def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> Non
 
     sleep_calls: list[float] = []
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: 0.0)
 
     def _fake_sleep(delay: float) -> None:
@@ -364,8 +364,8 @@ def test_attach_to_cloud_job_hides_lines_for_none_mode(monkeypatch) -> None:
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "none")
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "none")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -398,8 +398,8 @@ def test_attach_to_cloud_job_none_mode_skips_log_requests(monkeypatch) -> None:
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
     client = _Client()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "none")
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "none")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -457,8 +457,8 @@ def test_attach_to_cloud_job_limits_to_one_worker_in_one_mode(monkeypatch) -> No
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "one")
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "one")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -509,8 +509,8 @@ def test_attach_to_cloud_job_shows_only_errors_in_errors_mode(monkeypatch) -> No
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -560,8 +560,8 @@ def test_attach_to_cloud_job_errors_mode_falls_back_to_log_line_when_severity_mi
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -639,8 +639,8 @@ def test_attach_to_cloud_job_errors_mode_does_not_spend_worker_cap_on_info_only_
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -693,8 +693,8 @@ def test_attach_to_cloud_job_all_mode_suppresses_workers_beyond_cap(
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "all")
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "all")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -748,7 +748,7 @@ def test_attach_to_cloud_job_keeps_polling_logs_when_status_refresh_retries(
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
