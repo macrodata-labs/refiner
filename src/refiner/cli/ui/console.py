@@ -772,7 +772,8 @@ def run_stage_ui(
     log_mode: str = "all",
     interrupt_message: str | None = None,
     poll_interval_seconds: float = 0.05,
-) -> None:
+    keep_open: bool = False,
+) -> tuple[StageConsole, StageSnapshot]:
     snapshot = snapshot_getter()
     console = StageConsole(
         job_id=snapshot.job_id,
@@ -812,7 +813,10 @@ def run_stage_ui(
         console.emit_system(str(err))
         raise
     finally:
-        console.close()
+        if not keep_open:
+            console.close()
+
+    return console, snapshot
 
 
 __all__ = [

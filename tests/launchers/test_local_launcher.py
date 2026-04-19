@@ -4,6 +4,8 @@ from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 import io
 from pathlib import Path
+import subprocess
+import sys
 import threading
 import time
 from typing import Any, cast
@@ -11,6 +13,7 @@ import pytest
 from loguru import logger as _base_logger
 
 import sys as local_run_sys
+from refiner.cli.run.local import collect_local_stage_results
 from refiner.cli.ui.console import (
     StageConsole,
     StageSnapshot,
@@ -558,6 +561,110 @@ def test_run_stage_ui_marks_failed_on_interrupt(
     assert statuses[-1] == "failed"
     assert system_messages == []
     assert closed == [True]
+
+
+def test_collect_local_stage_results_marks_failed_from_worker_payload_and_emits_log_tail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _FakeConsole:
+        def __init__(self) -> None:
+            self.snapshots: list[StageSnapshot] = []
+            self.system_messages: list[str] = []
+            self.lines: list[tuple[str, list[str]]] = []
+            self.closed = 0
+
+        def apply_snapshot(self, snapshot: StageSnapshot) -> None:
+            self.snapshots.append(snapshot)
+
+        def emit_system(self, message: str) -> None:
+            self.system_messages.append(message)
+
+        def emit_lines(self, *, worker_id: str, lines: list[str]) -> None:
+            self.lines.append((worker_id, list(lines)))
+
+        def close(self) -> None:
+            self.closed += 1
+
+    stage_dir = tmp_path / "stage-0"
+    logs_dir = stage_dir / "logs"
+    logs_dir.mkdir(parents=True)
+    worker_id = "worker-1"
+    log_path = logs_dir / f"worker-{worker_id}.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "2026-04-19 19:00:00.000 | INFO     | demo:start - starting",
+                "Traceback (most recent call last):",
+                '  File "demo.py", line 1, in <module>',
+                "ValueError: boom",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json; "
+                "print(json.dumps({"
+                "'worker_id':'worker-1','claimed':1,'completed':0,'failed':1,"
+                "'output_rows':0,'error':'boom'}), flush=True)"
+            ),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    fake_console = _FakeConsole()
+    monkeypatch.setattr(
+        "refiner.cli.run.local.run_stage_ui",
+        lambda **kwargs: (
+            fake_console,
+            StageSnapshot(
+                job_id="job-1",
+                job_name="demo",
+                rundir=str(tmp_path),
+                stage_index=0,
+                total_stages=1,
+                stage_workers=1,
+                tracking_url=None,
+                status="completed",
+                worker_total=1,
+                worker_running=0,
+                worker_completed=1,
+                worker_failed=0,
+                elapsed_seconds=0.0,
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="worker worker-1: boom"):
+        collect_local_stage_results(
+            job_id="job-1",
+            job_name="demo",
+            rundir=str(tmp_path),
+            stage_index=0,
+            total_stages=1,
+            stage_workers=1,
+            tracking_url=None,
+            processes=[(worker_id, process)],
+            log_mode=None,
+            interrupt_message="interrupted",
+            terminate_timeout_seconds=0.1,
+        )
+
+    assert fake_console.snapshots[-1].status == "failed"
+    assert fake_console.snapshots[-1].worker_failed == 1
+    assert fake_console.snapshots[-1].worker_completed == 0
+    assert any(
+        "last log lines from worker-1:" == message
+        for message in fake_console.system_messages
+    )
+    assert fake_console.lines[-1][0] == "worker-1"
+    assert "ValueError: boom" in fake_console.lines[-1][1]
+    assert fake_console.closed == 1
 
 
 def test_stream_stage_logs_skips_tails_for_none_mode(
