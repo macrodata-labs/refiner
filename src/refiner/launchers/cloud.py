@@ -16,7 +16,6 @@ from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudRunCreateRequest,
     CloudRunResumeRequest,
-    CloudResumeSelector,
     CloudRuntimeConfig,
     CloudRuntimeOverrides,
     MacrodataApiError,
@@ -24,6 +23,7 @@ from refiner.platform.client import (
     StagePayload,
     serialize_pipeline_inline,
 )
+from refiner.platform.client.models import build_resume_selector
 from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.job_urls import build_job_tracking_url
@@ -32,6 +32,7 @@ from refiner.pipeline.planning import plan_pipeline_stages
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+    from refiner.pipeline.planning import PlannedStage
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
@@ -87,28 +88,12 @@ class CloudLauncher(BaseLauncher):
         )
         if resume is not None and resume != "latest-compatible":
             raise ValueError("resume must be 'latest-compatible' when provided")
-        if resume_from_job_id is not None and resume is not None:
-            raise ValueError(
-                "resume selector must specify exactly one of job_id or latest_compatible"
-            )
-        if resume_from_job_id is not None:
-            if resume_name is not None or resume_limit_to_me:
-                raise ValueError(
-                    "name and limit_to_me are only supported with latest_compatible"
-                )
-            resume_selector = CloudResumeSelector(job_id=resume_from_job_id)
-        elif resume is not None:
-            resume_selector = CloudResumeSelector(
-                latest_compatible=True,
-                name=resume_name,
-                limit_to_me=resume_limit_to_me,
-            )
-        else:
-            if resume_name is not None or resume_limit_to_me:
-                raise ValueError(
-                    "resume_name and resume_limit_to_me require resume='latest-compatible'"
-                )
-            resume_selector = None
+        resume_selector = build_resume_selector(
+            job_id=resume_from_job_id,
+            latest_compatible=(resume == "latest-compatible"),
+            name=resume_name,
+            limit_to_me=resume_limit_to_me,
+        )
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
         normalized_gpu_type = gpu_type.strip() if gpu_type is not None else None
@@ -255,11 +240,7 @@ class CloudLauncher(BaseLauncher):
                         selector=selector,
                         name=self.name,
                         runtime_overrides=self._runtime_overrides(),
-                        plan=self._compiled_plan(
-                            stages,
-                            secret_values=secret_values,
-                            include_runtime=False,
-                        ),
+                        plan=self._resume_plan(stages, secret_values=secret_values),
                         stage_payloads=[
                             StagePayload(
                                 stage_index=stage.index,
@@ -334,6 +315,32 @@ class CloudLauncher(BaseLauncher):
             gpus_per_worker=self.gpus_per_worker,
             gpu_type=self.gpu_type,
         )
+
+    def _resume_plan(
+        self,
+        stages: list["PlannedStage"],
+        *,
+        secret_values: tuple[str, ...],
+    ) -> dict[str, object]:
+        plan = self._compiled_plan(stages, secret_values=secret_values)
+        resume_plan = dict(plan)
+        stage_dicts = cast(list[dict[str, object]], resume_plan.get("stages", []))
+        resume_plan["stages"] = [
+            {
+                key: value
+                for key, value in stage.items()
+                if key
+                not in {
+                    "requested_num_workers",
+                    "cpus_per_worker",
+                    "memory_mb_per_worker",
+                    "gpus_per_worker",
+                    "gpu_type",
+                }
+            }
+            for stage in stage_dicts
+        ]
+        return resume_plan
 
 
 __all__ = ["CloudLauncher", "CloudLaunchResult"]

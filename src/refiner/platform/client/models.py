@@ -343,6 +343,39 @@ class CloudResumeSelector:
         return payload
 
 
+def build_resume_selector(
+    *,
+    job_id: str | None = None,
+    latest_compatible: bool = False,
+    name: str | None = None,
+    limit_to_me: bool = False,
+    require_selector: bool = False,
+) -> CloudResumeSelector | None:
+    if job_id is not None and latest_compatible:
+        raise ValueError(
+            "resume selector must specify exactly one of job_id or latest_compatible"
+        )
+    if job_id is None and not latest_compatible:
+        if name is not None or limit_to_me:
+            raise ValueError(
+                "resume_name and resume_limit_to_me require resume='latest-compatible'"
+            )
+        if require_selector:
+            raise ValueError("specify exactly one of <job_id> or --latest-compatible")
+        return None
+    if job_id is not None:
+        return CloudResumeSelector(
+            job_id=job_id,
+            name=name,
+            limit_to_me=limit_to_me,
+        )
+    return CloudResumeSelector(
+        latest_compatible=True,
+        name=name,
+        limit_to_me=limit_to_me,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class CloudRunResumeRequest:
     selector: CloudResumeSelector
