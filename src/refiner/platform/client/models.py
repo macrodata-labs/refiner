@@ -115,6 +115,90 @@ class StageLifecycleResponse(msgspec.Struct, frozen=True):
     stage: StageLifecycleStage
 
 
+def _validate_cloud_runtime_fields(
+    *,
+    num_workers: int | None = None,
+    cpus_per_worker: int | None = None,
+    mem_mb_per_worker: int | None = None,
+    gpus_per_worker: int | None = None,
+    gpu_type: str | None = None,
+    require_complete_gpu: bool = True,
+) -> str | None:
+    if num_workers is not None and num_workers <= 0:
+        raise ValueError("num_workers must be > 0")
+    if cpus_per_worker is not None and cpus_per_worker <= 0:
+        raise ValueError("cpus_per_worker must be > 0")
+    if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
+        raise ValueError("mem_mb_per_worker must be > 0")
+    if gpus_per_worker is not None and gpus_per_worker <= 0:
+        raise ValueError("gpus_per_worker must be > 0")
+    normalized_gpu_type = gpu_type.strip() if gpu_type is not None else None
+    if gpu_type is not None and not normalized_gpu_type:
+        raise ValueError("gpu_type must be non-empty")
+    if (
+        require_complete_gpu
+        and gpus_per_worker is not None
+        and normalized_gpu_type is None
+    ):
+        raise ValueError("gpu_type is required when gpus_per_worker is set")
+    if (
+        require_complete_gpu
+        and normalized_gpu_type is not None
+        and gpus_per_worker is None
+    ):
+        raise ValueError("gpus_per_worker is required when gpu_type is set")
+    return normalized_gpu_type
+
+
+def _cloud_runtime_payload(
+    *,
+    num_workers: int | None = None,
+    cpus_per_worker: int | None = None,
+    mem_mb_per_worker: int | None = None,
+    gpus_per_worker: int | None = None,
+    gpu_type: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if num_workers is not None:
+        payload["num_workers"] = num_workers
+    if cpus_per_worker is not None:
+        payload["cpus_per_worker"] = cpus_per_worker
+    if mem_mb_per_worker is not None:
+        payload["mem_mb_per_worker"] = mem_mb_per_worker
+    if gpus_per_worker is not None:
+        payload["gpus_per_worker"] = gpus_per_worker
+    if gpu_type is not None:
+        payload["gpu_type"] = gpu_type
+    return payload
+
+
+def _update_cloud_run_request_payload(
+    payload: dict[str, Any],
+    *,
+    executor: dict[str, Any] | None = None,
+    name: str | None = None,
+    plan: dict[str, Any] | None = None,
+    stage_payloads: list[Any] | None = None,
+    manifest: dict[str, Any] | None = None,
+    secrets: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    if executor is not None:
+        payload["executor"] = executor
+    if name is not None:
+        payload["name"] = name
+    if plan is not None:
+        payload["plan"] = plan
+    if stage_payloads is not None:
+        payload["stage_payloads"] = [
+            stage_payload.to_dict() for stage_payload in stage_payloads
+        ]
+    if manifest is not None:
+        payload["manifest"] = manifest
+    if secrets:
+        payload["secrets"] = secrets
+    return payload
+
+
 @dataclass(frozen=True, slots=True)
 class CloudRuntimeConfig:
     num_workers: int
@@ -123,19 +207,60 @@ class CloudRuntimeConfig:
     gpus_per_worker: int | None = None
     gpu_type: str | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "gpu_type",
+            _validate_cloud_runtime_fields(
+                num_workers=self.num_workers,
+                cpus_per_worker=self.cpus_per_worker,
+                mem_mb_per_worker=self.mem_mb_per_worker,
+                gpus_per_worker=self.gpus_per_worker,
+                gpu_type=self.gpu_type,
+                require_complete_gpu=False,
+            ),
+        )
+
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "num_workers": self.num_workers,
-        }
-        if self.cpus_per_worker is not None:
-            payload["cpus_per_worker"] = self.cpus_per_worker
-        if self.mem_mb_per_worker is not None:
-            payload["mem_mb_per_worker"] = self.mem_mb_per_worker
-        if self.gpus_per_worker is not None:
-            payload["gpus_per_worker"] = self.gpus_per_worker
-        if self.gpu_type is not None:
-            payload["gpu_type"] = self.gpu_type
-        return payload
+        return _cloud_runtime_payload(
+            num_workers=self.num_workers,
+            cpus_per_worker=self.cpus_per_worker,
+            mem_mb_per_worker=self.mem_mb_per_worker,
+            gpus_per_worker=self.gpus_per_worker,
+            gpu_type=self.gpu_type,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CloudRuntimeOverrides:
+    num_workers: int | None = None
+    cpus_per_worker: int | None = None
+    mem_mb_per_worker: int | None = None
+    gpus_per_worker: int | None = None
+    gpu_type: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "gpu_type",
+            _validate_cloud_runtime_fields(
+                num_workers=self.num_workers,
+                cpus_per_worker=self.cpus_per_worker,
+                mem_mb_per_worker=self.mem_mb_per_worker,
+                gpus_per_worker=self.gpus_per_worker,
+                gpu_type=self.gpu_type,
+                require_complete_gpu=False,
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return _cloud_runtime_payload(
+            num_workers=self.num_workers,
+            cpus_per_worker=self.cpus_per_worker,
+            mem_mb_per_worker=self.mem_mb_per_worker,
+            gpus_per_worker=self.gpus_per_worker,
+            gpu_type=self.gpu_type,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +295,18 @@ class StagePayload:
 
 
 @dataclass(frozen=True, slots=True)
+class ResumeStagePayload:
+    stage_index: int
+    pipeline_payload: CloudPipelinePayload
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stage_index": self.stage_index,
+            "pipeline_payload": self.pipeline_payload.to_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CloudRunCreateRequest:
     name: str
     plan: dict[str, Any]
@@ -179,18 +316,120 @@ class CloudRunCreateRequest:
     secrets: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "name": self.name,
-            "executor": {
+        return _update_cloud_run_request_payload(
+            {},
+            executor={
+                "type": "macrodata-cloud",
                 "sync_local_dependencies": self.sync_local_dependencies,
             },
-            "plan": self.plan,
-            "stage_payloads": [payload.to_dict() for payload in self.stage_payloads],
-        }
-        if self.manifest is not None:
-            payload["manifest"] = self.manifest
-        if self.secrets:
-            payload["secrets"] = self.secrets
+            name=self.name,
+            plan=self.plan,
+            stage_payloads=self.stage_payloads,
+            manifest=self.manifest,
+            secrets=self.secrets,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CloudResumeSelector:
+    job_id: str | None = None
+    latest_compatible: bool = False
+    name: str | None = None
+    limit_to_me: bool = False
+
+    def __post_init__(self) -> None:
+        has_job_id = self.job_id is not None
+        if has_job_id == self.latest_compatible:
+            raise ValueError(
+                "resume selector must specify exactly one of job_id or latest_compatible"
+            )
+        if has_job_id:
+            normalized_job_id = self.job_id.strip() if self.job_id is not None else None
+            if not normalized_job_id:
+                raise ValueError("job_id must be non-empty")
+            if self.name is not None or self.limit_to_me:
+                raise ValueError(
+                    "name and limit_to_me are only supported with latest_compatible"
+                )
+            object.__setattr__(self, "job_id", normalized_job_id)
+        if self.name is not None:
+            normalized_name = self.name.strip()
+            if not normalized_name:
+                raise ValueError("resume selector name must be non-empty")
+            object.__setattr__(self, "name", normalized_name)
+
+    @classmethod
+    def from_mode(
+        cls,
+        *,
+        job_id: str | None = None,
+        mode: str | None = None,
+        name: str | None = None,
+        limit_to_me: bool = False,
+    ) -> "CloudResumeSelector | None":
+        if mode is not None and mode != "latest-compatible":
+            raise ValueError("resume must be 'latest-compatible' when provided")
+        if job_id is None and mode is None:
+            if name is not None or limit_to_me:
+                raise ValueError(
+                    "resume_name and resume_limit_to_me require resume='latest-compatible'"
+                )
+            return None
+        return cls(
+            job_id=job_id,
+            latest_compatible=(mode == "latest-compatible"),
+            name=name,
+            limit_to_me=limit_to_me,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.job_id is not None:
+            return {"job_id": self.job_id}
+        payload: dict[str, Any] = {"latest_compatible": True}
+        if self.name is not None:
+            payload["name"] = self.name
+        if self.limit_to_me:
+            payload["limit_to_me"] = True
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class CloudRunResumeRequest:
+    selector: CloudResumeSelector
+    name: str | None = None
+    runtime_overrides: CloudRuntimeOverrides | None = None
+    plan: dict[str, Any] | None = None
+    stage_payloads: list[ResumeStagePayload] | None = None
+    manifest: dict[str, Any] | None = None
+    sync_local_dependencies: bool | None = None
+    secrets: dict[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.name is not None:
+            normalized_name = self.name.strip()
+            if not normalized_name:
+                raise ValueError("name must be non-empty")
+            object.__setattr__(self, "name", normalized_name)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = _update_cloud_run_request_payload(
+            {"selector": self.selector.to_dict()},
+            executor=(
+                {
+                    "type": "macrodata-cloud",
+                    "sync_local_dependencies": self.sync_local_dependencies,
+                }
+                if self.sync_local_dependencies is not None
+                else None
+            ),
+            name=self.name,
+            plan=self.plan,
+            stage_payloads=self.stage_payloads,
+            manifest=self.manifest,
+            secrets=self.secrets,
+        )
+        if self.runtime_overrides is not None:
+            payload["runtime_overrides"] = self.runtime_overrides.to_dict()
         return payload
 
 

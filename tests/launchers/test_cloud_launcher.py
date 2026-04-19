@@ -10,6 +10,7 @@ from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
+    CloudRunResumeRequest,
     MacrodataApiError,
 )
 from refiner.platform.manifest import _redact_captured_text
@@ -20,6 +21,7 @@ def _stub_cloud_submit(
     *,
     manifest: dict[str, object] | Callable[..., dict[str, object]] | None = None,
     fail_on_submit: bool = False,
+    fail_on_resume: bool = False,
 ) -> dict[str, object]:
     captured: dict[str, object] = {}
 
@@ -30,11 +32,24 @@ def _stub_cloud_submit(
         def cloud_submit_job(self, *, request):
             if fail_on_submit:
                 raise AssertionError("should not submit")
-            captured["request"] = request
+            captured["submit_request"] = request
 
             class _Resp:
                 job_id = "job-123"
                 stage_index = 0
+                status = "queued"
+                workspace_slug = None
+
+            return _Resp()
+
+        def cloud_resume_job(self, *, request):
+            if fail_on_resume:
+                raise AssertionError("should not resume")
+            captured["resume_request"] = request
+
+            class _Resp:
+                job_id = "job-123"
+                stage_index = 1
                 status = "queued"
                 workspace_slug = None
 
@@ -96,7 +111,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert result.stage_index == 0
     assert result.status == "queued"
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.name == "demo cloud"
     assert request.sync_local_dependencies is True
     assert request.plan["stages"][0]["name"] == "stage_0"
@@ -178,7 +193,7 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
     pipeline = read_jsonl("input.jsonl")
     pipeline.launch_cloud(name="demo cloud", sync_local_dependencies=False)
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.sync_local_dependencies is False
 
 
@@ -196,7 +211,7 @@ def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
         secrets={"OPENAI_API_KEY": None, "MODEL_NAME": "gpt-5"},
     )
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.secrets == {
         "OPENAI_API_KEY": "env-secret",
         "MODEL_NAME": "gpt-5",
@@ -224,7 +239,7 @@ def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> No
         env={"MODEL_NAME": env_value},
     )
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.secrets == {
         "OPENAI_API_KEY": "super-secret-value",
         "MODEL_NAME": "plain-env-value",
@@ -277,7 +292,7 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
     )
     pipeline.launch_cloud(name="demo cloud", secrets={"OPENAI_API_KEY": secret})
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
     assert secret not in request.plan["stages"][0]["steps"][1]["args"]["fn"]
     assert request.manifest is not None
@@ -441,7 +456,7 @@ def test_pipeline_launch_cloud_interactive_ref_fallback_accepts(monkeypatch) -> 
 
     read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     manifest = cast(dict[str, object], request.manifest)
     environment = cast(dict[str, object], manifest["environment"])
     assert environment["refiner_ref"] is None
@@ -487,7 +502,7 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_env_override(
 
     read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     manifest = cast(dict[str, object], request.manifest)
     environment = cast(dict[str, object], manifest["environment"])
     assert environment["refiner_ref"] is None
@@ -513,7 +528,6 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_requires_override(
 
     with pytest.raises(SystemExit, match="MACRODATA_FALLBACK_TO_LATEST_PYPI=1"):
         read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
-
 
 def test_pipeline_launch_cloud_detached_mode_prints_followup_commands(
     monkeypatch, capsys
@@ -767,3 +781,125 @@ def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
 
     assert result.job_id == "job-123"
     assert "attach job-123" in out.out
+
+
+def test_pipeline_launch_cloud_resume_from_job_id_posts_resume_request(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    result = read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        num_workers=3,
+        cpus_per_worker=2,
+        resume_from_job_id=" job-previous ",
+    )
+
+    assert result.job_id == "job-123"
+    assert result.stage_index == 1
+    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    assert request.selector.to_dict() == {"job_id": "job-previous"}
+    assert request.name == "demo cloud"
+    assert request.plan is not None
+    assert "requested_num_workers" not in request.plan["stages"][0]
+    assert request.stage_payloads is not None
+    assert request.stage_payloads[0].stage_index == 0
+    assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
+    assert request.runtime_overrides is not None
+    assert request.runtime_overrides.to_dict() == {
+        "num_workers": 3,
+        "cpus_per_worker": 2,
+    }
+    assert request.sync_local_dependencies is True
+
+
+def test_pipeline_launch_cloud_resume_latest_compatible_posts_resume_request(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        resume="latest-compatible",
+        resume_name="prior job",
+        resume_limit_to_me=True,
+    )
+
+    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    assert request.selector.to_dict() == {
+        "latest_compatible": True,
+        "name": "prior job",
+        "limit_to_me": True,
+    }
+    assert request.runtime_overrides is None
+
+
+def test_pipeline_launch_cloud_resume_without_overrides_preserves_prior_runtime(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        resume_from_job_id="job-previous",
+    )
+
+    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    assert request.runtime_overrides is None
+    assert request.plan is not None
+    assert "requested_num_workers" not in request.plan["stages"][0]
+
+
+def test_pipeline_launch_cloud_resume_rejects_invalid_mode(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+
+    with pytest.raises(
+        ValueError, match="resume must be 'latest-compatible' when provided"
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            resume="latest",
+        )
+
+
+def test_pipeline_launch_cloud_resume_rejects_mutually_exclusive_selectors(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+
+    with pytest.raises(
+        ValueError,
+        match="resume selector must specify exactly one of job_id or latest_compatible",
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            resume_from_job_id="job-1",
+            resume="latest-compatible",
+        )
+
+
+def test_pipeline_launch_cloud_resume_rejects_filters_without_latest_compatible(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+
+    with pytest.raises(
+        ValueError,
+        match="resume_name and resume_limit_to_me require resume='latest-compatible'",
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            resume_name="job-name",
+        )

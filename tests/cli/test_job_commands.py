@@ -7,22 +7,25 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from refiner.cli.jobs import common as jobs_common
+from refiner.cli.jobs import attach as jobs_attach_module
+from refiner.cli.jobs import control as jobs_control_module
+from refiner.cli.jobs import get as jobs_get_module
+from refiner.cli.jobs import list as jobs_list_module
+from refiner.cli.jobs import logs as jobs_logs
+from refiner.cli.jobs import manifest as jobs_manifest_module
+from refiner.cli.jobs import metrics as jobs_metrics_module
+from refiner.cli.jobs import resume as jobs_resume_module
+from refiner.cli.jobs import workers as jobs_workers_module
 from refiner.cli.jobs.attach import cmd_jobs_attach
 from refiner.cli.jobs.control import cmd_jobs_cancel
 from refiner.cli.jobs.get import cmd_jobs_get
 from refiner.cli.jobs.list import cmd_jobs_list
-from refiner.cli.jobs import logs as jobs_logs
-from refiner.cli.jobs import get as jobs_get_module
-from refiner.cli.jobs import list as jobs_list_module
-from refiner.cli.jobs import attach as jobs_attach_module
-from refiner.cli.jobs import manifest as jobs_manifest_module
-from refiner.cli.jobs import metrics as jobs_metrics_module
-from refiner.cli.jobs import workers as jobs_workers_module
-from refiner.cli.jobs import control as jobs_control_module
 from refiner.cli.jobs.logs import cmd_jobs_logs
 from refiner.cli.jobs.manifest import cmd_jobs_manifest
 from refiner.cli.jobs.metrics import cmd_jobs_metrics, cmd_jobs_resource_metrics
+from refiner.cli.jobs.resume import cmd_jobs_resume
 from refiner.cli.jobs.workers import cmd_jobs_workers
+from refiner.platform.client import CloudRunCreateResponse, CloudRunResumeRequest
 from refiner.platform.client.api import MacrodataApiError
 
 jobs = SimpleNamespace(
@@ -34,11 +37,15 @@ jobs = SimpleNamespace(
     cmd_jobs_manifest=cmd_jobs_manifest,
     cmd_jobs_metrics=cmd_jobs_metrics,
     cmd_jobs_resource_metrics=cmd_jobs_resource_metrics,
+    cmd_jobs_resume=cmd_jobs_resume,
     cmd_jobs_workers=cmd_jobs_workers,
 )
 
 
 class _FakeClient:
+    def __init__(self) -> None:
+        self.resume_requests: list[object] = []
+
     def cli_list_jobs(self, **_: object) -> dict[str, object]:
         return {
             "items": [
@@ -216,6 +223,15 @@ class _FakeClient:
             "failed_operations": 0,
         }
 
+    def cloud_resume_job(self, *, request: object) -> object:
+        self.resume_requests.append(request)
+        return CloudRunCreateResponse(
+            job_id="job-2",
+            stage_index=1,
+            status="queued",
+            workspace_slug="macrodata",
+        )
+
 
 def _patch_job_client(monkeypatch, factory) -> None:
     monkeypatch.setattr(jobs_list_module, "_client", factory)
@@ -224,6 +240,7 @@ def _patch_job_client(monkeypatch, factory) -> None:
     monkeypatch.setattr(jobs_logs, "_client", factory)
     monkeypatch.setattr(jobs_manifest_module, "_client", factory)
     monkeypatch.setattr(jobs_metrics_module, "_client", factory)
+    monkeypatch.setattr(jobs_resume_module, "_client", factory)
     monkeypatch.setattr(jobs_workers_module, "_client", factory)
     monkeypatch.setattr(jobs_control_module, "_client", factory)
 
@@ -2908,6 +2925,147 @@ def test_jobs_resource_metrics_deduplicates_worker_ids(monkeypatch) -> None:
 
     assert rc == 0
     assert observed["worker_ids"] == ["worker-1", "worker-2"]
+
+
+def test_jobs_resume_by_job_id_plain_output(monkeypatch, capsys) -> None:
+    client = _FakeClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+
+    rc = jobs.cmd_jobs_resume(
+        Namespace(
+            job_id="job-1",
+            latest_compatible=False,
+            name=None,
+            limit_to_me=False,
+            num_workers=None,
+            cpus_per_worker=None,
+            mem_mb_per_worker=None,
+            gpus_per_worker=None,
+            gpu_type=None,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "Resumed: job-2" in out.out
+    request = cast(CloudRunResumeRequest, client.resume_requests[0])
+    assert request.selector.to_dict() == {"job_id": "job-1"}
+    assert request.runtime_overrides is None
+
+
+def test_jobs_resume_latest_compatible_json_output(monkeypatch, capsys) -> None:
+    client = _FakeClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+
+    rc = jobs.cmd_jobs_resume(
+        Namespace(
+            job_id=None,
+            latest_compatible=True,
+            name="demo cloud",
+            limit_to_me=True,
+            num_workers=6,
+            cpus_per_worker=4,
+            mem_mb_per_worker=8192,
+            gpus_per_worker=1,
+            gpu_type="h100",
+            json=True,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert '"job_id": "job-2"' in out.out
+    request = cast(CloudRunResumeRequest, client.resume_requests[0])
+    assert request.selector.to_dict() == {
+        "latest_compatible": True,
+        "name": "demo cloud",
+        "limit_to_me": True,
+    }
+    assert request.runtime_overrides is not None
+    assert request.runtime_overrides.to_dict() == {
+        "num_workers": 6,
+        "cpus_per_worker": 4,
+        "mem_mb_per_worker": 8192,
+        "gpus_per_worker": 1,
+        "gpu_type": "h100",
+    }
+
+
+def test_jobs_resume_accepts_partial_gpu_override(monkeypatch) -> None:
+    client = _FakeClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+
+    rc = jobs.cmd_jobs_resume(
+        Namespace(
+            job_id="job-1",
+            latest_compatible=False,
+            name=None,
+            limit_to_me=False,
+            num_workers=None,
+            cpus_per_worker=None,
+            mem_mb_per_worker=None,
+            gpus_per_worker=2,
+            gpu_type=None,
+            json=False,
+        )
+    )
+
+    assert rc == 0
+    request = cast(CloudRunResumeRequest, client.resume_requests[0])
+    assert request.runtime_overrides is not None
+    assert request.runtime_overrides.to_dict() == {"gpus_per_worker": 2}
+
+
+def test_jobs_resume_requires_exactly_one_selector(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_resume(
+        Namespace(
+            job_id="job-1",
+            latest_compatible=True,
+            name=None,
+            limit_to_me=False,
+            num_workers=None,
+            cpus_per_worker=None,
+            mem_mb_per_worker=None,
+            gpus_per_worker=None,
+            gpu_type=None,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert (
+        "resume selector must specify exactly one of job_id or latest_compatible"
+        in out.err
+    )
+
+
+def test_jobs_resume_rejects_name_filter_with_exact_job_id(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_resume(
+        Namespace(
+            job_id="job-1",
+            latest_compatible=False,
+            name="demo cloud",
+            limit_to_me=False,
+            num_workers=None,
+            cpus_per_worker=None,
+            mem_mb_per_worker=None,
+            gpus_per_worker=None,
+            gpu_type=None,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert out.out == ""
+    assert "only supported with latest_compatible" in out.err
 
 
 def test_jobs_error_reports_to_stderr(monkeypatch, capsys) -> None:

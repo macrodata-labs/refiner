@@ -15,9 +15,13 @@ from refiner.cli.ui import stdin_is_interactive, stdout_is_interactive
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudRunCreateRequest,
+    CloudRunResumeRequest,
+    CloudResumeSelector,
     CloudRuntimeConfig,
+    CloudRuntimeOverrides,
     MacrodataApiError,
     MacrodataClient,
+    ResumeStagePayload,
     StagePayload,
     serialize_pipeline_inline,
 )
@@ -28,6 +32,7 @@ from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+    from refiner.pipeline.planning import PlannedStage
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
@@ -61,7 +66,7 @@ class CloudLauncher(BaseLauncher):
         *,
         pipeline: "RefinerPipeline",
         name: str,
-        num_workers: int = 1,
+        num_workers: int | None = None,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
@@ -69,31 +74,43 @@ class CloudLauncher(BaseLauncher):
         sync_local_dependencies: bool = True,
         secrets: dict[str, object | None] | None = None,
         env: dict[str, object | None] | None = None,
+        resume_from_job_id: str | None = None,
+        resume: str | None = None,
+        resume_name: str | None = None,
+        resume_limit_to_me: bool = False,
     ):
         super().__init__(
             pipeline=pipeline,
             name=name,
-            num_workers=num_workers,
+            num_workers=1 if num_workers is None else num_workers,
             cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
+        resume_selector = CloudResumeSelector.from_mode(
+            job_id=resume_from_job_id,
+            mode=resume,
+            name=resume_name,
+            limit_to_me=resume_limit_to_me,
+        )
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
-        if gpus_per_worker is not None and gpus_per_worker <= 0:
-            raise ValueError("gpus_per_worker must be > 0")
-        if gpus_per_worker is not None and gpu_type is None:
-            raise ValueError("gpu_type is required when gpus_per_worker is set")
-        if gpu_type is not None and not gpu_type.strip():
+        normalized_gpu_type = gpu_type.strip() if gpu_type is not None else None
+        if gpu_type is not None and not normalized_gpu_type:
             raise ValueError("gpu_type must be non-empty")
-        if gpu_type is not None and gpus_per_worker is None:
-            raise ValueError("gpus_per_worker is required when gpu_type is set")
+        if resume_selector is None:
+            if gpus_per_worker is not None and normalized_gpu_type is None:
+                raise ValueError("gpu_type is required when gpus_per_worker is set")
+            if normalized_gpu_type is not None and gpus_per_worker is None:
+                raise ValueError("gpus_per_worker is required when gpu_type is set")
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.gpus_per_worker = gpus_per_worker
-        self.gpu_type = gpu_type.strip() if gpu_type is not None else None
+        self.gpu_type = normalized_gpu_type
+        self.runtime_override_num_workers = num_workers
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
+        self.resume_selector = resume_selector
 
     @staticmethod
     def _resolve_env_values(
@@ -181,29 +198,56 @@ class CloudLauncher(BaseLauncher):
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
         stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
-        request = CloudRunCreateRequest(
-            name=self.name,
-            plan=self._compiled_plan(stages, secret_values=secret_values),
-            stage_payloads=[
-                StagePayload(
-                    stage_index=stage.index,
-                    pipeline_payload=serialize_pipeline_inline(stage.pipeline),
-                    runtime=CloudRuntimeConfig(
-                        num_workers=stage.compute.num_workers,
-                        cpus_per_worker=stage.compute.cpus_per_worker,
-                        mem_mb_per_worker=stage.compute.memory_mb_per_worker,
-                        gpus_per_worker=stage.compute.gpus_per_worker,
-                        gpu_type=stage.compute.gpu_type,
-                    ),
-                )
-                for stage in stages
-            ],
-            manifest=manifest,
-            sync_local_dependencies=self.sync_local_dependencies,
-            secrets=self._merged_env(resolved_secrets, resolved_env),
-        )
+        selector = self.resume_selector
+        merged_env = self._merged_env(resolved_secrets, resolved_env)
         try:
-            resp = client.cloud_submit_job(request=request)
+            if selector is None:
+                compiled_plan = self._compiled_plan(stages, secret_values=secret_values)
+                stage_payloads = [
+                    StagePayload(
+                        stage_index=stage.index,
+                        pipeline_payload=serialize_pipeline_inline(stage.pipeline),
+                        runtime=CloudRuntimeConfig(
+                            num_workers=stage.compute.num_workers,
+                            cpus_per_worker=self.cpus_per_worker,
+                            mem_mb_per_worker=self.mem_mb_per_worker,
+                            gpus_per_worker=self.gpus_per_worker,
+                            gpu_type=self.gpu_type,
+                        ),
+                    )
+                    for stage in stages
+                ]
+                resp = client.cloud_submit_job(
+                    request=CloudRunCreateRequest(
+                        name=self.name,
+                        plan=compiled_plan,
+                        stage_payloads=stage_payloads,
+                        manifest=manifest,
+                        sync_local_dependencies=self.sync_local_dependencies,
+                        secrets=merged_env,
+                    )
+                )
+            else:
+                resp = client.cloud_resume_job(
+                    request=CloudRunResumeRequest(
+                        selector=selector,
+                        name=self.name,
+                        runtime_overrides=self._runtime_overrides(),
+                        plan=self._resume_plan(stages, secret_values=secret_values),
+                        stage_payloads=[
+                            ResumeStagePayload(
+                                stage_index=stage.index,
+                                pipeline_payload=serialize_pipeline_inline(
+                                    stage.pipeline
+                                ),
+                            )
+                            for stage in stages
+                        ],
+                        manifest=manifest,
+                        sync_local_dependencies=self.sync_local_dependencies,
+                        secrets=merged_env,
+                    )
+                )
         except MacrodataCredentialsError as err:
             raise SystemExit(
                 "Your Macrodata API key is invalid. Run `macrodata login` "
@@ -247,6 +291,50 @@ class CloudLauncher(BaseLauncher):
             stage_index=resp.stage_index,
             status=resp.status,
         )
+
+    def _runtime_overrides(self) -> CloudRuntimeOverrides | None:
+        if (
+            self.runtime_override_num_workers is None
+            and self.cpus_per_worker is None
+            and self.mem_mb_per_worker is None
+            and self.gpus_per_worker is None
+            and self.gpu_type is None
+        ):
+            return None
+        return CloudRuntimeOverrides(
+            num_workers=self.runtime_override_num_workers,
+            cpus_per_worker=self.cpus_per_worker,
+            mem_mb_per_worker=self.mem_mb_per_worker,
+            gpus_per_worker=self.gpus_per_worker,
+            gpu_type=self.gpu_type,
+        )
+
+    def _resume_plan(
+        self,
+        stages: list["PlannedStage"],
+        *,
+        secret_values: tuple[str, ...],
+    ) -> dict[str, object]:
+        plan = self._compiled_plan(stages, secret_values=secret_values)
+        resume_plan = dict(plan)
+        stage_dicts = cast(list[dict[str, object]], resume_plan.get("stages", []))
+        resume_plan["stages"] = [
+            self._strip_stage_runtime(stage) for stage in stage_dicts
+        ]
+        return resume_plan
+
+    @staticmethod
+    def _strip_stage_runtime(stage: dict[str, object]) -> dict[str, object]:
+        cleaned = dict(stage)
+        for key in (
+            "requested_num_workers",
+            "cpus_per_worker",
+            "memory_mb_per_worker",
+            "gpus_per_worker",
+            "gpu_type",
+        ):
+            cleaned.pop(key, None)
+        return cleaned
 
 
 __all__ = ["CloudLauncher", "CloudLaunchResult"]

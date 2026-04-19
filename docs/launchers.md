@@ -52,10 +52,6 @@ Returned stats include:
 - on interactive terminals, Refiner redraws a pinned terminal header with job metadata, live runtime, and the latest worker log lines beneath it
 - on non-interactive output, Refiner prints plain prefixed log lines
 
-## Internal Notes
-
-- the local launcher keeps worker result JSON on `stdout` reserved for launcher-to-worker control flow and suppresses that final payload from the live log pane
-
 ## Cloud Launcher
 
 Use `launch_cloud(...)` to submit the compiled pipeline to Macrodata Cloud.
@@ -95,8 +91,61 @@ Returned result includes:
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
+- `resume_from_job_id`: explicitly resume from one exact prior cloud job
+- `resume="latest-compatible"`: explicitly ask the control plane to pick the latest compatible prior job
+- `resume_name`: optional run-name filter used with `resume="latest-compatible"`
+- `resume_limit_to_me`: restrict latest-compatible lookup to jobs started by the authenticated user
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
+
+### Resuming cloud work
+
+Fresh cloud launch remains the default. Resume only triggers when you pass an explicit selector.
+
+Use an exact prior job id when you already know which failed attempt you want to continue:
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_jsonl("input/*.jsonl")
+    .map(lambda row: {"x": row["x"]})
+    .write_parquet("hf://datasets/macrodata/my-output")
+)
+
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    num_workers=16,
+    cpus_per_worker=4,
+    resume_from_job_id="job_123",
+)
+```
+
+Use `resume="latest-compatible"` when you want an explicit selector without hard-coding a job id:
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_jsonl("input/*.jsonl")
+    .map(lambda row: {"x": row["x"]})
+    .write_parquet("hf://datasets/macrodata/my-output")
+)
+
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    resume="latest-compatible",
+    resume_name="cloud-job",
+    resume_limit_to_me=True,
+)
+```
+
+Resume behavior notes:
+
+- resume never triggers from the output path or job name alone; you must opt in with `resume_from_job_id` or `resume="latest-compatible"`
+- resumed cloud launches create a new attempt instead of mutating the old job
+- if you omit `num_workers`, `cpus_per_worker`, `mem_mb_per_worker`, `gpus_per_worker`, and `gpu_type` on resume, the control plane can inherit the selected run's existing sizing
+- if you pass any of those fields on resume, they are treated as explicit overrides for the new attempt
 
 ### Launched writer notes
 
@@ -116,3 +165,7 @@ See [Auth](auth.md) for credential lookup order. In practice:
 - [CLI](cli.md)
 - [Observability](observability.md)
 - [Robotics](robotics.md)
+
+## Internal Notes
+
+- the local launcher keeps worker result JSON on `stdout` reserved for launcher-to-worker control flow and suppresses that final payload from the live log pane

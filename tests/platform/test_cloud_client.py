@@ -6,7 +6,10 @@ from refiner.platform.client import MacrodataClient
 from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
+    CloudRunResumeRequest,
+    CloudResumeSelector,
     CloudRuntimeConfig,
+    CloudRuntimeOverrides,
     StagePayload,
 )
 from refiner.platform.client import MacrodataApiError
@@ -63,6 +66,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert captured["path"] == "/api/cloud/runs"
     assert captured["base_url"] == "https://example.com"
     assert "http_client" in captured
+    assert captured["timeout_s"] == 30.0
     json_payload = cast(dict[str, object], captured["json_payload"])
     assert json_payload["executor"] == {
         "sync_local_dependencies": True,
@@ -102,3 +106,61 @@ def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -
         assert "job_id" in str(err)
     else:  # pragma: no cover
         raise AssertionError("expected MacrodataApiError")
+
+
+def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "job_id": "job-2",
+            "stage_index": 1,
+            "status": "queued",
+            "workspaceSlug": "macrodata",
+        }
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    resp = client.cloud_resume_job(
+        request=CloudRunResumeRequest(
+            selector=CloudResumeSelector(
+                latest_compatible=True,
+                name="demo-cloud-job",
+                limit_to_me=True,
+            ),
+            runtime_overrides=CloudRuntimeOverrides(
+                cpus_per_worker=8,
+                mem_mb_per_worker=16384,
+            ),
+            sync_local_dependencies=False,
+        )
+    )
+
+    assert resp.job_id == "job-2"
+    assert resp.stage_index == 1
+    assert resp.status == "queued"
+    assert resp.workspace_slug == "macrodata"
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/cloud/runs/resume"
+    assert captured["timeout_s"] == 30.0
+    json_payload = cast(dict[str, object], captured["json_payload"])
+    assert json_payload["selector"] == {
+        "latest_compatible": True,
+        "name": "demo-cloud-job",
+        "limit_to_me": True,
+    }
+    assert json_payload["executor"] == {
+        "type": "macrodata-cloud",
+        "sync_local_dependencies": False,
+    }
+    assert json_payload["runtime_overrides"] == {
+        "cpus_per_worker": 8,
+        "mem_mb_per_worker": 16384,
+    }
+
+
+def test_cloud_runtime_overrides_allow_partial_gpu_fields() -> None:
+    assert CloudRuntimeOverrides(gpus_per_worker=2).to_dict() == {"gpus_per_worker": 2}
+    assert CloudRuntimeOverrides(gpu_type="h100").to_dict() == {"gpu_type": "h100"}

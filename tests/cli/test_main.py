@@ -93,6 +93,31 @@ def test_parser_has_jobs_attach_command() -> None:
     assert args.job_id == "job-1"
 
 
+def test_parser_has_jobs_resume_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "jobs",
+            "resume",
+            "--latest-compatible",
+            "--name",
+            "demo cloud",
+            "--limit-to-me",
+            "--num-workers",
+            "5",
+            "--cpus-per-worker",
+            "2",
+        ]
+    )
+    assert args.command == "jobs"
+    assert args.jobs_command == "resume"
+    assert args.latest_compatible is True
+    assert args.name == "demo cloud"
+    assert args.limit_to_me is True
+    assert args.num_workers == 5
+    assert args.cpus_per_worker == 2
+
+
 def test_parser_has_jobs_workers_pagination_flags() -> None:
     parser = build_parser()
     args = parser.parse_args(

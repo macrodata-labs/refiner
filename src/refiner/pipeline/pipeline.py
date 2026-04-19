@@ -346,7 +346,7 @@ class RefinerPipeline:
         self,
         *,
         name: str,
-        num_workers: int = 1,
+        num_workers: int | None = None,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
@@ -354,12 +354,18 @@ class RefinerPipeline:
         sync_local_dependencies: bool = True,
         secrets: Mapping[str, object | None] | None = None,
         env: Mapping[str, object | None] | None = None,
+        resume_from_job_id: str | None = None,
+        resume: str | None = None,
+        resume_name: str | None = None,
+        resume_limit_to_me: bool = False,
     ) -> "CloudLaunchResult":
         """Launch the pipeline on Macrodata Cloud.
 
         Args:
             name: Human-readable run name.
-            num_workers: Requested logical worker count.
+            num_workers: Requested logical worker count. Fresh launches default to
+                `1` when omitted. Resume launches leave worker count unchanged
+                unless you pass an explicit override.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
@@ -370,6 +376,12 @@ class RefinerPipeline:
             env: Extra environment variables to mount inside the cloud image without
                 treating their values as redaction targets. `None` values are loaded
                 from the submitting environment.
+            resume_from_job_id: Resume from one exact prior cloud job.
+            resume: Explicit resume selector mode. Currently only
+                `"latest-compatible"` is supported.
+            resume_name: Optional name filter used with `resume="latest-compatible"`.
+            resume_limit_to_me: Restrict latest-compatible resume lookup to jobs
+                started by the authenticated user.
         """
         from refiner.launchers.cloud import CloudLauncher
 
@@ -384,6 +396,10 @@ class RefinerPipeline:
             sync_local_dependencies=sync_local_dependencies,
             secrets=dict(secrets) if secrets is not None else None,
             env=dict(env) if env is not None else None,
+            resume_from_job_id=resume_from_job_id,
+            resume=resume,
+            resume_name=resume_name,
+            resume_limit_to_me=resume_limit_to_me,
         )
         return launcher.launch()
 
