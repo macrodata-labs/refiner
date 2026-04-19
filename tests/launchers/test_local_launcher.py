@@ -12,13 +12,13 @@ from loguru import logger as _base_logger
 
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
-from refiner.cli.local_run import (
+from refiner.cli.run.local import (
     LocalStageConsole,
     sys as local_run_sys,
     normalize_log_mode,
     should_emit_worker_line,
 )
-from refiner.cli.local_run import (
+from refiner.cli.run.local import (
     LocalStageSnapshot,
     run_local_stage_ui,
     stream_local_stage_logs,
@@ -253,7 +253,7 @@ def test_launch_local_streams_worker_logs_to_launcher_stdout(
         logger.info("processing row {}", row["x"])
         return {"x": int(row["x"]) + 1}
 
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: False)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: False)
 
     pipeline = read_jsonl(str(path)).map(logged_map)
     pipeline.launch_local(
@@ -270,7 +270,7 @@ def test_launch_local_streams_worker_logs_to_launcher_stdout(
 def test_local_stage_console_colors_timestamp_level_and_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: True)
     console = LocalStageConsole(
         job_id="job-1",
         job_name="local-log-stream-demo",
@@ -322,7 +322,7 @@ def test_local_stage_console_colors_timestamp_level_and_message(
 def test_local_stage_console_omits_rundir_row_when_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: True)
     console = LocalStageConsole(
         job_id="job-1",
         job_name="cloud-attach-demo",
@@ -344,7 +344,7 @@ def test_local_stage_console_omits_rundir_row_when_absent(
 def test_local_stage_console_apply_snapshot_updates_stage_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: False)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: False)
     console = LocalStageConsole(
         job_id="job-1",
         job_name="demo",
@@ -382,9 +382,9 @@ def test_local_stage_console_apply_snapshot_updates_stage_metadata(
 def test_local_stage_console_formats_system_lines_without_worker_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: True)
     monkeypatch.setattr(
-        "refiner.cli.local_run.LocalStageConsole._render",
+        "refiner.cli.run.local.LocalStageConsole._render",
         lambda *args, **kwargs: None,
     )
     console = LocalStageConsole(
@@ -409,9 +409,9 @@ def test_local_stage_console_formats_system_lines_without_worker_prefix(
 def test_local_stage_console_bounds_interactive_log_buffer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: True)
     monkeypatch.setattr(
-        "refiner.cli.local_run.LocalStageConsole._render",
+        "refiner.cli.run.local.LocalStageConsole._render",
         lambda *args, **kwargs: None,
     )
     console = LocalStageConsole(
@@ -438,9 +438,9 @@ def test_local_stage_console_close_moves_cursor_below_frame(
 ) -> None:
     writes: list[str] = []
 
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: True)
     monkeypatch.setattr(
-        "refiner.cli.local_run.LocalStageConsole._write",
+        "refiner.cli.run.local.LocalStageConsole._write",
         staticmethod(lambda text: writes.append(text)),
     )
 
@@ -467,9 +467,9 @@ def test_local_stage_console_close_prints_last_system_message_after_alt_screen(
 ) -> None:
     writes: list[str] = []
 
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: True)
     monkeypatch.setattr(
-        "refiner.cli.local_run.LocalStageConsole._write",
+        "refiner.cli.run.local.LocalStageConsole._write",
         staticmethod(lambda text: writes.append(text)),
     )
 
@@ -502,7 +502,7 @@ def test_local_stage_console_write_squelches_broken_stdout(
             raise io.UnsupportedOperation()
 
     broken = _BrokenStdout()
-    monkeypatch.setattr("refiner.cli.local_run.sys.stdout", broken)
+    monkeypatch.setattr("refiner.cli.run.local.sys.stdout", broken)
 
     with pytest.raises(BrokenPipeError):
         LocalStageConsole._write("hello")
@@ -517,21 +517,21 @@ def test_run_local_stage_ui_marks_failed_on_interrupt(
     system_messages: list[str] = []
     closed: list[bool] = []
 
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: False)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: False)
     monkeypatch.setattr(
-        "refiner.cli.local_run.stream_local_stage_logs",
+        "refiner.cli.run.local.stream_local_stage_logs",
         lambda **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
     monkeypatch.setattr(
-        "refiner.cli.local_run.LocalStageConsole.set_status",
+        "refiner.cli.run.local.LocalStageConsole.set_status",
         lambda self, status: statuses.append(status),
     )
     monkeypatch.setattr(
-        "refiner.cli.local_run.LocalStageConsole.emit_system",
+        "refiner.cli.run.local.LocalStageConsole.emit_system",
         lambda self, message: system_messages.append(message),
     )
     monkeypatch.setattr(
-        "refiner.cli.local_run.LocalStageConsole.close",
+        "refiner.cli.run.local.LocalStageConsole.close",
         lambda self: closed.append(True),
     )
 
@@ -565,7 +565,7 @@ def test_run_local_stage_ui_marks_failed_on_interrupt(
 def test_stream_local_stage_logs_skips_tails_for_none_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: False)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: False)
 
     class _Console:
         def emit(self, *, worker_id: str, line: str) -> None:
@@ -576,7 +576,7 @@ def test_stream_local_stage_logs_skips_tails_for_none_mode(
             return None
 
     monkeypatch.setattr(
-        "refiner.cli.local_run.LocalStageLogTail",
+        "refiner.cli.run.local.LocalStageLogTail",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("tail should not be created")
         ),
@@ -600,7 +600,7 @@ def test_stream_local_stage_logs_skips_tails_for_none_mode(
 def test_stream_local_stage_logs_only_tails_selected_worker_for_one_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: False)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: False)
     tailed: list[Path] = []
 
     class _FakeTail:
@@ -624,7 +624,7 @@ def test_stream_local_stage_logs_only_tails_selected_worker_for_one_mode(
             del force
             return None
 
-    monkeypatch.setattr("refiner.cli.local_run.LocalStageLogTail", _FakeTail)
+    monkeypatch.setattr("refiner.cli.run.local.LocalStageLogTail", _FakeTail)
     ticks = 0
 
     def _is_stage_running() -> bool:
@@ -652,14 +652,14 @@ def test_local_stage_console_flushes_before_batched_truncation(
 ) -> None:
     renders: list[bool] = []
 
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: True)
     original_render = LocalStageConsole._render
 
     def _recording_render(self, *, force: bool = False) -> None:
         renders.append(force)
 
     monkeypatch.setattr(
-        "refiner.cli.local_run.LocalStageConsole._render",
+        "refiner.cli.run.local.LocalStageConsole._render",
         _recording_render,
     )
 
@@ -683,7 +683,7 @@ def test_local_stage_console_flushes_before_batched_truncation(
         )
     finally:
         monkeypatch.setattr(
-            "refiner.cli.local_run.LocalStageConsole._render",
+            "refiner.cli.run.local.LocalStageConsole._render",
             original_render,
         )
         console.close()
@@ -694,7 +694,7 @@ def test_local_stage_console_flushes_before_batched_truncation(
 def test_stream_local_stage_logs_errors_mode_keeps_traceback_continuations(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: False)
+    monkeypatch.setattr("refiner.cli.run.local.stdout_is_interactive", lambda: False)
     emitted: list[str] = []
 
     class _FakeTail:
@@ -729,7 +729,7 @@ def test_stream_local_stage_logs_errors_mode_keeps_traceback_continuations(
             del force
             return None
 
-    monkeypatch.setattr("refiner.cli.local_run.LocalStageLogTail", _FakeTail)
+    monkeypatch.setattr("refiner.cli.run.local.LocalStageLogTail", _FakeTail)
     ticks = 0
 
     def _is_stage_running() -> bool:

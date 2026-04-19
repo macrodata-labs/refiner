@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from refiner.cli.run import cmd_run
+from refiner.cli.run.command import cmd_run
 
 
 def register_run_command(

@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from refiner.cli import cloud_run
+from refiner.cli.run import cloud as cloud_run
 from refiner.platform.client import MacrodataApiError, MacrodataClient
 
 

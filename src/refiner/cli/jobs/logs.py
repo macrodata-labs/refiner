@@ -7,7 +7,7 @@ import sys
 import time
 from typing import Any, cast
 
-from refiner.cli.job_utils import (
+from refiner.cli.jobs.follow import (
     FollowLogPoller,
     TERMINAL_JOB_STATUSES,
     call_with_retry,

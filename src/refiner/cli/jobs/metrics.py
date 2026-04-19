@@ -4,8 +4,8 @@ from argparse import Namespace
 import sys
 from typing import Any
 
-from refiner.cli.job_utils import format_ts as _format_ts
-from refiner.cli.job_utils import safe_text as _safe_text
+from refiner.cli.jobs.follow import format_ts as _format_ts
+from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.cli.jobs.common import _client, _print_table, _run_job_command
 
 _MAX_METRICS_WORKER_IDS = 50

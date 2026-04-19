@@ -9,7 +9,7 @@ from refiner.platform.client import MacrodataApiError
 
 
 def cmd_jobs_attach(args: Namespace) -> int:
-    from refiner.cli import cloud_run
+    from refiner.cli.run import cloud
 
     try:
         client = _client()
@@ -28,13 +28,13 @@ def cmd_jobs_attach(args: Namespace) -> int:
         return 1
 
     try:
-        return cloud_run.attach_to_cloud_job(
+        return cloud.attach_to_cloud_job(
             client=client,
             job_id=args.job_id,
             initial_job_payload=payload,
             force_attach=True,
         )
-    except cloud_run.CloudAttachDetached:
+    except cloud.CloudAttachDetached:
         return 130
     except SystemExit as err:
         code = err.code

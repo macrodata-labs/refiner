@@ -4,9 +4,9 @@ from argparse import Namespace
 
 import pytest
 
-from refiner.cli import run
-from refiner.cli.cloud_run import CloudAttachDetached
-from refiner.cli.local_run import (
+from refiner.cli.run import command as run
+from refiner.cli.run.cloud import CloudAttachDetached
+from refiner.cli.run.local import (
     LocalLaunchInterrupted,
     LocalLaunchResumeError,
     resolve_log_mode,

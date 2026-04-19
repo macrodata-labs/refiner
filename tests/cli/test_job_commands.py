@@ -256,7 +256,7 @@ def test_jobs_attach_calls_cloud_attach(monkeypatch) -> None:
 
     _patch_job_client(monkeypatch, lambda: _FakeClient())
     monkeypatch.setattr(
-        "refiner.cli.cloud_run.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         _fake_attach_to_cloud_job,
     )
 
@@ -291,7 +291,7 @@ def test_jobs_attach_routes_attach_api_errors_through_cli_handler(
 ) -> None:
     _patch_job_client(monkeypatch, lambda: _FakeClient())
     monkeypatch.setattr(
-        "refiner.cli.cloud_run.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(
             MacrodataApiError(status=503, message="temporary")
         ),
@@ -309,7 +309,7 @@ def test_jobs_attach_routes_attach_system_exit_through_cli_handler(
 ) -> None:
     _patch_job_client(monkeypatch, lambda: _FakeClient())
     monkeypatch.setattr(
-        "refiner.cli.cloud_run.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(SystemExit("unsupported local log mode")),
     )
 

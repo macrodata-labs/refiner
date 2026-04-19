@@ -10,8 +10,8 @@ from uuid import uuid4
 
 import cloudpickle
 
-from refiner.cli.attach_mode import attach_mode_override
-from refiner.cli.local_run import (
+from refiner.cli.run.modes import attach_mode_override
+from refiner.cli.run.local import (
     LaunchStats,
     collect_local_stage_results,
     format_resume_message,

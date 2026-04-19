@@ -4,7 +4,7 @@ from argparse import Namespace
 import sys
 from typing import Any
 
-from refiner.cli.job_utils import safe_text as _safe_text
+from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.cli.jobs.common import _client, _run_job_command
 
 

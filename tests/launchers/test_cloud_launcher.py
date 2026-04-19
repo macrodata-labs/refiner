@@ -556,7 +556,7 @@ def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
         return 0
 
     monkeypatch.setattr(
-        "refiner.cli.cloud_run.attach_to_cloud_job", _fake_attach_to_cloud_job
+        "refiner.cli.run.cloud.attach_to_cloud_job", _fake_attach_to_cloud_job
     )
 
     result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
@@ -580,7 +580,7 @@ def test_pipeline_launch_cloud_attach_failure_prints_fallback(
         lambda **_: "attach",
     )
     monkeypatch.setattr(
-        "refiner.cli.cloud_run.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(
             MacrodataApiError(status=503, message="boom")
         ),
@@ -611,7 +611,7 @@ def test_pipeline_launch_cloud_unexpected_attach_failure_propagates(
         lambda **_: "attach",
     )
     monkeypatch.setattr(
-        "refiner.cli.cloud_run.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
@@ -633,7 +633,7 @@ def test_pipeline_launch_cloud_defaults_to_detached_outside_cli(
         lambda *, context, file=None: print(f"attach {context.job_id}", file=file),
     )
     monkeypatch.setattr(
-        "refiner.cli.cloud_run.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(AssertionError("should not attach")),
     )
 
@@ -660,7 +660,7 @@ def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
         lambda *, context, file=None: print(f"attach {context.job_id}", file=file),
     )
     monkeypatch.setattr(
-        "refiner.cli.cloud_run.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(AssertionError("should not attach")),
     )
 

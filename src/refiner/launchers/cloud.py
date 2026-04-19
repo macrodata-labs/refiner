@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from refiner.cli.attach_mode import (
+from refiner.cli.run.modes import (
     CloudAttachContext,
     emit_cloud_followup_commands,
     resolve_launcher_attach_mode,
@@ -226,7 +226,7 @@ class CloudLauncher(BaseLauncher):
             emit_cloud_followup_commands(context=context)
         else:
             try:
-                from refiner.cli.cloud_run import attach_to_cloud_job
+                from refiner.cli.run.cloud import attach_to_cloud_job
 
                 attach_to_cloud_job(
                     client=client,

@@ -5,7 +5,7 @@ import json
 import sys
 from typing import Any
 
-from refiner.cli.job_utils import safe_text as _safe_text
+from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import MacrodataApiError
 from refiner.platform.client import MacrodataClient

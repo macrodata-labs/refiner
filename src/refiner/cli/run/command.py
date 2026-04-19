@@ -6,12 +6,12 @@ import runpy
 import sys
 from pathlib import Path
 
-from refiner.cli.attach_mode import (
+from refiner.cli.run.modes import (
     CloudAttachDetached,
     _ATTACH_MODE_ENV_VAR,
     normalize_attach_mode,
 )
-from refiner.cli.local_run import LocalLaunchResumeError
+from refiner.cli.run.local import LocalLaunchResumeError
 
 
 def _attach_mode_arg(args: argparse.Namespace) -> str:

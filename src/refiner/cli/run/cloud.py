@@ -6,12 +6,12 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, cast
 
-from refiner.cli.attach_mode import (
+from refiner.cli.run.modes import (
     CloudAttachContext,
     CloudAttachDetached,
     emit_cloud_followup_commands,
 )
-from refiner.cli.job_utils import (
+from refiner.cli.jobs.follow import (
     FollowLogPoller,
     TERMINAL_JOB_STATUSES as _TERMINAL_JOB_STATUSES,
     call_with_retry,
@@ -20,13 +20,13 @@ from refiner.cli.job_utils import (
     job_status as _job_status,
     safe_text as _safe_text,
 )
-from refiner.cli.local_run import (
+from refiner.cli.run.local import (
     LocalStageConsole,
     LocalStageSnapshot,
     resolve_log_mode,
     should_emit_worker_line,
 )
-from refiner.cli import ui
+from refiner.cli.ui import terminal as ui
 from refiner.job_urls import build_job_tracking_url
 from refiner.platform.client import MacrodataClient
 
