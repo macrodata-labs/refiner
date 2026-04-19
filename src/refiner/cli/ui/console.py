@@ -85,6 +85,7 @@ _LOGURU_TAG_TO_ANSI = {
     "WHITE": "\x1b[97m",
 }
 _ANSI_RESET = "\x1b[0m"
+_URL_FALLBACK_TEXT = "Not tracked; run macrodata login"
 _LOGURU_LINE_RE = re.compile(
     r"^(?P<timestamp>[^|]+?) \| (?P<level>[A-Z]+)(?P<level_padding>\s*) \| (?P<rest>.*)$"
 )
@@ -457,9 +458,9 @@ class StageConsole:
                 "",
             ),
             (
-                "URL" if self._tracking_url is not None else "",
-                self._tracking_url or "",
-                _URL_COLOR,
+                "URL",
+                self._tracking_url or _URL_FALLBACK_TEXT,
+                _URL_COLOR if self._tracking_url is not None else _VALUE_COLOR,
                 "Status",
                 self._status,
                 _STATUS_COLORS.get(self._status, _VALUE_COLOR),

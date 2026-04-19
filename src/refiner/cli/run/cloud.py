@@ -46,6 +46,13 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _coerce_stage_index(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _warn_follow_skip(
     *,
     context: CloudAttachContext,
@@ -169,16 +176,18 @@ def _active_stage(job: dict[str, Any]) -> tuple[int, int]:
                 continue
             status = _safe_text(stage.get("status")).lower()
             if status not in _STAGE_NOT_STARTED_STATUSES:
-                return int(stage.get("index", index) or index), len(stages)
+                return _coerce_stage_index(stage.get("index"), index), len(stages)
     for stage in stages:
         if not isinstance(stage, dict):
             continue
         status = _safe_text(stage.get("status")).lower()
         if status not in _TERMINAL_JOB_STATUSES:
-            return int(stage.get("index", 0) or 0), len(stages)
+            return _coerce_stage_index(stage.get("index"), 0), len(stages)
     last_stage = stages[-1]
     if isinstance(last_stage, dict):
-        return int(last_stage.get("index", len(stages) - 1) or 0), len(stages)
+        return _coerce_stage_index(last_stage.get("index"), len(stages) - 1), len(
+            stages
+        )
     return len(stages) - 1, len(stages)
 
 
@@ -199,23 +208,29 @@ def _build_snapshot(
     if not isinstance(job, dict):
         raise RuntimeError("job details unavailable")
     stage_index, total_stages = _active_stage(job)
-    current_stage = None
+    current_stage: dict[str, Any] | None = None
     stages = job.get("stages")
     if isinstance(stages, list):
-        for stage in stages:
-            if isinstance(stage, dict) and int(stage.get("index", -1)) == stage_index:
-                current_stage = stage
+        for fallback_index, stage in enumerate(stages):
+            if not isinstance(stage, dict):
+                continue
+            stage_dict = cast(dict[str, Any], stage)
+            if (
+                _coerce_stage_index(stage_dict.get("index"), fallback_index)
+                == stage_index
+            ):
+                current_stage = stage_dict
                 break
     total_workers = int(job.get("totalWorkers", 0) or 0)
     running_workers = int(job.get("runningWorkers", 0) or 0)
     completed_workers = (
         int(current_stage.get("completedWorkers", 0) or 0)
-        if isinstance(current_stage, dict)
+        if current_stage is not None
         else 0
     )
     stage_workers = (
         int(current_stage.get("totalWorkers", total_workers) or total_workers)
-        if isinstance(current_stage, dict)
+        if current_stage is not None
         else total_workers
     )
     return StageSnapshot(

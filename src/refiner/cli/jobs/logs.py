@@ -202,6 +202,7 @@ def _stream_logs(
                     retryable_error_count=final_retryable_error_count,
                     max_retryable_errors=_FOLLOW_LOG_MAX_RETRYABLE_ERRORS,
                 )
+                final_retryable_error_count = 0
                 entries = final_payload.get("entries")
                 if isinstance(entries, list):
                     for entry in entries:

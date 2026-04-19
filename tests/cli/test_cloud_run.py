@@ -120,6 +120,48 @@ def test_build_snapshot_preserves_stage_zero_progress() -> None:
     assert snapshot.stage_workers == 5
 
 
+def test_build_snapshot_tolerates_null_stage_indexes() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "running",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": 1_700_000_001_000,
+                "runningWorkers": 2,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": None,
+                        "status": "running",
+                        "completedWorkers": 3,
+                        "totalWorkers": 5,
+                    },
+                    {
+                        "index": 1,
+                        "status": "queued",
+                        "completedWorkers": 0,
+                        "totalWorkers": 7,
+                    },
+                ],
+            }
+        },
+    )
+
+    assert snapshot.stage_index == 0
+    assert snapshot.worker_completed == 3
+    assert snapshot.stage_workers == 5
+
+
 def _log_entry(
     *, ts: int, worker_id: str, severity: str, line: str
 ) -> dict[str, object]:

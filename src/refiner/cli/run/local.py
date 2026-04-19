@@ -20,8 +20,13 @@ class LocalLaunchResumeError(RuntimeError):
     pass
 
 
-class LocalLaunchInterrupted(KeyboardInterrupt):
-    pass
+class LocalLaunchInterrupted(SystemExit):
+    def __init__(self, message: str, code: int = 130) -> None:
+        super().__init__(code)
+        self.message = message
+
+    def __str__(self) -> str:
+        return self.message
 
 
 @dataclass(frozen=True, slots=True)

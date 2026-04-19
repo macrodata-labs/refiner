@@ -720,6 +720,91 @@ def test_jobs_logs_follow_retries_terminal_window_fetch_errors(
     assert "final recovered" in out.out
 
 
+def test_jobs_logs_follow_resets_terminal_retry_counter_after_success(
+    monkeypatch, capsys
+) -> None:
+    class _TerminalClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+            self.final_page_index = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            if self.log_calls == 1:
+                return {
+                    "entries": [],
+                    "hasOlder": False,
+                    "nextCursor": None,
+                }
+            self.final_page_index += 1
+            if self.final_page_index == 1:
+                raise MacrodataApiError(status=503, message="temporary-1")
+            if self.final_page_index == 2:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_003_000,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": "final page 1",
+                            "messageHash": "final-1",
+                        }
+                    ],
+                    "hasOlder": True,
+                    "nextCursor": "cursor-final-1",
+                }
+            if self.final_page_index == 3:
+                raise MacrodataApiError(status=503, message="temporary-2")
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_004_000,
+                        "severity": "info",
+                        "workerId": "worker-1",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": "final page 2",
+                        "messageHash": "final-2",
+                    }
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    _patch_job_client(monkeypatch, lambda: _TerminalClient())
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "final page 1" in out.out
+    assert "final page 2" in out.out
+
+
 def test_jobs_logs_follow_drains_backlog_before_terminal_exit(
     monkeypatch, capsys
 ) -> None:

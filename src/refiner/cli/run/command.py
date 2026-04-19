@@ -11,7 +11,7 @@ from refiner.cli.run.modes import (
     _ATTACH_MODE_ENV_VAR,
     normalize_attach_mode,
 )
-from refiner.cli.run.local import LocalLaunchResumeError
+from refiner.cli.run.local import LocalLaunchInterrupted, LocalLaunchResumeError
 
 
 def _attach_mode_arg(args: argparse.Namespace) -> str:
@@ -67,6 +67,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(str(err), file=sys.stderr)
             return 1
         except SystemExit as err:
+            if isinstance(err, LocalLaunchInterrupted):
+                if str(err) and not sys.stdout.isatty():
+                    print(str(err), file=sys.stderr)
+                return 130
             code = err.code
             if code is None:
                 return 0

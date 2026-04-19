@@ -14,6 +14,7 @@ from loguru import logger as _base_logger
 
 import sys as local_run_sys
 from refiner.cli.run.local import collect_local_stage_results
+from refiner.cli.run.local import LocalLaunchInterrupted
 from refiner.cli.ui.console import (
     StageConsole,
     StageSnapshot,
@@ -340,6 +341,30 @@ def test_local_stage_console_omits_rundir_row_when_absent(
 
     assert not any("Rundir:" in line for line in header_lines)
     assert any("Runtime:" in line for line in header_lines)
+
+
+def test_stage_console_shows_login_hint_when_tracking_url_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
+    console = StageConsole(
+        job_id="job-1",
+        job_name="demo",
+        rundir="/tmp/run",
+        stage_index=0,
+        total_stages=1,
+        stage_workers=1,
+        tracking_url=None,
+    )
+    try:
+        header_lines = console._build_header_lines(width=100)
+    finally:
+        console.close()
+
+    assert any(
+        "URL:" in line and "Not tracked; run macrodata login" in line
+        for line in header_lines
+    )
 
 
 def test_local_stage_console_apply_snapshot_updates_stage_metadata(
@@ -1506,7 +1531,7 @@ def test_local_launcher_reports_interrupted_stage_with_reason(
         lambda **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
 
-    with pytest.raises(KeyboardInterrupt) as exc_info:
+    with pytest.raises(LocalLaunchInterrupted) as exc_info:
         launcher.launch()
 
     assert heartbeat_started == [0]
@@ -1562,7 +1587,7 @@ def test_local_launcher_prints_abort_message_in_noninteractive_mode(
         lambda *, stages: (None, None),
     )
 
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(LocalLaunchInterrupted):
         launcher.launch()
 
     err = capsys.readouterr().err
