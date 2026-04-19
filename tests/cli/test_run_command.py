@@ -46,6 +46,32 @@ def test_cmd_run_sets_env_overrides_and_forwards_args(monkeypatch, tmp_path) -> 
     assert run.os.environ.get("REFINER_ATTACH") is None
 
 
+def test_cmd_run_sets_auto_attach_mode_by_default(monkeypatch, tmp_path) -> None:
+    script = tmp_path / "demo.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def _fake_run_path(path: str, *, run_name: str):
+        del path, run_name
+        captured["attach"] = run.os.environ.get("REFINER_ATTACH")
+
+    monkeypatch.setattr(run.runpy, "run_path", _fake_run_path)
+
+    rc = run.cmd_run(
+        Namespace(
+            script=str(script),
+            script_args=[],
+            logs=None,
+            attach=False,
+            detach=False,
+        )
+    )
+
+    assert rc == 0
+    assert captured["attach"] == "auto"
+    assert run.os.environ.get("REFINER_ATTACH") is None
+
+
 def test_cmd_run_restores_attach_env(monkeypatch, tmp_path) -> None:
     script = tmp_path / "demo.py"
     script.write_text("print('ok')\n", encoding="utf-8")

@@ -9,7 +9,7 @@ from refiner.cli.cloud_run import (
     CloudAttachContext,
     attach_to_cloud_job,
     emit_cloud_followup_commands,
-    resolve_attach_mode,
+    resolve_launcher_attach_mode,
 )
 from refiner.cli.ui import stdin_is_interactive
 from refiner.platform.auth import MacrodataCredentialsError
@@ -222,7 +222,7 @@ class CloudLauncher(BaseLauncher):
             stage_index=resp.stage_index,
         )
         logger.info(f"Cloud job launched. View job:\n  {tracking_url}")
-        attach_mode = resolve_attach_mode()
+        attach_mode = resolve_launcher_attach_mode()
         if attach_mode == "detach":
             emit_cloud_followup_commands(context=context)
         else:

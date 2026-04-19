@@ -79,6 +79,15 @@ def resolve_attach_mode() -> str:
     return "attach" if stdout_is_interactive() else "detach"
 
 
+def resolve_launcher_attach_mode() -> str:
+    override = attach_mode_override()
+    if override is None:
+        return "detach"
+    if override == "auto":
+        return "attach" if stdout_is_interactive() else "detach"
+    return override
+
+
 def require_cloud_attach_supported(executor_kind: str) -> None:
     override = attach_mode_override()
     if override is None:
