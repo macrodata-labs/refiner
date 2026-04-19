@@ -44,17 +44,6 @@ class WorkerProcessMonitor:
     stderr_thread: threading.Thread
 
 
-@dataclass(frozen=True, slots=True)
-class WorkerResult:
-    worker_id: str
-    claimed: int
-    completed: int
-    failed: int
-    output_rows: int
-    error: str | None
-    returncode: int | None
-
-
 def format_resume_message(message: str, *, rundir: str | None) -> str:
     suffix = (
         f" To resume completed shards, rerun with rundir={rundir!r}."
@@ -196,15 +185,74 @@ def collect_local_stage_results(
         failed_workers = 0
         failed_worker_ids: list[str] = []
         for monitor in monitors:
-            worker_result = _collect_worker_result(monitor)
-            claimed += worker_result.claimed
-            completed += worker_result.completed
-            failed += worker_result.failed
-            output_rows += worker_result.output_rows
-            worker_errors = _worker_errors(worker_result)
+            monitor.stdout_thread.join()
+            monitor.stderr_thread.join()
+            monitor.process.wait()
+            stdout = "".join(monitor.stdout_buffer)
+            stderr = "".join(monitor.stderr_buffer)
+            final_stdout_line = next(
+                (line for line in reversed(stdout.splitlines()) if line.strip()),
+                "",
+            )
+            try:
+                decoded = json.loads(final_stdout_line or "{}")
+            except json.JSONDecodeError:
+                decoded = None
+            raw = (
+                decoded
+                if isinstance(decoded, dict)
+                else {
+                    "worker_id": monitor.worker_id,
+                    "claimed": 0,
+                    "completed": 0,
+                    "failed": 1,
+                    "output_rows": 0,
+                    "error": (
+                        stderr.strip()
+                        or stdout.strip()
+                        or f"worker process exited with code {monitor.process.returncode}"
+                    ),
+                }
+            )
+            worker_id = str(raw.get("worker_id", monitor.worker_id))
+            worker_error = (
+                str(raw["error"]).strip() if raw.get("error") is not None else None
+            )
+            worker_errors: list[str] = []
+            if worker_error:
+                worker_errors.append(f"worker {worker_id}: {worker_error}")
+            if monitor.process.returncode not in (0, None):
+                worker_errors.append(
+                    f"worker {worker_id} exited with code {monitor.process.returncode}"
+                )
+            worker_failed = (
+                int(raw.get("failed", 0))
+                if isinstance(raw.get("failed", 0), int | float | str)
+                else 0
+            )
+            if worker_failed > 0 and worker_error is None:
+                worker_errors.append(
+                    f"worker {worker_id} reported {worker_failed} failed shard(s)"
+                )
+            claimed += (
+                int(raw.get("claimed", 0))
+                if isinstance(raw.get("claimed", 0), int | float | str)
+                else 0
+            )
+            completed += (
+                int(raw.get("completed", 0))
+                if isinstance(raw.get("completed", 0), int | float | str)
+                else 0
+            )
+            failed += worker_failed
+            output_rows += (
+                int(raw.get("output_rows", 0))
+                if isinstance(raw.get("output_rows", 0), int | float | str)
+                else 0
+            )
             if worker_errors:
                 failed_workers += 1
-                failed_worker_ids.append(worker_result.worker_id)
+                failed_worker_ids.append(worker_id)
                 errors.extend(worker_errors)
             else:
                 completed_workers += 1
@@ -226,11 +274,15 @@ def collect_local_stage_results(
             )
         )
         if errors:
-            _emit_failed_worker_log_tails(
-                console=console,
-                worker_ids=failed_worker_ids,
-                worker_log_paths=worker_log_paths,
-            )
+            for worker_id in failed_worker_ids:
+                path = worker_log_paths.get(worker_id)
+                if path is None or not path.exists():
+                    continue
+                tail_lines = _tail_lines(path, max_lines=8)
+                if not tail_lines:
+                    continue
+                console.emit_system(f"last log lines from {worker_id}:")
+                console.emit_lines(worker_id=worker_id, lines=tail_lines)
             console.close()
             console = None
             raise RuntimeError("; ".join(sorted(set(errors))))
@@ -252,93 +304,6 @@ def collect_local_stage_results(
         if console is not None:
             console.close()
         raise
-
-
-def _collect_worker_result(monitor: WorkerProcessMonitor) -> WorkerResult:
-    monitor.stdout_thread.join()
-    monitor.stderr_thread.join()
-    monitor.process.wait()
-    stdout = "".join(monitor.stdout_buffer)
-    stderr = "".join(monitor.stderr_buffer)
-    final_stdout_line = next(
-        (line for line in reversed(stdout.splitlines()) if line.strip()),
-        "",
-    )
-    try:
-        decoded = json.loads(final_stdout_line or "{}")
-    except json.JSONDecodeError:
-        decoded = None
-    raw = (
-        decoded
-        if isinstance(decoded, dict)
-        else {
-            "worker_id": monitor.worker_id,
-            "claimed": 0,
-            "completed": 0,
-            "failed": 1,
-            "output_rows": 0,
-            "error": (
-                stderr.strip()
-                or stdout.strip()
-                or f"worker process exited with code {monitor.process.returncode}"
-            ),
-        }
-    )
-    return WorkerResult(
-        worker_id=str(raw.get("worker_id", monitor.worker_id)),
-        claimed=_coerce_int(raw.get("claimed", 0)),
-        completed=_coerce_int(raw.get("completed", 0)),
-        failed=_coerce_int(raw.get("failed", 0)),
-        output_rows=_coerce_int(raw.get("output_rows", 0)),
-        error=_coerce_error(raw.get("error")),
-        returncode=monitor.process.returncode,
-    )
-
-
-def _coerce_int(value: object) -> int:
-    if isinstance(value, int | float | str):
-        return int(value)
-    return 0
-
-
-def _coerce_error(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _worker_errors(worker_result: WorkerResult) -> list[str]:
-    errors: list[str] = []
-    if worker_result.error is not None:
-        errors.append(f"worker {worker_result.worker_id}: {worker_result.error}")
-    if worker_result.returncode not in (0, None):
-        errors.append(
-            f"worker {worker_result.worker_id} exited with code {worker_result.returncode}"
-        )
-    if worker_result.failed > 0 and worker_result.error is None:
-        errors.append(
-            f"worker {worker_result.worker_id} reported {worker_result.failed} failed shard(s)"
-        )
-    return errors
-
-
-def _emit_failed_worker_log_tails(
-    *,
-    console,
-    worker_ids: list[str],
-    worker_log_paths: dict[str, Path],
-    max_lines_per_worker: int = 8,
-) -> None:
-    for worker_id in worker_ids:
-        path = worker_log_paths.get(worker_id)
-        if path is None or not path.exists():
-            continue
-        tail_lines = _tail_lines(path, max_lines=max_lines_per_worker)
-        if not tail_lines:
-            continue
-        console.emit_system(f"last log lines from {worker_id}:")
-        console.emit_lines(worker_id=worker_id, lines=tail_lines)
 
 
 def _tail_lines(path: Path, *, max_lines: int) -> list[str]:
