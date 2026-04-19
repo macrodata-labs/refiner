@@ -16,6 +16,7 @@ from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudRunCreateRequest,
     CloudRuntimeConfig,
+    MacrodataApiError,
     MacrodataClient,
     StagePayload,
     serialize_pipeline_inline,
@@ -230,8 +231,9 @@ class CloudLauncher(BaseLauncher):
                     client=client,
                     job_id=resp.job_id,
                     stage_index_hint=resp.stage_index,
+                    force_attach=True,
                 )
-            except Exception:
+            except (MacrodataApiError, MacrodataCredentialsError):
                 print(
                     "Cloud job submitted, but attach failed. Continue with:",
                     file=sys.stderr,

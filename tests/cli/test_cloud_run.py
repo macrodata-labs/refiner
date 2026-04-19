@@ -9,12 +9,14 @@ from refiner.platform.client import MacrodataClient
 
 class _FakeConsole:
     def __init__(self, **_: object) -> None:
+        self.kwargs = dict(_)
         self.snapshots: list[object] = []
         self.system_messages: list[str] = []
+        self.emitted_lines: list[tuple[str, list[str]]] = []
         self.closed = 0
 
     def emit_lines(self, *, worker_id: str, lines: list[str]) -> None:
-        del worker_id, lines
+        self.emitted_lines.append((worker_id, list(lines)))
 
     def emit_system(self, message: str) -> None:
         self.system_messages.append(message)
@@ -58,10 +60,25 @@ def _job_payload(*, stage_index: int, status: str) -> dict[str, object]:
     }
 
 
+def _log_entry(
+    *, ts: int, worker_id: str, severity: str, line: str
+) -> dict[str, object]:
+    return {
+        "ts": ts,
+        "severity": severity,
+        "line": line,
+        "workerId": worker_id,
+        "sourceType": "worker",
+        "sourceName": "runner",
+        "messageHash": f"{worker_id}-{ts}-{severity}-{line}",
+    }
+
+
 def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
     class _Client:
         def __init__(self) -> None:
             self.base_url = "https://example.com"
+            self.log_calls = 0
             self.logged_stage_indexes: list[int | None] = []
 
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
@@ -86,9 +103,15 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
             return {"entries": [], "hasOlder": False, "nextCursor": None}
 
     monotonic_values = itertools.count(0.0, 1.0)
-    fake_console = _FakeConsole()
     monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    created_consoles: list[_FakeConsole] = []
+    monkeypatch.setattr(
+        cloud_run,
+        "LocalStageConsole",
+        lambda **kwargs: (
+            created_consoles.append(_FakeConsole(**kwargs)) or created_consoles[-1]
+        ),
+    )
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -102,7 +125,55 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
 
     assert rc == 0
     assert client.logged_stage_indexes[-1] == 1
-    assert fake_console.closed == 1
+    assert created_consoles[-1].closed == 1
+    assert created_consoles[-1].kwargs["rundir"] is None
+
+
+def test_attach_to_cloud_job_force_attach_uses_console_without_tty(monkeypatch) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    _log_entry(
+                        ts=1_700_000_002_000,
+                        worker_id="worker-1",
+                        severity="info",
+                        line="hello",
+                    )
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: False)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+        force_attach=True,
+    )
+
+    assert rc == 0
+    assert fake_console.emitted_lines
 
 
 def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
@@ -186,3 +257,278 @@ def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> Non
 
     assert sleep_calls
     assert sleep_calls[0] >= cloud_run._ATTACH_LOGS_INTERVAL_SECONDS
+
+
+def test_attach_to_cloud_job_hides_lines_for_none_mode(monkeypatch) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    _log_entry(
+                        ts=1_700_000_002_000,
+                        worker_id="worker-1",
+                        severity="info",
+                        line="hello",
+                    )
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setenv("REFINER_LOCAL_LOGS", "none")
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert fake_console.emitted_lines == []
+
+
+def test_attach_to_cloud_job_none_mode_skips_log_requests(monkeypatch) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            return {"entries": [], "hasOlder": False, "nextCursor": None}
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    client = _Client()
+    monkeypatch.setenv("REFINER_LOCAL_LOGS", "none")
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, client),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert client.log_calls == 0
+
+
+def test_attach_to_cloud_job_limits_to_one_worker_in_one_mode(monkeypatch) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            payload = _job_payload(stage_index=0, status="completed")
+            job = cast(dict[str, object], payload["job"])
+            job["runningWorkers"] = 2
+            job["totalWorkers"] = 2
+            stage = cast(list[dict[str, object]], job["stages"])[0]
+            stage["runningWorkers"] = 2
+            stage["totalWorkers"] = 2
+            return payload
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    _log_entry(
+                        ts=1_700_000_002_000,
+                        worker_id="worker-1",
+                        severity="info",
+                        line="first",
+                    ),
+                    _log_entry(
+                        ts=1_700_000_002_001,
+                        worker_id="worker-2",
+                        severity="info",
+                        line="second",
+                    ),
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setenv("REFINER_LOCAL_LOGS", "one")
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-1"]
+
+
+def test_attach_to_cloud_job_shows_only_errors_in_errors_mode(monkeypatch) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    _log_entry(
+                        ts=1_700_000_002_000,
+                        worker_id="worker-1",
+                        severity="info",
+                        line="info line",
+                    ),
+                    _log_entry(
+                        ts=1_700_000_002_001,
+                        worker_id="worker-2",
+                        severity="error",
+                        line="error line",
+                    ),
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-2"]
+
+
+def test_attach_to_cloud_job_errors_mode_does_not_spend_worker_cap_on_info_only_workers(
+    monkeypatch,
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            payload = _job_payload(stage_index=0, status="completed")
+            job = cast(dict[str, object], payload["job"])
+            job["runningWorkers"] = 6
+            job["totalWorkers"] = 6
+            stage = cast(list[dict[str, object]], job["stages"])[0]
+            stage["runningWorkers"] = 6
+            stage["totalWorkers"] = 6
+            return payload
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    _log_entry(
+                        ts=1_700_000_002_000,
+                        worker_id="worker-1",
+                        severity="info",
+                        line="info",
+                    ),
+                    _log_entry(
+                        ts=1_700_000_002_001,
+                        worker_id="worker-2",
+                        severity="info",
+                        line="info",
+                    ),
+                    _log_entry(
+                        ts=1_700_000_002_002,
+                        worker_id="worker-3",
+                        severity="info",
+                        line="info",
+                    ),
+                    _log_entry(
+                        ts=1_700_000_002_003,
+                        worker_id="worker-4",
+                        severity="info",
+                        line="info",
+                    ),
+                    _log_entry(
+                        ts=1_700_000_002_004,
+                        worker_id="worker-5",
+                        severity="error",
+                        line="boom",
+                    ),
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-5"]

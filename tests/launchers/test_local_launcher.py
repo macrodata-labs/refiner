@@ -319,6 +319,28 @@ def test_local_stage_console_colors_timestamp_level_and_message(
     assert "__main__:emit_logs:14 - loguru row=0 starting\x1b[0m" in line
 
 
+def test_local_stage_console_omits_rundir_row_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    console = LocalStageConsole(
+        job_id="job-1",
+        job_name="cloud-attach-demo",
+        rundir=None,
+        stage_index=0,
+        total_stages=2,
+        stage_workers=1,
+        tracking_url="https://example.com/jobs/job-1",
+    )
+    try:
+        header_lines = console._build_header_lines(width=80)
+    finally:
+        console.close()
+
+    assert not any("Rundir:" in line for line in header_lines)
+    assert any("Runtime:" in line for line in header_lines)
+
+
 def test_local_stage_console_formats_system_lines_without_worker_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -737,6 +759,20 @@ def test_should_emit_worker_line_filters_by_mode() -> None:
         worker_id="worker-a",
         selected_worker_id=None,
         line=info_line,
+    )
+    assert should_emit_worker_line(
+        log_mode="errors",
+        worker_id="worker-a",
+        selected_worker_id=None,
+        line=info_line,
+        severity="error",
+    )
+    assert not should_emit_worker_line(
+        log_mode="errors",
+        worker_id="worker-a",
+        selected_worker_id=None,
+        line=error_line,
+        severity="info",
     )
 
 

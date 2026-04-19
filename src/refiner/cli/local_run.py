@@ -115,7 +115,7 @@ class LaunchStats:
 class LocalStageSnapshot:
     job_id: str
     job_name: str
-    rundir: str
+    rundir: str | None
     stage_index: int
     total_stages: int
     stage_workers: int
@@ -207,6 +207,7 @@ def should_emit_worker_line(
     worker_id: str,
     selected_worker_id: str | None,
     line: str,
+    severity: str | None = None,
 ) -> bool:
     if log_mode == "all":
         return True
@@ -215,6 +216,8 @@ def should_emit_worker_line(
     if log_mode == "one":
         return selected_worker_id is None or worker_id == selected_worker_id
     if log_mode == "errors":
+        if severity is not None:
+            return severity.strip().lower() == "error"
         match = _LOGURU_LINE_RE.match(line)
         return match is not None and match.group("level").upper() in {
             "ERROR",
@@ -564,7 +567,7 @@ class LocalStageConsole:
         *,
         job_id: str,
         job_name: str,
-        rundir: str,
+        rundir: str | None,
         stage_index: int,
         total_stages: int,
         stage_workers: int,
@@ -694,14 +697,6 @@ class LocalStageConsole:
                 "",
             ),
             (
-                "Rundir",
-                self._rundir,
-                _VALUE_COLOR,
-                "Runtime",
-                _format_elapsed_seconds(self._elapsed_seconds),
-                "",
-            ),
-            (
                 "URL" if self._tracking_url is not None else "",
                 self._tracking_url or "",
                 _URL_COLOR,
@@ -710,6 +705,21 @@ class LocalStageConsole:
                 _STATUS_COLORS.get(self._status, _VALUE_COLOR),
             ),
         ]
+        row_specs.insert(
+            2,
+            (
+                "Rundir" if self._rundir is not None else "Runtime",
+                self._rundir
+                if self._rundir is not None
+                else _format_elapsed_seconds(self._elapsed_seconds),
+                _VALUE_COLOR,
+                "Runtime" if self._rundir is not None else "",
+                _format_elapsed_seconds(self._elapsed_seconds)
+                if self._rundir is not None
+                else "",
+                "",
+            ),
+        )
 
         def build_row(
             left_label: str,

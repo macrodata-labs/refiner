@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, TextIO, cast
 
@@ -21,6 +21,8 @@ from refiner.cli.job_utils import (
 from refiner.cli.local_run import (
     LocalStageConsole,
     LocalStageSnapshot,
+    resolve_log_mode,
+    should_emit_worker_line,
     stdout_is_interactive,
 )
 from refiner.job_urls import build_job_tracking_url
@@ -133,6 +135,14 @@ def _warn_follow_skip(
         )
 
 
+def _context_for_stage(
+    context: CloudAttachContext, *, stage_index: int
+) -> CloudAttachContext:
+    if context.stage_index == stage_index:
+        return context
+    return replace(context, stage_index=stage_index)
+
+
 def _log_worker_label(entry: dict[str, Any]) -> str:
     worker_id = entry.get("workerId")
     if isinstance(worker_id, str) and worker_id.strip():
@@ -150,6 +160,29 @@ def _format_attach_log_line(entry: dict[str, Any]) -> str:
         f"{_safe_text(entry.get('sourceType'))}/{_safe_text(entry.get('sourceName'))} "
         f"{_safe_text(entry.get('line'))}"
     )
+
+
+def _emit_cloud_log_mode_banner(
+    *,
+    console: LocalStageConsole,
+    log_mode: str,
+    running_workers: int,
+) -> None:
+    if log_mode == "none":
+        console.emit_system("live log lines are hidden; updating header only")
+        return
+    if log_mode == "one" and running_workers > 1:
+        console.emit_system("showing one running worker at a time to stay live")
+        return
+    if log_mode in {"all", "errors"} and running_workers > _ATTACH_MAX_LOGGED_WORKERS:
+        if log_mode == "errors":
+            console.emit_system(
+                f"showing error logs from up to {_ATTACH_MAX_LOGGED_WORKERS} of {running_workers} running workers to stay live"
+            )
+            return
+        console.emit_system(
+            f"showing up to {_ATTACH_MAX_LOGGED_WORKERS} of {running_workers} running workers to stay live"
+        )
 
 
 def _active_stage(job: dict[str, Any]) -> tuple[int, int]:
@@ -210,7 +243,7 @@ def _build_snapshot(
     return LocalStageSnapshot(
         job_id=context.job_id,
         job_name=context.job_name,
-        rundir="cloud",
+        rundir=None,
         stage_index=stage_index,
         total_stages=max(1, total_stages),
         stage_workers=stage_workers,
@@ -273,8 +306,9 @@ def attach_to_cloud_job(
     job_id: str,
     initial_job_payload: dict[str, Any] | None = None,
     stage_index_hint: int | None = None,
+    force_attach: bool = False,
 ) -> int:
-    if not stdout_is_interactive():
+    if not force_attach and not stdout_is_interactive():
         payload = initial_job_payload or client.cli_get_job(job_id=job_id)
         context = _cloud_context_from_job_payload(
             client=client,
@@ -295,19 +329,21 @@ def attach_to_cloud_job(
     console = LocalStageConsole(
         job_id=context.job_id,
         job_name=context.job_name,
-        rundir="cloud",
+        rundir=None,
         stage_index=snapshot.stage_index,
         total_stages=snapshot.total_stages,
         stage_workers=snapshot.stage_workers,
         tracking_url=context.tracking_url,
     )
     console.emit_system(f"attached to cloud job {context.job_id}")
+    log_mode = resolve_log_mode(None)
     selected_worker_ids: tuple[str, ...] = ()
     current_stage_index = snapshot.stage_index
-    if snapshot.worker_running > _ATTACH_MAX_LOGGED_WORKERS:
-        console.emit_system(
-            f"showing up to {_ATTACH_MAX_LOGGED_WORKERS} of {snapshot.worker_running} running workers to stay live"
-        )
+    _emit_cloud_log_mode_banner(
+        console=console,
+        log_mode=log_mode,
+        running_workers=snapshot.worker_running,
+    )
     closed = False
     try:
         console.apply_snapshot(snapshot)
@@ -347,7 +383,8 @@ def attach_to_cloud_job(
                     job_payload=job_payload,
                     stage_index_hint=stage_index_hint,
                 )
-                if snapshot.stage_index != current_stage_index:
+                stage_changed = snapshot.stage_index != current_stage_index
+                if stage_changed:
                     selected_worker_ids = ()
                     current_cursor = None
                     full_batch_polls = 0
@@ -359,12 +396,21 @@ def attach_to_cloud_job(
                     next_logs_at = now
                 console.apply_snapshot(snapshot)
                 current_stage_index = snapshot.stage_index
+                context = _context_for_stage(context, stage_index=current_stage_index)
+                if stage_changed:
+                    _emit_cloud_log_mode_banner(
+                        console=console,
+                        log_mode=log_mode,
+                        running_workers=snapshot.worker_running,
+                    )
                 terminal_seen = _job_status(job_payload) in _TERMINAL_JOB_STATUSES
                 next_summary_at = now + _ATTACH_SUMMARY_INTERVAL_SECONDS
 
             logs_available = isinstance(job_payload.get("job"), dict) and bool(
                 cast(dict[str, Any], job_payload["job"]).get("logsAvailable", True)
             )
+            if log_mode == "none":
+                logs_available = False
             if not logs_available:
                 next_logs_at = now + _ATTACH_LOGS_INTERVAL_SECONDS
             if logs_available and now >= next_logs_at:
@@ -397,17 +443,39 @@ def attach_to_cloud_job(
                         if not isinstance(entry, dict):
                             continue
                         worker_id = _safe_text(entry.get("workerId"))
+                        selected_worker_id = (
+                            selected_worker_ids[0] if selected_worker_ids else None
+                        )
+                        should_emit = should_emit_worker_line(
+                            log_mode=log_mode,
+                            worker_id=worker_id,
+                            selected_worker_id=selected_worker_id,
+                            line=_safe_text(entry.get("line")),
+                            severity=_safe_text(entry.get("severity")),
+                        )
                         if (
-                            worker_id != "-"
+                            log_mode == "one"
+                            and worker_id != "-"
+                            and not selected_worker_ids
+                        ):
+                            selected_worker_ids = (worker_id,)
+                            selected_worker_id = worker_id
+                            should_emit = should_emit_worker_line(
+                                log_mode=log_mode,
+                                worker_id=worker_id,
+                                selected_worker_id=selected_worker_id,
+                                line=_safe_text(entry.get("line")),
+                                severity=_safe_text(entry.get("severity")),
+                            )
+                        elif (
+                            log_mode in {"all", "errors"}
+                            and should_emit
+                            and worker_id != "-"
                             and worker_id not in selected_worker_ids
                             and len(selected_worker_ids) < _ATTACH_MAX_LOGGED_WORKERS
                         ):
                             selected_worker_ids = (*selected_worker_ids, worker_id)
-                        if (
-                            selected_worker_ids
-                            and worker_id != "-"
-                            and worker_id not in selected_worker_ids
-                        ):
+                        if not should_emit:
                             continue
                         key = _log_entry_key(entry)
                         if key in seen_keys:

@@ -10,6 +10,7 @@ from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
+    MacrodataApiError,
 )
 from refiner.platform.manifest import _redact_captured_text
 
@@ -557,6 +558,7 @@ def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
     assert result.job_id == "job-123"
     assert captured["job_id"] == "job-123"
     assert captured["stage_index_hint"] == 0
+    assert captured["force_attach"] is True
 
 
 def test_pipeline_launch_cloud_attach_failure_prints_fallback(
@@ -570,7 +572,9 @@ def test_pipeline_launch_cloud_attach_failure_prints_fallback(
     monkeypatch.setattr("refiner.launchers.cloud.resolve_attach_mode", lambda: "attach")
     monkeypatch.setattr(
         "refiner.launchers.cloud.attach_to_cloud_job",
-        lambda **_: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda **_: (_ for _ in ()).throw(
+            MacrodataApiError(status=503, message="boom")
+        ),
     )
     monkeypatch.setattr(
         "refiner.launchers.cloud.emit_cloud_followup_commands",
@@ -583,3 +587,21 @@ def test_pipeline_launch_cloud_attach_failure_prints_fallback(
     assert result.job_id == "job-123"
     assert "attach failed" in out.err
     assert "fallback job-123" in out.err
+
+
+def test_pipeline_launch_cloud_unexpected_attach_failure_propagates(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    monkeypatch.setattr("refiner.launchers.cloud.resolve_attach_mode", lambda: "attach")
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.attach_to_cloud_job",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")

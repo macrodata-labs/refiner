@@ -58,6 +58,7 @@ Behavior:
 - cloud launches default to attach in interactive terminals and detach in non-interactive output
 - `--attach` forces attached mode for cloud launches and is accepted for local launches
 - `--detach` forces detached mode for cloud launches and errors for local launches
+- `--logs` applies to attached local and cloud launches; `all` is the default, `one` shows a single worker at a time, `none` keeps the header live without log lines, and `errors` only shows error log lines
 - detached cloud launches print the exact follow-up commands to inspect, attach, or cancel the job
 - attached cloud launches exit automatically when the job reaches a terminal state
 - `Ctrl+C` during an attached cloud launch detaches the local CLI only; the cloud job keeps running and the CLI prints the job URL plus reattach and cancel commands

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import builtins
 from argparse import Namespace
+from datetime import datetime
 from typing import Any, cast
-
 
 from refiner.cli import jobs
 from refiner.platform.client.api import MacrodataApiError
@@ -224,6 +224,7 @@ def test_jobs_attach_calls_cloud_attach(monkeypatch) -> None:
 
     assert rc == 0
     assert captured["job_id"] == "job-1"
+    assert captured["force_attach"] is True
     payload = cast(dict[str, object], captured["initial_job_payload"])
     job = cast(dict[str, object], payload["job"])
     assert job["executorKind"] == "cloud"
@@ -893,6 +894,62 @@ def test_jobs_logs_follow_ignores_transient_status_probe_errors(
 
     assert rc == 0
     assert "first" in out.out
+
+
+def test_jobs_logs_follow_advances_window_after_transient_status_probe_error(
+    monkeypatch,
+) -> None:
+    class _FlakyStatusClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls: list[tuple[int, int]] = []
+            self.job_calls = 0
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            self.log_calls.append(
+                (cast(int, kwargs["start_ms"]), cast(int, kwargs["end_ms"]))
+            )
+            return {"entries": [], "hasOlder": False, "nextCursor": None}
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            self.job_calls += 1
+            if self.job_calls == 1:
+                raise MacrodataApiError(status=503, message="temporary")
+            payload = super().cli_get_job(job_id=job_id)
+            cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    client = _FlakyStatusClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+    now_values = iter([10, 15])
+
+    class _FakeDateTime:
+        @staticmethod
+        def now(*, tz=None):
+            return datetime.fromtimestamp(next(now_values), tz=tz)
+
+    monkeypatch.setattr(jobs, "datetime", _FakeDateTime)
+    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+
+    assert rc == 0
+    assert client.log_calls == [(1, 2), (2, 10000)]
 
 
 def test_jobs_logs_follow_retries_transient_log_fetch_errors(

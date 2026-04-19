@@ -366,6 +366,14 @@ def _stream_logs(
             continue
         else:
             full_batch_polls = 0
+        next_start_ms = current_start_ms
+        next_end_ms = current_end_ms
+        if current_cursor is None:
+            next_start_ms = current_end_ms
+            next_end_ms = max(
+                int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+                next_start_ms + 1,
+            )
         try:
             job_payload = client.cli_get_job(job_id=args.job_id)
         except MacrodataApiError as err:
@@ -374,6 +382,8 @@ def _stream_logs(
             status_retryable_error_count += 1
             if status_retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
                 raise
+            current_start_ms = next_start_ms
+            current_end_ms = next_end_ms
             time.sleep(_follow_retry_delay(status_retryable_error_count))
             job_payload = {}
             continue
@@ -383,9 +393,8 @@ def _stream_logs(
         if current_cursor is None and _job_status(job_payload) in TERMINAL_JOB_STATUSES:
             return 0
         if current_cursor is None:
-            current_start_ms = current_end_ms
-            next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-            current_end_ms = max(next_end_ms, current_start_ms + 1)
+            current_start_ms = next_start_ms
+            current_end_ms = next_end_ms
         time.sleep(_FOLLOW_LOG_POLL_INTERVAL_SECONDS)
 
 
@@ -623,6 +632,7 @@ def cmd_jobs_attach(args: Namespace) -> int:
             client=client,
             job_id=args.job_id,
             initial_job_payload=payload,
+            force_attach=True,
         )
     except CloudAttachDetached:
         return 130
