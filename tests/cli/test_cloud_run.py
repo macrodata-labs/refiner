@@ -78,6 +78,48 @@ def test_active_stage_prefers_failed_started_stage_over_later_queued_stage() -> 
     assert total_stages == 3
 
 
+def test_build_snapshot_preserves_stage_zero_progress() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "running",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": 1_700_000_001_000,
+                "runningWorkers": 2,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": 0,
+                        "status": "running",
+                        "completedWorkers": 3,
+                        "totalWorkers": 5,
+                    },
+                    {
+                        "index": 1,
+                        "status": "queued",
+                        "completedWorkers": 0,
+                        "totalWorkers": 7,
+                    },
+                ],
+            }
+        },
+    )
+
+    assert snapshot.stage_index == 0
+    assert snapshot.worker_completed == 3
+    assert snapshot.stage_workers == 5
+
+
 def _log_entry(
     *, ts: int, worker_id: str, severity: str, line: str
 ) -> dict[str, object]:
@@ -121,7 +163,6 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
             return {"entries": [], "hasOlder": False, "nextCursor": None}
 
     monotonic_values = itertools.count(0.0, 1.0)
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     created_consoles: list[_FakeConsole] = []
     monkeypatch.setattr(
         cloud_run,
@@ -177,7 +218,6 @@ def test_attach_to_cloud_job_uses_console_without_tty(monkeypatch) -> None:
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: False)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
@@ -202,7 +242,6 @@ def test_attach_to_cloud_job_rejects_invalid_log_mode_env(monkeypatch) -> None:
             del job_id
             return _job_payload(stage_index=0, status="running")
 
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setenv("REFINER_LOCAL_LOGS", "bogus")
 
     with pytest.raises(SystemExit, match="unsupported local log mode"):
@@ -236,7 +275,6 @@ def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
@@ -267,7 +305,6 @@ def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> Non
 
     sleep_calls: list[float] = []
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: 0.0)
 
@@ -328,7 +365,6 @@ def test_attach_to_cloud_job_hides_lines_for_none_mode(monkeypatch) -> None:
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
     monkeypatch.setenv("REFINER_LOCAL_LOGS", "none")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
@@ -363,7 +399,6 @@ def test_attach_to_cloud_job_none_mode_skips_log_requests(monkeypatch) -> None:
     fake_console = _FakeConsole()
     client = _Client()
     monkeypatch.setenv("REFINER_LOCAL_LOGS", "none")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
@@ -423,7 +458,6 @@ def test_attach_to_cloud_job_limits_to_one_worker_in_one_mode(monkeypatch) -> No
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
     monkeypatch.setenv("REFINER_LOCAL_LOGS", "one")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
@@ -476,7 +510,6 @@ def test_attach_to_cloud_job_shows_only_errors_in_errors_mode(monkeypatch) -> No
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
     monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
@@ -528,7 +561,6 @@ def test_attach_to_cloud_job_errors_mode_falls_back_to_log_line_when_severity_mi
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
     monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
@@ -608,7 +640,6 @@ def test_attach_to_cloud_job_errors_mode_does_not_spend_worker_cap_on_info_only_
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
     monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
@@ -663,7 +694,6 @@ def test_attach_to_cloud_job_all_mode_suppresses_workers_beyond_cap(
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
     monkeypatch.setenv("REFINER_LOCAL_LOGS", "all")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
@@ -718,7 +748,6 @@ def test_attach_to_cloud_job_keeps_polling_logs_when_status_refresh_retries(
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)

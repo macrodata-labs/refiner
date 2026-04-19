@@ -131,20 +131,4 @@ class FileCleanupReducerSink(BaseSink):
                 continue
 
 
-def build_file_cleanup_reducer(
-    output: DataFolderLike,
-    *,
-    filename_template: str,
-    reducer_name: str,
-) -> FileCleanupReducerSink | None:
-    try:
-        return FileCleanupReducerSink(
-            output,
-            filename_template=filename_template,
-            reducer_name=reducer_name,
-        )
-    except ValueError:
-        return None
-
-
-__all__ = ["FileCleanupReducerSink", "build_file_cleanup_reducer"]
+__all__ = ["FileCleanupReducerSink"]

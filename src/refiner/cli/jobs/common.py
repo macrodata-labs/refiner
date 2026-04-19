@@ -52,15 +52,6 @@ def _print_next_cursor(value: Any) -> None:
         print(f"\nNext cursor: {_safe_text(value)}")
 
 
-def _render_payload(
-    *,
-    as_json: bool,
-    payload: _Payload,
-    renderer: _PayloadRenderer,
-) -> int:
-    return _print_json(payload) if as_json else renderer(payload)
-
-
 def _run_job_command(
     *,
     as_json: bool,
@@ -71,7 +62,7 @@ def _run_job_command(
         payload = fetch()
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)
-    return _render_payload(as_json=as_json, payload=payload, renderer=renderer)
+    return _print_json(payload) if as_json else renderer(payload)
 
 
 def _executor_text(value: Any) -> str:

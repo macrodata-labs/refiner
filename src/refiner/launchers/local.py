@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import cloudpickle
 
-from refiner.cli.attach_mode import require_cloud_attach_supported
+from refiner.cli.attach_mode import attach_mode_override
 from refiner.cli.local_run import (
     LaunchStats,
     collect_local_stage_results,
@@ -365,7 +365,8 @@ class LocalLauncher(BaseLauncher):
         )
 
     def launch(self) -> LaunchStats:
-        require_cloud_attach_supported("local")
+        if attach_mode_override() == "detach":
+            raise SystemExit("--detach is only supported for cloud launches.")
         available_cpus = len(available_cpu_ids())
         if self.num_workers > available_cpus:
             logger.warning(

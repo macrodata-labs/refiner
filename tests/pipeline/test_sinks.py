@@ -4,6 +4,7 @@ import json
 from typing import cast
 
 import pyarrow.parquet as pq
+import pytest
 
 from refiner import col
 from refiner.pipeline.data.row import DictRow
@@ -291,23 +292,21 @@ def test_file_cleanup_reducer_tolerates_duplicate_listed_paths(
     assert not loser_path.exists()
 
 
-def test_jsonl_sink_skips_cleanup_reducer_for_unsupported_filename_template(
-    tmp_path,
-) -> None:
+def test_jsonl_sink_rejects_unsupported_cleanup_filename_template(tmp_path) -> None:
     sink = JsonlSink(
         tmp_path / "jsonl-custom",
         filename_template="{shard_id}.jsonl",
     )
 
-    assert sink.build_reducer() is None
+    with pytest.raises(ValueError, match="requires fields"):
+        sink.build_reducer()
 
 
-def test_parquet_sink_skips_cleanup_reducer_for_unsupported_filename_template(
-    tmp_path,
-) -> None:
+def test_parquet_sink_rejects_unsupported_cleanup_filename_template(tmp_path) -> None:
     sink = ParquetSink(
         tmp_path / "parquet-custom",
         filename_template="{shard_id:>12}.parquet",
     )
 
-    assert sink.build_reducer() is None
+    with pytest.raises(ValueError, match="without conversion or format specifiers"):
+        sink.build_reducer()

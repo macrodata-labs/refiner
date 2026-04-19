@@ -564,6 +564,7 @@ def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
     assert result.job_id == "job-123"
     assert captured["job_id"] == "job-123"
     assert captured["stage_index_hint"] == 0
+    assert captured["force_attach"] is True
 
 
 def test_pipeline_launch_cloud_attach_failure_prints_fallback(
@@ -627,6 +628,33 @@ def test_pipeline_launch_cloud_defaults_to_detached_outside_cli(
         lambda ref: True,
     )
     monkeypatch.delenv("REFINER_ATTACH", raising=False)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.emit_cloud_followup_commands",
+        lambda *, context, file=None: print(f"attach {context.job_id}", file=file),
+    )
+    monkeypatch.setattr(
+        "refiner.cli.cloud_run.attach_to_cloud_job",
+        lambda **_: (_ for _ in ()).throw(AssertionError("should not attach")),
+    )
+
+    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+    out = capsys.readouterr()
+
+    assert result.job_id == "job-123"
+    assert "attach job-123" in out.out
+
+
+def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
+    monkeypatch, capsys
+) -> None:
+    _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    monkeypatch.setenv("REFINER_ATTACH", "auto")
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.launchers.cloud.stdout_is_interactive", lambda: False)
     monkeypatch.setattr(
         "refiner.launchers.cloud.emit_cloud_followup_commands",
         lambda *, context, file=None: print(f"attach {context.job_id}", file=file),

@@ -67,11 +67,3 @@ def emit_cloud_followup_commands(
         )
     print(f"Workers: macrodata jobs workers {context.job_id}", file=output)
     print(f"Cancel: macrodata jobs cancel {context.job_id}", file=output)
-
-
-def require_cloud_attach_supported(executor_kind: str) -> None:
-    override = attach_mode_override()
-    if override is None:
-        return
-    if executor_kind != "cloud" and override == "detach":
-        raise SystemExit("--detach is only supported for cloud launches.")

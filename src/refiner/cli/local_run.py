@@ -15,8 +15,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 import threading
+from typing import Any
 
 from loguru import logger
+from refiner.cli.ui import stdout_is_interactive
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _WORKER_COLORS = (
@@ -138,13 +140,6 @@ class WorkerProcessMonitor:
     stderr_thread: threading.Thread
 
 
-def stdout_is_interactive() -> bool:
-    try:
-        return sys.stdout.isatty()
-    except Exception:  # pragma: no cover
-        return False
-
-
 def _loguru_markup_to_ansi(markup: str) -> str:
     ansi_parts: list[str] = []
     for tag in _LOGURU_TAG_RE.findall(markup):
@@ -207,7 +202,7 @@ def should_emit_worker_line(
     worker_id: str,
     selected_worker_id: str | None,
     line: str,
-    severity: str | None = None,
+    severity: Any = None,
 ) -> bool:
     if log_mode == "all":
         return True
@@ -216,7 +211,7 @@ def should_emit_worker_line(
     if log_mode == "one":
         return selected_worker_id is None or worker_id == selected_worker_id
     if log_mode == "errors":
-        if severity is not None:
+        if isinstance(severity, str):
             return severity.strip().lower() == "error"
         match = _LOGURU_LINE_RE.match(line)
         return match is not None and match.group("level").upper() in {

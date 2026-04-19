@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+import time
+from typing import Any, Callable, TypeVar
 
 from refiner.platform.client import MacrodataApiError
 from refiner.platform.client.api import sanitize_terminal_text
 
 TERMINAL_JOB_STATUSES = frozenset({"completed", "failed", "canceled"})
+T = TypeVar("T")
+_LogKey = tuple[str, str, str, str, str]
 
 
 def safe_text(value: Any) -> str:
@@ -88,3 +92,120 @@ def is_retryable_api_error(err: Exception) -> bool:
 def next_log_cursor(payload: dict[str, Any]) -> str | None:
     cursor = payload.get("nextCursor")
     return cursor if isinstance(cursor, str) and cursor else None
+
+
+def follow_skip_message(*, start_ms: int, end_ms: int) -> str:
+    return (
+        "log volume is high; skipped older backlog from "
+        f"{format_ts(start_ms)} to {format_ts(end_ms)} to stay live"
+    )
+
+
+def call_with_retry(
+    operation: Callable[[], T],
+    *,
+    retryable_error_count: int,
+    max_retryable_errors: int,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> tuple[T, int]:
+    while True:
+        try:
+            return operation(), retryable_error_count
+        except Exception as err:
+            if not is_retryable_api_error(err):
+                raise
+            retryable_error_count += 1
+            if retryable_error_count > max_retryable_errors:
+                raise
+            sleep_fn(retry_delay(retryable_error_count))
+
+
+@dataclass
+class FollowPollResult:
+    action: str
+    next_window_start_ms: int | None = None
+    skipped_start_ms: int | None = None
+    skipped_end_ms: int | None = None
+
+
+@dataclass
+class FollowLogPoller:
+    start_ms: int
+    end_ms: int
+    dedupe_limit: int
+    max_drain_polls: int
+    max_retryable_errors: int
+    cursor: str | None = None
+    full_batch_polls: int = 0
+    retryable_error_count: int = 0
+    seen_keys: set[_LogKey] = field(default_factory=set)
+    seen_order: deque[_LogKey] = field(default_factory=deque)
+
+    def reset_window(self, *, now_ms: int, window_ms: int) -> None:
+        self.start_ms = max(0, now_ms - window_ms)
+        self.end_ms = max(self.start_ms + 1, now_ms)
+        self.cursor = None
+        self.full_batch_polls = 0
+        self.retryable_error_count = 0
+        self.seen_keys.clear()
+        self.seen_order.clear()
+
+    def poll(
+        self,
+        *,
+        fetch_page: Callable[[int, int, str | None], dict[str, Any]],
+        emit_entry: Callable[[dict[str, Any]], None],
+        now_ms: Callable[[], int],
+    ) -> FollowPollResult:
+        payload, self.retryable_error_count = call_with_retry(
+            lambda: fetch_page(self.start_ms, self.end_ms, self.cursor),
+            retryable_error_count=self.retryable_error_count,
+            max_retryable_errors=self.max_retryable_errors,
+        )
+        self.retryable_error_count = 0
+        oldest_emitted_ms: int | None = None
+        entries = payload.get("entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                key = log_entry_key(entry)
+                if key in self.seen_keys:
+                    continue
+                emit_entry(entry)
+                remember_seen_key(
+                    key=key,
+                    seen_keys=self.seen_keys,
+                    seen_order=self.seen_order,
+                    limit=self.dedupe_limit,
+                )
+                parsed_entry_ms = parse_epoch_ms(entry.get("ts"))
+                if parsed_entry_ms is not None and oldest_emitted_ms is None:
+                    oldest_emitted_ms = parsed_entry_ms
+
+        self.cursor = next_log_cursor(payload)
+        if self.cursor is not None:
+            self.full_batch_polls += 1
+            if self.full_batch_polls < self.max_drain_polls:
+                return FollowPollResult(action="drain")
+            skipped_start_ms = self.start_ms
+            skipped_end_ms = oldest_emitted_ms or self.end_ms
+            self.cursor = None
+            self.full_batch_polls = 0
+            self.start_ms = self.end_ms
+            self.end_ms = max(now_ms(), self.start_ms + 1)
+            return FollowPollResult(
+                action="skip",
+                skipped_start_ms=skipped_start_ms,
+                skipped_end_ms=skipped_end_ms,
+            )
+
+        self.full_batch_polls = 0
+        next_window_start_ms = self.end_ms
+        next_window_end_ms = max(now_ms(), next_window_start_ms + 1)
+        self.start_ms = next_window_start_ms
+        self.end_ms = next_window_end_ms
+        return FollowPollResult(
+            action="advance",
+            next_window_start_ms=next_window_start_ms,
+        )

@@ -2,25 +2,22 @@ from __future__ import annotations
 
 import sys
 import time
-from collections import deque
+from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime, timezone
 from typing import Any, cast
 
 from refiner.cli.attach_mode import (
     CloudAttachContext,
     CloudAttachDetached,
+    emit_cloud_followup_commands,
 )
 from refiner.cli.job_utils import (
+    FollowLogPoller,
     TERMINAL_JOB_STATUSES as _TERMINAL_JOB_STATUSES,
+    call_with_retry,
+    follow_skip_message,
     format_ts as _format_ts,
-    is_retryable_api_error as _is_retryable_api_error,
     job_status as _job_status,
-    log_entry_key as _log_entry_key,
-    next_log_cursor as _next_log_cursor,
-    parse_epoch_ms,
-    remember_seen_key as _remember_seen_key,
-    retry_delay,
     safe_text as _safe_text,
 )
 from refiner.cli.local_run import (
@@ -28,10 +25,10 @@ from refiner.cli.local_run import (
     LocalStageSnapshot,
     resolve_log_mode,
     should_emit_worker_line,
-    stdout_is_interactive as _stdout_is_interactive,
 )
+from refiner.cli import ui
 from refiner.job_urls import build_job_tracking_url
-from refiner.platform.client import MacrodataApiError, MacrodataClient
+from refiner.platform.client import MacrodataClient
 
 _DEFAULT_LOG_WINDOW_MS = 60 * 60 * 1000
 _DEFAULT_ATTACH_LOG_LIMIT = 500
@@ -43,7 +40,10 @@ _ATTACH_MAX_DRAIN_POLLS = 5
 _ATTACH_DRAIN_POLL_DELAY_SECONDS = 0.1
 _ATTACH_MAX_RETRYABLE_ERRORS = 5
 _STAGE_NOT_STARTED_STATUSES = {"queued", "pending"}
-stdout_is_interactive = _stdout_is_interactive
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def _warn_follow_skip(
@@ -53,10 +53,7 @@ def _warn_follow_skip(
     end_ms: int,
     console: LocalStageConsole,
 ) -> None:
-    console.emit_system(
-        "log volume is high; skipped older backlog from "
-        f"{_format_ts(start_ms)} to {_format_ts(end_ms)} to stay live"
-    )
+    console.emit_system(follow_skip_message(start_ms=start_ms, end_ms=end_ms))
     if context.stage_index is None:
         console.emit_system(
             f"request logs for fewer workers for better visibility, or rerun with "
@@ -67,14 +64,6 @@ def _warn_follow_skip(
             f"request logs for fewer workers for better visibility, or rerun with "
             f"`macrodata jobs logs {context.job_id} --stage {context.stage_index} --start-ms <ms> --end-ms <ms>` for full coverage"
         )
-
-
-def _context_for_stage(
-    context: CloudAttachContext, *, stage_index: int
-) -> CloudAttachContext:
-    if context.stage_index == stage_index:
-        return context
-    return replace(context, stage_index=stage_index)
 
 
 def _log_worker_label(entry: dict[str, Any]) -> str:
@@ -94,6 +83,55 @@ def _format_attach_log_line(entry: dict[str, Any]) -> str:
         f"{_safe_text(entry.get('sourceType'))}/{_safe_text(entry.get('sourceName'))} "
         f"{_safe_text(entry.get('line'))}"
     )
+
+
+def _emit_attach_entries(
+    *,
+    console: LocalStageConsole,
+    log_mode: str,
+    selected_worker_ids: tuple[str, ...],
+) -> tuple[Callable[[dict[str, Any]], None], Callable[[], tuple[str, ...]]]:
+    current_selected_worker_ids = selected_worker_ids
+
+    def _emit_entry(entry: dict[str, Any]) -> None:
+        nonlocal current_selected_worker_ids
+        worker_id = _safe_text(entry.get("workerId"))
+        selected_worker_id = (
+            current_selected_worker_ids[0] if current_selected_worker_ids else None
+        )
+        should_emit = should_emit_worker_line(
+            log_mode=log_mode,
+            worker_id=worker_id,
+            selected_worker_id=selected_worker_id,
+            line=_safe_text(entry.get("line")),
+            severity=entry.get("severity"),
+        )
+        if log_mode == "one" and worker_id != "-" and not current_selected_worker_ids:
+            current_selected_worker_ids = (worker_id,)
+            should_emit = should_emit_worker_line(
+                log_mode=log_mode,
+                worker_id=worker_id,
+                selected_worker_id=worker_id,
+                line=_safe_text(entry.get("line")),
+                severity=entry.get("severity"),
+            )
+        elif (
+            log_mode in {"all", "errors"}
+            and should_emit
+            and worker_id != "-"
+            and worker_id not in current_selected_worker_ids
+        ):
+            if len(current_selected_worker_ids) >= _ATTACH_MAX_LOGGED_WORKERS:
+                return
+            current_selected_worker_ids = (*current_selected_worker_ids, worker_id)
+        if not should_emit:
+            return
+        console.emit_lines(
+            worker_id=_log_worker_label(entry),
+            lines=[_format_attach_log_line(entry)],
+        )
+
+    return _emit_entry, lambda: current_selected_worker_ids
 
 
 def _emit_cloud_log_mode_banner(
@@ -165,10 +203,7 @@ def _build_snapshot(
     stages = job.get("stages")
     if isinstance(stages, list):
         for stage in stages:
-            if (
-                isinstance(stage, dict)
-                and int(stage.get("index", -1) or -1) == stage_index
-            ):
+            if isinstance(stage, dict) and int(stage.get("index", -1)) == stage_index:
                 current_stage = stage
                 break
     total_workers = int(job.get("totalWorkers", 0) or 0)
@@ -205,7 +240,6 @@ def _cloud_context_from_job_payload(
     client: MacrodataClient,
     job_id: str,
     payload: dict[str, Any],
-    stage_index_hint: int | None = None,
 ) -> CloudAttachContext:
     job = payload.get("job")
     if not isinstance(job, dict):
@@ -219,7 +253,7 @@ def _cloud_context_from_job_payload(
             job_id=job_id,
             workspace_slug=workspace_slug if isinstance(workspace_slug, str) else None,
         ),
-        stage_index=stage_index_hint,
+        stage_index=None,
     )
 
 
@@ -234,11 +268,16 @@ def _snapshot_and_context(
         client=client,
         job_id=job_id,
         payload=job_payload,
-        stage_index_hint=stage_index_hint,
     )
     snapshot = _build_snapshot(
         context=context,
         job_payload=job_payload,
+    )
+    context = replace(
+        context,
+        stage_index=stage_index_hint
+        if stage_index_hint is not None
+        else snapshot.stage_index,
     )
     return context, snapshot
 
@@ -249,18 +288,22 @@ def attach_to_cloud_job(
     job_id: str,
     initial_job_payload: dict[str, Any] | None = None,
     stage_index_hint: int | None = None,
+    force_attach: bool = True,
 ) -> int:
     job_payload = initial_job_payload or client.cli_get_job(job_id=job_id)
-    if stage_index_hint is None:
-        job = job_payload.get("job")
-        if isinstance(job, dict):
-            stage_index_hint = _active_stage(job)[0]
     context, snapshot = _snapshot_and_context(
         client=client,
         job_id=job_id,
         job_payload=job_payload,
         stage_index_hint=stage_index_hint,
     )
+    if not force_attach and not ui.stdout_is_interactive():
+        emit_cloud_followup_commands(context=context)
+        return 0
+    try:
+        log_mode = resolve_log_mode(None)
+    except ValueError as err:
+        raise SystemExit(str(err)) from err
     console = LocalStageConsole(
         job_id=context.job_id,
         job_name=context.job_name,
@@ -271,10 +314,6 @@ def attach_to_cloud_job(
         tracking_url=context.tracking_url,
     )
     console.emit_system(f"attached to cloud job {context.job_id}")
-    try:
-        log_mode = resolve_log_mode(None)
-    except ValueError as err:
-        raise SystemExit(str(err)) from err
     selected_worker_ids: tuple[str, ...] = ()
     current_stage_index = snapshot.stage_index
     _emit_cloud_log_mode_banner(
@@ -285,17 +324,13 @@ def attach_to_cloud_job(
     closed = False
     try:
         console.apply_snapshot(snapshot)
-        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        current_start_ms = max(
-            0,
-            now_ms - _DEFAULT_LOG_WINDOW_MS,
+        poller = FollowLogPoller(
+            start_ms=max(0, _now_ms() - _DEFAULT_LOG_WINDOW_MS),
+            end_ms=max(max(0, _now_ms() - _DEFAULT_LOG_WINDOW_MS) + 1, _now_ms()),
+            dedupe_limit=_ATTACH_DEDUPE_LIMIT,
+            max_drain_polls=_ATTACH_MAX_DRAIN_POLLS,
+            max_retryable_errors=_ATTACH_MAX_RETRYABLE_ERRORS,
         )
-        current_end_ms = max(current_start_ms + 1, now_ms)
-        current_cursor: str | None = None
-        seen_keys: set[tuple[str, str, str, str, str]] = set()
-        seen_order: deque[tuple[str, str, str, str, str]] = deque()
-        full_batch_polls = 0
-        log_retryable_error_count = 0
         status_retryable_error_count = 0
         next_summary_at = time.monotonic() + _ATTACH_SUMMARY_INTERVAL_SECONDS
         next_logs_at = 0.0
@@ -304,17 +339,13 @@ def attach_to_cloud_job(
         while True:
             now = time.monotonic()
             if now >= next_summary_at:
-                try:
-                    job_payload = client.cli_get_job(job_id=job_id)
-                except MacrodataApiError as err:
-                    if not _is_retryable_api_error(err):
-                        raise
-                    status_retryable_error_count += 1
-                    if status_retryable_error_count > _ATTACH_MAX_RETRYABLE_ERRORS:
-                        raise
-                    next_summary_at = now + retry_delay(status_retryable_error_count)
-                    continue
+                job_payload, status_retryable_error_count = call_with_retry(
+                    lambda: client.cli_get_job(job_id=job_id),
+                    retryable_error_count=status_retryable_error_count,
+                    max_retryable_errors=_ATTACH_MAX_RETRYABLE_ERRORS,
+                )
                 status_retryable_error_count = 0
+                refreshed_now = time.monotonic()
                 context, snapshot = _snapshot_and_context(
                     client=client,
                     job_id=job_id,
@@ -324,17 +355,15 @@ def attach_to_cloud_job(
                 stage_changed = snapshot.stage_index != current_stage_index
                 if stage_changed:
                     selected_worker_ids = ()
-                    current_cursor = None
-                    full_batch_polls = 0
-                    seen_keys.clear()
-                    seen_order.clear()
-                    reset_now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-                    current_start_ms = max(0, reset_now_ms - _DEFAULT_LOG_WINDOW_MS)
-                    current_end_ms = max(current_start_ms + 1, reset_now_ms)
+                    poller.reset_window(
+                        now_ms=_now_ms(),
+                        window_ms=_DEFAULT_LOG_WINDOW_MS,
+                    )
                     next_logs_at = now
                 console.apply_snapshot(snapshot)
                 current_stage_index = snapshot.stage_index
-                context = _context_for_stage(context, stage_index=current_stage_index)
+                if context.stage_index != current_stage_index:
+                    context = replace(context, stage_index=current_stage_index)
                 if stage_changed:
                     _emit_cloud_log_mode_banner(
                         console=console,
@@ -342,7 +371,7 @@ def attach_to_cloud_job(
                         running_workers=snapshot.worker_running,
                     )
                 terminal_seen = _job_status(job_payload) in _TERMINAL_JOB_STATUSES
-                next_summary_at = now + _ATTACH_SUMMARY_INTERVAL_SECONDS
+                next_summary_at = refreshed_now + _ATTACH_SUMMARY_INTERVAL_SECONDS
 
             logs_available = isinstance(job_payload.get("job"), dict) and bool(
                 cast(dict[str, Any], job_payload["job"]).get("logsAvailable", True)
@@ -350,119 +379,46 @@ def attach_to_cloud_job(
             if log_mode == "none":
                 logs_available = False
             if logs_available and now >= next_logs_at:
-                try:
-                    payload = client.cli_get_job_logs(
-                        job_id=job_id,
-                        start_ms=current_start_ms,
-                        end_ms=current_end_ms,
-                        cursor=current_cursor,
-                        limit=_DEFAULT_ATTACH_LOG_LIMIT,
-                        stage_index=current_stage_index,
-                        worker_id=None,
-                        source_type=None,
-                        source_name=None,
-                        severity=None,
-                        search=None,
-                    )
-                except MacrodataApiError as err:
-                    if not _is_retryable_api_error(err):
-                        raise
-                    log_retryable_error_count += 1
-                    if log_retryable_error_count > _ATTACH_MAX_RETRYABLE_ERRORS:
-                        raise
-                    time.sleep(retry_delay(log_retryable_error_count))
+                emit_entry, selected_worker_ids_getter = _emit_attach_entries(
+                    console=console,
+                    log_mode=log_mode,
+                    selected_worker_ids=selected_worker_ids,
+                )
+                result = poller.poll(
+                    fetch_page=lambda page_start_ms, page_end_ms, page_cursor: (
+                        client.cli_get_job_logs(
+                            job_id=job_id,
+                            start_ms=page_start_ms,
+                            end_ms=page_end_ms,
+                            cursor=page_cursor,
+                            limit=_DEFAULT_ATTACH_LOG_LIMIT,
+                            stage_index=current_stage_index,
+                            worker_id=None,
+                            source_type=None,
+                            source_name=None,
+                            severity=None,
+                            search=None,
+                        )
+                    ),
+                    emit_entry=emit_entry,
+                    now_ms=_now_ms,
+                )
+                selected_worker_ids = selected_worker_ids_getter()
+                if result.action == "drain":
+                    next_logs_at = time.monotonic() + _ATTACH_DRAIN_POLL_DELAY_SECONDS
                     continue
-                log_retryable_error_count = 0
-                entries = payload.get("entries")
-                if isinstance(entries, list):
-                    for entry in entries:
-                        if not isinstance(entry, dict):
-                            continue
-                        worker_id = _safe_text(entry.get("workerId"))
-                        selected_worker_id = (
-                            selected_worker_ids[0] if selected_worker_ids else None
-                        )
-                        should_emit = should_emit_worker_line(
-                            log_mode=log_mode,
-                            worker_id=worker_id,
-                            selected_worker_id=selected_worker_id,
-                            line=_safe_text(entry.get("line")),
-                            severity=entry.get("severity"),
-                        )
-                        if (
-                            log_mode == "one"
-                            and worker_id != "-"
-                            and not selected_worker_ids
-                        ):
-                            selected_worker_ids = (worker_id,)
-                            selected_worker_id = worker_id
-                            should_emit = should_emit_worker_line(
-                                log_mode=log_mode,
-                                worker_id=worker_id,
-                                selected_worker_id=selected_worker_id,
-                                line=_safe_text(entry.get("line")),
-                                severity=entry.get("severity"),
-                            )
-                        elif (
-                            log_mode in {"all", "errors"}
-                            and should_emit
-                            and worker_id != "-"
-                            and worker_id not in selected_worker_ids
-                        ):
-                            if len(selected_worker_ids) >= _ATTACH_MAX_LOGGED_WORKERS:
-                                continue
-                            selected_worker_ids = (*selected_worker_ids, worker_id)
-                        if not should_emit:
-                            continue
-                        key = _log_entry_key(entry)
-                        if key in seen_keys:
-                            continue
-                        console.emit_lines(
-                            worker_id=_log_worker_label(entry),
-                            lines=[_format_attach_log_line(entry)],
-                        )
-                        _remember_seen_key(
-                            key=key,
-                            seen_keys=seen_keys,
-                            seen_order=seen_order,
-                            limit=_ATTACH_DEDUPE_LIMIT,
-                        )
-                current_cursor = _next_log_cursor(payload)
-                if current_cursor is not None:
-                    full_batch_polls += 1
-                    if full_batch_polls < _ATTACH_MAX_DRAIN_POLLS:
-                        next_logs_at = (
-                            time.monotonic() + _ATTACH_DRAIN_POLL_DELAY_SECONDS
-                        )
-                        continue
-                    oldest_entry = (
-                        entries[0] if isinstance(entries, list) and entries else None
-                    )
-                    skipped_end_ms = current_end_ms
-                    if isinstance(oldest_entry, dict):
-                        parsed_oldest_ms = parse_epoch_ms(oldest_entry.get("ts"))
-                        if parsed_oldest_ms is not None:
-                            skipped_end_ms = parsed_oldest_ms
+                if result.action == "skip":
                     _warn_follow_skip(
                         context=context,
-                        start_ms=current_start_ms,
-                        end_ms=skipped_end_ms,
+                        start_ms=result.skipped_start_ms or poller.start_ms,
+                        end_ms=result.skipped_end_ms or poller.end_ms,
                         console=console,
                     )
-                    current_cursor = None
-                    full_batch_polls = 0
-                    current_start_ms = current_end_ms
-                    next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-                    current_end_ms = max(next_end_ms, current_start_ms + 1)
                     next_logs_at = time.monotonic()
                     continue
-                full_batch_polls = 0
-                current_start_ms = current_end_ms
-                next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-                current_end_ms = max(next_end_ms, current_start_ms + 1)
-                next_logs_at = now + _ATTACH_LOGS_INTERVAL_SECONDS
+                next_logs_at = time.monotonic() + _ATTACH_LOGS_INTERVAL_SECONDS
 
-            if terminal_seen and current_cursor is None:
+            if terminal_seen and poller.cursor is None:
                 console.emit_system(
                     f"cloud job {context.job_id} finished with status {_job_status(job_payload)}"
                 )

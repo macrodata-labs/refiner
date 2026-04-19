@@ -35,3 +35,10 @@ def stdin_is_interactive() -> bool:
         return sys.stdin.isatty()
     except Exception:  # pragma: no cover
         return False
+
+
+def stdout_is_interactive() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except Exception:  # pragma: no cover
+        return False

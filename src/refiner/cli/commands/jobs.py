@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 from argparse import SUPPRESS
-
 from refiner.cli.jobs.attach import cmd_jobs_attach
 from refiner.cli.jobs.control import cmd_jobs_cancel
 from refiner.cli.jobs.get import cmd_jobs_get

@@ -32,6 +32,7 @@ def cmd_jobs_attach(args: Namespace) -> int:
             client=client,
             job_id=args.job_id,
             initial_job_payload=payload,
+            force_attach=False,
         )
     except cloud_run.CloudAttachDetached:
         return 130
