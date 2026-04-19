@@ -793,10 +793,11 @@ def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
 def test_pipeline_launch_cloud_resume_from_job_id_posts_resume_request(
     monkeypatch,
 ) -> None:
-    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
-    monkeypatch.setattr(
-        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
-        lambda ref: True,
+    captured = _stub_cloud_submit(
+        monkeypatch,
+        manifest=lambda **_: (_ for _ in ()).throw(
+            AssertionError("should not build a fresh manifest for exact-id resume")
+        ),
     )
 
     result = read_jsonl("input.jsonl").launch_cloud(
@@ -811,6 +812,7 @@ def test_pipeline_launch_cloud_resume_from_job_id_posts_resume_request(
     request = cast(CloudRunResumeRequest, captured["resume_request"])
     assert request.selector.to_dict() == {"job_id": "job-previous"}
     assert request.name == "demo cloud"
+    assert request.manifest is None
     assert request.plan is not None
     assert "requested_num_workers" not in request.plan["stages"][0]
     assert request.stage_payloads is not None

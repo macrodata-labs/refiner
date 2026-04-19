@@ -198,11 +198,11 @@ class CloudLauncher(BaseLauncher):
         resolved_secrets = self._resolve_env_values(self.secrets)
         resolved_env = self._resolve_env_values(self.env)
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
-        manifest = self._resolve_cloud_manifest(secret_values=secret_values)
         selector = self.resume_selector
         merged_env = self._merged_env(resolved_secrets, resolved_env)
         try:
             if selector is None:
+                manifest = self._resolve_cloud_manifest(secret_values=secret_values)
                 stages = self._planned_stages()
                 compiled_plan = self._compiled_plan(stages, secret_values=secret_values)
                 stage_payloads = [
@@ -234,6 +234,11 @@ class CloudLauncher(BaseLauncher):
                 # Effective worker sizing comes from the prior job and explicit
                 # runtime_overrides, so resume planning uses a placeholder worker
                 # count and compiles the stage graph without runtime sizing.
+                manifest = (
+                    self._resolve_cloud_manifest(secret_values=secret_values)
+                    if selector.latest_compatible
+                    else None
+                )
                 stages = plan_pipeline_stages(self.pipeline, default_num_workers=1)
                 resp = client.cloud_resume_job(
                     request=CloudRunResumeRequest(
