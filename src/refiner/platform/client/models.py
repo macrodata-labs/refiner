@@ -199,68 +199,53 @@ def _update_cloud_run_request_payload(
     return payload
 
 
+class _CloudRuntimePayloadMixin:
+    num_workers: int | None
+    cpus_per_worker: int | None
+    mem_mb_per_worker: int | None
+    gpus_per_worker: int | None
+    gpu_type: str | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "gpu_type",
+            _validate_cloud_runtime_fields(
+                num_workers=self.num_workers,
+                cpus_per_worker=self.cpus_per_worker,
+                mem_mb_per_worker=self.mem_mb_per_worker,
+                gpus_per_worker=self.gpus_per_worker,
+                gpu_type=self.gpu_type,
+                require_complete_gpu=False,
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return _cloud_runtime_payload(
+            num_workers=self.num_workers,
+            cpus_per_worker=self.cpus_per_worker,
+            mem_mb_per_worker=self.mem_mb_per_worker,
+            gpus_per_worker=self.gpus_per_worker,
+            gpu_type=self.gpu_type,
+        )
+
+
 @dataclass(frozen=True, slots=True)
-class CloudRuntimeConfig:
+class CloudRuntimeConfig(_CloudRuntimePayloadMixin):
     num_workers: int
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpus_per_worker: int | None = None
     gpu_type: str | None = None
 
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "gpu_type",
-            _validate_cloud_runtime_fields(
-                num_workers=self.num_workers,
-                cpus_per_worker=self.cpus_per_worker,
-                mem_mb_per_worker=self.mem_mb_per_worker,
-                gpus_per_worker=self.gpus_per_worker,
-                gpu_type=self.gpu_type,
-                require_complete_gpu=False,
-            ),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return _cloud_runtime_payload(
-            num_workers=self.num_workers,
-            cpus_per_worker=self.cpus_per_worker,
-            mem_mb_per_worker=self.mem_mb_per_worker,
-            gpus_per_worker=self.gpus_per_worker,
-            gpu_type=self.gpu_type,
-        )
-
 
 @dataclass(frozen=True, slots=True)
-class CloudRuntimeOverrides:
+class CloudRuntimeOverrides(_CloudRuntimePayloadMixin):
     num_workers: int | None = None
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpus_per_worker: int | None = None
     gpu_type: str | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "gpu_type",
-            _validate_cloud_runtime_fields(
-                num_workers=self.num_workers,
-                cpus_per_worker=self.cpus_per_worker,
-                mem_mb_per_worker=self.mem_mb_per_worker,
-                gpus_per_worker=self.gpus_per_worker,
-                gpu_type=self.gpu_type,
-                require_complete_gpu=False,
-            ),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return _cloud_runtime_payload(
-            num_workers=self.num_workers,
-            cpus_per_worker=self.cpus_per_worker,
-            mem_mb_per_worker=self.mem_mb_per_worker,
-            gpus_per_worker=self.gpus_per_worker,
-            gpu_type=self.gpu_type,
-        )
 
 
 @dataclass(frozen=True, slots=True)

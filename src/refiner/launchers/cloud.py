@@ -29,6 +29,7 @@ from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
+from refiner.pipeline.planning import plan_pipeline_stages
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -196,12 +197,12 @@ class CloudLauncher(BaseLauncher):
         resolved_secrets = self._resolve_env_values(self.secrets)
         resolved_env = self._resolve_env_values(self.env)
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
-        stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
         selector = self.resume_selector
         merged_env = self._merged_env(resolved_secrets, resolved_env)
         try:
             if selector is None:
+                stages = self._planned_stages()
                 compiled_plan = self._compiled_plan(stages, secret_values=secret_values)
                 stage_payloads = [
                     StagePayload(
@@ -228,6 +229,11 @@ class CloudLauncher(BaseLauncher):
                     )
                 )
             else:
+                # Resume requests only need stage topology plus serialized pipeline payloads.
+                # Effective worker sizing comes from the prior job and explicit
+                # runtime_overrides, so resume planning uses a placeholder worker
+                # count and strips runtime fields later.
+                stages = plan_pipeline_stages(self.pipeline, default_num_workers=1)
                 resp = client.cloud_resume_job(
                     request=CloudRunResumeRequest(
                         selector=selector,

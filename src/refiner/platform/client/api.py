@@ -167,6 +167,12 @@ class MacrodataClient:
     def close(self) -> None:
         self._http_client.close()
 
+    def __enter__(self) -> MacrodataClient:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
     def __del__(self) -> None:  # pragma: no cover
         try:
             self.close()
