@@ -6,6 +6,15 @@ from datetime import datetime
 from typing import Any, cast
 
 from refiner.cli import jobs
+from refiner.cli.jobs import common as jobs_common
+from refiner.cli.jobs import logs as jobs_logs
+from refiner.cli.jobs import get as jobs_get_module
+from refiner.cli.jobs import list as jobs_list_module
+from refiner.cli.jobs import attach as jobs_attach_module
+from refiner.cli.jobs import manifest as jobs_manifest_module
+from refiner.cli.jobs import metrics as jobs_metrics_module
+from refiner.cli.jobs import workers as jobs_workers_module
+from refiner.cli.jobs import control as jobs_control_module
 from refiner.platform.client.api import MacrodataApiError
 
 
@@ -180,8 +189,19 @@ class _FakeClient:
         }
 
 
+def _patch_job_client(monkeypatch, factory) -> None:
+    monkeypatch.setattr(jobs_list_module, "_client", factory)
+    monkeypatch.setattr(jobs_get_module, "_client", factory)
+    monkeypatch.setattr(jobs_attach_module, "_client", factory)
+    monkeypatch.setattr(jobs_logs, "_client", factory)
+    monkeypatch.setattr(jobs_manifest_module, "_client", factory)
+    monkeypatch.setattr(jobs_metrics_module, "_client", factory)
+    monkeypatch.setattr(jobs_workers_module, "_client", factory)
+    monkeypatch.setattr(jobs_control_module, "_client", factory)
+
+
 def test_jobs_list_plain_output(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_list(
         Namespace(status=None, kind=None, me=False, limit=20, cursor=None, json=False)
@@ -195,7 +215,7 @@ def test_jobs_list_plain_output(monkeypatch, capsys) -> None:
 
 
 def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_get(Namespace(job_id="job-1", json=False))
     out = capsys.readouterr()
@@ -214,7 +234,7 @@ def test_jobs_attach_calls_cloud_attach(monkeypatch) -> None:
         captured.update(kwargs)
         return 0
 
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
     monkeypatch.setattr(
         "refiner.cli.cloud_run.attach_to_cloud_job",
         _fake_attach_to_cloud_job,
@@ -237,7 +257,7 @@ def test_jobs_attach_rejects_non_cloud_job(monkeypatch, capsys) -> None:
             cast(dict[str, object], payload["job"])["executorKind"] = "local"
             return payload
 
-    monkeypatch.setattr(jobs, "_client", lambda: _LocalClient())
+    _patch_job_client(monkeypatch, lambda: _LocalClient())
 
     rc = jobs.cmd_jobs_attach(Namespace(job_id="job-1"))
     out = capsys.readouterr()
@@ -249,7 +269,7 @@ def test_jobs_attach_rejects_non_cloud_job(monkeypatch, capsys) -> None:
 def test_jobs_attach_routes_attach_api_errors_through_cli_handler(
     monkeypatch, capsys
 ) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
     monkeypatch.setattr(
         "refiner.cli.cloud_run.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(
@@ -265,7 +285,7 @@ def test_jobs_attach_routes_attach_api_errors_through_cli_handler(
 
 
 def test_jobs_logs_json_output(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -292,7 +312,7 @@ def test_jobs_logs_json_output(monkeypatch, capsys) -> None:
 
 
 def test_jobs_logs_follow_rejects_json(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -318,7 +338,7 @@ def test_jobs_logs_follow_rejects_json(monkeypatch, capsys) -> None:
 
 
 def test_jobs_logs_follow_rejects_cursor(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -351,7 +371,7 @@ def test_jobs_logs_passes_cursor_to_client(monkeypatch, capsys) -> None:
             captured.update(kwargs)
             return super().cli_get_job_logs(**kwargs)
 
-    monkeypatch.setattr(jobs, "_client", lambda: _CursorClient())
+    _patch_job_client(monkeypatch, lambda: _CursorClient())
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -374,7 +394,7 @@ def test_jobs_logs_passes_cursor_to_client(monkeypatch, capsys) -> None:
 
     assert rc == 0
     assert captured["cursor"] == "cursor-1"
-    assert captured["limit"] == jobs._DEFAULT_LOG_PAGE_LIMIT
+    assert captured["limit"] == jobs_logs._DEFAULT_LOG_PAGE_LIMIT
 
 
 def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None:
@@ -417,7 +437,7 @@ def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None
             }
 
     client = _FollowClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _patch_job_client(monkeypatch, lambda: client)
 
     sleep_calls = {"count": 0}
 
@@ -426,7 +446,7 @@ def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None
         if sleep_calls["count"] >= 2:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
+    monkeypatch.setattr(jobs_logs.time, "sleep", _fake_sleep)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -485,14 +505,14 @@ def test_jobs_logs_follow_returns_when_job_is_terminal(monkeypatch, capsys) -> N
             return payload
 
     client = _TerminalClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _patch_job_client(monkeypatch, lambda: client)
 
     sleep_calls = {"count": 0}
 
     def _fake_sleep(_: float) -> None:
         sleep_calls["count"] += 1
 
-    monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
+    monkeypatch.setattr(jobs_logs.time, "sleep", _fake_sleep)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -567,8 +587,8 @@ def test_jobs_logs_follow_drains_backlog_before_terminal_exit(
             return payload
 
     client = _BacklogClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
-    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+    _patch_job_client(monkeypatch, lambda: client)
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -639,14 +659,14 @@ def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
             return payload
 
     client = _BusyClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _patch_job_client(monkeypatch, lambda: client)
 
     sleep_calls = {"count": 0}
 
     def _fake_sleep(_: float) -> None:
         sleep_calls["count"] += 1
 
-    monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
+    monkeypatch.setattr(jobs_logs.time, "sleep", _fake_sleep)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -682,7 +702,7 @@ def test_jobs_logs_follow_skips_backlog_to_stay_live(monkeypatch, capsys) -> Non
         def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
             self.log_calls += 1
             cursor = kwargs.get("cursor")
-            if self.log_calls <= jobs._FOLLOW_LOG_MAX_DRAIN_POLLS:
+            if self.log_calls <= jobs_logs._FOLLOW_LOG_MAX_DRAIN_POLLS:
                 return {
                     "entries": [
                         {
@@ -718,12 +738,12 @@ def test_jobs_logs_follow_skips_backlog_to_stay_live(monkeypatch, capsys) -> Non
 
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
-            if self.log_calls > jobs._FOLLOW_LOG_MAX_DRAIN_POLLS:
+            if self.log_calls > jobs_logs._FOLLOW_LOG_MAX_DRAIN_POLLS:
                 cast(dict[str, object], payload["job"])["status"] = "completed"
             return payload
 
-    monkeypatch.setattr(jobs, "_client", lambda: _SkippingClient())
-    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+    _patch_job_client(monkeypatch, lambda: _SkippingClient())
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -759,7 +779,7 @@ def test_jobs_logs_follow_sleeps_after_bounded_drain_polls(monkeypatch, capsys) 
 
         def cli_get_job_logs(self, **_: object) -> dict[str, object]:
             self.log_calls += 1
-            if self.log_calls > jobs._FOLLOW_LOG_MAX_DRAIN_POLLS:
+            if self.log_calls > jobs_logs._FOLLOW_LOG_MAX_DRAIN_POLLS:
                 return {
                     "entries": [
                         {
@@ -799,14 +819,14 @@ def test_jobs_logs_follow_sleeps_after_bounded_drain_polls(monkeypatch, capsys) 
             return payload
 
     client = _HotClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _patch_job_client(monkeypatch, lambda: client)
 
     sleep_calls = {"count": 0}
 
     def _fake_sleep(_: float) -> None:
         sleep_calls["count"] += 1
 
-    monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
+    monkeypatch.setattr(jobs_logs.time, "sleep", _fake_sleep)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -829,8 +849,8 @@ def test_jobs_logs_follow_sleeps_after_bounded_drain_polls(monkeypatch, capsys) 
 
     assert rc == 0
     assert "line-1" in out.out
-    assert f"line-{jobs._FOLLOW_LOG_MAX_DRAIN_POLLS}" in out.out
-    assert sleep_calls["count"] == jobs._FOLLOW_LOG_MAX_DRAIN_POLLS
+    assert f"line-{jobs_logs._FOLLOW_LOG_MAX_DRAIN_POLLS}" in out.out
+    assert sleep_calls["count"] == jobs_logs._FOLLOW_LOG_MAX_DRAIN_POLLS
     assert client.job_calls == 2
 
 
@@ -870,8 +890,8 @@ def test_jobs_logs_follow_ignores_transient_status_probe_errors(
             cast(dict[str, object], payload["job"])["status"] = "completed"
             return payload
 
-    monkeypatch.setattr(jobs, "_client", lambda: _FlakyStatusClient())
-    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+    _patch_job_client(monkeypatch, lambda: _FlakyStatusClient())
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -919,7 +939,7 @@ def test_jobs_logs_follow_advances_window_after_transient_status_probe_error(
             return payload
 
     client = _FlakyStatusClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _patch_job_client(monkeypatch, lambda: client)
     now_values = iter([10, 15])
 
     class _FakeDateTime:
@@ -927,8 +947,8 @@ def test_jobs_logs_follow_advances_window_after_transient_status_probe_error(
         def now(*, tz=None):
             return datetime.fromtimestamp(next(now_values), tz=tz)
 
-    monkeypatch.setattr(jobs, "datetime", _FakeDateTime)
-    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+    monkeypatch.setattr(jobs_logs, "datetime", _FakeDateTime)
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -985,8 +1005,8 @@ def test_jobs_logs_follow_retries_transient_log_fetch_errors(
                 cast(dict[str, object], payload["job"])["status"] = "completed"
             return payload
 
-    monkeypatch.setattr(jobs, "_client", lambda: _FlakyLogsClient())
-    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+    _patch_job_client(monkeypatch, lambda: _FlakyLogsClient())
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -1040,7 +1060,7 @@ def test_jobs_logs_follow_flushes_stream_output(monkeypatch) -> None:
             return payload
 
     client = _TerminalClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _patch_job_client(monkeypatch, lambda: client)
 
     recorded_flushes: list[bool] = []
     original_print = builtins.print
@@ -1078,7 +1098,7 @@ def test_jobs_logs_non_follow_returns_clean_interrupt_exit(monkeypatch) -> None:
         def cli_get_job_logs(self, **_: object) -> dict[str, object]:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr(jobs, "_client", lambda: _InterruptClient())
+    _patch_job_client(monkeypatch, lambda: _InterruptClient())
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -1109,7 +1129,7 @@ def test_jobs_logs_follow_surfaces_permanent_status_probe_errors(monkeypatch) ->
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             raise MacrodataApiError(status=404, message="missing")
 
-    monkeypatch.setattr(jobs, "_client", lambda: _PermanentStatusErrorClient())
+    _patch_job_client(monkeypatch, lambda: _PermanentStatusErrorClient())
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -1149,8 +1169,8 @@ def test_jobs_logs_follow_uses_larger_default_limit(monkeypatch, capsys) -> None
             cast(dict[str, object], payload["job"])["status"] = "completed"
             return payload
 
-    monkeypatch.setattr(jobs, "_client", lambda: _LimitClient())
-    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+    _patch_job_client(monkeypatch, lambda: _LimitClient())
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -1172,7 +1192,7 @@ def test_jobs_logs_follow_uses_larger_default_limit(monkeypatch, capsys) -> None
     _ = capsys.readouterr()
 
     assert rc == 0
-    assert captured["limit"] == jobs._DEFAULT_FOLLOW_LOG_PAGE_LIMIT
+    assert captured["limit"] == jobs_logs._DEFAULT_FOLLOW_LOG_PAGE_LIMIT
 
 
 def test_jobs_resource_metrics_plain_output_accepts_second_timestamps(
@@ -1198,7 +1218,7 @@ def test_jobs_resource_metrics_plain_output_accepts_second_timestamps(
                 },
             }
 
-    monkeypatch.setattr(jobs, "_client", lambda: _SecondsClient())
+    _patch_job_client(monkeypatch, lambda: _SecondsClient())
 
     rc = jobs.cmd_jobs_resource_metrics(
         Namespace(
@@ -1237,7 +1257,7 @@ def test_jobs_list_plain_output_ignores_invalid_timestamps(monkeypatch, capsys) 
                 "nextCursor": None,
             }
 
-    monkeypatch.setattr(jobs, "_client", lambda: _InvalidTimestampClient())
+    _patch_job_client(monkeypatch, lambda: _InvalidTimestampClient())
 
     rc = jobs.cmd_jobs_list(
         Namespace(status=None, kind=None, limit=20, cursor=None, me=False, json=False)
@@ -1251,7 +1271,7 @@ def test_jobs_list_plain_output_ignores_invalid_timestamps(monkeypatch, capsys) 
 
 
 def test_jobs_metrics_plain_output(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_metrics(
         Namespace(job_id="job-1", stage_index=0, step=None, metric=[], json=False)
@@ -1265,7 +1285,7 @@ def test_jobs_metrics_plain_output(monkeypatch, capsys) -> None:
 
 
 def test_jobs_cancel_plain_output(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_cancel(Namespace(job_id="job-1", json=False))
     out = capsys.readouterr()
@@ -1285,7 +1305,7 @@ def test_jobs_cancel_plain_output_accepts_camel_case(monkeypatch, capsys) -> Non
                 "failedOperations": 0,
             }
 
-    monkeypatch.setattr(jobs, "_client", lambda: _CamelCancelClient())
+    _patch_job_client(monkeypatch, lambda: _CamelCancelClient())
 
     rc = jobs.cmd_jobs_cancel(Namespace(job_id="job-1", json=False))
     out = capsys.readouterr()
@@ -1296,7 +1316,7 @@ def test_jobs_cancel_plain_output_accepts_camel_case(monkeypatch, capsys) -> Non
 
 
 def test_jobs_workers_plain_output_shows_next_cursor(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_workers(
         Namespace(job_id="job-1", stage=0, limit=20, cursor=None, json=False)
@@ -1320,7 +1340,7 @@ def test_jobs_workers_plain_output_sanitizes_next_cursor(monkeypatch, capsys) ->
             }
             return payload
 
-    monkeypatch.setattr(jobs, "_client", lambda: _CursorClient())
+    _patch_job_client(monkeypatch, lambda: _CursorClient())
 
     rc = jobs.cmd_jobs_workers(
         Namespace(job_id="job-1", stage=0, limit=20, cursor=None, json=False)
@@ -1333,7 +1353,7 @@ def test_jobs_workers_plain_output_sanitizes_next_cursor(monkeypatch, capsys) ->
 
 
 def test_jobs_manifest_plain_output(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_manifest(
         Namespace(
@@ -1355,7 +1375,7 @@ def test_jobs_manifest_plain_output(monkeypatch, capsys) -> None:
 def test_jobs_manifest_keeps_runtime_when_extra_sections_requested(
     monkeypatch, capsys
 ) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_manifest(
         Namespace(
@@ -1387,7 +1407,7 @@ def test_jobs_manifest_sanitizes_script_text(monkeypatch, capsys) -> None:
             }
             return payload
 
-    monkeypatch.setattr(jobs, "_client", lambda: _ManifestClient())
+    _patch_job_client(monkeypatch, lambda: _ManifestClient())
 
     rc = jobs.cmd_jobs_manifest(
         Namespace(
@@ -1412,7 +1432,7 @@ def test_jobs_get_missing_payload_reports_to_stderr(monkeypatch, capsys) -> None
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             return {"unexpected": job_id}
 
-    monkeypatch.setattr(jobs, "_client", lambda: _MissingJobClient())
+    _patch_job_client(monkeypatch, lambda: _MissingJobClient())
 
     rc = jobs.cmd_jobs_get(Namespace(job_id="job-1", json=False))
     out = capsys.readouterr()
@@ -1427,7 +1447,7 @@ def test_jobs_metrics_missing_payload_reports_to_stderr(monkeypatch, capsys) -> 
         def cli_get_job_step_metrics(self, **_: object) -> dict[str, object]:
             return {"jobId": "job-1"}
 
-    monkeypatch.setattr(jobs, "_client", lambda: _MissingMetricsClient())
+    _patch_job_client(monkeypatch, lambda: _MissingMetricsClient())
 
     rc = jobs.cmd_jobs_metrics(
         Namespace(
@@ -1446,7 +1466,7 @@ def test_jobs_metrics_missing_payload_reports_to_stderr(monkeypatch, capsys) -> 
 
 
 def test_jobs_metrics_rejects_metric_without_step(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_metrics(
         Namespace(
@@ -1465,7 +1485,7 @@ def test_jobs_metrics_rejects_metric_without_step(monkeypatch, capsys) -> None:
 
 
 def test_jobs_logs_search_requires_explicit_scope(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -1491,7 +1511,7 @@ def test_jobs_logs_search_requires_explicit_scope(monkeypatch, capsys) -> None:
 
 
 def test_jobs_logs_search_rejects_large_limits(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -1517,7 +1537,7 @@ def test_jobs_logs_search_rejects_large_limits(monkeypatch, capsys) -> None:
 
 
 def test_jobs_logs_search_requires_explicit_window(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_logs(
         Namespace(
@@ -1570,7 +1590,7 @@ def test_jobs_metrics_passes_metric_labels(monkeypatch) -> None:
                 ],
             }
 
-    monkeypatch.setattr(jobs, "_client", lambda: _CapturingClient())
+    _patch_job_client(monkeypatch, lambda: _CapturingClient())
 
     rc = jobs.cmd_jobs_metrics(
         Namespace(
@@ -1587,7 +1607,7 @@ def test_jobs_metrics_passes_metric_labels(monkeypatch) -> None:
 
 
 def test_jobs_resource_metrics_rejects_too_many_worker_ids(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_resource_metrics(
         Namespace(
@@ -1616,7 +1636,7 @@ def test_jobs_resource_metrics_deduplicates_worker_ids(monkeypatch) -> None:
             observed.update(kwargs)
             return super().cli_get_job_metrics(**kwargs)
 
-    monkeypatch.setattr(jobs, "_client", lambda: _CapturingClient())
+    _patch_job_client(monkeypatch, lambda: _CapturingClient())
 
     rc = jobs.cmd_jobs_resource_metrics(
         Namespace(
@@ -1638,9 +1658,9 @@ def test_jobs_resource_metrics_deduplicates_worker_ids(monkeypatch) -> None:
 def test_jobs_error_reports_to_stderr(monkeypatch, capsys) -> None:
     class _FailingClient(_FakeClient):
         def cli_list_jobs(self, **_: object) -> dict[str, object]:
-            raise jobs.MacrodataApiError(status=500, message="boom")
+            raise MacrodataApiError(status=500, message="boom")
 
-    monkeypatch.setattr(jobs, "_client", lambda: _FailingClient())
+    _patch_job_client(monkeypatch, lambda: _FailingClient())
 
     rc = jobs.cmd_jobs_list(
         Namespace(status=None, kind=None, me=False, limit=20, cursor=None, json=False)
@@ -1653,7 +1673,7 @@ def test_jobs_error_reports_to_stderr(monkeypatch, capsys) -> None:
 
 
 def test_print_table_handles_ragged_rows(capsys) -> None:
-    jobs._print_table([["A", "B", "C"], ["1", "2"], ["3"]])
+    jobs_common._print_table([["A", "B", "C"], ["1", "2"], ["3"]])
     out = capsys.readouterr()
 
     assert "A  B  C" in out.out

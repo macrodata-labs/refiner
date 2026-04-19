@@ -121,7 +121,7 @@ def test_parser_has_resource_metrics_command() -> None:
 
 
 def test_main_dispatches(monkeypatch) -> None:
-    monkeypatch.setattr("refiner.cli.main.cmd_whoami", lambda args: 7)
+    monkeypatch.setattr("refiner.cli.commands.auth.cmd_whoami", lambda args: 7)
     rc = main(["whoami"])
     assert rc == 7
 
