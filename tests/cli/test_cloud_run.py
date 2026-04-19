@@ -60,6 +60,22 @@ def _job_payload(*, stage_index: int, status: str) -> dict[str, object]:
     }
 
 
+def test_active_stage_prefers_failed_started_stage_over_later_queued_stage() -> None:
+    stage_index, total_stages = cloud_run._active_stage(
+        {
+            "status": "failed",
+            "stages": [
+                {"index": 0, "status": "completed"},
+                {"index": 1, "status": "failed"},
+                {"index": 2, "status": "queued"},
+            ],
+        }
+    )
+
+    assert stage_index == 1
+    assert total_stages == 3
+
+
 def _log_entry(
     *, ts: int, worker_id: str, severity: str, line: str
 ) -> dict[str, object]:
@@ -532,3 +548,61 @@ def test_attach_to_cloud_job_errors_mode_does_not_spend_worker_cap_on_info_only_
 
     assert rc == 0
     assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-5"]
+
+
+def test_attach_to_cloud_job_all_mode_suppresses_workers_beyond_cap(
+    monkeypatch,
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            payload = _job_payload(stage_index=0, status="completed")
+            job = cast(dict[str, object], payload["job"])
+            worker_count = cloud_run._ATTACH_MAX_LOGGED_WORKERS + 1
+            job["runningWorkers"] = worker_count
+            job["totalWorkers"] = worker_count
+            stage = cast(list[dict[str, object]], job["stages"])[0]
+            stage["runningWorkers"] = worker_count
+            stage["totalWorkers"] = worker_count
+            return payload
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            entries = [
+                _log_entry(
+                    ts=1_700_000_002_000 + index,
+                    worker_id=f"worker-{index}",
+                    severity="info",
+                    line=f"line-{index}",
+                )
+                for index in range(1, cloud_run._ATTACH_MAX_LOGGED_WORKERS + 2)
+            ]
+            return {"entries": entries, "hasOlder": False, "nextCursor": None}
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setenv("REFINER_LOCAL_LOGS", "all")
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert [worker_id for worker_id, _ in fake_console.emitted_lines] == [
+        f"worker-{index}"
+        for index in range(1, cloud_run._ATTACH_MAX_LOGGED_WORKERS + 1)
+    ]

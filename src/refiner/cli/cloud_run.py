@@ -39,6 +39,7 @@ _ATTACH_DEDUPE_LIMIT = 100_000
 _ATTACH_MAX_DRAIN_POLLS = 5
 _ATTACH_DRAIN_POLL_DELAY_SECONDS = 0.1
 _ATTACH_MAX_RETRYABLE_ERRORS = 5
+_STAGE_NOT_STARTED_STATUSES = {"queued", "pending"}
 
 
 class CloudAttachDetached(KeyboardInterrupt):
@@ -198,6 +199,15 @@ def _active_stage(job: dict[str, Any]) -> tuple[int, int]:
     stages = job.get("stages")
     if not isinstance(stages, list) or not stages:
         return 0, 1
+    job_status = _safe_text(job.get("status")).lower()
+    if job_status in _TERMINAL_JOB_STATUSES and job_status != "completed":
+        for index in range(len(stages) - 1, -1, -1):
+            stage = stages[index]
+            if not isinstance(stage, dict):
+                continue
+            status = _safe_text(stage.get("status")).lower()
+            if status not in _STAGE_NOT_STARTED_STATUSES:
+                return int(stage.get("index", index) or index), len(stages)
     for stage in stages:
         if not isinstance(stage, dict):
             continue
@@ -481,8 +491,9 @@ def attach_to_cloud_job(
                             and should_emit
                             and worker_id != "-"
                             and worker_id not in selected_worker_ids
-                            and len(selected_worker_ids) < _ATTACH_MAX_LOGGED_WORKERS
                         ):
+                            if len(selected_worker_ids) >= _ATTACH_MAX_LOGGED_WORKERS:
+                                continue
                             selected_worker_ids = (*selected_worker_ids, worker_id)
                         if not should_emit:
                             continue
