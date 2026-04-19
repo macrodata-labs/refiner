@@ -341,6 +341,44 @@ def test_local_stage_console_omits_rundir_row_when_absent(
     assert any("Runtime:" in line for line in header_lines)
 
 
+def test_local_stage_console_apply_snapshot_updates_stage_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: False)
+    console = LocalStageConsole(
+        job_id="job-1",
+        job_name="demo",
+        rundir=None,
+        stage_index=0,
+        total_stages=2,
+        stage_workers=1,
+        tracking_url=None,
+    )
+    try:
+        console.apply_snapshot(
+            LocalStageSnapshot(
+                job_id="job-1",
+                job_name="demo",
+                rundir=None,
+                stage_index=1,
+                total_stages=3,
+                stage_workers=4,
+                tracking_url=None,
+                status="running",
+                worker_total=4,
+                worker_running=2,
+                worker_completed=1,
+                worker_failed=0,
+                elapsed_seconds=5.0,
+            )
+        )
+    finally:
+        console.close()
+
+    assert console._stage_index == 1
+    assert console._total_stages == 3
+
+
 def test_local_stage_console_formats_system_lines_without_worker_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

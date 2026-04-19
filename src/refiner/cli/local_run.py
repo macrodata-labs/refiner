@@ -626,12 +626,16 @@ class LocalStageConsole:
         self._render(force=True)
 
     def apply_snapshot(self, snapshot: LocalStageSnapshot) -> None:
+        previous_stage_index = self._stage_index
+        previous_total_stages = self._total_stages
         previous_status = self._status
         previous_total = self._worker_total
         previous_running = self._worker_running
         previous_completed = self._worker_completed
         previous_failed = self._worker_failed
         previous_elapsed_seconds = int(self._elapsed_seconds)
+        self._stage_index = snapshot.stage_index
+        self._total_stages = snapshot.total_stages
         self._status = snapshot.status
         self._worker_total = snapshot.worker_total
         self._worker_running = snapshot.worker_running
@@ -639,7 +643,9 @@ class LocalStageConsole:
         self._worker_failed = snapshot.worker_failed
         self._elapsed_seconds = snapshot.elapsed_seconds
         if (
-            self._status != previous_status
+            self._stage_index != previous_stage_index
+            or self._total_stages != previous_total_stages
+            or self._status != previous_status
             or self._worker_total != previous_total
             or self._worker_running != previous_running
             or self._worker_completed != previous_completed
