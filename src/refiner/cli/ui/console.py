@@ -191,7 +191,7 @@ def should_emit_worker_line(
         return selected_worker_id is None or worker_id == selected_worker_id
     if log_mode == "errors":
         if isinstance(severity, str):
-            return severity.strip().lower() == "error"
+            return severity.strip().lower() in {"error", "critical", "fatal"}
         match = _LOGURU_LINE_RE.match(line)
         return match is not None and match.group("level").upper() in {
             "ERROR",

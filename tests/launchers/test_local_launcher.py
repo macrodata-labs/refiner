@@ -1570,6 +1570,56 @@ def test_local_launcher_stops_after_failed_stage(
     assert launched == [0]
 
 
+def test_local_launcher_preserves_reducer_stage_resource_opt_out(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = read_jsonl(str(tmp_path / "missing.jsonl"))
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-reducer-resources",
+        num_workers=1,
+        gpus_per_worker=1,
+    )
+
+    stages = [
+        PlannedStage(
+            index=0,
+            name="stage_0",
+            pipeline=pipeline,
+            compute=StageComputeRequirements(num_workers=1),
+        ),
+        PlannedStage(
+            index=1,
+            name="stage_1",
+            pipeline=pipeline,
+            compute=StageComputeRequirements(
+                num_workers=1,
+                inherit_launcher_resources=False,
+            ),
+        ),
+    ]
+    seen_gpu_hints: list[int | None] = []
+
+    monkeypatch.setattr(launcher, "_planned_stages", lambda: stages)
+
+    def fake_launch_stage(*, stage):  # noqa: ANN001
+        seen_gpu_hints.append(stage.compute.gpus_per_worker)
+        return LaunchStats(
+            job_id="job-1",
+            workers=1,
+            claimed=1,
+            completed=1,
+            failed=0,
+            output_rows=0,
+        )
+
+    monkeypatch.setattr(launcher, "_launch_stage", fake_launch_stage)
+
+    launcher.launch()
+
+    assert seen_gpu_hints == [1, None]
+
+
 def test_local_launcher_does_not_force_platform_terminal_state(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -762,6 +762,55 @@ def test_attach_to_cloud_job_shows_only_errors_in_errors_mode(monkeypatch) -> No
     assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-2"]
 
 
+@pytest.mark.parametrize("severity", ["critical", "fatal"])
+def test_attach_to_cloud_job_errors_mode_shows_critical_and_fatal_lines(
+    monkeypatch, severity: str
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    _log_entry(
+                        ts=1_700_000_002_001,
+                        worker_id="worker-2",
+                        severity=severity,
+                        line=f"{severity} line",
+                    )
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setenv("REFINER_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-2"]
+
+
 def test_attach_to_cloud_job_errors_mode_falls_back_to_log_line_when_severity_missing(
     monkeypatch,
 ) -> None:

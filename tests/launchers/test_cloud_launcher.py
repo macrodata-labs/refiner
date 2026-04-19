@@ -684,6 +684,64 @@ def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_does_not_raise_wi
     assert result.job_id == "job-123"
 
 
+def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    stage_zero = read_jsonl("input-a.jsonl")
+    stage_one = read_jsonl("input-b.jsonl")
+    monkeypatch.setattr(
+        "refiner.launchers.base.plan_pipeline_stages",
+        lambda pipeline, default_num_workers: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=stage_zero,
+                compute=StageComputeRequirements(num_workers=2),
+            ),
+            PlannedStage(
+                index=1,
+                name="stage_1",
+                pipeline=stage_one,
+                compute=StageComputeRequirements(
+                    num_workers=1,
+                    inherit_launcher_resources=False,
+                ),
+            ),
+        ],
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        cpus_per_worker=4,
+        mem_mb_per_worker=8192,
+        gpus_per_worker=1,
+        gpu_type="h100",
+    )
+
+    request = cast(CloudRunCreateRequest, captured["request"])
+    assert request.plan["stages"][0]["cpus_per_worker"] == 4
+    assert request.plan["stages"][0]["memory_mb_per_worker"] == 8192
+    assert request.plan["stages"][0]["gpus_per_worker"] == 1
+    assert request.plan["stages"][0]["gpu_type"] == "h100"
+    assert "cpus_per_worker" not in request.plan["stages"][1]
+    assert "memory_mb_per_worker" not in request.plan["stages"][1]
+    assert "gpus_per_worker" not in request.plan["stages"][1]
+    assert "gpu_type" not in request.plan["stages"][1]
+    assert request.stage_payloads[0].runtime.cpus_per_worker == 4
+    assert request.stage_payloads[0].runtime.mem_mb_per_worker == 8192
+    assert request.stage_payloads[0].runtime.gpus_per_worker == 1
+    assert request.stage_payloads[0].runtime.gpu_type == "h100"
+    assert request.stage_payloads[1].runtime.cpus_per_worker is None
+    assert request.stage_payloads[1].runtime.mem_mb_per_worker is None
+    assert request.stage_payloads[1].runtime.gpus_per_worker is None
+    assert request.stage_payloads[1].runtime.gpu_type is None
+
+
 def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
     monkeypatch, capsys
 ) -> None:

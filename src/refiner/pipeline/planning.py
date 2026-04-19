@@ -39,6 +39,7 @@ class StageComputeRequirements:
     memory_mb_per_worker: int | None = None
     gpus_per_worker: int | None = None
     gpu_type: str | None = None
+    inherit_launcher_resources: bool = True
 
     def to_stage_plan_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"requested_num_workers": self.num_workers}
@@ -477,7 +478,10 @@ def plan_pipeline_stages(
                 index=1,
                 name=f"{stage_base_name}_stage_1",
                 pipeline=reducer_stage,
-                compute=StageComputeRequirements(num_workers=1),
+                compute=StageComputeRequirements(
+                    num_workers=1,
+                    inherit_launcher_resources=False,
+                ),
             ),
         ]
 
