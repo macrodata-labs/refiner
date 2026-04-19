@@ -61,8 +61,8 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert resp.workspace_slug == "macrodata"
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/cloud/runs"
-    assert captured["api_key"] == "md_test"
     assert captured["base_url"] == "https://example.com"
+    assert "http_client" in captured
     json_payload = cast(dict[str, object], captured["json_payload"])
     assert json_payload["executor"] == {
         "type": "macrodata-cloud",

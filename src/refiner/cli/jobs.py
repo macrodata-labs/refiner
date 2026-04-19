@@ -8,9 +8,19 @@ from argparse import Namespace
 from datetime import datetime, timezone
 from typing import Any
 
+from refiner.cli.job_utils import (
+    TERMINAL_JOB_STATUSES,
+    format_ts as _format_ts,
+    is_retryable_api_error as _is_retryable_api_error,
+    job_status as _job_status,
+    log_entry_key as _log_entry_key,
+    next_log_cursor as _next_log_cursor,
+    parse_epoch_ms,
+    remember_seen_key as _remember_seen_key,
+    safe_text as _safe_text,
+)
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import MacrodataApiError, MacrodataClient
-from refiner.platform.client.api import sanitize_terminal_text
 
 _DEFAULT_LOG_WINDOW_MS = 60 * 60 * 1000
 _MAX_LOG_SEARCH_LIMIT = 100
@@ -20,8 +30,8 @@ _DEFAULT_LOG_PAGE_LIMIT = 100
 _DEFAULT_FOLLOW_LOG_PAGE_LIMIT = 500
 _FOLLOW_LOG_DEDUPE_LIMIT = 100_000
 _FOLLOW_LOG_MAX_DRAIN_POLLS = 5
+_FOLLOW_LOG_DRAIN_POLL_DELAY_SECONDS = 0.1
 _FOLLOW_LOG_MAX_RETRYABLE_ERRORS = 5
-_TERMINAL_JOB_STATUSES = frozenset({"completed", "failed", "canceled"})
 
 
 def _client() -> MacrodataClient:
@@ -31,23 +41,6 @@ def _client() -> MacrodataClient:
 def _print_json(payload: dict[str, Any]) -> int:
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
-
-
-def _format_ts(value: Any) -> str:
-    if not isinstance(value, (int, float)):
-        return "-"
-    timestamp_ms = value * 1000 if value < 100_000_000_000 else value
-    try:
-        dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
-    except (OverflowError, OSError, ValueError):
-        return "-"
-    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-
-def _safe_text(value: Any) -> str:
-    if value is None:
-        return "-"
-    return sanitize_terminal_text(str(value))
 
 
 def _progress_text(progress: Any) -> str:
@@ -273,54 +266,8 @@ def _format_log_entry(entry: dict[str, Any]) -> str:
     )
 
 
-def _log_entry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str]:
-    raw_message_hash = entry.get("messageHash")
-    message_hash = (
-        str(raw_message_hash)
-        if isinstance(raw_message_hash, (str, int, float)) and str(raw_message_hash)
-        else ""
-    )
-    return (
-        _safe_text(entry.get("ts")),
-        _safe_text(entry.get("workerId")),
-        _safe_text(entry.get("sourceType")),
-        _safe_text(entry.get("sourceName")),
-        message_hash or _safe_text(entry.get("line")),
-    )
-
-
-def _next_log_cursor(payload: dict[str, Any]) -> str | None:
-    cursor = payload.get("nextCursor")
-    return cursor if isinstance(cursor, str) and cursor else None
-
-
-def _job_status(payload: dict[str, Any]) -> str:
-    job = payload.get("job")
-    if not isinstance(job, dict):
-        return ""
-    return _safe_text(job.get("status")).lower()
-
-
-def _is_retryable_api_error(err: Exception) -> bool:
-    if isinstance(err, MacrodataApiError):
-        return err.status in {0, 429} or err.status >= 500
-    return False
-
-
 def _follow_retry_delay(error_count: int) -> float:
     return min(float(2 ** max(0, error_count - 1)), 5.0)
-
-
-def _remember_seen_key(
-    *,
-    key: tuple[str, str, str, str, str],
-    seen_keys: set[tuple[str, str, str, str, str]],
-    seen_order: deque[tuple[str, str, str, str, str]],
-) -> None:
-    seen_keys.add(key)
-    seen_order.append(key)
-    while len(seen_order) > _FOLLOW_LOG_DEDUPE_LIMIT:
-        seen_keys.discard(seen_order.popleft())
 
 
 def _effective_log_limit(args: Namespace) -> int:
@@ -396,19 +343,20 @@ def _stream_logs(
                     key=key,
                     seen_keys=seen_keys,
                     seen_order=seen_order,
+                    limit=_FOLLOW_LOG_DEDUPE_LIMIT,
                 )
         current_cursor = _next_log_cursor(payload)
         if current_cursor is not None:
             full_batch_polls += 1
             if full_batch_polls < _FOLLOW_LOG_MAX_DRAIN_POLLS:
+                time.sleep(_FOLLOW_LOG_DRAIN_POLL_DELAY_SECONDS)
                 continue
             oldest_entry = entries[0] if isinstance(entries, list) and entries else None
-            skipped_end_ms = (
-                int(oldest_entry.get("ts"))
-                if isinstance(oldest_entry, dict)
-                and isinstance(oldest_entry.get("ts"), (int, float, str))
-                else current_end_ms
-            )
+            skipped_end_ms = current_end_ms
+            if isinstance(oldest_entry, dict):
+                parsed_oldest_ms = parse_epoch_ms(oldest_entry.get("ts"))
+                if parsed_oldest_ms is not None:
+                    skipped_end_ms = parsed_oldest_ms
             _warn_follow_skip(start_ms=current_start_ms, end_ms=skipped_end_ms)
             current_cursor = None
             full_batch_polls = 0
@@ -418,6 +366,14 @@ def _stream_logs(
             continue
         else:
             full_batch_polls = 0
+        next_start_ms = current_start_ms
+        next_end_ms = current_end_ms
+        if current_cursor is None:
+            next_start_ms = current_end_ms
+            next_end_ms = max(
+                int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+                next_start_ms + 1,
+            )
         try:
             job_payload = client.cli_get_job(job_id=args.job_id)
         except MacrodataApiError as err:
@@ -426,21 +382,19 @@ def _stream_logs(
             status_retryable_error_count += 1
             if status_retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
                 raise
+            current_start_ms = next_start_ms
+            current_end_ms = next_end_ms
             time.sleep(_follow_retry_delay(status_retryable_error_count))
             job_payload = {}
             continue
         except MacrodataCredentialsError:
             raise
         status_retryable_error_count = 0
-        if (
-            current_cursor is None
-            and _job_status(job_payload) in _TERMINAL_JOB_STATUSES
-        ):
+        if current_cursor is None and _job_status(job_payload) in TERMINAL_JOB_STATUSES:
             return 0
         if current_cursor is None:
-            current_start_ms = current_end_ms
-            next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-            current_end_ms = max(next_end_ms, current_start_ms + 1)
+            current_start_ms = next_start_ms
+            current_end_ms = next_end_ms
         time.sleep(_FOLLOW_LOG_POLL_INTERVAL_SECONDS)
 
 
@@ -652,6 +606,38 @@ def cmd_jobs_get(args: Namespace) -> int:
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)
     return _print_json(payload) if args.json else _render_job(payload)
+
+
+def cmd_jobs_attach(args: Namespace) -> int:
+    from refiner.cli.cloud_run import CloudAttachDetached, attach_to_cloud_job
+
+    try:
+        client = _client()
+        payload = client.cli_get_job(job_id=args.job_id)
+    except (MacrodataApiError, MacrodataCredentialsError) as err:
+        return _handle_error(err)
+
+    job = payload.get("job")
+    if not isinstance(job, dict):
+        print("Job details unavailable.", file=sys.stderr)
+        return 1
+    if _executor_text(job.get("executorKind")) != "cloud":
+        print(
+            "`macrodata jobs attach` is only supported for cloud jobs.", file=sys.stderr
+        )
+        return 1
+
+    try:
+        return attach_to_cloud_job(
+            client=client,
+            job_id=args.job_id,
+            initial_job_payload=payload,
+            force_attach=True,
+        )
+    except CloudAttachDetached:
+        return 130
+    except (MacrodataApiError, MacrodataCredentialsError) as err:
+        return _handle_error(err)
 
 
 def cmd_jobs_manifest(args: Namespace) -> int:

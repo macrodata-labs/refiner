@@ -94,22 +94,31 @@ def request_json(
     path: str,
     api_key: str | None = None,
     base_url: str | None = None,
+    http_client: httpx.Client | None = None,
     json_payload: dict[str, Any] | None = None,
     timeout_s: float = 10.0,
 ) -> dict[str, Any]:
     resolved_base_url = resolve_platform_base_url() if base_url is None else base_url
     url = f"{resolved_base_url.rstrip('/')}{path}"
-    headers = {"User-Agent": _USER_AGENT}
-    if api_key is not None and api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        resp = httpx.request(
-            method,
-            url,
-            headers=headers,
-            json=json_payload,
-            timeout=timeout_s,
-        )
+        if http_client is not None:
+            resp = http_client.request(
+                method,
+                url,
+                json=json_payload,
+                timeout=timeout_s,
+            )
+        else:
+            headers = {"User-Agent": _USER_AGENT}
+            if api_key is not None and api_key.strip():
+                headers["Authorization"] = f"Bearer {api_key}"
+            resp = httpx.request(
+                method,
+                url,
+                headers=headers,
+                json=json_payload,
+                timeout=timeout_s,
+            )
     except httpx.RequestError as err:
         raise MacrodataApiError(status=0, message=str(err)) from err
 
@@ -141,6 +150,19 @@ class MacrodataClient:
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None):
         self.api_key = api_key if api_key is not None else current_api_key()
         self.base_url = (base_url or resolve_platform_base_url()).rstrip("/")
+        headers = {"User-Agent": _USER_AGENT}
+        if self.api_key.strip():
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        self._http_client = httpx.Client(headers=headers)
+
+    def close(self) -> None:
+        self._http_client.close()
+
+    def __del__(self) -> None:  # pragma: no cover
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _request_raw(
         self,
@@ -164,8 +186,8 @@ class MacrodataClient:
         return request_json(
             method=method,
             path=resolved_path,
-            api_key=self.api_key,
             base_url=self.base_url,
+            http_client=self._http_client,
             json_payload=json_payload,
             timeout_s=timeout_s,
         )
@@ -410,8 +432,8 @@ class MacrodataClient:
         response_data = request_json(
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/services/start",
-            api_key=self.api_key,
             base_url=self.base_url,
+            http_client=self._http_client,
             json_payload={"services": services},
             timeout_s=60.0,
         )
@@ -430,8 +452,8 @@ class MacrodataClient:
         response_data = request_json(
             method="GET",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/workers/{worker_id}/services/{service_id}",
-            api_key=self.api_key,
             base_url=self.base_url,
+            http_client=self._http_client,
         )
         if not isinstance(response_data, dict):
             raise ValueError("runtime service response must be a JSON object")

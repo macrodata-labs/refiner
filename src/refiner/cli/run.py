@@ -6,7 +6,20 @@ import runpy
 import sys
 from pathlib import Path
 
+from refiner.cli.cloud_run import (
+    CloudAttachDetached,
+    _ATTACH_MODE_ENV_VAR,
+    normalize_attach_mode,
+)
 from refiner.cli.local_run import LocalLaunchResumeError
+
+
+def _attach_mode_arg(args: argparse.Namespace) -> str:
+    if getattr(args, "attach", False):
+        return "attach"
+    if getattr(args, "detach", False):
+        return "detach"
+    return "auto"
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -24,8 +37,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     original_argv = sys.argv
     original_sys_path = list(sys.path)
     original_logs = os.environ.get("REFINER_LOCAL_LOGS")
+    original_attach = os.environ.get(_ATTACH_MODE_ENV_VAR)
     cwd_entries = {"", str(Path.cwd())}
     try:
+        os.environ[_ATTACH_MODE_ENV_VAR] = normalize_attach_mode(_attach_mode_arg(args))
         if args.logs is not None:
             os.environ["REFINER_LOCAL_LOGS"] = args.logs
         elif original_logs is None:
@@ -39,6 +54,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             runpy.run_path(str(script), run_name="__main__")
         except BrokenPipeError:
             return 141
+        except CloudAttachDetached:
+            return 130
         except KeyboardInterrupt as err:
             if err.args and not sys.stdout.isatty():
                 print(str(err), file=sys.stderr)
@@ -64,4 +81,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             os.environ.pop("REFINER_LOCAL_LOGS", None)
         else:
             os.environ["REFINER_LOCAL_LOGS"] = original_logs
+        if original_attach is None:
+            os.environ.pop(_ATTACH_MODE_ENV_VAR, None)
+        else:
+            os.environ[_ATTACH_MODE_ENV_VAR] = original_attach
     return 0

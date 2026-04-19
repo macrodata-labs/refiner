@@ -79,6 +79,13 @@ def test_launch_local_single_worker(tmp_path) -> None:
     assert stats.output_rows == 2
 
 
+def test_launch_local_rejects_detach_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REFINER_ATTACH", "detach")
+
+    with pytest.raises(SystemExit, match="--detach is only supported"):
+        read_jsonl("input.jsonl").launch_local(name="unit-test-local")
+
+
 def test_launch_local_single_worker_csv(tmp_path) -> None:
     path = tmp_path / "a.csv"
     path.write_text("x\n1\n2\n")
@@ -310,6 +317,66 @@ def test_local_stage_console_colors_timestamp_level_and_message(
     assert f"{expected_info_prefix}INFO" in line
     assert "\x1b[0m | " in line
     assert "__main__:emit_logs:14 - loguru row=0 starting\x1b[0m" in line
+
+
+def test_local_stage_console_omits_rundir_row_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: True)
+    console = LocalStageConsole(
+        job_id="job-1",
+        job_name="cloud-attach-demo",
+        rundir=None,
+        stage_index=0,
+        total_stages=2,
+        stage_workers=1,
+        tracking_url="https://example.com/jobs/job-1",
+    )
+    try:
+        header_lines = console._build_header_lines(width=80)
+    finally:
+        console.close()
+
+    assert not any("Rundir:" in line for line in header_lines)
+    assert any("Runtime:" in line for line in header_lines)
+
+
+def test_local_stage_console_apply_snapshot_updates_stage_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("refiner.cli.local_run.stdout_is_interactive", lambda: False)
+    console = LocalStageConsole(
+        job_id="job-1",
+        job_name="demo",
+        rundir=None,
+        stage_index=0,
+        total_stages=2,
+        stage_workers=1,
+        tracking_url=None,
+    )
+    try:
+        console.apply_snapshot(
+            LocalStageSnapshot(
+                job_id="job-1",
+                job_name="demo",
+                rundir=None,
+                stage_index=1,
+                total_stages=3,
+                stage_workers=4,
+                tracking_url=None,
+                status="running",
+                worker_total=4,
+                worker_running=2,
+                worker_completed=1,
+                worker_failed=0,
+                elapsed_seconds=5.0,
+            )
+        )
+    finally:
+        console.close()
+
+    assert console._stage_index == 1
+    assert console._total_stages == 3
 
 
 def test_local_stage_console_formats_system_lines_without_worker_prefix(
@@ -730,6 +797,20 @@ def test_should_emit_worker_line_filters_by_mode() -> None:
         worker_id="worker-a",
         selected_worker_id=None,
         line=info_line,
+    )
+    assert should_emit_worker_line(
+        log_mode="errors",
+        worker_id="worker-a",
+        selected_worker_id=None,
+        line=info_line,
+        severity="error",
+    )
+    assert not should_emit_worker_line(
+        log_mode="errors",
+        worker_id="worker-a",
+        selected_worker_id=None,
+        line=error_line,
+        severity="info",
     )
 
 

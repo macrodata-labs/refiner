@@ -5,6 +5,7 @@ from argparse import Namespace
 import pytest
 
 from refiner.cli import run
+from refiner.cli.cloud_run import CloudAttachDetached
 from refiner.cli.local_run import (
     LocalLaunchInterrupted,
     LocalLaunchResumeError,
@@ -12,7 +13,7 @@ from refiner.cli.local_run import (
 )
 
 
-def test_cmd_run_sets_log_env_and_forwards_args(monkeypatch, tmp_path) -> None:
+def test_cmd_run_sets_env_overrides_and_forwards_args(monkeypatch, tmp_path) -> None:
     script = tmp_path / "demo.py"
     script.write_text("print('ok')\n", encoding="utf-8")
     captured: dict[str, object] = {}
@@ -22,6 +23,7 @@ def test_cmd_run_sets_log_env_and_forwards_args(monkeypatch, tmp_path) -> None:
         captured["run_name"] = run_name
         captured["argv"] = list(run.sys.argv)
         captured["logs"] = run.os.environ.get("REFINER_LOCAL_LOGS")
+        captured["attach"] = run.os.environ.get("REFINER_ATTACH")
 
     monkeypatch.setattr(run.runpy, "run_path", _fake_run_path)
 
@@ -30,18 +32,70 @@ def test_cmd_run_sets_log_env_and_forwards_args(monkeypatch, tmp_path) -> None:
             script=str(script),
             script_args=["--", "--rows", "10"],
             logs="one",
+            attach=True,
+            detach=False,
         )
     )
 
     assert rc == 0
     assert captured["path"] == str(script)
     assert captured["run_name"] == "__main__"
-    assert captured["argv"] == [
-        str(script),
-        "--rows",
-        "10",
-    ]
+    assert captured["argv"] == [str(script), "--rows", "10"]
     assert captured["logs"] == "one"
+    assert captured["attach"] == "attach"
+    assert run.os.environ.get("REFINER_ATTACH") is None
+
+
+def test_cmd_run_sets_auto_attach_mode_by_default(monkeypatch, tmp_path) -> None:
+    script = tmp_path / "demo.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def _fake_run_path(path: str, *, run_name: str):
+        del path, run_name
+        captured["attach"] = run.os.environ.get("REFINER_ATTACH")
+
+    monkeypatch.setattr(run.runpy, "run_path", _fake_run_path)
+
+    rc = run.cmd_run(
+        Namespace(
+            script=str(script),
+            script_args=[],
+            logs=None,
+            attach=False,
+            detach=False,
+        )
+    )
+
+    assert rc == 0
+    assert captured["attach"] == "auto"
+    assert run.os.environ.get("REFINER_ATTACH") is None
+
+
+def test_cmd_run_restores_attach_env(monkeypatch, tmp_path) -> None:
+    script = tmp_path / "demo.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("REFINER_ATTACH", "detach")
+
+    def _fake_run_path(path: str, *, run_name: str):
+        captured["attach"] = run.os.environ.get("REFINER_ATTACH")
+
+    monkeypatch.setattr(run.runpy, "run_path", _fake_run_path)
+
+    rc = run.cmd_run(
+        Namespace(
+            script=str(script),
+            script_args=[],
+            logs=None,
+            attach=True,
+            detach=False,
+        )
+    )
+
+    assert rc == 0
+    assert captured["attach"] == "attach"
+    assert run.os.environ.get("REFINER_ATTACH") == "detach"
 
 
 def test_cmd_run_missing_script_returns_error(capsys, tmp_path) -> None:
@@ -50,6 +104,8 @@ def test_cmd_run_missing_script_returns_error(capsys, tmp_path) -> None:
             script=str(tmp_path / "missing.py"),
             script_args=[],
             logs=None,
+            attach=False,
+            detach=False,
         )
     )
     out = capsys.readouterr()
@@ -79,6 +135,8 @@ def test_cmd_run_prints_runtime_error_without_traceback(
             script=str(script),
             script_args=[],
             logs=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -105,6 +163,8 @@ def test_cmd_run_suppresses_resume_error_print_on_tty(
             script=str(script),
             script_args=[],
             logs=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -129,6 +189,8 @@ def test_cmd_run_does_not_swallow_plain_runtime_error(monkeypatch, tmp_path) -> 
                 script=str(script),
                 script_args=[],
                 logs=None,
+                attach=False,
+                detach=False,
             )
         )
 
@@ -152,12 +214,41 @@ def test_cmd_run_returns_130_for_launcher_interrupt(
             script=str(script),
             script_args=[],
             logs=None,
+            attach=False,
+            detach=False,
         )
     )
 
     out = capsys.readouterr()
     assert rc == 130
     assert "Local job interrupted" in out.err
+
+
+def test_cmd_run_suppresses_generic_interrupt_message_for_cloud_detach(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    script = tmp_path / "demo.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+
+    def _raise(path: str, *, run_name: str):
+        del path, run_name
+        raise CloudAttachDetached()
+
+    monkeypatch.setattr(run.runpy, "run_path", _raise)
+
+    rc = run.cmd_run(
+        Namespace(
+            script=str(script),
+            script_args=[],
+            logs=None,
+            attach=False,
+            detach=False,
+        )
+    )
+
+    out = capsys.readouterr()
+    assert rc == 130
+    assert out.err == ""
 
 
 def test_cmd_run_returns_141_for_broken_pipe(monkeypatch, tmp_path) -> None:
@@ -175,6 +266,8 @@ def test_cmd_run_returns_141_for_broken_pipe(monkeypatch, tmp_path) -> None:
             script=str(script),
             script_args=[],
             logs=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -198,6 +291,8 @@ def test_cmd_run_prepends_script_directory_to_sys_path(monkeypatch, tmp_path) ->
             script=str(script),
             script_args=[],
             logs=None,
+            attach=False,
+            detach=False,
         )
     )
 
@@ -225,6 +320,8 @@ def test_cmd_run_drops_cwd_entry_from_sys_path(monkeypatch, tmp_path) -> None:
             script=str(script),
             script_args=[],
             logs=None,
+            attach=False,
+            detach=False,
         )
     )
 
