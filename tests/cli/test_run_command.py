@@ -6,11 +6,8 @@ import pytest
 
 from refiner.cli.run import command as run
 from refiner.cli.run.cloud import CloudAttachDetached
-from refiner.cli.run.local import (
-    LocalLaunchInterrupted,
-    LocalLaunchResumeError,
-    resolve_log_mode,
-)
+from refiner.cli.run.local import LocalLaunchInterrupted, LocalLaunchResumeError
+from refiner.cli.ui.console import resolve_log_mode
 
 
 def test_cmd_run_sets_env_overrides_and_forwards_args(monkeypatch, tmp_path) -> None:

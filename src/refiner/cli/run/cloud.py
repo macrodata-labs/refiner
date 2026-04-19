@@ -20,7 +20,7 @@ from refiner.cli.jobs.follow import (
     job_status as _job_status,
     safe_text as _safe_text,
 )
-from refiner.cli.run.local import (
+from refiner.cli.ui.console import (
     LocalStageConsole,
     LocalStageSnapshot,
     resolve_log_mode,

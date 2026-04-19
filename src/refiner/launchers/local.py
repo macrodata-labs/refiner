@@ -17,8 +17,8 @@ from refiner.cli.run.local import (
     format_resume_message,
     LocalLaunchInterrupted,
     LocalLaunchResumeError,
-    stdout_is_interactive,
 )
+from refiner.cli.ui.terminal import stdout_is_interactive
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import PlannedStage
