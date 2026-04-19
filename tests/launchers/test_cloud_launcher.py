@@ -529,6 +529,7 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_requires_override(
     with pytest.raises(SystemExit, match="MACRODATA_FALLBACK_TO_LATEST_PYPI=1"):
         read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
+
 def test_pipeline_launch_cloud_detached_mode_prints_followup_commands(
     monkeypatch, capsys
 ) -> None:
