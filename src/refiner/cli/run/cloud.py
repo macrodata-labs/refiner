@@ -53,6 +53,15 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _terminal_exit_code(status: str) -> int:
+    normalized = status.strip().lower()
+    if normalized == "completed":
+        return 0
+    if normalized in {"failed", "canceled"}:
+        return 1
+    return 0
+
+
 def _coerce_stage_index(value: Any, default: int) -> int:
     try:
         return int(value)
@@ -539,10 +548,11 @@ def attach_to_cloud_job(
                     next_logs_at = time.monotonic() + _ATTACH_LOGS_INTERVAL_SECONDS
 
             if terminal_seen and poller.cursor is None:
+                final_status = _job_status(job_payload)
                 console.emit_system(
-                    f"cloud job {context.job_id} finished with status {_job_status(job_payload)}"
+                    f"cloud job {context.job_id} finished with status {final_status}"
                 )
-                return 0
+                return _terminal_exit_code(final_status)
 
             deadline = (
                 min(next_summary_at, next_logs_at, next_render_at)

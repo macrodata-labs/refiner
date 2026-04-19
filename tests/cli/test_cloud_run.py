@@ -431,6 +431,44 @@ def test_attach_to_cloud_job_uses_console_without_tty(monkeypatch) -> None:
     assert fake_console.emitted_lines
 
 
+@pytest.mark.parametrize(("status", "expected_rc"), [("failed", 1), ("canceled", 1)])
+def test_attach_to_cloud_job_returns_nonzero_for_unsuccessful_terminal_status(
+    monkeypatch, status: str, expected_rc: int
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            payload = _job_payload(stage_index=0, status=status)
+            job = cast(dict[str, object], payload["job"])
+            job["logsAvailable"] = False
+            return payload
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    payload = _job_payload(stage_index=0, status=status)
+    job = cast(dict[str, object], payload["job"])
+    job["logsAvailable"] = False
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=payload,
+        stage_index_hint=0,
+    )
+
+    assert rc == expected_rc
+    assert fake_console.system_messages[-1] == (
+        f"cloud job job-1 finished with status {status}"
+    )
+
+
 def test_attach_to_cloud_job_rejects_invalid_log_mode_env(monkeypatch) -> None:
     class _Client:
         def __init__(self) -> None:

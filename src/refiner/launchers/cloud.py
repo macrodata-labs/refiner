@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 from refiner.cli.run.modes import (
     CloudAttachContext,
+    attach_mode_override,
     emit_cloud_followup_commands,
     resolve_launcher_attach_mode,
 )
@@ -227,12 +228,14 @@ class CloudLauncher(BaseLauncher):
             try:
                 from refiner.cli.run.cloud import attach_to_cloud_job
 
-                attach_to_cloud_job(
+                attach_rc = attach_to_cloud_job(
                     client=client,
                     job_id=resp.job_id,
                     stage_index_hint=resp.stage_index,
                     force_attach=True,
                 )
+                if attach_rc != 0 and attach_mode_override() is not None:
+                    raise SystemExit(attach_rc)
             except (MacrodataApiError, MacrodataCredentialsError):
                 print(
                     "Cloud job submitted, but attach failed. Continue with:",
