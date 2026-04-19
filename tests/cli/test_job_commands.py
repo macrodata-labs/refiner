@@ -2114,6 +2114,48 @@ def test_jobs_logs_plain_output_collapses_redundant_source_name(
     assert "worker:worker" not in out.out
 
 
+def test_jobs_logs_interactive_output_tolerates_unknown_severity(
+    monkeypatch, capsys
+) -> None:
+    class _UnknownSeverityClient(_FakeClient):
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            payload = super().cli_get_job_logs()
+            entries = cast(list[dict[str, object]], payload["entries"])
+            entries[0]["severity"] = "notice"
+            entries[0]["workerId"] = "worker-abcdef123456"
+            entries[0]["sourceName"] = "worker"
+            return payload
+
+    _patch_job_client(monkeypatch, lambda: _UnknownSeverityClient())
+    monkeypatch.setattr("refiner.cli.jobs.common.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.cli.jobs.logs.stdout_is_interactive", lambda: True)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=0,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1_700_000_000_000,
+            end_ms=1_700_000_002_000,
+            cursor=None,
+            limit=1,
+            follow=False,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "worker=worker-a...123456" in out.out
+    assert "NOTICE" in out.out
+    assert "retrying shard" in out.out
+    assert "\x1b[" in out.out
+
+
 def test_jobs_workers_plain_output_sanitizes_next_cursor(monkeypatch, capsys) -> None:
     class _CursorClient(_FakeClient):
         def cli_get_job_workers(self, **_: object) -> dict[str, object]:

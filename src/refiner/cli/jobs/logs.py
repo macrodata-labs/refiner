@@ -185,6 +185,14 @@ def _loguru_markup_to_ansi(markup: str) -> str:
     return "".join(ansi_parts)
 
 
+def _level_ansi(level: str, *, fallback: str) -> str:
+    try:
+        loguru_level = logger.level(level)
+    except ValueError:
+        return fallback
+    return _loguru_markup_to_ansi(loguru_level.color) or fallback
+
+
 def format_rendered_log_line(*, worker_id: str, line: str, interactive: bool) -> str:
     prefix = f"worker={worker_id}"
     if not interactive:
@@ -197,7 +205,7 @@ def format_rendered_log_line(*, worker_id: str, line: str, interactive: bool) ->
     return (
         f"{worker_color}{prefix}{_ANSI_RESET} "
         f"{_TIMESTAMP_COLOR}{match.group('timestamp').strip()}{_ANSI_RESET} | "
-        f"{_loguru_markup_to_ansi(logger.level(level).color) or worker_color}"
+        f"{_level_ansi(level, fallback=worker_color)}"
         f"{level}{match.group('level_padding')}{_ANSI_RESET} | "
         f"{worker_color}{match.group('rest')}{_ANSI_RESET}"
     )
