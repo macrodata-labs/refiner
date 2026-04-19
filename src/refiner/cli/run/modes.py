@@ -41,7 +41,7 @@ def attach_mode_override() -> str | None:
 def resolve_launcher_attach_mode(*, interactive: bool) -> str:
     override = attach_mode_override()
     if override is None:
-        return "detach"
+        return "attach" if interactive else "detach"
     if override == "auto":
         return "attach" if interactive else "detach"
     return override

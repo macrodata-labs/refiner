@@ -124,18 +124,18 @@ macrodata jobs attach <job_id>
 
 ### `macrodata jobs manifest`
 
-Reads the captured run manifest for a job. Text mode always prints the runtime section first. Use the optional flags to additionally show dependency information and captured code metadata.
+Reads the captured run manifest for a job. Text mode always prints the runtime section, dependency summary, and captured script path/SHA first. Use the optional flags to expand the dependency list or captured code text.
 
 Options:
 
-- `--show-deps`
-- `--show-code`
+- `--deps`
+- `--code`
 - `--json`
 
 ```bash
 macrodata jobs manifest <job_id>
-macrodata jobs manifest <job_id> --show-deps
-macrodata jobs manifest <job_id> --show-code
+macrodata jobs manifest <job_id> --deps
+macrodata jobs manifest <job_id> --code
 ```
 
 ### `macrodata jobs workers`
@@ -183,7 +183,9 @@ Notes:
 - `--search` requires both `--start-ms` and `--end-ms`
 - `--search` supports at most 100 results per request
 - `--cursor` reuses `nextCursor` from a previous response to fetch the next page in the same window
+- one-shot log fetches start from the earliest matching logs in the requested window
 - one-shot log fetches default to `100` entries per request
+- `--follow` starts from the most recent matching logs in the requested window and then stays live
 - `--follow` defaults to `500` entries per request
 - `--follow` may skip older backlog under sustained log volume to stay live; when it does, it prints the skipped timestamp range and recovery guidance
 - `--follow` cannot be combined with `--json`, `--cursor`, or `--search`
@@ -207,12 +209,17 @@ Options:
 
 - `--step <step_index>`
 - `--metric <label>`; may be repeated and requires `--step`
+- `--workers`; include worker rankings for supported metric kinds and requires `--step` plus `--metric`
+- `--worker <worker_id>`; may be repeated and requires `--step` plus `--metric`
+- `--asc` / `--desc`; sort worker rankings ascending or descending and require `--workers`
 - `--json`
 
 ```bash
 macrodata jobs metrics <job_id> <stage_index>
 macrodata jobs metrics <job_id> <stage_index> --step 2
 macrodata jobs metrics <job_id> <stage_index> --step 2 --metric rows_processed --metric queue_depth
+macrodata jobs metrics <job_id> <stage_index> --step 2 --metric rows_processed --workers
+macrodata jobs metrics <job_id> <stage_index> --step 2 --metric rows_processed --workers --worker <worker_id>
 ```
 
 ### `macrodata jobs resource-metrics`

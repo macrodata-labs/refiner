@@ -27,7 +27,11 @@ def register_run_command(
         "--logs",
         choices=("all", "none", "one", "errors"),
         default=None,
-        help="Override attached live log display mode via REFINER_LOGS",
+        help=(
+            "Attached log display mode: all=show live logs from capped workers "
+            "(default), one=follow one worker, none=hide log lines and update "
+            "the header only, errors=show error lines only."
+        ),
     )
     run.add_argument("script", help="Python script to execute")
     run.add_argument(

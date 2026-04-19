@@ -619,8 +619,8 @@ def test_pipeline_launch_cloud_unexpected_attach_failure_propagates(
         read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
 
-def test_pipeline_launch_cloud_defaults_to_detached_outside_cli(
-    monkeypatch, capsys
+def test_pipeline_launch_cloud_defaults_to_auto_attach_when_interactive(
+    monkeypatch,
 ) -> None:
     _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
@@ -628,20 +628,22 @@ def test_pipeline_launch_cloud_defaults_to_detached_outside_cli(
         lambda ref: True,
     )
     monkeypatch.delenv("REFINER_ATTACH", raising=False)
+    monkeypatch.setattr("refiner.launchers.cloud.stdout_is_interactive", lambda: True)
+    captured: dict[str, object] = {}
+
+    def _fake_attach_to_cloud_job(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
     monkeypatch.setattr(
-        "refiner.launchers.cloud.emit_cloud_followup_commands",
-        lambda *, context, file=None: print(f"attach {context.job_id}", file=file),
-    )
-    monkeypatch.setattr(
-        "refiner.cli.run.cloud.attach_to_cloud_job",
-        lambda **_: (_ for _ in ()).throw(AssertionError("should not attach")),
+        "refiner.cli.run.cloud.attach_to_cloud_job", _fake_attach_to_cloud_job
     )
 
     result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
-    out = capsys.readouterr()
 
     assert result.job_id == "job-123"
-    assert "attach job-123" in out.out
+    assert captured["job_id"] == "job-123"
+    assert captured["force_attach"] is True
 
 
 def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(

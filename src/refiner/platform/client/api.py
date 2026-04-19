@@ -37,6 +37,14 @@ def sanitize_terminal_text(value: str) -> str:
     return "".join(ch for ch in value if " " <= ch < "\x7f" or ch >= "\xa0")
 
 
+def _query_param_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return [_query_param_value(item) for item in value]
+    return value
+
+
 def resolve_platform_base_url() -> str:
     env_value = os.environ.get(PLATFORM_BASE_URL_ENV_VAR)
     if env_value:
@@ -176,7 +184,7 @@ class MacrodataClient:
         resolved_path = path
         if query_params:
             filtered_params = {
-                key: value
+                key: _query_param_value(value)
                 for key, value in query_params.items()
                 if value is not None and value != [] and value != ""
             }
@@ -347,8 +355,9 @@ class MacrodataClient:
         self,
         *,
         job_id: str,
-        start_ms: int,
-        end_ms: int,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        anchor: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
         stage_index: int | None = None,
@@ -364,6 +373,7 @@ class MacrodataClient:
             query_params={
                 "startMs": start_ms,
                 "endMs": end_ms,
+                "anchor": anchor,
                 "cursor": cursor,
                 "limit": limit,
                 "stageIndex": stage_index,
@@ -407,6 +417,9 @@ class MacrodataClient:
         stage_index: int,
         step_index: int | None = None,
         metric_labels: list[str] | None = None,
+        workers: bool | None = None,
+        worker_ids: list[str] | None = None,
+        sort: str | None = None,
     ) -> dict[str, Any]:
         return self._request_raw(
             method="GET",
@@ -414,6 +427,9 @@ class MacrodataClient:
             query_params={
                 "stepIndex": step_index,
                 "metricLabels": ",".join(metric_labels) if metric_labels else None,
+                "workers": workers,
+                "workerIds": worker_ids,
+                "sort": sort,
             },
             timeout_s=30.0,
         )

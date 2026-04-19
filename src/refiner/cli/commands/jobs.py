@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from argparse import SUPPRESS
 from refiner.cli.jobs.attach import cmd_jobs_attach
 from refiner.cli.jobs.control import cmd_jobs_cancel
 from refiner.cli.jobs.get import cmd_jobs_get
@@ -62,19 +61,14 @@ def register_jobs_command(
     jobs_manifest = jobs_subparsers.add_parser("manifest", help="Get job manifest")
     jobs_manifest.add_argument("job_id", help="Job identifier")
     jobs_manifest.add_argument(
-        "--show-deps",
+        "--deps",
         action="store_true",
         help="Show dependencies from the manifest",
     )
     jobs_manifest.add_argument(
-        "--show-code",
+        "--code",
         action="store_true",
-        help="Show captured script metadata from the manifest",
-    )
-    jobs_manifest.add_argument(
-        "--show-runtime",
-        action="store_true",
-        help=SUPPRESS,
+        help="Show captured script text from the manifest",
     )
     jobs_manifest.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
@@ -134,6 +128,27 @@ def register_jobs_command(
         action="append",
         default=[],
         help="Metric label to fetch for the selected step; may be repeated",
+    )
+    jobs_metrics.add_argument(
+        "--workers",
+        action="store_true",
+        help="Include worker rankings for supported metric kinds",
+    )
+    jobs_metrics.add_argument(
+        "--worker",
+        action="append",
+        default=[],
+        help="Filter values/rankings to a worker ID; may be repeated",
+    )
+    jobs_metrics.add_argument(
+        "--asc",
+        action="store_true",
+        help="Sort worker rankings ascending",
+    )
+    jobs_metrics.add_argument(
+        "--desc",
+        action="store_true",
+        help="Sort worker rankings descending",
     )
     jobs_metrics.add_argument(
         "--json", action="store_true", help="Print raw JSON response"

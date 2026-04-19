@@ -75,13 +75,14 @@ def test_parser_has_jobs_cancel_command() -> None:
     assert args.job_id == "job-1"
 
 
-def test_parser_keeps_manifest_show_runtime_alias() -> None:
+def test_parser_has_manifest_flags() -> None:
     parser = build_parser()
-    args = parser.parse_args(["jobs", "manifest", "job-1", "--show-runtime"])
+    args = parser.parse_args(["jobs", "manifest", "job-1", "--deps", "--code"])
     assert args.command == "jobs"
     assert args.jobs_command == "manifest"
     assert args.job_id == "job-1"
-    assert args.show_runtime is True
+    assert args.deps is True
+    assert args.code is True
 
 
 def test_parser_has_jobs_attach_command() -> None:
@@ -115,6 +116,32 @@ def test_parser_has_stage_metrics_commands() -> None:
     assert args.stage_index == 2
     assert args.step == 3
     assert args.metric == ["rows"]
+
+
+def test_parser_has_stage_metrics_worker_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "jobs",
+            "metrics",
+            "job-1",
+            "2",
+            "--step",
+            "3",
+            "--metric",
+            "rows",
+            "--workers",
+            "--worker",
+            "worker-1",
+            "--asc",
+        ]
+    )
+    assert args.command == "jobs"
+    assert args.jobs_command == "metrics"
+    assert args.workers is True
+    assert args.worker == ["worker-1"]
+    assert args.asc is True
+    assert args.desc is False
 
 
 def test_parser_has_resource_metrics_command() -> None:

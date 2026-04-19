@@ -24,7 +24,6 @@ from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
-from refiner.worker.context import logger
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -220,7 +219,7 @@ class CloudLauncher(BaseLauncher):
             tracking_url=tracking_url,
             stage_index=resp.stage_index,
         )
-        logger.info(f"Cloud job launched. View job:\n  {tracking_url}")
+        print(f"Cloud job launched. View job:\n  {tracking_url}")
         attach_mode = resolve_launcher_attach_mode(interactive=stdout_is_interactive())
         if attach_mode == "detach":
             emit_cloud_followup_commands(context=context)

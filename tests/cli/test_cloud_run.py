@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import re
 from typing import cast
 
 import pytest
@@ -103,6 +104,9 @@ def test_build_snapshot_preserves_stage_zero_progress() -> None:
                         "status": "running",
                         "completedWorkers": 3,
                         "totalWorkers": 5,
+                        "shardDone": 4,
+                        "shardTotal": 9,
+                        "shardRunning": 2,
                     },
                     {
                         "index": 1,
@@ -118,6 +122,48 @@ def test_build_snapshot_preserves_stage_zero_progress() -> None:
     assert snapshot.stage_index == 0
     assert snapshot.worker_completed == 3
     assert snapshot.stage_workers == 5
+    assert snapshot.shard_completed == 4
+    assert snapshot.shard_total == 9
+    assert snapshot.shard_running == 2
+
+
+def test_build_snapshot_reads_stage_shard_running() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "running",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": 1_700_000_001_000,
+                "runningWorkers": 2,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": 0,
+                        "status": "running",
+                        "completedWorkers": 3,
+                        "totalWorkers": 5,
+                        "shardDone": 4,
+                        "shardTotal": 9,
+                        "shardRunning": 2,
+                    }
+                ],
+            }
+        },
+    )
+
+    assert snapshot.shard_completed == 4
+    assert snapshot.shard_total == 9
+    assert snapshot.shard_running == 2
 
 
 def test_build_snapshot_tolerates_null_stage_indexes() -> None:
@@ -162,6 +208,78 @@ def test_build_snapshot_tolerates_null_stage_indexes() -> None:
     assert snapshot.stage_workers == 5
 
 
+def test_build_snapshot_keeps_pending_runtime_at_zero_without_start_time() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "queued",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": None,
+                "runningWorkers": 0,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": 0,
+                        "status": "queued",
+                        "completedWorkers": 0,
+                        "totalWorkers": 4,
+                        "shardDone": 0,
+                        "shardTotal": 9,
+                    }
+                ],
+            }
+        },
+    )
+
+    assert snapshot.status == "queued"
+    assert snapshot.elapsed_seconds == 0.0
+
+
+def test_build_snapshot_prefers_active_stage_status_over_job_status() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "running",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": None,
+                "runningWorkers": 0,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": 0,
+                        "status": "queued",
+                        "completedWorkers": 0,
+                        "runningWorkers": 0,
+                        "totalWorkers": 4,
+                    }
+                ],
+            }
+        },
+    )
+
+    assert snapshot.status == "queued"
+
+
 def _log_entry(
     *, ts: int, worker_id: str, severity: str, line: str
 ) -> dict[str, object]:
@@ -176,12 +294,42 @@ def _log_entry(
     }
 
 
+def test_format_attach_log_line_matches_local_log_shape() -> None:
+    line = cloud_run._format_attach_log_line(
+        _log_entry(
+            ts=1_700_000_002_000,
+            worker_id="worker-1234567890",
+            severity="warn",
+            line="processing shard 4",
+        )
+    )
+
+    assert re.match(
+        r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \| WARNING  \| worker:runner - processing shard 4$",
+        line,
+    )
+
+
+def test_log_worker_label_shows_short_worker_prefix() -> None:
+    label = cloud_run._log_worker_label(
+        _log_entry(
+            ts=1_700_000_002_000,
+            worker_id="019da6e1-8583-7014-8f96-a310159b4545",
+            severity="info",
+            line="hello",
+        )
+    )
+
+    assert label == "019da6e1...9b4545"
+
+
 def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
     class _Client:
         def __init__(self) -> None:
             self.base_url = "https://example.com"
             self.log_calls = 0
             self.logged_stage_indexes: list[int | None] = []
+            self.logged_calls: list[dict[str, object]] = []
 
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             del job_id
@@ -202,6 +350,7 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
             self.logged_stage_indexes.append(
                 cast(int | None, kwargs.get("stage_index"))
             )
+            self.logged_calls.append(dict(kwargs))
             return {"entries": [], "hasOlder": False, "nextCursor": None}
 
     monotonic_values = itertools.count(0.0, 1.0)
@@ -226,6 +375,13 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
 
     assert rc == 0
     assert client.logged_stage_indexes[-1] == 1
+    assert len(client.logged_calls) >= 2
+    assert client.logged_calls[0]["anchor"] == "latest"
+    assert client.logged_calls[0]["start_ms"] is None
+    assert client.logged_calls[0]["end_ms"] is None
+    assert client.logged_calls[1]["anchor"] == "earliest"
+    assert isinstance(client.logged_calls[1]["start_ms"], int)
+    assert isinstance(client.logged_calls[1]["end_ms"], int)
     assert created_consoles[-1].closed == 1
     assert created_consoles[-1].kwargs["rundir"] is None
 
@@ -305,7 +461,7 @@ def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             del job_id
             self.job_calls += 1
-            if self.job_calls == 1:
+            if self.job_calls <= 2:
                 return _job_payload(stage_index=1, status="running")
             return _job_payload(stage_index=1, status="completed")
 
@@ -330,10 +486,11 @@ def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
     )
 
     assert rc == 0
-    assert client.log_calls[0]["stage_index"] == 0
+    assert client.log_calls
     assert client.log_calls[0]["cursor"] is None
-    assert client.log_calls[1]["stage_index"] == 1
-    assert client.log_calls[1]["cursor"] is None
+    assert any(
+        call["stage_index"] == 1 and call["cursor"] is None for call in client.log_calls
+    )
 
 
 def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> None:
@@ -373,7 +530,7 @@ def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> Non
         raise AssertionError("expected CloudAttachDetached")
 
     assert sleep_calls
-    assert sleep_calls[0] >= cloud_run._ATTACH_LOGS_INTERVAL_SECONDS
+    assert sleep_calls[0] >= cloud_run._ATTACH_RENDER_INTERVAL_SECONDS
 
 
 def test_attach_to_cloud_job_hides_lines_for_none_mode(monkeypatch) -> None:

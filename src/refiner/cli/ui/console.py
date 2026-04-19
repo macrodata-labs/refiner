@@ -58,6 +58,7 @@ _TIMESTAMP_COLOR = "\x1b[38;5;255m"
 _TITLE_COLOR = "\x1b[1;38;5;45m"
 _LABEL_COLOR = "\x1b[38;5;110m"
 _VALUE_COLOR = "\x1b[1;38;5;255m"
+_PLAIN_VALUE_COLOR = "\x1b[38;5;255m"
 _URL_COLOR = "\x1b[4;38;5;117m"
 _SEPARATOR_COLOR = "\x1b[38;5;239m"
 _STATUS_COLORS = {
@@ -85,7 +86,7 @@ _LOGURU_TAG_TO_ANSI = {
     "WHITE": "\x1b[97m",
 }
 _ANSI_RESET = "\x1b[0m"
-_URL_FALLBACK_TEXT = "Not tracked; run macrodata login"
+_URL_FALLBACK_TEXT = "Not tracked; run \x1b[1;3mmacrodata login\x1b[23;22m"
 _LOGURU_LINE_RE = re.compile(
     r"^(?P<timestamp>[^|]+?) \| (?P<level>[A-Z]+)(?P<level_padding>\s*) \| (?P<rest>.*)$"
 )
@@ -109,6 +110,9 @@ class StageSnapshot:
     worker_completed: int
     worker_failed: int
     elapsed_seconds: float
+    shard_total: int | None = None
+    shard_completed: int | None = None
+    shard_running: int | None = None
 
 
 def _loguru_markup_to_ansi(markup: str) -> str:
@@ -137,6 +141,12 @@ def _truncate_plain(value: str, width: int) -> str:
     if width <= 3:
         return value[:width]
     return value[: width - 3] + "..."
+
+
+def _truncate_display(value: str, width: int) -> str:
+    if _visible_width(value) <= width:
+        return value
+    return _truncate_plain(_ANSI_RE.sub("", value), width)
 
 
 def _format_elapsed_seconds(elapsed_seconds: float) -> str:
@@ -327,6 +337,7 @@ class StageConsole:
         total_stages: int,
         stage_workers: int,
         tracking_url: str | None,
+        initial_snapshot: StageSnapshot | None = None,
     ) -> None:
         self._interactive = stdout_is_interactive()
         self._job_id = job_id
@@ -340,19 +351,29 @@ class StageConsole:
         self._worker_running = stage_workers
         self._worker_completed = 0
         self._worker_failed = 0
+        self._shard_total: int | None = None
+        self._shard_completed: int | None = None
+        self._shard_running: int | None = None
         self._elapsed_seconds = 0.0
+        self._elapsed_synced_at = time.monotonic()
         self._lines: deque[str] = deque(maxlen=self._MAX_BUFFERED_LINES)
         self._last_system_message: str | None = None
         self._last_rendered_at = 0.0
         self._last_rendered_line_count = 0
         self._alternate_screen = False
         self._cursor_hidden = False
+        if initial_snapshot is not None:
+            self._apply_snapshot_values(initial_snapshot)
         if self._interactive:
-            self._write("\x1b[?1049h")
-            self._alternate_screen = True
-            self._write("\x1b[?25l")
-            self._cursor_hidden = True
-            self._render(force=True)
+            try:
+                self._write("\x1b[?1049h")
+                self._alternate_screen = True
+                self._write("\x1b[?25l")
+                self._cursor_hidden = True
+                self._render(force=True)
+            except Exception:
+                self._restore_terminal_state()
+                raise
 
     def emit_lines(self, *, worker_id: str, lines: list[str]) -> None:
         formatted_lines = [
@@ -388,15 +409,11 @@ class StageConsole:
         previous_running = self._worker_running
         previous_completed = self._worker_completed
         previous_failed = self._worker_failed
+        previous_shard_total = self._shard_total
+        previous_shard_completed = self._shard_completed
+        previous_shard_running = self._shard_running
         previous_elapsed_seconds = int(self._elapsed_seconds)
-        self._stage_index = snapshot.stage_index
-        self._total_stages = snapshot.total_stages
-        self._status = snapshot.status
-        self._worker_total = snapshot.worker_total
-        self._worker_running = snapshot.worker_running
-        self._worker_completed = snapshot.worker_completed
-        self._worker_failed = snapshot.worker_failed
-        self._elapsed_seconds = snapshot.elapsed_seconds
+        self._apply_snapshot_values(snapshot)
         if (
             self._stage_index != previous_stage_index
             or self._total_stages != previous_total_stages
@@ -405,19 +422,32 @@ class StageConsole:
             or self._worker_running != previous_running
             or self._worker_completed != previous_completed
             or self._worker_failed != previous_failed
+            or self._shard_total != previous_shard_total
+            or self._shard_completed != previous_shard_completed
+            or self._shard_running != previous_shard_running
             or int(self._elapsed_seconds) != previous_elapsed_seconds
         ):
             self._render()
 
+    def _apply_snapshot_values(self, snapshot: StageSnapshot) -> None:
+        self._stage_index = snapshot.stage_index
+        self._total_stages = snapshot.total_stages
+        self._status = snapshot.status
+        self._worker_total = snapshot.worker_total
+        self._worker_running = snapshot.worker_running
+        self._worker_completed = snapshot.worker_completed
+        self._worker_failed = snapshot.worker_failed
+        self._shard_total = snapshot.shard_total
+        self._shard_completed = snapshot.shard_completed
+        self._shard_running = snapshot.shard_running
+        self._elapsed_seconds = snapshot.elapsed_seconds
+        self._elapsed_synced_at = time.monotonic()
+
     def close(self) -> None:
         try:
             self._render(force=True)
-            if self._interactive and self._cursor_hidden:
-                if self._last_rendered_line_count > 0:
-                    self._write(f"\x1b[{self._last_rendered_line_count};1H")
-                self._write("\x1b[?25h")
+            self._restore_terminal_state()
             if self._alternate_screen:
-                self._write("\x1b[?1049l")
                 terminal_width = shutil.get_terminal_size(fallback=(120, 30)).columns
                 self._write("\n".join(self._build_header_lines(width=terminal_width)))
                 self._write("\n")
@@ -431,11 +461,44 @@ class StageConsole:
             self._cursor_hidden = False
             self._alternate_screen = False
 
+    def _restore_terminal_state(self) -> None:
+        if self._interactive and self._cursor_hidden:
+            if self._last_rendered_line_count > 0:
+                self._write(f"\x1b[{self._last_rendered_line_count};1H")
+            self._write("\x1b[?25h")
+        if self._alternate_screen:
+            self._write("\x1b[?1049l")
+
     def _build_header_lines(self, *, width: int) -> list[str]:
         title = "Macrodata Refiner".center(width)
         separator = f"{_SEPARATOR_COLOR}{'-' * width}{_ANSI_RESET}"
         left_width = max(20, (width - 3) // 2)
         right_width = max(20, width - left_width - 3)
+        runtime_value = _format_elapsed_seconds(self._display_elapsed_seconds())
+        if self._rundir is not None:
+            runtime_row = (
+                "Rundir",
+                self._rundir,
+                _VALUE_COLOR,
+                "Runtime",
+                runtime_value,
+                _VALUE_COLOR,
+            )
+        else:
+            runtime_row = (
+                "Runtime",
+                runtime_value,
+                _VALUE_COLOR,
+                "Shards" if self._shard_total is not None else "",
+                (
+                    self._format_shard_counts(
+                        max_width=max(1, right_width - len("Shards") - 2)
+                    )
+                    if self._shard_total is not None
+                    else ""
+                ),
+                "",
+            )
         row_specs = [
             (
                 "Job",
@@ -460,27 +523,13 @@ class StageConsole:
             (
                 "URL",
                 self._tracking_url or _URL_FALLBACK_TEXT,
-                _URL_COLOR if self._tracking_url is not None else _VALUE_COLOR,
+                _URL_COLOR if self._tracking_url is not None else _PLAIN_VALUE_COLOR,
                 "Status",
                 self._status,
                 _STATUS_COLORS.get(self._status, _VALUE_COLOR),
             ),
         ]
-        row_specs.insert(
-            2,
-            (
-                "Rundir" if self._rundir is not None else "Runtime",
-                self._rundir
-                if self._rundir is not None
-                else _format_elapsed_seconds(self._elapsed_seconds),
-                _VALUE_COLOR,
-                "Runtime" if self._rundir is not None else "",
-                _format_elapsed_seconds(self._elapsed_seconds)
-                if self._rundir is not None
-                else "",
-                "",
-            ),
-        )
+        row_specs.insert(2, runtime_row)
 
         def build_row(
             left_label: str,
@@ -500,11 +549,11 @@ class StageConsole:
                 else right_width
             )
             left_segment = (
-                f"{left_value_color}{_truncate_plain(left_value, left_value_width)}{_ANSI_RESET}"
+                f"{left_value_color}{_truncate_display(left_value, left_value_width)}{_ANSI_RESET}"
                 if not left_label and left_value
                 else (
                     f"{_LABEL_COLOR}{left_label}:{_ANSI_RESET} "
-                    f"{left_value_color}{_truncate_plain(left_value, left_value_width)}{_ANSI_RESET}"
+                    f"{left_value_color}{_truncate_display(left_value, left_value_width)}{_ANSI_RESET}"
                     if left_label
                     else ""
                 )
@@ -514,7 +563,7 @@ class StageConsole:
             else:
                 right_segment = (
                     f"{_LABEL_COLOR}{right_label}:{_ANSI_RESET} "
-                    f"{right_color}{_truncate_plain(right_value, right_value_width)}{_ANSI_RESET}"
+                    f"{right_color}{_truncate_display(right_value, right_value_width)}{_ANSI_RESET}"
                 )
             return (
                 (
@@ -609,6 +658,54 @@ class StageConsole:
             ]
         )
 
+    def _format_shard_counts(self, *, max_width: int) -> str:
+        if self._shard_total is None:
+            return ""
+        completed = max(0, self._shard_completed or 0)
+        total = max(0, self._shard_total)
+        running = max(0, self._shard_running or 0)
+        percent = 0 if total == 0 else int((completed / total) * 100)
+        percent_color = _STATUS_COLORS.get(self._status, _VALUE_COLOR)
+        if not self._interactive:
+            return _truncate_plain(
+                f"running={running} completed={completed} total={total} ({percent}%)",
+                max_width,
+            )
+        variants = [
+            (
+                "running",
+                "completed",
+                "total",
+                f"({percent}%)",
+            ),
+            ("run", "done", "tot", f"({percent}%)"),
+            ("r", "d", "t", f"{percent}%"),
+        ]
+        for running_label, completed_label, total_label, percent_label in variants:
+            text = " ".join(
+                [
+                    f"{running_label}={_STATUS_COLORS['running']}{running}{_ANSI_RESET}",
+                    f"{completed_label}={_STATUS_COLORS['completed']}{completed}{_ANSI_RESET}",
+                    f"{total_label}={_VALUE_COLOR}{total}{_ANSI_RESET}",
+                    f"{percent_color}{percent_label}{_ANSI_RESET}",
+                ]
+            )
+            if _visible_width(text) <= max_width:
+                return text
+        return (
+            f"r={_STATUS_COLORS['running']}{running}{_ANSI_RESET} "
+            f"d={_STATUS_COLORS['completed']}{completed}{_ANSI_RESET} "
+            f"t={_VALUE_COLOR}{total}{_ANSI_RESET} "
+            f"{percent_color}{percent}%{_ANSI_RESET}"
+        )
+
+    def _display_elapsed_seconds(self) -> float:
+        if self._status != "running":
+            return self._elapsed_seconds
+        return max(
+            0.0, self._elapsed_seconds + (time.monotonic() - self._elapsed_synced_at)
+        )
+
     def _format_line(self, *, worker_id: str, line: str) -> str:
         prefix = f"worker={worker_id}"
         if not self._interactive:
@@ -677,6 +774,7 @@ def stream_stage_logs(
     log_mode: str = "all",
     poll_interval_seconds: float = 0.05,
 ) -> None:
+    render_interval_seconds = StageConsole._REDRAW_INTERVAL_SECONDS
     error_continuation_open: dict[str, bool] = {}
 
     def _filter_lines(worker_id: str, lines: list[str]) -> list[str]:
@@ -709,14 +807,19 @@ def stream_stage_logs(
     if log_mode == "none":
         snapshot_interval_seconds = max(poll_interval_seconds, 0.25)
         next_snapshot_at = time.monotonic()
+        next_render_at = next_snapshot_at
         while True:
             now = time.monotonic()
             if on_tick is not None and now >= next_snapshot_at:
                 on_tick()
                 next_snapshot_at = now + snapshot_interval_seconds
+            if now >= next_render_at:
+                console._render()
+                next_render_at = now + render_interval_seconds
             if not is_stage_running():
                 break
-            time.sleep(max(0.0, next_snapshot_at - time.monotonic()))
+            deadline = min(next_snapshot_at, next_render_at)
+            time.sleep(max(0.0, deadline - time.monotonic()))
         console._render()
         return
     selected_worker_id = (
@@ -738,6 +841,7 @@ def stream_stage_logs(
     )
     snapshot_interval_seconds = max(poll_interval_seconds, 0.25)
     next_snapshot_at = time.monotonic()
+    next_render_at = next_snapshot_at
     try:
         while True:
             emitted_any = False
@@ -752,9 +856,13 @@ def stream_stage_logs(
             if on_tick is not None and now >= next_snapshot_at:
                 on_tick()
                 next_snapshot_at = now + snapshot_interval_seconds
+            if now >= next_render_at:
+                console._render()
+                next_render_at = now + render_interval_seconds
             if not is_stage_running():
                 break
-            watcher.wait(max(0.0, next_snapshot_at - time.monotonic()))
+            deadline = min(next_snapshot_at, next_render_at)
+            watcher.wait(max(0.0, deadline - time.monotonic()))
         for worker_id, log_tail in log_tails.items():
             lines = _filter_lines(worker_id, log_tail.flush())
             if lines:
@@ -784,8 +892,9 @@ def run_stage_ui(
         total_stages=snapshot.total_stages,
         stage_workers=snapshot.stage_workers,
         tracking_url=snapshot.tracking_url,
+        initial_snapshot=snapshot,
     )
-    console.apply_snapshot(snapshot)
+    should_close = True
 
     def _update_snapshot() -> None:
         nonlocal snapshot
@@ -802,6 +911,7 @@ def run_stage_ui(
             poll_interval_seconds=poll_interval_seconds,
         )
         console.apply_snapshot(snapshot)
+        should_close = not keep_open
     except KeyboardInterrupt:
         console.set_status("failed")
         if stdout_is_interactive():
@@ -814,7 +924,7 @@ def run_stage_ui(
         console.emit_system(str(err))
         raise
     finally:
-        if not keep_open:
+        if should_close:
             console.close()
 
     return console, snapshot

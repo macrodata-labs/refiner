@@ -87,3 +87,58 @@ def test_cli_list_jobs_omits_me_when_false(monkeypatch) -> None:
     client.cli_list_jobs(limit=20, me=False)
 
     assert captured["path"] == "/api/cli/jobs?limit=20"
+
+
+def test_cli_list_jobs_serializes_me_as_lowercase_true(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"items": [], "nextCursor": None}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    client.cli_list_jobs(limit=1, me=True)
+
+    assert captured["path"] == "/api/cli/jobs?me=true&limit=1"
+
+
+def test_cli_get_job_logs_serializes_anchor(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"entries": [], "hasOlder": False, "nextCursor": None}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    client.cli_get_job_logs(
+        job_id="job-1",
+        start_ms=1,
+        end_ms=2,
+        anchor="earliest",
+    )
+
+    assert (
+        captured["path"] == "/api/cli/jobs/job-1/logs?startMs=1&endMs=2&anchor=earliest"
+    )
+
+
+def test_cli_get_job_logs_omits_unset_bounds(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"entries": [], "hasOlder": False, "nextCursor": None}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    client.cli_get_job_logs(
+        job_id="job-1",
+        anchor="latest",
+    )
+
+    assert captured["path"] == "/api/cli/jobs/job-1/logs?anchor=latest"

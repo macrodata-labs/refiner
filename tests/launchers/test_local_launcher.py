@@ -4,6 +4,7 @@ from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 import io
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
@@ -31,6 +32,8 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.worker.resources.gpu import build_gpu_sets
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 @pytest.fixture(autouse=True)
@@ -343,6 +346,181 @@ def test_local_stage_console_omits_rundir_row_when_absent(
     assert any("Runtime:" in line for line in header_lines)
 
 
+def test_stage_console_shows_shards_on_cloud_runtime_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
+    console = StageConsole(
+        job_id="job-1",
+        job_name="cloud-attach-demo",
+        rundir=None,
+        stage_index=0,
+        total_stages=2,
+        stage_workers=3,
+        tracking_url="https://example.com/jobs/job-1",
+    )
+    try:
+        console.apply_snapshot(
+            StageSnapshot(
+                job_id="job-1",
+                job_name="cloud-attach-demo",
+                rundir=None,
+                stage_index=0,
+                total_stages=2,
+                stage_workers=3,
+                tracking_url="https://example.com/jobs/job-1",
+                status="running",
+                worker_total=3,
+                worker_running=1,
+                worker_completed=1,
+                worker_failed=0,
+                elapsed_seconds=12.0,
+                shard_total=9,
+                shard_completed=4,
+                shard_running=2,
+            )
+        )
+        header_lines = console._build_header_lines(width=100)
+    finally:
+        console.close()
+
+    plain_lines = [_ANSI_RE.sub("", line) for line in header_lines]
+    assert any(
+        "Runtime:" in line and "00:12" in line and "Shards:" in line
+        for line in plain_lines
+    )
+    assert any("running=2 completed=4 total=9 (44%)" in line for line in plain_lines)
+
+
+def test_stage_console_runtime_advances_between_snapshot_polls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monotonic_values = iter((100.0, 100.0, 101.4, 101.4, 101.4))
+
+    monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
+    monkeypatch.setattr(
+        "refiner.cli.ui.console.time.monotonic",
+        lambda: next(monotonic_values),
+    )
+
+    console = StageConsole(
+        job_id="job-1",
+        job_name="cloud-attach-demo",
+        rundir=None,
+        stage_index=0,
+        total_stages=1,
+        stage_workers=1,
+        tracking_url="https://example.com/jobs/job-1",
+    )
+    try:
+        console.apply_snapshot(
+            StageSnapshot(
+                job_id="job-1",
+                job_name="cloud-attach-demo",
+                rundir=None,
+                stage_index=0,
+                total_stages=1,
+                stage_workers=1,
+                tracking_url="https://example.com/jobs/job-1",
+                status="running",
+                worker_total=1,
+                worker_running=1,
+                worker_completed=0,
+                worker_failed=0,
+                elapsed_seconds=10.0,
+            )
+        )
+        header_lines = console._build_header_lines(width=100)
+    finally:
+        console.close()
+
+    plain_lines = [_ANSI_RE.sub("", line) for line in header_lines]
+    assert any("Runtime:" in line and "00:11" in line for line in plain_lines)
+
+
+def test_stage_console_shows_zero_percent_when_shard_total_is_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
+    console = StageConsole(
+        job_id="job-1",
+        job_name="cloud-attach-demo",
+        rundir=None,
+        stage_index=0,
+        total_stages=1,
+        stage_workers=1,
+        tracking_url="https://example.com/jobs/job-1",
+    )
+    try:
+        console.apply_snapshot(
+            StageSnapshot(
+                job_id="job-1",
+                job_name="cloud-attach-demo",
+                rundir=None,
+                stage_index=0,
+                total_stages=1,
+                stage_workers=1,
+                tracking_url="https://example.com/jobs/job-1",
+                status="running",
+                worker_total=1,
+                worker_running=1,
+                worker_completed=0,
+                worker_failed=0,
+                elapsed_seconds=0.0,
+                shard_total=0,
+                shard_completed=0,
+                shard_running=0,
+            )
+        )
+        header_lines = console._build_header_lines(width=100)
+    finally:
+        console.close()
+
+    plain_lines = [_ANSI_RE.sub("", line) for line in header_lines]
+    assert any("running=0 completed=0 total=0 (0%)" in line for line in plain_lines)
+
+
+def test_stage_console_colors_shard_percent_with_status_color(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: True)
+    console = StageConsole(
+        job_id="job-1",
+        job_name="cloud-attach-demo",
+        rundir=None,
+        stage_index=0,
+        total_stages=1,
+        stage_workers=1,
+        tracking_url="https://example.com/jobs/job-1",
+    )
+    try:
+        console.apply_snapshot(
+            StageSnapshot(
+                job_id="job-1",
+                job_name="cloud-attach-demo",
+                rundir=None,
+                stage_index=0,
+                total_stages=1,
+                stage_workers=1,
+                tracking_url="https://example.com/jobs/job-1",
+                status="completed",
+                worker_total=1,
+                worker_running=0,
+                worker_completed=1,
+                worker_failed=0,
+                elapsed_seconds=0.0,
+                shard_total=4,
+                shard_completed=4,
+                shard_running=0,
+            )
+        )
+        header_lines = console._build_header_lines(width=100)
+    finally:
+        console.close()
+
+    assert any("\x1b[1;38;5;77m(100%)\x1b[0m" in line for line in header_lines)
+
+
 def test_stage_console_shows_login_hint_when_tracking_url_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -362,8 +540,8 @@ def test_stage_console_shows_login_hint_when_tracking_url_missing(
         console.close()
 
     assert any(
-        "URL:" in line and "Not tracked; run macrodata login" in line
-        for line in header_lines
+        "URL:" in plain_line and "Not tracked; run macrodata login" in plain_line
+        for plain_line in (_ANSI_RE.sub("", line) for line in header_lines)
     )
 
 
@@ -585,6 +763,47 @@ def test_run_stage_ui_marks_failed_on_interrupt(
 
     assert statuses[-1] == "failed"
     assert system_messages == []
+    assert closed == [True]
+
+
+def test_run_stage_ui_closes_on_interrupt_even_when_keep_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+
+    monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
+    monkeypatch.setattr(
+        "refiner.cli.ui.console.stream_stage_logs",
+        lambda **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    monkeypatch.setattr(
+        "refiner.cli.ui.console.StageConsole.close",
+        lambda self: closed.append(True),
+    )
+
+    snapshot = StageSnapshot(
+        job_id="job-1",
+        job_name="demo",
+        rundir="/tmp/run",
+        stage_index=0,
+        total_stages=1,
+        stage_workers=1,
+        tracking_url=None,
+        status="running",
+        worker_total=1,
+        worker_running=1,
+        worker_completed=0,
+        worker_failed=0,
+        elapsed_seconds=0.0,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_stage_ui(
+            worker_log_paths={},
+            snapshot_getter=lambda: snapshot,
+            keep_open=True,
+        )
+
     assert closed == [True]
 
 
