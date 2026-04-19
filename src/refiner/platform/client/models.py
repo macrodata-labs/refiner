@@ -268,27 +268,16 @@ class CloudPipelinePayload:
 class StagePayload:
     stage_index: int
     pipeline_payload: CloudPipelinePayload
-    runtime: CloudRuntimeConfig
+    runtime: CloudRuntimeConfig | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "stage_index": self.stage_index,
             "pipeline_payload": self.pipeline_payload.to_dict(),
-            "runtime": self.runtime.to_dict(),
         }
+        if self.runtime is not None:
+            payload["runtime"] = self.runtime.to_dict()
         return payload
-
-
-@dataclass(frozen=True, slots=True)
-class ResumeStagePayload:
-    stage_index: int
-    pipeline_payload: CloudPipelinePayload
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "stage_index": self.stage_index,
-            "pipeline_payload": self.pipeline_payload.to_dict(),
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,30 +332,6 @@ class CloudResumeSelector:
                 raise ValueError("resume selector name must be non-empty")
             object.__setattr__(self, "name", normalized_name)
 
-    @classmethod
-    def from_mode(
-        cls,
-        *,
-        job_id: str | None = None,
-        mode: str | None = None,
-        name: str | None = None,
-        limit_to_me: bool = False,
-    ) -> "CloudResumeSelector | None":
-        if mode is not None and mode != "latest-compatible":
-            raise ValueError("resume must be 'latest-compatible' when provided")
-        if job_id is None and mode is None:
-            if name is not None or limit_to_me:
-                raise ValueError(
-                    "resume_name and resume_limit_to_me require resume='latest-compatible'"
-                )
-            return None
-        return cls(
-            job_id=job_id,
-            latest_compatible=(mode == "latest-compatible"),
-            name=name,
-            limit_to_me=limit_to_me,
-        )
-
     def to_dict(self) -> dict[str, Any]:
         if self.job_id is not None:
             return {"job_id": self.job_id}
@@ -384,7 +349,7 @@ class CloudRunResumeRequest:
     name: str | None = None
     runtime_overrides: CloudRuntimeOverrides | None = None
     plan: dict[str, Any] | None = None
-    stage_payloads: list[ResumeStagePayload] | None = None
+    stage_payloads: list[StagePayload] | None = None
     manifest: dict[str, Any] | None = None
     sync_local_dependencies: bool | None = None
     secrets: dict[str, str] | None = None

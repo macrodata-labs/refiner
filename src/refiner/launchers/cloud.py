@@ -21,7 +21,6 @@ from refiner.platform.client import (
     CloudRuntimeOverrides,
     MacrodataApiError,
     MacrodataClient,
-    ResumeStagePayload,
     StagePayload,
     serialize_pipeline_inline,
 )
@@ -33,7 +32,6 @@ from refiner.pipeline.planning import plan_pipeline_stages
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
-    from refiner.pipeline.planning import PlannedStage
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
@@ -87,12 +85,30 @@ class CloudLauncher(BaseLauncher):
             cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
-        resume_selector = CloudResumeSelector.from_mode(
-            job_id=resume_from_job_id,
-            mode=resume,
-            name=resume_name,
-            limit_to_me=resume_limit_to_me,
-        )
+        if resume is not None and resume != "latest-compatible":
+            raise ValueError("resume must be 'latest-compatible' when provided")
+        if resume_from_job_id is not None and resume is not None:
+            raise ValueError(
+                "resume selector must specify exactly one of job_id or latest_compatible"
+            )
+        if resume_from_job_id is not None:
+            if resume_name is not None or resume_limit_to_me:
+                raise ValueError(
+                    "name and limit_to_me are only supported with latest_compatible"
+                )
+            resume_selector = CloudResumeSelector(job_id=resume_from_job_id)
+        elif resume is not None:
+            resume_selector = CloudResumeSelector(
+                latest_compatible=True,
+                name=resume_name,
+                limit_to_me=resume_limit_to_me,
+            )
+        else:
+            if resume_name is not None or resume_limit_to_me:
+                raise ValueError(
+                    "resume_name and resume_limit_to_me require resume='latest-compatible'"
+                )
+            resume_selector = None
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
         normalized_gpu_type = gpu_type.strip() if gpu_type is not None else None
@@ -232,16 +248,20 @@ class CloudLauncher(BaseLauncher):
                 # Resume requests only need stage topology plus serialized pipeline payloads.
                 # Effective worker sizing comes from the prior job and explicit
                 # runtime_overrides, so resume planning uses a placeholder worker
-                # count and strips runtime fields later.
+                # count and compiles the stage graph without runtime sizing.
                 stages = plan_pipeline_stages(self.pipeline, default_num_workers=1)
                 resp = client.cloud_resume_job(
                     request=CloudRunResumeRequest(
                         selector=selector,
                         name=self.name,
                         runtime_overrides=self._runtime_overrides(),
-                        plan=self._resume_plan(stages, secret_values=secret_values),
+                        plan=self._compiled_plan(
+                            stages,
+                            secret_values=secret_values,
+                            include_runtime=False,
+                        ),
                         stage_payloads=[
-                            ResumeStagePayload(
+                            StagePayload(
                                 stage_index=stage.index,
                                 pipeline_payload=serialize_pipeline_inline(
                                     stage.pipeline
@@ -314,33 +334,6 @@ class CloudLauncher(BaseLauncher):
             gpus_per_worker=self.gpus_per_worker,
             gpu_type=self.gpu_type,
         )
-
-    def _resume_plan(
-        self,
-        stages: list["PlannedStage"],
-        *,
-        secret_values: tuple[str, ...],
-    ) -> dict[str, object]:
-        plan = self._compiled_plan(stages, secret_values=secret_values)
-        resume_plan = dict(plan)
-        stage_dicts = cast(list[dict[str, object]], resume_plan.get("stages", []))
-        resume_plan["stages"] = [
-            self._strip_stage_runtime(stage) for stage in stage_dicts
-        ]
-        return resume_plan
-
-    @staticmethod
-    def _strip_stage_runtime(stage: dict[str, object]) -> dict[str, object]:
-        cleaned = dict(stage)
-        for key in (
-            "requested_num_workers",
-            "cpus_per_worker",
-            "memory_mb_per_worker",
-            "gpus_per_worker",
-            "gpu_type",
-        ):
-            cleaned.pop(key, None)
-        return cleaned
 
 
 __all__ = ["CloudLauncher", "CloudLaunchResult"]

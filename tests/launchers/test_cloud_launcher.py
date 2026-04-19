@@ -123,6 +123,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert len(request.stage_payloads) == 1
     assert request.stage_payloads[0].stage_index == 0
     assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
+    assert request.stage_payloads[0].runtime is not None
     assert request.stage_payloads[0].runtime.num_workers == 3
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
@@ -432,7 +433,12 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
 
     request = cast(CloudRunCreateRequest, captured["request"])
     assert [payload.stage_index for payload in request.stage_payloads] == [0, 1]
-    assert [payload.runtime.num_workers for payload in request.stage_payloads] == [2, 5]
+    runtimes = [payload.runtime for payload in request.stage_payloads]
+    assert all(runtime is not None for runtime in runtimes)
+    assert [runtime.num_workers for runtime in runtimes if runtime is not None] == [
+        2,
+        5,
+    ]
     assert (
         request.stage_payloads[0].pipeline_payload.sha256
         != request.stage_payloads[1].pipeline_payload.sha256
@@ -810,6 +816,7 @@ def test_pipeline_launch_cloud_resume_from_job_id_posts_resume_request(
     assert request.stage_payloads is not None
     assert request.stage_payloads[0].stage_index == 0
     assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
+    assert request.stage_payloads[0].runtime is None
     assert request.runtime_overrides is not None
     assert request.runtime_overrides.to_dict() == {
         "num_workers": 3,
@@ -840,6 +847,8 @@ def test_pipeline_launch_cloud_resume_latest_compatible_posts_resume_request(
         "name": "prior job",
         "limit_to_me": True,
     }
+    assert request.stage_payloads is not None
+    assert request.stage_payloads[0].runtime is None
     assert request.runtime_overrides is None
 
 
