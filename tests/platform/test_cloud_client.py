@@ -161,6 +161,32 @@ def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> 
     }
 
 
+def test_cloud_client_cloud_resume_job_raw_posts_to_resume_endpoint(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"job_id": "job-raw", "workspaceSlug": "macrodata", "extra": True}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    payload = client.cloud_resume_job_raw(
+        request=CloudRunResumeRequest(selector=CloudResumeSelector(job_id="job-1"))
+    )
+
+    assert payload == {
+        "job_id": "job-raw",
+        "workspaceSlug": "macrodata",
+        "extra": True,
+    }
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/cloud/runs/resume"
+    assert captured["timeout_s"] == 30.0
+
+
 def test_cloud_runtime_overrides_allow_partial_gpu_fields() -> None:
     assert CloudRuntimeOverrides(gpus_per_worker=2).to_dict() == {"gpus_per_worker": 2}
     assert CloudRuntimeOverrides(gpu_type="h100").to_dict() == {"gpu_type": "h100"}

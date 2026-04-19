@@ -232,6 +232,16 @@ class _FakeClient:
             workspace_slug="macrodata",
         )
 
+    def cloud_resume_job_raw(self, *, request: object) -> dict[str, object]:
+        self.resume_requests.append(request)
+        return {
+            "job_id": "job-2",
+            "stage_index": 1,
+            "status": "queued",
+            "workspaceSlug": "macrodata",
+            "extraField": {"kept": True},
+        }
+
 
 def _patch_job_client(monkeypatch, factory) -> None:
     monkeypatch.setattr(jobs_list_module, "_client", factory)
@@ -2929,7 +2939,7 @@ def test_jobs_resource_metrics_deduplicates_worker_ids(monkeypatch) -> None:
 
 def test_jobs_resume_by_job_id_plain_output(monkeypatch, capsys) -> None:
     client = _FakeClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _patch_job_client(monkeypatch, lambda: client)
 
     rc = jobs.cmd_jobs_resume(
         Namespace(
@@ -2956,7 +2966,7 @@ def test_jobs_resume_by_job_id_plain_output(monkeypatch, capsys) -> None:
 
 def test_jobs_resume_latest_compatible_json_output(monkeypatch, capsys) -> None:
     client = _FakeClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _patch_job_client(monkeypatch, lambda: client)
 
     rc = jobs.cmd_jobs_resume(
         Namespace(
@@ -2976,6 +2986,7 @@ def test_jobs_resume_latest_compatible_json_output(monkeypatch, capsys) -> None:
 
     assert rc == 0
     assert '"job_id": "job-2"' in out.out
+    assert '"extraField"' in out.out
     request = cast(CloudRunResumeRequest, client.resume_requests[0])
     assert request.selector.to_dict() == {
         "latest_compatible": True,
@@ -2994,7 +3005,7 @@ def test_jobs_resume_latest_compatible_json_output(monkeypatch, capsys) -> None:
 
 def test_jobs_resume_accepts_partial_gpu_override(monkeypatch) -> None:
     client = _FakeClient()
-    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _patch_job_client(monkeypatch, lambda: client)
 
     rc = jobs.cmd_jobs_resume(
         Namespace(
@@ -3018,7 +3029,7 @@ def test_jobs_resume_accepts_partial_gpu_override(monkeypatch) -> None:
 
 
 def test_jobs_resume_requires_exactly_one_selector(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_resume(
         Namespace(

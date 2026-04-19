@@ -76,11 +76,15 @@ def cmd_jobs_resume(args: Namespace) -> int:
     try:
         selector = _resume_selector_from_args(args)
         runtime_overrides = _resume_runtime_overrides_from_args(args)
-        payload = _client().cloud_resume_job(
-            request=CloudRunResumeRequest(
-                selector=selector,
-                runtime_overrides=runtime_overrides,
-            )
+        request = CloudRunResumeRequest(
+            selector=selector,
+            runtime_overrides=runtime_overrides,
+        )
+        client = _client()
+        payload = (
+            client.cloud_resume_job_raw(request=request)
+            if args.json
+            else client.cloud_resume_job(request=request)
         )
     except (MacrodataApiError, MacrodataCredentialsError, ValueError) as err:
         return _handle_error(err)
