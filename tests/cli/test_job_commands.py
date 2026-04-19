@@ -264,7 +264,7 @@ def test_jobs_attach_calls_cloud_attach(monkeypatch) -> None:
 
     assert rc == 0
     assert captured["job_id"] == "job-1"
-    assert captured.get("force_attach", False) is False
+    assert captured.get("force_attach", False) is True
     payload = cast(dict[str, object], captured["initial_job_payload"])
     job = cast(dict[str, object], payload["job"])
     assert job["executorKind"] == "cloud"
