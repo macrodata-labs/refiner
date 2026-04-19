@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import builtins
+import itertools
 from argparse import Namespace
 from datetime import datetime
 from typing import Any, cast
 
 from refiner.cli import jobs
 from refiner.platform.client.api import MacrodataApiError
+
+
+def _install_follow_clock(monkeypatch) -> None:
+    monotonic_values = itertools.count(0.0, 1.0)
+    monkeypatch.setattr(jobs.time, "monotonic", lambda: next(monotonic_values))
 
 
 class _FakeClient:
@@ -426,6 +432,7 @@ def test_jobs_logs_follow_streams_until_interrupted(monkeypatch, capsys) -> None
         if sleep_calls["count"] >= 2:
             raise KeyboardInterrupt
 
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
 
     rc = jobs.cmd_jobs_logs(
@@ -492,6 +499,7 @@ def test_jobs_logs_follow_returns_when_job_is_terminal(monkeypatch, capsys) -> N
     def _fake_sleep(_: float) -> None:
         sleep_calls["count"] += 1
 
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
 
     rc = jobs.cmd_jobs_logs(
@@ -516,7 +524,55 @@ def test_jobs_logs_follow_returns_when_job_is_terminal(monkeypatch, capsys) -> N
     assert rc == 0
     assert "done" in out.out
     assert out.err == ""
-    assert sleep_calls["count"] == 0
+    assert sleep_calls["count"] == 1
+
+
+def test_jobs_logs_follow_waits_until_logs_are_available(monkeypatch) -> None:
+    class _DelayedLogsClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+            self.job_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            self.job_calls += 1
+            payload = super().cli_get_job(job_id=job_id)
+            job = cast(dict[str, object], payload["job"])
+            if self.job_calls == 1:
+                job["logsAvailable"] = False
+            else:
+                job["logsAvailable"] = True
+                job["status"] = "completed"
+            return payload
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            return {"entries": [], "hasOlder": False, "nextCursor": None}
+
+    client = _DelayedLogsClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _install_follow_clock(monkeypatch)
+    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+
+    assert rc == 0
+    assert client.log_calls == 2
 
 
 def test_jobs_logs_follow_drains_backlog_before_terminal_exit(
@@ -568,6 +624,7 @@ def test_jobs_logs_follow_drains_backlog_before_terminal_exit(
 
     client = _BacklogClient()
     monkeypatch.setattr(jobs, "_client", lambda: client)
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
@@ -646,6 +703,7 @@ def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
     def _fake_sleep(_: float) -> None:
         sleep_calls["count"] += 1
 
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
 
     rc = jobs.cmd_jobs_logs(
@@ -670,8 +728,58 @@ def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
     assert rc == 0
     assert "first" in out.out
     assert "second" in out.out
-    assert sleep_calls["count"] == 1
-    assert client.job_calls == 1
+    assert sleep_calls["count"] == 0
+    assert client.job_calls == 2
+
+
+def test_jobs_logs_follow_keeps_draining_cursor_when_logs_become_unavailable(
+    monkeypatch,
+) -> None:
+    class _CursorClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls: list[dict[str, object]] = []
+            self.job_calls = 0
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            self.log_calls.append(dict(kwargs))
+            if len(self.log_calls) == 1:
+                return {"entries": [], "hasOlder": True, "nextCursor": "cursor-1"}
+            return {"entries": [], "hasOlder": False, "nextCursor": None}
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            self.job_calls += 1
+            payload = super().cli_get_job(job_id=job_id)
+            job = cast(dict[str, object], payload["job"])
+            job["logsAvailable"] = False
+            if self.job_calls >= 2:
+                job["status"] = "completed"
+            return payload
+
+    client = _CursorClient()
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+    _install_follow_clock(monkeypatch)
+    monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=1,
+            follow=True,
+            json=False,
+        )
+    )
+
+    assert rc == 0
+    assert [call["cursor"] for call in client.log_calls] == [None, "cursor-1"]
 
 
 def test_jobs_logs_follow_skips_backlog_to_stay_live(monkeypatch, capsys) -> None:
@@ -723,6 +831,7 @@ def test_jobs_logs_follow_skips_backlog_to_stay_live(monkeypatch, capsys) -> Non
             return payload
 
     monkeypatch.setattr(jobs, "_client", lambda: _SkippingClient())
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
@@ -806,6 +915,7 @@ def test_jobs_logs_follow_sleeps_after_bounded_drain_polls(monkeypatch, capsys) 
     def _fake_sleep(_: float) -> None:
         sleep_calls["count"] += 1
 
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", _fake_sleep)
 
     rc = jobs.cmd_jobs_logs(
@@ -830,8 +940,8 @@ def test_jobs_logs_follow_sleeps_after_bounded_drain_polls(monkeypatch, capsys) 
     assert rc == 0
     assert "line-1" in out.out
     assert f"line-{jobs._FOLLOW_LOG_MAX_DRAIN_POLLS}" in out.out
-    assert sleep_calls["count"] == jobs._FOLLOW_LOG_MAX_DRAIN_POLLS
-    assert client.job_calls == 2
+    assert sleep_calls["count"] == 0
+    assert client.job_calls == jobs._FOLLOW_LOG_MAX_DRAIN_POLLS
 
 
 def test_jobs_logs_follow_ignores_transient_status_probe_errors(
@@ -867,10 +977,12 @@ def test_jobs_logs_follow_ignores_transient_status_probe_errors(
             if self.job_calls == 1:
                 raise MacrodataApiError(status=503, message="temporary")
             payload = super().cli_get_job(job_id=job_id)
-            cast(dict[str, object], payload["job"])["status"] = "completed"
+            if self.job_calls >= 2:
+                cast(dict[str, object], payload["job"])["status"] = "completed"
             return payload
 
     monkeypatch.setattr(jobs, "_client", lambda: _FlakyStatusClient())
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
@@ -915,12 +1027,13 @@ def test_jobs_logs_follow_advances_window_after_transient_status_probe_error(
             if self.job_calls == 1:
                 raise MacrodataApiError(status=503, message="temporary")
             payload = super().cli_get_job(job_id=job_id)
-            cast(dict[str, object], payload["job"])["status"] = "completed"
+            if self.job_calls >= 2:
+                cast(dict[str, object], payload["job"])["status"] = "completed"
             return payload
 
     client = _FlakyStatusClient()
     monkeypatch.setattr(jobs, "_client", lambda: client)
-    now_values = iter([10, 15])
+    now_values = iter([10, 15, 20])
 
     class _FakeDateTime:
         @staticmethod
@@ -928,6 +1041,7 @@ def test_jobs_logs_follow_advances_window_after_transient_status_probe_error(
             return datetime.fromtimestamp(next(now_values), tz=tz)
 
     monkeypatch.setattr(jobs, "datetime", _FakeDateTime)
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
@@ -949,7 +1063,7 @@ def test_jobs_logs_follow_advances_window_after_transient_status_probe_error(
     )
 
     assert rc == 0
-    assert client.log_calls == [(1, 2), (2, 10000)]
+    assert client.log_calls == [(1, 2), (2, 10_000)]
 
 
 def test_jobs_logs_follow_retries_transient_log_fetch_errors(
@@ -986,6 +1100,7 @@ def test_jobs_logs_follow_retries_transient_log_fetch_errors(
             return payload
 
     monkeypatch.setattr(jobs, "_client", lambda: _FlakyLogsClient())
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(
@@ -1150,6 +1265,7 @@ def test_jobs_logs_follow_uses_larger_default_limit(monkeypatch, capsys) -> None
             return payload
 
     monkeypatch.setattr(jobs, "_client", lambda: _LimitClient())
+    _install_follow_clock(monkeypatch)
     monkeypatch.setattr(jobs.time, "sleep", lambda _: None)
 
     rc = jobs.cmd_jobs_logs(

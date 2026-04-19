@@ -2,20 +2,16 @@ from __future__ import annotations
 
 import sys
 import time
-from collections import deque
-from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any, TextIO, cast
 
 from refiner.cli.job_utils import (
     TERMINAL_JOB_STATUSES as _TERMINAL_JOB_STATUSES,
+    FollowStatus,
+    epoch_ms_now,
     format_ts as _format_ts,
-    is_retryable_api_error as _is_retryable_api_error,
+    follow_logs as _follow_logs,
     job_status as _job_status,
-    log_entry_key as _log_entry_key,
-    next_log_cursor as _next_log_cursor,
-    parse_epoch_ms,
-    remember_seen_key as _remember_seen_key,
     safe_text as _safe_text,
 )
 from refiner.cli.local_run import (
@@ -26,7 +22,7 @@ from refiner.cli.local_run import (
     stdout_is_interactive,
 )
 from refiner.job_urls import build_job_tracking_url
-from refiner.platform.client import MacrodataApiError, MacrodataClient
+from refiner.platform.client import MacrodataClient
 
 _ATTACH_MODE_ENV_VAR = "REFINER_ATTACH"
 _VALID_ATTACH_MODES = {"auto", "attach", "detach"}
@@ -73,13 +69,6 @@ def attach_mode_override() -> str | None:
     return normalize_attach_mode(value)
 
 
-def resolve_attach_mode() -> str:
-    override = attach_mode_override()
-    if override is not None and override != "auto":
-        return override
-    return "attach" if stdout_is_interactive() else "detach"
-
-
 def resolve_launcher_attach_mode() -> str:
     override = attach_mode_override()
     if override is None:
@@ -87,14 +76,6 @@ def resolve_launcher_attach_mode() -> str:
     if override == "auto":
         return "attach" if stdout_is_interactive() else "detach"
     return override
-
-
-def require_cloud_attach_supported(executor_kind: str) -> None:
-    override = attach_mode_override()
-    if override is None:
-        return
-    if executor_kind != "cloud" and override == "detach":
-        raise SystemExit("--detach is only supported for cloud launches.")
 
 
 def emit_cloud_followup_commands(
@@ -118,10 +99,6 @@ def emit_cloud_followup_commands(
     print(f"Cancel: macrodata jobs cancel {context.job_id}", file=file)
 
 
-def _retry_delay(error_count: int) -> float:
-    return min(float(2 ** max(0, error_count - 1)), 5.0)
-
-
 def _warn_follow_skip(
     *,
     context: CloudAttachContext,
@@ -143,14 +120,6 @@ def _warn_follow_skip(
             f"request logs for fewer workers for better visibility, or rerun with "
             f"`macrodata jobs logs {context.job_id} --stage {context.stage_index} --start-ms <ms> --end-ms <ms>` for full coverage"
         )
-
-
-def _context_for_stage(
-    context: CloudAttachContext, *, stage_index: int
-) -> CloudAttachContext:
-    if context.stage_index == stage_index:
-        return context
-    return replace(context, stage_index=stage_index)
 
 
 def _log_worker_label(entry: dict[str, Any]) -> str:
@@ -366,193 +335,153 @@ def attach_to_cloud_job(
     closed = False
     try:
         console.apply_snapshot(snapshot)
-        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        current_start_ms = max(
-            0,
-            now_ms - _DEFAULT_LOG_WINDOW_MS,
-        )
-        current_end_ms = max(current_start_ms + 1, now_ms)
-        current_cursor: str | None = None
-        seen_keys: set[tuple[str, str, str, str, str]] = set()
-        seen_order: deque[tuple[str, str, str, str, str]] = deque()
-        full_batch_polls = 0
-        log_retryable_error_count = 0
-        status_retryable_error_count = 0
-        next_summary_at = time.monotonic() + _ATTACH_SUMMARY_INTERVAL_SECONDS
-        next_logs_at = 0.0
-        terminal_seen = False
+        end_ms = epoch_ms_now()
+        start_ms = max(0, end_ms - _DEFAULT_LOG_WINDOW_MS)
 
-        while True:
-            now = time.monotonic()
-            if now >= next_summary_at:
-                try:
-                    job_payload = client.cli_get_job(job_id=job_id)
-                except MacrodataApiError as err:
-                    if not _is_retryable_api_error(err):
-                        raise
-                    status_retryable_error_count += 1
-                    if status_retryable_error_count > _ATTACH_MAX_RETRYABLE_ERRORS:
-                        raise
-                    next_summary_at = now + _retry_delay(status_retryable_error_count)
-                    continue
-                status_retryable_error_count = 0
-                context, snapshot = _snapshot_and_context(
-                    client=client,
-                    job_id=job_id,
-                    job_payload=job_payload,
-                    stage_index_hint=stage_index_hint,
-                )
-                stage_changed = snapshot.stage_index != current_stage_index
-                if stage_changed:
-                    selected_worker_ids = ()
-                    current_cursor = None
-                    full_batch_polls = 0
-                    seen_keys.clear()
-                    seen_order.clear()
-                    reset_now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-                    current_start_ms = max(0, reset_now_ms - _DEFAULT_LOG_WINDOW_MS)
-                    current_end_ms = max(current_start_ms + 1, reset_now_ms)
-                    next_logs_at = now
-                console.apply_snapshot(snapshot)
-                current_stage_index = snapshot.stage_index
-                context = _context_for_stage(context, stage_index=current_stage_index)
-                if stage_changed:
-                    _emit_cloud_log_mode_banner(
-                        console=console,
-                        log_mode=log_mode,
-                        running_workers=snapshot.worker_running,
-                    )
-                terminal_seen = _job_status(job_payload) in _TERMINAL_JOB_STATUSES
-                next_summary_at = now + _ATTACH_SUMMARY_INTERVAL_SECONDS
-
-            logs_available = isinstance(job_payload.get("job"), dict) and bool(
-                cast(dict[str, Any], job_payload["job"]).get("logsAvailable", True)
+        def _fetch_logs(
+            current_start_ms: int,
+            current_end_ms: int,
+            current_cursor: str | None,
+        ) -> dict[str, Any]:
+            return client.cli_get_job_logs(
+                job_id=job_id,
+                start_ms=current_start_ms,
+                end_ms=current_end_ms,
+                cursor=current_cursor,
+                limit=_DEFAULT_ATTACH_LOG_LIMIT,
+                stage_index=current_stage_index,
+                worker_id=None,
+                source_type=None,
+                source_name=None,
+                severity=None,
+                search=None,
             )
-            if log_mode == "none":
-                logs_available = False
-            if not logs_available:
-                next_logs_at = now + _ATTACH_LOGS_INTERVAL_SECONDS
-            if logs_available and now >= next_logs_at:
-                try:
-                    payload = client.cli_get_job_logs(
-                        job_id=job_id,
-                        start_ms=current_start_ms,
-                        end_ms=current_end_ms,
-                        cursor=current_cursor,
-                        limit=_DEFAULT_ATTACH_LOG_LIMIT,
-                        stage_index=current_stage_index,
-                        worker_id=None,
-                        source_type=None,
-                        source_name=None,
-                        severity=None,
-                        search=None,
-                    )
-                except MacrodataApiError as err:
-                    if not _is_retryable_api_error(err):
-                        raise
-                    log_retryable_error_count += 1
-                    if log_retryable_error_count > _ATTACH_MAX_RETRYABLE_ERRORS:
-                        raise
-                    time.sleep(_retry_delay(log_retryable_error_count))
-                    continue
-                log_retryable_error_count = 0
-                entries = payload.get("entries")
-                if isinstance(entries, list):
-                    for entry in entries:
-                        if not isinstance(entry, dict):
-                            continue
-                        worker_id = _safe_text(entry.get("workerId"))
-                        selected_worker_id = (
-                            selected_worker_ids[0] if selected_worker_ids else None
-                        )
-                        should_emit = should_emit_worker_line(
-                            log_mode=log_mode,
-                            worker_id=worker_id,
-                            selected_worker_id=selected_worker_id,
-                            line=_safe_text(entry.get("line")),
-                            severity=_safe_text(entry.get("severity")),
-                        )
-                        if (
-                            log_mode == "one"
-                            and worker_id != "-"
-                            and not selected_worker_ids
-                        ):
-                            selected_worker_ids = (worker_id,)
-                            selected_worker_id = worker_id
-                            should_emit = should_emit_worker_line(
-                                log_mode=log_mode,
-                                worker_id=worker_id,
-                                selected_worker_id=selected_worker_id,
-                                line=_safe_text(entry.get("line")),
-                                severity=_safe_text(entry.get("severity")),
-                            )
-                        elif (
-                            log_mode in {"all", "errors"}
-                            and should_emit
-                            and worker_id != "-"
-                            and worker_id not in selected_worker_ids
-                        ):
-                            if len(selected_worker_ids) >= _ATTACH_MAX_LOGGED_WORKERS:
-                                continue
-                            selected_worker_ids = (*selected_worker_ids, worker_id)
-                        if not should_emit:
-                            continue
-                        key = _log_entry_key(entry)
-                        if key in seen_keys:
-                            continue
-                        console.emit_lines(
-                            worker_id=_log_worker_label(entry),
-                            lines=[_format_attach_log_line(entry)],
-                        )
-                        _remember_seen_key(
-                            key=key,
-                            seen_keys=seen_keys,
-                            seen_order=seen_order,
-                            limit=_ATTACH_DEDUPE_LIMIT,
-                        )
-                current_cursor = _next_log_cursor(payload)
-                if current_cursor is not None:
-                    full_batch_polls += 1
-                    if full_batch_polls < _ATTACH_MAX_DRAIN_POLLS:
-                        next_logs_at = (
-                            time.monotonic() + _ATTACH_DRAIN_POLL_DELAY_SECONDS
-                        )
-                        continue
-                    oldest_entry = (
-                        entries[0] if isinstance(entries, list) and entries else None
-                    )
-                    skipped_end_ms = current_end_ms
-                    if isinstance(oldest_entry, dict):
-                        parsed_oldest_ms = parse_epoch_ms(oldest_entry.get("ts"))
-                        if parsed_oldest_ms is not None:
-                            skipped_end_ms = parsed_oldest_ms
-                    _warn_follow_skip(
-                        context=context,
-                        start_ms=current_start_ms,
-                        end_ms=skipped_end_ms,
-                        console=console,
-                    )
-                    current_cursor = None
-                    full_batch_polls = 0
-                    current_start_ms = current_end_ms
-                    next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-                    current_end_ms = max(next_end_ms, current_start_ms + 1)
-                    next_logs_at = time.monotonic()
-                    continue
-                full_batch_polls = 0
-                current_start_ms = current_end_ms
-                next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-                current_end_ms = max(next_end_ms, current_start_ms + 1)
-                next_logs_at = now + _ATTACH_LOGS_INTERVAL_SECONDS
 
-            if terminal_seen and current_cursor is None:
-                console.emit_system(
-                    f"cloud job {context.job_id} finished with status {_job_status(job_payload)}"
+        def _refresh_status() -> FollowStatus:
+            nonlocal \
+                context, \
+                snapshot, \
+                job_payload, \
+                current_stage_index, \
+                selected_worker_ids
+            job_payload = client.cli_get_job(job_id=job_id)
+            context, snapshot = _snapshot_and_context(
+                client=client,
+                job_id=job_id,
+                job_payload=job_payload,
+                stage_index_hint=stage_index_hint,
+            )
+            stage_changed = snapshot.stage_index != current_stage_index
+            console.apply_snapshot(snapshot)
+            current_stage_index = snapshot.stage_index
+            if context.stage_index != current_stage_index:
+                context = CloudAttachContext(
+                    job_id=context.job_id,
+                    job_name=context.job_name,
+                    tracking_url=context.tracking_url,
+                    stage_index=current_stage_index,
                 )
-                return 0
+            if stage_changed:
+                selected_worker_ids = ()
+                _emit_cloud_log_mode_banner(
+                    console=console,
+                    log_mode=log_mode,
+                    running_workers=snapshot.worker_running,
+                )
+            status = _job_status(job_payload)
+            logs_available = (
+                log_mode != "none"
+                and isinstance(job_payload.get("job"), dict)
+                and bool(
+                    cast(dict[str, Any], job_payload["job"]).get("logsAvailable", True)
+                )
+            )
+            return FollowStatus(
+                terminal_status=status if status in _TERMINAL_JOB_STATUSES else None,
+                logs_available=logs_available,
+                reset_window=stage_changed,
+            )
 
-            deadline = min(next_summary_at, next_logs_at)
-            time.sleep(max(0.05, deadline - time.monotonic()))
+        def _emit_entry(entry: dict[str, Any]) -> bool:
+            nonlocal selected_worker_ids
+            worker_id = _safe_text(entry.get("workerId"))
+            selected_worker_id = selected_worker_ids[0] if selected_worker_ids else None
+            should_emit = should_emit_worker_line(
+                log_mode=log_mode,
+                worker_id=worker_id,
+                selected_worker_id=selected_worker_id,
+                line=_safe_text(entry.get("line")),
+                severity=_safe_text(entry.get("severity")),
+            )
+            if log_mode == "one" and worker_id != "-" and not selected_worker_ids:
+                selected_worker_ids = (worker_id,)
+                should_emit = should_emit_worker_line(
+                    log_mode=log_mode,
+                    worker_id=worker_id,
+                    selected_worker_id=worker_id,
+                    line=_safe_text(entry.get("line")),
+                    severity=_safe_text(entry.get("severity")),
+                )
+            elif (
+                log_mode in {"all", "errors"}
+                and should_emit
+                and worker_id != "-"
+                and worker_id not in selected_worker_ids
+            ):
+                if len(selected_worker_ids) >= _ATTACH_MAX_LOGGED_WORKERS:
+                    return False
+                selected_worker_ids = (*selected_worker_ids, worker_id)
+            if not should_emit:
+                return False
+            console.emit_lines(
+                worker_id=_log_worker_label(entry),
+                lines=[_format_attach_log_line(entry)],
+            )
+            return True
+
+        return _follow_logs(
+            start_ms=start_ms,
+            end_ms=end_ms,
+            poll_interval_seconds=_ATTACH_LOGS_INTERVAL_SECONDS,
+            status_interval_seconds=_ATTACH_SUMMARY_INTERVAL_SECONDS,
+            log_window_ms=_DEFAULT_LOG_WINDOW_MS,
+            max_drain_polls=_ATTACH_MAX_DRAIN_POLLS,
+            drain_poll_delay_seconds=_ATTACH_DRAIN_POLL_DELAY_SECONDS,
+            dedupe_limit=_ATTACH_DEDUPE_LIMIT,
+            max_retryable_errors=_ATTACH_MAX_RETRYABLE_ERRORS,
+            fetch_logs=_fetch_logs,
+            refresh_status=_refresh_status,
+            emit_entry=_emit_entry,
+            on_skip=lambda start, end: _warn_follow_skip(
+                context=context,
+                start_ms=start,
+                end_ms=end,
+                console=console,
+            ),
+            on_terminal=lambda status: console.emit_system(
+                f"cloud job {context.job_id} finished with status {status}"
+            ),
+            initial_status=FollowStatus(
+                terminal_status=(
+                    _job_status(job_payload)
+                    if _job_status(job_payload) in _TERMINAL_JOB_STATUSES
+                    else None
+                ),
+                logs_available=(
+                    log_mode != "none"
+                    and isinstance(job_payload.get("job"), dict)
+                    and bool(
+                        cast(dict[str, Any], job_payload["job"]).get(
+                            "logsAvailable", True
+                        )
+                    )
+                ),
+            ),
+            allow_status_during_drain=True,
+            monotonic=time.monotonic,
+            sleep=time.sleep,
+            epoch_ms=epoch_ms_now,
+        )
     except KeyboardInterrupt:
         console.emit_system(
             f"detached from cloud job {context.job_id}. The cloud job is still running."

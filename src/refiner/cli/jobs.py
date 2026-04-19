@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
 import json
 import sys
 import time
@@ -10,13 +9,10 @@ from typing import Any
 
 from refiner.cli.job_utils import (
     TERMINAL_JOB_STATUSES,
+    FollowStatus,
     format_ts as _format_ts,
-    is_retryable_api_error as _is_retryable_api_error,
+    follow_logs as _follow_logs,
     job_status as _job_status,
-    log_entry_key as _log_entry_key,
-    next_log_cursor as _next_log_cursor,
-    parse_epoch_ms,
-    remember_seen_key as _remember_seen_key,
     safe_text as _safe_text,
 )
 from refiner.platform.auth import MacrodataCredentialsError
@@ -266,10 +262,6 @@ def _format_log_entry(entry: dict[str, Any]) -> str:
     )
 
 
-def _follow_retry_delay(error_count: int) -> float:
-    return min(float(2 ** max(0, error_count - 1)), 5.0)
-
-
 def _effective_log_limit(args: Namespace) -> int:
     if isinstance(args.limit, int):
         return args.limit
@@ -297,105 +289,62 @@ def _stream_logs(
     limit: int,
 ) -> int:
     client = _client()
-    seen_keys: set[tuple[str, str, str, str, str]] = set()
-    seen_order: deque[tuple[str, str, str, str, str]] = deque()
-    current_start_ms = start_ms
-    current_end_ms = end_ms
-    current_cursor: str | None = None
-    full_batch_polls = 0
-    log_retryable_error_count = 0
-    status_retryable_error_count = 0
 
-    while True:
-        try:
-            payload = client.cli_get_job_logs(
-                job_id=args.job_id,
-                start_ms=current_start_ms,
-                end_ms=current_end_ms,
-                cursor=current_cursor,
-                limit=limit,
-                stage_index=args.stage,
-                worker_id=args.worker,
-                source_type=args.source_type,
-                source_name=args.source_name,
-                severity=args.severity,
-                search=args.search,
-            )
-        except MacrodataApiError as err:
-            if not _is_retryable_api_error(err):
-                raise
-            log_retryable_error_count += 1
-            if log_retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
-                raise
-            time.sleep(_follow_retry_delay(log_retryable_error_count))
-            continue
-        log_retryable_error_count = 0
-        entries = payload.get("entries")
-        if isinstance(entries, list):
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                key = _log_entry_key(entry)
-                if key in seen_keys:
-                    continue
-                print(_format_log_entry(entry), flush=True)
-                _remember_seen_key(
-                    key=key,
-                    seen_keys=seen_keys,
-                    seen_order=seen_order,
-                    limit=_FOLLOW_LOG_DEDUPE_LIMIT,
-                )
-        current_cursor = _next_log_cursor(payload)
-        if current_cursor is not None:
-            full_batch_polls += 1
-            if full_batch_polls < _FOLLOW_LOG_MAX_DRAIN_POLLS:
-                time.sleep(_FOLLOW_LOG_DRAIN_POLL_DELAY_SECONDS)
-                continue
-            oldest_entry = entries[0] if isinstance(entries, list) and entries else None
-            skipped_end_ms = current_end_ms
-            if isinstance(oldest_entry, dict):
-                parsed_oldest_ms = parse_epoch_ms(oldest_entry.get("ts"))
-                if parsed_oldest_ms is not None:
-                    skipped_end_ms = parsed_oldest_ms
-            _warn_follow_skip(start_ms=current_start_ms, end_ms=skipped_end_ms)
-            current_cursor = None
-            full_batch_polls = 0
-            current_start_ms = current_end_ms
-            next_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-            current_end_ms = max(next_end_ms, current_start_ms + 1)
-            continue
-        else:
-            full_batch_polls = 0
-        next_start_ms = current_start_ms
-        next_end_ms = current_end_ms
-        if current_cursor is None:
-            next_start_ms = current_end_ms
-            next_end_ms = max(
-                int(datetime.now(tz=timezone.utc).timestamp() * 1000),
-                next_start_ms + 1,
-            )
-        try:
-            job_payload = client.cli_get_job(job_id=args.job_id)
-        except MacrodataApiError as err:
-            if not _is_retryable_api_error(err):
-                raise
-            status_retryable_error_count += 1
-            if status_retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
-                raise
-            current_start_ms = next_start_ms
-            current_end_ms = next_end_ms
-            time.sleep(_follow_retry_delay(status_retryable_error_count))
-            job_payload = {}
-            continue
-        except MacrodataCredentialsError:
-            raise
-        status_retryable_error_count = 0
-        if current_cursor is None and _job_status(job_payload) in TERMINAL_JOB_STATUSES:
-            return 0
-        if current_cursor is None:
-            current_start_ms = next_start_ms
-            current_end_ms = next_end_ms
-        time.sleep(_FOLLOW_LOG_POLL_INTERVAL_SECONDS)
+    def _logs_available(payload: dict[str, Any]) -> bool:
+        job = payload.get("job")
+        return isinstance(job, dict) and bool(job.get("logsAvailable", True))
+
+    def _fetch_logs(
+        current_start_ms: int,
+        current_end_ms: int,
+        current_cursor: str | None,
+    ) -> dict[str, Any]:
+        return client.cli_get_job_logs(
+            job_id=args.job_id,
+            start_ms=current_start_ms,
+            end_ms=current_end_ms,
+            cursor=current_cursor,
+            limit=limit,
+            stage_index=args.stage,
+            worker_id=args.worker,
+            source_type=args.source_type,
+            source_name=args.source_name,
+            severity=args.severity,
+            search=args.search,
+        )
+
+    def _refresh_status() -> FollowStatus:
+        payload = client.cli_get_job(job_id=args.job_id)
+        status = _job_status(payload)
+        return FollowStatus(
+            terminal_status=status if status in TERMINAL_JOB_STATUSES else None,
+            logs_available=_logs_available(payload),
+        )
+
+    def _emit_entry(entry: dict[str, Any]) -> bool:
+        print(_format_log_entry(entry), flush=True)
+        return True
+
+    return _follow_logs(
+        start_ms=start_ms,
+        end_ms=end_ms,
+        poll_interval_seconds=_FOLLOW_LOG_POLL_INTERVAL_SECONDS,
+        status_interval_seconds=_FOLLOW_LOG_POLL_INTERVAL_SECONDS,
+        log_window_ms=_DEFAULT_LOG_WINDOW_MS,
+        max_drain_polls=_FOLLOW_LOG_MAX_DRAIN_POLLS,
+        drain_poll_delay_seconds=_FOLLOW_LOG_DRAIN_POLL_DELAY_SECONDS,
+        dedupe_limit=_FOLLOW_LOG_DEDUPE_LIMIT,
+        max_retryable_errors=_FOLLOW_LOG_MAX_RETRYABLE_ERRORS,
+        fetch_logs=_fetch_logs,
+        refresh_status=_refresh_status,
+        emit_entry=_emit_entry,
+        on_skip=lambda start, end: _warn_follow_skip(start_ms=start, end_ms=end),
+        refresh_status_after_empty_page=True,
+        allow_status_during_drain=True,
+        monotonic=time.monotonic,
+        sleep=time.sleep,
+        epoch_ms=lambda: int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+    )
 
 
 def _render_resource_metrics(payload: dict[str, Any]) -> int:
