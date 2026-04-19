@@ -393,7 +393,7 @@ def attach_to_cloud_job(
                     status_retryable_error_count += 1
                     if status_retryable_error_count > _ATTACH_MAX_RETRYABLE_ERRORS:
                         raise
-                    time.sleep(_retry_delay(status_retryable_error_count))
+                    next_summary_at = now + _retry_delay(status_retryable_error_count)
                     continue
                 status_retryable_error_count = 0
                 context, snapshot = _snapshot_and_context(

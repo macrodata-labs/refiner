@@ -4,7 +4,7 @@ import itertools
 from typing import cast
 
 from refiner.cli import cloud_run
-from refiner.platform.client import MacrodataClient
+from refiner.platform.client import MacrodataApiError, MacrodataClient
 
 
 class _FakeConsole:
@@ -606,3 +606,55 @@ def test_attach_to_cloud_job_all_mode_suppresses_workers_beyond_cap(
         f"worker-{index}"
         for index in range(1, cloud_run._ATTACH_MAX_LOGGED_WORKERS + 1)
     ]
+
+
+def test_attach_to_cloud_job_keeps_polling_logs_when_status_refresh_retries(
+    monkeypatch,
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.job_calls = 0
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            self.job_calls += 1
+            if self.job_calls == 1:
+                raise MacrodataApiError(status=503, message="temporary")
+            return _job_payload(stage_index=0, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    _log_entry(
+                        ts=1_700_000_002_000,
+                        worker_id="worker-1",
+                        severity="info",
+                        line="hello",
+                    )
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-1"]
