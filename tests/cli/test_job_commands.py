@@ -539,6 +539,70 @@ def test_jobs_logs_follow_returns_when_job_is_terminal(monkeypatch, capsys) -> N
     assert sleep_calls["count"] == 0
 
 
+def test_jobs_logs_follow_fetches_one_final_window_after_terminal_status(
+    monkeypatch, capsys
+) -> None:
+    class _TerminalClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            if self.log_calls == 1:
+                return {
+                    "entries": [],
+                    "hasOlder": False,
+                    "nextCursor": None,
+                }
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_003_000,
+                        "severity": "info",
+                        "workerId": "worker-1",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": "final line",
+                        "messageHash": "final",
+                    }
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    client = _TerminalClient()
+    _patch_job_client(monkeypatch, lambda: client)
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "final line" in out.out
+    assert client.log_calls == 2
+
+
 def test_jobs_logs_follow_drains_backlog_before_terminal_exit(
     monkeypatch, capsys
 ) -> None:
@@ -940,7 +1004,7 @@ def test_jobs_logs_follow_advances_window_after_transient_status_probe_error(
 
     client = _FlakyStatusClient()
     _patch_job_client(monkeypatch, lambda: client)
-    now_values = iter([10, 15])
+    now_values = iter([10, 15, 16])
 
     class _FakeDateTime:
         @staticmethod
@@ -969,7 +1033,7 @@ def test_jobs_logs_follow_advances_window_after_transient_status_probe_error(
     )
 
     assert rc == 0
-    assert client.log_calls == [(1, 2), (2, 10000)]
+    assert client.log_calls == [(1, 2), (2, 10000), (10000, 16000)]
 
 
 def test_jobs_logs_follow_retries_transient_log_fetch_errors(
@@ -1358,7 +1422,6 @@ def test_jobs_manifest_plain_output(monkeypatch, capsys) -> None:
     rc = jobs.cmd_jobs_manifest(
         Namespace(
             job_id="job-1",
-            show_runtime=False,
             show_deps=False,
             show_code=False,
             json=False,
@@ -1380,7 +1443,6 @@ def test_jobs_manifest_keeps_runtime_when_extra_sections_requested(
     rc = jobs.cmd_jobs_manifest(
         Namespace(
             job_id="job-1",
-            show_runtime=False,
             show_deps=True,
             show_code=False,
             json=False,
@@ -1412,7 +1474,6 @@ def test_jobs_manifest_sanitizes_script_text(monkeypatch, capsys) -> None:
     rc = jobs.cmd_jobs_manifest(
         Namespace(
             job_id="job-1",
-            show_runtime=False,
             show_deps=False,
             show_code=True,
             json=False,

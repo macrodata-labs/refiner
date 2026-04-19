@@ -81,6 +81,34 @@ def _render_logs(payload: dict[str, Any]) -> int:
     return 0
 
 
+def _emit_follow_entries(
+    *,
+    entries: Any,
+    seen_keys: set[tuple[str, str, str, str, str]],
+    seen_order: deque[tuple[str, str, str, str, str]],
+) -> int | None:
+    newest_entry_ms: int | None = None
+    if not isinstance(entries, list):
+        return newest_entry_ms
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        key = _log_entry_key(entry)
+        if key in seen_keys:
+            continue
+        print(_format_log_entry(entry), flush=True)
+        _remember_seen_key(
+            key=key,
+            seen_keys=seen_keys,
+            seen_order=seen_order,
+            limit=_FOLLOW_LOG_DEDUPE_LIMIT,
+        )
+        parsed_entry_ms = parse_epoch_ms(entry.get("ts"))
+        if parsed_entry_ms is not None:
+            newest_entry_ms = parsed_entry_ms
+    return newest_entry_ms
+
+
 def _stream_logs(
     *,
     args: Namespace,
@@ -123,33 +151,21 @@ def _stream_logs(
             continue
         log_retryable_error_count = 0
         entries = payload.get("entries")
-        if isinstance(entries, list):
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                key = _log_entry_key(entry)
-                if key in seen_keys:
-                    continue
-                print(_format_log_entry(entry), flush=True)
-                _remember_seen_key(
-                    key=key,
-                    seen_keys=seen_keys,
-                    seen_order=seen_order,
-                    limit=_FOLLOW_LOG_DEDUPE_LIMIT,
-                )
+        newest_processed_ms = _emit_follow_entries(
+            entries=entries,
+            seen_keys=seen_keys,
+            seen_order=seen_order,
+        )
         current_cursor = _next_log_cursor(payload)
         if current_cursor is not None:
             full_batch_polls += 1
             if full_batch_polls < _FOLLOW_LOG_MAX_DRAIN_POLLS:
                 time.sleep(_FOLLOW_LOG_DRAIN_POLL_DELAY_SECONDS)
                 continue
-            oldest_entry = entries[0] if isinstance(entries, list) and entries else None
-            skipped_end_ms = current_end_ms
-            if isinstance(oldest_entry, dict):
-                parsed_oldest_ms = parse_epoch_ms(oldest_entry.get("ts"))
-                if parsed_oldest_ms is not None:
-                    skipped_end_ms = parsed_oldest_ms
-            _warn_follow_skip(start_ms=current_start_ms, end_ms=skipped_end_ms)
+            skipped_start_ms = newest_processed_ms
+            if skipped_start_ms is None:
+                skipped_start_ms = current_start_ms
+            _warn_follow_skip(start_ms=skipped_start_ms, end_ms=current_end_ms)
             current_cursor = None
             full_batch_polls = 0
             current_start_ms = current_end_ms
@@ -179,6 +195,28 @@ def _stream_logs(
             raise
         status_retryable_error_count = 0
         if _job_status(job_payload) in TERMINAL_JOB_STATUSES:
+            final_end_ms = max(
+                int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+                next_start_ms + 1,
+            )
+            final_payload = client.cli_get_job_logs(
+                job_id=args.job_id,
+                start_ms=next_start_ms,
+                end_ms=final_end_ms,
+                cursor=None,
+                limit=limit,
+                stage_index=args.stage,
+                worker_id=args.worker,
+                source_type=args.source_type,
+                source_name=args.source_name,
+                severity=args.severity,
+                search=args.search,
+            )
+            _emit_follow_entries(
+                entries=final_payload.get("entries"),
+                seen_keys=seen_keys,
+                seen_order=seen_order,
+            )
             return 0
         current_start_ms = next_start_ms
         current_end_ms = next_end_ms

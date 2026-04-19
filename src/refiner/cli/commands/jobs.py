@@ -19,7 +19,13 @@ def register_jobs_command(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
     jobs = subparsers.add_parser("jobs", help="Inspect Macrodata jobs")
-    jobs.set_defaults(handler=lambda _args: (jobs.print_help(), 0)[1])
+
+    def _show_jobs_help(_args: argparse.Namespace) -> int:
+        _ = _args
+        jobs.print_help()
+        return 0
+
+    jobs.set_defaults(handler=_show_jobs_help)
     jobs_subparsers = jobs.add_subparsers(dest="jobs_command")
 
     jobs_list = jobs_subparsers.add_parser(
@@ -58,11 +64,6 @@ def register_jobs_command(
 
     jobs_manifest = jobs_subparsers.add_parser("manifest", help="Get job manifest")
     jobs_manifest.add_argument("job_id", help="Job identifier")
-    jobs_manifest.add_argument(
-        "--show-runtime",
-        action="store_true",
-        help="Show runtime information from the manifest",
-    )
     jobs_manifest.add_argument(
         "--show-deps",
         action="store_true",

@@ -124,11 +124,10 @@ macrodata jobs attach <job_id>
 
 ### `macrodata jobs manifest`
 
-Reads the captured run manifest for a job. Text mode always prints the runtime section first. Use the optional flags to additionally show dependency information and captured code metadata. `--show-runtime` is only there for symmetry with the other section flags.
+Reads the captured run manifest for a job. Text mode always prints the runtime section first. Use the optional flags to additionally show dependency information and captured code metadata.
 
 Options:
 
-- `--show-runtime`
 - `--show-deps`
 - `--show-code`
 - `--json`

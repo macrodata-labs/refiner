@@ -13,7 +13,6 @@ from refiner.platform.client import MacrodataApiError
 def _render_manifest(
     payload: dict[str, Any],
     *,
-    show_runtime: bool,
     show_deps: bool,
     show_code: bool,
 ) -> int:
@@ -21,7 +20,6 @@ def _render_manifest(
     if not isinstance(manifest, dict):
         print("Manifest unavailable.", file=sys.stderr)
         return 1
-    _ = show_runtime
     environment = manifest.get("environment")
     print("Runtime")
     if isinstance(environment, dict):
@@ -74,7 +72,6 @@ def cmd_jobs_manifest(args: Namespace) -> int:
         if args.json
         else _render_manifest(
             payload,
-            show_runtime=args.show_runtime,
             show_deps=args.show_deps,
             show_code=args.show_code,
         )
