@@ -3,10 +3,14 @@ from __future__ import annotations
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, TextIO, cast
+from typing import Any, cast
 
+from refiner.cli.attach_mode import (
+    CloudAttachContext,
+    CloudAttachDetached,
+)
 from refiner.cli.job_utils import (
     TERMINAL_JOB_STATUSES as _TERMINAL_JOB_STATUSES,
     format_ts as _format_ts,
@@ -24,13 +28,11 @@ from refiner.cli.local_run import (
     LocalStageSnapshot,
     resolve_log_mode,
     should_emit_worker_line,
-    stdout_is_interactive,
+    stdout_is_interactive as _stdout_is_interactive,
 )
 from refiner.job_urls import build_job_tracking_url
 from refiner.platform.client import MacrodataApiError, MacrodataClient
 
-_ATTACH_MODE_ENV_VAR = "REFINER_ATTACH"
-_VALID_ATTACH_MODES = {"auto", "attach", "detach"}
 _DEFAULT_LOG_WINDOW_MS = 60 * 60 * 1000
 _DEFAULT_ATTACH_LOG_LIMIT = 500
 _ATTACH_SUMMARY_INTERVAL_SECONDS = 2.0
@@ -41,82 +43,7 @@ _ATTACH_MAX_DRAIN_POLLS = 5
 _ATTACH_DRAIN_POLL_DELAY_SECONDS = 0.1
 _ATTACH_MAX_RETRYABLE_ERRORS = 5
 _STAGE_NOT_STARTED_STATUSES = {"queued", "pending"}
-
-
-class CloudAttachDetached(KeyboardInterrupt):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class CloudAttachContext:
-    job_id: str
-    job_name: str
-    tracking_url: str
-    stage_index: int | None
-
-
-def normalize_attach_mode(mode: str) -> str:
-    normalized = mode.strip().lower()
-    if normalized not in _VALID_ATTACH_MODES:
-        allowed = ", ".join(sorted(_VALID_ATTACH_MODES))
-        raise ValueError(
-            f"unsupported attach mode {mode!r}; expected one of: {allowed}"
-        )
-    return normalized
-
-
-def attach_mode_override() -> str | None:
-    import os
-
-    value = os.environ.get(_ATTACH_MODE_ENV_VAR)
-    if value is None:
-        return None
-    return normalize_attach_mode(value)
-
-
-def resolve_attach_mode() -> str:
-    override = attach_mode_override()
-    if override is not None and override != "auto":
-        return override
-    return "attach" if stdout_is_interactive() else "detach"
-
-
-def resolve_launcher_attach_mode() -> str:
-    override = attach_mode_override()
-    if override is None:
-        return "detach"
-    if override == "auto":
-        return "attach" if stdout_is_interactive() else "detach"
-    return override
-
-
-def require_cloud_attach_supported(executor_kind: str) -> None:
-    override = attach_mode_override()
-    if override is None:
-        return
-    if executor_kind != "cloud" and override == "detach":
-        raise SystemExit("--detach is only supported for cloud launches.")
-
-
-def emit_cloud_followup_commands(
-    *,
-    context: CloudAttachContext,
-    file: TextIO = sys.stdout,
-) -> None:
-    print("Cloud job submitted.", file=file)
-    print(f"Job ID: {context.job_id}", file=file)
-    print(f"URL: {context.tracking_url}", file=file)
-    print(f"Attach: macrodata jobs attach {context.job_id}", file=file)
-    print(f"Summary: macrodata jobs get {context.job_id}", file=file)
-    if context.stage_index is None:
-        print(f"Logs: macrodata jobs logs {context.job_id}", file=file)
-    else:
-        print(
-            f"Logs: macrodata jobs logs {context.job_id} --stage {context.stage_index}",
-            file=file,
-        )
-    print(f"Workers: macrodata jobs workers {context.job_id}", file=file)
-    print(f"Cancel: macrodata jobs cancel {context.job_id}", file=file)
+stdout_is_interactive = _stdout_is_interactive
 
 
 def _warn_follow_skip(
@@ -322,20 +249,12 @@ def attach_to_cloud_job(
     job_id: str,
     initial_job_payload: dict[str, Any] | None = None,
     stage_index_hint: int | None = None,
-    force_attach: bool = False,
 ) -> int:
-    if not force_attach and not stdout_is_interactive():
-        payload = initial_job_payload or client.cli_get_job(job_id=job_id)
-        context = _cloud_context_from_job_payload(
-            client=client,
-            job_id=job_id,
-            payload=payload,
-            stage_index_hint=stage_index_hint,
-        )
-        emit_cloud_followup_commands(context=context)
-        return 0
-
     job_payload = initial_job_payload or client.cli_get_job(job_id=job_id)
+    if stage_index_hint is None:
+        job = job_payload.get("job")
+        if isinstance(job, dict):
+            stage_index_hint = _active_stage(job)[0]
     context, snapshot = _snapshot_and_context(
         client=client,
         job_id=job_id,
@@ -352,7 +271,10 @@ def attach_to_cloud_job(
         tracking_url=context.tracking_url,
     )
     console.emit_system(f"attached to cloud job {context.job_id}")
-    log_mode = resolve_log_mode(None)
+    try:
+        log_mode = resolve_log_mode(None)
+    except ValueError as err:
+        raise SystemExit(str(err)) from err
     selected_worker_ids: tuple[str, ...] = ()
     current_stage_index = snapshot.stage_index
     _emit_cloud_log_mode_banner(
@@ -427,8 +349,6 @@ def attach_to_cloud_job(
             )
             if log_mode == "none":
                 logs_available = False
-            if not logs_available:
-                next_logs_at = now + _ATTACH_LOGS_INTERVAL_SECONDS
             if logs_available and now >= next_logs_at:
                 try:
                     payload = client.cli_get_job_logs(
@@ -467,7 +387,7 @@ def attach_to_cloud_job(
                             worker_id=worker_id,
                             selected_worker_id=selected_worker_id,
                             line=_safe_text(entry.get("line")),
-                            severity=_safe_text(entry.get("severity")),
+                            severity=entry.get("severity"),
                         )
                         if (
                             log_mode == "one"
@@ -481,7 +401,7 @@ def attach_to_cloud_job(
                                 worker_id=worker_id,
                                 selected_worker_id=selected_worker_id,
                                 line=_safe_text(entry.get("line")),
-                                severity=_safe_text(entry.get("severity")),
+                                severity=entry.get("severity"),
                             )
                         elif (
                             log_mode in {"all", "errors"}
@@ -548,7 +468,11 @@ def attach_to_cloud_job(
                 )
                 return 0
 
-            deadline = min(next_summary_at, next_logs_at)
+            deadline = (
+                min(next_summary_at, next_logs_at)
+                if logs_available
+                else next_summary_at
+            )
             time.sleep(max(0.05, deadline - time.monotonic()))
     except KeyboardInterrupt:
         console.emit_system(

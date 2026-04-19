@@ -10,7 +10,7 @@ from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
-from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
+from refiner.pipeline.sinks.reducer.file import build_file_cleanup_reducer
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
 
@@ -78,8 +78,8 @@ class JsonlSink(BaseSink):
             },
         )
 
-    def build_reducer(self) -> BaseSink:
-        return FileCleanupReducerSink(
+    def build_reducer(self) -> BaseSink | None:
+        return build_file_cleanup_reducer(
             output=self.output,
             filename_template=self.filename_template,
             reducer_name="write_jsonl_reduce",

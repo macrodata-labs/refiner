@@ -3,10 +3,14 @@ from __future__ import annotations
 import builtins
 from argparse import Namespace
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, cast
 
-from refiner.cli import jobs
 from refiner.cli.jobs import common as jobs_common
+from refiner.cli.jobs.attach import cmd_jobs_attach
+from refiner.cli.jobs.control import cmd_jobs_cancel
+from refiner.cli.jobs.get import cmd_jobs_get
+from refiner.cli.jobs.list import cmd_jobs_list
 from refiner.cli.jobs import logs as jobs_logs
 from refiner.cli.jobs import get as jobs_get_module
 from refiner.cli.jobs import list as jobs_list_module
@@ -15,7 +19,23 @@ from refiner.cli.jobs import manifest as jobs_manifest_module
 from refiner.cli.jobs import metrics as jobs_metrics_module
 from refiner.cli.jobs import workers as jobs_workers_module
 from refiner.cli.jobs import control as jobs_control_module
+from refiner.cli.jobs.logs import cmd_jobs_logs
+from refiner.cli.jobs.manifest import cmd_jobs_manifest
+from refiner.cli.jobs.metrics import cmd_jobs_metrics, cmd_jobs_resource_metrics
+from refiner.cli.jobs.workers import cmd_jobs_workers
 from refiner.platform.client.api import MacrodataApiError
+
+jobs = SimpleNamespace(
+    cmd_jobs_attach=cmd_jobs_attach,
+    cmd_jobs_cancel=cmd_jobs_cancel,
+    cmd_jobs_get=cmd_jobs_get,
+    cmd_jobs_list=cmd_jobs_list,
+    cmd_jobs_logs=cmd_jobs_logs,
+    cmd_jobs_manifest=cmd_jobs_manifest,
+    cmd_jobs_metrics=cmd_jobs_metrics,
+    cmd_jobs_resource_metrics=cmd_jobs_resource_metrics,
+    cmd_jobs_workers=cmd_jobs_workers,
+)
 
 
 class _FakeClient:
@@ -244,7 +264,7 @@ def test_jobs_attach_calls_cloud_attach(monkeypatch) -> None:
 
     assert rc == 0
     assert captured["job_id"] == "job-1"
-    assert captured["force_attach"] is True
+    assert captured.get("force_attach", False) is False
     payload = cast(dict[str, object], captured["initial_job_payload"])
     job = cast(dict[str, object], payload["job"])
     assert job["executorKind"] == "cloud"
@@ -282,6 +302,22 @@ def test_jobs_attach_routes_attach_api_errors_through_cli_handler(
 
     assert rc == 1
     assert "temporary" in out.err
+
+
+def test_jobs_attach_routes_attach_system_exit_through_cli_handler(
+    monkeypatch, capsys
+) -> None:
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
+    monkeypatch.setattr(
+        "refiner.cli.cloud_run.attach_to_cloud_job",
+        lambda **_: (_ for _ in ()).throw(SystemExit("unsupported local log mode")),
+    )
+
+    rc = jobs.cmd_jobs_attach(Namespace(job_id="job-1"))
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert "unsupported local log mode" in out.err
 
 
 def test_jobs_logs_json_output(monkeypatch, capsys) -> None:
@@ -554,16 +590,32 @@ def test_jobs_logs_follow_fetches_one_final_window_after_terminal_status(
                     "hasOlder": False,
                     "nextCursor": None,
                 }
+            if self.log_calls == 2:
+                return {
+                    "entries": [
+                        {
+                            "ts": 1_700_000_003_000,
+                            "severity": "info",
+                            "workerId": "worker-1",
+                            "sourceType": "worker",
+                            "sourceName": "runner",
+                            "line": "final line",
+                            "messageHash": "final",
+                        }
+                    ],
+                    "hasOlder": True,
+                    "nextCursor": "cursor-final",
+                }
             return {
                 "entries": [
                     {
-                        "ts": 1_700_000_003_000,
+                        "ts": 1_700_000_004_000,
                         "severity": "info",
                         "workerId": "worker-1",
                         "sourceType": "worker",
                         "sourceName": "runner",
-                        "line": "final line",
-                        "messageHash": "final",
+                        "line": "final line 2",
+                        "messageHash": "final-2",
                     }
                 ],
                 "hasOlder": False,
@@ -600,7 +652,72 @@ def test_jobs_logs_follow_fetches_one_final_window_after_terminal_status(
 
     assert rc == 0
     assert "final line" in out.out
-    assert client.log_calls == 2
+    assert "final line 2" in out.out
+    assert client.log_calls == 3
+
+
+def test_jobs_logs_follow_retries_terminal_window_fetch_errors(
+    monkeypatch, capsys
+) -> None:
+    class _TerminalClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            if self.log_calls == 1:
+                return {
+                    "entries": [],
+                    "hasOlder": False,
+                    "nextCursor": None,
+                }
+            if self.log_calls == 2:
+                raise MacrodataApiError(status=503, message="temporary")
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_003_000,
+                        "severity": "info",
+                        "workerId": "worker-1",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": "final recovered",
+                        "messageHash": "final",
+                    }
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            cast(dict[str, object], payload["job"])["status"] = "completed"
+            return payload
+
+    _patch_job_client(monkeypatch, lambda: _TerminalClient())
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "final recovered" in out.out
 
 
 def test_jobs_logs_follow_drains_backlog_before_terminal_exit(

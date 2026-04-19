@@ -12,6 +12,7 @@ from refiner.cli.jobs.common import (
     _print_table,
     _progress_text,
     _run_job_command,
+    _started_by_text,
 )
 
 
@@ -20,17 +21,6 @@ def _render_list(payload: dict[str, Any]) -> int:
     if not isinstance(items, list) or not items:
         print("No jobs found.")
         return 0
-
-    def started_by_text(item: dict[str, Any]) -> str:
-        email = item.get("startedByEmail")
-        username = item.get("startedByUsername")
-        if isinstance(email, str) and email:
-            if isinstance(username, str) and username:
-                return _safe_text(f"{username} ({email})")
-            return _safe_text(email)
-        if isinstance(username, str) and username:
-            return _safe_text(username)
-        return "-"
 
     rows = [["ID", "Status", "Kind", "Started By", "Progress", "Created", "Name"]]
     for item in items:
@@ -41,7 +31,7 @@ def _render_list(payload: dict[str, Any]) -> int:
                 _safe_text(item.get("id")),
                 _safe_text(item.get("status")),
                 _executor_text(item.get("executorKind")),
-                started_by_text(item),
+                _started_by_text(item),
                 _progress_text(item.get("progress")),
                 _format_ts(item.get("createdAt")),
                 _safe_text(item.get("name")),

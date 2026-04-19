@@ -3,6 +3,8 @@ from __future__ import annotations
 import itertools
 from typing import cast
 
+import pytest
+
 from refiner.cli import cloud_run
 from refiner.platform.client import MacrodataApiError, MacrodataClient
 
@@ -145,7 +147,7 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
     assert created_consoles[-1].kwargs["rundir"] is None
 
 
-def test_attach_to_cloud_job_force_attach_uses_console_without_tty(monkeypatch) -> None:
+def test_attach_to_cloud_job_uses_console_without_tty(monkeypatch) -> None:
     class _Client:
         def __init__(self) -> None:
             self.base_url = "https://example.com"
@@ -185,11 +187,31 @@ def test_attach_to_cloud_job_force_attach_uses_console_without_tty(monkeypatch) 
         job_id="job-1",
         initial_job_payload=_job_payload(stage_index=0, status="running"),
         stage_index_hint=0,
-        force_attach=True,
     )
 
     assert rc == 0
     assert fake_console.emitted_lines
+
+
+def test_attach_to_cloud_job_rejects_invalid_log_mode_env(monkeypatch) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="running")
+
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setenv("REFINER_LOCAL_LOGS", "bogus")
+
+    with pytest.raises(SystemExit, match="unsupported local log mode"):
+        cloud_run.attach_to_cloud_job(
+            client=cast(MacrodataClient, _Client()),
+            job_id="job-1",
+            initial_job_payload=_job_payload(stage_index=0, status="running"),
+            stage_index_hint=0,
+        )
 
 
 def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
@@ -446,6 +468,58 @@ def test_attach_to_cloud_job_shows_only_errors_in_errors_mode(monkeypatch) -> No
                         severity="error",
                         line="error line",
                     ),
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-2"]
+
+
+def test_attach_to_cloud_job_errors_mode_falls_back_to_log_line_when_severity_missing(
+    monkeypatch,
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_002_001,
+                        "severity": None,
+                        "workerId": "worker-2",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": "2026-04-19 10:00:00 | ERROR    | boom",
+                        "messageHash": "missing-severity",
+                    }
                 ],
                 "hasOlder": False,
                 "nextCursor": None,

@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 import argparse
+from argparse import SUPPRESS
 
-from refiner.cli.jobs import (
-    cmd_jobs_attach,
-    cmd_jobs_cancel,
-    cmd_jobs_get,
-    cmd_jobs_list,
-    cmd_jobs_logs,
-    cmd_jobs_manifest,
-    cmd_jobs_metrics,
-    cmd_jobs_resource_metrics,
-    cmd_jobs_workers,
-)
+from refiner.cli.jobs.attach import cmd_jobs_attach
+from refiner.cli.jobs.control import cmd_jobs_cancel
+from refiner.cli.jobs.get import cmd_jobs_get
+from refiner.cli.jobs.list import cmd_jobs_list
+from refiner.cli.jobs.logs import cmd_jobs_logs
+from refiner.cli.jobs.manifest import cmd_jobs_manifest
+from refiner.cli.jobs.metrics import cmd_jobs_metrics, cmd_jobs_resource_metrics
+from refiner.cli.jobs.workers import cmd_jobs_workers
 
 
 def register_jobs_command(
@@ -73,6 +71,11 @@ def register_jobs_command(
         "--show-code",
         action="store_true",
         help="Show captured script metadata from the manifest",
+    )
+    jobs_manifest.add_argument(
+        "--show-runtime",
+        action="store_true",
+        help=SUPPRESS,
     )
     jobs_manifest.add_argument(
         "--json", action="store_true", help="Print raw JSON response"

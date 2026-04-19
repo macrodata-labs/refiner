@@ -92,16 +92,13 @@ def _progress_text(progress: Any) -> str:
     return "-"
 
 
-def _step_summary_text(args: Any) -> str:
-    if not isinstance(args, dict) or not args:
-        return "-"
-    parts: list[str] = []
-    for key in sorted(args.keys())[:3]:
-        value = args.get(key)
-        if isinstance(value, (str, int, float, bool)):
-            parts.append(f"{key}={value}")
-        elif isinstance(value, list):
-            parts.append(f"{key}=[{len(value)}]")
-        elif isinstance(value, dict):
-            parts.append(f"{key}={{...}}")
-    return _safe_text(", ".join(parts) if parts else "{...}")
+def _started_by_text(item: dict[str, Any]) -> str:
+    email = item.get("startedByEmail")
+    username = item.get("startedByUsername")
+    if isinstance(email, str) and email:
+        if isinstance(username, str) and username:
+            return _safe_text(f"{username} ({email})")
+        return _safe_text(email)
+    if isinstance(username, str) and username:
+        return _safe_text(username)
+    return "-"

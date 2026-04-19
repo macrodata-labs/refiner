@@ -6,7 +6,7 @@ import runpy
 import sys
 from pathlib import Path
 
-from refiner.cli.cloud_run import (
+from refiner.cli.attach_mode import (
     CloudAttachDetached,
     _ATTACH_MODE_ENV_VAR,
     normalize_attach_mode,
@@ -54,9 +54,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             runpy.run_path(str(script), run_name="__main__")
         except BrokenPipeError:
             return 141
-        except CloudAttachDetached:
-            return 130
         except KeyboardInterrupt as err:
+            if isinstance(err, CloudAttachDetached):
+                return 130
             if err.args and not sys.stdout.isatty():
                 print(str(err), file=sys.stderr)
             elif not err.args:

@@ -12,8 +12,23 @@ from refiner.cli.jobs.common import (
     _print_table,
     _progress_text,
     _run_job_command,
-    _step_summary_text,
+    _started_by_text,
 )
+
+
+def _step_summary_text(args: Any) -> str:
+    if not isinstance(args, dict) or not args:
+        return "-"
+    parts: list[str] = []
+    for key in sorted(args.keys())[:3]:
+        value = args.get(key)
+        if isinstance(value, (str, int, float, bool)):
+            parts.append(f"{key}={value}")
+        elif isinstance(value, list):
+            parts.append(f"{key}=[{len(value)}]")
+        elif isinstance(value, dict):
+            parts.append(f"{key}={{...}}")
+    return _safe_text(", ".join(parts) if parts else "{...}")
 
 
 def _render_job(payload: dict[str, Any]) -> int:
@@ -35,17 +50,9 @@ def _render_job(payload: dict[str, Any]) -> int:
         f"  Started: {_format_ts(job.get('startedAt'))}"
         f"  Ended: {_format_ts(job.get('endedAt'))}"
     )
-    started_by_email = job.get("startedByEmail")
-    started_by_username = job.get("startedByUsername")
-    if isinstance(started_by_email, str) and started_by_email:
-        if isinstance(started_by_username, str) and started_by_username:
-            print(
-                f"Started By: {_safe_text(f'{started_by_username} ({started_by_email})')}"
-            )
-        else:
-            print(f"Started By: {_safe_text(started_by_email)}")
-    elif isinstance(started_by_username, str) and started_by_username:
-        print(f"Started By: {_safe_text(started_by_username)}")
+    started_by = _started_by_text(job)
+    if started_by != "-":
+        print(f"Started By: {started_by}")
     print(
         "Workers:"
         f" {_safe_text(job.get('runningWorkers'))}/{_safe_text(job.get('totalWorkers'))}"

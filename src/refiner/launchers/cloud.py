@@ -5,9 +5,8 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from refiner.cli.cloud_run import (
+from refiner.cli.attach_mode import (
     CloudAttachContext,
-    attach_to_cloud_job,
     emit_cloud_followup_commands,
     resolve_launcher_attach_mode,
 )
@@ -222,16 +221,17 @@ class CloudLauncher(BaseLauncher):
             stage_index=resp.stage_index,
         )
         logger.info(f"Cloud job launched. View job:\n  {tracking_url}")
-        attach_mode = resolve_launcher_attach_mode()
+        attach_mode = resolve_launcher_attach_mode(interactive=stdin_is_interactive())
         if attach_mode == "detach":
             emit_cloud_followup_commands(context=context)
         else:
             try:
+                from refiner.cli.cloud_run import attach_to_cloud_job
+
                 attach_to_cloud_job(
                     client=client,
                     job_id=resp.job_id,
                     stage_index_hint=resp.stage_index,
-                    force_attach=True,
                 )
             except (MacrodataApiError, MacrodataCredentialsError):
                 print(

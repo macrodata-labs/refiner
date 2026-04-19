@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import cloudpickle
 
-from refiner.cli.cloud_run import require_cloud_attach_supported
+from refiner.cli.attach_mode import require_cloud_attach_supported
 from refiner.cli.local_run import (
     LaunchStats,
     collect_local_stage_results,

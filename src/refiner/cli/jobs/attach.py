@@ -32,9 +32,16 @@ def cmd_jobs_attach(args: Namespace) -> int:
             client=client,
             job_id=args.job_id,
             initial_job_payload=payload,
-            force_attach=True,
         )
     except cloud_run.CloudAttachDetached:
         return 130
+    except SystemExit as err:
+        code = err.code
+        if code is None:
+            return 0
+        if isinstance(code, int):
+            return code
+        print(str(code), file=sys.stderr)
+        return 1
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)

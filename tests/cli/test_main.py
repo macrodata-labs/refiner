@@ -75,6 +75,15 @@ def test_parser_has_jobs_cancel_command() -> None:
     assert args.job_id == "job-1"
 
 
+def test_parser_keeps_manifest_show_runtime_alias() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["jobs", "manifest", "job-1", "--show-runtime"])
+    assert args.command == "jobs"
+    assert args.jobs_command == "manifest"
+    assert args.job_id == "job-1"
+    assert args.show_runtime is True
+
+
 def test_parser_has_jobs_attach_command() -> None:
     parser = build_parser()
     args = parser.parse_args(["jobs", "attach", "job-1"])

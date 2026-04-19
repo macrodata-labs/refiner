@@ -346,10 +346,14 @@ def collect_local_stage_results(
         )
 
     try:
+        try:
+            resolved_log_mode = resolve_log_mode(log_mode)
+        except ValueError as err:
+            raise SystemExit(str(err)) from err
         run_local_stage_ui(
             worker_log_paths=worker_log_paths,
             snapshot_getter=snapshot,
-            log_mode=resolve_log_mode(log_mode),
+            log_mode=resolved_log_mode,
             interrupt_message=interrupt_message,
         )
         errors: list[str] = []

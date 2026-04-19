@@ -106,6 +106,43 @@ def _emit_follow_entries(
     return newest_entry_ms
 
 
+def _fetch_log_page(
+    *,
+    client: Any,
+    args: Namespace,
+    start_ms: int,
+    end_ms: int,
+    cursor: str | None,
+    limit: int,
+    retryable_error_count: int,
+) -> tuple[dict[str, Any], int]:
+    while True:
+        try:
+            return (
+                client.cli_get_job_logs(
+                    job_id=args.job_id,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    cursor=cursor,
+                    limit=limit,
+                    stage_index=args.stage,
+                    worker_id=args.worker,
+                    source_type=args.source_type,
+                    source_name=args.source_name,
+                    severity=args.severity,
+                    search=args.search,
+                ),
+                retryable_error_count,
+            )
+        except MacrodataApiError as err:
+            if not _is_retryable_api_error(err):
+                raise
+            retryable_error_count += 1
+            if retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
+                raise
+            time.sleep(retry_delay(retryable_error_count))
+
+
 def _stream_logs(
     *,
     args: Namespace,
@@ -124,28 +161,15 @@ def _stream_logs(
     status_retryable_error_count = 0
 
     while True:
-        try:
-            payload = client.cli_get_job_logs(
-                job_id=args.job_id,
-                start_ms=current_start_ms,
-                end_ms=current_end_ms,
-                cursor=current_cursor,
-                limit=limit,
-                stage_index=args.stage,
-                worker_id=args.worker,
-                source_type=args.source_type,
-                source_name=args.source_name,
-                severity=args.severity,
-                search=args.search,
-            )
-        except MacrodataApiError as err:
-            if not _is_retryable_api_error(err):
-                raise
-            log_retryable_error_count += 1
-            if log_retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
-                raise
-            time.sleep(retry_delay(log_retryable_error_count))
-            continue
+        payload, log_retryable_error_count = _fetch_log_page(
+            client=client,
+            args=args,
+            start_ms=current_start_ms,
+            end_ms=current_end_ms,
+            cursor=current_cursor,
+            limit=limit,
+            retryable_error_count=log_retryable_error_count,
+        )
         log_retryable_error_count = 0
         entries = payload.get("entries")
         newest_processed_ms = _emit_follow_entries(
@@ -196,24 +220,26 @@ def _stream_logs(
                 int(datetime.now(tz=timezone.utc).timestamp() * 1000),
                 next_start_ms + 1,
             )
-            final_payload = client.cli_get_job_logs(
-                job_id=args.job_id,
-                start_ms=next_start_ms,
-                end_ms=final_end_ms,
-                cursor=None,
-                limit=limit,
-                stage_index=args.stage,
-                worker_id=args.worker,
-                source_type=args.source_type,
-                source_name=args.source_name,
-                severity=args.severity,
-                search=args.search,
-            )
-            _emit_follow_entries(
-                entries=final_payload.get("entries"),
-                seen_keys=seen_keys,
-                seen_order=seen_order,
-            )
+            final_cursor: str | None = None
+            final_retryable_error_count = 0
+            while True:
+                final_payload, final_retryable_error_count = _fetch_log_page(
+                    client=client,
+                    args=args,
+                    start_ms=next_start_ms,
+                    end_ms=final_end_ms,
+                    cursor=final_cursor,
+                    limit=limit,
+                    retryable_error_count=final_retryable_error_count,
+                )
+                _emit_follow_entries(
+                    entries=final_payload.get("entries"),
+                    seen_keys=seen_keys,
+                    seen_order=seen_order,
+                )
+                final_cursor = _next_log_cursor(final_payload)
+                if final_cursor is None:
+                    break
             return 0
         current_start_ms = next_start_ms
         current_end_ms = next_end_ms

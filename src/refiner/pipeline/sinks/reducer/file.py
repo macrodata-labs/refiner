@@ -117,17 +117,9 @@ class FileCleanupReducerSink(BaseSink):
         # Extra template fields are treated as structure only. Authority is decided
         # solely from the finalized (shard_id, worker_id) pair extracted from each
         # managed path.
-        managed_paths = sorted(
-            {
-                path
-                for path in listed_paths
-                if isinstance(path, str)
-                and path
-                and path != "."
-                and self._managed_path_pattern.fullmatch(path) is not None
-            }
-        )
-        for rel_path in managed_paths:
+        for rel_path in listed_paths:
+            if not isinstance(rel_path, str) or not rel_path or rel_path == ".":
+                continue
             match = self._managed_path_pattern.fullmatch(rel_path)
             if match is None:
                 continue
@@ -139,4 +131,20 @@ class FileCleanupReducerSink(BaseSink):
                 continue
 
 
-__all__ = ["FileCleanupReducerSink"]
+def build_file_cleanup_reducer(
+    output: DataFolderLike,
+    *,
+    filename_template: str,
+    reducer_name: str,
+) -> FileCleanupReducerSink | None:
+    try:
+        return FileCleanupReducerSink(
+            output,
+            filename_template=filename_template,
+            reducer_name=reducer_name,
+        )
+    except ValueError:
+        return None
+
+
+__all__ = ["FileCleanupReducerSink", "build_file_cleanup_reducer"]
