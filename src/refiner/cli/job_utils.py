@@ -75,6 +75,10 @@ def remember_seen_key(
         seen_keys.discard(seen_order.popleft())
 
 
+def retry_delay(error_count: int) -> float:
+    return min(float(2 ** max(0, error_count - 1)), 5.0)
+
+
 def is_retryable_api_error(err: Exception) -> bool:
     if isinstance(err, MacrodataApiError):
         return err.status in {0, 429} or err.status >= 500

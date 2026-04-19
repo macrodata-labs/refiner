@@ -5,9 +5,12 @@ from typing import Any
 
 from refiner.cli.job_utils import format_ts as _format_ts
 from refiner.cli.job_utils import safe_text as _safe_text
-from refiner.cli.jobs.common import _client, _handle_error, _print_json, _print_table
-from refiner.platform.auth import MacrodataCredentialsError
-from refiner.platform.client import MacrodataApiError
+from refiner.cli.jobs.common import (
+    _client,
+    _print_next_cursor,
+    _print_table,
+    _run_job_command,
+)
 
 
 def _render_workers(payload: dict[str, Any]) -> int:
@@ -35,20 +38,18 @@ def _render_workers(payload: dict[str, Any]) -> int:
     _print_table(rows)
     page = payload.get("page")
     if isinstance(page, dict):
-        next_cursor = page.get("nextCursor")
-        if isinstance(next_cursor, str) and next_cursor:
-            print(f"\nNext cursor: {_safe_text(next_cursor)}")
+        _print_next_cursor(page.get("nextCursor"))
     return 0
 
 
 def cmd_jobs_workers(args: Namespace) -> int:
-    try:
-        payload = _client().cli_get_job_workers(
+    return _run_job_command(
+        as_json=args.json,
+        fetch=lambda: _client().cli_get_job_workers(
             job_id=args.job_id,
             stage_index=args.stage,
             limit=args.limit,
             cursor=args.cursor,
-        )
-    except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
-    return _print_json(payload) if args.json else _render_workers(payload)
+        ),
+        renderer=_render_workers,
+    )

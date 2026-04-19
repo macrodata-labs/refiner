@@ -8,13 +8,11 @@ from refiner.cli.job_utils import safe_text as _safe_text
 from refiner.cli.jobs.common import (
     _client,
     _executor_text,
-    _handle_error,
-    _print_json,
+    _print_next_cursor,
     _print_table,
     _progress_text,
+    _run_job_command,
 )
-from refiner.platform.auth import MacrodataCredentialsError
-from refiner.platform.client import MacrodataApiError
 
 
 def _render_list(payload: dict[str, Any]) -> int:
@@ -50,21 +48,19 @@ def _render_list(payload: dict[str, Any]) -> int:
             ]
         )
     _print_table(rows)
-    next_cursor = payload.get("nextCursor")
-    if isinstance(next_cursor, str) and next_cursor:
-        print(f"\nNext cursor: {_safe_text(next_cursor)}")
+    _print_next_cursor(payload.get("nextCursor"))
     return 0
 
 
 def cmd_jobs_list(args: Namespace) -> int:
-    try:
-        payload = _client().cli_list_jobs(
+    return _run_job_command(
+        as_json=args.json,
+        fetch=lambda: _client().cli_list_jobs(
             status=args.status,
             executor_kind=args.kind,
             me=args.me,
             limit=args.limit,
             cursor=args.cursor,
-        )
-    except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
-    return _print_json(payload) if args.json else _render_list(payload)
+        ),
+        renderer=_render_list,
+    )

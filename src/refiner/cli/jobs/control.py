@@ -3,9 +3,7 @@ from __future__ import annotations
 from argparse import Namespace
 
 from refiner.cli.job_utils import safe_text as _safe_text
-from refiner.cli.jobs.common import _client, _handle_error, _print_json
-from refiner.platform.auth import MacrodataCredentialsError
-from refiner.platform.client import MacrodataApiError
+from refiner.cli.jobs.common import _client, _run_job_command
 
 
 def _render_cancel(payload: dict[str, object]) -> int:
@@ -24,8 +22,8 @@ def _render_cancel(payload: dict[str, object]) -> int:
 
 
 def cmd_jobs_cancel(args: Namespace) -> int:
-    try:
-        payload = _client().cli_cancel_job(job_id=args.job_id)
-    except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
-    return _print_json(payload) if args.json else _render_cancel(payload)
+    return _run_job_command(
+        as_json=args.json,
+        fetch=lambda: _client().cli_cancel_job(job_id=args.job_id),
+        renderer=_render_cancel,
+    )

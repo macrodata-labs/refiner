@@ -5,9 +5,7 @@ import sys
 from typing import Any
 
 from refiner.cli.job_utils import safe_text as _safe_text
-from refiner.cli.jobs.common import _client, _handle_error, _print_json
-from refiner.platform.auth import MacrodataCredentialsError
-from refiner.platform.client import MacrodataApiError
+from refiner.cli.jobs.common import _client, _run_job_command
 
 
 def _render_manifest(
@@ -63,16 +61,12 @@ def _render_manifest(
 
 
 def cmd_jobs_manifest(args: Namespace) -> int:
-    try:
-        payload = _client().cli_get_job_manifest(job_id=args.job_id)
-    except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
-    return (
-        _print_json(payload)
-        if args.json
-        else _render_manifest(
+    return _run_job_command(
+        as_json=args.json,
+        fetch=lambda: _client().cli_get_job_manifest(job_id=args.job_id),
+        renderer=lambda payload: _render_manifest(
             payload,
             show_deps=args.show_deps,
             show_code=args.show_code,
-        )
+        ),
     )

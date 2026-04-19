@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import sys
 from typing import Any
 
 from refiner.cli.job_utils import safe_text as _safe_text
+from refiner.platform.auth import MacrodataCredentialsError
+from refiner.platform.client import MacrodataApiError
 from refiner.platform.client import MacrodataClient
+
+_Payload = dict[str, Any]
+_PayloadFetcher = Callable[[], _Payload]
+_PayloadRenderer = Callable[[_Payload], int]
 
 
 def _client() -> MacrodataClient:
@@ -38,6 +45,33 @@ def _print_table(rows: list[list[str]]) -> None:
 def _handle_error(err: Exception) -> int:
     print(_safe_text(str(err)), file=sys.stderr)
     return 1
+
+
+def _print_next_cursor(value: Any) -> None:
+    if isinstance(value, str) and value:
+        print(f"\nNext cursor: {_safe_text(value)}")
+
+
+def _render_payload(
+    *,
+    as_json: bool,
+    payload: _Payload,
+    renderer: _PayloadRenderer,
+) -> int:
+    return _print_json(payload) if as_json else renderer(payload)
+
+
+def _run_job_command(
+    *,
+    as_json: bool,
+    fetch: _PayloadFetcher,
+    renderer: _PayloadRenderer,
+) -> int:
+    try:
+        payload = fetch()
+    except (MacrodataApiError, MacrodataCredentialsError) as err:
+        return _handle_error(err)
+    return _render_payload(as_json=as_json, payload=payload, renderer=renderer)
 
 
 def _executor_text(value: Any) -> str:

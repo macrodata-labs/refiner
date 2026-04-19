@@ -16,6 +16,7 @@ from refiner.cli.job_utils import (
     next_log_cursor as _next_log_cursor,
     parse_epoch_ms,
     remember_seen_key as _remember_seen_key,
+    retry_delay,
     safe_text as _safe_text,
 )
 from refiner.cli.local_run import (
@@ -116,10 +117,6 @@ def emit_cloud_followup_commands(
         )
     print(f"Workers: macrodata jobs workers {context.job_id}", file=file)
     print(f"Cancel: macrodata jobs cancel {context.job_id}", file=file)
-
-
-def _retry_delay(error_count: int) -> float:
-    return min(float(2 ** max(0, error_count - 1)), 5.0)
 
 
 def _warn_follow_skip(
@@ -393,7 +390,7 @@ def attach_to_cloud_job(
                     status_retryable_error_count += 1
                     if status_retryable_error_count > _ATTACH_MAX_RETRYABLE_ERRORS:
                         raise
-                    next_summary_at = now + _retry_delay(status_retryable_error_count)
+                    next_summary_at = now + retry_delay(status_retryable_error_count)
                     continue
                 status_retryable_error_count = 0
                 context, snapshot = _snapshot_and_context(
@@ -453,7 +450,7 @@ def attach_to_cloud_job(
                     log_retryable_error_count += 1
                     if log_retryable_error_count > _ATTACH_MAX_RETRYABLE_ERRORS:
                         raise
-                    time.sleep(_retry_delay(log_retryable_error_count))
+                    time.sleep(retry_delay(log_retryable_error_count))
                     continue
                 log_retryable_error_count = 0
                 entries = payload.get("entries")

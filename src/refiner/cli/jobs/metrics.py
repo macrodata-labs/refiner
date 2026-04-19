@@ -6,9 +6,7 @@ from typing import Any
 
 from refiner.cli.job_utils import format_ts as _format_ts
 from refiner.cli.job_utils import safe_text as _safe_text
-from refiner.cli.jobs.common import _client, _handle_error, _print_json, _print_table
-from refiner.platform.auth import MacrodataCredentialsError
-from refiner.platform.client import MacrodataApiError
+from refiner.cli.jobs.common import _client, _print_table, _run_job_command
 
 _MAX_METRICS_WORKER_IDS = 50
 
@@ -117,16 +115,16 @@ def cmd_jobs_metrics(args: Namespace) -> int:
     if metric_labels and args.step is None:
         print("--metric requires --step.", file=sys.stderr)
         return 1
-    try:
-        payload = _client().cli_get_job_step_metrics(
+    return _run_job_command(
+        as_json=args.json,
+        fetch=lambda: _client().cli_get_job_step_metrics(
             job_id=args.job_id,
             stage_index=args.stage_index,
             step_index=args.step,
             metric_labels=metric_labels,
-        )
-    except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
-    return _print_json(payload) if args.json else _render_metrics(payload)
+        ),
+        renderer=_render_metrics,
+    )
 
 
 def cmd_jobs_resource_metrics(args: Namespace) -> int:
@@ -137,8 +135,9 @@ def cmd_jobs_resource_metrics(args: Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    try:
-        payload = _client().cli_get_job_metrics(
+    return _run_job_command(
+        as_json=args.json,
+        fetch=lambda: _client().cli_get_job_metrics(
             job_id=args.job_id,
             range_value=args.range,
             start_ms=args.start_ms,
@@ -146,7 +145,6 @@ def cmd_jobs_resource_metrics(args: Namespace) -> int:
             bucket_count=args.bucket_count,
             stage_index=args.stage_index,
             worker_ids=worker_ids,
-        )
-    except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
-    return _print_json(payload) if args.json else _render_resource_metrics(payload)
+        ),
+        renderer=_render_resource_metrics,
+    )

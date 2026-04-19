@@ -16,9 +16,10 @@ from refiner.cli.job_utils import (
     next_log_cursor as _next_log_cursor,
     parse_epoch_ms,
     remember_seen_key as _remember_seen_key,
+    retry_delay,
     safe_text as _safe_text,
 )
-from refiner.cli.jobs.common import _client, _handle_error, _print_json
+from refiner.cli.jobs.common import _client, _handle_error, _render_payload
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import MacrodataApiError
 
@@ -41,10 +42,6 @@ def _format_log_entry(entry: dict[str, Any]) -> str:
         f"{_safe_text(entry.get('sourceType'))}/{_safe_text(entry.get('sourceName'))} "
         f"{_safe_text(entry.get('line'))}"
     )
-
-
-def _follow_retry_delay(error_count: int) -> float:
-    return min(float(2 ** max(0, error_count - 1)), 5.0)
 
 
 def _effective_log_limit(args: Namespace) -> int:
@@ -147,7 +144,7 @@ def _stream_logs(
             log_retryable_error_count += 1
             if log_retryable_error_count > _FOLLOW_LOG_MAX_RETRYABLE_ERRORS:
                 raise
-            time.sleep(_follow_retry_delay(log_retryable_error_count))
+            time.sleep(retry_delay(log_retryable_error_count))
             continue
         log_retryable_error_count = 0
         entries = payload.get("entries")
@@ -189,7 +186,7 @@ def _stream_logs(
                 raise
             current_start_ms = next_start_ms
             current_end_ms = next_end_ms
-            time.sleep(_follow_retry_delay(status_retryable_error_count))
+            time.sleep(retry_delay(status_retryable_error_count))
             continue
         except MacrodataCredentialsError:
             raise
@@ -297,4 +294,4 @@ def cmd_jobs_logs(args: Namespace) -> int:
         return 130
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return _handle_error(err)
-    return _print_json(payload) if args.json else _render_logs(payload)
+    return _render_payload(as_json=args.json, payload=payload, renderer=_render_logs)

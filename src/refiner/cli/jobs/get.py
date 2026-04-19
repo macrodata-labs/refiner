@@ -9,14 +9,11 @@ from refiner.cli.job_utils import safe_text as _safe_text
 from refiner.cli.jobs.common import (
     _client,
     _executor_text,
-    _handle_error,
-    _print_json,
     _print_table,
     _progress_text,
+    _run_job_command,
     _step_summary_text,
 )
-from refiner.platform.auth import MacrodataCredentialsError
-from refiner.platform.client import MacrodataApiError
 
 
 def _render_job(payload: dict[str, Any]) -> int:
@@ -112,8 +109,8 @@ def _render_job(payload: dict[str, Any]) -> int:
 
 
 def cmd_jobs_get(args: Namespace) -> int:
-    try:
-        payload = _client().cli_get_job(job_id=args.job_id)
-    except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
-    return _print_json(payload) if args.json else _render_job(payload)
+    return _run_job_command(
+        as_json=args.json,
+        fetch=lambda: _client().cli_get_job(job_id=args.job_id),
+        renderer=_render_job,
+    )
