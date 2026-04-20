@@ -112,17 +112,18 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
-        normalized_gpu_type = gpu_type.strip() if gpu_type is not None else None
-        if gpu_type is not None and not normalized_gpu_type:
-            raise ValueError("gpu_type must be non-empty")
-        if gpus_per_worker is not None and normalized_gpu_type is None:
+        if gpus_per_worker is not None and gpus_per_worker <= 0:
+            raise ValueError("gpus_per_worker must be > 0")
+        if gpus_per_worker is not None and gpu_type is None:
             raise ValueError("gpu_type is required when gpus_per_worker is set")
-        if normalized_gpu_type is not None and gpus_per_worker is None:
+        if gpu_type is not None and not gpu_type.strip():
+            raise ValueError("gpu_type must be non-empty")
+        if gpu_type is not None and gpus_per_worker is None:
             raise ValueError("gpus_per_worker is required when gpu_type is set")
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.gpus_per_worker = gpus_per_worker
-        self.gpu_type = normalized_gpu_type
+        self.gpu_type = gpu_type.strip() if gpu_type is not None else None
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
@@ -213,38 +214,33 @@ class CloudLauncher(BaseLauncher):
         resolved_secrets = self._resolve_env_values(self.secrets)
         resolved_env = self._resolve_env_values(self.env)
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
-        merged_env = self._merged_env(resolved_secrets, resolved_env)
-        try:
-            manifest = self._resolve_cloud_manifest(secret_values=secret_values)
-            planned_stages = self._planned_stages()
-            stages = self._resolved_stages(planned_stages)
-            resp = client.cloud_submit_job(
-                request=CloudRunCreateRequest(
-                    name=self.name,
-                    plan=self._compiled_plan(
-                        planned_stages, secret_values=secret_values
+        stages = self._resolved_stages()
+        manifest = self._resolve_cloud_manifest(secret_values=secret_values)
+        request = CloudRunCreateRequest(
+            name=self.name,
+            plan=self._compiled_plan(stages, secret_values=secret_values),
+            stage_payloads=[
+                StagePayload(
+                    stage_index=stage.index,
+                    pipeline_payload=serialize_pipeline_inline(stage.pipeline),
+                    runtime=CloudRuntimeConfig(
+                        num_workers=stage.compute.num_workers,
+                        cpus_per_worker=stage.compute.cpus_per_worker,
+                        mem_mb_per_worker=stage.compute.memory_mb_per_worker,
+                        gpus_per_worker=stage.compute.gpus_per_worker,
+                        gpu_type=stage.compute.gpu_type,
                     ),
-                    stage_payloads=[
-                        StagePayload(
-                            stage_index=stage.index,
-                            pipeline_payload=serialize_pipeline_inline(stage.pipeline),
-                            runtime=CloudRuntimeConfig(
-                                num_workers=stage.compute.num_workers,
-                                cpus_per_worker=stage.compute.cpus_per_worker,
-                                mem_mb_per_worker=stage.compute.memory_mb_per_worker,
-                                gpus_per_worker=stage.compute.gpus_per_worker,
-                                gpu_type=stage.compute.gpu_type,
-                            ),
-                        )
-                        for stage in stages
-                    ],
-                    manifest=manifest,
-                    sync_local_dependencies=self.sync_local_dependencies,
-                    secrets=merged_env,
-                    continue_from_job=self.continue_from_job,
-                    unsafe_continue=self.unsafe_continue,
                 )
-            )
+                for stage in stages
+            ],
+            manifest=manifest,
+            sync_local_dependencies=self.sync_local_dependencies,
+            secrets=self._merged_env(resolved_secrets, resolved_env),
+            continue_from_job=self.continue_from_job,
+            unsafe_continue=self.unsafe_continue,
+        )
+        try:
+            resp = client.cloud_submit_job(request=request)
         except MacrodataCredentialsError as err:
             raise SystemExit(
                 "Your Macrodata API key is invalid. Run `macrodata login` "
