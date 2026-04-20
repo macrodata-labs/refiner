@@ -418,6 +418,8 @@ def _stream_logs(
             cast(dict[str, Any], job_payload["job"]).get("logsAvailable", True)
         )
         if _job_status(job_payload) in TERMINAL_JOB_STATUSES:
+            if not logs_available:
+                return 0
             final_end_ms = max(_now_ms(), next_start_ms + 1)
             final_cursor: str | None = None
             final_retryable_error_count = 0

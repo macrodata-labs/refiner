@@ -947,6 +947,57 @@ def test_jobs_logs_follow_fetches_one_final_window_after_terminal_status(
     assert client.log_calls == 3
 
 
+def test_jobs_logs_follow_skips_terminal_drain_when_logs_unavailable(
+    monkeypatch, capsys
+) -> None:
+    class _TerminalNoLogsClient(_FakeClient):
+        def __init__(self) -> None:
+            self.log_calls = 0
+
+        def cli_get_job_logs(self, **_: object) -> dict[str, object]:
+            self.log_calls += 1
+            return {
+                "entries": [],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            if self.log_calls >= 1:
+                job = cast(dict[str, object], payload["job"])
+                job["status"] = "completed"
+                job["logsAvailable"] = False
+            return payload
+
+    client = _TerminalNoLogsClient()
+    _patch_job_client(monkeypatch, lambda: client)
+    monkeypatch.setattr(jobs_logs.time, "sleep", lambda _: None)
+
+    rc = jobs.cmd_jobs_logs(
+        Namespace(
+            job_id="job-1",
+            stage=None,
+            worker=None,
+            source_type=None,
+            source_name=None,
+            severity=None,
+            search=None,
+            start_ms=1,
+            end_ms=2,
+            cursor=None,
+            limit=None,
+            follow=True,
+            json=False,
+        )
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert out.out == ""
+    assert client.log_calls == 2
+
+
 def test_jobs_logs_follow_retries_terminal_window_fetch_errors(
     monkeypatch, capsys
 ) -> None:
