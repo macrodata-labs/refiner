@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, cast
 
 from refiner.cli.run.modes import (
     CloudAttachContext,
-    attach_mode_override,
     emit_cloud_followup_commands,
     resolve_launcher_attach_mode,
 )
@@ -233,16 +232,17 @@ class CloudLauncher(BaseLauncher):
                     )
                 )
             else:
-                # Resume requests only need stage topology plus serialized pipeline payloads.
-                # Effective worker sizing comes from the prior job and explicit
-                # runtime_overrides, so resume planning uses a placeholder worker
-                # count and compiles the stage graph without runtime sizing.
-                manifest = (
-                    self._resolve_cloud_manifest(secret_values=secret_values)
-                    if selector.latest_compatible
-                    else None
+                # Resume launches a new cloud job from the current compiled pipeline while
+                # reusing completed work from a compatible failed job. The compiled stage
+                # graph and manifest therefore always come from the current launch request.
+                # Effective worker sizing for the resumed suffix is resolved by the backend
+                # from the prior job plus explicit runtime_overrides, so resume planning uses
+                # a placeholder worker count and strips runtime sizing from the compatibility
+                # plan.
+                manifest = self._resolve_cloud_manifest(secret_values=secret_values)
+                stages = self._resolved_stages(
+                    plan_pipeline_stages(self.pipeline, default_num_workers=1)
                 )
-                stages = plan_pipeline_stages(self.pipeline, default_num_workers=1)
                 resp = client.cloud_resume_job(
                     request=CloudRunResumeRequest(
                         selector=selector,
@@ -293,7 +293,7 @@ class CloudLauncher(BaseLauncher):
                     stage_index_hint=resp.stage_index,
                     force_attach=True,
                 )
-                if attach_rc != 0 and attach_mode_override() is not None:
+                if attach_rc != 0:
                     raise SystemExit(attach_rc)
             except (MacrodataApiError, MacrodataCredentialsError):
                 print(
@@ -334,19 +334,23 @@ class CloudLauncher(BaseLauncher):
         resume_plan = dict(plan)
         stage_dicts = cast(list[dict[str, object]], resume_plan.get("stages", []))
         resume_plan["stages"] = [
-            {
-                key: value
-                for key, value in stage.items()
-                if key
-                not in {
-                    "requested_num_workers",
-                    "cpus_per_worker",
-                    "memory_mb_per_worker",
-                    "gpus_per_worker",
-                    "gpu_type",
+            (
+                {
+                    key: value
+                    for key, value in stage_dict.items()
+                    if key
+                    not in {
+                        "requested_num_workers",
+                        "cpus_per_worker",
+                        "memory_mb_per_worker",
+                        "gpus_per_worker",
+                        "gpu_type",
+                    }
                 }
-            }
-            for stage in stage_dicts
+                if planned_stage.compute.inherit_launcher_resources
+                else stage_dict
+            )
+            for planned_stage, stage_dict in zip(stages, stage_dicts, strict=True)
         ]
         return resume_plan
 

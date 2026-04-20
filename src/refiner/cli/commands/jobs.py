@@ -8,7 +8,6 @@ from refiner.cli.jobs.list import cmd_jobs_list
 from refiner.cli.jobs.logs import cmd_jobs_logs
 from refiner.cli.jobs.manifest import cmd_jobs_manifest
 from refiner.cli.jobs.metrics import cmd_jobs_metrics, cmd_jobs_resource_metrics
-from refiner.cli.jobs.resume import cmd_jobs_resume
 from refiner.cli.jobs.workers import cmd_jobs_workers
 
 
@@ -193,41 +192,3 @@ def register_jobs_command(
         "--json", action="store_true", help="Print raw JSON response"
     )
     jobs_cancel.set_defaults(handler=cmd_jobs_cancel)
-
-    jobs_resume = jobs_subparsers.add_parser(
-        "resume", help="Resume a cloud job or the latest compatible cloud run"
-    )
-    jobs_resume.add_argument("job_id", nargs="?", help="Prior cloud job identifier")
-    jobs_resume.add_argument(
-        "--latest-compatible",
-        action="store_true",
-        help="Resume the latest compatible cloud run instead of an exact job ID",
-    )
-    jobs_resume.add_argument(
-        "--name",
-        help="Optional run-name filter used with --latest-compatible",
-    )
-    jobs_resume.add_argument(
-        "--limit-to-me",
-        action="store_true",
-        help="Restrict latest-compatible lookup to jobs started by the authenticated user",
-    )
-    jobs_resume.add_argument(
-        "--num-workers", type=int, help="Override worker count for the resumed attempt"
-    )
-    jobs_resume.add_argument(
-        "--cpus-per-worker", type=int, help="Override CPU cores per worker"
-    )
-    jobs_resume.add_argument(
-        "--mem-mb-per-worker", type=int, help="Override memory in MB per worker"
-    )
-    jobs_resume.add_argument(
-        "--gpus-per-worker", type=int, help="Override GPU count per worker"
-    )
-    jobs_resume.add_argument(
-        "--gpu-type", help="Override GPU type for the resumed attempt"
-    )
-    jobs_resume.add_argument(
-        "--json", action="store_true", help="Print raw JSON response"
-    )
-    jobs_resume.set_defaults(handler=cmd_jobs_resume)

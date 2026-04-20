@@ -317,14 +317,6 @@ class MacrodataClient:
             timeout_s=30.0,
         )
 
-    def cloud_resume_job_raw(self, *, request: CloudRunResumeRequest) -> dict[str, Any]:
-        return self._request_raw(
-            method="POST",
-            path="/api/cloud/runs/resume",
-            json_payload=request.to_dict(),
-            timeout_s=30.0,
-        )
-
     def cli_list_jobs(
         self,
         *,

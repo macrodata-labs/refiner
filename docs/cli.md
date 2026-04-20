@@ -252,34 +252,7 @@ Options:
 macrodata jobs cancel <job_id>
 ```
 
-### `macrodata jobs resume`
-
-Starts a new cloud attempt from an exact prior job or from the latest compatible prior run. Resume is always explicit; the CLI never resumes based only on a matching name or output path.
-
-Options:
-
-- `<job_id>` or `--latest-compatible` (exactly one is required)
-- `--name <run_name>`; only with `--latest-compatible`
-- `--limit-to-me`; only with `--latest-compatible`
-- `--num-workers <count>`
-- `--cpus-per-worker <count>`
-- `--mem-mb-per-worker <count>`
-- `--gpus-per-worker <count>`
-- `--gpu-type <type>`
-- `--json`
-
-```bash
-macrodata jobs resume job_123
-macrodata jobs resume --latest-compatible --name cloud-job --limit-to-me
-macrodata jobs resume job_123 --num-workers 16 --cpus-per-worker 4
-```
-
-Notes:
-
-- if you omit the runtime override flags, the resumed attempt can inherit the selected run's existing worker sizing
-- runtime override flags are field-by-field; for example, you can change only `--gpus-per-worker` or only `--gpu-type`
-
-Every job command supports `--json`. That mode prints the raw API response so scripts and agentic tools can consume the exact payload returned by Macrodata.
+Most job commands support `--json`. That mode prints the raw API response so scripts and agentic tools can consume the exact payload returned by Macrodata. `macrodata jobs attach` is the current exception.
 
 ## Notes
 
@@ -288,7 +261,6 @@ Every job command supports `--json`. That mode prints the raw API response so sc
 - `macrodata jobs logs ...`, `macrodata jobs metrics ...`, and `macrodata jobs resource-metrics ...` are only available for cloud jobs
 - `macrodata jobs resource-metrics ...` accepts at most 50 distinct `--worker-id` filters per request
 - `macrodata jobs cancel ...` is only available for cloud jobs in `pending` or `running` state
-- `macrodata jobs resume ...` is only available for cloud jobs and creates a new attempt instead of mutating the old job
 
 ## Internal Notes
 

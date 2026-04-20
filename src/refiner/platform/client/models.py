@@ -349,28 +349,16 @@ def build_resume_selector(
     latest_compatible: bool = False,
     name: str | None = None,
     limit_to_me: bool = False,
-    require_selector: bool = False,
 ) -> CloudResumeSelector | None:
-    if job_id is not None and latest_compatible:
-        raise ValueError(
-            "resume selector must specify exactly one of job_id or latest_compatible"
-        )
     if job_id is None and not latest_compatible:
         if name is not None or limit_to_me:
             raise ValueError(
                 "resume_name and resume_limit_to_me require resume='latest-compatible'"
             )
-        if require_selector:
-            raise ValueError("specify exactly one of <job_id> or --latest-compatible")
         return None
-    if job_id is not None:
-        return CloudResumeSelector(
-            job_id=job_id,
-            name=name,
-            limit_to_me=limit_to_me,
-        )
     return CloudResumeSelector(
-        latest_compatible=True,
+        job_id=job_id,
+        latest_compatible=latest_compatible,
         name=name,
         limit_to_me=limit_to_me,
     )
@@ -379,12 +367,12 @@ def build_resume_selector(
 @dataclass(frozen=True, slots=True)
 class CloudRunResumeRequest:
     selector: CloudResumeSelector
+    plan: dict[str, Any]
+    stage_payloads: list[StagePayload]
+    manifest: dict[str, Any]
+    sync_local_dependencies: bool
     name: str | None = None
     runtime_overrides: CloudRuntimeOverrides | None = None
-    plan: dict[str, Any] | None = None
-    stage_payloads: list[StagePayload] | None = None
-    manifest: dict[str, Any] | None = None
-    sync_local_dependencies: bool | None = None
     secrets: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
@@ -397,14 +385,10 @@ class CloudRunResumeRequest:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = _update_cloud_run_request_payload(
             {"selector": self.selector.to_dict()},
-            executor=(
-                {
-                    "type": "macrodata-cloud",
-                    "sync_local_dependencies": self.sync_local_dependencies,
-                }
-                if self.sync_local_dependencies is not None
-                else None
-            ),
+            executor={
+                "type": "macrodata-cloud",
+                "sync_local_dependencies": self.sync_local_dependencies,
+            },
             name=self.name,
             plan=self.plan,
             stage_payloads=self.stage_payloads,

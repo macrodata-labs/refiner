@@ -143,7 +143,8 @@ result = pipeline.launch_cloud(
 Resume behavior notes:
 
 - resume never triggers from the output path or job name alone; you must opt in with `resume_from_job_id` or `resume="latest-compatible"`
-- resumed cloud launches create a new attempt instead of mutating the old job
+- resumed cloud launches create a new cloud job linked to the prior failed job instead of mutating the old job
+- the current compiled pipeline and manifest define the resumed launch, and the control plane only reuses prior work when they are compatible with the selected failed job
 - if you omit `num_workers`, `cpus_per_worker`, `mem_mb_per_worker`, `gpus_per_worker`, and `gpu_type` on resume, the control plane can inherit the selected run's existing sizing
 - if you pass any of those fields on resume, they are treated as explicit overrides for the new attempt
 

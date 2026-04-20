@@ -376,7 +376,8 @@ class RefinerPipeline:
             env: Extra environment variables to mount inside the cloud image without
                 treating their values as redaction targets. `None` values are loaded
                 from the submitting environment.
-            resume_from_job_id: Resume from one exact prior cloud job.
+            resume_from_job_id: Launch a new cloud job that reuses completed work
+                from one exact prior compatible cloud job.
             resume: Explicit resume selector mode. Currently only
                 `"latest-compatible"` is supported.
             resume_name: Optional name filter used with `resume="latest-compatible"`.

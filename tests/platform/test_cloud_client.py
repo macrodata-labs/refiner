@@ -130,11 +130,24 @@ def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> 
                 name="demo-cloud-job",
                 limit_to_me=True,
             ),
+            plan={"stages": [{"name": "stage_0", "steps": []}]},
+            stage_payloads=[
+                StagePayload(
+                    stage_index=0,
+                    pipeline_payload=CloudPipelinePayload(
+                        format="cloudpickle",
+                        bytes_b64="AQID",
+                        sha256="abc123",
+                        size_bytes=3,
+                    ),
+                )
+            ],
+            manifest={"version": 1},
+            sync_local_dependencies=False,
             runtime_overrides=CloudRuntimeOverrides(
                 cpus_per_worker=8,
                 mem_mb_per_worker=16384,
             ),
-            sync_local_dependencies=False,
         )
     )
 
@@ -159,32 +172,19 @@ def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> 
         "cpus_per_worker": 8,
         "mem_mb_per_worker": 16384,
     }
-
-
-def test_cloud_client_cloud_resume_job_raw_posts_to_resume_endpoint(
-    monkeypatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_request_json(**kwargs: object) -> dict[str, object]:
-        captured.update(kwargs)
-        return {"job_id": "job-raw", "workspaceSlug": "macrodata", "extra": True}
-
-    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
-
-    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
-    payload = client.cloud_resume_job_raw(
-        request=CloudRunResumeRequest(selector=CloudResumeSelector(job_id="job-1"))
-    )
-
-    assert payload == {
-        "job_id": "job-raw",
-        "workspaceSlug": "macrodata",
-        "extra": True,
-    }
-    assert captured["method"] == "POST"
-    assert captured["path"] == "/api/cloud/runs/resume"
-    assert captured["timeout_s"] == 30.0
+    assert json_payload["plan"] == {"stages": [{"name": "stage_0", "steps": []}]}
+    assert json_payload["manifest"] == {"version": 1}
+    assert json_payload["stage_payloads"] == [
+        {
+            "stage_index": 0,
+            "pipeline_payload": {
+                "format": "cloudpickle",
+                "bytes_b64": "AQID",
+                "sha256": "abc123",
+                "size_bytes": 3,
+            },
+        }
+    ]
 
 
 def test_cloud_runtime_overrides_allow_partial_gpu_fields() -> None:

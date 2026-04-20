@@ -4,7 +4,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from refiner.pipeline.planning import (
@@ -63,33 +63,11 @@ class BaseLauncher(ABC):
         stages: list[PlannedStage] | None = None,
         *,
         secret_values: tuple[str, ...] = (),
-        include_runtime: bool = True,
     ) -> dict[str, object]:
-        plan = compile_planned_stages(
+        return compile_planned_stages(
             self._resolved_stages(stages),
             secret_values=secret_values,
         )
-        if include_runtime:
-            return plan
-
-        plan_without_runtime = dict(plan)
-        stage_dicts = cast(list[dict[str, object]], plan.get("stages", []))
-        plan_without_runtime["stages"] = [
-            {
-                key: value
-                for key, value in stage.items()
-                if key
-                not in {
-                    "requested_num_workers",
-                    "cpus_per_worker",
-                    "memory_mb_per_worker",
-                    "gpus_per_worker",
-                    "gpu_type",
-                }
-            }
-            for stage in stage_dicts
-        ]
-        return plan_without_runtime
 
     def _resolved_stages(
         self,

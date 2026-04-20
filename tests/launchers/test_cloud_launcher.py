@@ -685,7 +685,7 @@ def test_pipeline_launch_cloud_defaults_to_auto_attach_when_interactive(
     assert captured["force_attach"] is True
 
 
-def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_does_not_raise_without_override(
+def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_raises(
     monkeypatch,
 ) -> None:
     _stub_cloud_submit(monkeypatch)
@@ -700,9 +700,8 @@ def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_does_not_raise_wi
         lambda **_: 1,
     )
 
-    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
-
-    assert result.job_id == "job-123"
+    with pytest.raises(SystemExit, match="1"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
 
 def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
@@ -797,11 +796,10 @@ def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
 def test_pipeline_launch_cloud_resume_from_job_id_posts_resume_request(
     monkeypatch,
 ) -> None:
-    captured = _stub_cloud_submit(
-        monkeypatch,
-        manifest=lambda **_: (_ for _ in ()).throw(
-            AssertionError("should not build a fresh manifest for exact-id resume")
-        ),
+    captured = _stub_cloud_submit(monkeypatch, manifest={"version": 1})
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
     )
 
     result = read_jsonl("input.jsonl").launch_cloud(
@@ -816,7 +814,7 @@ def test_pipeline_launch_cloud_resume_from_job_id_posts_resume_request(
     request = cast(CloudRunResumeRequest, captured["resume_request"])
     assert request.selector.to_dict() == {"job_id": "job-previous"}
     assert request.name == "demo cloud"
-    assert request.manifest is None
+    assert request.manifest == {"version": 1}
     assert request.plan is not None
     assert "requested_num_workers" not in request.plan["stages"][0]
     assert request.stage_payloads is not None
@@ -876,6 +874,49 @@ def test_pipeline_launch_cloud_resume_without_overrides_preserves_prior_runtime(
     assert request.runtime_overrides is None
     assert request.plan is not None
     assert "requested_num_workers" not in request.plan["stages"][0]
+
+
+def test_pipeline_launch_cloud_resume_preserves_fixed_reducer_stage_runtime(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    stage_zero = read_jsonl("input-a.jsonl")
+    reducer_stage = read_jsonl("input-b.jsonl")
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.plan_pipeline_stages",
+        lambda pipeline, default_num_workers: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=stage_zero,
+                compute=StageComputeRequirements(num_workers=default_num_workers),
+            ),
+            PlannedStage(
+                index=1,
+                name="stage_1",
+                pipeline=reducer_stage,
+                compute=StageComputeRequirements(
+                    num_workers=1,
+                    inherit_launcher_resources=False,
+                ),
+            ),
+        ],
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        num_workers=4,
+        resume_from_job_id="job-previous",
+    )
+
+    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    assert request.plan is not None
+    assert "requested_num_workers" not in request.plan["stages"][0]
+    assert request.plan["stages"][1]["requested_num_workers"] == 1
 
 
 def test_pipeline_launch_cloud_resume_rejects_invalid_mode(monkeypatch) -> None:
