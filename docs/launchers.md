@@ -102,7 +102,7 @@ Returned result includes:
 
 Fresh cloud launch remains the default. Resume only triggers when you pass an explicit selector.
 
-Use an exact prior job id when you already know which failed attempt you want to continue:
+Use an exact prior job id when you already know which failed job you want to continue:
 
 ```python
 import refiner as mdr
@@ -146,7 +146,7 @@ Resume behavior notes:
 - resumed cloud launches create a new cloud job linked to the prior failed job instead of mutating the old job
 - the current compiled pipeline and manifest define the resumed launch, and the control plane only reuses prior work when they are compatible with the selected failed job
 - if you omit `num_workers`, `cpus_per_worker`, `mem_mb_per_worker`, `gpus_per_worker`, and `gpu_type` on resume, the control plane can inherit the selected run's existing sizing
-- if you pass any of those fields on resume, they are treated as explicit overrides for the new attempt
+- if you pass any of those fields on resume, they are treated as explicit overrides for the new resumed job
 
 ### Launched writer notes
 
