@@ -124,7 +124,9 @@ class CloudRuntimeConfig:
     gpu_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"num_workers": self.num_workers}
+        payload: dict[str, Any] = {
+            "num_workers": self.num_workers,
+        }
         if self.cpus_per_worker is not None:
             payload["cpus_per_worker"] = self.cpus_per_worker
         if self.mem_mb_per_worker is not None:
@@ -159,11 +161,12 @@ class StagePayload:
     runtime: CloudRuntimeConfig
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "stage_index": self.stage_index,
             "pipeline_payload": self.pipeline_payload.to_dict(),
             "runtime": self.runtime.to_dict(),
         }
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
