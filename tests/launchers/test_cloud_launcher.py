@@ -524,7 +524,8 @@ def test_pipeline_launch_cloud_detached_mode_prints_followup_commands(
         lambda ref: True,
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.resolve_launcher_attach_mode", lambda: "detach"
+        "refiner.launchers.cloud.resolve_launcher_attach_mode",
+        lambda **_: "detach",
     )
     monkeypatch.setattr(
         "refiner.launchers.cloud.emit_cloud_followup_commands",
@@ -545,7 +546,8 @@ def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
         lambda ref: True,
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.resolve_launcher_attach_mode", lambda: "attach"
+        "refiner.launchers.cloud.resolve_launcher_attach_mode",
+        lambda **_: "attach",
     )
     captured: dict[str, object] = {}
 
@@ -554,7 +556,7 @@ def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
         return 0
 
     monkeypatch.setattr(
-        "refiner.launchers.cloud.attach_to_cloud_job", _fake_attach_to_cloud_job
+        "refiner.cli.run.cloud.attach_to_cloud_job", _fake_attach_to_cloud_job
     )
 
     result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
@@ -563,6 +565,24 @@ def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
     assert captured["job_id"] == "job-123"
     assert captured["stage_index_hint"] == 0
     assert captured["force_attach"] is True
+
+
+def test_pipeline_launch_cloud_explicit_attach_exits_nonzero_when_remote_job_fails(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    monkeypatch.setenv("REFINER_ATTACH", "attach")
+    monkeypatch.setattr(
+        "refiner.cli.run.cloud.attach_to_cloud_job",
+        lambda **_: 1,
+    )
+
+    with pytest.raises(SystemExit, match="1"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
 
 def test_pipeline_launch_cloud_attach_failure_prints_fallback(
@@ -574,10 +594,11 @@ def test_pipeline_launch_cloud_attach_failure_prints_fallback(
         lambda ref: True,
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.resolve_launcher_attach_mode", lambda: "attach"
+        "refiner.launchers.cloud.resolve_launcher_attach_mode",
+        lambda **_: "attach",
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(
             MacrodataApiError(status=503, message="boom")
         ),
@@ -604,10 +625,11 @@ def test_pipeline_launch_cloud_unexpected_attach_failure_propagates(
         lambda ref: True,
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.resolve_launcher_attach_mode", lambda: "attach"
+        "refiner.launchers.cloud.resolve_launcher_attach_mode",
+        lambda **_: "attach",
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
@@ -615,8 +637,8 @@ def test_pipeline_launch_cloud_unexpected_attach_failure_propagates(
         read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
 
-def test_pipeline_launch_cloud_defaults_to_detached_outside_cli(
-    monkeypatch, capsys
+def test_pipeline_launch_cloud_defaults_to_auto_attach_when_interactive(
+    monkeypatch,
 ) -> None:
     _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
@@ -624,12 +646,119 @@ def test_pipeline_launch_cloud_defaults_to_detached_outside_cli(
         lambda ref: True,
     )
     monkeypatch.delenv("REFINER_ATTACH", raising=False)
+    monkeypatch.setattr("refiner.launchers.cloud.stdout_is_interactive", lambda: True)
+    captured: dict[str, object] = {}
+
+    def _fake_attach_to_cloud_job(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(
+        "refiner.cli.run.cloud.attach_to_cloud_job", _fake_attach_to_cloud_job
+    )
+
+    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert result.job_id == "job-123"
+    assert captured["job_id"] == "job-123"
+    assert captured["force_attach"] is True
+
+
+def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_does_not_raise_without_override(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    monkeypatch.delenv("REFINER_ATTACH", raising=False)
+    monkeypatch.setattr("refiner.launchers.cloud.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        "refiner.cli.run.cloud.attach_to_cloud_job",
+        lambda **_: 1,
+    )
+
+    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert result.job_id == "job-123"
+
+
+def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    stage_zero = read_jsonl("input-a.jsonl")
+    stage_one = read_jsonl("input-b.jsonl")
+    monkeypatch.setattr(
+        "refiner.launchers.base.plan_pipeline_stages",
+        lambda pipeline, default_num_workers: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=stage_zero,
+                compute=StageComputeRequirements(num_workers=2),
+            ),
+            PlannedStage(
+                index=1,
+                name="stage_1",
+                pipeline=stage_one,
+                compute=StageComputeRequirements(
+                    num_workers=1,
+                    inherit_launcher_resources=False,
+                ),
+            ),
+        ],
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        cpus_per_worker=4,
+        mem_mb_per_worker=8192,
+        gpus_per_worker=1,
+        gpu_type="h100",
+    )
+
+    request = cast(CloudRunCreateRequest, captured["request"])
+    assert request.plan["stages"][0]["cpus_per_worker"] == 4
+    assert request.plan["stages"][0]["memory_mb_per_worker"] == 8192
+    assert request.plan["stages"][0]["gpus_per_worker"] == 1
+    assert request.plan["stages"][0]["gpu_type"] == "h100"
+    assert "cpus_per_worker" not in request.plan["stages"][1]
+    assert "memory_mb_per_worker" not in request.plan["stages"][1]
+    assert "gpus_per_worker" not in request.plan["stages"][1]
+    assert "gpu_type" not in request.plan["stages"][1]
+    assert request.stage_payloads[0].runtime.cpus_per_worker == 4
+    assert request.stage_payloads[0].runtime.mem_mb_per_worker == 8192
+    assert request.stage_payloads[0].runtime.gpus_per_worker == 1
+    assert request.stage_payloads[0].runtime.gpu_type == "h100"
+    assert request.stage_payloads[1].runtime.cpus_per_worker is None
+    assert request.stage_payloads[1].runtime.mem_mb_per_worker is None
+    assert request.stage_payloads[1].runtime.gpus_per_worker is None
+    assert request.stage_payloads[1].runtime.gpu_type is None
+
+
+def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
+    monkeypatch, capsys
+) -> None:
+    _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    monkeypatch.setenv("REFINER_ATTACH", "auto")
+    monkeypatch.setattr("refiner.launchers.cloud.stdin_is_interactive", lambda: True)
+    monkeypatch.setattr("refiner.launchers.cloud.stdout_is_interactive", lambda: False)
     monkeypatch.setattr(
         "refiner.launchers.cloud.emit_cloud_followup_commands",
         lambda *, context, file=None: print(f"attach {context.job_id}", file=file),
     )
     monkeypatch.setattr(
-        "refiner.launchers.cloud.attach_to_cloud_job",
+        "refiner.cli.run.cloud.attach_to_cloud_job",
         lambda **_: (_ for _ in ()).throw(AssertionError("should not attach")),
     )
 

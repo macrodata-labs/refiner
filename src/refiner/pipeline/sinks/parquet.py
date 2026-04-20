@@ -75,7 +75,7 @@ class ParquetSink(BaseSink):
             args["compression"] = self.compression
         return ("write_parquet", "writer", args)
 
-    def build_reducer(self) -> BaseSink:
+    def build_reducer(self) -> BaseSink | None:
         return FileCleanupReducerSink(
             output=self.output,
             filename_template=self.filename_template,

@@ -78,7 +78,7 @@ class JsonlSink(BaseSink):
             },
         )
 
-    def build_reducer(self) -> BaseSink:
+    def build_reducer(self) -> BaseSink | None:
         return FileCleanupReducerSink(
             output=self.output,
             filename_template=self.filename_template,

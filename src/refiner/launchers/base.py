@@ -64,21 +64,47 @@ class BaseLauncher(ABC):
         *,
         secret_values: tuple[str, ...] = (),
     ) -> dict[str, object]:
-        resolved_stages = [
+        return compile_planned_stages(
+            self._resolved_stages(stages),
+            secret_values=secret_values,
+        )
+
+    def _resolved_stages(
+        self,
+        stages: list[PlannedStage] | None = None,
+    ) -> list[PlannedStage]:
+        return [
             replace(stage, compute=self._stage_compute_requirements(stage.compute))
             for stage in (stages or self._planned_stages())
         ]
-        return compile_planned_stages(resolved_stages, secret_values=secret_values)
 
     def _stage_compute_requirements(
         self, compute: StageComputeRequirements
     ) -> StageComputeRequirements:
+        if not compute.inherit_launcher_resources:
+            return compute
         return replace(
             compute,
-            cpus_per_worker=getattr(self, "cpus_per_worker", None),
-            memory_mb_per_worker=getattr(self, "mem_mb_per_worker", None),
-            gpus_per_worker=getattr(self, "gpus_per_worker", None),
-            gpu_type=getattr(self, "gpu_type", None),
+            cpus_per_worker=(
+                compute.cpus_per_worker
+                if compute.cpus_per_worker is not None
+                else getattr(self, "cpus_per_worker", None)
+            ),
+            memory_mb_per_worker=(
+                compute.memory_mb_per_worker
+                if compute.memory_mb_per_worker is not None
+                else getattr(self, "mem_mb_per_worker", None)
+            ),
+            gpus_per_worker=(
+                compute.gpus_per_worker
+                if compute.gpus_per_worker is not None
+                else getattr(self, "gpus_per_worker", None)
+            ),
+            gpu_type=(
+                compute.gpu_type
+                if compute.gpu_type is not None
+                else getattr(self, "gpu_type", None)
+            ),
         )
 
     def _run_manifest(

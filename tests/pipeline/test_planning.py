@@ -283,4 +283,5 @@ def test_plan_pipeline_stages_adds_writer_reducer_stage() -> None:
     assert stages[1].index == 1
     assert stages[1].name == "write_parquet_stage_1"
     assert stages[1].compute.num_workers == 1
+    assert stages[1].compute.inherit_launcher_resources is False
     assert stages[1].pipeline.source.name == "task"

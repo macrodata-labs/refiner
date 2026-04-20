@@ -4,6 +4,7 @@ import json
 from typing import cast
 
 import pyarrow.parquet as pq
+import pytest
 
 from refiner import col
 from refiner.pipeline.data.row import DictRow
@@ -137,6 +138,7 @@ def test_jsonl_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
             sink.on_shard_complete(shard_id)
 
     reducer = JsonlSink(output_dir).build_reducer()
+    assert reducer is not None
     with set_active_run_context(
         job_id="job",
         stage_index=1,
@@ -181,6 +183,7 @@ def test_parquet_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
             sink.on_shard_complete(shard_id)
 
     reducer = ParquetSink(output_dir).build_reducer()
+    assert reducer is not None
     with set_active_run_context(
         job_id="job",
         stage_index=1,
@@ -287,3 +290,23 @@ def test_file_cleanup_reducer_tolerates_duplicate_listed_paths(
 
     assert winner_path.exists()
     assert not loser_path.exists()
+
+
+def test_jsonl_sink_rejects_unsupported_cleanup_filename_template(tmp_path) -> None:
+    sink = JsonlSink(
+        tmp_path / "jsonl-custom",
+        filename_template="{shard_id}.jsonl",
+    )
+
+    with pytest.raises(ValueError, match="requires fields"):
+        sink.build_reducer()
+
+
+def test_parquet_sink_rejects_unsupported_cleanup_filename_template(tmp_path) -> None:
+    sink = ParquetSink(
+        tmp_path / "parquet-custom",
+        filename_template="{shard_id:>12}.parquet",
+    )
+
+    with pytest.raises(ValueError, match="without conversion or format specifiers"):
+        sink.build_reducer()

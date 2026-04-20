@@ -5,13 +5,13 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from refiner.cli.cloud_run import (
+from refiner.cli.run.modes import (
     CloudAttachContext,
-    attach_to_cloud_job,
+    attach_mode_override,
     emit_cloud_followup_commands,
     resolve_launcher_attach_mode,
 )
-from refiner.cli.ui import stdin_is_interactive
+from refiner.cli.ui import stdin_is_interactive, stdout_is_interactive
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudRunCreateRequest,
@@ -25,7 +25,6 @@ from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
-from refiner.worker.context import logger
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -180,7 +179,7 @@ class CloudLauncher(BaseLauncher):
         resolved_secrets = self._resolve_env_values(self.secrets)
         resolved_env = self._resolve_env_values(self.env)
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
-        stages = self._planned_stages()
+        stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
         request = CloudRunCreateRequest(
             name=self.name,
@@ -191,10 +190,10 @@ class CloudLauncher(BaseLauncher):
                     pipeline_payload=serialize_pipeline_inline(stage.pipeline),
                     runtime=CloudRuntimeConfig(
                         num_workers=stage.compute.num_workers,
-                        cpus_per_worker=self.cpus_per_worker,
-                        mem_mb_per_worker=self.mem_mb_per_worker,
-                        gpus_per_worker=self.gpus_per_worker,
-                        gpu_type=self.gpu_type,
+                        cpus_per_worker=stage.compute.cpus_per_worker,
+                        mem_mb_per_worker=stage.compute.memory_mb_per_worker,
+                        gpus_per_worker=stage.compute.gpus_per_worker,
+                        gpu_type=stage.compute.gpu_type,
                     ),
                 )
                 for stage in stages
@@ -221,18 +220,22 @@ class CloudLauncher(BaseLauncher):
             tracking_url=tracking_url,
             stage_index=resp.stage_index,
         )
-        logger.info(f"Cloud job launched. View job:\n  {tracking_url}")
-        attach_mode = resolve_launcher_attach_mode()
+        print(f"Cloud job launched. View job:\n  {tracking_url}")
+        attach_mode = resolve_launcher_attach_mode(interactive=stdout_is_interactive())
         if attach_mode == "detach":
             emit_cloud_followup_commands(context=context)
         else:
             try:
-                attach_to_cloud_job(
+                from refiner.cli.run.cloud import attach_to_cloud_job
+
+                attach_rc = attach_to_cloud_job(
                     client=client,
                     job_id=resp.job_id,
                     stage_index_hint=resp.stage_index,
                     force_attach=True,
                 )
+                if attach_rc != 0 and attach_mode_override() is not None:
+                    raise SystemExit(attach_rc)
             except (MacrodataApiError, MacrodataCredentialsError):
                 print(
                     "Cloud job submitted, but attach failed. Continue with:",

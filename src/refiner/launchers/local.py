@@ -10,15 +10,15 @@ from uuid import uuid4
 
 import cloudpickle
 
-from refiner.cli.cloud_run import require_cloud_attach_supported
-from refiner.cli.local_run import (
+from refiner.cli.run.modes import attach_mode_override
+from refiner.cli.run.local import (
     LaunchStats,
     collect_local_stage_results,
     format_resume_message,
     LocalLaunchInterrupted,
     LocalLaunchResumeError,
-    stdout_is_interactive,
 )
+from refiner.cli.ui.terminal import stdout_is_interactive
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import PlannedStage
@@ -287,9 +287,9 @@ class LocalLauncher(BaseLauncher):
         gpu_sets = (
             build_gpu_sets(
                 num_workers=stage_workers,
-                gpus_per_worker=self.gpus_per_worker,
+                gpus_per_worker=stage.compute.gpus_per_worker,
             )
-            if self.gpus_per_worker is not None
+            if stage.compute.gpus_per_worker is not None
             else [[] for _ in range(stage_workers)]
         )
         completed_shard_ids = {
@@ -365,14 +365,15 @@ class LocalLauncher(BaseLauncher):
         )
 
     def launch(self) -> LaunchStats:
-        require_cloud_attach_supported("local")
+        if attach_mode_override() == "detach":
+            raise SystemExit("--detach is only supported for cloud launches.")
         available_cpus = len(available_cpu_ids())
         if self.num_workers > available_cpus:
             logger.warning(
                 f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )
         self.job_tracking_url = None
-        stages = self._planned_stages()
+        stages = self._resolved_stages()
         self._total_stages = max(1, len(stages))
         tracking_client, self.job_id = self._register_tracked_job(stages=stages)
         if self.job_id is None:

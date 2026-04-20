@@ -6,12 +6,12 @@ import runpy
 import sys
 from pathlib import Path
 
-from refiner.cli.cloud_run import (
+from refiner.cli.run.modes import (
     CloudAttachDetached,
     _ATTACH_MODE_ENV_VAR,
     normalize_attach_mode,
 )
-from refiner.cli.local_run import LocalLaunchResumeError
+from refiner.cli.run.local import LocalLaunchInterrupted, LocalLaunchResumeError
 
 
 def _attach_mode_arg(args: argparse.Namespace) -> str:
@@ -36,15 +36,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         script_args = script_args[1:]
     original_argv = sys.argv
     original_sys_path = list(sys.path)
-    original_logs = os.environ.get("REFINER_LOCAL_LOGS")
+    original_logs = os.environ.get("REFINER_LOGS")
     original_attach = os.environ.get(_ATTACH_MODE_ENV_VAR)
     cwd_entries = {"", str(Path.cwd())}
     try:
         os.environ[_ATTACH_MODE_ENV_VAR] = normalize_attach_mode(_attach_mode_arg(args))
         if args.logs is not None:
-            os.environ["REFINER_LOCAL_LOGS"] = args.logs
+            os.environ["REFINER_LOGS"] = args.logs
         elif original_logs is None:
-            os.environ.pop("REFINER_LOCAL_LOGS", None)
+            os.environ.pop("REFINER_LOGS", None)
         sys.argv = [str(script), *script_args]
         sys.path = [
             str(script.parent.resolve()),
@@ -54,9 +54,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             runpy.run_path(str(script), run_name="__main__")
         except BrokenPipeError:
             return 141
-        except CloudAttachDetached:
-            return 130
         except KeyboardInterrupt as err:
+            if isinstance(err, CloudAttachDetached):
+                return 130
             if err.args and not sys.stdout.isatty():
                 print(str(err), file=sys.stderr)
             elif not err.args:
@@ -67,6 +67,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(str(err), file=sys.stderr)
             return 1
         except SystemExit as err:
+            if isinstance(err, LocalLaunchInterrupted):
+                if str(err) and not sys.stdout.isatty():
+                    print(str(err), file=sys.stderr)
+                return 130
             code = err.code
             if code is None:
                 return 0
@@ -78,9 +82,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         sys.argv = original_argv
         sys.path = original_sys_path
         if original_logs is None:
-            os.environ.pop("REFINER_LOCAL_LOGS", None)
+            os.environ.pop("REFINER_LOGS", None)
         else:
-            os.environ["REFINER_LOCAL_LOGS"] = original_logs
+            os.environ["REFINER_LOGS"] = original_logs
         if original_attach is None:
             os.environ.pop(_ATTACH_MODE_ENV_VAR, None)
         else:

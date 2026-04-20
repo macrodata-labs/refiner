@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import itertools
+import re
 from typing import cast
 
-from refiner.cli import cloud_run
+import pytest
+
+from refiner.cli.run import cloud as cloud_run
 from refiner.platform.client import MacrodataApiError, MacrodataClient
 
 
@@ -76,6 +79,207 @@ def test_active_stage_prefers_failed_started_stage_over_later_queued_stage() -> 
     assert total_stages == 3
 
 
+def test_build_snapshot_preserves_stage_zero_progress() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "running",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": 1_700_000_001_000,
+                "runningWorkers": 2,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": 0,
+                        "status": "running",
+                        "completedWorkers": 3,
+                        "totalWorkers": 5,
+                        "shardDone": 4,
+                        "shardTotal": 9,
+                        "shardRunning": 2,
+                    },
+                    {
+                        "index": 1,
+                        "status": "queued",
+                        "completedWorkers": 0,
+                        "totalWorkers": 7,
+                    },
+                ],
+            }
+        },
+    )
+
+    assert snapshot.stage_index == 0
+    assert snapshot.worker_completed == 3
+    assert snapshot.stage_workers == 5
+    assert snapshot.shard_completed == 4
+    assert snapshot.shard_total == 9
+    assert snapshot.shard_running == 2
+
+
+def test_build_snapshot_reads_stage_shard_running() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "running",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": 1_700_000_001_000,
+                "runningWorkers": 2,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": 0,
+                        "status": "running",
+                        "completedWorkers": 3,
+                        "totalWorkers": 5,
+                        "shardDone": 4,
+                        "shardTotal": 9,
+                        "shardRunning": 2,
+                    }
+                ],
+            }
+        },
+    )
+
+    assert snapshot.shard_completed == 4
+    assert snapshot.shard_total == 9
+    assert snapshot.shard_running == 2
+
+
+def test_build_snapshot_tolerates_null_stage_indexes() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "running",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": 1_700_000_001_000,
+                "runningWorkers": 2,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": None,
+                        "status": "running",
+                        "completedWorkers": 3,
+                        "totalWorkers": 5,
+                    },
+                    {
+                        "index": 1,
+                        "status": "queued",
+                        "completedWorkers": 0,
+                        "totalWorkers": 7,
+                    },
+                ],
+            }
+        },
+    )
+
+    assert snapshot.stage_index == 0
+    assert snapshot.worker_completed == 3
+    assert snapshot.stage_workers == 5
+
+
+def test_build_snapshot_keeps_pending_runtime_at_zero_without_start_time() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "queued",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": None,
+                "runningWorkers": 0,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": 0,
+                        "status": "queued",
+                        "completedWorkers": 0,
+                        "totalWorkers": 4,
+                        "shardDone": 0,
+                        "shardTotal": 9,
+                    }
+                ],
+            }
+        },
+    )
+
+    assert snapshot.status == "queued"
+    assert snapshot.elapsed_seconds == 0.0
+
+
+def test_build_snapshot_prefers_active_stage_status_over_job_status() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "job": {
+                "id": "job-1",
+                "name": "cloud pipeline",
+                "status": "running",
+                "createdAt": 1_700_000_000_000,
+                "startedAt": None,
+                "runningWorkers": 0,
+                "totalWorkers": 4,
+                "stages": [
+                    {
+                        "index": 0,
+                        "status": "queued",
+                        "completedWorkers": 0,
+                        "runningWorkers": 0,
+                        "totalWorkers": 4,
+                    }
+                ],
+            }
+        },
+    )
+
+    assert snapshot.status == "queued"
+
+
 def _log_entry(
     *, ts: int, worker_id: str, severity: str, line: str
 ) -> dict[str, object]:
@@ -90,12 +294,42 @@ def _log_entry(
     }
 
 
+def test_format_attach_log_line_matches_local_log_shape() -> None:
+    line = cloud_run._format_attach_log_line(
+        _log_entry(
+            ts=1_700_000_002_000,
+            worker_id="worker-1234567890",
+            severity="warn",
+            line="processing shard 4",
+        )
+    )
+
+    assert re.match(
+        r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \| WARNING  \| worker:runner - processing shard 4$",
+        line,
+    )
+
+
+def test_log_worker_label_shows_short_worker_prefix() -> None:
+    label = cloud_run._log_worker_label(
+        _log_entry(
+            ts=1_700_000_002_000,
+            worker_id="019da6e1-8583-7014-8f96-a310159b4545",
+            severity="info",
+            line="hello",
+        )
+    )
+
+    assert label == "019da6e1...9b4545"
+
+
 def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
     class _Client:
         def __init__(self) -> None:
             self.base_url = "https://example.com"
             self.log_calls = 0
             self.logged_stage_indexes: list[int | None] = []
+            self.logged_calls: list[dict[str, object]] = []
 
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             del job_id
@@ -116,14 +350,14 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
             self.logged_stage_indexes.append(
                 cast(int | None, kwargs.get("stage_index"))
             )
+            self.logged_calls.append(dict(kwargs))
             return {"entries": [], "hasOlder": False, "nextCursor": None}
 
     monotonic_values = itertools.count(0.0, 1.0)
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
     created_consoles: list[_FakeConsole] = []
     monkeypatch.setattr(
         cloud_run,
-        "LocalStageConsole",
+        "StageConsole",
         lambda **kwargs: (
             created_consoles.append(_FakeConsole(**kwargs)) or created_consoles[-1]
         ),
@@ -141,11 +375,18 @@ def test_attach_to_cloud_job_follows_active_stage(monkeypatch) -> None:
 
     assert rc == 0
     assert client.logged_stage_indexes[-1] == 1
+    assert len(client.logged_calls) >= 2
+    assert client.logged_calls[0]["anchor"] == "latest"
+    assert client.logged_calls[0]["start_ms"] is None
+    assert client.logged_calls[0]["end_ms"] is None
+    assert client.logged_calls[1]["anchor"] == "earliest"
+    assert isinstance(client.logged_calls[1]["start_ms"], int)
+    assert isinstance(client.logged_calls[1]["end_ms"], int)
     assert created_consoles[-1].closed == 1
     assert created_consoles[-1].kwargs["rundir"] is None
 
 
-def test_attach_to_cloud_job_force_attach_uses_console_without_tty(monkeypatch) -> None:
+def test_attach_to_cloud_job_uses_console_without_tty(monkeypatch) -> None:
     class _Client:
         def __init__(self) -> None:
             self.base_url = "https://example.com"
@@ -175,8 +416,7 @@ def test_attach_to_cloud_job_force_attach_uses_console_without_tty(monkeypatch) 
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: False)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -185,11 +425,68 @@ def test_attach_to_cloud_job_force_attach_uses_console_without_tty(monkeypatch) 
         job_id="job-1",
         initial_job_payload=_job_payload(stage_index=0, status="running"),
         stage_index_hint=0,
-        force_attach=True,
     )
 
     assert rc == 0
     assert fake_console.emitted_lines
+
+
+@pytest.mark.parametrize(("status", "expected_rc"), [("failed", 1), ("canceled", 1)])
+def test_attach_to_cloud_job_returns_nonzero_for_unsuccessful_terminal_status(
+    monkeypatch, status: str, expected_rc: int
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            payload = _job_payload(stage_index=0, status=status)
+            job = cast(dict[str, object], payload["job"])
+            job["logsAvailable"] = False
+            return payload
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    payload = _job_payload(stage_index=0, status=status)
+    job = cast(dict[str, object], payload["job"])
+    job["logsAvailable"] = False
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=payload,
+        stage_index_hint=0,
+    )
+
+    assert rc == expected_rc
+    assert fake_console.system_messages[-1] == (
+        f"cloud job job-1 finished with status {status}"
+    )
+
+
+def test_attach_to_cloud_job_rejects_invalid_log_mode_env(monkeypatch) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="running")
+
+    monkeypatch.setenv("REFINER_LOGS", "bogus")
+
+    with pytest.raises(SystemExit, match="unsupported log mode"):
+        cloud_run.attach_to_cloud_job(
+            client=cast(MacrodataClient, _Client()),
+            job_id="job-1",
+            initial_job_payload=_job_payload(stage_index=0, status="running"),
+            stage_index_hint=0,
+        )
 
 
 def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
@@ -202,7 +499,7 @@ def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             del job_id
             self.job_calls += 1
-            if self.job_calls == 1:
+            if self.job_calls <= 2:
                 return _job_payload(stage_index=1, status="running")
             return _job_payload(stage_index=1, status="completed")
 
@@ -214,8 +511,7 @@ def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -228,10 +524,11 @@ def test_attach_to_cloud_job_resets_cursor_on_stage_switch(monkeypatch) -> None:
     )
 
     assert rc == 0
-    assert client.log_calls[0]["stage_index"] == 0
+    assert client.log_calls
     assert client.log_calls[0]["cursor"] is None
-    assert client.log_calls[1]["stage_index"] == 1
-    assert client.log_calls[1]["cursor"] is None
+    assert any(
+        call["stage_index"] == 1 and call["cursor"] is None for call in client.log_calls
+    )
 
 
 def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> None:
@@ -245,8 +542,7 @@ def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> Non
 
     sleep_calls: list[float] = []
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: 0.0)
 
     def _fake_sleep(delay: float) -> None:
@@ -272,7 +568,7 @@ def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> Non
         raise AssertionError("expected CloudAttachDetached")
 
     assert sleep_calls
-    assert sleep_calls[0] >= cloud_run._ATTACH_LOGS_INTERVAL_SECONDS
+    assert sleep_calls[0] >= cloud_run._ATTACH_RENDER_INTERVAL_SECONDS
 
 
 def test_attach_to_cloud_job_hides_lines_for_none_mode(monkeypatch) -> None:
@@ -305,9 +601,8 @@ def test_attach_to_cloud_job_hides_lines_for_none_mode(monkeypatch) -> None:
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "none")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "none")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -340,9 +635,8 @@ def test_attach_to_cloud_job_none_mode_skips_log_requests(monkeypatch) -> None:
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
     client = _Client()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "none")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "none")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -400,9 +694,8 @@ def test_attach_to_cloud_job_limits_to_one_worker_in_one_mode(monkeypatch) -> No
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "one")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "one")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -453,9 +746,108 @@ def test_attach_to_cloud_job_shows_only_errors_in_errors_mode(monkeypatch) -> No
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-2"]
+
+
+@pytest.mark.parametrize("severity", ["critical", "fatal"])
+def test_attach_to_cloud_job_errors_mode_shows_critical_and_fatal_lines(
+    monkeypatch, severity: str
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    _log_entry(
+                        ts=1_700_000_002_001,
+                        worker_id="worker-2",
+                        severity=severity,
+                        line=f"{severity} line",
+                    )
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setenv("REFINER_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
+
+    rc = cloud_run.attach_to_cloud_job(
+        client=cast(MacrodataClient, _Client()),
+        job_id="job-1",
+        initial_job_payload=_job_payload(stage_index=0, status="running"),
+        stage_index_hint=0,
+    )
+
+    assert rc == 0
+    assert [worker_id for worker_id, _ in fake_console.emitted_lines] == ["worker-2"]
+
+
+def test_attach_to_cloud_job_errors_mode_falls_back_to_log_line_when_severity_missing(
+    monkeypatch,
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.base_url = "https://example.com"
+            self.log_calls = 0
+
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            del job_id
+            return _job_payload(stage_index=0, status="completed")
+
+        def cli_get_job_logs(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            self.log_calls += 1
+            if self.log_calls > 1:
+                return {"entries": [], "hasOlder": False, "nextCursor": None}
+            return {
+                "entries": [
+                    {
+                        "ts": 1_700_000_002_001,
+                        "severity": None,
+                        "workerId": "worker-2",
+                        "sourceType": "worker",
+                        "sourceName": "runner",
+                        "line": "2026-04-19 10:00:00 | ERROR    | boom",
+                        "messageHash": "missing-severity",
+                    }
+                ],
+                "hasOlder": False,
+                "nextCursor": None,
+            }
+
+    monotonic_values = itertools.count(0.0, 1.0)
+    fake_console = _FakeConsole()
+    monkeypatch.setenv("REFINER_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -533,9 +925,8 @@ def test_attach_to_cloud_job_errors_mode_does_not_spend_worker_cap_on_info_only_
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "errors")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "errors")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -588,9 +979,8 @@ def test_attach_to_cloud_job_all_mode_suppresses_workers_beyond_cap(
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setenv("REFINER_LOCAL_LOGS", "all")
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setenv("REFINER_LOGS", "all")
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
@@ -644,8 +1034,7 @@ def test_attach_to_cloud_job_keeps_polling_logs_when_status_refresh_retries(
 
     monotonic_values = itertools.count(0.0, 1.0)
     fake_console = _FakeConsole()
-    monkeypatch.setattr(cloud_run, "stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(cloud_run, "LocalStageConsole", lambda **_: fake_console)
+    monkeypatch.setattr(cloud_run, "StageConsole", lambda **_: fake_console)
     monkeypatch.setattr(cloud_run.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
