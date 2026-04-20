@@ -163,8 +163,8 @@ Continue behavior notes:
 - by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; if they do not, the control plane tells you to either lower the boundary (`JOBID:k-1`) or pass `force_continue=True`
 - after validation, stages at or before the boundary that are already fully completed are marked `skipped`, and any partially completed boundary stage reruns only its unfinished shards
 - executor/config differences are advisory and do not block continue on their own
-- if you omit `num_workers`, `cpus_per_worker`, `mem_mb_per_worker`, `gpus_per_worker`, and `gpu_type` on continue, the control plane can inherit the selected run's existing sizing
-- if you pass any of those fields on continue, they are treated as explicit overrides for the new continued job
+- continue uses the current launch's requested runtime sizing; the old job only contributes reusable shard completion state
+- if you pass `num_workers`, `cpus_per_worker`, `mem_mb_per_worker`, `gpus_per_worker`, or `gpu_type`, they become part of the current continued launch just like any fresh cloud launch
 
 ### Launched writer notes
 

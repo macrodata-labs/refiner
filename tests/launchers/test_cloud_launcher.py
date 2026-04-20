@@ -816,7 +816,8 @@ def test_pipeline_launch_cloud_continue_from_job_posts_resume_request(
     assert request.name == "demo cloud"
     assert request.manifest == {"version": 1}
     assert request.plan is not None
-    assert "requested_num_workers" not in request.plan["stages"][0]
+    assert request.plan["stages"][0]["requested_num_workers"] == 3
+    assert request.plan["stages"][0]["cpus_per_worker"] == 2
     assert request.stage_payloads is not None
     assert request.stage_payloads[0].stage_index == 0
     assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
@@ -871,7 +872,7 @@ def test_pipeline_launch_cloud_continue_from_job_infer_posts_resume_request(
     assert request.runtime_overrides is None
 
 
-def test_pipeline_launch_cloud_continue_without_overrides_preserves_prior_runtime(
+def test_pipeline_launch_cloud_continue_without_overrides_uses_current_plan_runtime(
     monkeypatch,
 ) -> None:
     captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
@@ -888,7 +889,7 @@ def test_pipeline_launch_cloud_continue_without_overrides_preserves_prior_runtim
     request = cast(CloudRunResumeRequest, captured["resume_request"])
     assert request.runtime_overrides is None
     assert request.plan is not None
-    assert "requested_num_workers" not in request.plan["stages"][0]
+    assert request.plan["stages"][0]["requested_num_workers"] == 1
 
 
 def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
@@ -902,13 +903,13 @@ def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
     stage_zero = read_jsonl("input-a.jsonl")
     reducer_stage = read_jsonl("input-b.jsonl")
     monkeypatch.setattr(
-        "refiner.launchers.cloud.plan_pipeline_stages",
-        lambda pipeline, default_num_workers: [
+        "refiner.launchers.cloud.CloudLauncher._planned_stages",
+        lambda self: [
             PlannedStage(
                 index=0,
                 name="stage_0",
                 pipeline=stage_zero,
-                compute=StageComputeRequirements(num_workers=default_num_workers),
+                compute=StageComputeRequirements(num_workers=self.num_workers),
             ),
             PlannedStage(
                 index=1,
@@ -930,7 +931,7 @@ def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
 
     request = cast(CloudRunResumeRequest, captured["resume_request"])
     assert request.plan is not None
-    assert "requested_num_workers" not in request.plan["stages"][0]
+    assert request.plan["stages"][0]["requested_num_workers"] == 4
     assert request.plan["stages"][1]["requested_num_workers"] == 1
 
 

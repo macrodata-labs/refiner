@@ -27,11 +27,9 @@ from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
-from refiner.pipeline.planning import plan_pipeline_stages
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
-    from refiner.pipeline.planning import PlannedStage
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
@@ -226,23 +224,22 @@ class CloudLauncher(BaseLauncher):
                     )
                 )
             else:
-                # Resume launches a new cloud job from the current compiled pipeline while
-                # reusing completed work from a compatible failed job. The compiled stage
-                # graph and manifest therefore always come from the current launch request.
-                # Effective worker sizing for the resumed suffix is resolved by the backend
-                # from the prior job plus explicit runtime_overrides, so resume planning uses
-                # a placeholder worker count and strips runtime sizing from the compatibility
-                # plan.
+                # Continue launches a new cloud job from the current compiled pipeline while
+                # reusing completed work from a prior compatible failed job. The compiled
+                # stage graph, manifest, and requested runtime sizing all come from the
+                # current launch request; the old job only contributes reusable shard
+                # completion state.
                 manifest = self._resolve_cloud_manifest(secret_values=secret_values)
-                stages = self._resolved_stages(
-                    plan_pipeline_stages(self.pipeline, default_num_workers=1)
-                )
+                planned_stages = self._planned_stages()
+                stages = self._resolved_stages(planned_stages)
                 resp = client.cloud_resume_job(
                     request=CloudRunResumeRequest(
                         continue_from_job=continue_from_job,
                         name=self.name,
                         runtime_overrides=self._runtime_overrides(),
-                        plan=self._resume_plan(stages, secret_values=secret_values),
+                        plan=self._compiled_plan(
+                            planned_stages, secret_values=secret_values
+                        ),
                         stage_payloads=[
                             StagePayload(
                                 stage_index=stage.index,
@@ -318,36 +315,6 @@ class CloudLauncher(BaseLauncher):
             gpus_per_worker=self.gpus_per_worker,
             gpu_type=self.gpu_type,
         )
-
-    def _resume_plan(
-        self,
-        stages: list["PlannedStage"],
-        *,
-        secret_values: tuple[str, ...],
-    ) -> dict[str, object]:
-        plan = self._compiled_plan(stages, secret_values=secret_values)
-        resume_plan = dict(plan)
-        stage_dicts = cast(list[dict[str, object]], resume_plan.get("stages", []))
-        resume_plan["stages"] = [
-            (
-                {
-                    key: value
-                    for key, value in stage_dict.items()
-                    if key
-                    not in {
-                        "requested_num_workers",
-                        "cpus_per_worker",
-                        "memory_mb_per_worker",
-                        "gpus_per_worker",
-                        "gpu_type",
-                    }
-                }
-                if planned_stage.compute.inherit_launcher_resources
-                else stage_dict
-            )
-            for planned_stage, stage_dict in zip(stages, stage_dicts, strict=True)
-        ]
-        return resume_plan
 
 
 __all__ = ["CloudLauncher", "CloudLaunchResult"]
