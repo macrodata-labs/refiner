@@ -115,33 +115,13 @@ class StageLifecycleResponse(msgspec.Struct, frozen=True):
     stage: StageLifecycleStage
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class CloudRuntimeConfig:
     num_workers: int
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpus_per_worker: int | None = None
     gpu_type: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.num_workers <= 0:
-            raise ValueError("num_workers must be > 0")
-        if self.cpus_per_worker is not None and self.cpus_per_worker <= 0:
-            raise ValueError("cpus_per_worker must be > 0")
-        if self.mem_mb_per_worker is not None and self.mem_mb_per_worker <= 0:
-            raise ValueError("mem_mb_per_worker must be > 0")
-        if self.gpus_per_worker is not None and self.gpus_per_worker <= 0:
-            raise ValueError("gpus_per_worker must be > 0")
-        normalized_gpu_type = (
-            self.gpu_type.strip() if self.gpu_type is not None else None
-        )
-        if self.gpu_type is not None and not normalized_gpu_type:
-            raise ValueError("gpu_type must be non-empty")
-        if self.gpus_per_worker is not None and normalized_gpu_type is None:
-            raise ValueError("gpu_type is required when gpus_per_worker is set")
-        if normalized_gpu_type is not None and self.gpus_per_worker is None:
-            raise ValueError("gpus_per_worker is required when gpu_type is set")
-        self.gpu_type = normalized_gpu_type
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"num_workers": self.num_workers}
