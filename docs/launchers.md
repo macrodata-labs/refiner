@@ -92,7 +92,7 @@ Returned result includes:
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
 - `continue_from_job`: continue from one exact prior job id (`JOBID`), one exact job-and-stage boundary (`JOBID:stage_index`), or `"infer"`. `:stage_index` is optional; when omitted, the control plane uses the last stage in the selected job that has any completed shards.
-- `force_continue`: allow continue when the reused stage boundary no longer matches the current pipeline
+- `unsafe_continue`: allow continue when the reused stage boundary no longer matches the current pipeline
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
 
@@ -160,11 +160,10 @@ Continue behavior notes:
 - `continue_from_job="infer"` asks the control plane to resolve one prior job using the current launch name and the current authenticated user
 - continue rejects source jobs that are still running, already completed successfully, or have no completed shards to reuse
 - if you omit `:stage_index`, the control plane uses the last stage in the selected job that has any completed shards
-- by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; if they do not, the control plane tells you to either lower the boundary (`JOBID:k-1`) or pass `force_continue=True`
+- by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; if they do not, the control plane tells you to either lower the boundary (`JOBID:k-1`) or pass `unsafe_continue=True`
 - after validation, stages at or before the boundary that are already fully completed are marked `skipped`, and any partially completed boundary stage reruns only its unfinished shards
 - executor/config differences are advisory and do not block continue on their own
 - continue uses the current launch's requested runtime sizing; the old job only contributes reusable shard completion state
-- if you pass `num_workers`, `cpus_per_worker`, `mem_mb_per_worker`, `gpus_per_worker`, or `gpu_type`, they become part of the current continued launch just like any fresh cloud launch
 
 ### Launched writer notes
 

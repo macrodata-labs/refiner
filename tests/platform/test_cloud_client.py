@@ -65,10 +65,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert "http_client" in captured
     assert captured["timeout_s"] == 30.0
     json_payload = cast(dict[str, object], captured["json_payload"])
-    assert json_payload["executor"] == {
-        "type": "macrodata-cloud",
-        "sync_local_dependencies": True,
-    }
+    assert json_payload["executor"] == {"sync_local_dependencies": True}
     stage_payloads = cast(list[dict[str, object]], json_payload["stage_payloads"])
     assert stage_payloads == [
         {
@@ -135,15 +132,12 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
                         sha256="abc123",
                         size_bytes=3,
                     ),
+                    runtime=CloudRuntimeConfig(num_workers=1),
                 )
             ],
             manifest={"version": 1},
             sync_local_dependencies=False,
-            runtime_overrides={
-                "cpus_per_worker": 8,
-                "mem_mb_per_worker": 16384,
-            },
-            force_continue=True,
+            unsafe_continue=True,
         )
     )
 
@@ -158,14 +152,9 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
     assert json_payload["name"] == "demo-cloud-job"
     assert json_payload["continue_from_job"] == "job-previous:2"
     assert json_payload["executor"] == {
-        "type": "macrodata-cloud",
         "sync_local_dependencies": False,
     }
-    assert json_payload["force_continue"] is True
-    assert json_payload["runtime_overrides"] == {
-        "cpus_per_worker": 8,
-        "mem_mb_per_worker": 16384,
-    }
+    assert json_payload["unsafe_continue"] is True
     assert json_payload["plan"] == {"stages": [{"name": "stage_0", "steps": []}]}
     assert json_payload["manifest"] == {"version": 1}
     assert json_payload["stage_payloads"] == [
@@ -177,5 +166,6 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
                 "sha256": "abc123",
                 "size_bytes": 3,
             },
+            "runtime": {"num_workers": 1},
         }
     ]

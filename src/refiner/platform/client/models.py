@@ -115,7 +115,7 @@ class StageLifecycleResponse(msgspec.Struct, frozen=True):
     stage: StageLifecycleStage
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class CloudRuntimeConfig:
     num_workers: int
     cpus_per_worker: int | None = None
@@ -141,7 +141,7 @@ class CloudRuntimeConfig:
             raise ValueError("gpu_type is required when gpus_per_worker is set")
         if normalized_gpu_type is not None and self.gpus_per_worker is None:
             raise ValueError("gpus_per_worker is required when gpu_type is set")
-        object.__setattr__(self, "gpu_type", normalized_gpu_type)
+        self.gpu_type = normalized_gpu_type
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"num_workers": self.num_workers}
@@ -176,16 +176,14 @@ class CloudPipelinePayload:
 class StagePayload:
     stage_index: int
     pipeline_payload: CloudPipelinePayload
-    runtime: CloudRuntimeConfig | None = None
+    runtime: CloudRuntimeConfig
 
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+        return {
             "stage_index": self.stage_index,
             "pipeline_payload": self.pipeline_payload.to_dict(),
+            "runtime": self.runtime.to_dict(),
         }
-        if self.runtime is not None:
-            payload["runtime"] = self.runtime.to_dict()
-        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,13 +195,11 @@ class CloudRunCreateRequest:
     sync_local_dependencies: bool = True
     secrets: dict[str, str] | None = None
     continue_from_job: str | None = None
-    runtime_overrides: dict[str, Any] | None = None
-    force_continue: bool = False
+    unsafe_continue: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "executor": {
-                "type": "macrodata-cloud",
                 "sync_local_dependencies": self.sync_local_dependencies,
             },
             "name": self.name,
@@ -218,10 +214,8 @@ class CloudRunCreateRequest:
             payload["secrets"] = self.secrets
         if self.continue_from_job is not None:
             payload["continue_from_job"] = self.continue_from_job
-        if self.runtime_overrides is not None:
-            payload["runtime_overrides"] = self.runtime_overrides
-        if self.force_continue:
-            payload["force_continue"] = True
+        if self.unsafe_continue:
+            payload["unsafe_continue"] = True
         return payload
 
 

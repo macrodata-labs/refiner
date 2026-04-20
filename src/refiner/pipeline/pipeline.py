@@ -346,7 +346,7 @@ class RefinerPipeline:
         self,
         *,
         name: str,
-        num_workers: int | None = None,
+        num_workers: int = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
@@ -355,15 +355,13 @@ class RefinerPipeline:
         secrets: Mapping[str, object | None] | None = None,
         env: Mapping[str, object | None] | None = None,
         continue_from_job: str | None = None,
-        force_continue: bool = False,
+        unsafe_continue: bool = False,
     ) -> "CloudLaunchResult":
         """Launch the pipeline on Macrodata Cloud.
 
         Args:
             name: Human-readable run name.
-            num_workers: Requested logical worker count. Fresh launches default to
-                `1` when omitted. Continue launches use the current launch config
-                too, so omitting this still means `1`.
+            num_workers: Requested logical worker count.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
@@ -376,7 +374,7 @@ class RefinerPipeline:
                 from the submitting environment.
             continue_from_job: Explicit continue selector. Accepts one prior cloud
                 job id, one prior job id plus `:stage_index`, or `"infer"`.
-            force_continue: Allow continue when the reused stage boundary is not
+            unsafe_continue: Allow continue when the reused stage boundary is not
                 fully compatible with the current pipeline.
         """
         from refiner.launchers.cloud import CloudLauncher
@@ -393,7 +391,7 @@ class RefinerPipeline:
             secrets=dict(secrets) if secrets is not None else None,
             env=dict(env) if env is not None else None,
             continue_from_job=continue_from_job,
-            force_continue=force_continue,
+            unsafe_continue=unsafe_continue,
         )
         return launcher.launch()
 

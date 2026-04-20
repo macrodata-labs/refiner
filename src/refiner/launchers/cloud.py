@@ -89,7 +89,7 @@ class CloudLauncher(BaseLauncher):
         *,
         pipeline: "RefinerPipeline",
         name: str,
-        num_workers: int | None = None,
+        num_workers: int = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
@@ -98,18 +98,18 @@ class CloudLauncher(BaseLauncher):
         secrets: dict[str, object | None] | None = None,
         env: dict[str, object | None] | None = None,
         continue_from_job: str | None = None,
-        force_continue: bool = False,
+        unsafe_continue: bool = False,
     ):
         super().__init__(
             pipeline=pipeline,
             name=name,
-            num_workers=1 if num_workers is None else num_workers,
+            num_workers=num_workers,
             cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
         normalized_continue_from_job = _parse_continue_from_job(continue_from_job)
-        if force_continue and normalized_continue_from_job is None:
-            raise ValueError("force_continue requires continue_from_job")
+        if unsafe_continue and normalized_continue_from_job is None:
+            raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
         normalized_gpu_type = gpu_type.strip() if gpu_type is not None else None
@@ -123,12 +123,11 @@ class CloudLauncher(BaseLauncher):
         self.mem_mb_per_worker = mem_mb_per_worker
         self.gpus_per_worker = gpus_per_worker
         self.gpu_type = normalized_gpu_type
-        self.runtime_override_num_workers = num_workers
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
         self.continue_from_job = normalized_continue_from_job
-        self.force_continue = force_continue
+        self.unsafe_continue = unsafe_continue
 
     @staticmethod
     def _resolve_env_values(
@@ -243,28 +242,7 @@ class CloudLauncher(BaseLauncher):
                     sync_local_dependencies=self.sync_local_dependencies,
                     secrets=merged_env,
                     continue_from_job=self.continue_from_job,
-                    runtime_overrides=(
-                        None
-                        if (
-                            self.runtime_override_num_workers is None
-                            and self.cpus_per_worker is None
-                            and self.mem_mb_per_worker is None
-                            and self.gpus_per_worker is None
-                            and self.gpu_type is None
-                        )
-                        else {
-                            key: value
-                            for key, value in {
-                                "num_workers": self.runtime_override_num_workers,
-                                "cpus_per_worker": self.cpus_per_worker,
-                                "mem_mb_per_worker": self.mem_mb_per_worker,
-                                "gpus_per_worker": self.gpus_per_worker,
-                                "gpu_type": self.gpu_type,
-                            }.items()
-                            if value is not None
-                        }
-                    ),
-                    force_continue=self.force_continue,
+                    unsafe_continue=self.unsafe_continue,
                 )
             )
         except MacrodataCredentialsError as err:
@@ -297,18 +275,8 @@ class CloudLauncher(BaseLauncher):
                     stage_index_hint=resp.stage_index,
                     force_attach=True,
                 )
-                if attach_rc != 0:
-                    # Explicit attach mode should keep the historical nonzero exit
-                    # contract. Auto attach is best-effort because submission has
-                    # already succeeded and the follow-up commands are enough to
-                    # recover.
-                    if attach_mode_override() == "attach":
-                        raise SystemExit(attach_rc)
-                    print(
-                        "Cloud job submitted, but attach failed. Continue with:",
-                        file=sys.stderr,
-                    )
-                    emit_cloud_followup_commands(context=context, file=sys.stderr)
+                if attach_rc != 0 and attach_mode_override() is not None:
+                    raise SystemExit(attach_rc)
             except (MacrodataApiError, MacrodataCredentialsError):
                 print(
                     "Cloud job submitted, but attach failed. Continue with:",

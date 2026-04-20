@@ -39,9 +39,6 @@ jobs = SimpleNamespace(
 
 
 class _FakeClient:
-    def __init__(self) -> None:
-        pass
-
     def cli_list_jobs(self, **_: object) -> dict[str, object]:
         return {
             "items": [
