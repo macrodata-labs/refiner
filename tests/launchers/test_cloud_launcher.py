@@ -744,7 +744,7 @@ def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
         gpu_type="h100",
     )
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.plan["stages"][0]["cpus_per_worker"] == 4
     assert request.plan["stages"][0]["memory_mb_per_worker"] == 8192
     assert request.plan["stages"][0]["gpus_per_worker"] == 1
@@ -753,14 +753,18 @@ def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
     assert "memory_mb_per_worker" not in request.plan["stages"][1]
     assert "gpus_per_worker" not in request.plan["stages"][1]
     assert "gpu_type" not in request.plan["stages"][1]
-    assert request.stage_payloads[0].runtime.cpus_per_worker == 4
-    assert request.stage_payloads[0].runtime.mem_mb_per_worker == 8192
-    assert request.stage_payloads[0].runtime.gpus_per_worker == 1
-    assert request.stage_payloads[0].runtime.gpu_type == "h100"
-    assert request.stage_payloads[1].runtime.cpus_per_worker is None
-    assert request.stage_payloads[1].runtime.mem_mb_per_worker is None
-    assert request.stage_payloads[1].runtime.gpus_per_worker is None
-    assert request.stage_payloads[1].runtime.gpu_type is None
+    first_runtime = request.stage_payloads[0].runtime
+    second_runtime = request.stage_payloads[1].runtime
+    assert first_runtime is not None
+    assert second_runtime is not None
+    assert first_runtime.cpus_per_worker == 4
+    assert first_runtime.mem_mb_per_worker == 8192
+    assert first_runtime.gpus_per_worker == 1
+    assert first_runtime.gpu_type == "h100"
+    assert second_runtime.cpus_per_worker is None
+    assert second_runtime.mem_mb_per_worker is None
+    assert second_runtime.gpus_per_worker is None
+    assert second_runtime.gpu_type is None
 
 
 def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(

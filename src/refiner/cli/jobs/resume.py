@@ -10,11 +10,11 @@ from refiner.cli.jobs.common import _client, _handle_error
 from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
-    CloudResumeSelector,
     CloudRunResumeRequest,
     CloudRuntimeOverrides,
     MacrodataApiError,
 )
+from refiner.platform.client.models import CloudResumeSelector, build_resume_selector
 
 
 def _print_resume_json(payload: Any) -> int:
@@ -39,16 +39,15 @@ def _render_resume(payload: Any) -> int:
 
 
 def _resume_selector_from_args(args: Namespace) -> CloudResumeSelector:
-    selector = CloudResumeSelector.from_mode(
+    selector = build_resume_selector(
         job_id=args.job_id,
-        mode="latest-compatible" if args.latest_compatible else None,
+        latest_compatible=args.latest_compatible,
         name=args.name,
         limit_to_me=args.limit_to_me,
+        require_selector=True,
     )
-    if selector is None:
-        raise ValueError(
-            "resume selector must specify exactly one of job_id or latest_compatible"
-        )
+    if selector is None:  # pragma: no cover
+        raise ValueError("resume selector parsing produced no selector")
     return selector
 
 

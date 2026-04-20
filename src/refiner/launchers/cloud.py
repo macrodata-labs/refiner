@@ -203,18 +203,21 @@ class CloudLauncher(BaseLauncher):
         try:
             if selector is None:
                 manifest = self._resolve_cloud_manifest(secret_values=secret_values)
-                stages = self._planned_stages()
-                compiled_plan = self._compiled_plan(stages, secret_values=secret_values)
+                planned_stages = self._planned_stages()
+                stages = self._resolved_stages(planned_stages)
+                compiled_plan = self._compiled_plan(
+                    planned_stages, secret_values=secret_values
+                )
                 stage_payloads = [
                     StagePayload(
                         stage_index=stage.index,
                         pipeline_payload=serialize_pipeline_inline(stage.pipeline),
                         runtime=CloudRuntimeConfig(
                             num_workers=stage.compute.num_workers,
-                            cpus_per_worker=self.cpus_per_worker,
-                            mem_mb_per_worker=self.mem_mb_per_worker,
-                            gpus_per_worker=self.gpus_per_worker,
-                            gpu_type=self.gpu_type,
+                            cpus_per_worker=stage.compute.cpus_per_worker,
+                            mem_mb_per_worker=stage.compute.memory_mb_per_worker,
+                            gpus_per_worker=stage.compute.gpus_per_worker,
+                            gpu_type=stage.compute.gpu_type,
                         ),
                     )
                     for stage in stages

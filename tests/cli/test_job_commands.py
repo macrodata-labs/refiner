@@ -3056,7 +3056,7 @@ def test_jobs_resume_requires_exactly_one_selector(monkeypatch, capsys) -> None:
 
 
 def test_jobs_resume_rejects_name_filter_with_exact_job_id(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(jobs, "_client", lambda: _FakeClient())
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
 
     rc = jobs.cmd_jobs_resume(
         Namespace(
