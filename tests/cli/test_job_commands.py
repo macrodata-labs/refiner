@@ -7,18 +7,18 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from refiner.cli.jobs import common as jobs_common
-from refiner.cli.jobs import attach as jobs_attach_module
-from refiner.cli.jobs import control as jobs_control_module
-from refiner.cli.jobs import get as jobs_get_module
-from refiner.cli.jobs import list as jobs_list_module
-from refiner.cli.jobs import logs as jobs_logs
-from refiner.cli.jobs import manifest as jobs_manifest_module
-from refiner.cli.jobs import metrics as jobs_metrics_module
-from refiner.cli.jobs import workers as jobs_workers_module
 from refiner.cli.jobs.attach import cmd_jobs_attach
 from refiner.cli.jobs.control import cmd_jobs_cancel
 from refiner.cli.jobs.get import cmd_jobs_get
 from refiner.cli.jobs.list import cmd_jobs_list
+from refiner.cli.jobs import logs as jobs_logs
+from refiner.cli.jobs import get as jobs_get_module
+from refiner.cli.jobs import list as jobs_list_module
+from refiner.cli.jobs import attach as jobs_attach_module
+from refiner.cli.jobs import manifest as jobs_manifest_module
+from refiner.cli.jobs import metrics as jobs_metrics_module
+from refiner.cli.jobs import workers as jobs_workers_module
+from refiner.cli.jobs import control as jobs_control_module
 from refiner.cli.jobs.logs import cmd_jobs_logs
 from refiner.cli.jobs.manifest import cmd_jobs_manifest
 from refiner.cli.jobs.metrics import cmd_jobs_metrics, cmd_jobs_resource_metrics
