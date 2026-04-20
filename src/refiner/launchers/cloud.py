@@ -246,6 +246,8 @@ class CloudLauncher(BaseLauncher):
                 "Your Macrodata API key is invalid. Run `macrodata login` "
                 "or set MACRODATA_API_KEY with a valid key."
             ) from err
+        except MacrodataApiError as err:
+            raise SystemExit(err.message) from err
         tracking_url = build_job_tracking_url(
             client=client,
             job_id=resp.job_id,
