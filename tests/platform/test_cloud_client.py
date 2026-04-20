@@ -69,6 +69,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert captured["timeout_s"] == 30.0
     json_payload = cast(dict[str, object], captured["json_payload"])
     assert json_payload["executor"] == {
+        "type": "macrodata-cloud",
         "sync_local_dependencies": True,
     }
     stage_payloads = cast(list[dict[str, object]], json_payload["stage_payloads"])
