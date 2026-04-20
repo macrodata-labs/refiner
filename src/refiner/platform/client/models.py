@@ -288,9 +288,17 @@ class CloudRunCreateRequest:
     manifest: dict[str, Any] | None = None
     sync_local_dependencies: bool = True
     secrets: dict[str, str] | None = None
+    continue_from_job: str | None = None
+    runtime_overrides: CloudRuntimeOverrides | None = None
+    force_continue: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "continue_from_job", parse_continue_selector(self.continue_from_job)
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return _update_cloud_run_request_payload(
+        payload = _update_cloud_run_request_payload(
             {},
             executor={
                 "type": "macrodata-cloud",
@@ -302,6 +310,13 @@ class CloudRunCreateRequest:
             manifest=self.manifest,
             secrets=self.secrets,
         )
+        if self.continue_from_job is not None:
+            payload["continue_from_job"] = self.continue_from_job
+        if self.runtime_overrides is not None:
+            payload["runtime_overrides"] = self.runtime_overrides.to_dict()
+        if self.force_continue:
+            payload["force_continue"] = True
+        return payload
 
 
 def parse_continue_selector(value: str | None) -> str | None:
@@ -330,48 +345,6 @@ def parse_continue_selector(value: str | None) -> str | None:
     if stage_index < 0:
         raise ValueError("continue_from_job stage index must be >= 0")
     return f"{job_id.strip()}:{stage_index}"
-
-
-@dataclass(frozen=True, slots=True)
-class CloudRunResumeRequest:
-    continue_from_job: str
-    plan: dict[str, Any]
-    stage_payloads: list[StagePayload]
-    manifest: dict[str, Any]
-    sync_local_dependencies: bool
-    name: str | None = None
-    runtime_overrides: CloudRuntimeOverrides | None = None
-    secrets: dict[str, str] | None = None
-    force_continue: bool = False
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "continue_from_job", parse_continue_selector(self.continue_from_job)
-        )
-        if self.name is not None:
-            normalized_name = self.name.strip()
-            if not normalized_name:
-                raise ValueError("name must be non-empty")
-            object.__setattr__(self, "name", normalized_name)
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = _update_cloud_run_request_payload(
-            {"continue_from_job": self.continue_from_job},
-            executor={
-                "type": "macrodata-cloud",
-                "sync_local_dependencies": self.sync_local_dependencies,
-            },
-            name=self.name,
-            plan=self.plan,
-            stage_payloads=self.stage_payloads,
-            manifest=self.manifest,
-            secrets=self.secrets,
-        )
-        if self.runtime_overrides is not None:
-            payload["runtime_overrides"] = self.runtime_overrides.to_dict()
-        if self.force_continue:
-            payload["force_continue"] = True
-        return payload
 
 
 class CloudRunCreateResponse(msgspec.Struct, frozen=True):

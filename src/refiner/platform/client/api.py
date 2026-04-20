@@ -13,7 +13,6 @@ from refiner.platform.auth import MacrodataCredentialsError, current_api_key
 from refiner.platform.client.models import (
     CloudRunCreateRequest,
     CloudRunCreateResponse,
-    CloudRunResumeRequest,
     CreateJobEnvelope,
     CreateJobResponse,
     StageLifecycleResponse,
@@ -301,17 +300,6 @@ class MacrodataClient:
         return self._request(
             method="POST",
             path="/api/cloud/runs",
-            response_type=CloudRunCreateResponse,
-            json_payload=request.to_dict(),
-            timeout_s=30.0,
-        )
-
-    def cloud_resume_job(
-        self, *, request: CloudRunResumeRequest
-    ) -> CloudRunCreateResponse:
-        return self._request(
-            method="POST",
-            path="/api/cloud/runs/resume",
             response_type=CloudRunCreateResponse,
             json_payload=request.to_dict(),
             timeout_s=30.0,

@@ -14,7 +14,6 @@ from refiner.cli.ui import stdin_is_interactive, stdout_is_interactive
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudRunCreateRequest,
-    CloudRunResumeRequest,
     CloudRuntimeConfig,
     CloudRuntimeOverrides,
     MacrodataApiError,
@@ -189,72 +188,39 @@ class CloudLauncher(BaseLauncher):
         resolved_secrets = self._resolve_env_values(self.secrets)
         resolved_env = self._resolve_env_values(self.env)
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
-        continue_from_job = self.continue_from_job
         merged_env = self._merged_env(resolved_secrets, resolved_env)
         try:
-            if continue_from_job is None:
-                manifest = self._resolve_cloud_manifest(secret_values=secret_values)
-                planned_stages = self._planned_stages()
-                stages = self._resolved_stages(planned_stages)
-                compiled_plan = self._compiled_plan(
-                    planned_stages, secret_values=secret_values
+            manifest = self._resolve_cloud_manifest(secret_values=secret_values)
+            planned_stages = self._planned_stages()
+            stages = self._resolved_stages(planned_stages)
+            resp = client.cloud_submit_job(
+                request=CloudRunCreateRequest(
+                    name=self.name,
+                    plan=self._compiled_plan(
+                        planned_stages, secret_values=secret_values
+                    ),
+                    stage_payloads=[
+                        StagePayload(
+                            stage_index=stage.index,
+                            pipeline_payload=serialize_pipeline_inline(stage.pipeline),
+                            runtime=CloudRuntimeConfig(
+                                num_workers=stage.compute.num_workers,
+                                cpus_per_worker=stage.compute.cpus_per_worker,
+                                mem_mb_per_worker=stage.compute.memory_mb_per_worker,
+                                gpus_per_worker=stage.compute.gpus_per_worker,
+                                gpu_type=stage.compute.gpu_type,
+                            ),
+                        )
+                        for stage in stages
+                    ],
+                    manifest=manifest,
+                    sync_local_dependencies=self.sync_local_dependencies,
+                    secrets=merged_env,
+                    continue_from_job=self.continue_from_job,
+                    runtime_overrides=self._runtime_overrides(),
+                    force_continue=self.force_continue,
                 )
-                stage_payloads = [
-                    StagePayload(
-                        stage_index=stage.index,
-                        pipeline_payload=serialize_pipeline_inline(stage.pipeline),
-                        runtime=CloudRuntimeConfig(
-                            num_workers=stage.compute.num_workers,
-                            cpus_per_worker=stage.compute.cpus_per_worker,
-                            mem_mb_per_worker=stage.compute.memory_mb_per_worker,
-                            gpus_per_worker=stage.compute.gpus_per_worker,
-                            gpu_type=stage.compute.gpu_type,
-                        ),
-                    )
-                    for stage in stages
-                ]
-                resp = client.cloud_submit_job(
-                    request=CloudRunCreateRequest(
-                        name=self.name,
-                        plan=compiled_plan,
-                        stage_payloads=stage_payloads,
-                        manifest=manifest,
-                        sync_local_dependencies=self.sync_local_dependencies,
-                        secrets=merged_env,
-                    )
-                )
-            else:
-                # Continue launches a new cloud job from the current compiled pipeline while
-                # reusing completed work from a prior compatible failed job. The compiled
-                # stage graph, manifest, and requested runtime sizing all come from the
-                # current launch request; the old job only contributes reusable shard
-                # completion state.
-                manifest = self._resolve_cloud_manifest(secret_values=secret_values)
-                planned_stages = self._planned_stages()
-                stages = self._resolved_stages(planned_stages)
-                resp = client.cloud_resume_job(
-                    request=CloudRunResumeRequest(
-                        continue_from_job=continue_from_job,
-                        name=self.name,
-                        runtime_overrides=self._runtime_overrides(),
-                        plan=self._compiled_plan(
-                            planned_stages, secret_values=secret_values
-                        ),
-                        stage_payloads=[
-                            StagePayload(
-                                stage_index=stage.index,
-                                pipeline_payload=serialize_pipeline_inline(
-                                    stage.pipeline
-                                ),
-                            )
-                            for stage in stages
-                        ],
-                        manifest=manifest,
-                        sync_local_dependencies=self.sync_local_dependencies,
-                        secrets=merged_env,
-                        force_continue=self.force_continue,
-                    )
-                )
+            )
         except MacrodataCredentialsError as err:
             raise SystemExit(
                 "Your Macrodata API key is invalid. Run `macrodata login` "

@@ -6,7 +6,6 @@ from refiner.platform.client import MacrodataClient
 from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
-    CloudRunResumeRequest,
     CloudRuntimeConfig,
     CloudRuntimeOverrides,
     StagePayload,
@@ -108,7 +107,7 @@ def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -
         raise AssertionError("expected MacrodataApiError")
 
 
-def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> None:
+def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_request_json(**kwargs: object) -> dict[str, object]:
@@ -123,8 +122,9 @@ def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> 
     monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
-    resp = client.cloud_resume_job(
-        request=CloudRunResumeRequest(
+    resp = client.cloud_submit_job(
+        request=CloudRunCreateRequest(
+            name="demo-cloud-job",
             continue_from_job="job-previous:2",
             plan={"stages": [{"name": "stage_0", "steps": []}]},
             stage_payloads=[
@@ -153,9 +153,10 @@ def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> 
     assert resp.status == "queued"
     assert resp.workspace_slug == "macrodata"
     assert captured["method"] == "POST"
-    assert captured["path"] == "/api/cloud/runs/resume"
+    assert captured["path"] == "/api/cloud/runs"
     assert captured["timeout_s"] == 30.0
     json_payload = cast(dict[str, object], captured["json_payload"])
+    assert json_payload["name"] == "demo-cloud-job"
     assert json_payload["continue_from_job"] == "job-previous:2"
     assert json_payload["executor"] == {
         "type": "macrodata-cloud",

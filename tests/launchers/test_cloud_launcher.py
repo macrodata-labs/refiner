@@ -10,7 +10,6 @@ from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
-    CloudRunResumeRequest,
     MacrodataApiError,
 )
 from refiner.platform.manifest import _redact_captured_text
@@ -21,7 +20,6 @@ def _stub_cloud_submit(
     *,
     manifest: dict[str, object] | Callable[..., dict[str, object]] | None = None,
     fail_on_submit: bool = False,
-    fail_on_resume: bool = False,
 ) -> dict[str, object]:
     captured: dict[str, object] = {}
 
@@ -36,20 +34,7 @@ def _stub_cloud_submit(
 
             class _Resp:
                 job_id = "job-123"
-                stage_index = 0
-                status = "queued"
-                workspace_slug = None
-
-            return _Resp()
-
-        def cloud_resume_job(self, *, request):
-            if fail_on_resume:
-                raise AssertionError("should not resume")
-            captured["resume_request"] = request
-
-            class _Resp:
-                job_id = "job-123"
-                stage_index = 1
+                stage_index = 1 if request.continue_from_job is not None else 0
                 status = "queued"
                 workspace_slug = None
 
@@ -793,7 +778,7 @@ def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
     assert "attach job-123" in out.out
 
 
-def test_pipeline_launch_cloud_continue_from_job_posts_resume_request(
+def test_pipeline_launch_cloud_continue_from_job_posts_submit_request(
     monkeypatch,
 ) -> None:
     captured = _stub_cloud_submit(monkeypatch, manifest={"version": 1})
@@ -811,7 +796,7 @@ def test_pipeline_launch_cloud_continue_from_job_posts_resume_request(
 
     assert result.job_id == "job-123"
     assert result.stage_index == 1
-    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.continue_from_job == "job-previous"
     assert request.name == "demo cloud"
     assert request.manifest == {"version": 1}
@@ -821,7 +806,9 @@ def test_pipeline_launch_cloud_continue_from_job_posts_resume_request(
     assert request.stage_payloads is not None
     assert request.stage_payloads[0].stage_index == 0
     assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
-    assert request.stage_payloads[0].runtime is None
+    assert request.stage_payloads[0].runtime is not None
+    assert request.stage_payloads[0].runtime.num_workers == 3
+    assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.runtime_overrides is not None
     assert request.runtime_overrides.to_dict() == {
         "num_workers": 3,
@@ -830,10 +817,10 @@ def test_pipeline_launch_cloud_continue_from_job_posts_resume_request(
     assert request.sync_local_dependencies is True
 
 
-def test_pipeline_launch_cloud_continue_from_job_stage_posts_resume_request(
+def test_pipeline_launch_cloud_continue_from_job_stage_posts_submit_request(
     monkeypatch,
 ) -> None:
-    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
         lambda ref: True,
@@ -844,17 +831,17 @@ def test_pipeline_launch_cloud_continue_from_job_stage_posts_resume_request(
         continue_from_job="job-previous:2",
     )
 
-    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.continue_from_job == "job-previous:2"
     assert request.stage_payloads is not None
-    assert request.stage_payloads[0].runtime is None
+    assert request.stage_payloads[0].runtime is not None
     assert request.runtime_overrides is None
 
 
-def test_pipeline_launch_cloud_continue_from_job_infer_posts_resume_request(
+def test_pipeline_launch_cloud_continue_from_job_infer_posts_submit_request(
     monkeypatch,
 ) -> None:
-    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
         lambda ref: True,
@@ -865,17 +852,17 @@ def test_pipeline_launch_cloud_continue_from_job_infer_posts_resume_request(
         continue_from_job="infer",
     )
 
-    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.continue_from_job == "infer"
     assert request.stage_payloads is not None
-    assert request.stage_payloads[0].runtime is None
+    assert request.stage_payloads[0].runtime is not None
     assert request.runtime_overrides is None
 
 
 def test_pipeline_launch_cloud_continue_without_overrides_uses_current_plan_runtime(
     monkeypatch,
 ) -> None:
-    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
         lambda ref: True,
@@ -886,7 +873,7 @@ def test_pipeline_launch_cloud_continue_without_overrides_uses_current_plan_runt
         continue_from_job="job-previous",
     )
 
-    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.runtime_overrides is None
     assert request.plan is not None
     assert request.plan["stages"][0]["requested_num_workers"] == 1
@@ -895,7 +882,7 @@ def test_pipeline_launch_cloud_continue_without_overrides_uses_current_plan_runt
 def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
     monkeypatch,
 ) -> None:
-    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
         lambda ref: True,
@@ -929,7 +916,7 @@ def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
         continue_from_job="job-previous",
     )
 
-    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.plan is not None
     assert request.plan["stages"][0]["requested_num_workers"] == 4
     assert request.plan["stages"][1]["requested_num_workers"] == 1
@@ -938,7 +925,7 @@ def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
 def test_pipeline_launch_cloud_continue_rejects_invalid_stage_index(
     monkeypatch,
 ) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
 
     with pytest.raises(
         ValueError, match="continue_from_job stage index must be an integer"
@@ -952,7 +939,7 @@ def test_pipeline_launch_cloud_continue_rejects_invalid_stage_index(
 def test_pipeline_launch_cloud_continue_rejects_empty_stage_index(
     monkeypatch,
 ) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
 
     with pytest.raises(
         ValueError, match="continue_from_job stage index must be non-empty"
@@ -966,7 +953,7 @@ def test_pipeline_launch_cloud_continue_rejects_empty_stage_index(
 def test_pipeline_launch_cloud_continue_rejects_multiple_colons(
     monkeypatch,
 ) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
 
     with pytest.raises(
         ValueError,
@@ -981,7 +968,7 @@ def test_pipeline_launch_cloud_continue_rejects_multiple_colons(
 def test_pipeline_launch_cloud_continue_requires_selector_for_force_continue(
     monkeypatch,
 ) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
 
     with pytest.raises(ValueError, match="force_continue requires continue_from_job"):
         read_jsonl("input.jsonl").launch_cloud(
@@ -991,7 +978,7 @@ def test_pipeline_launch_cloud_continue_requires_selector_for_force_continue(
 
 
 def test_pipeline_launch_cloud_continue_forwards_force_continue(monkeypatch) -> None:
-    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
         lambda ref: True,
@@ -1003,12 +990,12 @@ def test_pipeline_launch_cloud_continue_forwards_force_continue(monkeypatch) -> 
         force_continue=True,
     )
 
-    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.force_continue is True
 
 
 def test_pipeline_launch_cloud_continue_rejects_blank_selector(monkeypatch) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
 
     with pytest.raises(ValueError, match="continue_from_job must be non-empty"):
         read_jsonl("input.jsonl").launch_cloud(
