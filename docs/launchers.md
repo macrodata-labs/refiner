@@ -91,7 +91,7 @@ Returned result includes:
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
-- `continue_from_job`: continue from one exact prior job id, one exact job-and-stage boundary (`JOBID:stage_index`), or `"infer"`
+- `continue_from_job`: continue from one exact prior job id (`JOBID`), one exact job-and-stage boundary (`JOBID:stage_index`), or `"infer"`. `:stage_index` is optional; when omitted, the control plane uses the last stage in the selected job that has any completed shards.
 - `force_continue`: allow continue when the reused stage boundary no longer matches the current pipeline
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
@@ -100,7 +100,7 @@ Returned result includes:
 
 Fresh cloud launch remains the default. Continue only triggers when you pass `continue_from_job`.
 
-Use an exact prior job id when you already know which failed or canceled job you want to continue:
+Use an exact prior job id when you already know which failed or canceled job you want to continue. If you omit `:stage_index`, the control plane uses the last stage in that job with any completed shards:
 
 ```python
 import refiner as mdr
@@ -159,7 +159,7 @@ Continue behavior notes:
 - continued cloud launches create a new cloud job linked to the prior failed job instead of mutating the old job
 - `continue_from_job="infer"` asks the control plane to resolve one prior job using the current launch name and the current authenticated user
 - continue rejects source jobs that are still running, already completed successfully, or have no completed shards to reuse
-- if you omit `:stage_index`, the control plane uses the last stage in the selected job that has completed shards
+- if you omit `:stage_index`, the control plane uses the last stage in the selected job that has any completed shards
 - by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; if they do not, the control plane tells you to either lower the boundary (`JOBID:k-1`) or pass `force_continue=True`
 - after validation, stages at or before the boundary that are already fully completed are marked `skipped`, and any partially completed boundary stage reruns only its unfinished shards
 - executor/config differences are advisory and do not block continue on their own
