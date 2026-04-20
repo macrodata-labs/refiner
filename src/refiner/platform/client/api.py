@@ -226,13 +226,11 @@ class MacrodataClient:
         self,
         *,
         name: str,
-        executor: dict[str, Any],
         plan: dict[str, Any],
         manifest: dict[str, Any],
     ) -> CreateJobResponse:
         request_body = {
             "name": name,
-            "executor": executor,
             "plan": plan,
             "manifest": manifest,
         }

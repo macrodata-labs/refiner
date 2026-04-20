@@ -1242,7 +1242,7 @@ def test_local_launcher_registers_job_and_reports_stage_lifecycle(
     launcher.launch()
 
     assert create_calls
-    assert create_calls[0]["executor"] == {"type": "refiner-local"}
+    assert "executor" not in create_calls[0]
     manifest = cast(dict[str, object], create_calls[0]["manifest"])
     environment = cast(dict[str, object], manifest["environment"])
     assert environment["rundir"] == str(tmp_path / "runs" / "<jobid>")
