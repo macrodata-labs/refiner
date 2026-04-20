@@ -91,18 +91,16 @@ Returned result includes:
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
-- `resume_from_job_id`: explicitly resume from one exact prior cloud job
-- `resume="latest-compatible"`: explicitly ask the control plane to pick the latest compatible prior job
-- `resume_name`: optional run-name filter used with `resume="latest-compatible"`
-- `resume_limit_to_me`: restrict latest-compatible lookup to jobs started by the authenticated user
+- `continue_from_job`: continue from one exact prior job id, one exact job-and-stage boundary (`JOBID:stage_index`), or `"infer"`
+- `force_continue`: allow continue when the reused stage boundary no longer matches the current pipeline
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
 
-### Resuming cloud work
+### Continuing cloud work
 
-Fresh cloud launch remains the default. Resume only triggers when you pass an explicit selector.
+Fresh cloud launch remains the default. Continue only triggers when you pass `continue_from_job`.
 
-Use an exact prior job id when you already know which failed job you want to continue:
+Use an exact prior job id when you already know which failed or canceled job you want to continue:
 
 ```python
 import refiner as mdr
@@ -117,11 +115,11 @@ result = pipeline.launch_cloud(
     name="cloud-job",
     num_workers=16,
     cpus_per_worker=4,
-    resume_from_job_id="job_123",
+    continue_from_job="job_123",
 )
 ```
 
-Use `resume="latest-compatible"` when you want an explicit selector without hard-coding a job id:
+Use `JOBID:stage_index` to pin the reused boundary explicitly:
 
 ```python
 import refiner as mdr
@@ -134,19 +132,39 @@ pipeline = (
 
 result = pipeline.launch_cloud(
     name="cloud-job",
-    resume="latest-compatible",
-    resume_name="cloud-job",
-    resume_limit_to_me=True,
+    continue_from_job="job_123:1",
 )
 ```
 
-Resume behavior notes:
+Use `"infer"` to look up your latest job in the current workspace with the same name:
 
-- resume never triggers from the output path or job name alone; you must opt in with `resume_from_job_id` or `resume="latest-compatible"`
-- resumed cloud launches create a new cloud job linked to the prior failed job instead of mutating the old job
-- the current compiled pipeline and manifest define the resumed launch, and the control plane only reuses prior work when they are compatible with the selected failed job
-- if you omit `num_workers`, `cpus_per_worker`, `mem_mb_per_worker`, `gpus_per_worker`, and `gpu_type` on resume, the control plane can inherit the selected run's existing sizing
-- if you pass any of those fields on resume, they are treated as explicit overrides for the new resumed job
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_jsonl("input/*.jsonl")
+    .map(lambda row: {"x": row["x"]})
+    .write_parquet("hf://datasets/macrodata/my-output")
+)
+
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    continue_from_job="infer",
+)
+```
+
+Continue behavior notes:
+
+- continue never triggers from the output path or job name alone; you must opt in with `continue_from_job`
+- continued cloud launches create a new cloud job linked to the prior failed job instead of mutating the old job
+- `continue_from_job="infer"` asks the control plane to resolve one prior job using the current launch name and the current authenticated user
+- continue rejects source jobs that are still running, already completed successfully, or have no completed shards to reuse
+- if you omit `:stage_index`, the control plane uses the last stage in the selected job that has completed shards
+- by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; if they do not, the control plane tells you to either lower the boundary (`JOBID:k-1`) or pass `force_continue=True`
+- after validation, stages at or before the boundary that are already fully completed are marked `skipped`, and any partially completed boundary stage reruns only its unfinished shards
+- executor/config differences are advisory and do not block continue on their own
+- if you omit `num_workers`, `cpus_per_worker`, `mem_mb_per_worker`, `gpus_per_worker`, and `gpu_type` on continue, the control plane can inherit the selected run's existing sizing
+- if you pass any of those fields on continue, they are treated as explicit overrides for the new continued job
 
 ### Launched writer notes
 

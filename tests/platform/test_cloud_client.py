@@ -7,7 +7,6 @@ from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
     CloudRunResumeRequest,
-    CloudResumeSelector,
     CloudRuntimeConfig,
     CloudRuntimeOverrides,
     StagePayload,
@@ -126,11 +125,7 @@ def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     resp = client.cloud_resume_job(
         request=CloudRunResumeRequest(
-            selector=CloudResumeSelector(
-                latest_compatible=True,
-                name="demo-cloud-job",
-                limit_to_me=True,
-            ),
+            continue_from_job="job-previous:2",
             plan={"stages": [{"name": "stage_0", "steps": []}]},
             stage_payloads=[
                 StagePayload(
@@ -149,6 +144,7 @@ def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> 
                 cpus_per_worker=8,
                 mem_mb_per_worker=16384,
             ),
+            force_continue=True,
         )
     )
 
@@ -160,15 +156,12 @@ def test_cloud_client_cloud_resume_job_posts_to_resume_endpoint(monkeypatch) -> 
     assert captured["path"] == "/api/cloud/runs/resume"
     assert captured["timeout_s"] == 30.0
     json_payload = cast(dict[str, object], captured["json_payload"])
-    assert json_payload["selector"] == {
-        "latest_compatible": True,
-        "name": "demo-cloud-job",
-        "limit_to_me": True,
-    }
+    assert json_payload["continue_from_job"] == "job-previous:2"
     assert json_payload["executor"] == {
         "type": "macrodata-cloud",
         "sync_local_dependencies": False,
     }
+    assert json_payload["force_continue"] is True
     assert json_payload["runtime_overrides"] == {
         "cpus_per_worker": 8,
         "mem_mb_per_worker": 16384,

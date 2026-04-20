@@ -304,69 +304,37 @@ class CloudRunCreateRequest:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class CloudResumeSelector:
-    job_id: str | None = None
-    latest_compatible: bool = False
-    name: str | None = None
-    limit_to_me: bool = False
-
-    def __post_init__(self) -> None:
-        has_job_id = self.job_id is not None
-        if has_job_id == self.latest_compatible:
-            raise ValueError(
-                "resume selector must specify exactly one of job_id or latest_compatible"
-            )
-        if has_job_id:
-            normalized_job_id = self.job_id.strip() if self.job_id is not None else None
-            if not normalized_job_id:
-                raise ValueError("job_id must be non-empty")
-            if self.name is not None or self.limit_to_me:
-                raise ValueError(
-                    "name and limit_to_me are only supported with latest_compatible"
-                )
-            object.__setattr__(self, "job_id", normalized_job_id)
-        if self.name is not None:
-            normalized_name = self.name.strip()
-            if not normalized_name:
-                raise ValueError("resume selector name must be non-empty")
-            object.__setattr__(self, "name", normalized_name)
-
-    def to_dict(self) -> dict[str, Any]:
-        if self.job_id is not None:
-            return {"job_id": self.job_id}
-        payload: dict[str, Any] = {"latest_compatible": True}
-        if self.name is not None:
-            payload["name"] = self.name
-        if self.limit_to_me:
-            payload["limit_to_me"] = True
-        return payload
-
-
-def build_resume_selector(
-    *,
-    job_id: str | None = None,
-    latest_compatible: bool = False,
-    name: str | None = None,
-    limit_to_me: bool = False,
-) -> CloudResumeSelector | None:
-    if job_id is None and not latest_compatible:
-        if name is not None or limit_to_me:
-            raise ValueError(
-                "resume_name and resume_limit_to_me require resume='latest-compatible'"
-            )
+def parse_continue_selector(value: str | None) -> str | None:
+    if value is None:
         return None
-    return CloudResumeSelector(
-        job_id=job_id,
-        latest_compatible=latest_compatible,
-        name=name,
-        limit_to_me=limit_to_me,
-    )
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("continue_from_job must be non-empty")
+    if normalized == "infer":
+        return normalized
+    if normalized.count(":") > 1:
+        raise ValueError(
+            "continue_from_job must be JOBID, JOBID:stage_index, or 'infer'"
+        )
+    if ":" not in normalized:
+        return normalized
+    job_id, raw_stage_index = normalized.split(":", 1)
+    if not job_id.strip():
+        raise ValueError("continue_from_job job id must be non-empty")
+    if not raw_stage_index.strip():
+        raise ValueError("continue_from_job stage index must be non-empty")
+    try:
+        stage_index = int(raw_stage_index)
+    except ValueError as err:
+        raise ValueError("continue_from_job stage index must be an integer") from err
+    if stage_index < 0:
+        raise ValueError("continue_from_job stage index must be >= 0")
+    return f"{job_id.strip()}:{stage_index}"
 
 
 @dataclass(frozen=True, slots=True)
 class CloudRunResumeRequest:
-    selector: CloudResumeSelector
+    continue_from_job: str
     plan: dict[str, Any]
     stage_payloads: list[StagePayload]
     manifest: dict[str, Any]
@@ -374,8 +342,12 @@ class CloudRunResumeRequest:
     name: str | None = None
     runtime_overrides: CloudRuntimeOverrides | None = None
     secrets: dict[str, str] | None = None
+    force_continue: bool = False
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "continue_from_job", parse_continue_selector(self.continue_from_job)
+        )
         if self.name is not None:
             normalized_name = self.name.strip()
             if not normalized_name:
@@ -384,7 +356,7 @@ class CloudRunResumeRequest:
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = _update_cloud_run_request_payload(
-            {"selector": self.selector.to_dict()},
+            {"continue_from_job": self.continue_from_job},
             executor={
                 "type": "macrodata-cloud",
                 "sync_local_dependencies": self.sync_local_dependencies,
@@ -397,6 +369,8 @@ class CloudRunResumeRequest:
         )
         if self.runtime_overrides is not None:
             payload["runtime_overrides"] = self.runtime_overrides.to_dict()
+        if self.force_continue:
+            payload["force_continue"] = True
         return payload
 
 

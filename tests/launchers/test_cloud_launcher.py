@@ -793,7 +793,7 @@ def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
     assert "attach job-123" in out.out
 
 
-def test_pipeline_launch_cloud_resume_from_job_id_posts_resume_request(
+def test_pipeline_launch_cloud_continue_from_job_posts_resume_request(
     monkeypatch,
 ) -> None:
     captured = _stub_cloud_submit(monkeypatch, manifest={"version": 1})
@@ -806,13 +806,13 @@ def test_pipeline_launch_cloud_resume_from_job_id_posts_resume_request(
         name="demo cloud",
         num_workers=3,
         cpus_per_worker=2,
-        resume_from_job_id=" job-previous ",
+        continue_from_job=" job-previous ",
     )
 
     assert result.job_id == "job-123"
     assert result.stage_index == 1
     request = cast(CloudRunResumeRequest, captured["resume_request"])
-    assert request.selector.to_dict() == {"job_id": "job-previous"}
+    assert request.continue_from_job == "job-previous"
     assert request.name == "demo cloud"
     assert request.manifest == {"version": 1}
     assert request.plan is not None
@@ -829,7 +829,7 @@ def test_pipeline_launch_cloud_resume_from_job_id_posts_resume_request(
     assert request.sync_local_dependencies is True
 
 
-def test_pipeline_launch_cloud_resume_latest_compatible_posts_resume_request(
+def test_pipeline_launch_cloud_continue_from_job_stage_posts_resume_request(
     monkeypatch,
 ) -> None:
     captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
@@ -840,23 +840,17 @@ def test_pipeline_launch_cloud_resume_latest_compatible_posts_resume_request(
 
     read_jsonl("input.jsonl").launch_cloud(
         name="demo cloud",
-        resume="latest-compatible",
-        resume_name="prior job",
-        resume_limit_to_me=True,
+        continue_from_job="job-previous:2",
     )
 
     request = cast(CloudRunResumeRequest, captured["resume_request"])
-    assert request.selector.to_dict() == {
-        "latest_compatible": True,
-        "name": "prior job",
-        "limit_to_me": True,
-    }
+    assert request.continue_from_job == "job-previous:2"
     assert request.stage_payloads is not None
     assert request.stage_payloads[0].runtime is None
     assert request.runtime_overrides is None
 
 
-def test_pipeline_launch_cloud_resume_without_overrides_preserves_prior_runtime(
+def test_pipeline_launch_cloud_continue_from_job_infer_posts_resume_request(
     monkeypatch,
 ) -> None:
     captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
@@ -867,7 +861,28 @@ def test_pipeline_launch_cloud_resume_without_overrides_preserves_prior_runtime(
 
     read_jsonl("input.jsonl").launch_cloud(
         name="demo cloud",
-        resume_from_job_id="job-previous",
+        continue_from_job="infer",
+    )
+
+    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    assert request.continue_from_job == "infer"
+    assert request.stage_payloads is not None
+    assert request.stage_payloads[0].runtime is None
+    assert request.runtime_overrides is None
+
+
+def test_pipeline_launch_cloud_continue_without_overrides_preserves_prior_runtime(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        continue_from_job="job-previous",
     )
 
     request = cast(CloudRunResumeRequest, captured["resume_request"])
@@ -876,7 +891,7 @@ def test_pipeline_launch_cloud_resume_without_overrides_preserves_prior_runtime(
     assert "requested_num_workers" not in request.plan["stages"][0]
 
 
-def test_pipeline_launch_cloud_resume_preserves_fixed_reducer_stage_runtime(
+def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
     monkeypatch,
 ) -> None:
     captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
@@ -910,7 +925,7 @@ def test_pipeline_launch_cloud_resume_preserves_fixed_reducer_stage_runtime(
     read_jsonl("input.jsonl").launch_cloud(
         name="demo cloud",
         num_workers=4,
-        resume_from_job_id="job-previous",
+        continue_from_job="job-previous",
     )
 
     request = cast(CloudRunResumeRequest, captured["resume_request"])
@@ -919,44 +934,83 @@ def test_pipeline_launch_cloud_resume_preserves_fixed_reducer_stage_runtime(
     assert request.plan["stages"][1]["requested_num_workers"] == 1
 
 
-def test_pipeline_launch_cloud_resume_rejects_invalid_mode(monkeypatch) -> None:
+def test_pipeline_launch_cloud_continue_rejects_invalid_stage_index(
+    monkeypatch,
+) -> None:
     _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
 
     with pytest.raises(
-        ValueError, match="resume must be 'latest-compatible' when provided"
+        ValueError, match="continue_from_job stage index must be an integer"
     ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
-            resume="latest",
+            continue_from_job="job-1:not-an-int",
         )
 
 
-def test_pipeline_launch_cloud_resume_rejects_mutually_exclusive_selectors(
+def test_pipeline_launch_cloud_continue_rejects_empty_stage_index(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+
+    with pytest.raises(
+        ValueError, match="continue_from_job stage index must be non-empty"
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="job-1:",
+        )
+
+
+def test_pipeline_launch_cloud_continue_rejects_multiple_colons(
     monkeypatch,
 ) -> None:
     _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
 
     with pytest.raises(
         ValueError,
-        match="resume selector must specify exactly one of job_id or latest_compatible",
+        match="continue_from_job must be JOBID, JOBID:stage_index, or 'infer'",
     ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
-            resume_from_job_id="job-1",
-            resume="latest-compatible",
+            continue_from_job="job-1:2:3",
         )
 
 
-def test_pipeline_launch_cloud_resume_rejects_filters_without_latest_compatible(
+def test_pipeline_launch_cloud_continue_requires_selector_for_force_continue(
     monkeypatch,
 ) -> None:
     _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
 
-    with pytest.raises(
-        ValueError,
-        match="resume_name and resume_limit_to_me require resume='latest-compatible'",
-    ):
+    with pytest.raises(ValueError, match="force_continue requires continue_from_job"):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
-            resume_name="job-name",
+            force_continue=True,
+        )
+
+
+def test_pipeline_launch_cloud_continue_forwards_force_continue(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        continue_from_job="job-previous",
+        force_continue=True,
+    )
+
+    request = cast(CloudRunResumeRequest, captured["resume_request"])
+    assert request.force_continue is True
+
+
+def test_pipeline_launch_cloud_continue_rejects_blank_selector(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True, fail_on_resume=True)
+
+    with pytest.raises(ValueError, match="continue_from_job must be non-empty"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="   ",
         )

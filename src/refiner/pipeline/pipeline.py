@@ -354,10 +354,8 @@ class RefinerPipeline:
         sync_local_dependencies: bool = True,
         secrets: Mapping[str, object | None] | None = None,
         env: Mapping[str, object | None] | None = None,
-        resume_from_job_id: str | None = None,
-        resume: str | None = None,
-        resume_name: str | None = None,
-        resume_limit_to_me: bool = False,
+        continue_from_job: str | None = None,
+        force_continue: bool = False,
     ) -> "CloudLaunchResult":
         """Launch the pipeline on Macrodata Cloud.
 
@@ -376,13 +374,10 @@ class RefinerPipeline:
             env: Extra environment variables to mount inside the cloud image without
                 treating their values as redaction targets. `None` values are loaded
                 from the submitting environment.
-            resume_from_job_id: Launch a new cloud job that reuses completed work
-                from one exact prior compatible cloud job.
-            resume: Explicit resume selector mode. Currently only
-                `"latest-compatible"` is supported.
-            resume_name: Optional name filter used with `resume="latest-compatible"`.
-            resume_limit_to_me: Restrict latest-compatible resume lookup to jobs
-                started by the authenticated user.
+            continue_from_job: Explicit continue selector. Accepts one prior cloud
+                job id, one prior job id plus `:stage_index`, or `"infer"`.
+            force_continue: Allow continue when the reused stage boundary is not
+                fully compatible with the current pipeline.
         """
         from refiner.launchers.cloud import CloudLauncher
 
@@ -397,10 +392,8 @@ class RefinerPipeline:
             sync_local_dependencies=sync_local_dependencies,
             secrets=dict(secrets) if secrets is not None else None,
             env=dict(env) if env is not None else None,
-            resume_from_job_id=resume_from_job_id,
-            resume=resume,
-            resume_name=resume_name,
-            resume_limit_to_me=resume_limit_to_me,
+            continue_from_job=continue_from_job,
+            force_continue=force_continue,
         )
         return launcher.launch()
 

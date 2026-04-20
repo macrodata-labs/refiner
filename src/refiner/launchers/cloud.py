@@ -22,7 +22,7 @@ from refiner.platform.client import (
     StagePayload,
     serialize_pipeline_inline,
 )
-from refiner.platform.client.models import build_resume_selector
+from refiner.platform.client.models import parse_continue_selector
 from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.job_urls import build_job_tracking_url
@@ -73,10 +73,8 @@ class CloudLauncher(BaseLauncher):
         sync_local_dependencies: bool = True,
         secrets: dict[str, object | None] | None = None,
         env: dict[str, object | None] | None = None,
-        resume_from_job_id: str | None = None,
-        resume: str | None = None,
-        resume_name: str | None = None,
-        resume_limit_to_me: bool = False,
+        continue_from_job: str | None = None,
+        force_continue: bool = False,
     ):
         super().__init__(
             pipeline=pipeline,
@@ -85,20 +83,15 @@ class CloudLauncher(BaseLauncher):
             cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
-        if resume is not None and resume != "latest-compatible":
-            raise ValueError("resume must be 'latest-compatible' when provided")
-        resume_selector = build_resume_selector(
-            job_id=resume_from_job_id,
-            latest_compatible=(resume == "latest-compatible"),
-            name=resume_name,
-            limit_to_me=resume_limit_to_me,
-        )
+        normalized_continue_from_job = parse_continue_selector(continue_from_job)
+        if force_continue and normalized_continue_from_job is None:
+            raise ValueError("force_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
         normalized_gpu_type = gpu_type.strip() if gpu_type is not None else None
         if gpu_type is not None and not normalized_gpu_type:
             raise ValueError("gpu_type must be non-empty")
-        if resume_selector is None:
+        if normalized_continue_from_job is None:
             if gpus_per_worker is not None and normalized_gpu_type is None:
                 raise ValueError("gpu_type is required when gpus_per_worker is set")
             if normalized_gpu_type is not None and gpus_per_worker is None:
@@ -111,7 +104,8 @@ class CloudLauncher(BaseLauncher):
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
-        self.resume_selector = resume_selector
+        self.continue_from_job = normalized_continue_from_job
+        self.force_continue = force_continue
 
     @staticmethod
     def _resolve_env_values(
@@ -197,10 +191,10 @@ class CloudLauncher(BaseLauncher):
         resolved_secrets = self._resolve_env_values(self.secrets)
         resolved_env = self._resolve_env_values(self.env)
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
-        selector = self.resume_selector
+        continue_from_job = self.continue_from_job
         merged_env = self._merged_env(resolved_secrets, resolved_env)
         try:
-            if selector is None:
+            if continue_from_job is None:
                 manifest = self._resolve_cloud_manifest(secret_values=secret_values)
                 planned_stages = self._planned_stages()
                 stages = self._resolved_stages(planned_stages)
@@ -245,7 +239,7 @@ class CloudLauncher(BaseLauncher):
                 )
                 resp = client.cloud_resume_job(
                     request=CloudRunResumeRequest(
-                        selector=selector,
+                        continue_from_job=continue_from_job,
                         name=self.name,
                         runtime_overrides=self._runtime_overrides(),
                         plan=self._resume_plan(stages, secret_values=secret_values),
@@ -261,6 +255,7 @@ class CloudLauncher(BaseLauncher):
                         manifest=manifest,
                         sync_local_dependencies=self.sync_local_dependencies,
                         secrets=merged_env,
+                        force_continue=self.force_continue,
                     )
                 )
         except MacrodataCredentialsError as err:
