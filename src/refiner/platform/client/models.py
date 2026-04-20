@@ -182,7 +182,6 @@ class CloudRunCreateRequest:
         payload: dict[str, Any] = {
             "name": self.name,
             "executor": {
-                "type": "macrodata-cloud",
                 "sync_local_dependencies": self.sync_local_dependencies,
             },
             "plan": self.plan,

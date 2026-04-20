@@ -205,7 +205,6 @@ class LocalLauncher(BaseLauncher):
             )
             registered_job = tracking_client.create_job(
                 name=self.name,
-                executor={"type": "refiner-local"},
                 plan=self._compiled_plan(stages),
                 manifest=manifest,
             )

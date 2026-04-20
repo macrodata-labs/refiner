@@ -26,7 +26,6 @@ def test_create_job_includes_manifest_refiner_metadata(monkeypatch) -> None:
     client = MacrodataClient(api_key="ing_test", base_url="https://example.com")
     ctx = client.create_job(
         name="local job",
-        executor={"type": "refiner-local"},
         plan={"stages": [{"name": "stage_0", "steps": []}]},
         manifest={
             "version": 1,
@@ -40,7 +39,7 @@ def test_create_job_includes_manifest_refiner_metadata(monkeypatch) -> None:
     assert ctx.stage_index == 0
 
     json_payload = cast(dict[str, object], captured["json_payload"])
-    assert json_payload["executor"] == {"type": "refiner-local"}
+    assert "executor" not in json_payload
     assert json_payload["manifest"] == {
         "version": 1,
         "environment": {
