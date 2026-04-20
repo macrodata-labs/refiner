@@ -182,14 +182,12 @@ class CloudRunCreateRequest:
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
+            "name": self.name,
             "executor": {
                 "sync_local_dependencies": self.sync_local_dependencies,
             },
-            "name": self.name,
             "plan": self.plan,
-            "stage_payloads": [
-                stage_payload.to_dict() for stage_payload in self.stage_payloads
-            ],
+            "stage_payloads": [payload.to_dict() for payload in self.stage_payloads],
         }
         if self.manifest is not None:
             payload["manifest"] = self.manifest
