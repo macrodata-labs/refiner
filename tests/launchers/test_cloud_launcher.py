@@ -573,7 +573,7 @@ def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
     assert captured["force_attach"] is True
 
 
-def test_pipeline_launch_cloud_explicit_attach_exits_nonzero_when_remote_job_fails(
+def test_pipeline_launch_cloud_explicit_attach_nonzero_exits(
     monkeypatch,
 ) -> None:
     _stub_cloud_submit(monkeypatch)
@@ -582,13 +582,20 @@ def test_pipeline_launch_cloud_explicit_attach_exits_nonzero_when_remote_job_fai
         lambda ref: True,
     )
     monkeypatch.setenv("REFINER_ATTACH", "attach")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("refiner.cli.run.cloud.attach_to_cloud_job", lambda **_: 1)
     monkeypatch.setattr(
-        "refiner.cli.run.cloud.attach_to_cloud_job",
-        lambda **_: 1,
+        "refiner.launchers.cloud.emit_cloud_followup_commands",
+        lambda *, context, file=None: captured.update(
+            {"job_id": context.job_id, "file": file}
+        ),
     )
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit) as err:
         read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert err.value.code == 1
+    assert captured == {}
 
 
 def test_pipeline_launch_cloud_attach_failure_prints_fallback(
@@ -670,7 +677,7 @@ def test_pipeline_launch_cloud_defaults_to_auto_attach_when_interactive(
     assert captured["force_attach"] is True
 
 
-def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_raises(
+def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_returns_job(
     monkeypatch,
 ) -> None:
     _stub_cloud_submit(monkeypatch)
@@ -680,13 +687,19 @@ def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_raises(
     )
     monkeypatch.delenv("REFINER_ATTACH", raising=False)
     monkeypatch.setattr("refiner.launchers.cloud.stdout_is_interactive", lambda: True)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("refiner.cli.run.cloud.attach_to_cloud_job", lambda **_: 1)
     monkeypatch.setattr(
-        "refiner.cli.run.cloud.attach_to_cloud_job",
-        lambda **_: 1,
+        "refiner.launchers.cloud.emit_cloud_followup_commands",
+        lambda *, context, file=None: captured.update(
+            {"job_id": context.job_id, "file": file}
+        ),
     )
 
-    with pytest.raises(SystemExit, match="1"):
-        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert result.job_id == "job-123"
+    assert captured["job_id"] == "job-123"
 
 
 def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
@@ -810,7 +823,7 @@ def test_pipeline_launch_cloud_continue_from_job_posts_submit_request(
     assert request.stage_payloads[0].runtime.num_workers == 3
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.runtime_overrides is not None
-    assert request.runtime_overrides.to_dict() == {
+    assert request.runtime_overrides == {
         "num_workers": 3,
         "cpus_per_worker": 2,
     }
@@ -877,6 +890,22 @@ def test_pipeline_launch_cloud_continue_without_overrides_uses_current_plan_runt
     assert request.runtime_overrides is None
     assert request.plan is not None
     assert request.plan["stages"][0]["requested_num_workers"] == 1
+
+
+def test_pipeline_launch_cloud_continue_requires_complete_gpu_overrides(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(
+        ValueError,
+        match="gpu_type is required when gpus_per_worker is set",
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="job-previous",
+            gpus_per_worker=1,
+        )
 
 
 def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(

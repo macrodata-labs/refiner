@@ -362,8 +362,8 @@ class RefinerPipeline:
         Args:
             name: Human-readable run name.
             num_workers: Requested logical worker count. Fresh launches default to
-                `1` when omitted. Resume launches leave worker count unchanged
-                unless you pass an explicit override.
+                `1` when omitted. Continue launches use the current launch config
+                too, so omitting this still means `1`.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.

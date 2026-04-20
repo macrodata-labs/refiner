@@ -7,7 +7,6 @@ from refiner.platform.client import (
     CloudPipelinePayload,
     CloudRunCreateRequest,
     CloudRuntimeConfig,
-    CloudRuntimeOverrides,
     StagePayload,
 )
 from refiner.platform.client import MacrodataApiError
@@ -140,10 +139,10 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
             ],
             manifest={"version": 1},
             sync_local_dependencies=False,
-            runtime_overrides=CloudRuntimeOverrides(
-                cpus_per_worker=8,
-                mem_mb_per_worker=16384,
-            ),
+            runtime_overrides={
+                "cpus_per_worker": 8,
+                "mem_mb_per_worker": 16384,
+            },
             force_continue=True,
         )
     )
@@ -180,8 +179,3 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
             },
         }
     ]
-
-
-def test_cloud_runtime_overrides_allow_partial_gpu_fields() -> None:
-    assert CloudRuntimeOverrides(gpus_per_worker=2).to_dict() == {"gpus_per_worker": 2}
-    assert CloudRuntimeOverrides(gpu_type="h100").to_dict() == {"gpu_type": "h100"}

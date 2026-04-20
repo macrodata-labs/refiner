@@ -115,137 +115,45 @@ class StageLifecycleResponse(msgspec.Struct, frozen=True):
     stage: StageLifecycleStage
 
 
-def _validate_cloud_runtime_fields(
-    *,
-    num_workers: int | None = None,
-    cpus_per_worker: int | None = None,
-    mem_mb_per_worker: int | None = None,
-    gpus_per_worker: int | None = None,
-    gpu_type: str | None = None,
-    require_complete_gpu: bool = True,
-) -> str | None:
-    if num_workers is not None and num_workers <= 0:
-        raise ValueError("num_workers must be > 0")
-    if cpus_per_worker is not None and cpus_per_worker <= 0:
-        raise ValueError("cpus_per_worker must be > 0")
-    if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
-        raise ValueError("mem_mb_per_worker must be > 0")
-    if gpus_per_worker is not None and gpus_per_worker <= 0:
-        raise ValueError("gpus_per_worker must be > 0")
-    normalized_gpu_type = gpu_type.strip() if gpu_type is not None else None
-    if gpu_type is not None and not normalized_gpu_type:
-        raise ValueError("gpu_type must be non-empty")
-    if (
-        require_complete_gpu
-        and gpus_per_worker is not None
-        and normalized_gpu_type is None
-    ):
-        raise ValueError("gpu_type is required when gpus_per_worker is set")
-    if (
-        require_complete_gpu
-        and normalized_gpu_type is not None
-        and gpus_per_worker is None
-    ):
-        raise ValueError("gpus_per_worker is required when gpu_type is set")
-    return normalized_gpu_type
-
-
-def _cloud_runtime_payload(
-    *,
-    num_workers: int | None = None,
-    cpus_per_worker: int | None = None,
-    mem_mb_per_worker: int | None = None,
-    gpus_per_worker: int | None = None,
-    gpu_type: str | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
-    if num_workers is not None:
-        payload["num_workers"] = num_workers
-    if cpus_per_worker is not None:
-        payload["cpus_per_worker"] = cpus_per_worker
-    if mem_mb_per_worker is not None:
-        payload["mem_mb_per_worker"] = mem_mb_per_worker
-    if gpus_per_worker is not None:
-        payload["gpus_per_worker"] = gpus_per_worker
-    if gpu_type is not None:
-        payload["gpu_type"] = gpu_type
-    return payload
-
-
-def _update_cloud_run_request_payload(
-    payload: dict[str, Any],
-    *,
-    executor: dict[str, Any] | None = None,
-    name: str | None = None,
-    plan: dict[str, Any] | None = None,
-    stage_payloads: list[Any] | None = None,
-    manifest: dict[str, Any] | None = None,
-    secrets: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    if executor is not None:
-        payload["executor"] = executor
-    if name is not None:
-        payload["name"] = name
-    if plan is not None:
-        payload["plan"] = plan
-    if stage_payloads is not None:
-        payload["stage_payloads"] = [
-            stage_payload.to_dict() for stage_payload in stage_payloads
-        ]
-    if manifest is not None:
-        payload["manifest"] = manifest
-    if secrets:
-        payload["secrets"] = secrets
-    return payload
-
-
-class _CloudRuntimePayloadMixin:
-    num_workers: int | None
-    cpus_per_worker: int | None
-    mem_mb_per_worker: int | None
-    gpus_per_worker: int | None
-    gpu_type: str | None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "gpu_type",
-            _validate_cloud_runtime_fields(
-                num_workers=self.num_workers,
-                cpus_per_worker=self.cpus_per_worker,
-                mem_mb_per_worker=self.mem_mb_per_worker,
-                gpus_per_worker=self.gpus_per_worker,
-                gpu_type=self.gpu_type,
-                require_complete_gpu=False,
-            ),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return _cloud_runtime_payload(
-            num_workers=self.num_workers,
-            cpus_per_worker=self.cpus_per_worker,
-            mem_mb_per_worker=self.mem_mb_per_worker,
-            gpus_per_worker=self.gpus_per_worker,
-            gpu_type=self.gpu_type,
-        )
-
-
 @dataclass(frozen=True, slots=True)
-class CloudRuntimeConfig(_CloudRuntimePayloadMixin):
+class CloudRuntimeConfig:
     num_workers: int
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpus_per_worker: int | None = None
     gpu_type: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.num_workers <= 0:
+            raise ValueError("num_workers must be > 0")
+        if self.cpus_per_worker is not None and self.cpus_per_worker <= 0:
+            raise ValueError("cpus_per_worker must be > 0")
+        if self.mem_mb_per_worker is not None and self.mem_mb_per_worker <= 0:
+            raise ValueError("mem_mb_per_worker must be > 0")
+        if self.gpus_per_worker is not None and self.gpus_per_worker <= 0:
+            raise ValueError("gpus_per_worker must be > 0")
+        normalized_gpu_type = (
+            self.gpu_type.strip() if self.gpu_type is not None else None
+        )
+        if self.gpu_type is not None and not normalized_gpu_type:
+            raise ValueError("gpu_type must be non-empty")
+        if self.gpus_per_worker is not None and normalized_gpu_type is None:
+            raise ValueError("gpu_type is required when gpus_per_worker is set")
+        if normalized_gpu_type is not None and self.gpus_per_worker is None:
+            raise ValueError("gpus_per_worker is required when gpu_type is set")
+        object.__setattr__(self, "gpu_type", normalized_gpu_type)
 
-@dataclass(frozen=True, slots=True)
-class CloudRuntimeOverrides(_CloudRuntimePayloadMixin):
-    num_workers: int | None = None
-    cpus_per_worker: int | None = None
-    mem_mb_per_worker: int | None = None
-    gpus_per_worker: int | None = None
-    gpu_type: str | None = None
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"num_workers": self.num_workers}
+        if self.cpus_per_worker is not None:
+            payload["cpus_per_worker"] = self.cpus_per_worker
+        if self.mem_mb_per_worker is not None:
+            payload["mem_mb_per_worker"] = self.mem_mb_per_worker
+        if self.gpus_per_worker is not None:
+            payload["gpus_per_worker"] = self.gpus_per_worker
+        if self.gpu_type is not None:
+            payload["gpu_type"] = self.gpu_type
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,62 +197,32 @@ class CloudRunCreateRequest:
     sync_local_dependencies: bool = True
     secrets: dict[str, str] | None = None
     continue_from_job: str | None = None
-    runtime_overrides: CloudRuntimeOverrides | None = None
+    runtime_overrides: dict[str, Any] | None = None
     force_continue: bool = False
 
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "continue_from_job", parse_continue_selector(self.continue_from_job)
-        )
-
     def to_dict(self) -> dict[str, Any]:
-        payload = _update_cloud_run_request_payload(
-            {},
-            executor={
+        payload: dict[str, Any] = {
+            "executor": {
                 "type": "macrodata-cloud",
                 "sync_local_dependencies": self.sync_local_dependencies,
             },
-            name=self.name,
-            plan=self.plan,
-            stage_payloads=self.stage_payloads,
-            manifest=self.manifest,
-            secrets=self.secrets,
-        )
+            "name": self.name,
+            "plan": self.plan,
+            "stage_payloads": [
+                stage_payload.to_dict() for stage_payload in self.stage_payloads
+            ],
+        }
+        if self.manifest is not None:
+            payload["manifest"] = self.manifest
+        if self.secrets:
+            payload["secrets"] = self.secrets
         if self.continue_from_job is not None:
             payload["continue_from_job"] = self.continue_from_job
         if self.runtime_overrides is not None:
-            payload["runtime_overrides"] = self.runtime_overrides.to_dict()
+            payload["runtime_overrides"] = self.runtime_overrides
         if self.force_continue:
             payload["force_continue"] = True
         return payload
-
-
-def parse_continue_selector(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip()
-    if not normalized:
-        raise ValueError("continue_from_job must be non-empty")
-    if normalized == "infer":
-        return normalized
-    if normalized.count(":") > 1:
-        raise ValueError(
-            "continue_from_job must be JOBID, JOBID:stage_index, or 'infer'"
-        )
-    if ":" not in normalized:
-        return normalized
-    job_id, raw_stage_index = normalized.split(":", 1)
-    if not job_id.strip():
-        raise ValueError("continue_from_job job id must be non-empty")
-    if not raw_stage_index.strip():
-        raise ValueError("continue_from_job stage index must be non-empty")
-    try:
-        stage_index = int(raw_stage_index)
-    except ValueError as err:
-        raise ValueError("continue_from_job stage index must be an integer") from err
-    if stage_index < 0:
-        raise ValueError("continue_from_job stage index must be >= 0")
-    return f"{job_id.strip()}:{stage_index}"
 
 
 class CloudRunCreateResponse(msgspec.Struct, frozen=True):

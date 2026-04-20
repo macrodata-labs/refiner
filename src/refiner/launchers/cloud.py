@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 from refiner.cli.run.modes import (
     CloudAttachContext,
+    attach_mode_override,
     emit_cloud_followup_commands,
     resolve_launcher_attach_mode,
 )
@@ -15,13 +16,11 @@ from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
     CloudRunCreateRequest,
     CloudRuntimeConfig,
-    CloudRuntimeOverrides,
     MacrodataApiError,
     MacrodataClient,
     StagePayload,
     serialize_pipeline_inline,
 )
-from refiner.platform.client.models import parse_continue_selector
 from refiner.platform.manifest import refiner_ref_exists_on_remote
 
 from refiner.job_urls import build_job_tracking_url
@@ -32,6 +31,34 @@ if TYPE_CHECKING:
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
+
+
+def _parse_continue_from_job(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("continue_from_job must be non-empty")
+    if normalized == "infer":
+        return normalized
+    if normalized.count(":") > 1:
+        raise ValueError(
+            "continue_from_job must be JOBID, JOBID:stage_index, or 'infer'"
+        )
+    if ":" not in normalized:
+        return normalized
+    job_id, raw_stage_index = normalized.split(":", 1)
+    if not job_id.strip():
+        raise ValueError("continue_from_job job id must be non-empty")
+    if not raw_stage_index.strip():
+        raise ValueError("continue_from_job stage index must be non-empty")
+    try:
+        stage_index = int(raw_stage_index)
+    except ValueError as err:
+        raise ValueError("continue_from_job stage index must be an integer") from err
+    if stage_index < 0:
+        raise ValueError("continue_from_job stage index must be >= 0")
+    return f"{job_id.strip()}:{stage_index}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +107,7 @@ class CloudLauncher(BaseLauncher):
             cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
-        normalized_continue_from_job = parse_continue_selector(continue_from_job)
+        normalized_continue_from_job = _parse_continue_from_job(continue_from_job)
         if force_continue and normalized_continue_from_job is None:
             raise ValueError("force_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
@@ -88,11 +115,10 @@ class CloudLauncher(BaseLauncher):
         normalized_gpu_type = gpu_type.strip() if gpu_type is not None else None
         if gpu_type is not None and not normalized_gpu_type:
             raise ValueError("gpu_type must be non-empty")
-        if normalized_continue_from_job is None:
-            if gpus_per_worker is not None and normalized_gpu_type is None:
-                raise ValueError("gpu_type is required when gpus_per_worker is set")
-            if normalized_gpu_type is not None and gpus_per_worker is None:
-                raise ValueError("gpus_per_worker is required when gpu_type is set")
+        if gpus_per_worker is not None and normalized_gpu_type is None:
+            raise ValueError("gpu_type is required when gpus_per_worker is set")
+        if normalized_gpu_type is not None and gpus_per_worker is None:
+            raise ValueError("gpus_per_worker is required when gpu_type is set")
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.gpus_per_worker = gpus_per_worker
@@ -217,7 +243,27 @@ class CloudLauncher(BaseLauncher):
                     sync_local_dependencies=self.sync_local_dependencies,
                     secrets=merged_env,
                     continue_from_job=self.continue_from_job,
-                    runtime_overrides=self._runtime_overrides(),
+                    runtime_overrides=(
+                        None
+                        if (
+                            self.runtime_override_num_workers is None
+                            and self.cpus_per_worker is None
+                            and self.mem_mb_per_worker is None
+                            and self.gpus_per_worker is None
+                            and self.gpu_type is None
+                        )
+                        else {
+                            key: value
+                            for key, value in {
+                                "num_workers": self.runtime_override_num_workers,
+                                "cpus_per_worker": self.cpus_per_worker,
+                                "mem_mb_per_worker": self.mem_mb_per_worker,
+                                "gpus_per_worker": self.gpus_per_worker,
+                                "gpu_type": self.gpu_type,
+                            }.items()
+                            if value is not None
+                        }
+                    ),
                     force_continue=self.force_continue,
                 )
             )
@@ -252,7 +298,17 @@ class CloudLauncher(BaseLauncher):
                     force_attach=True,
                 )
                 if attach_rc != 0:
-                    raise SystemExit(attach_rc)
+                    # Explicit attach mode should keep the historical nonzero exit
+                    # contract. Auto attach is best-effort because submission has
+                    # already succeeded and the follow-up commands are enough to
+                    # recover.
+                    if attach_mode_override() == "attach":
+                        raise SystemExit(attach_rc)
+                    print(
+                        "Cloud job submitted, but attach failed. Continue with:",
+                        file=sys.stderr,
+                    )
+                    emit_cloud_followup_commands(context=context, file=sys.stderr)
             except (MacrodataApiError, MacrodataCredentialsError):
                 print(
                     "Cloud job submitted, but attach failed. Continue with:",
@@ -263,23 +319,6 @@ class CloudLauncher(BaseLauncher):
             job_id=resp.job_id,
             stage_index=resp.stage_index,
             status=resp.status,
-        )
-
-    def _runtime_overrides(self) -> CloudRuntimeOverrides | None:
-        if (
-            self.runtime_override_num_workers is None
-            and self.cpus_per_worker is None
-            and self.mem_mb_per_worker is None
-            and self.gpus_per_worker is None
-            and self.gpu_type is None
-        ):
-            return None
-        return CloudRuntimeOverrides(
-            num_workers=self.runtime_override_num_workers,
-            cpus_per_worker=self.cpus_per_worker,
-            mem_mb_per_worker=self.mem_mb_per_worker,
-            gpus_per_worker=self.gpus_per_worker,
-            gpu_type=self.gpu_type,
         )
 
 
