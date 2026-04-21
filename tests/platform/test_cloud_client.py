@@ -124,7 +124,7 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
     resp = client.cloud_submit_job(
         request=CloudRunCreateRequest(
             name="demo-cloud-job",
-            continue_from_job="job-previous:2",
+            continue_from_job="00000000-0000-1000-8000-000000000123:2",
             plan={"stages": [{"name": "stage_0", "steps": []}]},
             stage_payloads=[
                 StagePayload(
@@ -154,7 +154,7 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
     assert captured["timeout_s"] == 30.0
     json_payload = cast(dict[str, object], captured["json_payload"])
     assert json_payload["name"] == "demo-cloud-job"
-    assert json_payload["continue_from_job"] == "job-previous:2"
+    assert json_payload["continue_from_job"] == "00000000-0000-1000-8000-000000000123:2"
     assert json_payload["executor"] == {
         "sync_local_dependencies": False,
     }

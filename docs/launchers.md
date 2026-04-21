@@ -91,8 +91,8 @@ Returned result includes:
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
-- `continue_from_job`: continue from one exact prior job id (`JOBID`), one exact job-and-stage boundary (`JOBID:stage_index`), or `"infer"`. `:stage_index` is optional; when omitted, the control plane uses the last stage in the selected job that has any completed shards.
-- exact `JOBID` selection is scoped to the current workspace; jobs from other workspaces are not eligible continue sources
+- `continue_from_job`: continue from one exact prior job id (`UUID`), one exact job-and-stage boundary (`UUID:stage_index`), or `"infer"`. `:stage_index` is optional; when omitted, the control plane uses the last resumable boundary in the selected job.
+- exact `UUID` selection is scoped to the current workspace; jobs from other workspaces are not eligible continue sources
 - `unsafe_continue`: allow continue when the reused stage boundary no longer matches the current pipeline
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
@@ -101,7 +101,7 @@ Returned result includes:
 
 Fresh cloud launch remains the default. Continue only triggers when you pass `continue_from_job`.
 
-Use an exact prior job id when you already know which failed or canceled job you want to continue. If you omit `:stage_index`, the control plane uses the last stage in that job with any completed shards:
+Use an exact prior job id when you already know which failed or canceled job you want to continue. If you omit `:stage_index`, the control plane uses the last resumable boundary in that job:
 
 ```python
 import refiner as mdr
@@ -116,11 +116,11 @@ result = pipeline.launch_cloud(
     name="cloud-job",
     num_workers=16,
     cpus_per_worker=4,
-    continue_from_job="job_123",
+    continue_from_job="00000000-0000-1000-8000-000000000123",
 )
 ```
 
-Use `JOBID:stage_index` to pin the reused boundary explicitly:
+Use `UUID:stage_index` to pin the reused boundary explicitly:
 
 ```python
 import refiner as mdr
@@ -133,7 +133,7 @@ pipeline = (
 
 result = pipeline.launch_cloud(
     name="cloud-job",
-    continue_from_job="job_123:1",
+    continue_from_job="00000000-0000-1000-8000-000000000123:1",
 )
 ```
 
@@ -160,9 +160,9 @@ Continue behavior notes:
 - continued cloud launches create a new cloud job linked to the prior failed job instead of mutating the old job
 - `continue_from_job="infer"` asks the control plane to resolve one prior job using the current launch name and the current authenticated user
 - for `"infer"`, the control plane only considers cloud-backed jobs when choosing that prior job
-- continue rejects source jobs that are still running, already completed successfully, or have no completed shards to reuse
-- if you omit `:stage_index`, the control plane uses the last stage in the selected job that has any completed shards
-- by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; if they do not, the control plane tells you to either lower the boundary (`JOBID:k-1`) or pass `unsafe_continue=True`
+- continue rejects source jobs that are still running, already completed successfully, or have no completed shards to reuse when the selected continue boundary is stage `0`
+- if you omit `:stage_index`, the control plane uses the last resumable boundary in the selected job
+- by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; runtime sizing changes on reused stages do not require `unsafe_continue`
 - after validation, stages at or before the boundary that are already fully completed are marked `skipped`, and any partially completed boundary stage reruns only its unfinished shards
 - executor/config differences are advisory and do not block continue on their own; cloud submit returns them as warnings
 - continue uses the current launch's requested runtime sizing; the old job only contributes reusable shard completion state

@@ -798,13 +798,13 @@ def test_pipeline_launch_cloud_continue_from_job_posts_submit_request(
         name="demo cloud",
         num_workers=3,
         cpus_per_worker=2,
-        continue_from_job=" job-previous ",
+        continue_from_job=" 00000000-0000-1000-8000-000000000123 ",
     )
 
     assert result.job_id == "job-123"
     assert result.stage_index == 1
     request = cast(CloudRunCreateRequest, captured["submit_request"])
-    assert request.continue_from_job == "job-previous"
+    assert request.continue_from_job == "00000000-0000-1000-8000-000000000123"
     assert request.name == "demo cloud"
     assert request.manifest == {"version": 1}
     assert request.plan is not None
@@ -829,11 +829,11 @@ def test_pipeline_launch_cloud_continue_from_job_stage_posts_submit_request(
 
     read_jsonl("input.jsonl").launch_cloud(
         name="demo cloud",
-        continue_from_job="job-previous:2",
+        continue_from_job="00000000-0000-1000-8000-000000000123:2",
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
-    assert request.continue_from_job == "job-previous:2"
+    assert request.continue_from_job == "00000000-0000-1000-8000-000000000123:2"
     assert request.stage_payloads is not None
     assert request.stage_payloads[0].runtime.num_workers == 1
 
@@ -867,7 +867,7 @@ def test_pipeline_launch_cloud_continue_uses_current_plan_runtime(monkeypatch) -
 
     read_jsonl("input.jsonl").launch_cloud(
         name="demo cloud",
-        continue_from_job="job-previous",
+        continue_from_job="00000000-0000-1000-8000-000000000123",
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
@@ -886,7 +886,7 @@ def test_pipeline_launch_cloud_continue_requires_gpu_type_when_gpus_requested(
     ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
-            continue_from_job="job-previous",
+            continue_from_job="00000000-0000-1000-8000-000000000123",
             gpus_per_worker=1,
         )
 
@@ -925,7 +925,7 @@ def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
     read_jsonl("input.jsonl").launch_cloud(
         name="demo cloud",
         num_workers=4,
-        continue_from_job="job-previous",
+        continue_from_job="00000000-0000-1000-8000-000000000123",
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
@@ -944,7 +944,7 @@ def test_pipeline_launch_cloud_continue_rejects_invalid_stage_index(
     ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
-            continue_from_job="job-1:not-an-int",
+            continue_from_job="00000000-0000-1000-8000-000000000123:not-an-int",
         )
 
 
@@ -958,7 +958,7 @@ def test_pipeline_launch_cloud_continue_rejects_empty_stage_index(
     ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
-            continue_from_job="job-1:",
+            continue_from_job="00000000-0000-1000-8000-000000000123:",
         )
 
 
@@ -969,11 +969,11 @@ def test_pipeline_launch_cloud_continue_rejects_multiple_colons(
 
     with pytest.raises(
         ValueError,
-        match="continue_from_job must be JOBID, JOBID:stage_index, or 'infer'",
+        match="continue_from_job must be UUID, UUID:stage_index, or 'infer'",
     ):
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
-            continue_from_job="job-1:2:3",
+            continue_from_job="00000000-0000-1000-8000-000000000123:2:3",
         )
 
 
@@ -998,7 +998,7 @@ def test_pipeline_launch_cloud_continue_forwards_unsafe_continue(monkeypatch) ->
 
     read_jsonl("input.jsonl").launch_cloud(
         name="demo cloud",
-        continue_from_job="job-previous",
+        continue_from_job="00000000-0000-1000-8000-000000000123",
         unsafe_continue=True,
     )
 
@@ -1044,4 +1044,16 @@ def test_pipeline_launch_cloud_continue_rejects_blank_selector(monkeypatch) -> N
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
             continue_from_job="   ",
+        )
+
+
+def test_pipeline_launch_cloud_continue_rejects_non_uuid_selector(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(
+        ValueError, match="continue_from_job must be UUID, UUID:stage_index, or 'infer'"
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="job-previous",
         )

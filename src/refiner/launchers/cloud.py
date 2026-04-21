@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import warnings
 from dataclasses import dataclass
@@ -32,6 +33,10 @@ if TYPE_CHECKING:
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
+_UUID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def _parse_continue_from_job(value: str | None) -> str | None:
@@ -43,14 +48,19 @@ def _parse_continue_from_job(value: str | None) -> str | None:
     if normalized == "infer":
         return normalized
     if normalized.count(":") > 1:
-        raise ValueError(
-            "continue_from_job must be JOBID, JOBID:stage_index, or 'infer'"
-        )
+        raise ValueError("continue_from_job must be UUID, UUID:stage_index, or 'infer'")
     if ":" not in normalized:
+        if not _UUID_PATTERN.fullmatch(normalized):
+            raise ValueError(
+                "continue_from_job must be UUID, UUID:stage_index, or 'infer'"
+            )
         return normalized
     job_id, raw_stage_index = normalized.split(":", 1)
     if not job_id.strip():
         raise ValueError("continue_from_job job id must be non-empty")
+    normalized_job_id = job_id.strip()
+    if not _UUID_PATTERN.fullmatch(normalized_job_id):
+        raise ValueError("continue_from_job job id must be a UUID")
     if not raw_stage_index.strip():
         raise ValueError("continue_from_job stage index must be non-empty")
     try:
@@ -59,7 +69,7 @@ def _parse_continue_from_job(value: str | None) -> str | None:
         raise ValueError("continue_from_job stage index must be an integer") from err
     if stage_index < 0:
         raise ValueError("continue_from_job stage index must be >= 0")
-    return f"{job_id.strip()}:{stage_index}"
+    return f"{normalized_job_id}:{stage_index}"
 
 
 @dataclass(frozen=True, slots=True)
