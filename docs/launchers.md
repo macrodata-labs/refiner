@@ -158,6 +158,7 @@ Continue behavior notes:
 - continue never triggers from the output path or job name alone; you must opt in with `continue_from_job`
 - continued cloud launches create a new cloud job linked to the prior failed job instead of mutating the old job
 - `continue_from_job="infer"` asks the control plane to resolve one prior job using the current launch name and the current authenticated user
+- for `"infer"`, the control plane only considers cloud-backed jobs when choosing that prior job
 - continue rejects source jobs that are still running, already completed successfully, or have no completed shards to reuse
 - if you omit `:stage_index`, the control plane uses the last stage in the selected job that has any completed shards
 - by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; if they do not, the control plane tells you to either lower the boundary (`JOBID:k-1`) or pass `unsafe_continue=True`
