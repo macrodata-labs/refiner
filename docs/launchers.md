@@ -92,6 +92,7 @@ Returned result includes:
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
 - `continue_from_job`: continue from one exact prior job id (`JOBID`), one exact job-and-stage boundary (`JOBID:stage_index`), or `"infer"`. `:stage_index` is optional; when omitted, the control plane uses the last stage in the selected job that has any completed shards.
+- exact `JOBID` selection is scoped to the current workspace; jobs from other workspaces are not eligible continue sources
 - `unsafe_continue`: allow continue when the reused stage boundary no longer matches the current pipeline
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
