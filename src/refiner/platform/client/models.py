@@ -45,6 +45,7 @@ class CreateJobResponse(msgspec.Struct, frozen=True):
     job_id: str
     stage_index: int
     workspace_slug: str | None = None
+    warnings: list[str] = msgspec.field(default_factory=list)
 
     @classmethod
     def from_envelope(cls, envelope: CreateJobEnvelope) -> CreateJobResponse:
@@ -57,6 +58,7 @@ class CreateJobResponse(msgspec.Struct, frozen=True):
             workspace_slug=workspace_slug.strip()
             if workspace_slug and workspace_slug.strip()
             else None,
+            warnings=[],
         )
 
 
@@ -205,3 +207,4 @@ class CloudRunCreateResponse(msgspec.Struct, frozen=True):
     stage_index: int
     status: str
     workspace_slug: str | None = msgspec.field(name="workspaceSlug", default=None)
+    warnings: list[str] = msgspec.field(default_factory=list)

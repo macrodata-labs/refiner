@@ -164,7 +164,7 @@ Continue behavior notes:
 - if you omit `:stage_index`, the control plane uses the last stage in the selected job that has any completed shards
 - by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; if they do not, the control plane tells you to either lower the boundary (`JOBID:k-1`) or pass `unsafe_continue=True`
 - after validation, stages at or before the boundary that are already fully completed are marked `skipped`, and any partially completed boundary stage reruns only its unfinished shards
-- executor/config differences are advisory and do not block continue on their own
+- executor/config differences are advisory and do not block continue on their own; cloud submit returns them as warnings
 - continue uses the current launch's requested runtime sizing; the old job only contributes reusable shard completion state
 
 ### Launched writer notes

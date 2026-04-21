@@ -37,6 +37,7 @@ def _stub_cloud_submit(
                 stage_index = 1 if request.continue_from_job is not None else 0
                 status = "queued"
                 workspace_slug = None
+                warnings: list[str] = []
 
             return _Resp()
 
@@ -95,6 +96,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert result.job_id == "job-123"
     assert result.stage_index == 0
     assert result.status == "queued"
+    assert result.warnings == []
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.name == "demo cloud"
@@ -1002,6 +1004,37 @@ def test_pipeline_launch_cloud_continue_forwards_unsafe_continue(monkeypatch) ->
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.unsafe_continue is True
+
+
+def test_pipeline_launch_cloud_surfaces_submit_warnings(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    class WarningClient:
+        def __init__(self):
+            self.base_url = "https://example.com"
+
+        def cloud_submit_job(self, *, request):
+            captured["submit_request"] = request
+
+            class _Resp:
+                job_id = "job-123"
+                stage_index = 0
+                status = "queued"
+                workspace_slug = None
+                warnings = ["Current executor settings differ"]
+
+            return _Resp()
+
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", WarningClient)
+
+    with pytest.warns(UserWarning, match="Current executor settings differ"):
+        result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert result.warnings == ["Current executor settings differ"]
 
 
 def test_pipeline_launch_cloud_continue_rejects_blank_selector(monkeypatch) -> None:

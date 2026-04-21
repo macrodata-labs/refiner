@@ -48,6 +48,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
             "stage_index": 0,
             "status": "queued",
             "workspaceSlug": "macrodata",
+            "warnings": ["warning 1"],
         }
 
     monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
@@ -59,6 +60,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert resp.stage_index == 0
     assert resp.status == "queued"
     assert resp.workspace_slug == "macrodata"
+    assert resp.warnings == ["warning 1"]
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/cloud/runs"
     assert captured["base_url"] == "https://example.com"
@@ -113,6 +115,7 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
             "stage_index": 1,
             "status": "queued",
             "workspaceSlug": "macrodata",
+            "warnings": ["warning 2"],
         }
 
     monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
@@ -145,6 +148,7 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
     assert resp.stage_index == 1
     assert resp.status == "queued"
     assert resp.workspace_slug == "macrodata"
+    assert resp.warnings == ["warning 2"]
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/cloud/runs"
     assert captured["timeout_s"] == 30.0
