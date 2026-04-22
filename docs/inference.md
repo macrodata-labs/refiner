@@ -81,11 +81,12 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 
 #### Cold-Starts
 Because Refiner Cloud may start VLLM on fresh hardware, startup can take 2 to 20 minutes depending on model size, weight downloads, and torch initialization. To reduce this, Refiner Cloud prewarms a small set of commonly used models:
-- `google/gemma-4-26B-A4B-it`
-- `Qwen/Qwen3-VL-30B-A3B-Instruct`
-- `Qwen/Qwen3-VL-8B-Instruct`
+- `Qwen/Qwen3.5-9B`
+- `google/gemma-4-E4B-it`
+- `rednote-hilab/dots.mocr`
+- `Qwen/Qwen3.5-4B`
 
-The two Qwen vision-language models should currently be launched with a single worker because multi-worker cold starts can hit compilation race conditions.
+The OCR example should currently be launched with a single worker because it starts both Dots OCR and Qwen VLM services for the same job.
 
 Other models can still be used, but the first startup is usually slower.
 
@@ -96,3 +97,4 @@ At the moment, VLLM deployments run on `1x H100`, which limits the model sizes t
 
 - Direct endpoint example: [examples/inference_endpoint.py](/Users/hynky/.codex/worktrees/ab9a/refiner/examples/inference_endpoint.py)
 - VLLM-backed example: [examples/inference_vllm.py](/Users/hynky/.codex/worktrees/ab9a/refiner/examples/inference_vllm.py)
+- PDF OCR example: [examples/ocr_dots_pdf.py](/Users/hynky/.codex/worktrees/ab9a/refiner/examples/ocr_dots_pdf.py)
