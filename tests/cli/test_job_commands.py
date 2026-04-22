@@ -61,6 +61,9 @@ class _FakeClient:
             "job": {
                 "id": job_id,
                 "name": "cloud pipeline",
+                "attemptNumber": 2,
+                "continuedFromJobId": "job-0",
+                "rootJobId": "job-root",
                 "status": "running",
                 "executorKind": "cloud",
                 "startedByUsername": "alex",
@@ -292,6 +295,7 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "Job: cloud pipeline  ID: job-1  URL:" in out.out
     assert "Available: manifest, logs, metrics" in out.out
     assert "Status: running  Kind: cloud  Cost: $1.25" in out.out
+    assert "Attempt: 2  Continued from job: job-0" in out.out
     assert "Workers:" not in out.out
     assert "Stages" in out.out
     assert "Steps" in out.out
@@ -327,6 +331,28 @@ def test_jobs_get_plain_output_shows_rundir_for_local_jobs(monkeypatch, capsys) 
 
     assert rc == 0
     assert "Rundir: /tmp/refiner/runs/job-1" in out.out
+
+
+def test_jobs_get_plain_output_hides_lineage_for_standalone_jobs(
+    monkeypatch, capsys
+) -> None:
+    class _StandaloneClient(_FakeClient):
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            job = cast(dict[str, object], payload["job"])
+            job["attemptNumber"] = 1
+            job["continuedFromJobId"] = None
+            return payload
+
+    _patch_job_client(monkeypatch, lambda: _StandaloneClient())
+    monkeypatch.setattr("refiner.cli.jobs.common.stdout_is_interactive", lambda: False)
+
+    rc = jobs.cmd_jobs_get(Namespace(job_id="job-1", json=False))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "Continued from job:" not in out.out
+    assert "Attempt:" not in out.out
 
 
 def test_jobs_get_colors_status_for_interactive_terminals(monkeypatch, capsys) -> None:

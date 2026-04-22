@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -267,7 +266,7 @@ class CloudLauncher(BaseLauncher):
         )
         response_warnings = list(getattr(resp, "warnings", []))
         for warning_message in response_warnings:
-            warnings.warn(warning_message, stacklevel=2)
+            print(f"Warning: {warning_message}", file=sys.stderr)
         context = CloudAttachContext(
             job_id=resp.job_id,
             job_name=self.name,

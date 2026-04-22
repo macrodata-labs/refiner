@@ -1031,8 +1031,7 @@ def test_pipeline_launch_cloud_surfaces_submit_warnings(monkeypatch) -> None:
 
     monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", WarningClient)
 
-    with pytest.warns(UserWarning, match="Current executor settings differ"):
-        result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
     assert result.warnings == ["Current executor settings differ"]
 
