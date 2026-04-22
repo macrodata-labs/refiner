@@ -354,6 +354,8 @@ class RefinerPipeline:
         sync_local_dependencies: bool = True,
         secrets: Mapping[str, object | None] | None = None,
         env: Mapping[str, object | None] | None = None,
+        continue_from_job: str | None = None,
+        unsafe_continue: bool = False,
     ) -> "CloudLaunchResult":
         """Launch the pipeline on Macrodata Cloud.
 
@@ -370,6 +372,10 @@ class RefinerPipeline:
             env: Extra environment variables to mount inside the cloud image without
                 treating their values as redaction targets. `None` values are loaded
                 from the submitting environment.
+            continue_from_job: Explicit continue selector. Accepts one prior cloud
+                job id, one prior job id plus `:stage_index`, or `"infer"`.
+            unsafe_continue: Allow continue when the reused stage boundary is not
+                fully compatible with the current pipeline.
         """
         from refiner.launchers.cloud import CloudLauncher
 
@@ -384,6 +390,8 @@ class RefinerPipeline:
             sync_local_dependencies=sync_local_dependencies,
             secrets=dict(secrets) if secrets is not None else None,
             env=dict(env) if env is not None else None,
+            continue_from_job=continue_from_job,
+            unsafe_continue=unsafe_continue,
         )
         return launcher.launch()
 

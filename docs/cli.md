@@ -252,7 +252,7 @@ Options:
 macrodata jobs cancel <job_id>
 ```
 
-Every job-inspection command supports `--json`. That mode prints the raw API response so scripts and agentic tools can consume the exact payload returned by Macrodata.
+Most job commands support `--json`. That mode prints the raw API response so scripts and agentic tools can consume the exact payload returned by Macrodata. `macrodata jobs attach` is the current exception.
 
 ## Notes
 

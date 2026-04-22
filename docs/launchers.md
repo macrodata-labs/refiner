@@ -52,10 +52,6 @@ Returned stats include:
 - on interactive terminals, Refiner redraws a pinned terminal header with job metadata, live runtime, and the latest worker log lines beneath it
 - on non-interactive output, Refiner prints plain prefixed log lines
 
-## Internal Notes
-
-- the local launcher keeps worker result JSON on `stdout` reserved for launcher-to-worker control flow and suppresses that final payload from the live log pane
-
 ## Cloud Launcher
 
 Use `launch_cloud(...)` to submit the compiled pipeline to Macrodata Cloud.
@@ -95,8 +91,81 @@ Returned result includes:
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
+- `continue_from_job`: continue from one exact prior job id (`UUID`), one exact job-and-stage boundary (`UUID:stage_index`), or `"infer"`. `:stage_index` is optional; when omitted, the control plane uses the last resumable boundary in the selected job.
+- exact `UUID` selection is scoped to the current workspace; jobs from other workspaces are not eligible continue sources
+- `unsafe_continue`: allow continue when the reused stage boundary no longer matches the current pipeline
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
+
+### Continuing cloud work
+
+Fresh cloud launch remains the default. Continue only triggers when you pass `continue_from_job`.
+
+Use an exact prior job id when you already know which failed or canceled job you want to continue. If you omit `:stage_index`, the control plane uses the last resumable boundary in that job:
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_jsonl("input/*.jsonl")
+    .map(lambda row: {"x": row["x"]})
+    .write_parquet("hf://datasets/macrodata/my-output")
+)
+
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    num_workers=16,
+    cpus_per_worker=4,
+    continue_from_job="00000000-0000-1000-8000-000000000123",
+)
+```
+
+Use `UUID:stage_index` to pin the reused boundary explicitly:
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_jsonl("input/*.jsonl")
+    .map(lambda row: {"x": row["x"]})
+    .write_parquet("hf://datasets/macrodata/my-output")
+)
+
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    continue_from_job="00000000-0000-1000-8000-000000000123:1",
+)
+```
+
+Use `"infer"` to look up your latest job in the current workspace with the same name:
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_jsonl("input/*.jsonl")
+    .map(lambda row: {"x": row["x"]})
+    .write_parquet("hf://datasets/macrodata/my-output")
+)
+
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    continue_from_job="infer",
+)
+```
+
+Continue behavior notes:
+
+- continue never triggers from the output path or job name alone; you must opt in with `continue_from_job`
+- continued cloud launches create a new cloud job linked to the prior failed job instead of mutating the old job
+- `continue_from_job="infer"` asks the control plane to resolve one prior job using the current launch name and the current authenticated user
+- for `"infer"`, the control plane only considers cloud-backed jobs when choosing that prior job
+- continue rejects source jobs that are still running, already completed successfully, or have no completed shards to reuse when the selected continue boundary is stage `0`
+- if you omit `:stage_index`, the control plane uses the last resumable boundary in the selected job
+- by default, the current normalized stage graph and manifest must match the selected source job through that reuse boundary; runtime sizing changes on reused stages do not require `unsafe_continue`
+- after validation, stages at or before the boundary that are already fully completed are marked `skipped`, and any partially completed boundary stage reruns only its unfinished shards
+- executor/config differences are advisory and do not block continue on their own; cloud submit returns them as warnings
+- continue uses the current launch's requested runtime sizing; the old job only contributes reusable shard completion state
 
 ### Launched writer notes
 
@@ -116,3 +185,7 @@ See [Auth](auth.md) for credential lookup order. In practice:
 - [CLI](cli.md)
 - [Observability](observability.md)
 - [Robotics](robotics.md)
+
+## Internal Notes
+
+- the local launcher keeps worker result JSON on `stdout` reserved for launcher-to-worker control flow and suppresses that final payload from the live log pane

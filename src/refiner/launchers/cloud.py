@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -31,6 +32,43 @@ if TYPE_CHECKING:
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
+_UUID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _parse_continue_from_job(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("continue_from_job must be non-empty")
+    if normalized == "infer":
+        return normalized
+    if normalized.count(":") > 1:
+        raise ValueError("continue_from_job must be UUID, UUID:stage_index, or 'infer'")
+    if ":" not in normalized:
+        if not _UUID_PATTERN.fullmatch(normalized):
+            raise ValueError(
+                "continue_from_job must be UUID, UUID:stage_index, or 'infer'"
+            )
+        return normalized
+    job_id, raw_stage_index = normalized.split(":", 1)
+    if not job_id.strip():
+        raise ValueError("continue_from_job job id must be non-empty")
+    normalized_job_id = job_id.strip()
+    if not _UUID_PATTERN.fullmatch(normalized_job_id):
+        raise ValueError("continue_from_job job id must be a UUID")
+    if not raw_stage_index.strip():
+        raise ValueError("continue_from_job stage index must be non-empty")
+    try:
+        stage_index = int(raw_stage_index)
+    except ValueError as err:
+        raise ValueError("continue_from_job stage index must be an integer") from err
+    if stage_index < 0:
+        raise ValueError("continue_from_job stage index must be >= 0")
+    return f"{normalized_job_id}:{stage_index}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +76,7 @@ class CloudLaunchResult:
     job_id: str
     stage_index: int
     status: str
+    warnings: list[str]
 
 
 class CloudLauncher(BaseLauncher):
@@ -69,6 +108,8 @@ class CloudLauncher(BaseLauncher):
         sync_local_dependencies: bool = True,
         secrets: dict[str, object | None] | None = None,
         env: dict[str, object | None] | None = None,
+        continue_from_job: str | None = None,
+        unsafe_continue: bool = False,
     ):
         super().__init__(
             pipeline=pipeline,
@@ -77,6 +118,9 @@ class CloudLauncher(BaseLauncher):
             cpus_per_worker=cpus_per_worker,
             gpus_per_worker=gpus_per_worker,
         )
+        normalized_continue_from_job = _parse_continue_from_job(continue_from_job)
+        if unsafe_continue and normalized_continue_from_job is None:
+            raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
         if gpus_per_worker is not None and gpus_per_worker <= 0:
@@ -94,6 +138,8 @@ class CloudLauncher(BaseLauncher):
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
+        self.continue_from_job = normalized_continue_from_job
+        self.unsafe_continue = unsafe_continue
 
     @staticmethod
     def _resolve_env_values(
@@ -201,6 +247,8 @@ class CloudLauncher(BaseLauncher):
             manifest=manifest,
             sync_local_dependencies=self.sync_local_dependencies,
             secrets=self._merged_env(resolved_secrets, resolved_env),
+            continue_from_job=self.continue_from_job,
+            unsafe_continue=self.unsafe_continue,
         )
         try:
             resp = client.cloud_submit_job(request=request)
@@ -209,11 +257,16 @@ class CloudLauncher(BaseLauncher):
                 "Your Macrodata API key is invalid. Run `macrodata login` "
                 "or set MACRODATA_API_KEY with a valid key."
             ) from err
+        except MacrodataApiError as err:
+            raise SystemExit(err.message) from err
         tracking_url = build_job_tracking_url(
             client=client,
             job_id=resp.job_id,
             workspace_slug=resp.workspace_slug,
         )
+        response_warnings = list(getattr(resp, "warnings", []))
+        for warning_message in response_warnings:
+            print(f"Warning: {warning_message}", file=sys.stderr)
         context = CloudAttachContext(
             job_id=resp.job_id,
             job_name=self.name,
@@ -246,6 +299,7 @@ class CloudLauncher(BaseLauncher):
             job_id=resp.job_id,
             stage_index=resp.stage_index,
             status=resp.status,
+            warnings=response_warnings,
         )
 
 

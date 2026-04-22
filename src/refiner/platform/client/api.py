@@ -302,6 +302,7 @@ class MacrodataClient:
             path="/api/cloud/runs",
             response_type=CloudRunCreateResponse,
             json_payload=request.to_dict(),
+            timeout_s=30.0,
         )
 
     def cli_list_jobs(

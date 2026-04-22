@@ -48,6 +48,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
             "stage_index": 0,
             "status": "queued",
             "workspaceSlug": "macrodata",
+            "warnings": ["warning 1"],
         }
 
     monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
@@ -59,14 +60,14 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert resp.stage_index == 0
     assert resp.status == "queued"
     assert resp.workspace_slug == "macrodata"
+    assert resp.warnings == ["warning 1"]
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/cloud/runs"
     assert captured["base_url"] == "https://example.com"
     assert "http_client" in captured
+    assert captured["timeout_s"] == 30.0
     json_payload = cast(dict[str, object], captured["json_payload"])
-    assert json_payload["executor"] == {
-        "sync_local_dependencies": True,
-    }
+    assert json_payload["executor"] == {"sync_local_dependencies": True}
     stage_payloads = cast(list[dict[str, object]], json_payload["stage_payloads"])
     assert stage_payloads == [
         {
@@ -102,3 +103,73 @@ def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -
         assert "job_id" in str(err)
     else:  # pragma: no cover
         raise AssertionError("expected MacrodataApiError")
+
+
+def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "job_id": "job-2",
+            "stage_index": 1,
+            "status": "queued",
+            "workspaceSlug": "macrodata",
+            "warnings": ["warning 2"],
+        }
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    resp = client.cloud_submit_job(
+        request=CloudRunCreateRequest(
+            name="demo-cloud-job",
+            continue_from_job="00000000-0000-1000-8000-000000000123:2",
+            plan={"stages": [{"name": "stage_0", "steps": []}]},
+            stage_payloads=[
+                StagePayload(
+                    stage_index=0,
+                    pipeline_payload=CloudPipelinePayload(
+                        format="cloudpickle",
+                        bytes_b64="AQID",
+                        sha256="abc123",
+                        size_bytes=3,
+                    ),
+                    runtime=CloudRuntimeConfig(num_workers=1),
+                )
+            ],
+            manifest={"version": 1},
+            sync_local_dependencies=False,
+            unsafe_continue=True,
+        )
+    )
+
+    assert resp.job_id == "job-2"
+    assert resp.stage_index == 1
+    assert resp.status == "queued"
+    assert resp.workspace_slug == "macrodata"
+    assert resp.warnings == ["warning 2"]
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/cloud/runs"
+    assert captured["timeout_s"] == 30.0
+    json_payload = cast(dict[str, object], captured["json_payload"])
+    assert json_payload["name"] == "demo-cloud-job"
+    assert json_payload["continue_from_job"] == "00000000-0000-1000-8000-000000000123:2"
+    assert json_payload["executor"] == {
+        "sync_local_dependencies": False,
+    }
+    assert json_payload["unsafe_continue"] is True
+    assert json_payload["plan"] == {"stages": [{"name": "stage_0", "steps": []}]}
+    assert json_payload["manifest"] == {"version": 1}
+    assert json_payload["stage_payloads"] == [
+        {
+            "stage_index": 0,
+            "pipeline_payload": {
+                "format": "cloudpickle",
+                "bytes_b64": "AQID",
+                "sha256": "abc123",
+                "size_bytes": 3,
+            },
+            "runtime": {"num_workers": 1},
+        }
+    ]

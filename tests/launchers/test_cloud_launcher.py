@@ -30,13 +30,14 @@ def _stub_cloud_submit(
         def cloud_submit_job(self, *, request):
             if fail_on_submit:
                 raise AssertionError("should not submit")
-            captured["request"] = request
+            captured["submit_request"] = request
 
             class _Resp:
                 job_id = "job-123"
-                stage_index = 0
+                stage_index = 1 if request.continue_from_job is not None else 0
                 status = "queued"
                 workspace_slug = None
+                warnings: list[str] = []
 
             return _Resp()
 
@@ -95,8 +96,9 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert result.job_id == "job-123"
     assert result.stage_index == 0
     assert result.status == "queued"
+    assert result.warnings == []
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.name == "demo cloud"
     assert request.sync_local_dependencies is True
     assert request.plan["stages"][0]["name"] == "stage_0"
@@ -108,6 +110,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert len(request.stage_payloads) == 1
     assert request.stage_payloads[0].stage_index == 0
     assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
+    assert request.stage_payloads[0].runtime is not None
     assert request.stage_payloads[0].runtime.num_workers == 3
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
@@ -178,7 +181,7 @@ def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> No
     pipeline = read_jsonl("input.jsonl")
     pipeline.launch_cloud(name="demo cloud", sync_local_dependencies=False)
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.sync_local_dependencies is False
 
 
@@ -196,7 +199,7 @@ def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
         secrets={"OPENAI_API_KEY": None, "MODEL_NAME": "gpt-5"},
     )
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.secrets == {
         "OPENAI_API_KEY": "env-secret",
         "MODEL_NAME": "gpt-5",
@@ -224,7 +227,7 @@ def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> No
         env={"MODEL_NAME": env_value},
     )
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.secrets == {
         "OPENAI_API_KEY": "super-secret-value",
         "MODEL_NAME": "plain-env-value",
@@ -277,7 +280,7 @@ def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(
     )
     pipeline.launch_cloud(name="demo cloud", secrets={"OPENAI_API_KEY": secret})
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
     assert secret not in request.plan["stages"][0]["steps"][1]["args"]["fn"]
     assert request.manifest is not None
@@ -417,7 +420,12 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
 
     request = cast(CloudRunCreateRequest, captured["request"])
     assert [payload.stage_index for payload in request.stage_payloads] == [0, 1]
-    assert [payload.runtime.num_workers for payload in request.stage_payloads] == [2, 5]
+    runtimes = [payload.runtime for payload in request.stage_payloads]
+    assert all(runtime is not None for runtime in runtimes)
+    assert [runtime.num_workers for runtime in runtimes if runtime is not None] == [
+        2,
+        5,
+    ]
     assert (
         request.stage_payloads[0].pipeline_payload.sha256
         != request.stage_payloads[1].pipeline_payload.sha256
@@ -441,7 +449,7 @@ def test_pipeline_launch_cloud_interactive_ref_fallback_accepts(monkeypatch) -> 
 
     read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     manifest = cast(dict[str, object], request.manifest)
     environment = cast(dict[str, object], manifest["environment"])
     assert environment["refiner_ref"] is None
@@ -487,7 +495,7 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_env_override(
 
     read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     manifest = cast(dict[str, object], request.manifest)
     environment = cast(dict[str, object], manifest["environment"])
     assert environment["refiner_ref"] is None
@@ -567,7 +575,7 @@ def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
     assert captured["force_attach"] is True
 
 
-def test_pipeline_launch_cloud_explicit_attach_exits_nonzero_when_remote_job_fails(
+def test_pipeline_launch_cloud_explicit_attach_nonzero_exits(
     monkeypatch,
 ) -> None:
     _stub_cloud_submit(monkeypatch)
@@ -576,13 +584,20 @@ def test_pipeline_launch_cloud_explicit_attach_exits_nonzero_when_remote_job_fai
         lambda ref: True,
     )
     monkeypatch.setenv("REFINER_ATTACH", "attach")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("refiner.cli.run.cloud.attach_to_cloud_job", lambda **_: 1)
     monkeypatch.setattr(
-        "refiner.cli.run.cloud.attach_to_cloud_job",
-        lambda **_: 1,
+        "refiner.launchers.cloud.emit_cloud_followup_commands",
+        lambda *, context, file=None: captured.update(
+            {"job_id": context.job_id, "file": file}
+        ),
     )
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit) as err:
         read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert err.value.code == 1
+    assert captured == {}
 
 
 def test_pipeline_launch_cloud_attach_failure_prints_fallback(
@@ -664,7 +679,7 @@ def test_pipeline_launch_cloud_defaults_to_auto_attach_when_interactive(
     assert captured["force_attach"] is True
 
 
-def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_does_not_raise_without_override(
+def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_returns_job(
     monkeypatch,
 ) -> None:
     _stub_cloud_submit(monkeypatch)
@@ -674,10 +689,7 @@ def test_pipeline_launch_cloud_interactive_auto_attach_nonzero_does_not_raise_wi
     )
     monkeypatch.delenv("REFINER_ATTACH", raising=False)
     monkeypatch.setattr("refiner.launchers.cloud.stdout_is_interactive", lambda: True)
-    monkeypatch.setattr(
-        "refiner.cli.run.cloud.attach_to_cloud_job",
-        lambda **_: 1,
-    )
+    monkeypatch.setattr("refiner.cli.run.cloud.attach_to_cloud_job", lambda **_: 1)
 
     result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
@@ -723,7 +735,7 @@ def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
         gpu_type="h100",
     )
 
-    request = cast(CloudRunCreateRequest, captured["request"])
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.plan["stages"][0]["cpus_per_worker"] == 4
     assert request.plan["stages"][0]["memory_mb_per_worker"] == 8192
     assert request.plan["stages"][0]["gpus_per_worker"] == 1
@@ -732,14 +744,18 @@ def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
     assert "memory_mb_per_worker" not in request.plan["stages"][1]
     assert "gpus_per_worker" not in request.plan["stages"][1]
     assert "gpu_type" not in request.plan["stages"][1]
-    assert request.stage_payloads[0].runtime.cpus_per_worker == 4
-    assert request.stage_payloads[0].runtime.mem_mb_per_worker == 8192
-    assert request.stage_payloads[0].runtime.gpus_per_worker == 1
-    assert request.stage_payloads[0].runtime.gpu_type == "h100"
-    assert request.stage_payloads[1].runtime.cpus_per_worker is None
-    assert request.stage_payloads[1].runtime.mem_mb_per_worker is None
-    assert request.stage_payloads[1].runtime.gpus_per_worker is None
-    assert request.stage_payloads[1].runtime.gpu_type is None
+    first_runtime = request.stage_payloads[0].runtime
+    second_runtime = request.stage_payloads[1].runtime
+    assert first_runtime is not None
+    assert second_runtime is not None
+    assert first_runtime.cpus_per_worker == 4
+    assert first_runtime.mem_mb_per_worker == 8192
+    assert first_runtime.gpus_per_worker == 1
+    assert first_runtime.gpu_type == "h100"
+    assert second_runtime.cpus_per_worker is None
+    assert second_runtime.mem_mb_per_worker is None
+    assert second_runtime.gpus_per_worker is None
+    assert second_runtime.gpu_type is None
 
 
 def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
@@ -767,3 +783,276 @@ def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
 
     assert result.job_id == "job-123"
     assert "attach job-123" in out.out
+
+
+def test_pipeline_launch_cloud_continue_from_job_posts_submit_request(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, manifest={"version": 1})
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    result = read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        num_workers=3,
+        cpus_per_worker=2,
+        continue_from_job=" 00000000-0000-1000-8000-000000000123 ",
+    )
+
+    assert result.job_id == "job-123"
+    assert result.stage_index == 1
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.continue_from_job == "00000000-0000-1000-8000-000000000123"
+    assert request.name == "demo cloud"
+    assert request.manifest == {"version": 1}
+    assert request.plan is not None
+    assert request.plan["stages"][0]["requested_num_workers"] == 3
+    assert request.plan["stages"][0]["cpus_per_worker"] == 2
+    assert request.stage_payloads is not None
+    assert request.stage_payloads[0].stage_index == 0
+    assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
+    assert request.stage_payloads[0].runtime.num_workers == 3
+    assert request.stage_payloads[0].runtime.cpus_per_worker == 2
+    assert request.sync_local_dependencies is True
+
+
+def test_pipeline_launch_cloud_continue_from_job_stage_posts_submit_request(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        continue_from_job="00000000-0000-1000-8000-000000000123:2",
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.continue_from_job == "00000000-0000-1000-8000-000000000123:2"
+    assert request.stage_payloads is not None
+    assert request.stage_payloads[0].runtime.num_workers == 1
+
+
+def test_pipeline_launch_cloud_continue_from_job_infer_posts_submit_request(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        continue_from_job="infer",
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.continue_from_job == "infer"
+    assert request.stage_payloads is not None
+    assert request.stage_payloads[0].runtime.num_workers == 1
+
+
+def test_pipeline_launch_cloud_continue_uses_current_plan_runtime(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        continue_from_job="00000000-0000-1000-8000-000000000123",
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.plan is not None
+    assert request.plan["stages"][0]["requested_num_workers"] == 1
+
+
+def test_pipeline_launch_cloud_continue_requires_gpu_type_when_gpus_requested(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(
+        ValueError,
+        match="gpu_type is required when gpus_per_worker is set",
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="00000000-0000-1000-8000-000000000123",
+            gpus_per_worker=1,
+        )
+
+
+def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    stage_zero = read_jsonl("input-a.jsonl")
+    reducer_stage = read_jsonl("input-b.jsonl")
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.CloudLauncher._planned_stages",
+        lambda self: [
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=stage_zero,
+                compute=StageComputeRequirements(num_workers=self.num_workers),
+            ),
+            PlannedStage(
+                index=1,
+                name="stage_1",
+                pipeline=reducer_stage,
+                compute=StageComputeRequirements(
+                    num_workers=1,
+                    inherit_launcher_resources=False,
+                ),
+            ),
+        ],
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        num_workers=4,
+        continue_from_job="00000000-0000-1000-8000-000000000123",
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.plan is not None
+    assert request.plan["stages"][0]["requested_num_workers"] == 4
+    assert request.plan["stages"][1]["requested_num_workers"] == 1
+
+
+def test_pipeline_launch_cloud_continue_rejects_invalid_stage_index(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(
+        ValueError, match="continue_from_job stage index must be an integer"
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="00000000-0000-1000-8000-000000000123:not-an-int",
+        )
+
+
+def test_pipeline_launch_cloud_continue_rejects_empty_stage_index(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(
+        ValueError, match="continue_from_job stage index must be non-empty"
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="00000000-0000-1000-8000-000000000123:",
+        )
+
+
+def test_pipeline_launch_cloud_continue_rejects_multiple_colons(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(
+        ValueError,
+        match="continue_from_job must be UUID, UUID:stage_index, or 'infer'",
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="00000000-0000-1000-8000-000000000123:2:3",
+        )
+
+
+def test_pipeline_launch_cloud_continue_requires_selector_for_unsafe_continue(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="unsafe_continue requires continue_from_job"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            unsafe_continue=True,
+        )
+
+
+def test_pipeline_launch_cloud_continue_forwards_unsafe_continue(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        continue_from_job="00000000-0000-1000-8000-000000000123",
+        unsafe_continue=True,
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.unsafe_continue is True
+
+
+def test_pipeline_launch_cloud_surfaces_submit_warnings(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    class WarningClient:
+        def __init__(self):
+            self.base_url = "https://example.com"
+
+        def cloud_submit_job(self, *, request):
+            captured["submit_request"] = request
+
+            class _Resp:
+                job_id = "job-123"
+                stage_index = 0
+                status = "queued"
+                workspace_slug = None
+                warnings = ["Current executor settings differ"]
+
+            return _Resp()
+
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", WarningClient)
+
+    result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert result.warnings == ["Current executor settings differ"]
+
+
+def test_pipeline_launch_cloud_continue_rejects_blank_selector(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="continue_from_job must be non-empty"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="   ",
+        )
+
+
+def test_pipeline_launch_cloud_continue_rejects_non_uuid_selector(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(
+        ValueError, match="continue_from_job must be UUID, UUID:stage_index, or 'infer'"
+    ):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            continue_from_job="job-previous",
+        )

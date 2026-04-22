@@ -147,6 +147,18 @@ def _render_job(payload: dict[str, Any]) -> int:
     started_by = _started_by_text(job)
     if started_by != "-":
         print(f"{_label_text('Created By')}: {_value_text(started_by)}")
+    continued_from_job_id = _safe_text(job.get("continuedFromJobId"))
+    attempt_number = _safe_text(job.get("attemptNumber"))
+    if continued_from_job_id != "-":
+        if attempt_number != "-":
+            print(
+                f"{_label_text('Attempt')}: {_value_text(attempt_number)}  "
+                f"{_label_text('Continued from job')}: {_value_text(continued_from_job_id)}"
+            )
+        else:
+            print(
+                f"{_label_text('Continued from job')}: {_value_text(continued_from_job_id)}"
+            )
     print(f"{_label_text('Available')}: {_availability_text(job)}")
     if isinstance(job.get("error"), str) and job["error"]:
         print(f"{_label_text('Error')}: {_error_text(job.get('error'))}")
