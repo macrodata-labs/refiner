@@ -12,23 +12,9 @@ INPUT_PATH = "hf://datasets/hynky/docling-issues/data/train-00000-of-00001.parqu
 OUTPUT_PATH = "output/docling-issues-ocr"
 PDF_SCALE = 2.0
 
-DOTS_PROVIDER = mdr.inference.VLLMProvider(
-    model="rednote-hilab/dots.mocr",
-    model_max_context=32768,
-    extra_kwargs={
-        "max_num_batched_tokens": 16384,
-        "chat_template_content_format": "string",
-    },
-)
+DOTS_PROVIDER = mdr.inference.VLLMProvider(model="rednote-hilab/dots.mocr")
 
-BLANK_PAGE_PROVIDER = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen3.5-4B",
-    model_max_context=32768,
-    extra_kwargs={
-        "max_num_batched_tokens": 16384,
-        "reasoning_parser": "qwen3",
-    },
-)
+BLANK_PAGE_PROVIDER = mdr.inference.VLLMProvider(model="Qwen/Qwen3.5-4B")
 
 
 def _image_data_url(image) -> str:
