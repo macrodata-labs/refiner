@@ -16,7 +16,7 @@ DOTS_PROVIDER = mdr.inference.VLLMProvider(
     model="rednote-hilab/dots.mocr",
     model_max_context=32768,
     extra_kwargs={
-        "max_num_batched_tokens": "16384",
+        "max_num_batched_tokens": 16384,
         "chat_template_content_format": "string",
     },
 )
@@ -25,7 +25,7 @@ BLANK_PAGE_PROVIDER = mdr.inference.VLLMProvider(
     model="Qwen/Qwen3.5-4B",
     model_max_context=32768,
     extra_kwargs={
-        "max_num_batched_tokens": "16384",
+        "max_num_batched_tokens": 16384,
         "reasoning_parser": "qwen3",
     },
 )

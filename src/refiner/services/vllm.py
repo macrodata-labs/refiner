@@ -44,7 +44,8 @@ class VLLMServiceDefinition:
         if self.model_max_context is not None:
             config["model_max_context"] = self.model_max_context
         if self.extra_kwargs:
-            config["extra_kwargs"] = dict(self.extra_kwargs)
+            for key, value in self.extra_kwargs.items():
+                config[str(key)] = value
         return RuntimeServiceSpec(name=self.name, kind=self.kind, config=config)
 
 

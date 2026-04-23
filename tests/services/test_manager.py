@@ -240,7 +240,7 @@ def test_vllm_service_definition_includes_extra_kwargs_in_name_and_config() -> N
     service = VLLMServiceDefinition(
         model_name_or_path="Qwen/Qwen2.5-VL-7B-Instruct",
         model_max_context=32768,
-        extra_kwargs={"limit-mm-per-prompt": "video=1"},
+        extra_kwargs={"limit_mm_per_prompt": "video=1"},
     )
 
     spec = service.to_spec()
@@ -248,7 +248,7 @@ def test_vllm_service_definition_includes_extra_kwargs_in_name_and_config() -> N
     assert spec.config == {
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
         "model_max_context": 32768,
-        "extra_kwargs": {"limit-mm-per-prompt": "video=1"},
+        "limit_mm_per_prompt": "video=1",
     }
     assert service.name.startswith("vllm-")
 

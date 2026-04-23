@@ -437,7 +437,7 @@ def test_vllm_provider_includes_extra_kwargs_in_service_definition() -> None:
     assert provider.service_definition().to_spec().config == {
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
         "model_max_context": 32768,
-        "extra_kwargs": {"limit-mm-per-prompt": "video=1"},
+        "limit-mm-per-prompt": "video=1",
     }
 
 
