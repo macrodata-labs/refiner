@@ -7,6 +7,7 @@ from typing import IO, TYPE_CHECKING
 
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFile
+from refiner.io.datafile import DataFileLike
 from refiner.utils import check_required_dependencies
 
 if TYPE_CHECKING:
@@ -24,14 +25,19 @@ class RenderedPdfPage:
 
 @dataclass(frozen=True, slots=True)
 class PdfFile:
-    data_file: DataFile
+    data: DataFileLike | bytes
+    name: str | None = None
 
     @property
     def uri(self) -> str:
-        return str(self.data_file)
+        if isinstance(self.data, bytes):
+            return self.name or "<bytes>"
+        return str(DataFile.resolve(self.data))
 
     def open(self, mode: str = "rb") -> IO[bytes]:
-        return self.data_file.open(mode=mode)
+        if isinstance(self.data, bytes):
+            raise TypeError("byte-backed PdfFile does not support open()")
+        return DataFile.resolve(self.data).open(mode=mode)
 
     async def iter_rendered_pages(
         self,
@@ -64,6 +70,8 @@ class PdfFile:
 
 
 async def _read_pdf_bytes(pdf: PdfFile) -> bytes:
+    if isinstance(pdf.data, bytes):
+        return pdf.data
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(io_executor(), _read_pdf_bytes_sync, pdf)
 

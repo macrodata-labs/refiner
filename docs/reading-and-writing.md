@@ -61,6 +61,13 @@ async def render_pdf(path: str):
         # Pass `image` to OCR or VLM code.
 ```
 
+If a parquet row already contains PDF bytes, construct the same primitive from
+the binary value:
+
+```python
+pdf = mdr.pdf.PdfFile(row["media_bytes"], name=f"{row['id']}.pdf")
+```
+
 `iter_rendered_pages(...)` reads the PDF bytes once, opens them with PDFium, and
 yields page images in order. PDF rendering is protected by an async lock because
 PDFium should not be called concurrently from Refiner PDF primitives.

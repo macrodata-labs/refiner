@@ -71,3 +71,13 @@ def test_pdf_file_uri_uses_underlying_data_file(tmp_path) -> None:
     pdf = mdr.pdf.PdfFile(DataFile.resolve(path))
 
     assert pdf.uri.endswith("sample.pdf")
+
+
+def test_iter_rendered_pages_supports_byte_backed_pdf() -> None:
+    pdf = mdr.pdf.PdfFile(_minimal_pdf(page_count=1), name="inline.pdf")
+
+    pages = asyncio.run(_collect_pages(pdf, scale=1.0))
+
+    assert pdf.uri == "inline.pdf"
+    assert [page.index for page in pages] == [0]
+    assert pages[0].image.size == (100, 80)
