@@ -34,6 +34,37 @@ import refiner as mdr
 pipeline = mdr.read_parquet("s3://my-bucket/documents/*.parquet")
 ```
 
+## PDF files
+
+Refiner exposes PDF documents as explicit file handles. Use `PdfFile` when a
+row already contains a PDF path or when you discover files through another
+reader.
+
+Install PDF rendering support with:
+
+```bash
+uv add "macrodata-refiner[pdf]"
+```
+
+Render pages lazily:
+
+```python
+import refiner as mdr
+
+from refiner.io import DataFile
+
+
+async def render_pdf(path: str):
+    pdf = mdr.pdf.PdfFile(DataFile.resolve(path))
+    async for page in pdf.iter_rendered_pages(scale=2.0):
+        image = page.image
+        # Pass `image` to OCR or VLM code.
+```
+
+`iter_rendered_pages(...)` reads the PDF bytes once, opens them with PDFium, and
+yields page images in order. PDF rendering is protected by an async lock because
+PDFium should not be called concurrently from Refiner PDF primitives.
+
 ## Common Crawl text readers
 
 [Common Crawl](https://commoncrawl.org/) publishes large public web crawls.

@@ -1,5 +1,6 @@
 import refiner.inference as inference
 import refiner.io as io
+import refiner.pdf as pdf
 import refiner.pipeline as pipeline
 import refiner.robotics as robotics
 import refiner.text as text
@@ -49,6 +50,7 @@ __all__ = [
     # submodules
     "inference",
     "io",
+    "pdf",
     "pipeline",
     "video",
     "robot",

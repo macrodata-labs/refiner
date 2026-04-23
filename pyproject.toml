@@ -50,6 +50,11 @@ testing = [
 ]
 all = [
     "macrodata-refiner[testing]",
+    "macrodata-refiner[pdf]",
+]
+pdf = [
+    "pillow>=12.2.0",
+    "pypdfium2>=5.7.1",
 ]
 
 [project.scripts]
