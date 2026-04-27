@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import random
 from collections.abc import Mapping, Sequence
@@ -108,23 +109,12 @@ def _parse_inference_response(
         message = choice.get("message")
         if not isinstance(message, Mapping):
             raise RuntimeError("chat completion response is missing message")
-        content = message.get("content")
-        if isinstance(content, str):
-            text = content
-        elif isinstance(content, Sequence):
-            parts: list[str] = []
-            for item in content:
-                if not isinstance(item, Mapping):
-                    continue
-                if item.get("type") == "text" and isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-            if not parts:
-                raise RuntimeError(
-                    "chat completion response is missing textual content"
-                )
-            text = "".join(parts)
-        else:
-            raise RuntimeError("chat completion response is missing textual content")
+        text = _extract_chat_text(message)
+        if text is None:
+            raise RuntimeError(
+                "chat completion response is missing textual content: "
+                f"{_truncate_json(choice)}"
+            )
     else:
         text = choice.get("text")
         if not isinstance(text, str):
@@ -141,6 +131,72 @@ def _parse_inference_response(
         usage=usage,
         response=response_json,
     )
+
+
+_CHAT_METADATA_KEYS = frozenset(
+    {
+        "role",
+        "type",
+        "id",
+        "index",
+        "name",
+        "url",
+        "image_url",
+        "audio_url",
+        "tool_calls",
+        "function_call",
+        "logprobs",
+        "annotations",
+    }
+)
+
+
+def _extract_chat_text(content: Any) -> str | None:
+    parts = _collect_chat_text_parts(content)
+    if not parts:
+        return None
+    return "".join(parts)
+
+
+def _collect_chat_text_parts(content: Any) -> list[str]:
+    if isinstance(content, str):
+        return [content] if content else []
+    if isinstance(content, Mapping):
+        parts: list[str] = []
+        preferred_keys = (
+            "content",
+            "text",
+            "value",
+            "output_text",
+            "reasoning_content",
+            "refusal",
+        )
+        for key in preferred_keys:
+            if key in content:
+                parts.extend(_collect_chat_text_parts(content[key]))
+        if parts:
+            return parts
+        for key, value in content.items():
+            if key in _CHAT_METADATA_KEYS:
+                continue
+            parts.extend(_collect_chat_text_parts(value))
+        return parts
+    if not isinstance(content, Sequence) or isinstance(content, (bytes, bytearray)):
+        return []
+    parts: list[str] = []
+    for item in content:
+        parts.extend(_collect_chat_text_parts(item))
+    return parts
+
+
+def _truncate_json(value: Any, *, limit: int = 800) -> str:
+    try:
+        serialized = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+    except TypeError:
+        serialized = repr(value)
+    if len(serialized) <= limit:
+        return serialized
+    return f"{serialized[: limit - 3]}..."
 
 
 def _normalize_openai_base_url(base_url: str) -> str:

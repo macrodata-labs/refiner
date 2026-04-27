@@ -29,8 +29,25 @@ def _image_message(prompt: str, image_url: str) -> list[dict[str, Any]]:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": image_url}},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+
+def _dots_image_message(prompt: str, image_url: str) -> list[dict[str, Any]]:
+    # dots.mocr's official vLLM example expects the image sentinel tokens inside the
+    # text block, even when the request also carries an image_url content item.
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": image_url}},
+                {
+                    "type": "text",
+                    "text": f"<|img|><|imgpad|><|endofimg|>{prompt}",
+                },
             ],
         }
     ]
@@ -70,12 +87,12 @@ async def transcribe_pdf(row, generate):
         image_url = _image_data_url(page.image)
         response = await generate(
             {
-                "messages": _image_message(
+                "messages": _dots_image_message(
                     "Transcribe this PDF page exactly. Return only the transcription.",
                     image_url,
                 ),
                 "temperature": 0.0,
-                "max_tokens": 4096,
+                "max_completion_tokens": 4096,
             }
         )
         text = response.text.strip()
