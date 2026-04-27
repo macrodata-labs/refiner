@@ -11,6 +11,7 @@ import refiner as mdr
 INPUT_PATH = "hf://datasets/hynky/docling-issues/data/train-00000-of-00001.parquet"
 OUTPUT_PATH = "output/docling-issues-ocr"
 PDF_SCALE = 2.0
+DOTS_OCR_PROMPT = "Extract the text content from this image."
 
 DOTS_PROVIDER = mdr.inference.VLLMProvider(model="rednote-hilab/dots.mocr")
 
@@ -88,11 +89,12 @@ async def transcribe_pdf(row, generate):
         response = await generate(
             {
                 "messages": _dots_image_message(
-                    "Transcribe this PDF page exactly. Return only the transcription.",
+                    DOTS_OCR_PROMPT,
                     image_url,
                 ),
-                "temperature": 0.0,
-                "max_completion_tokens": 4096,
+                "temperature": 0.1,
+                "top_p": 0.9,
+                "max_completion_tokens": 32768,
             }
         )
         text = response.text.strip()
