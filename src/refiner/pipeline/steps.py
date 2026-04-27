@@ -8,6 +8,7 @@ from typing import Any, TypeAlias
 import pyarrow as pa
 
 from refiner.pipeline.expressions import Expr
+from refiner.pipeline.data.datatype import DTypeMapping
 from refiner.pipeline.data.row import Row
 
 
@@ -39,6 +40,7 @@ class FnRowStep(RowStep):
     fn: MapFn
     index: int
     op_name: str | None = None
+    dtypes: DTypeMapping | None = None
 
     def apply_row(self, row: Row) -> MapResult:
         return self.fn(row)
@@ -60,6 +62,7 @@ class FnAsyncRowStep(AsyncRowStep):
     max_in_flight: int = 16
     preserve_order: bool = True
     op_name: str | None = None
+    dtypes: DTypeMapping | None = None
 
     def __post_init__(self) -> None:
         if self.max_in_flight <= 0:
@@ -83,6 +86,7 @@ class FnBatchStep(BatchStep):
     index: int
     batch_size: int
     op_name: str | None = None
+    dtypes: DTypeMapping | None = None
 
     def __post_init__(self) -> None:
         if self.batch_size <= 1:
@@ -104,6 +108,7 @@ class FnFlatMapStep(FlatMapStep):
     fn: FlatMapFn
     index: int
     op_name: str | None = None
+    dtypes: DTypeMapping | None = None
 
     def apply_row_many(self, row: Row) -> Iterable[MapResult]:
         return self.fn(row)
@@ -149,7 +154,7 @@ class RenameStep(RefinerStep):
 
 @dataclass(frozen=True, slots=True)
 class CastStep(RefinerStep):
-    dtypes: Mapping[str, str]
+    dtypes: DTypeMapping
     index: int
     op_name: str | None = "cast"
 

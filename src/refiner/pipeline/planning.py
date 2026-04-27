@@ -22,6 +22,7 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
+from refiner.pipeline.data.datatype import dtype_to_plan
 from refiner.platform.manifest import _redact_captured_text
 from refiner.services import RuntimeServiceSpec
 
@@ -185,7 +186,15 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
     if isinstance(step, RenameStep):
         return (explicit_name or "rename"), "rename", {"mapping": dict(step.mapping)}
     if isinstance(step, CastStep):
-        return (explicit_name or "cast"), "cast", {"dtypes": dict(step.dtypes)}
+        return (
+            (explicit_name or "cast"),
+            "cast",
+            {
+                "dtypes": {
+                    name: dtype_to_plan(dtype) for name, dtype in step.dtypes.items()
+                }
+            },
+        )
     if isinstance(step, FilterExprStep):
         return (
             explicit_name or "filter",

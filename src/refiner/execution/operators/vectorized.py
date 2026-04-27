@@ -3,14 +3,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
 from refiner.execution.tracking.shards import (
     ShardDeltaFn,
     count_table_by_shard,
     counts_delta,
 )
-from refiner.pipeline.data.tabular import filter_table, repeat_scalar
+from refiner.pipeline.data.datatype import apply_dtypes_to_table
+from refiner.pipeline.data.tabular import (
+    filter_table,
+    repeat_scalar,
+)
 from refiner.pipeline.expressions import eval_expr_arrow
 from refiner.pipeline.steps import (
     CastStep,
@@ -46,14 +49,11 @@ def apply_vectorized_op(
         return table.rename_columns(names), None
 
     if isinstance(op, CastStep):
-        out = table
-        for col_name, dtype in op.dtypes.items():
-            idx = out.schema.get_field_index(col_name)
-            if idx < 0:
-                raise KeyError(f"Unknown column for cast: {col_name}")
-            casted = pc.cast(out.column(col_name), target_type=pa.type_for_alias(dtype))
-            out = out.set_column(idx, col_name, casted)
-        return out, None
+        return apply_dtypes_to_table(
+            table,
+            op.dtypes,
+            preserve_metadata=False,
+        ), None
 
     if isinstance(op, WithColumnsStep):
         out = table
@@ -65,7 +65,7 @@ def apply_vectorized_op(
             if idx < 0:
                 out = out.append_column(col_name, values)
             else:
-                out = out.set_column(idx, col_name, values)
+                out = out.set_column(idx, pa.field(col_name, values.type), values)
         return out, None
 
     if isinstance(op, FilterExprStep):

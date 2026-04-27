@@ -63,6 +63,11 @@ class BaseSink(ABC):
         """Whether blocks written into this sink should count toward output_rows."""
         return True
 
+    @property
+    def requires_tabular_input(self) -> bool:
+        """Whether this sink expects blocks to be converted to `Tabular` before writing."""
+        return False
+
     def on_shard_complete(self, shard_id: str) -> None:
         """Flush or finalize state for one shard after upstream completion.
 

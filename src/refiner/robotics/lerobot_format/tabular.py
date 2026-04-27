@@ -45,7 +45,12 @@ class LeRobotTabular(Tabular):
         object.__setattr__(self, "roots_by_row", roots_by_row)
 
     @classmethod
-    def from_rows(cls, rows: Sequence[Row]) -> "LeRobotTabular":
+    def from_rows(
+        cls,
+        rows: Sequence[Row],
+        *,
+        schema: pa.Schema | None = None,
+    ) -> "LeRobotTabular":
         from refiner.robotics.lerobot_format.row import LeRobotRow
 
         if not all(isinstance(row, LeRobotRow) for row in rows):
@@ -55,7 +60,8 @@ class LeRobotTabular(Tabular):
             [
                 row._row.update({_ROW_INDEX_COLUMN: idx})
                 for idx, row in enumerate(lerobot_rows)
-            ]
+            ],
+            schema=schema,
         )
         row_order = [
             int(value) for value in base.table.column(_ROW_INDEX_COLUMN).to_pylist()

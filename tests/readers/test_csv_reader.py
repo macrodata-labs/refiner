@@ -1,3 +1,4 @@
+from refiner.pipeline.data import datatype
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers import CsvReader
 
@@ -65,3 +66,23 @@ def test_csv_can_enable_arrow_parse_threads(tmp_path):
         rows.extend(list(_rows_from_shard_units(reader.read_shard(shard))))
 
     assert [str(row["id"]) for row in rows] == ["0", "1"]
+
+
+def test_csv_reader_applies_dtypes_to_arrow_and_python_paths(tmp_path):
+    p = tmp_path / "data.csv"
+    p.write_text("id,video\n0,clip.mp4\n")
+
+    arrow_reader = CsvReader(str(p), dtypes={"video": datatype.video_file()})
+    arrow_unit = next(iter(arrow_reader.read_shard(arrow_reader.list_shards()[0])))
+    assert isinstance(arrow_unit, Tabular)
+    assert arrow_unit.table.schema.field("video").metadata == {b"asset_type": b"video"}
+
+    python_reader = CsvReader(
+        str(p),
+        multiline_rows=True,
+        dtypes={"video": datatype.video_file()},
+    )
+    python_row = next(iter(python_reader.read_shard(python_reader.list_shards()[0])))
+    assert not hasattr(python_row, "schema")
+    assert python_reader.schema is not None
+    assert python_reader.schema.field("video").metadata == {b"asset_type": b"video"}

@@ -24,19 +24,27 @@ class Tabular:
         self.shard_idx = self.index_by_name.get(SHARD_ID_COLUMN)
 
     @classmethod
-    def from_rows(cls, rows: Sequence[Row]) -> "Tabular":
+    def from_rows(
+        cls,
+        rows: Sequence[Row],
+        *,
+        schema: pa.Schema | None = None,
+    ) -> "Tabular":
         if not rows:
             return cls(pa.table({}))
         if all(_is_arrow_backed(row) for row in rows):
             # Fast path for Arrow-backed rows: sort by backing tabular source and row index so
             # we can rebuild with slice/take instead of materializing every cell in Python.
-            tables = _arrow_tables_from_rows(_sorted_arrow_rows(rows))
+            tables = _arrow_tables_from_rows(
+                _sorted_arrow_rows(rows),
+                schema=schema,
+            )
             if len(tables) == 1:
                 return cls(tables[0])
-            return cls(pa.concat_tables(tables))
+            return cls(_concat_tables(tables))
         # Generic row fallback. A union-of-names pass plus row.get(...) was as fast as the
         # earlier DictRow-specific special case and simpler to keep correct for mixed rows.
-        return cls(_table_from_rows(rows))
+        return cls(_table_from_rows(rows, schema=schema))
 
     @classmethod
     def from_batch(cls, batch: pa.RecordBatch) -> "Tabular":
@@ -86,7 +94,16 @@ def set_or_append_column(
     column: pa.Array | pa.ChunkedArray,
 ) -> pa.Table:
     if name in table.column_names:
-        return table.set_column(table.column_names.index(name), name, column)
+        idx = table.column_names.index(name)
+        current = table.schema.field(idx)
+        metadata = current.metadata if current.type == column.type else None
+        field = pa.field(
+            name,
+            column.type,
+            nullable=current.nullable or column.null_count > 0,
+            metadata=metadata,
+        )
+        return table.set_column(idx, field, column)
     return table.append_column(name, column)
 
 
@@ -106,7 +123,11 @@ def filter_table(table: pa.Table, predicate: Expr) -> pa.Table:
 
 
 # everything below is for fast from_rows
-def _table_from_rows(rows: Sequence[Row]) -> pa.Table:
+def _table_from_rows(
+    rows: Sequence[Row],
+    *,
+    schema: pa.Schema | None = None,
+) -> pa.Table:
     names: list[str] = []
     seen: set[str] = set()
     for row in rows:
@@ -115,10 +136,43 @@ def _table_from_rows(rows: Sequence[Row]) -> pa.Table:
                 continue
             seen.add(name)
             names.append(name)
-    columns = {name: [row.get(name) for row in rows] for name in names}
+    if schema is None:
+        columns = {name: [row.get(name) for row in rows] for name in names}
+        if any(row.shard_id is not None for row in rows):
+            columns[SHARD_ID_COLUMN] = [row.shard_id for row in rows]
+        return pa.table(columns)
+
+    arrays: dict[str, pa.Array] = {}
+    metadata_by_name: dict[str, dict[bytes, bytes]] = {}
+    for name in names:
+        schema_field = _schema_field(schema, name)
+        column, field_metadata = _array_from_values(
+            [row.get(name) for row in rows],
+            schema_field.type if schema_field is not None else None,
+            schema_field.metadata if schema_field is not None else None,
+        )
+        arrays[name] = column
+        if field_metadata:
+            metadata_by_name[name] = field_metadata
     if any(row.shard_id is not None for row in rows):
-        columns[SHARD_ID_COLUMN] = [row.shard_id for row in rows]
-    return pa.table(columns)
+        arrays[SHARD_ID_COLUMN] = pa.array(
+            [row.shard_id for row in rows],
+            type=pa.string(),
+        )
+    if not metadata_by_name:
+        return pa.table(arrays)
+    fields = [
+        pa.field(name, column.type, metadata=metadata_by_name.get(name))
+        for name, column in arrays.items()
+    ]
+    return pa.table(arrays, schema=pa.schema(fields))
+
+
+def _concat_tables(tables: Sequence[pa.Table]) -> pa.Table:
+    try:
+        return pa.concat_tables(tables)
+    except pa.ArrowInvalid:
+        return pa.concat_tables(tables, promote_options="default")
 
 
 def _sorted_arrow_rows(rows: Sequence[Row]) -> Sequence[Row]:
@@ -132,15 +186,12 @@ def _sorted_arrow_rows(rows: Sequence[Row]) -> Sequence[Row]:
     )
 
 
-def _arrow_tables_from_rows(rows: Sequence[Row]) -> list[pa.Table]:
+def _arrow_tables_from_rows(
+    rows: Sequence[Row],
+    *,
+    schema: pa.Schema | None = None,
+) -> list[pa.Table]:
     tables: list[pa.Table] = []
-    # Pristine Arrow batches do not need any overlay bookkeeping; skipping it improved the
-    # plain Arrow cases without affecting patched batches.
-    changed_specs = (
-        _overlay_changed_specs(rows)
-        if any(isinstance(row, _OverlayRow) for row in rows)
-        else []
-    )
     group_start = 0
     while group_start < len(rows):
         first = rows[group_start]
@@ -157,14 +208,19 @@ def _arrow_tables_from_rows(rows: Sequence[Row]) -> list[pa.Table]:
                 break
             group_end += 1
         tables.append(
-            _arrow_table_from_group(rows[group_start:group_end], changed_specs)
+            _arrow_table_from_group(
+                rows[group_start:group_end],
+                schema=schema,
+            )
         )
         group_start = group_end
     return tables
 
 
 def _arrow_table_from_group(
-    rows: Sequence[Row], changed_specs: list[tuple[str, pa.DataType]]
+    rows: Sequence[Row],
+    *,
+    schema: pa.Schema | None = None,
 ) -> pa.Table:
     sample = _base_arrow_row(rows[0])
     base = sample.tabular.table
@@ -185,21 +241,64 @@ def _arrow_table_from_group(
     else:
         table = base.take(pa.array(row_indices, type=pa.int64()))
 
-    changed_columns = _overlay_changes_by_column(rows)
-    for name, value_type in changed_specs:
-        changes = changed_columns.get(name, [])
+    changed_columns = (
+        _overlay_changes_by_column(rows)
+        if any(isinstance(row, _OverlayRow) for row in rows)
+        else {}
+    )
+    if schema is None and not changed_columns:
+        return _with_shard_id(table, rows[0].shard_id, len(rows))
+
+    for name, changes in changed_columns.items():
+        if all(name not in row for row in rows):
+            if name in table.column_names:
+                table = table.drop([name])
+            continue
+
+        schema_field = _schema_field(schema, name)
+        value_type = schema_field.type if schema_field is not None else None
         if name in table.column_names:
             values = table[name].to_pylist()
         else:
             values = [None] * len(rows)
         for idx, value in changes:
             values[idx] = value
-        column = pa.array(values, type=value_type)
-        table = set_or_append_column(table, name, column)
+        column, field_metadata = _array_from_values(
+            values,
+            value_type,
+            schema_field.metadata if schema_field is not None else None,
+        )
+        if schema_field is not None:
+            field = pa.field(name, column.type, metadata=field_metadata)
+            if name in table.column_names:
+                table = table.set_column(table.column_names.index(name), field, column)
+            else:
+                table = table.append_column(field, column)
+        elif name in table.column_names:
+            table = table.set_column(
+                table.column_names.index(name),
+                pa.field(name, column.type),
+                column,
+            )
+        else:
+            table = set_or_append_column(table, name, column)
 
-    shard_id = rows[0].shard_id
+    table = _apply_schema_to_unchanged_columns(
+        table,
+        schema=schema,
+        changed_names=set(changed_columns),
+    )
+
+    return _with_shard_id(table, rows[0].shard_id, len(rows))
+
+
+def _with_shard_id(
+    table: pa.Table,
+    shard_id: str | None,
+    num_rows: int,
+) -> pa.Table:
     if shard_id is not None:
-        shard_col = pa.array([shard_id] * len(rows), type=pa.string())
+        shard_col = pa.array([shard_id] * num_rows, type=pa.string())
         table = set_or_append_column(table, SHARD_ID_COLUMN, shard_col)
     return table
 
@@ -219,23 +318,59 @@ def _overlay_changes_by_column(
     return changes
 
 
-def _overlay_changed_specs(rows: Sequence[Row]) -> list[tuple[str, pa.DataType]]:
-    specs: list[tuple[str, pa.DataType]] = []
-    seen: set[str] = set()
-    for row in rows:
-        if not isinstance(row, _OverlayRow):
+def _schema_field(schema: pa.Schema | None, name: str) -> pa.Field | None:
+    if schema is None:
+        return None
+    idx = schema.get_field_index(name)
+    return schema.field(idx) if idx >= 0 else None
+
+
+def _apply_schema_to_unchanged_columns(
+    table: pa.Table,
+    *,
+    schema: pa.Schema | None,
+    changed_names: set[str],
+) -> pa.Table:
+    if schema is None:
+        return table
+
+    out = table
+    for field in schema:
+        name = field.name
+        if name in changed_names:
             continue
-        for name in row.patch:
-            if name in seen:
-                continue
-            seen.add(name)
-            specs.append((name, pa.scalar(row.patch[name]).type))
-        for name in row.deleted:
-            if name in seen:
-                continue
-            seen.add(name)
-            specs.append((name, _base_arrow_row(row).tabular.table[name].type))
-    return specs
+        idx = out.schema.get_field_index(name)
+        if idx < 0:
+            continue
+        column = out.column(name)
+        try:
+            if column.type != field.type:
+                column = column.cast(field.type)
+            replacement = pa.field(
+                name,
+                column.type,
+                nullable=field.nullable,
+                metadata=field.metadata,
+            )
+        except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError):
+            replacement = pa.field(name, column.type)
+        if out.schema.field(idx).equals(replacement, check_metadata=True):
+            continue
+        out = out.set_column(idx, replacement, column)
+    return out
+
+
+def _array_from_values(
+    values: Sequence[object],
+    value_type: pa.DataType | None,
+    metadata: dict[bytes, bytes] | None,
+) -> tuple[pa.Array, dict[bytes, bytes] | None]:
+    if value_type is None:
+        return pa.array(values), None
+    try:
+        return pa.array(values, type=value_type), dict(metadata) if metadata else None
+    except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError):
+        return pa.array(values), None
 
 
 def _is_arrow_backed(row: Row) -> bool:

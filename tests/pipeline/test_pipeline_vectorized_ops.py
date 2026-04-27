@@ -94,6 +94,42 @@ def test_vectorized_and_row_udf_segments_interoperate() -> None:
     assert [int(r["w"]) for r in out] == [25, 35, 45]
 
 
+def test_arrow_row_patch_type_inference_skips_initial_null() -> None:
+    rows = [
+        row.update(
+            {"mapped": None if int(row["value"]) == 1 else int(row["value"]) * 2}
+        )
+        for row in Tabular(pa.table({"value": [1, 2]}))
+    ]
+
+    out = Tabular.from_rows(rows).table
+
+    assert out["mapped"].to_pylist() == [None, 4]
+    assert out["mapped"].type == pa.int64()
+
+
+def test_arrow_row_patch_type_inference_promotes_across_tables() -> None:
+    row_1 = next(iter(Tabular(pa.table({"value": [1]})))).update({"mapped": None})
+    row_2 = next(iter(Tabular(pa.table({"value": [2]})))).update({"mapped": 4})
+
+    out = Tabular.from_rows([row_1, row_2]).table
+
+    assert out["mapped"].to_pylist() == [None, 4]
+    assert out["mapped"].type == pa.int64()
+
+
+def test_arrow_row_patch_existing_column_can_change_type() -> None:
+    rows = [
+        row.update({"value": f"chunk-{int(row['value'])}"})
+        for row in Tabular(pa.table({"value": [1, 2]}))
+    ]
+
+    out = Tabular.from_rows(rows).table
+
+    assert out["value"].to_pylist() == ["chunk-1", "chunk-2"]
+    assert out["value"].type == pa.string()
+
+
 def test_map_table_runs_on_vectorized_path() -> None:
     out = (
         from_items([{"x": 1}, {"x": 2}, {"x": 3}])
@@ -268,11 +304,11 @@ def test_vectorized_chunk_shrink_is_run_local(monkeypatch) -> None:
     calls: list[int] = []
     original_from_rows = engine_module.Tabular.from_rows
 
-    def _from_rows_with_oom(rows):
+    def _from_rows_with_oom(rows, **kwargs):
         calls.append(len(rows))
         if len(rows) > 2:
             raise pa.ArrowMemoryError("oom")
-        return original_from_rows(rows)
+        return original_from_rows(rows, **kwargs)
 
     monkeypatch.setattr(engine_module.Tabular, "from_rows", _from_rows_with_oom)
 
@@ -291,6 +327,30 @@ def test_vectorized_chunk_shrink_is_run_local(monkeypatch) -> None:
     assert len(out2) == 8
     assert calls[first_run_start] == 8
     assert calls[second_run_start] == 8
+
+
+def test_row_segment_to_vectorized_chunk_shrink_is_budgeted(monkeypatch) -> None:
+    calls: list[int] = []
+    original_from_rows = engine_module.Tabular.from_rows
+
+    def _from_rows_with_oom(rows, **kwargs):
+        calls.append(len(rows))
+        if len(rows) > 2:
+            raise pa.ArrowMemoryError("oom")
+        return original_from_rows(rows, **kwargs)
+
+    monkeypatch.setattr(engine_module.Tabular, "from_rows", _from_rows_with_oom)
+
+    out = (
+        from_items([{"x": i} for i in range(8)])
+        .map(lambda row: row)
+        .with_column("y", col("x") + 1)
+        .with_max_vectorized_block_bytes(1_000_000)
+        .materialize()
+    )
+
+    assert len(out) == 8
+    assert calls[:3] == [8, 4, 2]
 
 
 def test_with_max_vectorized_block_bytes_validates_positive() -> None:

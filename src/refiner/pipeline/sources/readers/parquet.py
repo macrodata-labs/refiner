@@ -13,6 +13,11 @@ from fsspec import AbstractFileSystem
 
 from refiner.io import DataFile
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.data.datatype import (
+    DTypeMapping,
+    apply_dtypes_to_table,
+    schema_with_dtypes,
+)
 from refiner.pipeline.data.shard import FilePart
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.data.tabular import Tabular, filter_table
@@ -57,6 +62,7 @@ class ParquetReader(BaseReader):
         filter: Expr | None = None,
         split_row_groups: bool = False,
         file_path_column: str | None = "file_path",
+        dtypes: DTypeMapping | None = None,
     ):
         """Create a Parquet reader.
 
@@ -90,6 +96,7 @@ class ParquetReader(BaseReader):
         )
         self.arrow_batch_size = int(arrow_batch_size)
         self.split_row_groups = split_row_groups
+        self.dtypes = dtypes
 
         ## filter
         # full filter expression
@@ -157,9 +164,14 @@ class ParquetReader(BaseReader):
                 else None,
                 "split_row_groups": self.split_row_groups,
                 "filter": self.filter.to_code() if self.filter is not None else None,
+                "dtypes": list(self.dtypes) if self.dtypes else None,
             }
         )
         return description
+
+    @property
+    def schema(self) -> pa.Schema | None:
+        return schema_with_dtypes(None, self.dtypes)
 
     def _metadata(self, pf: pq.ParquetFile) -> _ParquetMetadata | None:
         """Cache row-group byte starts and row starts for the currently open parquet file."""
@@ -279,6 +291,7 @@ class ParquetReader(BaseReader):
                 batch = batch.slice(begin, length)
                 offset += batch_rows
             table = pa.Table.from_batches([batch])
+            table = apply_dtypes_to_table(table, self.dtypes, strict=False)
             if self.filter is not None:
                 before = int(table.num_rows)
                 table = filter_table(table, self.filter)
@@ -310,13 +323,16 @@ class ParquetReader(BaseReader):
         fragment = self._get_parquet_fragment(source_file)
         if row_groups is not None:
             fragment = fragment.subset(row_group_ids=row_groups)
-        return [
-            row_group.id
-            for row_group_fragment in fragment.split_by_row_group(
-                filter=self._pushdown_filter
-            )
-            for row_group in row_group_fragment.row_groups
-        ]
+        try:
+            return [
+                row_group.id
+                for row_group_fragment in fragment.split_by_row_group(
+                    filter=self._pushdown_filter
+                )
+                for row_group in row_group_fragment.row_groups
+            ]
+        except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError):
+            return row_groups
 
     def _log_pushdown_pruning(
         self,

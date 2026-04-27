@@ -28,10 +28,16 @@ from refiner.pipeline.steps import (
     WithColumnsStep,
 )
 from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
-from refiner.pipeline.sources import BaseSource, CsvReader, JsonlReader, ParquetReader
+from refiner.pipeline.sources import (
+    BaseSource,
+    CsvReader,
+    JsonlReader,
+    ParquetReader,
+)
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
+from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.execution.engine import (
@@ -127,9 +133,16 @@ class RefinerPipeline:
             self._compiled_segments = compile_segments(self.pipeline_steps)
         return self._compiled_segments
 
-    def map(self, fn: MapFn) -> "RefinerPipeline":
+    def map(
+        self, fn: MapFn, *, dtypes: DTypeMapping | None = None
+    ) -> "RefinerPipeline":
         return self.add_step(
-            FnRowStep(fn=fn, op_name="map", index=self._next_step_index())
+            FnRowStep(
+                fn=fn,
+                op_name="map",
+                index=self._next_step_index(),
+                dtypes=dtypes,
+            )
         )
 
     def map_async(
@@ -138,6 +151,7 @@ class RefinerPipeline:
         *,
         max_in_flight: int = 16,
         preserve_order: bool = True,
+        dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
         return self.add_step(
             FnAsyncRowStep(
@@ -146,10 +160,17 @@ class RefinerPipeline:
                 preserve_order=preserve_order,
                 op_name="map_async",
                 index=self._next_step_index(),
+                dtypes=dtypes,
             )
         )
 
-    def batch_map(self, fn: BatchFn, *, batch_size: int) -> "RefinerPipeline":
+    def batch_map(
+        self,
+        fn: BatchFn,
+        *,
+        batch_size: int,
+        dtypes: DTypeMapping | None = None,
+    ) -> "RefinerPipeline":
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")
         return self.add_step(
@@ -158,12 +179,23 @@ class RefinerPipeline:
                 batch_size=batch_size,
                 op_name="batch_map",
                 index=self._next_step_index(),
+                dtypes=dtypes,
             )
         )
 
-    def flat_map(self, fn: FlatMapFn) -> "RefinerPipeline":
+    def flat_map(
+        self,
+        fn: FlatMapFn,
+        *,
+        dtypes: DTypeMapping | None = None,
+    ) -> "RefinerPipeline":
         return self.add_step(
-            FnFlatMapStep(fn=fn, op_name="flat_map", index=self._next_step_index())
+            FnFlatMapStep(
+                fn=fn,
+                op_name="flat_map",
+                index=self._next_step_index(),
+                dtypes=dtypes,
+            )
         )
 
     def map_table(self, fn: Callable[[pa.Table], pa.Table]) -> "RefinerPipeline":
@@ -235,7 +267,7 @@ class RefinerPipeline:
             RenameStep(mapping=mapping, index=self._next_step_index())
         )
 
-    def cast(self, **dtypes: str) -> "RefinerPipeline":
+    def cast(self, **dtypes: DTypeLike) -> "RefinerPipeline":
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
         if SHARD_ID_COLUMN in dtypes:
@@ -260,6 +292,10 @@ class RefinerPipeline:
             self._get_compiled_segments(),
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             on_shard_delta=on_shard_delta,
+            input_schema=self.source.schema,
+            final_output_tabular=(
+                self.sink.requires_tabular_input if self.sink is not None else False
+            ),
         )
 
     def iter_rows(self) -> Iterable[Row]:
@@ -441,6 +477,7 @@ def read_csv(
     multiline_rows: bool = False,
     encoding: str = "utf-8",
     parse_use_threads: bool = False,
+    dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with a CSV reader source.
 
@@ -459,6 +496,7 @@ def read_csv(
             multiline_rows=multiline_rows,
             encoding=encoding,
             parse_use_threads=parse_use_threads,
+            dtypes=dtypes,
         )
     )
 
@@ -473,6 +511,7 @@ def read_jsonl(
     num_shards: int | None = None,
     file_path_column: str | None = "file_path",
     parse_use_threads: bool = False,
+    dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with a JSONL reader source.
 
@@ -489,6 +528,7 @@ def read_jsonl(
             num_shards=num_shards,
             file_path_column=file_path_column,
             parse_use_threads=parse_use_threads,
+            dtypes=dtypes,
         )
     )
 
@@ -506,6 +546,7 @@ def read_parquet(
     filter: Expr | None = None,
     split_row_groups: bool = False,
     file_path_column: str | None = "file_path",
+    dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with a Parquet reader source.
 
@@ -527,6 +568,7 @@ def read_parquet(
             filter=filter,
             split_row_groups=split_row_groups,
             file_path_column=file_path_column,
+            dtypes=dtypes,
         )
     )
 

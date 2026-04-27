@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import refiner as rf
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner import col
 from refiner.pipeline import RefinerPipeline, from_items
@@ -106,6 +107,7 @@ def test_compile_pipeline_plan_flattens_vectorized_segment_ops() -> None:
         .filter(col("x") > 1)
         .with_columns(y=col("x") + 10)
         .select("y")
+        .cast(y=rf.datatype.video_file())
     )
     plan = compile_pipeline_plan(payload)
     steps = plan["stages"][0]["steps"]
@@ -114,13 +116,18 @@ def test_compile_pipeline_plan_flattens_vectorized_segment_ops() -> None:
         "filter",
         "with_columns",
         "select",
+        "cast",
     ]
     assert steps[1]["type"] == "filter_expr"
     assert steps[2]["type"] == "with_columns"
     assert steps[3]["type"] == "select"
+    assert steps[4]["type"] == "cast"
     assert "expression" in steps[1]["args"]
     assert "callable" not in steps[1]
     assert steps[2]["args"] == {"y": "(col('x') + 10)"}
+    assert steps[4]["args"]["dtypes"] == {
+        "y": {"type": "string", "metadata": {"asset_type": "video"}}
+    }
     assert "callable" not in steps[2]
 
 

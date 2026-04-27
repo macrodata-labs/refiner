@@ -8,8 +8,23 @@ from typing import cast
 import pyarrow as pa
 
 from refiner.pipeline.data.block import Block, StreamItem
+from refiner.pipeline.data.datatype import schema_with_dtypes
 from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline.steps import RefinerStep, VectorizedOp, VectorizedSegmentStep
+from refiner.pipeline.steps import (
+    CastStep,
+    DropStep,
+    FnAsyncRowStep,
+    FnBatchStep,
+    FnFlatMapStep,
+    FnRowStep,
+    FnTableStep,
+    RenameStep,
+    RefinerStep,
+    SelectStep,
+    VectorizedOp,
+    VectorizedSegmentStep,
+    WithColumnsStep,
+)
 from refiner.execution.buffer import RowBuffer
 from refiner.execution.operators.row import ShardDeltaFn, execute_row_steps
 from refiner.execution.operators.vectorized import (
@@ -58,11 +73,15 @@ def execute_segments(
     vectorized_chunk_rows: int = _DEFAULT_VECTORIZED_CHUNK_ROWS,
     max_vectorized_block_bytes: int | None = None,
     on_shard_delta: ShardDeltaFn | None = None,
+    input_schema: pa.Schema | None = None,
+    final_output_tabular: bool = False,
 ) -> Iterator[Block]:
+    """Execute segments, optionally converting final row blocks to `Tabular` blocks."""
     current: Iterable[Block] = _normalize_blocks(
         stream,
         block_rows=vectorized_chunk_rows,
     )
+    current_schema = input_schema
     for idx, segment in enumerate(segments):
         next_segment = segments[idx + 1] if idx + 1 < len(segments) else None
         if isinstance(segment, VectorSegment):
@@ -72,16 +91,24 @@ def execute_segments(
                 vectorized_chunk_rows=vectorized_chunk_rows,
                 max_vectorized_block_bytes=max_vectorized_block_bytes,
                 on_shard_delta=on_shard_delta,
+                input_schema=current_schema,
             )
+            current_schema = _vector_segment_schema(current_schema, segment.ops)
         else:
+            output_schema = _row_segment_schema(current_schema, segment.steps)
             current = _execute_row_segment(
                 current,
                 segment.steps,
                 output_block_rows=vectorized_chunk_rows,
-                output_tabular=isinstance(next_segment, VectorSegment),
-                max_vectorized_block_bytes=max_vectorized_block_bytes,
+                output_tabular=isinstance(next_segment, VectorSegment)
+                and max_vectorized_block_bytes is None,
                 on_shard_delta=on_shard_delta,
+                output_schema=output_schema,
             )
+            current_schema = output_schema
+    if final_output_tabular:
+        yield from _tabularize_blocks(current, schema=current_schema)
+        return
     yield from current
 
 
@@ -154,24 +181,96 @@ def _execute_row_segment(
     *,
     output_block_rows: int,
     output_tabular: bool,
-    max_vectorized_block_bytes: int | None,
     on_shard_delta: ShardDeltaFn | None,
+    output_schema: pa.Schema | None,
 ) -> Iterator[Block]:
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
     rows = iter_rows(stream)
     step_out = execute_row_steps(rows, steps, on_shard_delta=on_shard_delta)
-    if not output_tabular or max_vectorized_block_bytes is not None:
+    if not output_tabular:
         yield from _chunk_output_rows(step_out, output_block_rows)
         return
     for batch in _chunk_output_rows(step_out, output_block_rows):
         block = (
-            Tabular.from_rows(batch)
+            Tabular.from_rows(batch, schema=output_schema)
             if not batch
-            else batch[0].tabular_type.from_rows(batch)
+            else batch[0].tabular_type.from_rows(batch, schema=output_schema)
         )
         if block.table.num_rows > 0:
             yield block
+
+
+def _row_segment_schema(
+    input_schema: pa.Schema | None,
+    steps: Sequence[RefinerStep],
+) -> pa.Schema | None:
+    schema = input_schema
+    for step in steps:
+        dtypes = (
+            step.dtypes
+            if isinstance(step, (FnRowStep, FnAsyncRowStep, FnBatchStep, FnFlatMapStep))
+            else None
+        )
+        if not dtypes:
+            continue
+        schema = schema_with_dtypes(schema, dtypes)
+    return schema
+
+
+def _vector_segment_schema(
+    input_schema: pa.Schema | None,
+    ops: Sequence[VectorizedOp],
+) -> pa.Schema | None:
+    schema = input_schema
+    for op in ops:
+        if isinstance(op, FnTableStep):
+            schema = None
+            continue
+        if isinstance(op, CastStep):
+            schema = schema_with_dtypes(
+                schema,
+                op.dtypes,
+                preserve_metadata=False,
+            )
+            continue
+        if schema is None:
+            continue
+        if isinstance(op, SelectStep):
+            fields = [
+                schema.field(idx)
+                for name in op.columns
+                if (idx := schema.get_field_index(name)) >= 0
+            ]
+            schema = pa.schema(
+                fields,
+                metadata=schema.metadata,
+            )
+            continue
+        if isinstance(op, DropStep):
+            drop = set(op.columns)
+            schema = pa.schema(
+                [field for field in schema if field.name not in drop],
+                metadata=schema.metadata,
+            )
+            continue
+        if isinstance(op, RenameStep):
+            schema = pa.schema(
+                [
+                    field.with_name(op.mapping.get(field.name, field.name))
+                    for field in schema
+                ],
+                metadata=schema.metadata,
+            )
+            continue
+        if isinstance(op, WithColumnsStep):
+            assigned = set(op.assignments)
+            schema = pa.schema(
+                [field for field in schema if field.name not in assigned],
+                metadata=schema.metadata,
+            )
+            continue
+    return schema
 
 
 def _execute_vector_segment(
@@ -181,6 +280,7 @@ def _execute_vector_segment(
     vectorized_chunk_rows: int,
     max_vectorized_block_bytes: int | None,
     on_shard_delta: ShardDeltaFn | None,
+    input_schema: pa.Schema | None,
 ) -> Iterator[Tabular]:
     pending_rows = RowBuffer()
     current_chunk_rows = max(1, int(vectorized_chunk_rows))
@@ -208,9 +308,9 @@ def _execute_vector_segment(
             batch = pending_rows.peek(rows_for_try)
             try:
                 block = (
-                    Tabular.from_rows(batch)
+                    Tabular.from_rows(batch, schema=input_schema)
                     if not batch
-                    else batch[0].tabular_type.from_rows(batch)
+                    else batch[0].tabular_type.from_rows(batch, schema=input_schema)
                 )
             except pa.ArrowMemoryError:
                 if rows_for_try <= 1:
@@ -323,6 +423,24 @@ def _chunk_output_rows(rows: Iterable[Row], block_rows: int) -> Iterator[list[Ro
             yield out
     if pending:
         yield pending
+
+
+def _tabularize_blocks(
+    blocks: Iterable[Block],
+    *,
+    schema: pa.Schema | None,
+) -> Iterator[Tabular]:
+    for block in blocks:
+        if isinstance(block, Tabular):
+            yield block
+            continue
+        table = (
+            Tabular.from_rows(block, schema=schema)
+            if not block
+            else block[0].tabular_type.from_rows(block, schema=schema)
+        )
+        if table.num_rows > 0:
+            yield table
 
 
 __all__ = [

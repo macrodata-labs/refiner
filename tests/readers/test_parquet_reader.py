@@ -2,6 +2,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.data import datatype
 from refiner.pipeline.expressions import col
 from refiner.pipeline.sources.readers import ParquetReader
 from refiner.worker.context import set_active_run_context
@@ -102,6 +103,21 @@ def test_parquet_reads_all_rows(tmp_path):
     assert ids == list(range(50))
 
 
+def test_parquet_reader_schema_exposes_only_dtype_overrides(tmp_path):
+    p = _write_parquet(tmp_path)
+    reader = ParquetReader(
+        str(p),
+        columns_to_read=("x",),
+        dtypes={"x": datatype.video_file()},
+    )
+
+    schema = reader.schema
+
+    assert schema is not None
+    assert schema.names == ["x"]
+    assert schema.field("x").metadata == {b"asset_type": b"video"}
+
+
 def test_parquet_filter_reads_only_matching_rows(tmp_path):
     p = _write_parquet(tmp_path)
     reader = ParquetReader(
@@ -131,6 +147,33 @@ def test_parquet_filter_supports_residual_string_predicates(tmp_path):
         out.extend(list(_rows_from_shard_units(reader.read_shard(shard))))
 
     assert [int(row["id"]) for row in out] == [7, 17, 27, 37, 47]
+
+
+def test_parquet_filter_runs_after_dtype_overrides(tmp_path):
+    p = tmp_path / "string-ints.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "x": pa.array(["1", "2", "10", "20"]),
+                "label": pa.array(["a", "b", "c", "d"]),
+            }
+        ),
+        p,
+        row_group_size=2,
+    )
+
+    reader = ParquetReader(
+        str(p),
+        filter=col("x") > 2,
+        dtypes={"x": datatype.int64()},
+    )
+
+    out = []
+    for shard in reader.list_shards():
+        out.extend(list(_rows_from_shard_units(reader.read_shard(shard))))
+
+    assert [row["x"] for row in out] == [10, 20]
+    assert [row["label"] for row in out] == ["c", "d"]
 
 
 def test_parquet_can_split_inside_large_row_group(tmp_path):
@@ -256,6 +299,7 @@ def test_parquet_logs_pushdown_and_total_filtered_metrics(tmp_path):
         str(p),
         target_shard_bytes=100_000,
         filter=col("keep"),
+        dtypes={"keep": pa.field("keep", pa.bool_(), metadata={b"kind": b"flag"})},
     )
 
     emitter = _RecordingEmitter()
