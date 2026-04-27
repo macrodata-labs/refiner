@@ -20,10 +20,12 @@ BLANK_PAGE_PROVIDER = mdr.inference.VLLMProvider(model="Qwen/Qwen3.5-4B")
 
 
 def _image_data_url(image) -> str:
+    if image.mode not in {"RGB", "L"}:
+        image = image.convert("RGB")
     buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=90, optimize=True)
+    image.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}"
+    return f"data:image/png;base64,{encoded}"
 
 
 def _image_message(prompt: str, image_url: str) -> list[dict[str, Any]]:
