@@ -103,7 +103,7 @@ async def transcribe_pdf(row, generate):
         text = response.text.strip()
         page_texts.append(text)
         page_images.append(image_url)
-        if text.startswith("The "):
+        if not text or text.startswith("The "):
             suspect_blank_pages.append(page.index)
 
     return row.update(

@@ -160,7 +160,7 @@ def _extract_chat_text(content: Any) -> str | None:
 
 def _collect_chat_text_parts(content: Any) -> list[str]:
     if isinstance(content, str):
-        return [content] if content else []
+        return [content]
     if isinstance(content, Mapping):
         parts: list[str] = []
         preferred_keys = (
