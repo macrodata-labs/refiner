@@ -69,7 +69,7 @@ def _parquet_builder(data_files: object) -> object:
     return builder
 
 
-def test_resolve_hf_filepaths_rewrites_only_relative_file_values() -> None:
+def test_resolve_hf_relative_paths_rewrites_only_relative_file_values() -> None:
     table = datatype.apply_dtypes_to_table(
         pa.table(
             {
@@ -91,7 +91,7 @@ def test_resolve_hf_filepaths_rewrites_only_relative_file_values() -> None:
         {"frames": datatype.video_file()},
     )
 
-    out = hf_dataset.resolve_hf_filepaths(table, "org/repo")
+    out = hf_dataset.resolve_hf_relative_paths(table, "org/repo")
 
     assert out.column("frames").to_pylist() == [
         "hf://datasets/org/repo/relative/path.mp4",
@@ -262,7 +262,7 @@ def test_hf_dataset_reader_infers_media_dtypes_from_features(monkeypatch) -> Non
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
     monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
 
-    reader = HFDatasetReader("org/repo", resolve_filepaths=False)
+    reader = HFDatasetReader("org/repo", resolve_relative_paths=False)
 
     schema = reader.schema
     assert schema is not None

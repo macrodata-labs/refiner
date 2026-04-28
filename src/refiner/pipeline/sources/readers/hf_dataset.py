@@ -36,7 +36,12 @@ _HF_FILE_FEATURE_DTYPES = {
 
 
 class HFDatasetReader(BaseSource):
-    """Read Hugging Face datasets through the Hub's generated Parquet shards."""
+    """Read Hugging Face datasets through the Hub's generated Parquet shards.
+
+    `resolve_relative_paths` rewrites relative file-typed values as
+    `hf://datasets/{repo}/...` references. Absolute paths and URI values are left
+    unchanged.
+    """
 
     name = "read_hf_dataset"
 
@@ -46,7 +51,7 @@ class HFDatasetReader(BaseSource):
         config: str | None = None,
         split: str = "train",
         *,
-        resolve_filepaths: bool = True,
+        resolve_relative_paths: bool = True,
         dtypes: DTypeMapping | None = None,
         hf_token: str | None = None,
         timeout: float = 30.0,
@@ -60,7 +65,7 @@ class HFDatasetReader(BaseSource):
     ):
         self.repo = repo
         self.split = split
-        self.resolve_filepaths = resolve_filepaths
+        self.resolve_relative_paths = resolve_relative_paths
         self.hf_token = hf_token
         self.timeout = float(timeout)
         self.target_shard_bytes = target_shard_bytes
@@ -160,7 +165,7 @@ class HFDatasetReader(BaseSource):
             "repo": self.repo,
             "config": self.config,
             "split": self.split,
-            "resolve_filepaths": self.resolve_filepaths,
+            "resolve_relative_paths": self.resolve_relative_paths,
             "dtypes": list(self.dtypes) if self.dtypes else None,
         }
 
@@ -382,8 +387,8 @@ class HFDatasetReader(BaseSource):
             ):
                 columns.append(self.file_path_column)
             table = table.select([col for col in columns if col in table.column_names])
-        if self.resolve_filepaths:
-            table = resolve_hf_filepaths(table, self.repo)
+        if self.resolve_relative_paths:
+            table = resolve_hf_relative_paths(table, self.repo)
         return table
 
 
@@ -391,7 +396,7 @@ def _is_file_dtype(dtype: object) -> bool:
     return isinstance(dtype, pa.Field) and datatype.is_file_field(dtype)
 
 
-def resolve_hf_filepaths(table: pa.Table, repo: str) -> pa.Table:
+def resolve_hf_relative_paths(table: pa.Table, repo: str) -> pa.Table:
     """Resolve relative file columns against the HF dataset repository root."""
 
     out = table

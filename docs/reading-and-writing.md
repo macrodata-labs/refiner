@@ -59,8 +59,8 @@ pipeline = mdr.read_hf_dataset(
 
 Hugging Face `Image`, `Audio`, and `Video` features are marked as file columns
 automatically. Relative file paths in those columns are resolved to
-`hf://datasets/...` references by default; pass `resolve_filepaths=False` to keep
-the raw values.
+`hf://datasets/...` references by default; pass `resolve_relative_paths=False` to
+keep the raw values. Absolute paths and URI values are not rewritten.
 
 ## Common Crawl text readers
 
