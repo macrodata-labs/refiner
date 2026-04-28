@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import sys
 import types
-from importlib.machinery import ModuleSpec
 
 import pyarrow as pa
 import pytest
+import datasets
+from datasets.packaged_modules.parquet.parquet import Parquet
 
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.shard import FilePart, Shard
@@ -27,14 +27,10 @@ def _parquet_shard() -> Shard:
 
 
 def _empty_parquet_resolution(url: str) -> object:
-    if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-        return {}
     if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/"):
         return []
     if "datasets-server.huggingface.co/parquet" in url:
         return {"parquet_files": []}
-    if "/tree/" in url:
-        return []
     raise AssertionError(url)
 
 
@@ -44,24 +40,33 @@ def _install_datasets(
     config: str = "default",
     features: dict[str, object] | None = None,
     dataset: object | None = None,
+    builder: object | None = None,
 ) -> list[tuple[str, str, dict[str, object]]]:
     calls: list[tuple[str, str, dict[str, object]]] = []
-    module = types.ModuleType("datasets")
-    module.__spec__ = ModuleSpec("datasets", loader=None)
 
     def get_dataset_config_info(repo: str, **kwargs: object) -> object:
         calls.append(("info", repo, kwargs))
         return types.SimpleNamespace(config_name=config, features=features or {})
+
+    def load_dataset_builder(repo: str, config_name: str, **kwargs: object) -> object:
+        calls.append(("builder", repo, {"config": config_name, **kwargs}))
+        return builder or types.SimpleNamespace(config=types.SimpleNamespace())
 
     def load_dataset(repo: str, config_name: str, **kwargs: object) -> object:
         calls.append(("load", repo, {"config": config_name, **kwargs}))
         assert dataset is not None
         return dataset
 
-    setattr(module, "get_dataset_config_info", get_dataset_config_info)
-    setattr(module, "load_dataset", load_dataset)
-    monkeypatch.setitem(sys.modules, "datasets", module)
+    monkeypatch.setattr(datasets, "get_dataset_config_info", get_dataset_config_info)
+    monkeypatch.setattr(datasets, "load_dataset_builder", load_dataset_builder)
+    monkeypatch.setattr(datasets, "load_dataset", load_dataset)
     return calls
+
+
+def _parquet_builder(data_files: object) -> object:
+    builder = object.__new__(Parquet)
+    builder.config = types.SimpleNamespace(data_files=data_files)
+    return builder
 
 
 def test_resolve_hf_filepaths_rewrites_only_relative_file_values() -> None:
@@ -116,15 +121,10 @@ def test_hf_dataset_reader_lists_parquet_and_resolves_file_dtypes(monkeypatch) -
         calls.append(url)
         assert hf_token == "tok"
         assert timeout == 5.0
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {
-                "cfg": {
-                    "test": ["https://huggingface.co/datasets/org/repo/test.parquet"],
-                    "train": [
-                        "https://huggingface.co/datasets/org/repo/resolve/refs%2Fconvert%2Fparquet/cfg/train/0.parquet"
-                    ],
-                }
-            }
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/train":
+            return [
+                "https://huggingface.co/datasets/org/repo/resolve/refs%2Fconvert%2Fparquet/cfg/train/0.parquet"
+            ]
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -227,8 +227,8 @@ def test_hf_dataset_reader_infers_media_dtypes_from_features(monkeypatch) -> Non
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
         calls.append(url)
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {"default": {"train": ["https://example.com/train.parquet"]}}
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
+            return ["https://example.com/train.parquet"]
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -277,85 +277,66 @@ def test_hf_dataset_reader_infers_media_dtypes_from_features(monkeypatch) -> Non
     assert table.column("label").to_pylist() == ["cat"]
     assert table.schema.field("image").metadata == {b"asset_type": b"image"}
     assert table.schema.field("audio").metadata == {b"asset_type": b"audio"}
-    assert calls == ["https://huggingface.co/api/datasets/org/repo/parquet"]
-
-
-def test_hf_dataset_reader_falls_back_to_repo_parquet_files(monkeypatch) -> None:
-    _install_datasets(monkeypatch, config="cfg")
-    delegate_inputs: list[object] = []
-
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {}
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/train":
-            return []
-        if (
-            url
-            == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/partial-train"
-        ):
-            return []
-        if "datasets-server.huggingface.co/parquet" in url:
-            return {"parquet_files": []}
-        if "huggingface.co/api/datasets/org/repo/tree/main/cfg" in url:
-            return [
-                {
-                    "type": "file",
-                    "path": "cfg/train-00000-of-00001.parquet",
-                }
-            ]
-        if (
-            "huggingface.co/api/datasets/org/repo/tree/refs%2Fconvert%2Fparquet/cfg/train"
-            in url
-        ):
-            raise AssertionError("convert tree should not be needed")
-        raise AssertionError(url)
-
-    class FakeParquetReader:
-        def __init__(self, inputs, **kwargs):
-            del kwargs
-            delegate_inputs.append(inputs)
-
-        def list_shards(self):
-            return [_parquet_shard()]
-
-    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
-    monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
-
-    reader = HFDatasetReader("org/repo", config="cfg")
-
-    assert reader.list_shards()
-    assert delegate_inputs == [
-        [
-            "https://huggingface.co/datasets/org/repo/resolve/main/cfg/train-00000-of-00001.parquet"
-        ]
+    assert calls == [
+        "https://huggingface.co/api/datasets/org/repo/parquet/default/train"
     ]
 
 
-def test_hf_dataset_reader_falls_back_to_convert_parquet_tree(monkeypatch) -> None:
+def test_hf_dataset_reader_uses_datasets_server_parquet_files(monkeypatch) -> None:
     _install_datasets(monkeypatch, config="cfg")
     delegate_inputs: list[object] = []
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {}
-        if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/cfg/"):
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/train":
+            return []
+        if "datasets-server.huggingface.co/parquet" in url:
+            return {
+                "parquet_files": [
+                    {
+                        "config": "cfg",
+                        "split": "train",
+                        "url": "https://example.com/cfg/train.parquet",
+                    },
+                ]
+            }
+        raise AssertionError(url)
+
+    class FakeParquetReader:
+        def __init__(self, inputs, **kwargs):
+            del kwargs
+            delegate_inputs.append(inputs)
+
+        def list_shards(self):
+            return [_parquet_shard()]
+
+    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
+    monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
+
+    reader = HFDatasetReader("org/repo", config="cfg")
+
+    assert reader.list_shards()
+    assert delegate_inputs == [["https://example.com/cfg/train.parquet"]]
+
+
+def test_hf_dataset_reader_uses_parquet_builder_data_files(monkeypatch) -> None:
+    builder = _parquet_builder(
+        {
+            "train": [
+                "hf://datasets/org/repo@abc/cfg/train-00000-of-00001.parquet",
+                "hf://datasets/org/repo@abc/cfg/sidecar.json",
+            ],
+        }
+    )
+    _install_datasets(monkeypatch, config="cfg", builder=builder)
+    delegate_inputs: list[object] = []
+
+    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+        del hf_token, timeout
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/train":
             return []
         if "datasets-server.huggingface.co/parquet" in url:
             return {"parquet_files": []}
-        if "huggingface.co/api/datasets/org/repo/tree/main/cfg" in url:
-            return []
-        if (
-            "huggingface.co/api/datasets/org/repo/tree/refs%2Fconvert%2Fparquet/cfg/train"
-            in url
-        ):
-            return [
-                {
-                    "type": "file",
-                    "path": "cfg/train/0000.parquet",
-                }
-            ]
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -373,9 +354,7 @@ def test_hf_dataset_reader_falls_back_to_convert_parquet_tree(monkeypatch) -> No
 
     assert reader.list_shards()
     assert delegate_inputs == [
-        [
-            "https://huggingface.co/datasets/org/repo/resolve/refs%2Fconvert%2Fparquet/cfg/train/0000.parquet"
-        ]
+        ["hf://datasets/org/repo@abc/cfg/train-00000-of-00001.parquet"]
     ]
 
 
@@ -384,8 +363,8 @@ def test_hf_dataset_reader_leaves_bytes_only_media_feature_raw(monkeypatch) -> N
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {"default": {"train": ["https://example.com/train.parquet"]}}
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
+            return ["https://example.com/train.parquet"]
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -428,8 +407,8 @@ def test_hf_file_filter_loads_filter_column_before_final_projection(
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {"default": {"train": ["https://example.com/train.parquet"]}}
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
+            return ["https://example.com/train.parquet"]
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -493,8 +472,8 @@ def test_hf_dataset_reader_preserves_empty_projection(monkeypatch) -> None:
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {"default": {"train": ["https://example.com/train.parquet"]}}
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
+            return ["https://example.com/train.parquet"]
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -535,8 +514,8 @@ def test_hf_dataset_reader_does_not_mix_fallback_after_parquet_read_error(
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {"default": {"train": ["https://example.com/train.parquet"]}}
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
+            return ["https://example.com/train.parquet"]
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -607,7 +586,7 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
     shards = reader.list_shards()
     units = list(reader.read_shard(shards[1]))
 
-    assert [call[0] for call in calls] == ["info", "load"]
+    assert [call[0] for call in calls] == ["info", "builder", "load"]
     assert len(shards) == 2
     assert isinstance(units[0], Tabular)
     table = units[0].table

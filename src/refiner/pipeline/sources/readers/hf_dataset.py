@@ -399,41 +399,23 @@ def _list_parquet_urls(
 ) -> list[str]:
     """Return generated Parquet shard URLs for one HF dataset config/split."""
 
-    split_names = (split, f"partial-{split}")
     repo_quoted = quote(repo, safe="/")
     config_quoted = quote(config, safe="")
+    split_quoted = quote(split, safe="")
 
     payload = _get_json_or_none(
-        f"{_HF_HUB}/api/datasets/{repo_quoted}/parquet",
+        f"{_HF_HUB}/api/datasets/{repo_quoted}/parquet/{config_quoted}/{split_quoted}",
         hf_token=hf_token,
         timeout=timeout,
     )
-    if isinstance(payload, Mapping):
-        config_payload = cast(Mapping[object, object], payload).get(config)
-        if isinstance(config_payload, Mapping):
-            for split_name in split_names:
-                values = cast(Mapping[object, object], config_payload).get(split_name)
-                if isinstance(values, list):
-                    urls = [url for url in values if isinstance(url, str)]
-                    if urls:
-                        return urls
-
-    for split_name in split_names:
-        split_quoted = quote(split_name, safe="")
-        payload = _get_json_or_none(
-            f"{_HF_HUB}/api/datasets/"
-            f"{repo_quoted}/parquet/{config_quoted}/{split_quoted}",
-            hf_token=hf_token,
-            timeout=timeout,
-        )
-        if isinstance(payload, list):
-            urls = [url for url in payload if isinstance(url, str)]
-            if urls:
-                return urls
+    if isinstance(payload, list):
+        urls = [url for url in payload if isinstance(url, str)]
+        if urls:
+            return urls
 
     payload = _get_json_or_none(
         f"{_HF_DATASETS_SERVER}/parquet?dataset={repo_quoted}"
-        f"&config={config_quoted}&split={quote(split, safe='')}",
+        f"&config={config_quoted}&split={split_quoted}",
         hf_token=hf_token,
         timeout=timeout,
     )
@@ -448,66 +430,40 @@ def _list_parquet_urls(
                 url = item.get("url")
                 if (
                     item.get("config") == config
-                    and item.get("split") in split_names
+                    and item.get("split") == split
                     and isinstance(url, str)
                 ):
                     urls.append(url)
         if urls:
             return urls
 
-    payload = _get_json_or_none(
-        f"{_HF_HUB}/api/datasets/{repo_quoted}/tree/main/"
-        f"{config_quoted}?recursive=false",
-        hf_token=hf_token,
-        timeout=timeout,
+    from datasets import load_dataset_builder
+    from datasets.packaged_modules.parquet.parquet import Parquet
+
+    builder = load_dataset_builder(
+        repo,
+        config,
+        token=hf_token,
     )
-    if isinstance(payload, list):
-        urls = []
-        for item in payload:
-            if not isinstance(item, Mapping):
-                continue
-            item = cast(Mapping[str, object], item)
-            path = item.get("path")
-            filename = path.rsplit("/", maxsplit=1)[-1] if isinstance(path, str) else ""
-            if (
-                item.get("type") == "file"
-                and isinstance(path, str)
-                and path.endswith(".parquet")
-                and any(
-                    filename.startswith(f"{split_name}-") for split_name in split_names
-                )
-            ):
-                urls.append(
-                    f"{_HF_HUB}/datasets/{repo_quoted}/resolve/main/"
-                    f"{quote(path, safe='/')}"
-                )
+    if not isinstance(builder, Parquet):
+        raise FileNotFoundError(
+            f"No Hugging Face parquet shards for {repo!r} "
+            f"config={config!r} split={split!r}"
+        )
+    data_files = getattr(builder.config, "data_files", None)
+    if isinstance(data_files, Mapping):
+        files = data_files.get(split)
+        if isinstance(files, str):
+            urls = [files]
+        elif isinstance(files, Sequence):
+            urls = [file for file in files if isinstance(file, str)]
+        else:
+            urls = []
+        urls = [
+            url for url in urls if url.split("?", maxsplit=1)[0].endswith(".parquet")
+        ]
         if urls:
             return urls
-
-    for split_name in split_names:
-        split_quoted = quote(split_name, safe="")
-        payload = _get_json_or_none(
-            f"{_HF_HUB}/api/datasets/{repo_quoted}/tree/"
-            f"refs%2Fconvert%2Fparquet/{config_quoted}/"
-            f"{split_quoted}?recursive=true",
-            hf_token=hf_token,
-            timeout=timeout,
-        )
-        urls = []
-        if isinstance(payload, list):
-            for item in payload:
-                if not isinstance(item, Mapping):
-                    continue
-                item = cast(Mapping[str, object], item)
-                path = item.get("path")
-                if item.get("type") != "file" or not isinstance(path, str):
-                    continue
-                urls.append(
-                    f"{_HF_HUB}/datasets/{repo_quoted}/resolve/"
-                    f"refs%2Fconvert%2Fparquet/{quote(path, safe='/')}"
-                )
-            if urls:
-                return urls
 
     raise FileNotFoundError(
         f"No Hugging Face parquet shards for {repo!r} config={config!r} split={split!r}"
