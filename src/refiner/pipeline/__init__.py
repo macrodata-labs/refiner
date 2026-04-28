@@ -10,6 +10,8 @@ from refiner.pipeline.pipeline import (
     read_jsonl,
     read_lerobot,
     read_parquet,
+    read_tfds,
+    read_tfrecords,
     task,
 )
 
@@ -23,6 +25,8 @@ __all__ = [
     "read_jsonl",
     "read_lerobot",
     "read_parquet",
+    "read_tfds",
+    "read_tfrecords",
     "from_items",
     "from_source",
     "task",

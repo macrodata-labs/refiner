@@ -36,6 +36,8 @@ from refiner.pipeline.sources import (
     Hdf5Reader,
     JsonlReader,
     ParquetReader,
+    TfdsReader,
+    TfrecordReader,
 )
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy, PathSelection
@@ -726,6 +728,77 @@ def read_lerobot(
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             split_row_groups=split_row_groups,
+        )
+    )
+
+
+def read_tfrecords(
+    inputs: DataFileSetLike,
+    *,
+    features: Mapping[str, Any],
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    batch_size: int = 1024,
+    compression: str | None = "auto",
+    num_parallel_calls: int | None = None,
+    prefetch: int | None = 1,
+    file_path_column: str | None = "file_path",
+) -> RefinerPipeline:
+    """Create a pipeline with a TensorFlow TFRecord reader source.
+
+    Sharding is file-level; one large TFRecord file is one source shard.
+    """
+    return RefinerPipeline(
+        source=TfrecordReader(
+            inputs,
+            features=features,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            batch_size=batch_size,
+            compression=compression,
+            num_parallel_calls=num_parallel_calls,
+            prefetch=prefetch,
+            file_path_column=file_path_column,
+        )
+    )
+
+
+def read_tfds(
+    name: str,
+    *,
+    config: str | None = None,
+    split: str = "train",
+    data_dir: str | None = None,
+    download: bool = False,
+    batch_size: int = 1024,
+    examples_per_shard: int = 10_000,
+    num_shards: int | None = None,
+    shuffle_files: bool = False,
+    read_config: Any | None = None,
+    decoders: Mapping[str, Any] | None = None,
+    as_supervised: bool = False,
+) -> RefinerPipeline:
+    """Create a pipeline with a TensorFlow Datasets reader source."""
+    return RefinerPipeline(
+        source=TfdsReader(
+            name,
+            config=config,
+            split=split,
+            data_dir=data_dir,
+            download=download,
+            batch_size=batch_size,
+            examples_per_shard=examples_per_shard,
+            num_shards=num_shards,
+            shuffle_files=shuffle_files,
+            read_config=read_config,
+            decoders=decoders,
+            as_supervised=as_supervised,
         )
     )
 
