@@ -21,6 +21,12 @@ from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 _HF_HUB = "https://huggingface.co"
 _HF_DATASETS_SERVER = "https://datasets-server.huggingface.co"
 _HF_DATASET_URI_PREFIX = "hf://datasets"
+_HF_FILE_FEATURE_DTYPES = {
+    "Image": datatype.image_file,
+    "Audio": datatype.audio_file,
+    "Video": datatype.video_file,
+    "Pdf": datatype.pdf_file,
+}
 
 
 class HFDatasetReader(BaseSource):
@@ -49,7 +55,6 @@ class HFDatasetReader(BaseSource):
         self.repo = repo
         self.split = split
         self.resolve_filepaths = resolve_filepaths
-        self._explicit_dtypes = dtypes
         self.hf_token = hf_token
         self.timeout = float(timeout)
         self.target_shard_bytes = target_shard_bytes
@@ -75,19 +80,11 @@ class HFDatasetReader(BaseSource):
         info = get_dataset_config_info(self.repo, **info_kwargs)
         self.config: str = str(info.config_name or config or "default")
 
-        file_feature_dtypes = {
-            "Image": datatype.image_file,
-            "Audio": datatype.audio_file,
-            "Video": datatype.video_file,
-            "Pdf": datatype.pdf_file,
-        }
         inferred_dtypes: dict[str, pa.Field] = {}
-        features = info.features or {}
-        if isinstance(features, Mapping):
-            for name, feature in features.items():
-                dtype_factory = file_feature_dtypes.get(type(feature).__name__)
-                if isinstance(name, str) and dtype_factory is not None:
-                    inferred_dtypes[name] = dtype_factory()
+        for name, feature in (info.features or {}).items():
+            dtype_factory = _HF_FILE_FEATURE_DTYPES.get(type(feature).__name__)
+            if dtype_factory is not None:
+                inferred_dtypes[name] = dtype_factory()
 
         effective_dtypes = dict(inferred_dtypes)
         if dtypes:
@@ -106,9 +103,7 @@ class HFDatasetReader(BaseSource):
         self._file_dtypes = file_dtypes or None
         self._non_file_dtypes = non_file_dtypes or None
         self._explicit_file_dtype_names = {
-            name
-            for name, dtype in (self._explicit_dtypes or {}).items()
-            if _is_file_dtype(dtype)
+            name for name, dtype in (dtypes or {}).items() if _is_file_dtype(dtype)
         }
 
         # Filters on file columns must run after extracting the struct "path" field.
@@ -118,11 +113,9 @@ class HFDatasetReader(BaseSource):
             and self._file_dtypes is not None
             and bool(self._file_dtypes.keys() & filter.referenced_columns())
         )
-        self.filter = filter if filter_uses_file_dtype else None
-        self._parquet_filter = (
-            None if filter is None or filter_uses_file_dtype else filter
-        )
-        self._fallback_filter = filter
+        self._post_parquet_filter = filter if filter_uses_file_dtype else None
+        self._parquet_filter = None if filter_uses_file_dtype else filter
+        self._post_fallback_filter = filter
         self.split_row_groups = split_row_groups
         self.file_path_column = file_path_column
         self._delegate: ParquetReader | None = None
@@ -158,7 +151,10 @@ class HFDatasetReader(BaseSource):
             for unit in self._parquet_reader().read_shard(shard):
                 if isinstance(unit, Tabular):
                     yield unit.with_table(
-                        self._finish_table(unit.table, post_filter=self.filter)
+                        self._finish_table(
+                            unit.table,
+                            post_filter=self._post_parquet_filter,
+                        )
                     )
                 else:
                     yield unit
@@ -193,12 +189,14 @@ class HFDatasetReader(BaseSource):
             timeout=self.timeout,
         )
         columns_to_read = self.columns_to_read
-        if self.filter is not None and columns_to_read is not None:
+        if self._post_parquet_filter is not None and columns_to_read is not None:
             # Columns referenced by a delayed HF-side filter still need to be loaded,
             # even if the final projection would otherwise exclude them.
             extra_columns = sorted(
                 col
-                for col in self.filter.referenced_columns().difference(columns_to_read)
+                for col in self._post_parquet_filter.referenced_columns().difference(
+                    columns_to_read
+                )
                 if col != self.file_path_column
             )
             columns_to_read = (*columns_to_read, *extra_columns)
@@ -281,7 +279,7 @@ class HFDatasetReader(BaseSource):
             table = self._finish_table(
                 table,
                 non_file_dtypes=self._non_file_dtypes,
-                post_filter=self._fallback_filter,
+                post_filter=self._post_fallback_filter,
             )
             if table.num_rows > 0:
                 yield Tabular(table)
@@ -423,14 +421,11 @@ def _list_parquet_urls(
     repo_quoted = quote(repo, safe="/")
     config_quoted = quote(config, safe="")
 
-    try:
-        payload: object | None = _get_json(
-            f"{_HF_HUB}/api/datasets/{repo_quoted}/parquet",
-            hf_token=hf_token,
-            timeout=timeout,
-        )
-    except httpx.HTTPError:
-        payload = None
+    payload = _get_json_or_none(
+        f"{_HF_HUB}/api/datasets/{repo_quoted}/parquet",
+        hf_token=hf_token,
+        timeout=timeout,
+    )
     if isinstance(payload, Mapping):
         config_payload = cast(Mapping[object, object], payload).get(config)
         if isinstance(config_payload, Mapping):
@@ -443,29 +438,23 @@ def _list_parquet_urls(
 
     for split_name in split_names:
         split_quoted = quote(split_name, safe="")
-        try:
-            payload = _get_json(
-                f"{_HF_HUB}/api/datasets/"
-                f"{repo_quoted}/parquet/{config_quoted}/{split_quoted}",
-                hf_token=hf_token,
-                timeout=timeout,
-            )
-        except httpx.HTTPError:
-            continue
+        payload = _get_json_or_none(
+            f"{_HF_HUB}/api/datasets/"
+            f"{repo_quoted}/parquet/{config_quoted}/{split_quoted}",
+            hf_token=hf_token,
+            timeout=timeout,
+        )
         if isinstance(payload, list):
             urls = [url for url in payload if isinstance(url, str)]
             if urls:
                 return urls
 
-    try:
-        payload = _get_json(
-            f"{_HF_DATASETS_SERVER}/parquet?dataset={repo_quoted}"
-            f"&config={config_quoted}&split={quote(split, safe='')}",
-            hf_token=hf_token,
-            timeout=timeout,
-        )
-    except httpx.HTTPError:
-        payload = None
+    payload = _get_json_or_none(
+        f"{_HF_DATASETS_SERVER}/parquet?dataset={repo_quoted}"
+        f"&config={config_quoted}&split={quote(split, safe='')}",
+        hf_token=hf_token,
+        timeout=timeout,
+    )
     if isinstance(payload, Mapping):
         parquet_files = cast(Mapping[object, object], payload).get("parquet_files")
         urls = []
@@ -484,15 +473,12 @@ def _list_parquet_urls(
         if urls:
             return urls
 
-    try:
-        payload = _get_json(
-            f"{_HF_HUB}/api/datasets/{repo_quoted}/tree/main/"
-            f"{config_quoted}?recursive=false",
-            hf_token=hf_token,
-            timeout=timeout,
-        )
-    except httpx.HTTPError:
-        payload = None
+    payload = _get_json_or_none(
+        f"{_HF_HUB}/api/datasets/{repo_quoted}/tree/main/"
+        f"{config_quoted}?recursive=false",
+        hf_token=hf_token,
+        timeout=timeout,
+    )
     if isinstance(payload, list):
         urls = []
         for item in payload:
@@ -518,16 +504,13 @@ def _list_parquet_urls(
 
     for split_name in split_names:
         split_quoted = quote(split_name, safe="")
-        try:
-            payload = _get_json(
-                f"{_HF_HUB}/api/datasets/{repo_quoted}/tree/"
-                f"refs%2Fconvert%2Fparquet/{config_quoted}/"
-                f"{split_quoted}?recursive=true",
-                hf_token=hf_token,
-                timeout=timeout,
-            )
-        except httpx.HTTPError:
-            continue
+        payload = _get_json_or_none(
+            f"{_HF_HUB}/api/datasets/{repo_quoted}/tree/"
+            f"refs%2Fconvert%2Fparquet/{config_quoted}/"
+            f"{split_quoted}?recursive=true",
+            hf_token=hf_token,
+            timeout=timeout,
+        )
         urls = []
         if isinstance(payload, list):
             for item in payload:
@@ -547,6 +530,13 @@ def _list_parquet_urls(
     raise FileNotFoundError(
         f"No Hugging Face parquet shards for {repo!r} config={config!r} split={split!r}"
     )
+
+
+def _get_json_or_none(url: str, *, hf_token: str | None, timeout: float) -> object:
+    try:
+        return _get_json(url, hf_token=hf_token, timeout=timeout)
+    except httpx.HTTPError:
+        return None
 
 
 def _get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
