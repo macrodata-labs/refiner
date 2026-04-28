@@ -30,8 +30,6 @@ _HF_FILE_FEATURE_DTYPES = {
 
 
 class HFDatasetReader(BaseSource):
-    """Read Hugging Face datasets through the Hub's generated Parquet shards."""
-
     name = "read_hf_dataset"
 
     def __init__(
@@ -106,8 +104,6 @@ class HFDatasetReader(BaseSource):
             name for name, dtype in (dtypes or {}).items() if _is_file_dtype(dtype)
         }
 
-        # Filters on file columns must run after extracting the struct "path" field.
-        # Other filters can be delegated to the Parquet reader for pushdown.
         filter_uses_file_dtype = (
             filter is not None
             and self._file_dtypes is not None
@@ -163,8 +159,6 @@ class HFDatasetReader(BaseSource):
         if self._delegate is not None:
             return self._delegate
 
-        # URL discovery is intentionally separate from scanning; ParquetReader still
-        # owns byte planning, projection, filtering, and Arrow conversion.
         urls = _list_parquet_urls(
             self.repo,
             self.config,
@@ -174,8 +168,6 @@ class HFDatasetReader(BaseSource):
         )
         columns_to_read = self.columns_to_read
         if self._post_parquet_filter is not None and columns_to_read is not None:
-            # Columns referenced by a delayed HF-side filter still need to be loaded,
-            # even if the final projection would otherwise exclude them.
             extra_columns = sorted(
                 col
                 for col in self._post_parquet_filter.referenced_columns().difference(
@@ -334,16 +326,12 @@ def _is_file_dtype(dtype: object) -> bool:
 
 
 def resolve_hf_filepaths(table: pa.Table, repo: str) -> pa.Table:
-    """Resolve relative file columns against the HF dataset repository root."""
-
     out = table
     for idx, field in enumerate(table.schema):
         if not datatype.is_file_field(field):
             continue
         column = table.column(idx)
 
-        # Treat local absolute paths and any scheme:// URI as already resolved.
-        # find_substring is intentionally used instead of regex for the hot path.
         local_absolute = pc.call_function(
             "starts_with",
             [column],
@@ -368,8 +356,6 @@ def resolve_hf_filepaths(table: pa.Table, repo: str) -> pa.Table:
         if not bool(pc.call_function("any", [relative]).as_py()):
             continue
 
-        # HF file feature paths sometimes start with ./; normalize those before
-        # constructing the hf://datasets/{repo}/... reference.
         stripped = pc.call_function(
             "replace_substring_regex",
             [column],
@@ -399,8 +385,6 @@ def _list_parquet_urls(
     hf_token: str | None,
     timeout: float,
 ) -> list[str]:
-    """Return generated Parquet shard URLs for one HF dataset config/split."""
-
     split_names = (split, f"partial-{split}")
     repo_quoted = quote(repo, safe="/")
     config_quoted = quote(config, safe="")
