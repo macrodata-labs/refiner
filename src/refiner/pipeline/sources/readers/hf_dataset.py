@@ -132,7 +132,7 @@ class HFDatasetReader(BaseSource):
             return self._fallback_shards(self._fallback_num_shards)
         try:
             return self._parquet_reader().list_shards()
-        except Exception:
+        except (FileNotFoundError, httpx.HTTPError, OSError, pa.ArrowException):
             return self._fallback_shards(self.num_shards)
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:

@@ -20,6 +20,7 @@ Built-in readers:
 | `read_csv(...)` | CSV files | dict-like rows keyed by column name |
 | `read_jsonl(...)` | JSON Lines files | dict-like rows from each JSON object |
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
+| `read_hf_dataset(...)` | Hugging Face datasets | rows from generated Parquet shards, with optional file path resolution |
 | `read_lerobot(...)` | LeRobot robotics datasets | one row per episode, including frame/video metadata |
 | `text.read_commoncrawl(...)` | Common Crawl WARC or WET files | one row per WARC/WET record with selected WARC/HTTP fields |
 | `text.read_commoncrawl_from_index(...)` | Common Crawl WARC records via the parquet index | one row per fetched WARC record, planned from index rows |
@@ -33,6 +34,34 @@ import refiner as mdr
 
 pipeline = mdr.read_parquet("s3://my-bucket/documents/*.parquet")
 ```
+
+## Hugging Face datasets
+
+Use `read_hf_dataset(...)` for datasets hosted on the Hugging Face Hub. It
+resolves the dataset config with the `datasets` package, reads generated Parquet
+shards through Refiner's Parquet reader, and falls back to `datasets` streaming
+when generated Parquet shards are unavailable.
+
+```bash
+uv add "macrodata-refiner[huggingface]"
+```
+
+```python
+import refiner as mdr
+from refiner.pipeline.data import datatype
+
+pipeline = mdr.read_hf_dataset(
+    "user/my-dataset",
+    config="default",
+    split="train",
+    dtypes={"video": datatype.video_file()},
+)
+```
+
+Hugging Face `Image`, `Audio`, and `Video` features are marked as file columns
+automatically. Relative file paths in those columns are resolved to
+`hf://datasets/...` references by default; pass `resolve_filepaths=False` to keep
+the raw values.
 
 ## Common Crawl text readers
 
