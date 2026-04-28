@@ -120,6 +120,7 @@ class HFDatasetReader(BaseSource):
         self._parquet_filter = (
             None if filter is None or filter_uses_file_dtype else filter
         )
+        self._fallback_filter = filter
         self.split_row_groups = split_row_groups
         self.file_path_column = file_path_column
         self._delegate: ParquetReader | None = None
@@ -154,7 +155,9 @@ class HFDatasetReader(BaseSource):
         try:
             for unit in self._parquet_reader().read_shard(shard):
                 if isinstance(unit, Tabular):
-                    yield unit.with_table(self._finish_table(unit.table))
+                    yield unit.with_table(
+                        self._finish_table(unit.table, post_filter=self.filter)
+                    )
                 else:
                     yield unit
         except Exception:
@@ -272,11 +275,27 @@ class HFDatasetReader(BaseSource):
                 raise TypeError(
                     "Hugging Face fallback expected Arrow batches from datasets"
                 )
-            table = self._finish_table(table)
+            table = self._finish_table(
+                table,
+                non_file_dtypes=self._non_file_dtypes,
+                post_filter=self._fallback_filter,
+            )
             if table.num_rows > 0:
                 yield Tabular(table)
 
-    def _finish_table(self, table: pa.Table) -> pa.Table:
+    def _finish_table(
+        self,
+        table: pa.Table,
+        *,
+        non_file_dtypes: DTypeMapping | None = None,
+        post_filter: Expr | None = None,
+    ) -> pa.Table:
+        if non_file_dtypes:
+            table = datatype.apply_dtypes_to_table(
+                table,
+                non_file_dtypes,
+                strict=False,
+            )
         if self._file_dtypes:
             extracted_file_dtypes: dict[str, object] = {}
             for name, dtype in self._file_dtypes.items():
@@ -309,8 +328,8 @@ class HFDatasetReader(BaseSource):
                     extracted_file_dtypes,
                     strict=False,
                 )
-        if self.filter is not None:
-            table = filter_table(table, self.filter)
+        if post_filter is not None:
+            table = filter_table(table, post_filter)
         if self.columns_to_read is not None:
             columns = list(dict.fromkeys(self.columns_to_read))
             if (

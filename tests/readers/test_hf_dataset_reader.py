@@ -490,10 +490,12 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
 
         def iter(self, *, batch_size: int):
             assert batch_size == 10
+            base_id = (self.shard_index or 0) * 10
             yield pa.table(
                 {
-                    "id": [self.shard_index],
-                    "video": ["clip.mp4"],
+                    "id": [str(base_id), str(base_id + 1)],
+                    "label": ["drop", "keep"],
+                    "video": ["drop.mp4", "keep.mp4"],
                 }
             )
 
@@ -521,6 +523,8 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
         "org/repo",
         num_shards=2,
         arrow_batch_size=10,
+        dtypes={"id": datatype.int64()},
+        filter=col("label") == "keep",
     )
     shards = reader.list_shards()
     units = list(reader.read_shard(shards[1]))
@@ -529,8 +533,10 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
     assert len(shards) == 2
     assert isinstance(units[0], Tabular)
     table = units[0].table
-    assert table.column("id").to_pylist() == [1]
-    assert table.column("video").to_pylist() == ["hf://datasets/org/repo/clip.mp4"]
+    assert table.column("id").to_pylist() == [11]
+    assert table.column("id").type == pa.int64()
+    assert table.column("label").to_pylist() == ["keep"]
+    assert table.column("video").to_pylist() == ["hf://datasets/org/repo/keep.mp4"]
     assert table.schema.field("video").metadata == {b"asset_type": b"video"}
 
 
