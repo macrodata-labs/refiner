@@ -256,7 +256,9 @@ def _arrow_table_from_group(
             continue
 
         schema_field = _schema_field(schema, name)
-        value_type = schema_field.type if schema_field is not None else None
+        base_field = _schema_field(base.schema, name)
+        field = schema_field if schema_field is not None else base_field
+        value_type = field.type if field is not None else None
         if name in table.column_names:
             values = table[name].to_pylist()
         else:
@@ -266,7 +268,7 @@ def _arrow_table_from_group(
         column, field_metadata = _array_from_values(
             values,
             value_type,
-            schema_field.metadata if schema_field is not None else None,
+            field.metadata if field is not None else None,
         )
         if schema_field is not None:
             field = pa.field(name, column.type, metadata=field_metadata)
@@ -277,7 +279,7 @@ def _arrow_table_from_group(
         elif name in table.column_names:
             table = table.set_column(
                 table.column_names.index(name),
-                pa.field(name, column.type),
+                pa.field(name, column.type, metadata=field_metadata),
                 column,
             )
         else:
@@ -370,7 +372,13 @@ def _array_from_values(
     try:
         return pa.array(values, type=value_type), dict(metadata) if metadata else None
     except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError):
-        return pa.array(values), None
+        inferred = pa.array(values)
+        if metadata and b"asset_type" in metadata:
+            return inferred, None
+        try:
+            return inferred.cast(value_type), dict(metadata) if metadata else None
+        except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError):
+            return inferred, None
 
 
 def _is_arrow_backed(row: Row) -> bool:

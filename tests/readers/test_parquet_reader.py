@@ -176,6 +176,59 @@ def test_parquet_filter_runs_after_dtype_overrides(tmp_path):
     assert [row["label"] for row in out] == ["c", "d"]
 
 
+def test_parquet_dtype_override_clears_stale_file_metadata(tmp_path):
+    p = tmp_path / "metadata.parquet"
+    table = datatype.apply_dtypes_to_table(
+        pa.table({"frames": ["123"]}),
+        {"frames": datatype.video_file()},
+    )
+    pq.write_table(table, p)
+
+    reader = ParquetReader(
+        str(p),
+        file_path_column=None,
+        dtypes={"frames": datatype.int64()},
+    )
+    out = [
+        unit
+        for shard in reader.list_shards()
+        for unit in reader.read_shard(shard)
+        if isinstance(unit, Tabular)
+    ]
+
+    assert len(out) == 1
+    assert out[0].table["frames"].to_pylist() == [123]
+    assert out[0].table.schema.field("frames").type == pa.int64()
+    assert out[0].table.schema.field("frames").metadata is None
+
+
+def test_parquet_filter_disables_pushdown_for_dtype_columns(tmp_path):
+    p = tmp_path / "string-ints.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "x": pa.array(["100", "60", "5"]),
+                "label": pa.array(["a", "b", "c"]),
+            }
+        ),
+        p,
+        row_group_size=1,
+    )
+
+    reader = ParquetReader(
+        str(p),
+        filter=col("x") > 50,
+        dtypes={"x": datatype.int64()},
+    )
+
+    out = []
+    for shard in reader.list_shards():
+        out.extend(list(_rows_from_shard_units(reader.read_shard(shard))))
+
+    assert [row["x"] for row in out] == [100, 60]
+    assert [row["label"] for row in out] == ["a", "b"]
+
+
 def test_parquet_can_split_inside_large_row_group(tmp_path):
     p = tmp_path / "large-row-group.parquet"
     table = pa.table(

@@ -214,7 +214,7 @@ def _row_segment_schema(
         )
         if not dtypes:
             continue
-        schema = schema_with_dtypes(schema, dtypes)
+        schema = schema_with_dtypes(schema, dtypes, preserve_metadata=False)
     return schema
 
 

@@ -96,6 +96,17 @@ def test_arrow_row_fast_path_preserves_field_metadata() -> None:
     assert out.schema.field("frames").metadata == {b"asset_type": b"video"}
 
 
+def test_arrow_row_patch_preserves_base_type_without_schema_override() -> None:
+    table = pa.table({"x": pa.array([1, 2], type=pa.uint8())})
+    rows = Tabular(table).to_rows()
+    rows[0] = rows[0].update({"x": None})
+
+    out = Tabular.from_rows(rows).table
+
+    assert out.schema.field("x").type == pa.uint8()
+    assert out["x"].to_pylist() == [None, 2]
+
+
 def test_arrow_row_fast_path_applies_carried_schema_to_unchanged_columns() -> None:
     table = pa.table({"frames": ["a.mp4", "b.mp4"]})
     rows = Tabular(table).to_rows()
@@ -389,6 +400,28 @@ def test_vectorized_cast_clears_previous_file_metadata() -> None:
     blocks = list(pipeline.execute(pipeline.source.read()))
 
     assert isinstance(blocks[0], Tabular)
+    assert blocks[0].table.schema.field("frames").type == pa.int64()
+    assert blocks[0].table.schema.field("frames").metadata is None
+
+
+def test_row_dtype_redefinition_clears_previous_file_metadata() -> None:
+    pipeline = (
+        from_items([{"id": 1}])
+        .map(
+            lambda row: row.update({"frames": "123"}),
+            dtypes={"frames": rf.datatype.video_file()},
+        )
+        .map(
+            lambda row: row.update({"frames": row["frames"]}),
+            dtypes={"frames": "int64"},
+        )
+        .filter(rf.col("frames") > 100)
+    )
+
+    blocks = list(pipeline.execute(pipeline.source.read()))
+
+    assert isinstance(blocks[0], Tabular)
+    assert blocks[0].table["frames"].to_pylist() == [123]
     assert blocks[0].table.schema.field("frames").type == pa.int64()
     assert blocks[0].table.schema.field("frames").metadata is None
 
