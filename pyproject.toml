@@ -63,6 +63,13 @@ mcap = [
 s3 = [
     "s3fs",
 ]
+tensorflow = [
+    "tensorflow",
+]
+tfds = [
+    "macrodata-refiner[tensorflow]",
+    "tensorflow-datasets",
+]
 testing = [
     "macrodata-refiner[hdf5]",
     "macrodata-refiner[hf]",

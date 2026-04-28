@@ -23,6 +23,7 @@
 - [Tabular Files](reading-data/tabular-files.md)
 - [Files and Videos](reading-data/files-and-videos.md)
 - [Hugging Face](reading-data/hugging-face.md)
+- [TensorFlow](reading-data/tensorflow.md)
 - [Custom Readers](reading-data/custom-readers.md)
 
 ## Episode Data

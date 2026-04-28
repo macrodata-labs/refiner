@@ -7,6 +7,8 @@ from refiner.pipeline.sources.readers.json import JsonReader
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.mcap import McapReader
 from refiner.pipeline.sources.readers.parquet import ParquetReader
+from refiner.pipeline.sources.readers.tfds import TfdsReader
+from refiner.pipeline.sources.readers.tfrecord import TfrecordReader
 from refiner.pipeline.sources.readers.zarr import ZarrReader
 from refiner.robotics.lerobot_format import LeRobotRow
 
@@ -21,5 +23,7 @@ __all__ = [
     "LeRobotRow",
     "McapReader",
     "ParquetReader",
+    "TfdsReader",
+    "TfrecordReader",
     "ZarrReader",
 ]
