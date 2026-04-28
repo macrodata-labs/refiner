@@ -55,7 +55,9 @@ class HFDatasetReader(BaseSource):
         self.target_shard_bytes = target_shard_bytes
         self.num_shards = num_shards
         self.arrow_batch_size = arrow_batch_size
-        self.columns_to_read = tuple(columns_to_read) if columns_to_read else None
+        self.columns_to_read = (
+            tuple(columns_to_read) if columns_to_read is not None else None
+        )
 
         try:
             from datasets import get_dataset_config_info
@@ -225,7 +227,8 @@ class HFDatasetReader(BaseSource):
     def _fallback_shards(self, num_shards: int | None) -> list[Shard]:
         dataset = self._load_fallback_dataset()
         available = int(getattr(dataset, "num_shards", 1) or 1)
-        wanted = int(num_shards or available)
+        requested = int(num_shards) if num_shards is not None else None
+        wanted = available if requested is None or requested <= 0 else requested
         if wanted > available:
             raise ValueError(
                 f"Hugging Face fallback for {self.repo!r} has only {available} "

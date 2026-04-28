@@ -473,6 +473,47 @@ def test_hf_file_filter_loads_filter_column_before_final_projection(
     assert table.column("file_path").to_pylist() == ["source.parquet"]
 
 
+def test_hf_dataset_reader_preserves_empty_projection(monkeypatch) -> None:
+    _install_datasets(monkeypatch)
+    delegate_columns: list[tuple[str, ...] | None] = []
+
+    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+        del hf_token, timeout
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {"default": {"train": ["https://example.com/train.parquet"]}}
+        raise AssertionError(url)
+
+    class FakeParquetReader:
+        def __init__(self, inputs, **kwargs):
+            del inputs
+            self.columns_to_read = kwargs["columns_to_read"]
+            delegate_columns.append(self.columns_to_read)
+
+        def list_shards(self):
+            return [_parquet_shard()]
+
+        def read_shard(self, shard):
+            del shard
+            yield Tabular(
+                pa.table(
+                    {
+                        "value": [1],
+                        "file_path": ["source.parquet"],
+                    }
+                )
+            )
+
+    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
+    monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
+
+    reader = HFDatasetReader("org/repo", columns_to_read=[])
+    units = list(reader.read_shard(reader.list_shards()[0]))
+
+    assert delegate_columns == [()]
+    assert isinstance(units[0], Tabular)
+    assert units[0].table.column_names == ["file_path"]
+
+
 def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None:
     class FakeStreamingDataset:
         num_shards = 2
@@ -566,3 +607,28 @@ def test_hf_dataset_fallback_errors_when_requested_shards_exceed_source_shards(
 
     with pytest.raises(ValueError, match="only 1 source shard"):
         reader.list_shards()
+
+
+def test_hf_dataset_fallback_treats_non_positive_shards_as_auto(monkeypatch) -> None:
+    class FakeStreamingDataset:
+        num_shards = 3
+
+    _install_datasets(monkeypatch, dataset=FakeStreamingDataset())
+
+    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+        del hf_token, timeout
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {}
+        if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/"):
+            return []
+        if "datasets-server.huggingface.co/parquet" in url:
+            return {"parquet_files": []}
+        if "/tree/" in url:
+            return []
+        raise AssertionError(url)
+
+    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
+
+    reader = HFDatasetReader("org/repo", num_shards=-1)
+
+    assert len(reader.list_shards()) == 3
