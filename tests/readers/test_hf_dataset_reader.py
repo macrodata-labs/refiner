@@ -519,7 +519,13 @@ def test_hf_dataset_reader_reads_planned_shard_without_relisting(monkeypatch) ->
                 start=0,
                 end=10,
                 source_index=4,
-            )
+            ),
+            FilePart(
+                path="https://example.com/train-00001.parquet",
+                start=0,
+                end=20,
+                source_index=7,
+            ),
         ],
         global_ordinal=0,
     )
@@ -554,8 +560,11 @@ def test_hf_dataset_reader_reads_planned_shard_without_relisting(monkeypatch) ->
     units = list(HFDatasetReader("org/repo").read_shard(shard))
 
     assert calls == []
-    assert delegate_inputs[-1] == ["https://example.com/train-00000.parquet"]
-    assert delegate_source_indexes == [[0]]
+    assert delegate_inputs[-1] == [
+        "https://example.com/train-00000.parquet",
+        "https://example.com/train-00001.parquet",
+    ]
+    assert delegate_source_indexes == [[0, 1]]
     assert isinstance(units[0], Tabular)
 
 
