@@ -514,7 +514,6 @@ def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
     assert counter_totals["completion_tokens"] == 7
     assert "failed_requests" not in counter_totals
     assert {item["label"] for item in emitter.registered_gauges} >= {
-        "waiting_requests",
         "running_requests",
     }
 

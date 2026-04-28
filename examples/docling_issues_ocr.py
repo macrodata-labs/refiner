@@ -3,12 +3,16 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 from collections.abc import Mapping
 from typing import Any
 
 import refiner as mdr
 
-INPUT_PATH = "hf://datasets/hynky/docling-issues/data/train-00000-of-00001.parquet"
+INPUT_PATH = os.environ.get(
+    "REFINER_DOCLING_ISSUES_INPUT_PATH",
+    "hf://datasets/hynky/docling-issues/data/train-00000-of-00001.parquet",
+)
 OUTPUT_PATH = "output/docling-issues-ocr"
 PDF_SCALE = 200.0 / 72.0
 DOTS_OCR_PROMPT = "Extract the text content from this image."

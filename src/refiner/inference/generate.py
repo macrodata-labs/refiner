@@ -36,18 +36,12 @@ def generate(
     client_lock = asyncio.Lock()
     request_semaphore = asyncio.Semaphore(max_concurrent_requests)
     gauges_registered = False
-    waiting_requests = 0
     running_requests = 0
 
     def _ensure_metrics_registered() -> None:
         nonlocal gauges_registered
         if gauges_registered:
             return
-        register_gauge(
-            "waiting_requests",
-            lambda: waiting_requests,
-            unit="requests",
-        )
         register_gauge(
             "running_requests",
             lambda: running_requests,
@@ -58,7 +52,6 @@ def generate(
     async def _generate(row: Row, payload: GeneratePayload) -> InferenceResponse:
         nonlocal client
         nonlocal running_requests
-        nonlocal waiting_requests
         request_payload: dict[str, Any] = {}
         if isinstance(provider, (OpenAIEndpointProvider, VLLMProvider)):
             request_payload["model"] = provider.model
@@ -92,9 +85,7 @@ def generate(
                     _ensure_metrics_registered()
             assert client is not None
 
-        waiting_requests += 1
         await request_semaphore.acquire()
-        waiting_requests -= 1
         running_requests += 1
         try:
             response = await client.generate(request_payload)
