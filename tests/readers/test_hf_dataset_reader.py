@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+from importlib.machinery import ModuleSpec
 
 import pyarrow as pa
 import pytest
@@ -46,6 +47,7 @@ def _install_datasets(
 ) -> list[tuple[str, str, dict[str, object]]]:
     calls: list[tuple[str, str, dict[str, object]]] = []
     module = types.ModuleType("datasets")
+    module.__spec__ = ModuleSpec("datasets", loader=None)
 
     def get_dataset_config_info(repo: str, **kwargs: object) -> object:
         calls.append(("info", repo, kwargs))

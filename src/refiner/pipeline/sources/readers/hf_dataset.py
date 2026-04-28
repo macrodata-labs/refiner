@@ -17,6 +17,7 @@ from refiner.pipeline.expressions import Expr
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.pipeline.sources.readers.parquet import ParquetReader
 from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.utils import check_required_dependencies
 
 _HF_HUB = "https://huggingface.co"
 _HF_DATASETS_SERVER = "https://datasets-server.huggingface.co"
@@ -64,13 +65,8 @@ class HFDatasetReader(BaseSource):
             tuple(columns_to_read) if columns_to_read is not None else None
         )
 
-        try:
-            from datasets import get_dataset_config_info
-        except ImportError as e:
-            raise ImportError(
-                "read_hf_dataset requires the optional Hugging Face dependencies. "
-                "Install with `macrodata-refiner[huggingface]`."
-            ) from e
+        check_required_dependencies("read_hf_dataset", ["datasets"], dist="huggingface")
+        from datasets import get_dataset_config_info
 
         info_kwargs: dict[str, Any] = {}
         if config is not None:
