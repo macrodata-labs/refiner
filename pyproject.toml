@@ -41,11 +41,15 @@ robotics = [
 text = [
     "warcio",
 ]
+hdf5 = [
+    "h5py",
+]
 s3 = [
     "s3fs",
 ]
 testing = [
     "macrodata-refiner[huggingface]",
+    "macrodata-refiner[hdf5]",
     "macrodata-refiner[robotics]",
     "macrodata-refiner[text]",
     "macrodata-refiner[s3]",

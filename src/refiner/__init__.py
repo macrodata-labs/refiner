@@ -10,6 +10,7 @@ from refiner.pipeline import (
     from_source,
     read_csv,
     read_hf_dataset,
+    read_hdf5,
     read_jsonl,
     read_lerobot,
     read_parquet,
@@ -31,6 +32,7 @@ __all__ = [
     # sources
     "read_csv",
     "read_hf_dataset",
+    "read_hdf5",
     "read_jsonl",
     "read_lerobot",
     "read_parquet",

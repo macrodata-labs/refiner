@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from fsspec import AbstractFileSystem
 
@@ -33,6 +33,7 @@ from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
     HFDatasetReader,
+    Hdf5Reader,
     JsonlReader,
     ParquetReader,
 )
@@ -547,6 +548,46 @@ def read_jsonl(
             num_shards=num_shards,
             file_path_column=file_path_column,
             parse_use_threads=parse_use_threads,
+            dtypes=dtypes,
+        )
+    )
+
+
+def read_hdf5(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    groups: str | Sequence[str] | None = None,
+    datasets: Mapping[str, str] | Sequence[str] | None = None,
+    attrs: Mapping[str, str] | Sequence[str] | None = None,
+    file_path_column: str | None = "file_path",
+    group_path_column: str | None = "hdf5_group",
+    missing: Literal["error", "skip", "none"] = "error",
+    dtypes: DTypeMapping | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline with an HDF5 reader source.
+
+    HDF5 files are planned as atomic files. Each matched HDF5 group becomes one
+    row, with `datasets` and `attrs` selecting values relative to that group.
+    """
+    return RefinerPipeline(
+        source=Hdf5Reader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            groups=groups,
+            datasets=datasets,
+            attrs=attrs,
+            file_path_column=file_path_column,
+            group_path_column=group_path_column,
+            missing=missing,
             dtypes=dtypes,
         )
     )
