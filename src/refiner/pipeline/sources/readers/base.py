@@ -10,6 +10,7 @@ import pyarrow as pa
 
 from refiner.io import DataFile, DataFileSet, DataFolder
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.data.datatype import DTypeMapping, schema_with_dtypes
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline.data.tabular import repeat_scalar, set_or_append_column
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
@@ -19,6 +20,7 @@ from refiner.pipeline.sources.readers.utils import (
     align_byte_range_to_newlines,
     is_splittable_by_bytes,
 )
+from refiner.worker.context import logger
 
 
 class BaseReader(BaseSource):
@@ -48,6 +50,7 @@ class BaseReader(BaseSource):
         num_shards: int | None = None,
         file_path_column: str | None = "file_path",
         split_by_bytes: bool = True,
+        dtypes: DTypeMapping | None = None,
     ):
         """Create a reader over a set of input files.
 
@@ -59,6 +62,7 @@ class BaseReader(BaseSource):
             extensions: If a directory input is provided, filter by these suffixes (case-insensitive).
             target_shard_bytes: Target approximate byte size for planned shards.
             num_shards: Optional explicit number of planned shards.
+            dtypes: Optional dtype overrides exposed as this source's schema.
         """
         self.fileset = DataFileSet.resolve(
             inputs,
@@ -71,6 +75,7 @@ class BaseReader(BaseSource):
         self.num_shards = num_shards
         self.file_path_column = file_path_column
         self.split_by_bytes = split_by_bytes
+        self.dtypes = dtypes
         # Single-open-file cache for readers that do byte-based seeks or stream reads.
         self._open_file: DataFile | None = None
         self._open_fh: Any | None = None
@@ -83,6 +88,10 @@ class BaseReader(BaseSource):
     def files(self) -> list[str]:
         """Deterministic list of resolved input file paths."""
         return [file.path for file in self.fileset.files]
+
+    @property
+    def schema(self) -> pa.Schema | None:
+        return schema_with_dtypes(None, self.dtypes)
 
     def describe(self) -> dict[str, Any]:
         # Keep planning metadata cheap: do not resolve/list inputs here.
@@ -210,6 +219,7 @@ class BaseReader(BaseSource):
         shards: list[Shard] = []
         current_parts: list[FilePart] = []
         current_size = 0
+        file_count = 0
 
         def can_flush_more() -> bool:
             return shard_sizes is None or len(shards) < len(shard_sizes) - 1
@@ -228,6 +238,7 @@ class BaseReader(BaseSource):
 
         for source_index, files in enumerate(self.fileset.expand_sources()):
             for file in files:
+                file_count += 1
                 path = file.abs_path()
                 size = self.fileset.size(source_index, path)
                 # Atomic files stay whole: `end=-1` means "reader decides how to read the full file".
@@ -274,6 +285,20 @@ class BaseReader(BaseSource):
                     offset += span_size
 
         flush()
+        if (
+            num_shards is not None
+            and num_shards > 0
+            and not self.split_by_bytes
+            and file_count < num_shards
+        ):
+            logger.warning(
+                "{} requested {} shards, but this reader keeps files atomic and "
+                "only found {} input files; planned {} shards.",
+                self.name,
+                num_shards,
+                file_count,
+                len(shards),
+            )
         return shards
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:

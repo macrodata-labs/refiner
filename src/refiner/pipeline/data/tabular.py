@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from itertools import count
+from typing import Any, cast
 
 import pyarrow as pa
+import numpy as np
 
 from refiner.pipeline.expressions import Expr, eval_expr_arrow
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
@@ -137,7 +139,10 @@ def _table_from_rows(
             seen.add(name)
             names.append(name)
     if schema is None:
-        columns = {name: [row.get(name) for row in rows] for name in names}
+        columns = {
+            name: _array_from_values([row.get(name) for row in rows], None, None)[0]
+            for name in names
+        }
         if any(row.shard_id is not None for row in rows):
             columns[SHARD_ID_COLUMN] = [row.shard_id for row in rows]
         return pa.table(columns)
@@ -367,6 +372,7 @@ def _array_from_values(
     value_type: pa.DataType | None,
     metadata: dict[bytes, bytes] | None,
 ) -> tuple[pa.Array, dict[bytes, bytes] | None]:
+    values = [_arrow_compatible_value(value) for value in values]
     if value_type is None:
         return pa.array(values), None
     try:
@@ -379,6 +385,14 @@ def _array_from_values(
             return inferred.cast(value_type), dict(metadata) if metadata else None
         except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError):
             return inferred, None
+
+
+def _arrow_compatible_value(value: object) -> object:
+    if isinstance(value, np.ndarray):
+        return cast(Any, value).tolist()
+    if isinstance(value, np.generic):
+        return cast(Any, value).item()
+    return value
 
 
 def _is_arrow_backed(row: Row) -> bool:
