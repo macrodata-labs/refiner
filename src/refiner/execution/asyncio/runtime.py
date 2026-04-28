@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import atexit
-import os
 import threading
 from collections.abc import Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -12,8 +11,7 @@ T = TypeVar("T")
 
 
 def _default_io_workers() -> int:
-    cpu_count = max(1, os.cpu_count() or 1)
-    return min(4, cpu_count)
+    return 8
 
 
 class AsyncRuntime:

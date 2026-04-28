@@ -3,6 +3,8 @@ from __future__ import annotations
 from abc import ABC
 from typing import Any
 
+import pyarrow as pa
+
 from refiner.execution.tracking.shards import count_block_by_shard
 from refiner.pipeline.data.block import Block, split_block_by_shard
 from refiner.worker.metrics.api import log_throughput
@@ -58,15 +60,14 @@ class BaseSink(ABC):
         """
         return None
 
+    def set_input_schema(self, schema: pa.Schema | None) -> None:
+        """Receive the schema expected at this sink boundary before writing starts."""
+        del schema
+
     @property
     def counts_output_rows(self) -> bool:
         """Whether blocks written into this sink should count toward output_rows."""
         return True
-
-    @property
-    def requires_tabular_input(self) -> bool:
-        """Whether this sink expects blocks to be converted to `Tabular` before writing."""
-        return False
 
     def on_shard_complete(self, shard_id: str) -> None:
         """Flush or finalize state for one shard after upstream completion.

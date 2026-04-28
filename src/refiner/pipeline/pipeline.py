@@ -47,6 +47,7 @@ from refiner.execution.engine import (
     compile_segments,
     execute_segments,
     iter_rows,
+    schema_after_segments,
 )
 from refiner.execution.operators.row import ShardDeltaFn
 from refiner.pipeline.sources.base import SourceUnit
@@ -133,6 +134,9 @@ class RefinerPipeline:
         if self._compiled_segments is None:
             self._compiled_segments = compile_segments(self.pipeline_steps)
         return self._compiled_segments
+
+    def output_schema(self) -> pa.Schema | None:
+        return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
     def map(
         self, fn: MapFn, *, dtypes: DTypeMapping | None = None
@@ -294,9 +298,6 @@ class RefinerPipeline:
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             on_shard_delta=on_shard_delta,
             input_schema=self.source.schema,
-            final_output_tabular=(
-                self.sink.requires_tabular_input if self.sink is not None else False
-            ),
         )
 
     def iter_rows(self) -> Iterable[Row]:
@@ -326,11 +327,17 @@ class RefinerPipeline:
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}__w{worker_id}.jsonl",
+        upload_assets: bool = False,
+        assets_subdir: str = "assets",
+        max_asset_uploads_in_flight: int = 16,
     ) -> "RefinerPipeline":
         return self.with_sink(
             JsonlSink(
                 output=output,
                 filename_template=filename_template,
+                upload_assets=upload_assets,
+                assets_subdir=assets_subdir,
+                max_asset_uploads_in_flight=max_asset_uploads_in_flight,
             )
         )
 
@@ -340,12 +347,18 @@ class RefinerPipeline:
         *,
         filename_template: str = "{shard_id}__w{worker_id}.parquet",
         compression: str | None = None,
+        upload_assets: bool = False,
+        assets_subdir: str = "assets",
+        max_asset_uploads_in_flight: int = 16,
     ) -> "RefinerPipeline":
         return self.with_sink(
             ParquetSink(
                 output=output,
                 filename_template=filename_template,
                 compression=compression,
+                upload_assets=upload_assets,
+                assets_subdir=assets_subdir,
+                max_asset_uploads_in_flight=max_asset_uploads_in_flight,
             )
         )
 

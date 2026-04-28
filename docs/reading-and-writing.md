@@ -183,11 +183,40 @@ Example:
 pipeline = pipeline.write_parquet("s3://my-bucket/clean-output/")
 ```
 
+`write_jsonl(...)` and `write_parquet(...)` can also copy file-typed asset
+columns into the same output folder:
+
+```python
+pipeline = pipeline.write_parquet(
+    "s3://my-bucket/clean-output/",
+    upload_assets=True,
+)
+```
+
+When `upload_assets=True`, Refiner infers asset columns from file dtype metadata,
+copies those files without decoding them, and rewrites the column values to the
+copied asset paths. Assets are written under
+`{output}/assets/{shard_id}__w{worker_id}/...` by default; use `assets_subdir` to
+change the subfolder name and `max_asset_uploads_in_flight` to bound per-worker
+copy concurrency. Missing or unreadable asset paths fail the shard.
+
+Mark path columns as assets with `dtypes=...` on row transforms or with
+`cast(...)`:
+
+```python
+pipeline = pipeline.map(
+    lambda row: {"image": f"{row['image_dir']}/{row['image_name']}"},
+    dtypes={"image": mdr.datatype.image_file()},
+)
+
+pipeline = pipeline.cast(video=mdr.datatype.video_file())
+```
+
 When you run a writer through `launch_local(...)` or `launch_cloud(...)`, some
 sinks add a reducer stage after the main writer stage. For `write_jsonl(...)`
 and `write_parquet(...)`, that reducer removes stale shard/worker files and
-keeps only finalized outputs. The output prefix should therefore be dedicated to
-Refiner-managed files.
+uploaded asset attempt folders, keeping only finalized outputs. The output
+prefix should therefore be dedicated to Refiner-managed files.
 
 ## What Python Functions Actually See
 

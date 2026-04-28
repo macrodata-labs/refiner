@@ -8,7 +8,9 @@ import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.sinks.assets import AssetUploadManager
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import get_active_worker_token
@@ -21,11 +23,32 @@ class JsonlSink(BaseSink):
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}__w{worker_id}.jsonl",
+        upload_assets: bool = False,
+        assets_subdir: str = "assets",
+        max_asset_uploads_in_flight: int = 16,
     ):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
+        self.upload_assets = upload_assets
+        self.assets_subdir = assets_subdir
         self._files: dict[str, IO[str]] = {}
         self._encoder = json.JSONEncoder(ensure_ascii=True, separators=(",", ":"))
+        self._assets = (
+            AssetUploadManager(
+                self.output,
+                assets_subdir=assets_subdir,
+                filename_template=filename_template,
+                max_uploads_in_flight=max_asset_uploads_in_flight,
+            )
+            if upload_assets
+            else None
+        )
+        if self._assets is not None:
+            self.assets_subdir = self._assets.assets_subdir
+
+    def set_input_schema(self, schema: pa.Schema | None) -> None:
+        if self._assets is not None:
+            self._assets.set_input_schema(schema)
 
     def _relpath(self, shard_id: str) -> str:
         return self.filename_template.format(
@@ -44,10 +67,17 @@ class JsonlSink(BaseSink):
     def _write_rows(self, shard_id: str, rows: Iterable[Mapping[str, object]]) -> None:
         file = self._file(shard_id)
         for row in rows:
-            file.write(self._encoder.encode(row))
+            file.write(
+                self._encoder.encode(row.to_dict() if isinstance(row, Row) else row)
+            )
             file.write("\n")
 
     def _write_table_rows(self, shard_id: str, table: pa.Table) -> None:
+        if self._assets is not None:
+            self._write_rows(
+                shard_id, self._assets.rewrite_table(shard_id, table).to_pylist()
+            )
+            return
         for batch in table.to_batches(max_chunksize=4096):
             self._write_rows(shard_id, batch.to_pylist())
 
@@ -55,7 +85,10 @@ class JsonlSink(BaseSink):
         if isinstance(block, Tabular):
             self._write_table_rows(shard_id, block.table)
         else:
-            self._write_rows(shard_id, (row.to_dict() for row in block))
+            rows = block
+            if self._assets is not None:
+                rows = self._assets.rewrite_rows(shard_id, rows)
+            self._write_rows(shard_id, rows)
 
     def on_shard_complete(self, shard_id: str) -> None:
         file = self._files.pop(shard_id, None)
@@ -64,25 +97,30 @@ class JsonlSink(BaseSink):
             log_throughput("files_written", 1, shard_id=shard_id, unit="files")
 
     def close(self) -> None:
-        for file in self._files.values():
-            file.close()
-        self._files.clear()
+        try:
+            if self._assets is not None:
+                self._assets.flush()
+        finally:
+            for file in self._files.values():
+                file.close()
+            self._files.clear()
 
     def describe(self) -> tuple[str, str, dict[str, object]]:
-        return (
-            "write_jsonl",
-            "writer",
-            {
-                "path": self.output.abs_path(),
-                "filename_template": self.filename_template,
-            },
-        )
+        args: dict[str, object] = {
+            "path": self.output.abs_path(),
+            "filename_template": self.filename_template,
+        }
+        if self.upload_assets:
+            args["upload_assets"] = True
+            args["assets_subdir"] = self.assets_subdir
+        return ("write_jsonl", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:
         return FileCleanupReducerSink(
             output=self.output,
             filename_template=self.filename_template,
             reducer_name="write_jsonl_reduce",
+            assets_subdir=self.assets_subdir if self.upload_assets else None,
         )
 
 

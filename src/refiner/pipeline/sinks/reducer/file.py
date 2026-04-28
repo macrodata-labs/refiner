@@ -4,6 +4,7 @@ import re
 from string import Formatter
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.pipeline.sinks.assets import ASSET_ATTEMPT_DIR_RE
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.worker.context import get_active_stage_index, get_finalized_workers
 
@@ -65,10 +66,12 @@ class FileCleanupReducerSink(BaseSink):
         *,
         filename_template: str,
         reducer_name: str,
+        assets_subdir: str | None = None,
     ) -> None:
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
         self.reducer_name = reducer_name
+        self.assets_subdir = assets_subdir
         self._managed_path_pattern = _compile_managed_path_pattern(filename_template)
         self._cleanup_ran = False
 
@@ -81,13 +84,16 @@ class FileCleanupReducerSink(BaseSink):
         return False
 
     def describe(self) -> tuple[str, str, dict[str, object]]:
+        args = {
+            "path": self.output.abs_path(),
+            "filename_template": self.filename_template,
+        }
+        if self.assets_subdir is not None:
+            args["assets_subdir"] = self.assets_subdir
         return (
             self.reducer_name,
             "writer",
-            {
-                "path": self.output.abs_path(),
-                "filename_template": self.filename_template,
-            },
+            args,
         )
 
     def _run_cleanup(self) -> None:
@@ -112,14 +118,39 @@ class FileCleanupReducerSink(BaseSink):
         try:
             listed_paths = self.output.find("")
         except FileNotFoundError:
-            return
+            listed_paths = []
 
+        assets_prefix = (
+            f"{self.assets_subdir.rstrip('/')}/"
+            if self.assets_subdir is not None
+            else None
+        )
+
+        removed_asset_attempts: set[str] = set()
         # Extra template fields are treated as structure only. Authority is decided
         # solely from the finalized (shard_id, worker_id) pair extracted from each
         # managed path.
         for rel_path in listed_paths:
             if not isinstance(rel_path, str) or not rel_path or rel_path == ".":
                 continue
+            if assets_prefix is not None and (
+                rel_path == self.assets_subdir or rel_path.startswith(assets_prefix)
+            ):
+                attempt_dir = rel_path[len(assets_prefix) :].split("/", maxsplit=1)[0]
+                match = ASSET_ATTEMPT_DIR_RE.fullmatch(attempt_dir)
+                if match is None:
+                    continue
+                if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
+                    continue
+                if attempt_dir in removed_asset_attempts:
+                    continue
+                removed_asset_attempts.add(attempt_dir)
+                try:
+                    self.output.rm(f"{assets_prefix}{attempt_dir}", recursive=True)
+                except FileNotFoundError:
+                    continue
+                continue
+
             match = self._managed_path_pattern.fullmatch(rel_path)
             if match is None:
                 continue

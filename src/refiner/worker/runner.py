@@ -88,6 +88,8 @@ class Worker:
         )
         runtime_services = collect_pipeline_services(self.pipeline)
         sink = self.pipeline.sink or NullSink()
+        sink_schema = self.pipeline.output_schema()
+        sink.set_input_schema(sink_schema)
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )

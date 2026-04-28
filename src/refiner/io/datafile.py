@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import os
 from os import PathLike
+import posixpath
+import shutil
 from typing import Any, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
@@ -73,6 +76,45 @@ class DataFile:
 
     def open(self, mode: str = "rt", **kwargs):
         return self.fs.open(self.path, mode=mode, **kwargs)
+
+    def copy(self, dest: DataFileLike, *, buffer_size: int = 2 * 1024 * 1024) -> None:
+        target = DataFile.resolve(dest)
+        if self.abs_path() == target.abs_path():
+            return
+        if (
+            self.is_local
+            and target.is_local
+            and os.path.realpath(self.abs_path()) == os.path.realpath(target.abs_path())
+        ):
+            return
+        if self.fs is target.fs and (
+            posixpath.normpath(self.path) == posixpath.normpath(target.path)
+        ):
+            return
+
+        # Same-filesystem copies are usually server-side for object stores; fall back to
+        # streaming only when the backend cannot copy directly.
+        if self.fs is target.fs and callable(getattr(target.fs, "copy", None)):
+            target.fs.makedirs(target.fs._parent(target.path), exist_ok=True)
+            try:
+                target.fs.copy(self.path, target.path)
+                return
+            except Exception:
+                try:
+                    target.fs.rm(target.path)
+                except FileNotFoundError:
+                    pass
+
+        try:
+            target.fs.makedirs(target.fs._parent(target.path), exist_ok=True)
+            with self.open(mode="rb") as src, target.open(mode="wb") as dst:
+                shutil.copyfileobj(src, dst, length=buffer_size)
+        except Exception:
+            try:
+                target.fs.rm(target.path)
+            except FileNotFoundError:
+                pass
+            raise
 
     def exists(self) -> bool:
         return self.fs.exists(self.path)

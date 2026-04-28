@@ -456,7 +456,7 @@ def test_vectorized_cast_after_map_table_reestablishes_schema_override() -> None
     assert blocks[0].table.schema.field("x").type == pa.float32()
 
 
-def test_sink_execution_forces_final_row_schema_to_tabular(tmp_path) -> None:
+def test_pipeline_exposes_final_row_schema_for_sink(tmp_path) -> None:
     pipeline = (
         from_items([{"id": 1}])
         .map(
@@ -468,8 +468,10 @@ def test_sink_execution_forces_final_row_schema_to_tabular(tmp_path) -> None:
 
     blocks = list(pipeline.execute(pipeline.source.read()))
 
-    assert isinstance(blocks[0], Tabular)
-    assert blocks[0].table.schema.field("frames").metadata == {b"asset_type": b"video"}
+    assert isinstance(blocks[0], list)
+    schema = pipeline.output_schema()
+    assert schema is not None
+    assert schema.field("frames").metadata == {b"asset_type": b"video"}
 
 
 def test_tabular_schema_flows_through_row_segment() -> None:
