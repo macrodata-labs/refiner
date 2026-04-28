@@ -18,11 +18,23 @@ def _feature(type_name: str) -> object:
     return type(type_name, (), {})()
 
 
-def _parquet_shard(end: int = -1) -> Shard:
+def _parquet_shard() -> Shard:
     return Shard.from_file_parts(
-        [FilePart(path="source.parquet", start=0, end=end)],
+        [FilePart(path="source.parquet", start=0, end=-1)],
         global_ordinal=0,
     )
+
+
+def _empty_parquet_resolution(url: str) -> object:
+    if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+        return {}
+    if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/"):
+        return []
+    if "datasets-server.huggingface.co/parquet" in url:
+        return {"parquet_files": []}
+    if "/tree/" in url:
+        return []
+    raise AssertionError(url)
 
 
 def _install_datasets(
@@ -579,15 +591,7 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {}
-        if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/"):
-            return []
-        if "datasets-server.huggingface.co/parquet" in url:
-            return {"parquet_files": []}
-        if "/tree/" in url:
-            return []
-        raise AssertionError(url)
+        return _empty_parquet_resolution(url)
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
 
@@ -622,15 +626,7 @@ def test_hf_dataset_fallback_errors_when_requested_shards_exceed_source_shards(
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {}
-        if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/"):
-            return []
-        if "datasets-server.huggingface.co/parquet" in url:
-            return {"parquet_files": []}
-        if "/tree/" in url:
-            return []
-        raise AssertionError(url)
+        return _empty_parquet_resolution(url)
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
 
@@ -648,15 +644,7 @@ def test_hf_dataset_fallback_treats_non_positive_shards_as_auto(monkeypatch) -> 
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
-            return {}
-        if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/"):
-            return []
-        if "datasets-server.huggingface.co/parquet" in url:
-            return {"parquet_files": []}
-        if "/tree/" in url:
-            return []
-        raise AssertionError(url)
+        return _empty_parquet_resolution(url)
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
 

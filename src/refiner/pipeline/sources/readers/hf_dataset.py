@@ -121,7 +121,6 @@ class HFDatasetReader(BaseSource):
         self._delegate: ParquetReader | None = None
         self._fallback_dataset: object | None = None
         self._fallback_num_shards: int | None = None
-        self._parquet_shard_count: int | None = None
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -136,11 +135,9 @@ class HFDatasetReader(BaseSource):
         if self._fallback_num_shards is not None:
             return self._fallback_shards(self._fallback_num_shards)
         try:
-            shards = self._parquet_reader().list_shards()
+            return self._parquet_reader().list_shards()
         except Exception:
             return self._fallback_shards(self.num_shards)
-        self._parquet_shard_count = len(shards)
-        return shards
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         if isinstance(shard.descriptor, RowRangeDescriptor):
