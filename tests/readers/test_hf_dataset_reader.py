@@ -602,7 +602,7 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
         num_shards=2,
         arrow_batch_size=10,
         dtypes={"id": datatype.int64()},
-        filter=col("label") == "keep",
+        filter=(col("label") == "keep") & col("file_path").is_null(),
     )
     shards = reader.list_shards()
     units = list(reader.read_shard(shards[1]))
@@ -613,6 +613,7 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
     table = units[0].table
     assert table.column("id").to_pylist() == [11]
     assert table.column("id").type == pa.int64()
+    assert table.column("file_path").to_pylist() == [None]
     assert table.column("label").to_pylist() == ["keep"]
     assert table.column("video").to_pylist() == ["hf://datasets/org/repo/keep.mp4"]
     assert table.schema.field("video").metadata == {b"asset_type": b"video"}

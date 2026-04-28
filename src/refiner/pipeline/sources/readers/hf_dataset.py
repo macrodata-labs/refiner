@@ -256,6 +256,15 @@ class HFDatasetReader(BaseSource):
                 raise TypeError(
                     "Hugging Face fallback expected Arrow batches from datasets"
                 )
+            if (
+                self.file_path_column is not None
+                and self.file_path_column not in table.column_names
+            ):
+                table = set_or_append_column(
+                    table,
+                    self.file_path_column,
+                    pa.nulls(table.num_rows, type=pa.string()),
+                )
             table = self._finish_table(
                 table,
                 non_file_dtypes=self._non_file_dtypes,

@@ -48,13 +48,12 @@ uv add "macrodata-refiner[huggingface]"
 
 ```python
 import refiner as mdr
-from refiner.pipeline.data import datatype
 
 pipeline = mdr.read_hf_dataset(
     "user/my-dataset",
     config="default",
     split="train",
-    dtypes={"video": datatype.video_file()},
+    dtypes={"video": mdr.datatype.video_file()},
 )
 ```
 
