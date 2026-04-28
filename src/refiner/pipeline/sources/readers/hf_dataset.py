@@ -116,7 +116,7 @@ class HFDatasetReader(BaseSource):
         self.file_path_column = file_path_column
         self._delegate: ParquetReader | None = None
         self._fallback_dataset: object | None = None
-        self._fallback_num_shards: int | None = None
+        self._fallback_shard_count: int | None = None
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -128,8 +128,8 @@ class HFDatasetReader(BaseSource):
         }
 
     def list_shards(self) -> list[Shard]:
-        if self._fallback_num_shards is not None:
-            return self._fallback_shards(self._fallback_num_shards)
+        if self._fallback_shard_count is not None:
+            return self._fallback_shards(self._fallback_shard_count)
         try:
             return self._parquet_reader().list_shards()
         except (FileNotFoundError, httpx.HTTPError, OSError, pa.ArrowException):
@@ -212,7 +212,7 @@ class HFDatasetReader(BaseSource):
                 f"Hugging Face fallback for {self.repo!r} has only {available} "
                 f"source shard(s), but {wanted} were requested."
             )
-        self._fallback_num_shards = wanted
+        self._fallback_shard_count = wanted
         return [
             Shard.from_row_range(start=i, end=i + 1, global_ordinal=i)
             for i in range(wanted)
@@ -239,7 +239,7 @@ class HFDatasetReader(BaseSource):
         descriptor = shard.descriptor
         if not isinstance(descriptor, RowRangeDescriptor):
             raise TypeError("Hugging Face fallback requires row-range shards")
-        total = self._fallback_num_shards
+        total = self._fallback_shard_count
         if total is None:
             total = len(self._fallback_shards(self.num_shards))
         dataset = cast(Any, self._load_fallback_dataset()).shard(
