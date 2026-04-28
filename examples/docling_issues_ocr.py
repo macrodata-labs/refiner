@@ -87,27 +87,43 @@ async def transcribe_pdf(row, generate):
     suspect_blank_pages: list[int] = []
     page_images: list[str] = []
 
-    async for page in pdf.iter_rendered_pages(scale=PDF_SCALE):
-        image_url = _image_data_url(page.image)
-        response = await generate(
+    try:
+        async for page in pdf.iter_rendered_pages(scale=PDF_SCALE):
+            image_url = _image_data_url(page.image)
+            response = await generate(
+                {
+                    "messages": _dots_image_message(
+                        DOTS_OCR_PROMPT,
+                        image_url,
+                    ),
+                    "temperature": 0.1,
+                    "top_p": 1.0,
+                    "max_completion_tokens": DOTS_MAX_COMPLETION_TOKENS,
+                }
+            )
+            text = response.text.strip()
+            page_texts.append(text)
+            page_images.append(image_url)
+            if not text or text.startswith("The "):
+                suspect_blank_pages.append(page.index)
+    except Exception as exc:
+        return row.update(
             {
-                "messages": _dots_image_message(
-                    DOTS_OCR_PROMPT,
-                    image_url,
-                ),
-                "temperature": 0.1,
-                "top_p": 1.0,
-                "max_completion_tokens": DOTS_MAX_COMPLETION_TOKENS,
+                "invalid_pdf": True,
+                "pdf_error": str(exc),
+                "page_texts": [],
+                "transcription": "",
+                "page_count": 0,
+                "has_repetition": False,
+                "suspect_blank_pages": [],
+                "_page_images": [],
             }
         )
-        text = response.text.strip()
-        page_texts.append(text)
-        page_images.append(image_url)
-        if not text or text.startswith("The "):
-            suspect_blank_pages.append(page.index)
 
     return row.update(
         {
+            "invalid_pdf": False,
+            "pdf_error": None,
             "page_texts": page_texts,
             "transcription": "\n\n".join(page_texts),
             "page_count": len(page_texts),
@@ -116,6 +132,10 @@ async def transcribe_pdf(row, generate):
             "_page_images": page_images,
         }
     )
+
+
+def keep_valid_pdf(row) -> bool:
+    return not bool(row["invalid_pdf"])
 
 
 def keep_non_repetitive(row) -> bool:
@@ -183,6 +203,7 @@ if __name__ == "__main__":
             max_in_flight=16,
             preserve_order=False,
         )
+        .filter(keep_valid_pdf)
         .filter(keep_non_repetitive)
         .map_async(
             mdr.inference.generate(
