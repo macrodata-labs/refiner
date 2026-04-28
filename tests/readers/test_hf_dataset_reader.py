@@ -1,29 +1,53 @@
 from __future__ import annotations
 
+import sys
+import types
+
 import pyarrow as pa
+import pytest
 
 from refiner.pipeline.data import datatype
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.expressions import col
 from refiner.pipeline.sources.readers import hf_dataset
 from refiner.pipeline.sources.readers.hf_dataset import HFDatasetReader
 
 
-def _parquet_response(
+def _feature(type_name: str) -> object:
+    return type(type_name, (), {})()
+
+
+def _parquet_shard(end: int = -1) -> Shard:
+    return Shard.from_file_parts(
+        [FilePart(path="source.parquet", start=0, end=end)],
+        global_ordinal=0,
+    )
+
+
+def _install_datasets(
+    monkeypatch,
+    *,
     config: str = "default",
-    split: str = "train",
-    path: str = "default/train/0.parquet",
-) -> dict[str, list[dict[str, str]]]:
-    return {
-        "parquet_files": [
-            {
-                "config": config,
-                "split": split,
-                "url": f"https://huggingface.co/datasets/org/repo/resolve/refs%2Fconvert%2Fparquet/{path}",
-            }
-        ]
-    }
+    features: dict[str, object] | None = None,
+    dataset: object | None = None,
+) -> list[tuple[str, str, dict[str, object]]]:
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    module = types.ModuleType("datasets")
+
+    def get_dataset_config_info(repo: str, **kwargs: object) -> object:
+        calls.append(("info", repo, kwargs))
+        return types.SimpleNamespace(config_name=config, features=features or {})
+
+    def load_dataset(repo: str, config_name: str, **kwargs: object) -> object:
+        calls.append(("load", repo, {"config": config_name, **kwargs}))
+        assert dataset is not None
+        return dataset
+
+    setattr(module, "get_dataset_config_info", get_dataset_config_info)
+    setattr(module, "load_dataset", load_dataset)
+    monkeypatch.setitem(sys.modules, "datasets", module)
+    return calls
 
 
 def test_resolve_hf_filepaths_rewrites_only_relative_file_values() -> None:
@@ -67,6 +91,7 @@ def test_resolve_hf_filepaths_rewrites_only_relative_file_values() -> None:
 
 
 def test_hf_dataset_reader_lists_parquet_and_resolves_file_dtypes(monkeypatch) -> None:
+    _install_datasets(monkeypatch, config="cfg")
     calls: list[str] = []
     storage_options: list[object] = []
     parquet_dtypes: list[object] = []
@@ -77,21 +102,15 @@ def test_hf_dataset_reader_lists_parquet_and_resolves_file_dtypes(monkeypatch) -
         calls.append(url)
         assert hf_token == "tok"
         assert timeout == 5.0
-        if (
-            "datasets-server.huggingface.co/parquet?dataset=org/repo&config=cfg&split=train"
-            in url
-        ):
-            response = _parquet_response("cfg", "test", "cfg/test/0.parquet")
-            response["parquet_files"].append(
-                {
-                    "config": "cfg",
-                    "split": "train",
-                    "url": "https://huggingface.co/datasets/org/repo/resolve/refs%2Fconvert%2Fparquet/cfg/train/0.parquet",
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {
+                "cfg": {
+                    "test": ["https://huggingface.co/datasets/org/repo/test.parquet"],
+                    "train": [
+                        "https://huggingface.co/datasets/org/repo/resolve/refs%2Fconvert%2Fparquet/cfg/train/0.parquet"
+                    ],
                 }
-            )
-            return response
-        if "datasets-server.huggingface.co/info?dataset=org/repo" in url:
-            return {"dataset_info": {"cfg": {"features": {}}}}
+            }
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -106,7 +125,7 @@ def test_hf_dataset_reader_lists_parquet_and_resolves_file_dtypes(monkeypatch) -
             parquet_filters.append(self.filter)
 
         def list_shards(self):
-            return [Shard.from_row_range(start=0, end=2, global_ordinal=0)]
+            return [_parquet_shard()]
 
         def read_shard(self, shard):
             del shard
@@ -181,28 +200,21 @@ def test_hf_dataset_reader_lists_parquet_and_resolves_file_dtypes(monkeypatch) -
 
 
 def test_hf_dataset_reader_infers_media_dtypes_from_features(monkeypatch) -> None:
+    _install_datasets(
+        monkeypatch,
+        features={
+            "image": _feature("Image"),
+            "audio": _feature("Audio"),
+            "label": _feature("Value"),
+        },
+    )
     calls: list[str] = []
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
         calls.append(url)
-        if (
-            "datasets-server.huggingface.co/parquet?dataset=org/repo&config=default&split=train"
-            in url
-        ):
-            return _parquet_response()
-        if "datasets-server.huggingface.co/info?dataset=org/repo" in url:
-            return {
-                "dataset_info": {
-                    "default": {
-                        "features": {
-                            "image": {"_type": "Image"},
-                            "audio": {"_type": "Audio"},
-                            "label": {"_type": "Value", "dtype": "string"},
-                        }
-                    }
-                }
-            }
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {"default": {"train": ["https://example.com/train.parquet"]}}
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -211,7 +223,7 @@ def test_hf_dataset_reader_infers_media_dtypes_from_features(monkeypatch) -> Non
             self.dtypes = kwargs["dtypes"]
 
         def list_shards(self):
-            return [Shard.from_row_range(start=0, end=1, global_ordinal=0)]
+            return [_parquet_shard()]
 
         def read_shard(self, shard):
             del shard
@@ -251,18 +263,25 @@ def test_hf_dataset_reader_infers_media_dtypes_from_features(monkeypatch) -> Non
     assert table.column("label").to_pylist() == ["cat"]
     assert table.schema.field("image").metadata == {b"asset_type": b"image"}
     assert table.schema.field("audio").metadata == {b"asset_type": b"audio"}
-    assert any("datasets-server.huggingface.co/info" in call for call in calls)
+    assert calls == ["https://huggingface.co/api/datasets/org/repo/parquet"]
 
 
 def test_hf_dataset_reader_falls_back_to_repo_parquet_files(monkeypatch) -> None:
+    _install_datasets(monkeypatch, config="cfg")
     delegate_inputs: list[object] = []
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {}
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/train":
+            return []
         if (
-            "datasets-server.huggingface.co/parquet?dataset=org/repo&config=cfg&split=train"
-            in url
+            url
+            == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/partial-train"
         ):
+            return []
+        if "datasets-server.huggingface.co/parquet" in url:
             return {"parquet_files": []}
         if "huggingface.co/api/datasets/org/repo/tree/main/cfg" in url:
             return [
@@ -276,8 +295,6 @@ def test_hf_dataset_reader_falls_back_to_repo_parquet_files(monkeypatch) -> None
             in url
         ):
             raise AssertionError("convert tree should not be needed")
-        if "datasets-server.huggingface.co/info?dataset=org/repo" in url:
-            return {"dataset_info": {"cfg": {"features": {}}}}
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -286,7 +303,7 @@ def test_hf_dataset_reader_falls_back_to_repo_parquet_files(monkeypatch) -> None
             delegate_inputs.append(inputs)
 
         def list_shards(self):
-            return [Shard.from_row_range(start=0, end=1, global_ordinal=0)]
+            return [_parquet_shard()]
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
     monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
@@ -302,14 +319,16 @@ def test_hf_dataset_reader_falls_back_to_repo_parquet_files(monkeypatch) -> None
 
 
 def test_hf_dataset_reader_falls_back_to_convert_parquet_tree(monkeypatch) -> None:
+    _install_datasets(monkeypatch, config="cfg")
     delegate_inputs: list[object] = []
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if (
-            "datasets-server.huggingface.co/parquet?dataset=org/repo&config=cfg&split=train"
-            in url
-        ):
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {}
+        if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/cfg/"):
+            return []
+        if "datasets-server.huggingface.co/parquet" in url:
             return {"parquet_files": []}
         if "huggingface.co/api/datasets/org/repo/tree/main/cfg" in url:
             return []
@@ -323,8 +342,6 @@ def test_hf_dataset_reader_falls_back_to_convert_parquet_tree(monkeypatch) -> No
                     "path": "cfg/train/0000.parquet",
                 }
             ]
-        if "datasets-server.huggingface.co/info?dataset=org/repo" in url:
-            return {"dataset_info": {"cfg": {"features": {}}}}
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -333,7 +350,7 @@ def test_hf_dataset_reader_falls_back_to_convert_parquet_tree(monkeypatch) -> No
             delegate_inputs.append(inputs)
 
         def list_shards(self):
-            return [Shard.from_row_range(start=0, end=1, global_ordinal=0)]
+            return [_parquet_shard()]
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
     monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
@@ -349,17 +366,12 @@ def test_hf_dataset_reader_falls_back_to_convert_parquet_tree(monkeypatch) -> No
 
 
 def test_hf_dataset_reader_leaves_bytes_only_media_feature_raw(monkeypatch) -> None:
+    _install_datasets(monkeypatch, features={"image": _feature("Image")})
+
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if (
-            "datasets-server.huggingface.co/parquet?dataset=org/repo&config=default&split=train"
-            in url
-        ):
-            return _parquet_response()
-        if "datasets-server.huggingface.co/info?dataset=org/repo" in url:
-            return {
-                "dataset_info": {"default": {"features": {"image": {"_type": "Image"}}}}
-            }
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {"default": {"train": ["https://example.com/train.parquet"]}}
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -367,7 +379,7 @@ def test_hf_dataset_reader_leaves_bytes_only_media_feature_raw(monkeypatch) -> N
             del inputs, kwargs
 
         def list_shards(self):
-            return [Shard.from_row_range(start=0, end=1, global_ordinal=0)]
+            return [_parquet_shard()]
 
         def read_shard(self, shard):
             del shard
@@ -397,17 +409,13 @@ def test_hf_dataset_reader_leaves_bytes_only_media_feature_raw(monkeypatch) -> N
 def test_hf_file_filter_loads_filter_column_before_final_projection(
     monkeypatch,
 ) -> None:
+    _install_datasets(monkeypatch)
     delegate_columns: list[tuple[str, ...] | None] = []
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
-        if (
-            "datasets-server.huggingface.co/parquet?dataset=org/repo&config=default&split=train"
-            in url
-        ):
-            return _parquet_response()
-        if "datasets-server.huggingface.co/info?dataset=org/repo" in url:
-            return {"dataset_info": {"default": {"features": {}}}}
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {"default": {"train": ["https://example.com/train.parquet"]}}
         raise AssertionError(url)
 
     class FakeParquetReader:
@@ -417,7 +425,7 @@ def test_hf_file_filter_loads_filter_column_before_final_projection(
             delegate_columns.append(self.columns_to_read)
 
         def list_shards(self):
-            return [Shard.from_row_range(start=0, end=2, global_ordinal=0)]
+            return [_parquet_shard()]
 
         def read_shard(self, shard):
             del shard
@@ -463,3 +471,92 @@ def test_hf_file_filter_loads_filter_column_before_final_projection(
     assert table.column_names == ["audio", "file_path"]
     assert table.column("audio").to_pylist() == ["hf://datasets/org/repo/a.wav"]
     assert table.column("file_path").to_pylist() == ["source.parquet"]
+
+
+def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None:
+    class FakeStreamingDataset:
+        num_shards = 2
+
+        def __init__(self, shard_index: int | None = None):
+            self.shard_index = shard_index
+
+        def shard(self, *, num_shards: int, index: int):
+            assert num_shards == 2
+            return FakeStreamingDataset(index)
+
+        def with_format(self, format_name: str):
+            assert format_name == "arrow"
+            return self
+
+        def iter(self, *, batch_size: int):
+            assert batch_size == 10
+            yield pa.table(
+                {
+                    "id": [self.shard_index],
+                    "video": ["clip.mp4"],
+                }
+            )
+
+    calls = _install_datasets(
+        monkeypatch,
+        features={"video": _feature("Video")},
+        dataset=FakeStreamingDataset(),
+    )
+
+    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+        del hf_token, timeout
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {}
+        if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/"):
+            return []
+        if "datasets-server.huggingface.co/parquet" in url:
+            return {"parquet_files": []}
+        if "/tree/" in url:
+            return []
+        raise AssertionError(url)
+
+    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
+
+    reader = HFDatasetReader(
+        "org/repo",
+        num_shards=2,
+        arrow_batch_size=10,
+    )
+    shards = reader.list_shards()
+    units = list(reader.read_shard(shards[1]))
+
+    assert [call[0] for call in calls] == ["info", "load"]
+    assert len(shards) == 2
+    assert isinstance(units[0], Tabular)
+    table = units[0].table
+    assert table.column("id").to_pylist() == [1]
+    assert table.column("video").to_pylist() == ["hf://datasets/org/repo/clip.mp4"]
+    assert table.schema.field("video").metadata == {b"asset_type": b"video"}
+
+
+def test_hf_dataset_fallback_errors_when_requested_shards_exceed_source_shards(
+    monkeypatch,
+) -> None:
+    class FakeStreamingDataset:
+        num_shards = 1
+
+    _install_datasets(monkeypatch, dataset=FakeStreamingDataset())
+
+    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+        del hf_token, timeout
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {}
+        if url.startswith("https://huggingface.co/api/datasets/org/repo/parquet/"):
+            return []
+        if "datasets-server.huggingface.co/parquet" in url:
+            return {"parquet_files": []}
+        if "/tree/" in url:
+            return []
+        raise AssertionError(url)
+
+    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
+
+    reader = HFDatasetReader("org/repo", num_shards=2)
+
+    with pytest.raises(ValueError, match="only 1 source shard"):
+        reader.list_shards()
