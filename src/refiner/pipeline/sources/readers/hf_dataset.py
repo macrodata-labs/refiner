@@ -11,7 +11,12 @@ import pyarrow.compute as pc
 
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeMapping
-from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
+from refiner.pipeline.data.shard import (
+    FilePart,
+    FilePartsDescriptor,
+    RowRangeDescriptor,
+    Shard,
+)
 from refiner.pipeline.data.tabular import Tabular, filter_table, set_or_append_column
 from refiner.pipeline.expressions import Expr
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
@@ -64,6 +69,7 @@ class HFDatasetReader(BaseSource):
         self.columns_to_read = (
             tuple(columns_to_read) if columns_to_read is not None else None
         )
+        self.file_path_column = file_path_column
 
         check_required_dependencies("read_hf_dataset", ["datasets"], dist="huggingface")
         from datasets import get_dataset_config_info
@@ -104,18 +110,50 @@ class HFDatasetReader(BaseSource):
 
         # Filters on file columns must run after extracting the struct "path" field.
         # Other filters can be delegated to the Parquet reader for pushdown.
-        filter_uses_file_dtype = (
-            filter is not None
-            and self._file_dtypes is not None
-            and bool(self._file_dtypes.keys() & filter.referenced_columns())
+        referenced_filter_columns = (
+            filter.referenced_columns() if filter is not None else set()
+        )
+        filter_uses_file_dtype = filter is not None and (
+            (
+                self._file_dtypes is not None
+                and bool(self._file_dtypes.keys() & referenced_filter_columns)
+            )
+            or (
+                self.file_path_column is not None
+                and self.file_path_column in referenced_filter_columns
+            )
         )
         self._post_parquet_filter = filter if filter_uses_file_dtype else None
         self._parquet_filter = None if filter_uses_file_dtype else filter
         self._post_fallback_filter = filter
         self.split_row_groups = split_row_groups
-        self.file_path_column = file_path_column
         self._delegate: ParquetReader | None = None
         self._fallback_dataset: object | None = None
+        self._parquet_columns_to_read = self.columns_to_read
+        if (
+            self._post_parquet_filter is not None
+            and self._parquet_columns_to_read is not None
+        ):
+            extra_columns = sorted(
+                col
+                for col in self._post_parquet_filter.referenced_columns().difference(
+                    self._parquet_columns_to_read
+                )
+                if col != self.file_path_column
+            )
+            self._parquet_columns_to_read = (
+                *self._parquet_columns_to_read,
+                *extra_columns,
+            )
+        if (
+            self._parquet_columns_to_read is not None
+            and self.file_path_column is not None
+        ):
+            self._parquet_columns_to_read = tuple(
+                col
+                for col in self._parquet_columns_to_read
+                if col != self.file_path_column
+            )
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -137,7 +175,8 @@ class HFDatasetReader(BaseSource):
             yield from self._read_fallback_shard(shard)
             return
 
-        for unit in self._parquet_reader().read_shard(shard):
+        reader, parquet_shard = self._parquet_reader_for_shard(shard)
+        for unit in reader.read_shard(parquet_shard):
             if isinstance(unit, Tabular):
                 yield unit.with_table(
                     self._finish_table(
@@ -165,28 +204,50 @@ class HFDatasetReader(BaseSource):
             hf_token=self.hf_token,
             timeout=self.timeout,
         )
-        columns_to_read = self.columns_to_read
-        if self._post_parquet_filter is not None and columns_to_read is not None:
-            # Columns referenced by a delayed HF-side filter still need to be loaded,
-            # even if the final projection would otherwise exclude them.
-            extra_columns = sorted(
-                col
-                for col in self._post_parquet_filter.referenced_columns().difference(
-                    columns_to_read
+        self._delegate = self._make_parquet_reader(urls)
+        return self._delegate
+
+    def _parquet_reader_for_shard(self, shard: Shard) -> tuple[ParquetReader, Shard]:
+        if self._delegate is not None:
+            return self._delegate, shard
+
+        descriptor = shard.descriptor
+        if not isinstance(descriptor, FilePartsDescriptor):
+            return self._parquet_reader(), shard
+
+        paths: list[str] = []
+        path_indexes: dict[str, int] = {}
+        parts: list[FilePart] = []
+        for part in descriptor.parts:
+            source_index = path_indexes.get(part.path)
+            if source_index is None:
+                source_index = len(paths)
+                path_indexes[part.path] = source_index
+                paths.append(part.path)
+            parts.append(
+                FilePart(
+                    path=part.path,
+                    start=part.start,
+                    end=part.end,
+                    source_index=source_index,
                 )
-                if col != self.file_path_column
             )
-            columns_to_read = (*columns_to_read, *extra_columns)
-        if columns_to_read is not None and self.file_path_column is not None:
-            columns_to_read = tuple(
-                col for col in columns_to_read if col != self.file_path_column
-            )
-        self._delegate = ParquetReader(
-            urls,
+
+        parquet_shard = Shard.from_file_parts(
+            parts,
+            global_ordinal=shard.global_ordinal,
+            start_key=shard.start_key,
+            end_key=shard.end_key,
+        )
+        return self._make_parquet_reader(paths), parquet_shard
+
+    def _make_parquet_reader(self, urls: Sequence[str]) -> ParquetReader:
+        return ParquetReader(
+            list(urls),
             target_shard_bytes=self.target_shard_bytes,
             num_shards=self.num_shards,
             arrow_batch_size=self.arrow_batch_size,
-            columns_to_read=columns_to_read,
+            columns_to_read=self._parquet_columns_to_read,
             filter=self._parquet_filter,
             split_row_groups=self.split_row_groups,
             file_path_column=self.file_path_column,
@@ -197,7 +258,6 @@ class HFDatasetReader(BaseSource):
                 else None
             ),
         )
-        return self._delegate
 
     def _fallback_shards(self, num_shards: int | None) -> list[Shard]:
         dataset = self._load_fallback_dataset()

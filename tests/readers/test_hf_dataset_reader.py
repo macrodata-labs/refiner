@@ -8,7 +8,7 @@ import datasets
 from datasets.packaged_modules.parquet.parquet import Parquet
 
 from refiner.pipeline.data import datatype
-from refiner.pipeline.data.shard import FilePart, Shard
+from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.expressions import col
 from refiner.pipeline.sources.readers import hf_dataset
@@ -464,6 +464,99 @@ def test_hf_file_filter_loads_filter_column_before_final_projection(
     assert table.column_names == ["audio", "file_path"]
     assert table.column("audio").to_pylist() == ["hf://datasets/org/repo/a.wav"]
     assert table.column("file_path").to_pylist() == ["source.parquet"]
+
+
+def test_hf_file_path_filter_runs_after_parquet_reader(monkeypatch) -> None:
+    _install_datasets(monkeypatch)
+    parquet_filters: list[object] = []
+
+    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+        del hf_token, timeout
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
+            return ["https://example.com/train.parquet"]
+        raise AssertionError(url)
+
+    class FakeParquetReader:
+        def __init__(self, inputs, **kwargs):
+            del inputs
+            parquet_filters.append(kwargs["filter"])
+
+        def list_shards(self):
+            return [_parquet_shard()]
+
+        def read_shard(self, shard):
+            del shard
+            yield Tabular(
+                pa.table(
+                    {
+                        "value": [1, 2],
+                        "file_path": ["keep.parquet", "drop.parquet"],
+                    }
+                )
+            )
+
+    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
+    monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
+
+    reader = HFDatasetReader("org/repo", filter=col("file_path") == "keep.parquet")
+    units = list(reader.read_shard(reader.list_shards()[0]))
+
+    assert parquet_filters == [None]
+    assert isinstance(units[0], Tabular)
+    assert units[0].table.column("value").to_pylist() == [1]
+
+
+def test_hf_dataset_reader_reads_planned_shard_without_relisting(monkeypatch) -> None:
+    _install_datasets(monkeypatch)
+    calls: list[str] = []
+    delegate_inputs: list[object] = []
+    delegate_source_indexes: list[list[int]] = []
+
+    planned_shard = Shard.from_file_parts(
+        [
+            FilePart(
+                path="https://example.com/train-00000.parquet",
+                start=0,
+                end=10,
+                source_index=4,
+            )
+        ],
+        global_ordinal=0,
+    )
+
+    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+        del hf_token, timeout
+        calls.append(url)
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
+            return ["https://example.com/train-00000.parquet"]
+        raise AssertionError(url)
+
+    class FakeParquetReader:
+        def __init__(self, inputs, **kwargs):
+            del kwargs
+            delegate_inputs.append(inputs)
+
+        def list_shards(self):
+            return [planned_shard]
+
+        def read_shard(self, shard):
+            assert isinstance(shard.descriptor, FilePartsDescriptor)
+            delegate_source_indexes.append(
+                [part.source_index for part in shard.descriptor.parts]
+            )
+            yield Tabular(pa.table({"value": [1]}))
+
+    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
+    monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
+
+    shard = HFDatasetReader("org/repo").list_shards()[0]
+    calls.clear()
+    units = list(HFDatasetReader("org/repo").read_shard(shard))
+
+    assert calls == []
+    assert delegate_inputs[-1] == ["https://example.com/train-00000.parquet"]
+    assert delegate_source_indexes == [[0]]
+    assert isinstance(units[0], Tabular)
 
 
 def test_hf_dataset_reader_preserves_empty_projection(monkeypatch) -> None:
