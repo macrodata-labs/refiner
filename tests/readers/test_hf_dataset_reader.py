@@ -549,7 +549,7 @@ def test_hf_dataset_reader_reads_planned_shard_without_relisting(monkeypatch) ->
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
     monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
 
-    shard = HFDatasetReader("org/repo").list_shards()[0]
+    shard = Shard.from_dict(HFDatasetReader("org/repo").list_shards()[0].to_dict())
     calls.clear()
     units = list(HFDatasetReader("org/repo").read_shard(shard))
 
