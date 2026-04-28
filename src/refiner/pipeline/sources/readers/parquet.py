@@ -13,6 +13,11 @@ from fsspec import AbstractFileSystem
 
 from refiner.io import DataFile
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.data.datatype import (
+    DTypeMapping,
+    apply_dtypes_to_table,
+    schema_with_dtypes,
+)
 from refiner.pipeline.data.shard import FilePart
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.data.tabular import Tabular, filter_table
@@ -57,6 +62,7 @@ class ParquetReader(BaseReader):
         filter: Expr | None = None,
         split_row_groups: bool = False,
         file_path_column: str | None = "file_path",
+        dtypes: DTypeMapping | None = None,
     ):
         """Create a Parquet reader.
 
@@ -90,18 +96,23 @@ class ParquetReader(BaseReader):
         )
         self.arrow_batch_size = int(arrow_batch_size)
         self.split_row_groups = split_row_groups
+        self.dtypes = dtypes
 
         ## filter
         # full filter expression
         self.filter = filter
-        # what we can pass down to scanner. essentially an arrow dataset expression
-        self._pushdown_filter = (
-            filter.extract_pushdown_filter() if filter is not None else None
-        )
         # the columns we will need to have in order to be able to apply self.filter
         self._filter_columns = (
             filter.referenced_columns() if filter is not None else set()
         )
+        # what we can pass down to scanner. essentially an arrow dataset expression.
+        # If a filter touches dtype-overridden columns, pruning against the original
+        # parquet stats can use different semantics from the in-memory casted filter.
+        dtype_columns = set(dtypes or ())
+        self._pushdown_filter = (
+            filter.extract_pushdown_filter() if filter is not None else None
+        )
+        self._pushdown_dtype_columns = self._filter_columns & dtype_columns
 
         ## columns
         # the columns the parquet reader will return at the end
@@ -157,9 +168,14 @@ class ParquetReader(BaseReader):
                 else None,
                 "split_row_groups": self.split_row_groups,
                 "filter": self.filter.to_code() if self.filter is not None else None,
+                "dtypes": list(self.dtypes) if self.dtypes else None,
             }
         )
         return description
+
+    @property
+    def schema(self) -> pa.Schema | None:
+        return schema_with_dtypes(None, self.dtypes)
 
     def _metadata(self, pf: pq.ParquetFile) -> _ParquetMetadata | None:
         """Cache row-group byte starts and row starts for the currently open parquet file."""
@@ -279,6 +295,12 @@ class ParquetReader(BaseReader):
                 batch = batch.slice(begin, length)
                 offset += batch_rows
             table = pa.Table.from_batches([batch])
+            table = apply_dtypes_to_table(
+                table,
+                self.dtypes,
+                strict=False,
+                preserve_metadata=False,
+            )
             if self.filter is not None:
                 before = int(table.num_rows)
                 table = filter_table(table, self.filter)
@@ -308,15 +330,41 @@ class ParquetReader(BaseReader):
             return row_groups
 
         fragment = self._get_parquet_fragment(source_file)
+        if self._pushdown_dtype_columns and not self._pushdown_dtypes_keep_types(
+            fragment
+        ):
+            return row_groups
         if row_groups is not None:
             fragment = fragment.subset(row_group_ids=row_groups)
-        return [
-            row_group.id
-            for row_group_fragment in fragment.split_by_row_group(
-                filter=self._pushdown_filter
+        try:
+            return [
+                row_group.id
+                for row_group_fragment in fragment.split_by_row_group(
+                    filter=self._pushdown_filter
+                )
+                for row_group in row_group_fragment.row_groups
+            ]
+        except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError):
+            return row_groups
+
+    def _pushdown_dtypes_keep_types(self, fragment: ds.ParquetFileFragment) -> bool:
+        schema = fragment.physical_schema
+        for name in self._pushdown_dtype_columns:
+            idx = schema.get_field_index(name)
+            if idx < 0 or self.dtypes is None:
+                return False
+            field_schema = pa.schema([schema.field(idx)])
+            overridden = schema_with_dtypes(
+                field_schema,
+                {name: self.dtypes[name]},
+                preserve_metadata=False,
             )
-            for row_group in row_group_fragment.row_groups
-        ]
+            if (
+                overridden is None
+                or overridden.field(name).type != schema.field(idx).type
+            ):
+                return False
+        return True
 
     def _log_pushdown_pruning(
         self,

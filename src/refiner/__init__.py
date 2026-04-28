@@ -4,6 +4,7 @@ import refiner.pipeline as pipeline
 import refiner.robotics as robotics
 import refiner.text as text
 import refiner.video as video
+from refiner.pipeline.data import datatype
 from refiner.pipeline import (
     from_items,
     from_source,
@@ -54,4 +55,5 @@ __all__ = [
     "robot",
     "robotics",
     "text",
+    "datatype",
 ]

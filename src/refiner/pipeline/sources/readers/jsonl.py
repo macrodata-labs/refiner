@@ -8,6 +8,11 @@ import pyarrow as pa
 import pyarrow.json as pa_json
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.data.datatype import (
+    DTypeMapping,
+    apply_dtypes_to_table,
+    schema_with_dtypes,
+)
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
@@ -36,6 +41,7 @@ class JsonlReader(BaseReader):
         num_shards: int | None = None,
         file_path_column: str | None = "file_path",
         parse_use_threads: bool = False,
+        dtypes: DTypeMapping | None = None,
     ):
         """Create a JSONL reader.
 
@@ -54,6 +60,7 @@ class JsonlReader(BaseReader):
             file_path_column=file_path_column,
         )
         self.parse_use_threads = parse_use_threads
+        self.dtypes = dtypes
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read one planned JSONL shard by snapping file parts to newline boundaries."""
@@ -74,8 +81,12 @@ class JsonlReader(BaseReader):
                     )
                     for batch in reader:
                         yield Tabular(
-                            self._table_with_file_path(
-                                pa.Table.from_batches([batch]), source
+                            apply_dtypes_to_table(
+                                self._table_with_file_path(
+                                    pa.Table.from_batches([batch]), source
+                                ),
+                                self.dtypes,
+                                strict=False,
                             )
                         )
                 continue
@@ -90,8 +101,18 @@ class JsonlReader(BaseReader):
             )
             for batch in reader:
                 yield Tabular(
-                    self._table_with_file_path(pa.Table.from_batches([batch]), source)
+                    apply_dtypes_to_table(
+                        self._table_with_file_path(
+                            pa.Table.from_batches([batch]), source
+                        ),
+                        self.dtypes,
+                        strict=False,
+                    )
                 )
+
+    @property
+    def schema(self) -> pa.Schema | None:
+        return schema_with_dtypes(None, self.dtypes)
 
 
 __all__ = ["JsonlReader"]

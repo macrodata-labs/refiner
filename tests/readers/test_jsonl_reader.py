@@ -1,4 +1,6 @@
 import orjson
+
+from refiner.pipeline.data import datatype
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers import JsonlReader
 
@@ -33,3 +35,24 @@ def test_jsonl_bytes_lazy_reads_all_objects(tmp_path):
 
     assert count == n
     assert ids == set(range(n))
+
+
+def test_jsonl_reader_applies_dtypes(tmp_path):
+    p = tmp_path / "data.jsonl"
+    p.write_bytes(orjson.dumps({"video": "clip.mp4"}) + b"\n")
+
+    reader = JsonlReader(str(p), dtypes={"video": datatype.video_file()})
+    unit = next(iter(reader.read_shard(reader.list_shards()[0])))
+
+    assert isinstance(unit, Tabular)
+    assert unit.table.schema.field("video").metadata == {b"asset_type": b"video"}
+
+
+def test_jsonl_reader_schema_exposes_dtype_overrides(tmp_path):
+    p = tmp_path / "data.jsonl"
+    p.write_bytes(orjson.dumps({"video": "clip.mp4"}) + b"\n")
+
+    reader = JsonlReader(str(p), dtypes={"video": datatype.video_file()})
+
+    assert reader.schema is not None
+    assert reader.schema.field("video").metadata == {b"asset_type": b"video"}

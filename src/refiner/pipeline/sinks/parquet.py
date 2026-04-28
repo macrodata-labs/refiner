@@ -55,6 +55,10 @@ class ParquetSink(BaseSink):
             table = table.drop_columns([SHARD_ID_COLUMN])
         self._writer(shard_id, table.schema).write_table(table)
 
+    @property
+    def requires_tabular_input(self) -> bool:
+        return True
+
     def on_shard_complete(self, shard_id: str) -> None:
         writer = self._writers.pop(shard_id, None)
         if writer is not None:

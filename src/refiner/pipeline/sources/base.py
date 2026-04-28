@@ -39,6 +39,10 @@ class BaseSource(ABC):
         for shard in self.list_shards():
             yield from self.iter_shard_units(shard)
 
+    @property
+    def schema(self) -> pa.Schema | None:
+        return None
+
     def describe(self) -> dict[str, Any]:
         """Optional source metadata for planning/observability."""
         return {}

@@ -10,6 +10,11 @@ import pyarrow.csv as pa_csv
 from fsspec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.data.datatype import (
+    DTypeMapping,
+    apply_dtypes_to_table,
+    schema_with_dtypes,
+)
 from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.tabular import Tabular
@@ -41,6 +46,7 @@ class CsvReader(BaseReader):
         multiline_rows: bool = False,
         encoding: str = "utf-8",
         parse_use_threads: bool = False,
+        dtypes: DTypeMapping | None = None,
     ):
         """Create a CSV reader.
 
@@ -64,6 +70,7 @@ class CsvReader(BaseReader):
         self.multiline_rows = multiline_rows
         self.encoding = encoding
         self.parse_use_threads = parse_use_threads
+        self.dtypes = dtypes
         self._open_header: Optional[list[str]] = None
 
     def _get_handle_and_header(self, source_file):
@@ -138,8 +145,12 @@ class CsvReader(BaseReader):
                 )
                 for batch in reader:
                     yield Tabular(
-                        self._table_with_file_path(
-                            pa.Table.from_batches([batch]), source
+                        apply_dtypes_to_table(
+                            self._table_with_file_path(
+                                pa.Table.from_batches([batch]), source
+                            ),
+                            self.dtypes,
+                            strict=False,
                         )
                     )
             return
@@ -170,7 +181,11 @@ class CsvReader(BaseReader):
         )
         for batch in reader:
             yield Tabular(
-                self._table_with_file_path(pa.Table.from_batches([batch]), source)
+                apply_dtypes_to_table(
+                    self._table_with_file_path(pa.Table.from_batches([batch]), source),
+                    self.dtypes,
+                    strict=False,
+                )
             )
 
     def _read_shard_python(self, part: FilePart) -> Iterator[SourceUnit]:
@@ -184,7 +199,9 @@ class CsvReader(BaseReader):
             ) as tf:
                 reader = csv.DictReader(tf)
                 for row in reader:
-                    yield DictRow(self._with_file_path(dict(row), source))
+                    yield DictRow(
+                        self._with_file_path(dict(row), source),
+                    )
             return
 
         bounded = self._bounded_part(part)
@@ -207,7 +224,13 @@ class CsvReader(BaseReader):
                 fields = list(fields) + [None] * (len(header) - len(fields))
             if len(fields) > len(header):
                 fields = fields[: len(header)]
-            yield DictRow(self._with_file_path(dict(zip(header, fields)), source))
+            yield DictRow(
+                self._with_file_path(dict(zip(header, fields)), source),
+            )
+
+    @property
+    def schema(self) -> pa.Schema | None:
+        return schema_with_dtypes(None, self.dtypes)
 
 
 __all__ = ["CsvReader"]

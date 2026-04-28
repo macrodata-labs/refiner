@@ -614,6 +614,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e6/ab/fb21f4c939bb440104cc2b396d3be1d9b7a9fd3c6c2a53d98c45b3d7c954/fsspec-2026.2.0-py3-none-any.whl", hash = "sha256:98de475b5cb3bd66bedd5c4679e87b4fdfe1a3bf4d707b151b3c07e58c9a2437", size = 202505, upload-time = "2026-02-05T21:50:51.819Z" },
 ]
 
+[package.optional-dependencies]
+http = [
+    { name = "aiohttp" },
+]
+
 [[package]]
 name = "h11"
 version = "0.16.0"
@@ -770,7 +775,7 @@ version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "cloudpickle" },
-    { name = "fsspec" },
+    { name = "fsspec", extra = ["http"] },
     { name = "httpx" },
     { name = "loguru" },
     { name = "msgspec" },
@@ -826,7 +831,7 @@ dev = [
 requires-dist = [
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
-    { name = "fsspec" },
+    { name = "fsspec", extras = ["http"] },
     { name = "hf", marker = "extra == 'robotics'", specifier = ">=1.7.1" },
     { name = "httpx" },
     { name = "huggingface-hub", marker = "extra == 'robotics'", specifier = ">=1.4.1" },
