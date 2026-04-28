@@ -1,0 +1,554 @@
+from __future__ import annotations
+
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Any
+from typing import cast
+from urllib.parse import quote
+
+import httpx
+import pyarrow as pa
+import pyarrow.compute as pc
+
+from refiner.pipeline.data import datatype
+from refiner.pipeline.data.datatype import DTypeMapping
+from refiner.pipeline.data.shard import (
+    FilePart,
+    FilePartsDescriptor,
+    RowRangeDescriptor,
+    Shard,
+)
+from refiner.pipeline.data.tabular import Tabular, filter_table, set_or_append_column
+from refiner.pipeline.expressions import Expr
+from refiner.pipeline.sources.base import BaseSource, SourceUnit
+from refiner.pipeline.sources.readers.parquet import ParquetReader
+from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.utils import check_required_dependencies
+
+_HF_HUB = "https://huggingface.co"
+_HF_DATASETS_SERVER = "https://datasets-server.huggingface.co"
+_HF_DATASET_URI_PREFIX = "hf://datasets"
+_HF_FILE_FEATURE_DTYPES = {
+    "Image": datatype.image_file,
+    "Audio": datatype.audio_file,
+    "Video": datatype.video_file,
+    "Pdf": datatype.pdf_file,
+}
+
+
+class HFDatasetReader(BaseSource):
+    """Read Hugging Face datasets through the Hub's generated Parquet shards.
+
+    `resolve_relative_paths` rewrites relative file-typed values as
+    `hf://datasets/{repo}/...` references. Absolute paths and URI values are left
+    unchanged.
+    """
+
+    name = "read_hf_dataset"
+
+    def __init__(
+        self,
+        repo: str,
+        config: str | None = None,
+        split: str = "train",
+        *,
+        resolve_relative_paths: bool = True,
+        dtypes: DTypeMapping | None = None,
+        hf_token: str | None = None,
+        timeout: float = 30.0,
+        target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+        num_shards: int | None = None,
+        arrow_batch_size: int = 65536,
+        columns_to_read: Sequence[str] | None = None,
+        filter: Expr | None = None,
+        split_row_groups: bool = False,
+        file_path_column: str | None = "file_path",
+    ):
+        self.repo = repo
+        self.split = split
+        self.resolve_relative_paths = resolve_relative_paths
+        self.hf_token = hf_token
+        self.timeout = float(timeout)
+        self.target_shard_bytes = target_shard_bytes
+        self.num_shards = num_shards
+        self.arrow_batch_size = arrow_batch_size
+        self.columns_to_read = (
+            tuple(columns_to_read) if columns_to_read is not None else None
+        )
+        self.file_path_column = file_path_column
+
+        check_required_dependencies("read_hf_dataset", ["datasets"], dist="huggingface")
+        from datasets import get_dataset_config_info
+
+        info_kwargs: dict[str, Any] = {}
+        if config is not None:
+            info_kwargs["config_name"] = config
+        if self.hf_token is not None:
+            info_kwargs["token"] = self.hf_token
+        info = get_dataset_config_info(self.repo, **info_kwargs)
+        self.config: str = str(info.config_name or config or "default")
+
+        inferred_dtypes: dict[str, pa.Field] = {}
+        for name, feature in (info.features or {}).items():
+            dtype_factory = _HF_FILE_FEATURE_DTYPES.get(type(feature).__name__)
+            if dtype_factory is not None:
+                inferred_dtypes[name] = dtype_factory()
+
+        effective_dtypes = dict(inferred_dtypes)
+        if dtypes:
+            effective_dtypes.update(dtypes)
+        self.dtypes = effective_dtypes or None
+        file_dtypes = {
+            name: dtype
+            for name, dtype in effective_dtypes.items()
+            if _is_file_dtype(dtype)
+        }
+        non_file_dtypes = {
+            name: dtype
+            for name, dtype in effective_dtypes.items()
+            if not _is_file_dtype(dtype)
+        }
+        self._file_dtypes = file_dtypes or None
+        self._non_file_dtypes = non_file_dtypes or None
+        self._explicit_file_dtype_names = {
+            name for name, dtype in (dtypes or {}).items() if _is_file_dtype(dtype)
+        }
+
+        # Filters on file columns must run after extracting the struct "path" field.
+        # Other filters can be delegated to the Parquet reader for pushdown.
+        referenced_filter_columns = (
+            filter.referenced_columns() if filter is not None else set()
+        )
+        filter_uses_file_dtype = filter is not None and (
+            (
+                self._file_dtypes is not None
+                and bool(self._file_dtypes.keys() & referenced_filter_columns)
+            )
+            or (
+                self.file_path_column is not None
+                and self.file_path_column in referenced_filter_columns
+            )
+        )
+        self._post_parquet_filter = filter if filter_uses_file_dtype else None
+        self._parquet_filter = None if filter_uses_file_dtype else filter
+        self._post_fallback_filter = filter
+        self.split_row_groups = split_row_groups
+        self._delegate: ParquetReader | None = None
+        self._fallback_dataset: object | None = None
+        self._parquet_columns_to_read = self.columns_to_read
+        if (
+            self._post_parquet_filter is not None
+            and self._parquet_columns_to_read is not None
+        ):
+            extra_columns = sorted(
+                col
+                for col in self._post_parquet_filter.referenced_columns().difference(
+                    self._parquet_columns_to_read
+                )
+                if col != self.file_path_column
+            )
+            self._parquet_columns_to_read = (
+                *self._parquet_columns_to_read,
+                *extra_columns,
+            )
+        if (
+            self._parquet_columns_to_read is not None
+            and self.file_path_column is not None
+        ):
+            self._parquet_columns_to_read = tuple(
+                col
+                for col in self._parquet_columns_to_read
+                if col != self.file_path_column
+            )
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "repo": self.repo,
+            "config": self.config,
+            "split": self.split,
+            "resolve_relative_paths": self.resolve_relative_paths,
+            "dtypes": list(self.dtypes) if self.dtypes else None,
+        }
+
+    def list_shards(self) -> list[Shard]:
+        try:
+            return self._parquet_reader().list_shards()
+        except (FileNotFoundError, httpx.HTTPError, OSError, pa.ArrowException):
+            return self._fallback_shards(self.num_shards)
+
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
+        if isinstance(shard.descriptor, RowRangeDescriptor):
+            yield from self._read_fallback_shard(shard)
+            return
+
+        reader, parquet_shard = self._parquet_reader_for_shard(shard)
+        for unit in reader.read_shard(parquet_shard):
+            if isinstance(unit, Tabular):
+                yield unit.with_table(
+                    self._finish_table(
+                        unit.table,
+                        post_filter=self._post_parquet_filter,
+                    )
+                )
+            else:
+                yield unit
+
+    @property
+    def schema(self) -> pa.Schema | None:
+        return datatype.schema_with_dtypes(None, self.dtypes)
+
+    def _parquet_reader(self) -> ParquetReader:
+        if self._delegate is not None:
+            return self._delegate
+
+        # URL discovery is intentionally separate from scanning; ParquetReader still
+        # owns byte planning, projection, filtering, and Arrow conversion.
+        urls = _list_parquet_urls(
+            self.repo,
+            self.config,
+            self.split,
+            hf_token=self.hf_token,
+            timeout=self.timeout,
+        )
+        self._delegate = self._make_parquet_reader(urls)
+        return self._delegate
+
+    def _parquet_reader_for_shard(self, shard: Shard) -> tuple[ParquetReader, Shard]:
+        if self._delegate is not None:
+            return self._delegate, shard
+
+        descriptor = shard.descriptor
+        if not isinstance(descriptor, FilePartsDescriptor):
+            return self._parquet_reader(), shard
+
+        paths: list[str] = []
+        path_indexes: dict[str, int] = {}
+        parts: list[FilePart] = []
+        for part in descriptor.parts:
+            source_index = path_indexes.get(part.path)
+            if source_index is None:
+                source_index = len(paths)
+                path_indexes[part.path] = source_index
+                paths.append(part.path)
+            parts.append(
+                FilePart(
+                    path=part.path,
+                    start=part.start,
+                    end=part.end,
+                    source_index=source_index,
+                )
+            )
+
+        parquet_shard = Shard.from_file_parts(
+            parts,
+            global_ordinal=shard.global_ordinal,
+            start_key=shard.start_key,
+            end_key=shard.end_key,
+        )
+        return self._make_parquet_reader(paths), parquet_shard
+
+    def _make_parquet_reader(self, urls: Sequence[str]) -> ParquetReader:
+        return ParquetReader(
+            list(urls),
+            target_shard_bytes=self.target_shard_bytes,
+            num_shards=self.num_shards,
+            arrow_batch_size=self.arrow_batch_size,
+            columns_to_read=self._parquet_columns_to_read,
+            filter=self._parquet_filter,
+            split_row_groups=self.split_row_groups,
+            file_path_column=self.file_path_column,
+            dtypes=self._non_file_dtypes,
+            storage_options=(
+                {"headers": {"Authorization": f"Bearer {self.hf_token}"}}
+                if self.hf_token is not None
+                else None
+            ),
+        )
+
+    def _fallback_shards(self, num_shards: int | None) -> list[Shard]:
+        dataset = self._load_fallback_dataset()
+        available = int(getattr(dataset, "num_shards", 1) or 1)
+        requested = int(num_shards) if num_shards is not None else None
+        wanted = available if requested is None or requested <= 0 else requested
+        if wanted > available:
+            raise ValueError(
+                f"Hugging Face fallback for {self.repo!r} has only {available} "
+                f"source shard(s), but {wanted} were requested."
+            )
+        return [
+            Shard.from_row_range(start=i, end=wanted, global_ordinal=i)
+            for i in range(wanted)
+        ]
+
+    def _load_fallback_dataset(self) -> object:
+        if self._fallback_dataset is None:
+            from datasets import load_dataset
+
+            kwargs: dict[str, Any] = {
+                "split": self.split,
+                "streaming": True,
+            }
+            if self.hf_token is not None:
+                kwargs["token"] = self.hf_token
+            self._fallback_dataset = cast(Any, load_dataset)(
+                self.repo,
+                self.config,
+                **kwargs,
+            )
+        return self._fallback_dataset
+
+    def _read_fallback_shard(self, shard: Shard) -> Iterator[SourceUnit]:
+        descriptor = shard.descriptor
+        if not isinstance(descriptor, RowRangeDescriptor):
+            raise TypeError("Hugging Face fallback requires row-range shards")
+        dataset = cast(Any, self._load_fallback_dataset()).shard(
+            num_shards=int(descriptor.end),
+            index=int(descriptor.start),
+        )
+        dataset = dataset.with_format("arrow")
+        for batch in dataset.iter(batch_size=self.arrow_batch_size):
+            if isinstance(batch, pa.Table):
+                table = batch
+            elif isinstance(batch, Mapping):
+                table = pa.table(cast(Mapping[str, object], batch))
+            else:
+                raise TypeError(
+                    "Hugging Face fallback expected Arrow batches from datasets"
+                )
+            if (
+                self.file_path_column is not None
+                and self.file_path_column not in table.column_names
+            ):
+                table = set_or_append_column(
+                    table,
+                    self.file_path_column,
+                    pa.nulls(table.num_rows, type=pa.string()),
+                )
+            table = self._finish_table(
+                table,
+                non_file_dtypes=self._non_file_dtypes,
+                post_filter=self._post_fallback_filter,
+            )
+            if table.num_rows > 0:
+                yield Tabular(table)
+
+    def _finish_table(
+        self,
+        table: pa.Table,
+        *,
+        non_file_dtypes: DTypeMapping | None = None,
+        post_filter: Expr | None = None,
+    ) -> pa.Table:
+        if non_file_dtypes:
+            table = datatype.apply_dtypes_to_table(
+                table,
+                non_file_dtypes,
+                strict=False,
+            )
+        if self._file_dtypes:
+            extracted_file_dtypes: dict[str, object] = {}
+            for name, dtype in self._file_dtypes.items():
+                idx = table.schema.get_field_index(name)
+                if idx < 0:
+                    continue
+                field = table.schema.field(idx)
+                if (
+                    pa.types.is_struct(field.type)
+                    and field.type.get_field_index("path") >= 0
+                ):
+                    path = pc.call_function(
+                        "struct_field",
+                        [table.column(idx)],
+                        options=pc.StructFieldOptions(["path"]),
+                    )
+                    table = set_or_append_column(table, name, path)
+                    extracted_file_dtypes[name] = dtype
+                    continue
+                if pa.types.is_string(field.type) or pa.types.is_large_string(
+                    field.type
+                ):
+                    extracted_file_dtypes[name] = dtype
+                    continue
+                if name in self._explicit_file_dtype_names:
+                    extracted_file_dtypes[name] = dtype
+            if extracted_file_dtypes:
+                table = datatype.apply_dtypes_to_table(
+                    table,
+                    extracted_file_dtypes,
+                    strict=False,
+                )
+        if post_filter is not None:
+            table = filter_table(table, post_filter)
+        if self.columns_to_read is not None:
+            columns = list(dict.fromkeys(self.columns_to_read))
+            if (
+                self.file_path_column is not None
+                and self.file_path_column in table.column_names
+                and self.file_path_column not in columns
+            ):
+                columns.append(self.file_path_column)
+            table = table.select([col for col in columns if col in table.column_names])
+        if self.resolve_relative_paths:
+            table = resolve_hf_relative_paths(table, self.repo)
+        return table
+
+
+def _is_file_dtype(dtype: object) -> bool:
+    return isinstance(dtype, pa.Field) and datatype.is_file_field(dtype)
+
+
+def resolve_hf_relative_paths(table: pa.Table, repo: str) -> pa.Table:
+    """Resolve relative file columns against the HF dataset repository root."""
+
+    out = table
+    for idx, field in enumerate(table.schema):
+        if not datatype.is_file_field(field):
+            continue
+        column = table.column(idx)
+
+        # Treat local absolute paths and any scheme:// URI as already resolved.
+        # find_substring is intentionally used instead of regex for the hot path.
+        local_absolute = pc.call_function(
+            "starts_with",
+            [column],
+            options=pc.MatchSubstringOptions("/"),
+        )
+        protocol_position = pc.call_function(
+            "find_substring",
+            [column],
+            options=pc.MatchSubstringOptions("://"),
+        )
+        remote_absolute = pc.call_function(
+            "greater_equal",
+            [protocol_position, pa.scalar(0, type=pa.int32())],
+        )
+        relative = pc.call_function(
+            "and",
+            [
+                pc.fill_null(pc.call_function("invert", [local_absolute]), False),
+                pc.fill_null(pc.call_function("invert", [remote_absolute]), False),
+            ],
+        )
+        if not bool(pc.call_function("any", [relative]).as_py()):
+            continue
+
+        # HF file feature paths sometimes start with ./; normalize those before
+        # constructing the hf://datasets/{repo}/... reference.
+        stripped = pc.call_function(
+            "replace_substring_regex",
+            [column],
+            options=pc.ReplaceSubstringOptions(pattern=r"^(?:\./)+", replacement=""),
+        )
+        resolved = pc.call_function(
+            "binary_join_element_wise",
+            [
+                pa.scalar(f"{_HF_DATASET_URI_PREFIX}/{repo}/"),
+                stripped,
+                pa.scalar(""),
+            ],
+        )
+        out = set_or_append_column(
+            out,
+            field.name,
+            pc.call_function("if_else", [relative, resolved, column]),
+        )
+    return out
+
+
+def _list_parquet_urls(
+    repo: str,
+    config: str,
+    split: str,
+    *,
+    hf_token: str | None,
+    timeout: float,
+) -> list[str]:
+    """Return generated Parquet shard URLs for one HF dataset config/split."""
+
+    repo_quoted = quote(repo, safe="/")
+    config_quoted = quote(config, safe="")
+    split_quoted = quote(split, safe="")
+
+    payload = _get_json_or_none(
+        f"{_HF_HUB}/api/datasets/{repo_quoted}/parquet/{config_quoted}/{split_quoted}",
+        hf_token=hf_token,
+        timeout=timeout,
+    )
+    if isinstance(payload, list):
+        urls = [url for url in payload if isinstance(url, str)]
+        if urls:
+            return urls
+
+    payload = _get_json_or_none(
+        f"{_HF_DATASETS_SERVER}/parquet?dataset={repo_quoted}"
+        f"&config={config_quoted}&split={split_quoted}",
+        hf_token=hf_token,
+        timeout=timeout,
+    )
+    if isinstance(payload, Mapping):
+        parquet_files = cast(Mapping[object, object], payload).get("parquet_files")
+        urls = []
+        if isinstance(parquet_files, list):
+            for item in parquet_files:
+                if not isinstance(item, Mapping):
+                    continue
+                item = cast(Mapping[str, object], item)
+                url = item.get("url")
+                if (
+                    item.get("config") == config
+                    and item.get("split") == split
+                    and isinstance(url, str)
+                ):
+                    urls.append(url)
+        if urls:
+            return urls
+
+    from datasets import load_dataset_builder
+    from datasets.packaged_modules.parquet.parquet import Parquet
+
+    builder = load_dataset_builder(
+        repo,
+        config,
+        token=hf_token,
+    )
+    if not isinstance(builder, Parquet):
+        raise FileNotFoundError(
+            f"No Hugging Face parquet shards for {repo!r} "
+            f"config={config!r} split={split!r}"
+        )
+    data_files = getattr(builder.config, "data_files", None)
+    if isinstance(data_files, Mapping):
+        files = data_files.get(split)
+        if isinstance(files, str):
+            urls = [files]
+        elif isinstance(files, Sequence):
+            urls = [file for file in files if isinstance(file, str)]
+        else:
+            urls = []
+        urls = [
+            url for url in urls if url.split("?", maxsplit=1)[0].endswith(".parquet")
+        ]
+        if urls:
+            return urls
+
+    raise FileNotFoundError(
+        f"No Hugging Face parquet shards for {repo!r} config={config!r} split={split!r}"
+    )
+
+
+def _get_json_or_none(url: str, *, hf_token: str | None, timeout: float) -> object:
+    try:
+        return _get_json(url, hf_token=hf_token, timeout=timeout)
+    except httpx.HTTPError:
+        return None
+
+
+def _get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+    headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else None
+    response = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+    response.raise_for_status()
+    return response.json()
+
+
+__all__ = [
+    "HFDatasetReader",
+]

@@ -31,6 +31,7 @@ from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
 from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
+    HFDatasetReader,
     JsonlReader,
     ParquetReader,
 )
@@ -569,6 +570,53 @@ def read_parquet(
             split_row_groups=split_row_groups,
             file_path_column=file_path_column,
             dtypes=dtypes,
+        )
+    )
+
+
+def read_hf_dataset(
+    repo: str,
+    config: str | None = None,
+    split: str = "train",
+    *,
+    resolve_relative_paths: bool = True,
+    dtypes: DTypeMapping | None = None,
+    hf_token: str | None = None,
+    timeout: float = 30.0,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    arrow_batch_size: int = 65536,
+    columns_to_read: Sequence[str] | None = None,
+    filter: Expr | None = None,
+    split_row_groups: bool = False,
+    file_path_column: str | None = "file_path",
+) -> RefinerPipeline:
+    """Create a pipeline over Hugging Face dataset parquet shards.
+
+    Args:
+        repo: Hugging Face dataset repository ID.
+        config: Dataset config name. If omitted, Hugging Face datasets resolves it.
+        split: Dataset split to read.
+        resolve_relative_paths: Whether file-typed relative paths should be rewritten
+            as `hf://datasets/{repo}/...` references. Absolute paths and URI values
+            are left unchanged.
+    """
+    return RefinerPipeline(
+        source=HFDatasetReader(
+            repo,
+            config=config,
+            split=split,
+            resolve_relative_paths=resolve_relative_paths,
+            dtypes=dtypes,
+            hf_token=hf_token,
+            timeout=timeout,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            arrow_batch_size=arrow_batch_size,
+            columns_to_read=columns_to_read,
+            filter=filter,
+            split_row_groups=split_row_groups,
+            file_path_column=file_path_column,
         )
     )
 

@@ -27,6 +27,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+huggingface = [
+    "datasets>=3.0.0",
+]
 video = [
     "av",
 ]
@@ -42,6 +45,7 @@ s3 = [
     "s3fs",
 ]
 testing = [
+    "macrodata-refiner[huggingface]",
     "macrodata-refiner[robotics]",
     "macrodata-refiner[text]",
     "macrodata-refiner[s3]",
