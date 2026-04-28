@@ -514,6 +514,37 @@ def test_hf_dataset_reader_preserves_empty_projection(monkeypatch) -> None:
     assert units[0].table.column_names == ["file_path"]
 
 
+def test_hf_dataset_reader_does_not_mix_fallback_after_parquet_read_error(
+    monkeypatch,
+) -> None:
+    _install_datasets(monkeypatch)
+
+    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+        del hf_token, timeout
+        if url == "https://huggingface.co/api/datasets/org/repo/parquet":
+            return {"default": {"train": ["https://example.com/train.parquet"]}}
+        raise AssertionError(url)
+
+    class FakeParquetReader:
+        def __init__(self, inputs, **kwargs):
+            del inputs, kwargs
+
+        def list_shards(self):
+            return [_parquet_shard()]
+
+        def read_shard(self, shard):
+            del shard
+            raise OSError("bad parquet shard")
+
+    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
+    monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
+
+    reader = HFDatasetReader("org/repo")
+
+    with pytest.raises(OSError, match="bad parquet shard"):
+        list(reader.read_shard(reader.list_shards()[0]))
+
+
 def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None:
     class FakeStreamingDataset:
         num_shards = 2

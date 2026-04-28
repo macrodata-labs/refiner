@@ -147,29 +147,16 @@ class HFDatasetReader(BaseSource):
             yield from self._read_fallback_shard(shard)
             return
 
-        try:
-            for unit in self._parquet_reader().read_shard(shard):
-                if isinstance(unit, Tabular):
-                    yield unit.with_table(
-                        self._finish_table(
-                            unit.table,
-                            post_filter=self._post_parquet_filter,
-                        )
+        for unit in self._parquet_reader().read_shard(shard):
+            if isinstance(unit, Tabular):
+                yield unit.with_table(
+                    self._finish_table(
+                        unit.table,
+                        post_filter=self._post_parquet_filter,
                     )
-                else:
-                    yield unit
-        except Exception:
-            if shard.global_ordinal is None:
-                raise
-            fallback_count = self._parquet_shard_count or self.num_shards
-            self._fallback_shards(fallback_count)
-            yield from self._read_fallback_shard(
-                Shard.from_row_range(
-                    start=int(shard.global_ordinal),
-                    end=int(shard.global_ordinal) + 1,
-                    global_ordinal=shard.global_ordinal,
                 )
-            )
+            else:
+                yield unit
 
     @property
     def schema(self) -> pa.Schema | None:
