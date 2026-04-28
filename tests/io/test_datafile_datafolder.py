@@ -37,6 +37,28 @@ def test_datafile_resolve_with_path_fs_tuple(tmp_path):
     assert df.is_local
 
 
+def test_datafile_copy_skips_same_source_and_destination(tmp_path):
+    asset = tmp_path / "image.png"
+    asset.write_bytes(b"existing")
+    source = DataFile.resolve(str(asset))
+
+    source.copy(str(asset))
+    assert asset.read_bytes() == b"existing"
+
+    source.copy(str(tmp_path / "nested" / ".." / "image.png"))
+    assert asset.read_bytes() == b"existing"
+
+
+def test_datafile_copy_writes_destination(tmp_path):
+    source_path = tmp_path / "source.txt"
+    dest_path = tmp_path / "nested" / "dest.txt"
+    source_path.write_bytes(b"payload")
+
+    DataFile.resolve(str(source_path)).copy(str(dest_path))
+
+    assert dest_path.read_bytes() == b"payload"
+
+
 def test_datafolder_file_and_open_creates_parent_dirs(tmp_path):
     folder = DataFolder.resolve(str(tmp_path))
 

@@ -74,9 +74,8 @@ def execute_segments(
     max_vectorized_block_bytes: int | None = None,
     on_shard_delta: ShardDeltaFn | None = None,
     input_schema: pa.Schema | None = None,
-    final_output_tabular: bool = False,
 ) -> Iterator[Block]:
-    """Execute segments, optionally converting final row blocks to `Tabular` blocks."""
+    """Execute segments and yield row or tabular blocks."""
     current: Iterable[Block] = _normalize_blocks(
         stream,
         block_rows=vectorized_chunk_rows,
@@ -93,9 +92,9 @@ def execute_segments(
                 on_shard_delta=on_shard_delta,
                 input_schema=current_schema,
             )
-            current_schema = _vector_segment_schema(current_schema, segment.ops)
+            current_schema = _segment_schema(current_schema, segment)
         else:
-            output_schema = _row_segment_schema(current_schema, segment.steps)
+            output_schema = _segment_schema(current_schema, segment)
             current = _execute_row_segment(
                 current,
                 segment.steps,
@@ -106,10 +105,26 @@ def execute_segments(
                 output_schema=output_schema,
             )
             current_schema = output_schema
-    if final_output_tabular:
-        yield from _tabularize_blocks(current, schema=current_schema)
-        return
     yield from current
+
+
+def schema_after_segments(
+    input_schema: pa.Schema | None,
+    segments: Sequence[Segment],
+) -> pa.Schema | None:
+    schema = input_schema
+    for segment in segments:
+        schema = _segment_schema(schema, segment)
+    return schema
+
+
+def _segment_schema(
+    input_schema: pa.Schema | None,
+    segment: Segment,
+) -> pa.Schema | None:
+    if isinstance(segment, VectorSegment):
+        return _vector_segment_schema(input_schema, segment.ops)
+    return _row_segment_schema(input_schema, segment.steps)
 
 
 def iter_rows(stream: Iterable[StreamItem]) -> Iterator[Row]:
@@ -423,24 +438,6 @@ def _chunk_output_rows(rows: Iterable[Row], block_rows: int) -> Iterator[list[Ro
             yield out
     if pending:
         yield pending
-
-
-def _tabularize_blocks(
-    blocks: Iterable[Block],
-    *,
-    schema: pa.Schema | None,
-) -> Iterator[Tabular]:
-    for block in blocks:
-        if isinstance(block, Tabular):
-            yield block
-            continue
-        table = (
-            Tabular.from_rows(block, schema=schema)
-            if not block
-            else block[0].tabular_type.from_rows(block, schema=schema)
-        )
-        if table.num_rows > 0:
-            yield table
 
 
 __all__ = [
