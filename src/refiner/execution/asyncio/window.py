@@ -37,7 +37,7 @@ class AsyncWindow(Generic[T]):
 
         self._futures.add(submit(_tagged()))
 
-    def submit_ready(self, value: T) -> None:
+    def submit_result(self, value: T) -> None:
         idx = self._next_submit
         self._next_submit += 1
         if self.preserve_order:

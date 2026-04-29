@@ -268,7 +268,7 @@ class AssetUploadManager:
         list_items: bool,
     ) -> object:
         if value is None:
-            self._window.submit_ready(True)
+            self._window.submit_result(True)
             return None
         if list_items:
             if not isinstance(value, Sequence) or isinstance(
