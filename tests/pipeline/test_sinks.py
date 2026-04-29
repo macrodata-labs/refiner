@@ -288,8 +288,8 @@ def test_jsonl_sink_can_set_missing_assets_to_null(tmp_path) -> None:
     assert asset.read_bytes() == b"image"
     assert list_asset.read_bytes() == b"image"
     assert rows == [
-        {"image": str(asset), "images": [str(list_asset), None], "label": "keep"},
-        {"image": None, "images": [None], "label": "null"},
+        {"image": str(asset), "images": None, "label": "keep"},
+        {"image": None, "images": None, "label": "null"},
     ]
 
 

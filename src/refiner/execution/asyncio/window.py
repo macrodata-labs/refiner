@@ -37,14 +37,24 @@ class AsyncWindow(Generic[T]):
 
         self._futures.add(submit(_tagged()))
 
+    def submit_ready(self, value: T) -> None:
+        idx = self._next_submit
+        self._next_submit += 1
+        if self.preserve_order:
+            heapq.heappush(self._ready, (idx, value))
+        else:
+            self._buffered.append(value)
+
     def poll(self) -> list[T]:
         done = {future for future in self._futures if future.done()}
         out = self._take_buffered()
         out.extend(self._consume_done(done))
+        out.extend(self._take_ready_ordered())
         return out
 
     def flush(self) -> list[T]:
         out = self._take_buffered()
+        out.extend(self._take_ready_ordered())
         while self._futures:
             done, pending = wait(
                 self._futures,
@@ -62,11 +72,7 @@ class AsyncWindow(Generic[T]):
         if self.preserve_order:
             for future in done:
                 heapq.heappush(self._ready, future.result())
-            while self._ready and self._ready[0][0] == self._next_yield:
-                _, value = heapq.heappop(self._ready)
-                self._next_yield += 1
-                out.append(value)
-            return out
+            return self._take_ready_ordered()
 
         for future in done:
             _, value = future.result()
@@ -82,6 +88,14 @@ class AsyncWindow(Generic[T]):
     def _take_buffered(self) -> list[T]:
         out = self._buffered
         self._buffered = []
+        return out
+
+    def _take_ready_ordered(self) -> list[T]:
+        out: list[T] = []
+        while self._ready and self._ready[0][0] == self._next_yield:
+            _, value = heapq.heappop(self._ready)
+            self._next_yield += 1
+            out.append(value)
         return out
 
     def __len__(self) -> int:

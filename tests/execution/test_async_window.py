@@ -36,3 +36,13 @@ def test_async_window_poll_returns_ready_results_without_blocking() -> None:
 
     assert sorted(polled) == [1, 2]
     assert window.flush() == []
+
+
+def test_async_window_ready_results_preserve_order() -> None:
+    window = AsyncWindow[int](max_in_flight=2, preserve_order=True)
+
+    assert window.submit_blocking(_delayed_value(1, 0.03)) is None
+    assert window.submit_ready(2) is None
+
+    assert window.poll() == []
+    assert window.flush() == [1, 2]
