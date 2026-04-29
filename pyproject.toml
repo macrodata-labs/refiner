@@ -47,6 +47,9 @@ hdf5 = [
 s3 = [
     "s3fs",
 ]
+lance = [
+    "pylance>=4.0.1",
+]
 testing = [
     "macrodata-refiner[huggingface]",
     "macrodata-refiner[hdf5]",
@@ -57,6 +60,7 @@ testing = [
     "pytest-cov>=5.0.0",
 ]
 all = [
+    "macrodata-refiner[lance]",
     "macrodata-refiner[testing]",
 ]
 
