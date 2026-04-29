@@ -9,6 +9,7 @@ import shutil
 from typing import Any, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
+from fsspec.implementations.http import HTTPFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 DataFilePath: TypeAlias = str | PathLike[str]
@@ -105,9 +106,17 @@ class DataFile:
                 except FileNotFoundError:
                     pass
 
+        open_kwargs: dict[str, Any] = {}
+        if isinstance(self.fs, HTTPFileSystem):
+            open_kwargs = {"block_size": 0, "size": -1}
+        elif self.fs.protocol == "hf":
+            open_kwargs = {"block_size": 0}
         try:
             target.fs.makedirs(target.fs._parent(target.path), exist_ok=True)
-            with self.open(mode="rb") as src, target.open(mode="wb") as dst:
+            with (
+                self.open(mode="rb", **open_kwargs) as src,
+                target.open(mode="wb") as dst,
+            ):
                 shutil.copyfileobj(src, dst, length=buffer_size)
         except Exception:
             try:
