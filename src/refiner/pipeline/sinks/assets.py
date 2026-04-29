@@ -245,7 +245,7 @@ def asset_columns_from_schema(schema: pa.Schema | None) -> dict[str, str]:
         return {}
     columns: dict[str, str] = {}
     for field in schema:
-        if datatype.is_file_field(field):
+        if datatype.is_asset_path_field(field):
             columns[field.name] = "scalar"
             continue
         field_type = field.type
@@ -253,7 +253,7 @@ def asset_columns_from_schema(schema: pa.Schema | None) -> dict[str, str]:
             pa.types.is_list(field_type)
             or pa.types.is_large_list(field_type)
             or pa.types.is_fixed_size_list(field_type)
-        ) and datatype.is_file_field(field_type.value_field):
+        ) and datatype.is_asset_path_field(field_type.value_field):
             columns[field.name] = "list"
     return columns
 

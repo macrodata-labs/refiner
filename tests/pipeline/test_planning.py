@@ -107,7 +107,7 @@ def test_compile_pipeline_plan_flattens_vectorized_segment_ops() -> None:
         .filter(col("x") > 1)
         .with_columns(y=col("x") + 10)
         .select("y")
-        .cast(y=rf.datatype.video_file())
+        .cast(y=rf.datatype.video_path())
     )
     plan = compile_pipeline_plan(payload)
     steps = plan["stages"][0]["steps"]

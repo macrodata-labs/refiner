@@ -53,14 +53,13 @@ pipeline = mdr.read_hf_dataset(
     "user/my-dataset",
     config="default",
     split="train",
-    dtypes={"video": mdr.datatype.video_file()},
+    dtypes={"video": mdr.datatype.video_path()},
 )
 ```
 
-Hugging Face `Image`, `Audio`, and `Video` features are marked as file columns
-automatically. Relative file paths in those columns are resolved to
-`hf://datasets/...` references by default; pass `resolve_relative_paths=False` to
-keep the raw values. Absolute paths and URI values are not rewritten.
+Hugging Face `Image`, `Audio`, and `Video` features are marked as embedded asset
+columns automatically. Refiner leaves path values unchanged; use `map(...)` if a
+dataset stores paths that need custom resolution.
 
 ## Common Crawl text readers
 
@@ -206,10 +205,10 @@ Mark path columns as assets with `dtypes=...` on row transforms or with
 ```python
 pipeline = pipeline.map(
     lambda row: {"image": f"{row['image_dir']}/{row['image_name']}"},
-    dtypes={"image": mdr.datatype.image_file()},
+    dtypes={"image": mdr.datatype.image_path()},
 )
 
-pipeline = pipeline.cast(video=mdr.datatype.video_file())
+pipeline = pipeline.cast(video=mdr.datatype.video_path())
 ```
 
 When you run a writer through `launch_local(...)` or `launch_cloud(...)`, some

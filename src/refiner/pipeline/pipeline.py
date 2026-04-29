@@ -592,7 +592,6 @@ def read_hf_dataset(
     config: str | None = None,
     split: str = "train",
     *,
-    resolve_relative_paths: bool = True,
     dtypes: DTypeMapping | None = None,
     hf_token: str | None = None,
     timeout: float = 30.0,
@@ -610,16 +609,12 @@ def read_hf_dataset(
         repo: Hugging Face dataset repository ID.
         config: Dataset config name. If omitted, Hugging Face datasets resolves it.
         split: Dataset split to read.
-        resolve_relative_paths: Whether file-typed relative paths should be rewritten
-            as `hf://datasets/{repo}/...` references. Absolute paths and URI values
-            are left unchanged.
     """
     return RefinerPipeline(
         source=HFDatasetReader(
             repo,
             config=config,
             split=split,
-            resolve_relative_paths=resolve_relative_paths,
             dtypes=dtypes,
             hf_token=hf_token,
             timeout=timeout,

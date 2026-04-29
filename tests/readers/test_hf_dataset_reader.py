@@ -69,47 +69,9 @@ def _parquet_builder(data_files: object) -> object:
     return builder
 
 
-def test_resolve_hf_relative_paths_rewrites_only_relative_file_values() -> None:
-    table = datatype.apply_dtypes_to_table(
-        pa.table(
-            {
-                "frames": [
-                    "relative/path.mp4",
-                    "./nested/path.mp4",
-                    "https://example.com/path.mp4",
-                    "hf://datasets/repo/path.mp4",
-                    "s3://bucket/path.mp4",
-                    "gs://bucket/path.mp4",
-                    "memory://bucket/path.mp4",
-                    "az+https://account/path.mp4",
-                    "/local/path.mp4",
-                    None,
-                ],
-                "text": ["unchanged"] * 10,
-            }
-        ),
-        {"frames": datatype.video_file()},
-    )
-
-    out = hf_dataset.resolve_hf_relative_paths(table, "org/repo")
-
-    assert out.column("frames").to_pylist() == [
-        "hf://datasets/org/repo/relative/path.mp4",
-        "hf://datasets/org/repo/nested/path.mp4",
-        "https://example.com/path.mp4",
-        "hf://datasets/repo/path.mp4",
-        "s3://bucket/path.mp4",
-        "gs://bucket/path.mp4",
-        "memory://bucket/path.mp4",
-        "az+https://account/path.mp4",
-        "/local/path.mp4",
-        None,
-    ]
-    assert out.column("text").to_pylist() == ["unchanged"] * 10
-    assert out.schema.field("frames").metadata == {b"asset_type": b"video"}
-
-
-def test_hf_dataset_reader_lists_parquet_and_resolves_file_dtypes(monkeypatch) -> None:
+def test_hf_dataset_reader_lists_parquet_and_preserves_asset_path_values(
+    monkeypatch,
+) -> None:
     _install_datasets(monkeypatch, config="cfg")
     calls: list[str] = []
     storage_options: list[object] = []
@@ -146,21 +108,13 @@ def test_hf_dataset_reader_lists_parquet_and_resolves_file_dtypes(monkeypatch) -
             table = pa.table(
                 {
                     "frames": ["clip.mp4", "https://example.com/clip.mp4"],
-                    "image": pa.array(
-                        [
-                            {"bytes": None, "path": "image.png"},
-                            {"bytes": None, "path": None},
-                        ],
-                        type=pa.struct(
-                            [
-                                pa.field("bytes", pa.binary()),
-                                pa.field("path", pa.string()),
-                            ]
-                        ),
-                    ),
+                    "image": ["image.png", None],
                     "audio": ["sound.wav", "hf://datasets/org/repo/sound.wav"],
                 }
             )
+            table = datatype.apply_dtypes_to_table(table, self.dtypes, strict=False)
+            if self.filter is not None:
+                table = hf_dataset.filter_table(table, self.filter)
             yield Tabular(table)
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
@@ -171,9 +125,9 @@ def test_hf_dataset_reader_lists_parquet_and_resolves_file_dtypes(monkeypatch) -
         config="cfg",
         split="train",
         dtypes={
-            "frames": datatype.video_file(),
-            "image": datatype.image_file(),
-            "audio": datatype.audio_file(),
+            "frames": datatype.video_path(),
+            "image": datatype.image_path(),
+            "audio": datatype.audio_path(),
         },
         filter=col("image") == "image.png",
         hf_token="tok",
@@ -191,23 +145,21 @@ def test_hf_dataset_reader_lists_parquet_and_resolves_file_dtypes(monkeypatch) -
         "https://huggingface.co/datasets/org/repo/resolve/refs%2Fconvert%2Fparquet/cfg/train/0.parquet"
     ]
     assert storage_options[0] == {"headers": {"Authorization": "Bearer tok"}}
-    assert parquet_dtypes[0] is None
-    assert parquet_filters[0] is None
+    assert parquet_dtypes[0] == {
+        "frames": datatype.video_path(),
+        "image": datatype.image_path(),
+        "audio": datatype.audio_path(),
+    }
+    assert parquet_filters[0] is not None
     units = list(reader.read_shard(shard))
 
     assert calls
     assert isinstance(units[0], Tabular)
     table = units[0].table
     assert table.num_rows == 1
-    assert table.column("frames").to_pylist() == [
-        "hf://datasets/org/repo/clip.mp4",
-    ]
-    assert table.column("image").to_pylist() == [
-        "hf://datasets/org/repo/image.png",
-    ]
-    assert table.column("audio").to_pylist() == [
-        "hf://datasets/org/repo/sound.wav",
-    ]
+    assert table.column("frames").to_pylist() == ["clip.mp4"]
+    assert table.column("image").to_pylist() == ["image.png"]
+    assert table.column("audio").to_pylist() == ["sound.wav"]
     assert table.schema.field("frames").metadata == {b"asset_type": b"video"}
     assert table.schema.field("image").metadata == {b"asset_type": b"image"}
     assert table.schema.field("audio").metadata == {b"asset_type": b"audio"}
@@ -241,28 +193,41 @@ def test_hf_dataset_reader_infers_media_dtypes_from_features(monkeypatch) -> Non
 
         def read_shard(self, shard):
             del shard
-            yield Tabular(
-                pa.table(
-                    {
-                        "image": pa.array(
-                            [{"bytes": None, "path": "image.png"}],
-                            type=pa.struct(
-                                [
-                                    pa.field("bytes", pa.binary()),
-                                    pa.field("path", pa.string()),
-                                ]
-                            ),
+            table = pa.table(
+                {
+                    "image": pa.array(
+                        [{"bytes": None, "path": "image.png"}],
+                        type=pa.struct(
+                            [
+                                pa.field("bytes", pa.binary()),
+                                pa.field("path", pa.string()),
+                            ]
                         ),
-                        "audio": ["sound.wav"],
-                        "label": ["cat"],
-                    }
+                    ),
+                    "audio": pa.array(
+                        [{"bytes": None, "path": "sound.wav"}],
+                        type=pa.struct(
+                            [
+                                pa.field("bytes", pa.binary()),
+                                pa.field("path", pa.string()),
+                            ]
+                        ),
+                    ),
+                    "label": ["cat"],
+                }
+            )
+            yield Tabular(
+                datatype.apply_dtypes_to_table(
+                    table,
+                    self.dtypes,
+                    strict=False,
                 )
             )
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
     monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
 
-    reader = HFDatasetReader("org/repo", resolve_relative_paths=False)
+    reader = HFDatasetReader("org/repo")
 
     schema = reader.schema
     assert schema is not None
@@ -272,11 +237,13 @@ def test_hf_dataset_reader_infers_media_dtypes_from_features(monkeypatch) -> Non
     units = list(reader.read_shard(reader.list_shards()[0]))
     assert isinstance(units[0], Tabular)
     table = units[0].table
-    assert table.column("image").to_pylist() == ["image.png"]
-    assert table.column("audio").to_pylist() == ["sound.wav"]
+    assert table.column("image").to_pylist() == [{"bytes": None, "path": "image.png"}]
+    assert table.column("audio").to_pylist() == [{"bytes": None, "path": "sound.wav"}]
     assert table.column("label").to_pylist() == ["cat"]
     assert table.schema.field("image").metadata == {b"asset_type": b"image"}
     assert table.schema.field("audio").metadata == {b"asset_type": b"audio"}
+    assert datatype.asset_storage(table.schema.field("image")) == "bytes_with_path"
+    assert datatype.asset_storage(table.schema.field("audio")) == "bytes_with_path"
     assert calls == [
         "https://huggingface.co/api/datasets/org/repo/parquet/default/train"
     ]
@@ -399,11 +366,12 @@ def test_hf_dataset_reader_leaves_bytes_only_media_feature_raw(monkeypatch) -> N
     assert table.schema.field("image").metadata is None
 
 
-def test_hf_file_filter_loads_filter_column_before_final_projection(
+def test_hf_asset_path_filter_delegates_to_parquet_reader(
     monkeypatch,
 ) -> None:
     _install_datasets(monkeypatch)
     delegate_columns: list[tuple[str, ...] | None] = []
+    delegate_filters: list[object] = []
 
     def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
         del hf_token, timeout
@@ -415,33 +383,27 @@ def test_hf_file_filter_loads_filter_column_before_final_projection(
         def __init__(self, inputs, **kwargs):
             del inputs
             self.columns_to_read = kwargs["columns_to_read"]
+            self.dtypes = kwargs["dtypes"]
+            self.filter = kwargs["filter"]
             delegate_columns.append(self.columns_to_read)
+            delegate_filters.append(self.filter)
 
         def list_shards(self):
             return [_parquet_shard()]
 
         def read_shard(self, shard):
             del shard
-            yield Tabular(
-                pa.table(
-                    {
-                        "audio": ["a.wav", "b.wav"],
-                        "image": pa.array(
-                            [
-                                {"bytes": None, "path": "keep.png"},
-                                {"bytes": None, "path": "drop.jpg"},
-                            ],
-                            type=pa.struct(
-                                [
-                                    pa.field("bytes", pa.binary()),
-                                    pa.field("path", pa.string()),
-                                ]
-                            ),
-                        ),
-                        "file_path": ["source.parquet", "source.parquet"],
-                    }
-                )
+            table = pa.table(
+                {
+                    "audio": ["a.wav", "b.wav"],
+                    "image": ["keep.png", "drop.jpg"],
+                    "file_path": ["source.parquet", "source.parquet"],
+                }
             )
+            table = datatype.apply_dtypes_to_table(table, self.dtypes, strict=False)
+            if self.filter is not None:
+                table = hf_dataset.filter_table(table, self.filter)
+            yield Tabular(table)
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
     monkeypatch.setattr(hf_dataset, "ParquetReader", FakeParquetReader)
@@ -450,19 +412,20 @@ def test_hf_file_filter_loads_filter_column_before_final_projection(
         "org/repo",
         columns_to_read=("audio",),
         dtypes={
-            "audio": datatype.audio_file(),
-            "image": datatype.image_file(),
+            "audio": datatype.audio_path(),
+            "image": datatype.image_path(),
         },
         filter=col("image") == "keep.png",
     )
 
     units = list(reader.read_shard(reader.list_shards()[0]))
 
-    assert delegate_columns == [("audio", "image")]
+    assert delegate_columns == [("audio",)]
+    assert delegate_filters[0] is not None
     assert isinstance(units[0], Tabular)
     table = units[0].table
     assert table.column_names == ["audio", "file_path"]
-    assert table.column("audio").to_pylist() == ["hf://datasets/org/repo/a.wav"]
+    assert table.column("audio").to_pylist() == ["a.wav"]
     assert table.column("file_path").to_pylist() == ["source.parquet"]
 
 
@@ -662,7 +625,18 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
                 {
                     "id": [str(base_id), str(base_id + 1)],
                     "label": ["drop", "keep"],
-                    "video": ["drop.mp4", "keep.mp4"],
+                    "video": pa.array(
+                        [
+                            {"bytes": None, "path": "drop.mp4"},
+                            {"bytes": None, "path": "keep.mp4"},
+                        ],
+                        type=pa.struct(
+                            [
+                                pa.field("bytes", pa.binary()),
+                                pa.field("path", pa.string()),
+                            ]
+                        ),
+                    ),
                 }
             )
 
@@ -696,8 +670,9 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
     assert table.column("id").type == pa.int64()
     assert table.column("file_path").to_pylist() == [None]
     assert table.column("label").to_pylist() == ["keep"]
-    assert table.column("video").to_pylist() == ["hf://datasets/org/repo/keep.mp4"]
+    assert table.column("video").to_pylist() == [{"bytes": None, "path": "keep.mp4"}]
     assert table.schema.field("video").metadata == {b"asset_type": b"video"}
+    assert datatype.asset_storage(table.schema.field("video")) == "bytes_with_path"
 
 
 def test_hf_dataset_fallback_errors_when_requested_shards_exceed_source_shards(

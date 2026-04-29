@@ -17,9 +17,17 @@ from refiner.pipeline.steps import FilterExprStep, FnRowStep
 def test_datatype_constructors_produce_arrow_types_and_metadata() -> None:
     assert datatype.int64() == pa.int64()
     assert datatype.list("uint8") == pa.list_(pa.uint8())
-    assert datatype.video_file().type == pa.string()
-    assert datatype.video_file().metadata == {b"asset_type": b"video"}
-    assert datatype.file().metadata == {b"asset_type": b"unknown"}
+    assert datatype.video_path().type == pa.string()
+    assert datatype.video_path().metadata == {b"asset_type": b"video"}
+    assert datatype.file_path().metadata == {b"asset_type": b"file"}
+    assert datatype.video_path().type == pa.string()
+    assert datatype.video_bytes().type == pa.binary()
+    assert datatype.video_bytes_with_path().type == pa.struct(
+        [pa.field("bytes", pa.binary()), pa.field("path", pa.string())]
+    )
+    assert datatype.asset_storage(datatype.video_path()) == "path"
+    assert datatype.asset_storage(datatype.video_bytes()) == "bytes"
+    assert datatype.asset_storage(datatype.video_bytes_with_path()) == "bytes_with_path"
     assert datatype.list(datatype.uint8()) == pa.list_(pa.uint8())
     assert datatype.list(datatype.uint8(), size=3) == pa.list_(pa.uint8(), list_size=3)
     assert datatype.struct({"x": datatype.float32()}) == pa.struct(
@@ -46,11 +54,11 @@ def test_schema_and_table_dtypes_preserve_unrelated_metadata() -> None:
 
     schema = datatype.schema_with_dtypes(
         table.schema,
-        {"frames": datatype.video_file(), "label": pa.large_string()},
+        {"frames": datatype.video_path(), "label": pa.large_string()},
     )
     out = datatype.apply_dtypes_to_table(
         table,
-        {"frames": datatype.video_file(), "label": pa.large_string()},
+        {"frames": datatype.video_path(), "label": pa.large_string()},
     )
 
     assert schema is not None
@@ -87,7 +95,7 @@ def test_dict_rows_with_schema_preserve_field_metadata() -> None:
 def test_arrow_row_fast_path_preserves_field_metadata() -> None:
     table = datatype.apply_dtypes_to_table(
         pa.table({"frames": ["a.mp4", "b.mp4"]}),
-        {"frames": datatype.video_file()},
+        {"frames": datatype.video_path()},
     )
     rows = Tabular(table).to_rows()
 
@@ -112,7 +120,7 @@ def test_arrow_row_fast_path_applies_carried_schema_to_unchanged_columns() -> No
     rows = Tabular(table).to_rows()
     schema = datatype.schema_with_dtypes(
         table.schema,
-        {"frames": datatype.video_file()},
+        {"frames": datatype.video_path()},
     )
 
     out = Tabular.from_rows(rows, schema=schema).table
@@ -163,7 +171,7 @@ def test_row_segment_dtypes_apply_to_unchanged_arrow_rows() -> None:
                         FnRowStep(
                             fn=lambda row: row,
                             index=1,
-                            dtypes={"frames": rf.datatype.video_file()},
+                            dtypes={"frames": rf.datatype.video_path()},
                         ),
                     )
                 ),
@@ -186,7 +194,7 @@ def test_row_segment_dtypes_apply_to_unchanged_arrow_rows() -> None:
 def test_map_dtypes_do_not_attach_schema_to_row_outputs() -> None:
     pipeline = from_items([{"id": 1}]).map(
         lambda row: {"frames": "clip.mp4"},
-        dtypes={"frames": rf.datatype.video_file()},
+        dtypes={"frames": rf.datatype.video_path()},
     )
 
     blocks = list(pipeline.execute(pipeline.source.read()))
@@ -202,8 +210,8 @@ def test_map_dtypes_do_not_attach_declared_schema_overrides_to_rows() -> None:
     pipeline = from_items([{"id": 1}]).map(
         lambda row: {"frames": "clip.mp4"},
         dtypes={
-            "frames": rf.datatype.video_file(),
-            "missing": rf.datatype.video_file(),
+            "frames": rf.datatype.video_path(),
+            "missing": rf.datatype.video_path(),
         },
     )
 
@@ -220,11 +228,11 @@ def test_map_dtypes_accumulate_across_row_steps() -> None:
         from_items([{"id": 1}])
         .map(
             lambda row: row.update({"frames": "clip.mp4"}),
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .map(
             lambda row: row.update({"audio": "clip.wav"}),
-            dtypes={"audio": rf.datatype.audio_file()},
+            dtypes={"audio": rf.datatype.audio_path()},
         )
         .filter(rf.col("frames").is_not_null())
     )
@@ -269,7 +277,7 @@ def test_untyped_row_overwrite_does_not_attach_schema_to_rows() -> None:
         from_items([{"id": 1}])
         .map(
             lambda row: row.update({"frames": "clip.mp4"}),
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .map(lambda row: {"frames": "label-not-video"})
     )
@@ -288,7 +296,7 @@ def test_incompatible_row_value_clears_schema_field_on_table_conversion() -> Non
         from_items([{"id": 1}])
         .map(
             lambda row: row.update({"frames": "clip.mp4"}),
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .map(lambda row: {"frames": 123})
         .filter(rf.col("frames").is_not_null())
@@ -305,7 +313,7 @@ def test_incompatible_row_value_clears_schema_field_on_table_conversion() -> Non
 def test_incompatible_arrow_row_patch_clears_field_metadata() -> None:
     table = datatype.apply_dtypes_to_table(
         pa.table({"frames": ["a.mp4", "b.mp4"]}),
-        {"frames": datatype.video_file()},
+        {"frames": datatype.video_path()},
     )
     rows = [row.update({"frames": idx}) for idx, row in enumerate(Tabular(table))]
 
@@ -321,7 +329,7 @@ def test_row_step_schemas_flow_through_untyped_steps() -> None:
         from_items([{"id": 1}])
         .map(
             lambda row: row.update({"frames": "clip.mp4"}),
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .map(lambda row: row.update({"label": "keep"}))
         .filter(rf.col("frames").is_not_null())
@@ -338,7 +346,7 @@ def test_vectorized_schema_flows_into_later_row_segment() -> None:
         from_items([{"id": 1}])
         .map(
             lambda row: row.update({"frames": "clip.mp4"}),
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .filter(rf.col("frames").is_not_null())
         .map(lambda row: row.update({"frames": row["frames"]}))
@@ -356,7 +364,7 @@ def test_vectorized_assignment_clears_previous_schema_override() -> None:
         from_items([{"id": 1}])
         .map(
             lambda row: row.update({"frames": "clip.mp4"}),
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .filter(rf.col("frames").is_not_null())
         .with_column("frames", "label")
@@ -389,7 +397,7 @@ def test_vectorized_cast_clears_previous_file_metadata() -> None:
         from_items([{"id": 1}])
         .map(
             lambda row: row.update({"frames": "123"}),
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .filter(rf.col("frames").is_not_null())
         .cast(frames="int64")
@@ -409,7 +417,7 @@ def test_row_dtype_redefinition_clears_previous_file_metadata() -> None:
         from_items([{"id": 1}])
         .map(
             lambda row: row.update({"frames": "123"}),
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .map(
             lambda row: row.update({"frames": row["frames"]}),
@@ -429,7 +437,7 @@ def test_row_dtype_redefinition_clears_previous_file_metadata() -> None:
 def test_vectorized_cast_accepts_file_dtype_metadata() -> None:
     pipeline = (
         from_items([{"frames": "clip.mp4"}])
-        .cast(frames=rf.datatype.video_file())
+        .cast(frames=rf.datatype.video_path())
         .map(lambda row: row.update({"frames": row["frames"]}))
         .filter(rf.col("frames").is_not_null())
     )
@@ -461,7 +469,7 @@ def test_pipeline_exposes_final_row_schema_for_sink(tmp_path) -> None:
         from_items([{"id": 1}])
         .map(
             lambda row: row.update({"frames": "clip.mp4"}),
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .write_parquet(tmp_path)
     )
@@ -477,7 +485,7 @@ def test_pipeline_exposes_final_row_schema_for_sink(tmp_path) -> None:
 def test_tabular_schema_flows_through_row_segment() -> None:
     table = datatype.apply_dtypes_to_table(
         pa.table({"frames": ["clip.mp4"]}),
-        {"frames": datatype.video_file()},
+        {"frames": datatype.video_path()},
     )
 
     blocks = list(
@@ -506,7 +514,7 @@ def test_tabular_schema_flows_through_row_segment() -> None:
 def test_map_dtypes_attach_declared_schema_even_when_column_is_absent() -> None:
     pipeline = from_items([{"id": 1}]).map(
         lambda row: {"frames": "clip.mp4"},
-        dtypes={"missing": rf.datatype.video_file()},
+        dtypes={"missing": rf.datatype.video_path()},
     )
 
     blocks = list(pipeline.execute(pipeline.source.read()))
@@ -522,7 +530,7 @@ def test_map_dtypes_apply_to_downstream_tabular_blocks() -> None:
         from_items([{"id": 1}])
         .map(
             lambda row: {"frames": "clip.mp4"},
-            dtypes={"frames": rf.datatype.video_file()},
+            dtypes={"frames": rf.datatype.video_path()},
         )
         .filter(rf.col("frames").is_not_null())
     )
@@ -537,7 +545,7 @@ def test_map_dtypes_apply_to_downstream_tabular_blocks() -> None:
 def test_parquet_sink_and_reader_preserve_field_metadata(tmp_path) -> None:
     table = datatype.apply_dtypes_to_table(
         pa.table({"frames": ["clip.mp4"]}),
-        {"frames": datatype.video_file()},
+        {"frames": datatype.video_path()},
     )
     sink = ParquetSink(tmp_path)
     sink.write_shard_block("train", Tabular(table))
