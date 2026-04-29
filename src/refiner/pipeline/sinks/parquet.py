@@ -68,7 +68,7 @@ class ParquetSink(BaseSink):
         self._writers[shard_id] = writer
         return writer
 
-    def write_shard_block(self, shard_id: str, block: Block) -> None:
+    def write_shard_block(self, shard_id: str, block: Block) -> int:
         if isinstance(block, Tabular):
             table = block.table
         else:
@@ -83,11 +83,12 @@ class ParquetSink(BaseSink):
             table = table.drop_columns([SHARD_ID_COLUMN])
         if self._assets is None:
             self._writer(shard_id, table.schema).write_table(table)
-            return
+            return table.num_rows
         self._writer(
             shard_id,
             (table := self._assets.rewrite_table(shard_id, table)).schema,
         ).write_table(table)
+        return table.num_rows
 
     def on_shard_complete(self, shard_id: str) -> None:
         writer = self._writers.pop(shard_id, None)
@@ -98,7 +99,7 @@ class ParquetSink(BaseSink):
     def close(self) -> None:
         try:
             if self._assets is not None:
-                self._assets.flush()
+                self._assets.close()
         finally:
             for writer in self._writers.values():
                 writer.close()

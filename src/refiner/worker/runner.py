@@ -250,7 +250,7 @@ class Worker:
                         if heartbeat_error is not None:
                             raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                         with set_active_step_index(sink_step_index):
-                            written = sink.write_block(block)
+                            written, written_output_rows = sink.write_block(block)
                         _apply_row_delta(
                             {
                                 shard_id: -count
@@ -259,7 +259,7 @@ class Worker:
                             }
                         )
                         if sink.counts_output_rows:
-                            output_rows += block_num_rows(block)
+                            output_rows += written_output_rows
                 except Exception as e:
                     execution_error = e
                     failed_error = str(e).strip() or type(e).__name__

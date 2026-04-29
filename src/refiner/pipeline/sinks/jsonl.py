@@ -67,31 +67,34 @@ class JsonlSink(BaseSink):
         self._files[shard_id] = file
         return file
 
-    def _write_rows(self, shard_id: str, rows: Iterable[Mapping[str, object]]) -> None:
+    def _write_rows(self, shard_id: str, rows: Iterable[Mapping[str, object]]) -> int:
         file = self._file(shard_id)
+        count = 0
         for row in rows:
             file.write(
                 self._encoder.encode(row.to_dict() if isinstance(row, Row) else row)
             )
             file.write("\n")
+            count += 1
+        return count
 
-    def _write_table_rows(self, shard_id: str, table: pa.Table) -> None:
+    def _write_table_rows(self, shard_id: str, table: pa.Table) -> int:
         if self._assets is not None:
-            self._write_rows(
+            return self._write_rows(
                 shard_id, self._assets.rewrite_table(shard_id, table).to_pylist()
             )
-            return
+        count = 0
         for batch in table.to_batches(max_chunksize=4096):
-            self._write_rows(shard_id, batch.to_pylist())
+            count += self._write_rows(shard_id, batch.to_pylist())
+        return count
 
-    def write_shard_block(self, shard_id: str, block: Block) -> None:
+    def write_shard_block(self, shard_id: str, block: Block) -> int:
         if isinstance(block, Tabular):
-            self._write_table_rows(shard_id, block.table)
-        else:
-            rows = block
-            if self._assets is not None:
-                rows = self._assets.rewrite_rows(shard_id, rows)
-            self._write_rows(shard_id, rows)
+            return self._write_table_rows(shard_id, block.table)
+        rows = block
+        if self._assets is not None:
+            rows = self._assets.rewrite_rows(shard_id, rows)
+        return self._write_rows(shard_id, rows)
 
     def on_shard_complete(self, shard_id: str) -> None:
         file = self._files.pop(shard_id, None)
@@ -102,7 +105,7 @@ class JsonlSink(BaseSink):
     def close(self) -> None:
         try:
             if self._assets is not None:
-                self._assets.flush()
+                self._assets.close()
         finally:
             for file in self._files.values():
                 file.close()

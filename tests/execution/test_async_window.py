@@ -46,3 +46,16 @@ def test_async_window_ready_results_preserve_order() -> None:
 
     assert window.take_completed() == []
     assert window.drain() == [1, 2]
+
+
+def test_async_window_cancel_pending_clears_window() -> None:
+    window = AsyncWindow[int](max_in_flight=2, preserve_order=True)
+
+    assert window.submit_blocking(_delayed_value(1, 1.0)) is None
+    assert window.submit_result(2) is None
+
+    window.cancel_pending()
+
+    assert len(window) == 0
+    assert window.take_completed() == []
+    assert window.drain() == []

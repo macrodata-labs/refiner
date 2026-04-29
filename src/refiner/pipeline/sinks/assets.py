@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Iterable, Sequence
 import posixpath
 import re
@@ -8,7 +9,6 @@ from typing import Literal
 from urllib.parse import unquote, urlsplit
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.execution.asyncio.window import AsyncWindow
@@ -22,6 +22,7 @@ from refiner.worker.metrics.api import log_throughput
 
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 MissingAssetPolicy = Literal["error", "drop_row", "set_null"]
+AssetCopyResult = bool | list[bool]
 
 
 class AssetUploadManager:
@@ -61,8 +62,11 @@ class AssetUploadManager:
             f"{self.assets_subdir}/"
         ):
             raise ValueError("filename_template must not write into assets_subdir")
-        self._window = AsyncWindow[bool](
+        self._window = AsyncWindow[AssetCopyResult](
             max_in_flight=max_uploads_in_flight,
+            # Row-mode writers release rows as their asset-cell copies finish.
+            # Preserve result order so a later row cannot be yielded before an
+            # earlier row whose copies are still in flight.
             preserve_order=True,
         )
         self._next_row_index: dict[str, int] = {}
@@ -96,6 +100,9 @@ class AssetUploadManager:
                 "dtypes=... or cast(...), or call set_input_schema(...)."
             )
 
+    def close(self) -> None:
+        self._window.cancel_pending()
+
     def rewrite_table(self, shard_id: str, table: pa.Table) -> pa.Table:
         start = self._next_row_index.get(shard_id, 0)
         out = table
@@ -114,16 +121,20 @@ class AssetUploadManager:
             field = out.schema.field(idx)
             column = out.column(idx)
             values = column.to_pylist()
-            rewritten = [
-                self._rewrite_path(
-                    value,
-                    shard_id=shard_id,
-                    column_name=column_name,
-                    row_index=start + row_offset,
-                    list_items=kind == "list",
+            rewritten = []
+            for row_offset, value in enumerate(values):
+                if self.missing_asset_policy == "error" and value is None:
+                    rewritten.append(None)
+                    continue
+                rewritten.append(
+                    self._rewrite_path(
+                        value,
+                        shard_id=shard_id,
+                        column_name=column_name,
+                        row_index=start + row_offset,
+                        list_items=kind == "list",
+                    )
                 )
-                for row_offset, value in enumerate(values)
-            ]
             rewritten_array = pa.array(rewritten, type=field.type)
             out = set_or_append_column(
                 out,
@@ -135,33 +146,51 @@ class AssetUploadManager:
         # completed; otherwise a later copy failure leaves dangling references.
         results = self._window.drain()
         self._next_row_index[shard_id] = start + table.num_rows
-        keep: pa.Array | None = None
-        offset = 0
-        for column_name, field in result_columns:
-            column_results = results[offset : offset + table.num_rows]
-            offset += table.num_rows
-            if all(column_results):
-                continue
-            valid = pa.array(column_results, type=pa.bool_())
-            if self.missing_asset_policy == "set_null":
+        if self.missing_asset_policy == "set_null":
+            # Each result lines up with one rewritten table cell. Scalar cells
+            # return bool; list cells return one bool per non-null path element.
+            offset = 0
+            for column_name, field in result_columns:
+                column_results = results[offset : offset + table.num_rows]
+                offset += table.num_rows
                 idx = out.schema.get_field_index(column_name)
                 column = out.column(idx)
+                values = [
+                    _set_null_value(value, result)
+                    for value, result in zip(
+                        column.to_pylist(),
+                        column_results,
+                        strict=True,
+                    )
+                ]
                 out = set_or_append_column(
                     out,
                     column_name,
-                    pc.call_function(
-                        "if_else",
-                        [valid, column, pa.nulls(out.num_rows, type=field.type)],
-                    ),
+                    pa.array(values, type=field.type),
                 )
-            elif self.missing_asset_policy == "drop_row":
-                keep = valid if keep is None else pc.call_function("and", [keep, valid])
-        if keep is not None:
-            rows_before_filter = out.num_rows
-            out = out.filter(keep)
-            dropped = rows_before_filter - out.num_rows
-            if dropped:
-                log_throughput("asset_rows_dropped", dropped, shard_id, unit="rows")
+        elif self.missing_asset_policy == "drop_row":
+            # Drop-row only needs row-level validity, so list cell results collapse
+            # with all(...): any failed path element drops the whole row.
+            keep = [True] * table.num_rows
+            offset = 0
+            for _column_name, _field in result_columns:
+                column_results = results[offset : offset + table.num_rows]
+                offset += table.num_rows
+                for row_offset, result in enumerate(column_results):
+                    keep[row_offset] = keep[row_offset] and (
+                        all(result) if isinstance(result, list) else result
+                    )
+            if not all(keep):
+                rows_before_filter = out.num_rows
+                out = out.filter(pa.array(keep, type=pa.bool_()))
+                dropped = rows_before_filter - out.num_rows
+                if dropped:
+                    log_throughput(
+                        "asset_rows_dropped",
+                        dropped,
+                        shard_id,
+                        unit="rows",
+                    )
         return out
 
     def rewrite_rows(
@@ -171,17 +200,53 @@ class AssetUploadManager:
     ) -> Iterable[Row]:
         self.require_input_schema()
         if not self._asset_columns:
-            return rows
+            yield from rows
+            return
 
         start = self._next_row_index.get(shard_id, 0)
-        pending_rows: list[tuple[Row, dict[str, object], list[str]]] = []
+        # Results are ordered by the same nested loop used to build patches:
+        # row, then asset column. Keep only rows whose copy results are still
+        # pending instead of materializing the full input block.
+        pending_rows: deque[tuple[Row, dict[str, object], list[str]]] = deque()
+        results: deque[AssetCopyResult] = deque()
+        dropped = 0
         row_count = 0
+
+        def emit_ready() -> Iterable[Row]:
+            nonlocal dropped
+            while pending_rows:
+                row, patch, result_columns = pending_rows[0]
+                result_count = len(result_columns)
+                if len(results) < result_count:
+                    break
+                pending_rows.popleft()
+                row_results = [results.popleft() for _ in range(result_count)]
+                if self.missing_asset_policy == "drop_row" and not all(
+                    all(result) if isinstance(result, list) else result
+                    for result in row_results
+                ):
+                    dropped += 1
+                    continue
+                if self.missing_asset_policy == "set_null":
+                    for column_name, copied in zip(
+                        result_columns,
+                        row_results,
+                        strict=True,
+                    ):
+                        patch[column_name] = _set_null_value(
+                            patch[column_name],
+                            copied,
+                        )
+                yield row.update(patch) if patch else row
+
         for row_index, row in enumerate(rows, start=start):
             row_count += 1
             patch: dict[str, object] = {}
             result_columns: list[str] = []
             for column_name, kind in self._asset_columns.items():
                 if column_name not in row:
+                    continue
+                if self.missing_asset_policy == "error" and row[column_name] is None:
                     continue
                 value = self._rewrite_path(
                     row[column_name],
@@ -192,34 +257,22 @@ class AssetUploadManager:
                 )
                 patch[column_name] = value
                 result_columns.append(column_name)
+
             pending_rows.append((row, patch, result_columns))
-        # Keep row-mode JSONL writes atomic at the block level for asset references.
-        results = self._window.drain()
+            # Error policy must remain block-atomic for row sinks: JSONL writes
+            # rows as they are yielded, so do not expose any rewritten asset paths
+            # until every copy in the block has succeeded.
+            if self.missing_asset_policy != "error":
+                # Non-error policies can stream bounded rows as soon as their
+                # copy results are available.
+                results.extend(self._window.take_completed())
+                yield from emit_ready()
+
+        results.extend(self._window.drain())
+        yield from emit_ready()
         self._next_row_index[shard_id] = start + row_count
-        out: list[Row] = []
-        dropped = 0
-        offset = 0
-        for row, patch, result_columns in pending_rows:
-            row_results = results[offset : offset + len(result_columns)]
-            offset += len(result_columns)
-            if self.missing_asset_policy == "drop_row" and not all(row_results):
-                dropped += 1
-                continue
-            if self.missing_asset_policy == "set_null":
-                for column_name, copied in zip(
-                    result_columns,
-                    row_results,
-                    strict=True,
-                ):
-                    if not copied:
-                        patch[column_name] = None
-            out.append(row.update(patch) if patch else row)
         if dropped:
             log_throughput("asset_rows_dropped", dropped, shard_id, unit="rows")
-        return out
-
-    def flush(self) -> None:
-        self._window.drain()
 
     def _asset_relpath(
         self,
@@ -310,16 +363,16 @@ class AssetUploadManager:
             rewritten = self.output.abs_path(relpath)
             copies = (value, relpath)
 
-        def copy_assets_sync() -> bool:
+        def copy_assets_sync() -> AssetCopyResult:
             if isinstance(copies, list):
-                return all(
+                return [
                     self._copy_asset(item, relpath, shard_id=shard_id)
                     for item, relpath in copies
-                )
+                ]
             item, relpath = copies
             return self._copy_asset(item, relpath, shard_id=shard_id)
 
-        async def copy_assets() -> bool:
+        async def copy_assets() -> AssetCopyResult:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(io_executor(), copy_assets_sync)
 
@@ -348,6 +401,30 @@ def asset_columns_from_schema(schema: pa.Schema | None) -> dict[str, str]:
         ) and datatype.is_asset_path_field(field_type.value_field):
             columns[field.name] = "list"
     return columns
+
+
+def _set_null_value(value: object, result: AssetCopyResult) -> object:
+    # Scalar copy result: failed copy nulls the whole cell.
+    if isinstance(result, bool):
+        return value if result else None
+    if value is None:
+        return None
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise TypeError("Asset list result cannot be applied to non-list value")
+    # List copy result: failed copy nulls only that path element. Existing None
+    # values do not produce copy results, so they do not consume result entries.
+    result_iter = iter(result)
+    out: list[object] = []
+    for item in value:
+        if item is None:
+            out.append(None)
+            continue
+        out.append(item if next(result_iter) else None)
+    try:
+        next(result_iter)
+    except StopIteration:
+        return out
+    raise ValueError("Asset list result has more entries than list path values")
 
 
 __all__ = ["AssetUploadManager", "MissingAssetPolicy"]

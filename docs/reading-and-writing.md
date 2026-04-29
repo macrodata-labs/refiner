@@ -201,7 +201,18 @@ copies those files without decoding them, and rewrites the column values to the
 copied asset paths. Assets are written under
 `{output}/assets/{shard_id}__w{worker_id}/...` by default; use `assets_subdir` to
 change the subfolder name and `max_asset_uploads_in_flight` to bound per-worker
-copy concurrency. Missing or unreadable asset paths fail the shard.
+copy concurrency.
+
+Missing or unreadable asset paths are controlled by `missing_asset_policy`:
+
+| policy | behavior |
+| --- | --- |
+| `"error"` | fail the shard on the first missing asset path |
+| `"drop_row"` | skip rows with missing asset paths |
+| `"set_null"` | replace missing asset paths with null values |
+
+For list-typed asset columns, `"drop_row"` drops the row when any copied list
+item is missing, while `"set_null"` nulls only the missing list items.
 
 Mark path columns as assets with `dtypes=...` on row transforms or with
 `cast(...)`:

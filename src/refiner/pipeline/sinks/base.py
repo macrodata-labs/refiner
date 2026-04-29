@@ -19,26 +19,31 @@ class BaseSink(ABC):
     sinks.
     """
 
-    def write_block(self, block: Block) -> dict[str, int]:
+    def write_block(self, block: Block) -> tuple[dict[str, int], int]:
         """Split a mixed block by shard and dispatch each shard-local block.
 
         This is the normal entry point and should usually be inherited as-is.
         """
         blocks_by_shard, counts = split_block_by_shard(block)
+        output_rows = 0
         for shard_id, shard_block in blocks_by_shard.items():
-            self.write_shard_block(shard_id, shard_block)
+            actual_count = self.write_shard_block(shard_id, shard_block)
+            output_count = counts[shard_id] if actual_count is None else actual_count
             log_throughput(
                 "rows_written",
-                counts[shard_id],
+                output_count,
                 shard_id=shard_id,
                 unit="rows",
             )
-        return counts
+            output_rows += output_count
+        return counts, output_rows
 
-    def write_shard_block(self, shard_id: str, block: Block) -> None:
+    def write_shard_block(self, shard_id: str, block: Block) -> int | None:
         """Write one already shard-local block.
 
         This is the main method concrete shard-writing sinks should implement.
+        Return the actual row count when the sink can drop or expand rows;
+        otherwise return None to use the input block count.
         """
         del shard_id, block
         raise NotImplementedError
@@ -89,8 +94,9 @@ class BaseSink(ABC):
 class NullSink(BaseSink):
     """Sink that discards data and only reports shard counts."""
 
-    def write_block(self, block: Block) -> dict[str, int]:
-        return count_block_by_shard(block)
+    def write_block(self, block: Block) -> tuple[dict[str, int], int]:
+        counts = count_block_by_shard(block)
+        return counts, sum(counts.values())
 
 
 __all__ = ["BaseSink", "NullSink"]
