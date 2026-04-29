@@ -97,9 +97,9 @@ def execute_row_steps(
                 for row in inp.take_all():
                     row.log_throughput("rows_processed", 1, unit="rows")
                     window.submit_blocking(_run_async_step(step=step, row=row))
-                out.extend(window.poll())
+                out.extend(window.take_completed())
                 if flush_all:
-                    out.extend(window.flush())
+                    out.extend(window.drain())
                 return
 
             if isinstance(step, FilterRowStep):

@@ -133,7 +133,7 @@ class AssetUploadManager:
             result_columns.append((column_name, field))
         # Do not expose output rows that point at assets until those copies have
         # completed; otherwise a later copy failure leaves dangling references.
-        results = self._window.flush()
+        results = self._window.drain()
         self._next_row_index[shard_id] = start + table.num_rows
         keep: pa.Array | None = None
         offset = 0
@@ -194,7 +194,7 @@ class AssetUploadManager:
                 result_columns.append(column_name)
             pending_rows.append((row, patch, result_columns))
         # Keep row-mode JSONL writes atomic at the block level for asset references.
-        results = self._window.flush()
+        results = self._window.drain()
         self._next_row_index[shard_id] = start + row_count
         out: list[Row] = []
         dropped = 0
@@ -219,7 +219,7 @@ class AssetUploadManager:
         return out
 
     def flush(self) -> None:
-        self._window.flush()
+        self._window.drain()
 
     def _asset_relpath(
         self,

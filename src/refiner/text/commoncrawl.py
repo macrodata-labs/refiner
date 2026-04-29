@@ -446,10 +446,10 @@ class CommonCrawlWarcIndexSource(BaseSource):
         )
         for row in self._iter_index_rows(shard):
             window.submit_blocking(self._fetch_index_row_payload_async(row))
-            for payload in window.poll():
+            for payload in window.take_completed():
                 if payload is not None:
                     yield DictRow(payload)
-        for payload in window.flush():
+        for payload in window.drain():
             if payload is not None:
                 yield DictRow(payload)
 

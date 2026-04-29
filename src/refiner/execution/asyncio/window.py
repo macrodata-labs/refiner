@@ -45,14 +45,14 @@ class AsyncWindow(Generic[T]):
         else:
             self._buffered.append(value)
 
-    def poll(self) -> list[T]:
+    def take_completed(self) -> list[T]:
         done = {future for future in self._futures if future.done()}
         out = self._take_buffered()
         out.extend(self._consume_done(done))
         out.extend(self._take_ready_ordered())
         return out
 
-    def flush(self) -> list[T]:
+    def drain(self) -> list[T]:
         out = self._take_buffered()
         out.extend(self._take_ready_ordered())
         while self._futures:

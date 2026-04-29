@@ -21,21 +21,21 @@ def test_async_window_submit_blocking_enforces_max_in_flight() -> None:
     elapsed = time.perf_counter() - start
 
     assert elapsed >= 0.02
-    assert window.poll() == [1]
-    assert window.flush() == [2]
+    assert window.take_completed() == [1]
+    assert window.drain() == [2]
 
 
-def test_async_window_poll_returns_ready_results_without_blocking() -> None:
+def test_async_window_take_completed_returns_ready_results_without_blocking() -> None:
     window = AsyncWindow[int](max_in_flight=2, preserve_order=False)
 
     assert window.submit_blocking(_delayed_value(1, 0.03)) is None
     assert window.submit_blocking(_delayed_value(2, 0.0)) is None
 
     time.sleep(0.05)
-    polled = window.poll()
+    polled = window.take_completed()
 
     assert sorted(polled) == [1, 2]
-    assert window.flush() == []
+    assert window.drain() == []
 
 
 def test_async_window_ready_results_preserve_order() -> None:
@@ -44,5 +44,5 @@ def test_async_window_ready_results_preserve_order() -> None:
     assert window.submit_blocking(_delayed_value(1, 0.03)) is None
     assert window.submit_ready(2) is None
 
-    assert window.poll() == []
-    assert window.flush() == [1, 2]
+    assert window.take_completed() == []
+    assert window.drain() == [1, 2]
