@@ -15,6 +15,20 @@ from fsspec.implementations.local import LocalFileSystem
 DataFilePath: TypeAlias = str | PathLike[str]
 DataFileSpec: TypeAlias = tuple[DataFilePath, AbstractFileSystem]
 DataFileLike: TypeAlias = Union[DataFilePath, DataFileSpec, "DataFile"]
+_HF_HTTP_PREFIXES = ("https://huggingface.co/", "https://hf.co/")
+
+
+def _storage_options_for_path(
+    path: str,
+    storage_options: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    options = dict(storage_options or {})
+    if path.startswith(_HF_HTTP_PREFIXES) and (hf_token := os.environ.get("HF_TOKEN")):
+        headers = dict(cast(Mapping[str, str], options.get("headers") or {}))
+        if not any(key.lower() == "authorization" for key in headers):
+            headers["Authorization"] = f"Bearer {hf_token}"
+            options["headers"] = headers
+    return options
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +83,8 @@ class DataFile:
                 return cls(fs=fs, path=path)
 
             next_fs, path = url_to_fs(
-                data, **cast(Mapping[str, Any], storage_options or {})
+                data,
+                **_storage_options_for_path(data, storage_options),
             )
             return cls(fs=next_fs, path=path)
 

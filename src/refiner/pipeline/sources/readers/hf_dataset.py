@@ -45,7 +45,6 @@ class HFDatasetReader(BaseSource):
         split: str = "train",
         *,
         dtypes: DTypeMapping | None = None,
-        hf_token: str | None = None,
         timeout: float = 30.0,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
@@ -57,7 +56,6 @@ class HFDatasetReader(BaseSource):
     ):
         self.repo = repo
         self.split = split
-        self.hf_token = hf_token
         self.timeout = float(timeout)
         self.target_shard_bytes = target_shard_bytes
         self.num_shards = num_shards
@@ -73,8 +71,6 @@ class HFDatasetReader(BaseSource):
         info_kwargs: dict[str, Any] = {}
         if config is not None:
             info_kwargs["config_name"] = config
-        if self.hf_token is not None:
-            info_kwargs["token"] = self.hf_token
         info = get_dataset_config_info(self.repo, **info_kwargs)
         self.config: str = str(info.config_name or config or "default")
 
@@ -174,7 +170,6 @@ class HFDatasetReader(BaseSource):
             self.repo,
             self.config,
             self.split,
-            hf_token=self.hf_token,
             timeout=self.timeout,
         )
         self._delegate = self._make_parquet_reader(urls)
@@ -225,11 +220,6 @@ class HFDatasetReader(BaseSource):
             split_row_groups=self.split_row_groups,
             file_path_column=self.file_path_column,
             dtypes=self.dtypes,
-            storage_options=(
-                {"headers": {"Authorization": f"Bearer {self.hf_token}"}}
-                if self.hf_token is not None
-                else None
-            ),
         )
 
     def _fallback_shards(self, num_shards: int | None) -> list[Shard]:
@@ -255,8 +245,6 @@ class HFDatasetReader(BaseSource):
                 "split": self.split,
                 "streaming": True,
             }
-            if self.hf_token is not None:
-                kwargs["token"] = self.hf_token
             self._fallback_dataset = cast(Any, load_dataset)(
                 self.repo,
                 self.config,
@@ -331,7 +319,6 @@ def _list_parquet_urls(
     config: str,
     split: str,
     *,
-    hf_token: str | None,
     timeout: float,
 ) -> list[str]:
     """Return generated Parquet shard URLs for one HF dataset config/split."""
@@ -342,7 +329,6 @@ def _list_parquet_urls(
 
     payload = _get_json_or_none(
         f"{_HF_HUB}/api/datasets/{repo_quoted}/parquet/{config_quoted}/{split_quoted}",
-        hf_token=hf_token,
         timeout=timeout,
     )
     if isinstance(payload, list):
@@ -353,7 +339,6 @@ def _list_parquet_urls(
     payload = _get_json_or_none(
         f"{_HF_DATASETS_SERVER}/parquet?dataset={repo_quoted}"
         f"&config={config_quoted}&split={split_quoted}",
-        hf_token=hf_token,
         timeout=timeout,
     )
     if isinstance(payload, Mapping):
@@ -380,7 +365,6 @@ def _list_parquet_urls(
     builder = load_dataset_builder(
         repo,
         config,
-        token=hf_token,
     )
     if not isinstance(builder, Parquet):
         raise FileNotFoundError(
@@ -407,16 +391,22 @@ def _list_parquet_urls(
     )
 
 
-def _get_json_or_none(url: str, *, hf_token: str | None, timeout: float) -> object:
+def _get_json_or_none(url: str, *, timeout: float) -> object:
     try:
-        return _get_json(url, hf_token=hf_token, timeout=timeout)
+        return _get_json(url, timeout=timeout)
     except httpx.HTTPError:
         return None
 
 
-def _get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-    headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else None
-    response = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+def _get_json(url: str, *, timeout: float) -> object:
+    from huggingface_hub.utils import build_hf_headers
+
+    response = httpx.get(
+        url,
+        headers=build_hf_headers(),
+        timeout=timeout,
+        follow_redirects=True,
+    )
     response.raise_for_status()
     return response.json()
 

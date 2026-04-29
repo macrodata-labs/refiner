@@ -8,7 +8,7 @@ from typing import Any, Literal, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
 
-from refiner.io.datafile import DataFile, DataFileSpec
+from refiner.io.datafile import DataFile, DataFileSpec, _storage_options_for_path
 from refiner.io.datafolder import DataFolder, DataFolderSpec
 
 DataFileSetInput: TypeAlias = Union[
@@ -135,7 +135,10 @@ class DataFileSet:
                         DataFile.resolve(item, storage_options=storage_options)
                     )
                 else:
-                    item_fs, path = url_to_fs(item, **dict(storage_options or {}))
+                    item_fs, path = url_to_fs(
+                        item,
+                        **_storage_options_for_path(item, storage_options),
+                    )
                     normalized_entries.append(_PathSource(path=path, fs=item_fs))
 
         return cls(
