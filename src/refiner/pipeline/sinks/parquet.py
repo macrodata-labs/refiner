@@ -7,7 +7,7 @@ from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline.sinks.assets import AssetUploadManager
+from refiner.pipeline.sinks.assets import AssetUploadManager, MissingAssetPolicy
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import get_active_worker_token
@@ -24,12 +24,14 @@ class ParquetSink(BaseSink):
         upload_assets: bool = False,
         assets_subdir: str = "assets",
         max_asset_uploads_in_flight: int = 16,
+        missing_asset_policy: MissingAssetPolicy = "error",
     ):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
         self.compression = compression
         self.upload_assets = upload_assets
         self.assets_subdir = assets_subdir
+        self.missing_asset_policy = missing_asset_policy
         self._writers: dict[str, pq.ParquetWriter] = {}
         self._schema: pa.Schema | None = None
         self._assets = (
@@ -38,6 +40,7 @@ class ParquetSink(BaseSink):
                 assets_subdir=assets_subdir,
                 filename_template=filename_template,
                 max_uploads_in_flight=max_asset_uploads_in_flight,
+                missing_asset_policy=missing_asset_policy,
             )
             if upload_assets
             else None
@@ -111,6 +114,7 @@ class ParquetSink(BaseSink):
         if self.upload_assets:
             args["upload_assets"] = True
             args["assets_subdir"] = self.assets_subdir
+            args["missing_asset_policy"] = self.missing_asset_policy
         return ("write_parquet", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:

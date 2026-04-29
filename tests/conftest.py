@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -11,3 +12,7 @@ def pytest_configure() -> None:
     # Keep subprocess workers aligned with the same import path.
     existing = os.environ.get("PYTHONPATH", "")
     os.environ["PYTHONPATH"] = f"{src}{os.pathsep}{existing}" if existing else str(src)
+    # Tests should not report local launcher runs to a real Macrodata account just
+    # because the developer shell has credentials configured.
+    os.environ.pop("MACRODATA_API_KEY", None)
+    os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="refiner-test-config-")

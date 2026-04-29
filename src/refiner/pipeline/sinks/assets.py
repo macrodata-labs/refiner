@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Sequence
-from functools import partial
+from collections.abc import Iterable, Iterator, Sequence
 import posixpath
 import re
+from typing import Literal
 from urllib.parse import unquote, urlsplit
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.execution.asyncio.window import AsyncWindow
@@ -20,6 +21,7 @@ from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
 
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+MissingAssetPolicy = Literal["error", "drop_row", "set_null"]
 
 
 class AssetUploadManager:
@@ -30,7 +32,12 @@ class AssetUploadManager:
         assets_subdir: str,
         filename_template: str,
         max_uploads_in_flight: int,
+        missing_asset_policy: MissingAssetPolicy = "error",
     ) -> None:
+        if missing_asset_policy not in {"error", "drop_row", "set_null"}:
+            raise ValueError(
+                "missing_asset_policy must be one of: 'error', 'drop_row', 'set_null'"
+            )
         self.output = output
         # Assets live in a writer-managed subtree, so both the assets directory and
         # the sink's output template must stay relative and disjoint.
@@ -54,14 +61,15 @@ class AssetUploadManager:
             f"{self.assets_subdir}/"
         ):
             raise ValueError("filename_template must not write into assets_subdir")
-        self._window = AsyncWindow[None](
+        self._window = AsyncWindow[bool](
             max_in_flight=max_uploads_in_flight,
-            preserve_order=False,
+            preserve_order=True,
         )
         self._next_row_index: dict[str, int] = {}
         self._asset_columns: dict[str, str] = {}
         self._asset_column_segments: dict[str, str] = {}
         self._input_schema_set = False
+        self.missing_asset_policy = missing_asset_policy
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
         self._set_asset_columns(asset_columns_from_schema(schema))
@@ -91,6 +99,7 @@ class AssetUploadManager:
     def rewrite_table(self, shard_id: str, table: pa.Table) -> pa.Table:
         start = self._next_row_index.get(shard_id, 0)
         out = table
+        pending: list[tuple[str, pa.Field, list[object]]] = []
         # Tables may already carry asset metadata, while row-derived tables rely on
         # the schema passed through set_input_schema().
         columns = dict(self._asset_columns)
@@ -103,6 +112,7 @@ class AssetUploadManager:
             if idx < 0:
                 continue
             field = out.schema.field(idx)
+            values = out.column(idx).to_pylist()
             rewritten = [
                 self._rewrite_asset_path(
                     value,
@@ -111,17 +121,32 @@ class AssetUploadManager:
                     row_index=start + row_offset,
                     list_items=kind == "list",
                 )
-                for row_offset, value in enumerate(out.column(idx).to_pylist())
+                for row_offset, value in enumerate(values)
             ]
+            pending.append((column_name, field, rewritten))
+
+        upload_results = iter(self._window.flush())
+        keep: pa.Array | None = None
+        for column_name, field, rewritten in pending:
+            finalized = [
+                self._finalize_asset_value(value, upload_results) for value in rewritten
+            ]
+            rewritten_array = pa.array(finalized, type=field.type)
             out = set_or_append_column(
                 out,
                 column_name,
-                pa.array(rewritten, type=field.type),
+                rewritten_array,
             )
-        # Do not expose output rows that point at assets until those copies have
-        # completed; otherwise a later copy failure leaves dangling references.
-        self._window.flush()
+            if self.missing_asset_policy == "drop_row" and rewritten_array.null_count:
+                valid = pc.call_function("is_valid", [rewritten_array])
+                keep = valid if keep is None else pc.call_function("and", [keep, valid])
         self._next_row_index[shard_id] = start + table.num_rows
+        if keep is not None:
+            rows_before_filter = out.num_rows
+            out = out.filter(keep)
+            dropped = rows_before_filter - out.num_rows
+            if dropped:
+                log_throughput("asset_rows_dropped", dropped, shard_id, unit="rows")
         return out
 
     def rewrite_rows(
@@ -134,29 +159,80 @@ class AssetUploadManager:
             return rows
 
         start = self._next_row_index.get(shard_id, 0)
-        out: list[Row] = []
+        pending: list[tuple[Row, dict[str, object], dict[str, object]]] = []
         row_count = 0
         for row_index, row in enumerate(rows, start=start):
             row_count += 1
             patch: dict[str, object] = {}
+            original: dict[str, object] = {}
             for column_name, kind in self._asset_columns.items():
                 if column_name not in row:
                     continue
-                patch[column_name] = self._rewrite_asset_path(
+                original[column_name] = row[column_name]
+                value = self._rewrite_asset_path(
                     row[column_name],
                     shard_id=shard_id,
                     column_name=column_name,
                     row_index=row_index,
                     list_items=kind == "list",
                 )
+                patch[column_name] = value
+            pending.append((row, patch, original))
+        upload_results = iter(self._window.flush())
+        out: list[Row] = []
+        dropped = 0
+        for row, patch, original in pending:
+            patch = {
+                column_name: self._finalize_asset_value(value, upload_results)
+                for column_name, value in patch.items()
+            }
+            drop_row = False
+            for column_name, value in patch.items():
+                if (
+                    self.missing_asset_policy == "drop_row"
+                    and original[column_name] is not None
+                    and value is None
+                ):
+                    drop_row = True
+                    break
+            if drop_row:
+                dropped += 1
+                continue
             out.append(row.update(patch) if patch else row)
-        # Keep row-mode JSONL writes atomic at the block level for asset references.
-        self._window.flush()
         self._next_row_index[shard_id] = start + row_count
+        if dropped:
+            log_throughput("asset_rows_dropped", dropped, shard_id, unit="rows")
         return out
 
     def flush(self) -> None:
         self._window.flush()
+
+    def _finalize_asset_value(
+        self,
+        value: object,
+        upload_results: Iterator[bool],
+    ) -> object:
+        if isinstance(value, str):
+            return value if next(upload_results) else None
+        if value is None:
+            return None
+        if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+            return value
+
+        out: list[object] = []
+        for item in value:
+            if item is None:
+                out.append(None)
+                continue
+            if isinstance(item, str) and not next(upload_results):
+                # A missing list element drops the row for drop_row, but set_null
+                # preserves the list and nulls only the missing item.
+                if self.missing_asset_policy == "drop_row":
+                    return None
+                out.append(None)
+            else:
+                out.append(item)
+        return out
 
     def _rewrite_asset_path(
         self,
@@ -175,18 +251,20 @@ class AssetUploadManager:
                 (str, bytes, bytearray),
             ):
                 raise TypeError(f"Asset column {column_name!r} expected list values")
-            return [
-                None
-                if item is None
-                else self._rewrite_path(
+            out: list[object] = []
+            for item_index, item in enumerate(value):
+                if item is None:
+                    out.append(None)
+                    continue
+                rewritten = self._rewrite_path(
                     item,
                     shard_id=shard_id,
                     column_name=column_name,
                     row_index=row_index,
                     item_index=item_index,
                 )
-                for item_index, item in enumerate(value)
-            ]
+                out.append(rewritten)
+            return out
         return self._rewrite_path(
             value,
             shard_id=shard_id,
@@ -220,19 +298,30 @@ class AssetUploadManager:
             f"{self.assets_subdir}/{attempt_dir}/{column_segment}/{prefix}-{basename}"
         )
 
-        async def copy_asset() -> None:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                io_executor(),
-                partial(
-                    DataFile.resolve(value).copy,
-                    self.output.file(relpath),
-                ),
-            )
+        output_path = self.output.abs_path(relpath)
+
+        def copy_asset_sync() -> bool:
+            try:
+                DataFile.resolve(value).copy(self.output.file(relpath))
+            except Exception as e:
+                message = str(e).lower()
+                missing = isinstance(e, FileNotFoundError) or any(
+                    text in message
+                    for text in ("404", "entry not found", "no such file")
+                )
+                if self.missing_asset_policy == "error" or not missing:
+                    raise
+                log_throughput("assets_uploads_failed", 1, shard_id, unit="assets")
+                return False
             log_throughput("assets_uploaded", 1, shard_id=shard_id, unit="assets")
+            return True
+
+        async def copy_asset() -> bool:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(io_executor(), copy_asset_sync)
 
         self._window.submit_blocking(copy_asset())
-        return self.output.abs_path(relpath)
+        return output_path
 
 
 ASSET_ATTEMPT_DIR_RE = re.compile(
@@ -258,4 +347,4 @@ def asset_columns_from_schema(schema: pa.Schema | None) -> dict[str, str]:
     return columns
 
 
-__all__ = ["AssetUploadManager"]
+__all__ = ["AssetUploadManager", "MissingAssetPolicy"]

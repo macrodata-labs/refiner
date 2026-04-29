@@ -28,6 +28,7 @@ from refiner.pipeline.steps import (
     WithColumnsStep,
 )
 from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
+from refiner.pipeline.sinks.assets import MissingAssetPolicy
 from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
@@ -330,6 +331,7 @@ class RefinerPipeline:
         upload_assets: bool = False,
         assets_subdir: str = "assets",
         max_asset_uploads_in_flight: int = 16,
+        missing_asset_policy: MissingAssetPolicy = "error",
     ) -> "RefinerPipeline":
         return self.with_sink(
             JsonlSink(
@@ -338,6 +340,7 @@ class RefinerPipeline:
                 upload_assets=upload_assets,
                 assets_subdir=assets_subdir,
                 max_asset_uploads_in_flight=max_asset_uploads_in_flight,
+                missing_asset_policy=missing_asset_policy,
             )
         )
 
@@ -350,6 +353,7 @@ class RefinerPipeline:
         upload_assets: bool = False,
         assets_subdir: str = "assets",
         max_asset_uploads_in_flight: int = 16,
+        missing_asset_policy: MissingAssetPolicy = "error",
     ) -> "RefinerPipeline":
         return self.with_sink(
             ParquetSink(
@@ -359,6 +363,7 @@ class RefinerPipeline:
                 upload_assets=upload_assets,
                 assets_subdir=assets_subdir,
                 max_asset_uploads_in_flight=max_asset_uploads_in_flight,
+                missing_asset_policy=missing_asset_policy,
             )
         )
 
