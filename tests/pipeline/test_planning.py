@@ -38,7 +38,7 @@ class FakeReader(BaseReader):
 class UndescribedSink(BaseSink):
     def write_block(self, block):
         del block
-        return {}
+        return {}, 0
 
 
 def _score_filter_lambda():
@@ -234,7 +234,7 @@ def test_compile_pipeline_plan_redacts_sink_callable_args() -> None:
     class CallableSink(BaseSink):
         def write_block(self, block):
             del block
-            return {}
+            return {}, 0
 
         def describe(self):
             return (

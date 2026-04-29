@@ -10,7 +10,7 @@ from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline.sinks.assets import AssetUploadManager
+from refiner.pipeline.sinks.assets import AssetUploadManager, MissingAssetPolicy
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import get_active_worker_token
@@ -26,11 +26,13 @@ class JsonlSink(BaseSink):
         upload_assets: bool = False,
         assets_subdir: str = "assets",
         max_asset_uploads_in_flight: int = 16,
+        missing_asset_policy: MissingAssetPolicy = "error",
     ):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
         self.upload_assets = upload_assets
         self.assets_subdir = assets_subdir
+        self.missing_asset_policy = missing_asset_policy
         self._files: dict[str, IO[str]] = {}
         self._encoder = json.JSONEncoder(ensure_ascii=True, separators=(",", ":"))
         self._assets = (
@@ -39,6 +41,7 @@ class JsonlSink(BaseSink):
                 assets_subdir=assets_subdir,
                 filename_template=filename_template,
                 max_uploads_in_flight=max_asset_uploads_in_flight,
+                missing_asset_policy=missing_asset_policy,
             )
             if upload_assets
             else None
@@ -64,31 +67,34 @@ class JsonlSink(BaseSink):
         self._files[shard_id] = file
         return file
 
-    def _write_rows(self, shard_id: str, rows: Iterable[Mapping[str, object]]) -> None:
+    def _write_rows(self, shard_id: str, rows: Iterable[Mapping[str, object]]) -> int:
         file = self._file(shard_id)
+        count = 0
         for row in rows:
             file.write(
                 self._encoder.encode(row.to_dict() if isinstance(row, Row) else row)
             )
             file.write("\n")
+            count += 1
+        return count
 
-    def _write_table_rows(self, shard_id: str, table: pa.Table) -> None:
+    def _write_table_rows(self, shard_id: str, table: pa.Table) -> int:
         if self._assets is not None:
-            self._write_rows(
+            return self._write_rows(
                 shard_id, self._assets.rewrite_table(shard_id, table).to_pylist()
             )
-            return
+        count = 0
         for batch in table.to_batches(max_chunksize=4096):
-            self._write_rows(shard_id, batch.to_pylist())
+            count += self._write_rows(shard_id, batch.to_pylist())
+        return count
 
-    def write_shard_block(self, shard_id: str, block: Block) -> None:
+    def write_shard_block(self, shard_id: str, block: Block) -> int:
         if isinstance(block, Tabular):
-            self._write_table_rows(shard_id, block.table)
-        else:
-            rows = block
-            if self._assets is not None:
-                rows = self._assets.rewrite_rows(shard_id, rows)
-            self._write_rows(shard_id, rows)
+            return self._write_table_rows(shard_id, block.table)
+        rows = block
+        if self._assets is not None:
+            rows = self._assets.rewrite_rows(shard_id, rows)
+        return self._write_rows(shard_id, rows)
 
     def on_shard_complete(self, shard_id: str) -> None:
         file = self._files.pop(shard_id, None)
@@ -99,7 +105,7 @@ class JsonlSink(BaseSink):
     def close(self) -> None:
         try:
             if self._assets is not None:
-                self._assets.flush()
+                self._assets.close()
         finally:
             for file in self._files.values():
                 file.close()
@@ -113,6 +119,7 @@ class JsonlSink(BaseSink):
         if self.upload_assets:
             args["upload_assets"] = True
             args["assets_subdir"] = self.assets_subdir
+            args["missing_asset_policy"] = self.missing_asset_policy
         return ("write_jsonl", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:

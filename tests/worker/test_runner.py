@@ -101,7 +101,7 @@ class _RecordingSink(BaseSink):
         self.written_counts: list[dict[str, int]] = []
         self.completed_shards: list[str] = []
 
-    def write_block(self, block) -> dict[str, int]:
+    def write_block(self, block) -> tuple[dict[str, int], int]:
         if isinstance(block, list):
             counts: dict[str, int] = {}
             for row in block:
@@ -112,7 +112,7 @@ class _RecordingSink(BaseSink):
             for shard_id in block.column("__shard_id").to_pylist():
                 counts[shard_id] = counts.get(shard_id, 0) + 1
         self.written_counts.append(counts)
-        return counts
+        return counts, sum(counts.values())
 
     def on_shard_complete(self, shard_id: str) -> None:
         self.completed_shards.append(shard_id)
@@ -124,9 +124,9 @@ class _CloseFailingSink(_RecordingSink):
 
 
 class _ShortWriteAndCloseFailingSink(_CloseFailingSink):
-    def write_block(self, block) -> dict[str, int]:
-        counts = super().write_block(block)
-        return {shard_id: 1 for shard_id in counts}
+    def write_block(self, block) -> tuple[dict[str, int], int]:
+        counts, _output_rows = super().write_block(block)
+        return {shard_id: 1 for shard_id in counts}, 1
 
 
 class _MetricRecordingTelemetryEmitter(_NoopTelemetryEmitter):

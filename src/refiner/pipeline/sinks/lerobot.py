@@ -132,14 +132,14 @@ class LeRobotWriterSink(BaseSink):
     def on_shard_complete(self, shard_id: str) -> None:
         """Flush pending async work and persist one shard-local output chunk."""
         # TODO: We don't have to flush the whole thing we just need to flush the shard rows
-        self._async_window.flush()
+        self._async_window.drain()
         state = self._states.pop(shard_id, None)
         if state is not None:
             self._commit_shard(state)
 
     def close(self) -> None:
         """Flush any remaining shard-local work before sink shutdown."""
-        self._async_window.flush()
+        self._async_window.drain()
         for state in self._states.values():
             self._commit_shard(state)
         self._states.clear()

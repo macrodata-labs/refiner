@@ -187,6 +187,178 @@ def test_parquet_sink_does_not_upload_embedded_assets(tmp_path) -> None:
     assert datatype.asset_storage(out.schema.field("image")) == "bytes_with_path"
 
 
+def test_parquet_sink_can_drop_rows_with_missing_assets(tmp_path) -> None:
+    source = tmp_path / "source.png"
+    missing = tmp_path / "missing.png"
+    source.write_bytes(b"image")
+    output_dir = tmp_path / "parquet-drop-missing-assets"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    table = datatype.apply_dtypes_to_table(
+        pa.table(
+            {
+                "image": [str(source), str(source), str(missing)],
+                "images": [[str(source)], [str(source), str(missing)], [str(source)]],
+                "label": ["keep", "drop-list", "drop-scalar"],
+            }
+        ),
+        {
+            "image": datatype.image_path(),
+            "images": datatype.list(datatype.image_path()),
+        },
+    )
+    sink = ParquetSink(output_dir, upload_assets=True, missing_asset_policy="drop_row")
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        sink.write_shard_block(shard_id, Tabular(table))
+        sink.on_shard_complete(shard_id)
+
+    worker = worker_token_for(worker_id)
+    asset = output_dir / "assets" / f"{shard_id}__w{worker}" / "image" / "0-source.png"
+    list_asset = (
+        output_dir / "assets" / f"{shard_id}__w{worker}" / "images" / "0-0-source.png"
+    )
+    written = output_dir / f"{shard_id}__w{worker}.parquet"
+    out = pq.read_table(written)
+    assert asset.read_bytes() == b"image"
+    assert list_asset.read_bytes() == b"image"
+    assert out.column("image").to_pylist() == [str(asset)]
+    assert out.column("images").to_pylist() == [[str(list_asset)]]
+    assert out.column("label").to_pylist() == ["keep"]
+
+
+def test_parquet_sink_can_set_missing_list_assets_to_null(tmp_path) -> None:
+    source = tmp_path / "source.png"
+    missing = tmp_path / "missing.png"
+    source.write_bytes(b"image")
+    output_dir = tmp_path / "parquet-null-missing-assets"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    table = datatype.apply_dtypes_to_table(
+        pa.table(
+            {
+                "images": [[str(source), str(missing)], [str(missing)]],
+                "label": ["partial", "missing"],
+            }
+        ),
+        {"images": datatype.list(datatype.image_path())},
+    )
+    sink = ParquetSink(output_dir, upload_assets=True, missing_asset_policy="set_null")
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        sink.write_shard_block(shard_id, Tabular(table))
+        sink.on_shard_complete(shard_id)
+
+    worker = worker_token_for(worker_id)
+    asset = (
+        output_dir / "assets" / f"{shard_id}__w{worker}" / "images" / "0-0-source.png"
+    )
+    written = output_dir / f"{shard_id}__w{worker}.parquet"
+    out = pq.read_table(written)
+    assert asset.read_bytes() == b"image"
+    assert out.column("images").to_pylist() == [[str(asset), None], [None]]
+    assert out.column("label").to_pylist() == ["partial", "missing"]
+
+
+def test_jsonl_sink_can_set_missing_assets_to_null(tmp_path) -> None:
+    source = tmp_path / "source.png"
+    missing = tmp_path / "missing.png"
+    source.write_bytes(b"image")
+    output_dir = tmp_path / "jsonl-null-missing-assets"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    sink = JsonlSink(output_dir, upload_assets=True, missing_asset_policy="set_null")
+    sink.set_input_schema(
+        pa.schema(
+            [
+                datatype.image_path().with_name("image"),
+                pa.field("images", pa.list_(datatype.image_path())),
+            ]
+        )
+    )
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        sink.write_shard_block(
+            shard_id,
+            [
+                DictRow(
+                    {
+                        "image": str(source),
+                        "images": [str(source), str(missing)],
+                        "label": "keep",
+                    }
+                ),
+                DictRow(
+                    {
+                        "image": str(missing),
+                        "images": [str(missing)],
+                        "label": "null",
+                    }
+                ),
+            ],
+        )
+        sink.on_shard_complete(shard_id)
+
+    worker = worker_token_for(worker_id)
+    asset = output_dir / "assets" / f"{shard_id}__w{worker}" / "image" / "0-source.png"
+    list_asset = (
+        output_dir / "assets" / f"{shard_id}__w{worker}" / "images" / "0-0-source.png"
+    )
+    jsonl = output_dir / f"{shard_id}__w{worker}.jsonl"
+    rows = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines()]
+    assert asset.read_bytes() == b"image"
+    assert list_asset.read_bytes() == b"image"
+    assert rows == [
+        {"image": str(asset), "images": [str(list_asset), None], "label": "keep"},
+        {"image": None, "images": [None], "label": "null"},
+    ]
+
+
+def test_jsonl_sink_error_policy_raises_on_later_failed_asset(tmp_path) -> None:
+    source = tmp_path / "source.png"
+    missing = tmp_path / "missing.png"
+    source.write_bytes(b"image")
+    output_dir = tmp_path / "jsonl-error-missing-assets"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    sink = JsonlSink(output_dir, upload_assets=True)
+    sink.set_input_schema(pa.schema([datatype.image_path().with_name("image")]))
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        with pytest.raises(FileNotFoundError):
+            sink.write_shard_block(
+                shard_id,
+                [
+                    DictRow({"image": str(source), "label": "valid"}),
+                    DictRow({"image": str(missing), "label": "missing"}),
+                ],
+            )
+
+
 def test_asset_upload_rejects_unsafe_assets_subdir(tmp_path) -> None:
     with pytest.raises(ValueError, match="assets_subdir"):
         JsonlSink(tmp_path / "jsonl-assets", upload_assets=True, assets_subdir="../x")
@@ -376,6 +548,38 @@ def test_jsonl_pipeline_uploads_row_assets_from_dtype_schema(tmp_path) -> None:
     assert stats.output_rows == 1
     assert asset.read_bytes() == b"frame"
     assert json.loads(written.read_text(encoding="utf-8")) == {"image": str(asset)}
+
+
+def test_jsonl_pipeline_counts_rows_after_missing_asset_drop(tmp_path) -> None:
+    source = tmp_path / "frame.png"
+    missing = tmp_path / "missing.png"
+    source.write_bytes(b"frame")
+    output_dir = tmp_path / "jsonl-pipeline-drop-assets"
+    pipeline = (
+        from_items([{"image": str(source)}, {"image": str(missing)}])
+        .map(
+            lambda row: {"image": row["image"]},
+            dtypes={"image": datatype.image_path()},
+        )
+        .write_jsonl(
+            output_dir,
+            upload_assets=True,
+            missing_asset_policy="drop_row",
+        )
+    )
+
+    stats = pipeline.launch_local(
+        name="jsonl-drop-asset-counts",
+        num_workers=1,
+        rundir=str(tmp_path / "run"),
+    )
+
+    written = next(output_dir.glob("*.jsonl"))
+    rows = [
+        json.loads(line) for line in written.read_text(encoding="utf-8").splitlines()
+    ]
+    assert stats.output_rows == 1
+    assert len(rows) == 1
 
 
 def test_parquet_pipeline_uploads_row_assets_from_dtype_schema(tmp_path) -> None:
