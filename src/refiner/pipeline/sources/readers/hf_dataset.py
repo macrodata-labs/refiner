@@ -7,7 +7,6 @@ from urllib.parse import quote
 
 import httpx
 import pyarrow as pa
-import pyarrow.compute as pc
 
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeMapping
@@ -26,22 +25,16 @@ from refiner.utils import check_required_dependencies
 
 _HF_HUB = "https://huggingface.co"
 _HF_DATASETS_SERVER = "https://datasets-server.huggingface.co"
-_HF_DATASET_URI_PREFIX = "hf://datasets"
-_HF_FILE_FEATURE_DTYPES = {
-    "Image": datatype.image_file,
-    "Audio": datatype.audio_file,
-    "Video": datatype.video_file,
-    "Pdf": datatype.pdf_file,
+_HF_ASSET_FEATURE_DTYPES = {
+    "Image": datatype.image_bytes_with_path,
+    "Audio": datatype.audio_bytes_with_path,
+    "Video": datatype.video_bytes_with_path,
+    "Pdf": datatype.pdf_bytes_with_path,
 }
 
 
 class HFDatasetReader(BaseSource):
-    """Read Hugging Face datasets through the Hub's generated Parquet shards.
-
-    `resolve_relative_paths` rewrites relative file-typed values as
-    `hf://datasets/{repo}/...` references. Absolute paths and URI values are left
-    unchanged.
-    """
+    """Read Hugging Face datasets through the Hub's generated Parquet shards."""
 
     name = "read_hf_dataset"
 
@@ -51,7 +44,6 @@ class HFDatasetReader(BaseSource):
         config: str | None = None,
         split: str = "train",
         *,
-        resolve_relative_paths: bool = True,
         dtypes: DTypeMapping | None = None,
         hf_token: str | None = None,
         timeout: float = 30.0,
@@ -65,7 +57,6 @@ class HFDatasetReader(BaseSource):
     ):
         self.repo = repo
         self.split = split
-        self.resolve_relative_paths = resolve_relative_paths
         self.hf_token = hf_token
         self.timeout = float(timeout)
         self.target_shard_bytes = target_shard_bytes
@@ -89,7 +80,7 @@ class HFDatasetReader(BaseSource):
 
         inferred_dtypes: dict[str, pa.Field] = {}
         for name, feature in (info.features or {}).items():
-            dtype_factory = _HF_FILE_FEATURE_DTYPES.get(type(feature).__name__)
+            dtype_factory = _HF_ASSET_FEATURE_DTYPES.get(type(feature).__name__)
             if dtype_factory is not None:
                 inferred_dtypes[name] = dtype_factory()
 
@@ -97,39 +88,17 @@ class HFDatasetReader(BaseSource):
         if dtypes:
             effective_dtypes.update(dtypes)
         self.dtypes = effective_dtypes or None
-        file_dtypes = {
-            name: dtype
-            for name, dtype in effective_dtypes.items()
-            if _is_file_dtype(dtype)
-        }
-        non_file_dtypes = {
-            name: dtype
-            for name, dtype in effective_dtypes.items()
-            if not _is_file_dtype(dtype)
-        }
-        self._file_dtypes = file_dtypes or None
-        self._non_file_dtypes = non_file_dtypes or None
-        self._explicit_file_dtype_names = {
-            name for name, dtype in (dtypes or {}).items() if _is_file_dtype(dtype)
-        }
 
-        # Filters on file columns must run after extracting the struct "path" field.
-        # Other filters can be delegated to the Parquet reader for pushdown.
         referenced_filter_columns = (
             filter.referenced_columns() if filter is not None else set()
         )
-        filter_uses_file_dtype = filter is not None and (
-            (
-                self._file_dtypes is not None
-                and bool(self._file_dtypes.keys() & referenced_filter_columns)
-            )
-            or (
-                self.file_path_column is not None
-                and self.file_path_column in referenced_filter_columns
-            )
+        filter_needs_postprocess = (
+            filter is not None
+            and self.file_path_column is not None
+            and self.file_path_column in referenced_filter_columns
         )
-        self._post_parquet_filter = filter if filter_uses_file_dtype else None
-        self._parquet_filter = None if filter_uses_file_dtype else filter
+        self._post_parquet_filter = filter if filter_needs_postprocess else None
+        self._parquet_filter = None if filter_needs_postprocess else filter
         self._post_fallback_filter = filter
         self.split_row_groups = split_row_groups
         self._delegate: ParquetReader | None = None
@@ -165,7 +134,6 @@ class HFDatasetReader(BaseSource):
             "repo": self.repo,
             "config": self.config,
             "split": self.split,
-            "resolve_relative_paths": self.resolve_relative_paths,
             "dtypes": list(self.dtypes) if self.dtypes else None,
         }
 
@@ -256,7 +224,7 @@ class HFDatasetReader(BaseSource):
             filter=self._parquet_filter,
             split_row_groups=self.split_row_groups,
             file_path_column=self.file_path_column,
-            dtypes=self._non_file_dtypes,
+            dtypes=self.dtypes,
             storage_options=(
                 {"headers": {"Authorization": f"Bearer {self.hf_token}"}}
                 if self.hf_token is not None
@@ -325,7 +293,7 @@ class HFDatasetReader(BaseSource):
                 )
             table = self._finish_table(
                 table,
-                non_file_dtypes=self._non_file_dtypes,
+                dtypes=self.dtypes,
                 post_filter=self._post_fallback_filter,
             )
             if table.num_rows > 0:
@@ -335,47 +303,15 @@ class HFDatasetReader(BaseSource):
         self,
         table: pa.Table,
         *,
-        non_file_dtypes: DTypeMapping | None = None,
+        dtypes: DTypeMapping | None = None,
         post_filter: Expr | None = None,
     ) -> pa.Table:
-        if non_file_dtypes:
+        if dtypes:
             table = datatype.apply_dtypes_to_table(
                 table,
-                non_file_dtypes,
+                dtypes,
                 strict=False,
             )
-        if self._file_dtypes:
-            extracted_file_dtypes: dict[str, object] = {}
-            for name, dtype in self._file_dtypes.items():
-                idx = table.schema.get_field_index(name)
-                if idx < 0:
-                    continue
-                field = table.schema.field(idx)
-                if (
-                    pa.types.is_struct(field.type)
-                    and field.type.get_field_index("path") >= 0
-                ):
-                    path = pc.call_function(
-                        "struct_field",
-                        [table.column(idx)],
-                        options=pc.StructFieldOptions(["path"]),
-                    )
-                    table = set_or_append_column(table, name, path)
-                    extracted_file_dtypes[name] = dtype
-                    continue
-                if pa.types.is_string(field.type) or pa.types.is_large_string(
-                    field.type
-                ):
-                    extracted_file_dtypes[name] = dtype
-                    continue
-                if name in self._explicit_file_dtype_names:
-                    extracted_file_dtypes[name] = dtype
-            if extracted_file_dtypes:
-                table = datatype.apply_dtypes_to_table(
-                    table,
-                    extracted_file_dtypes,
-                    strict=False,
-                )
         if post_filter is not None:
             table = filter_table(table, post_filter)
         if self.columns_to_read is not None:
@@ -387,71 +323,7 @@ class HFDatasetReader(BaseSource):
             ):
                 columns.append(self.file_path_column)
             table = table.select([col for col in columns if col in table.column_names])
-        if self.resolve_relative_paths:
-            table = resolve_hf_relative_paths(table, self.repo)
         return table
-
-
-def _is_file_dtype(dtype: object) -> bool:
-    return isinstance(dtype, pa.Field) and datatype.is_file_field(dtype)
-
-
-def resolve_hf_relative_paths(table: pa.Table, repo: str) -> pa.Table:
-    """Resolve relative file columns against the HF dataset repository root."""
-
-    out = table
-    for idx, field in enumerate(table.schema):
-        if not datatype.is_file_field(field):
-            continue
-        column = table.column(idx)
-
-        # Treat local absolute paths and any scheme:// URI as already resolved.
-        # find_substring is intentionally used instead of regex for the hot path.
-        local_absolute = pc.call_function(
-            "starts_with",
-            [column],
-            options=pc.MatchSubstringOptions("/"),
-        )
-        protocol_position = pc.call_function(
-            "find_substring",
-            [column],
-            options=pc.MatchSubstringOptions("://"),
-        )
-        remote_absolute = pc.call_function(
-            "greater_equal",
-            [protocol_position, pa.scalar(0, type=pa.int32())],
-        )
-        relative = pc.call_function(
-            "and",
-            [
-                pc.fill_null(pc.call_function("invert", [local_absolute]), False),
-                pc.fill_null(pc.call_function("invert", [remote_absolute]), False),
-            ],
-        )
-        if not bool(pc.call_function("any", [relative]).as_py()):
-            continue
-
-        # HF file feature paths sometimes start with ./; normalize those before
-        # constructing the hf://datasets/{repo}/... reference.
-        stripped = pc.call_function(
-            "replace_substring_regex",
-            [column],
-            options=pc.ReplaceSubstringOptions(pattern=r"^(?:\./)+", replacement=""),
-        )
-        resolved = pc.call_function(
-            "binary_join_element_wise",
-            [
-                pa.scalar(f"{_HF_DATASET_URI_PREFIX}/{repo}/"),
-                stripped,
-                pa.scalar(""),
-            ],
-        )
-        out = set_or_append_column(
-            out,
-            field.name,
-            pc.call_function("if_else", [relative, resolved, column]),
-        )
-    return out
 
 
 def _list_parquet_urls(

@@ -41,7 +41,7 @@ def test_jsonl_reader_applies_dtypes(tmp_path):
     p = tmp_path / "data.jsonl"
     p.write_bytes(orjson.dumps({"video": "clip.mp4"}) + b"\n")
 
-    reader = JsonlReader(str(p), dtypes={"video": datatype.video_file()})
+    reader = JsonlReader(str(p), dtypes={"video": datatype.video_path()})
     unit = next(iter(reader.read_shard(reader.list_shards()[0])))
 
     assert isinstance(unit, Tabular)
@@ -52,7 +52,7 @@ def test_jsonl_reader_schema_exposes_dtype_overrides(tmp_path):
     p = tmp_path / "data.jsonl"
     p.write_bytes(orjson.dumps({"video": "clip.mp4"}) + b"\n")
 
-    reader = JsonlReader(str(p), dtypes={"video": datatype.video_file()})
+    reader = JsonlReader(str(p), dtypes={"video": datatype.video_path()})
 
     assert reader.schema is not None
     assert reader.schema.field("video").metadata == {b"asset_type": b"video"}

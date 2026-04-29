@@ -108,7 +108,7 @@ def test_parquet_reader_schema_exposes_only_dtype_overrides(tmp_path):
     reader = ParquetReader(
         str(p),
         columns_to_read=("x",),
-        dtypes={"x": datatype.video_file()},
+        dtypes={"x": datatype.video_path()},
     )
 
     schema = reader.schema
@@ -180,7 +180,7 @@ def test_parquet_dtype_override_clears_stale_file_metadata(tmp_path):
     p = tmp_path / "metadata.parquet"
     table = datatype.apply_dtypes_to_table(
         pa.table({"frames": ["123"]}),
-        {"frames": datatype.video_file()},
+        {"frames": datatype.video_path()},
     )
     pq.write_table(table, p)
 

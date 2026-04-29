@@ -7,8 +7,13 @@ from typing import TypeAlias, cast
 import pyarrow as pa
 
 _ASSET_TYPE_METADATA_KEY = b"asset_type"
-_FILE_ASSET_TYPES = frozenset({b"unknown", b"image", b"audio", b"video", b"pdf"})
 _FILE_FIELD_NAME = "__refiner_file__"
+_BYTES_WITH_PATH_TYPE = pa.struct(
+    [
+        pa.field("bytes", pa.binary()),
+        pa.field("path", pa.string()),
+    ]
+)
 
 DTypeLike: TypeAlias = str | pa.DataType | pa.Field
 DTypeMapping: TypeAlias = Mapping[str, DTypeLike]
@@ -72,24 +77,76 @@ def map(key_type: DTypeLike, value_type: DTypeLike) -> pa.DataType:
     return pa.map_(_arrow_type(key_type), _arrow_type(value_type))
 
 
-def file() -> pa.Field:
-    return _file_field(b"unknown")
+def asset_path(asset_type: str) -> pa.Field:
+    return _asset_field(asset_type, pa.string())
 
 
-def image_file() -> pa.Field:
-    return _file_field(b"image")
+def asset_bytes(asset_type: str) -> pa.Field:
+    return _asset_field(asset_type, pa.binary())
 
 
-def audio_file() -> pa.Field:
-    return _file_field(b"audio")
+def asset_bytes_with_path(asset_type: str) -> pa.Field:
+    return _asset_field(asset_type, _BYTES_WITH_PATH_TYPE)
 
 
-def video_file() -> pa.Field:
-    return _file_field(b"video")
+def file_path() -> pa.Field:
+    return asset_path("file")
 
 
-def pdf_file() -> pa.Field:
-    return _file_field(b"pdf")
+def file_bytes() -> pa.Field:
+    return asset_bytes("file")
+
+
+def file_bytes_with_path() -> pa.Field:
+    return asset_bytes_with_path("file")
+
+
+def image_path() -> pa.Field:
+    return asset_path("image")
+
+
+def image_bytes() -> pa.Field:
+    return asset_bytes("image")
+
+
+def image_bytes_with_path() -> pa.Field:
+    return asset_bytes_with_path("image")
+
+
+def audio_path() -> pa.Field:
+    return asset_path("audio")
+
+
+def audio_bytes() -> pa.Field:
+    return asset_bytes("audio")
+
+
+def audio_bytes_with_path() -> pa.Field:
+    return asset_bytes_with_path("audio")
+
+
+def video_path() -> pa.Field:
+    return asset_path("video")
+
+
+def video_bytes() -> pa.Field:
+    return asset_bytes("video")
+
+
+def video_bytes_with_path() -> pa.Field:
+    return asset_bytes_with_path("video")
+
+
+def pdf_path() -> pa.Field:
+    return asset_path("pdf")
+
+
+def pdf_bytes() -> pa.Field:
+    return asset_bytes("pdf")
+
+
+def pdf_bytes_with_path() -> pa.Field:
+    return asset_bytes_with_path("pdf")
 
 
 def schema_with_dtypes(
@@ -147,9 +204,32 @@ def apply_dtypes_to_table(
     return out
 
 
-def is_file_field(field: pa.Field) -> builtins.bool:
+def is_asset_field(field: pa.Field) -> builtins.bool:
     metadata = field.metadata or {}
-    return metadata.get(_ASSET_TYPE_METADATA_KEY) in _FILE_ASSET_TYPES
+    return builtins.bool(metadata.get(_ASSET_TYPE_METADATA_KEY))
+
+
+def asset_type(field: pa.Field) -> str | None:
+    metadata = field.metadata or {}
+    value = metadata.get(_ASSET_TYPE_METADATA_KEY)
+    return value.decode("utf-8", errors="replace") if value else None
+
+
+def asset_storage(field: pa.Field) -> str | None:
+    if not is_asset_field(field):
+        return None
+    field_type = field.type
+    if pa.types.is_string(field_type) or pa.types.is_large_string(field_type):
+        return "path"
+    if pa.types.is_binary(field_type) or pa.types.is_large_binary(field_type):
+        return "bytes"
+    if _is_bytes_with_path_type(field_type):
+        return "bytes_with_path"
+    return None
+
+
+def is_asset_path_field(field: pa.Field) -> builtins.bool:
+    return asset_storage(field) == "path"
 
 
 def dtype_to_plan(dtype: DTypeLike) -> str | dict[str, object]:
@@ -171,12 +251,26 @@ def dtype_to_plan(dtype: DTypeLike) -> str | dict[str, object]:
     raise TypeError(f"Unsupported dtype: {type(dtype)!r}")
 
 
-def _file_field(asset_type: bytes) -> pa.Field:
+def _asset_field(asset_type: str, storage_type: pa.DataType) -> pa.Field:
     return pa.field(
         _FILE_FIELD_NAME,
-        pa.string(),
-        metadata={_ASSET_TYPE_METADATA_KEY: asset_type},
+        storage_type,
+        metadata={_ASSET_TYPE_METADATA_KEY: asset_type.encode("utf-8")},
     )
+
+
+def _is_bytes_with_path_type(field_type: pa.DataType) -> builtins.bool:
+    if not pa.types.is_struct(field_type):
+        return False
+    bytes_idx = field_type.get_field_index("bytes")
+    path_idx = field_type.get_field_index("path")
+    if bytes_idx < 0 or path_idx < 0:
+        return False
+    bytes_type = field_type.field(bytes_idx).type
+    path_type = field_type.field(path_idx).type
+    return (
+        pa.types.is_binary(bytes_type) or pa.types.is_large_binary(bytes_type)
+    ) and (pa.types.is_string(path_type) or pa.types.is_large_string(path_type))
 
 
 def _replace_field_dtype(
@@ -246,28 +340,42 @@ __all__ = [
     "DTypeLike",
     "DTypeMapping",
     "apply_dtypes_to_table",
-    "audio_file",
+    "asset_bytes",
+    "asset_bytes_with_path",
+    "asset_path",
+    "asset_storage",
+    "asset_type",
+    "audio_bytes",
+    "audio_bytes_with_path",
+    "audio_path",
     "binary",
     "bool",
     "date",
     "dtype_to_plan",
     "duration",
-    "file",
+    "file_bytes",
+    "file_bytes_with_path",
+    "file_path",
     "float32",
     "float64",
-    "image_file",
+    "image_bytes",
+    "image_bytes_with_path",
+    "image_path",
     "int8",
     "int16",
     "int32",
     "int64",
-    "is_file_field",
+    "is_asset_field",
+    "is_asset_path_field",
     "large_binary",
     "large_list",
     "large_string",
     "list",
     "map",
     "null",
-    "pdf_file",
+    "pdf_bytes",
+    "pdf_bytes_with_path",
+    "pdf_path",
     "schema_with_dtypes",
     "string",
     "struct",
@@ -277,5 +385,7 @@ __all__ = [
     "uint16",
     "uint32",
     "uint64",
-    "video_file",
+    "video_bytes",
+    "video_bytes_with_path",
+    "video_path",
 ]

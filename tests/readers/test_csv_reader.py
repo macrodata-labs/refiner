@@ -72,7 +72,7 @@ def test_csv_reader_applies_dtypes_to_arrow_and_python_paths(tmp_path):
     p = tmp_path / "data.csv"
     p.write_text("id,video\n0,clip.mp4\n")
 
-    arrow_reader = CsvReader(str(p), dtypes={"video": datatype.video_file()})
+    arrow_reader = CsvReader(str(p), dtypes={"video": datatype.video_path()})
     arrow_unit = next(iter(arrow_reader.read_shard(arrow_reader.list_shards()[0])))
     assert isinstance(arrow_unit, Tabular)
     assert arrow_unit.table.schema.field("video").metadata == {b"asset_type": b"video"}
@@ -80,7 +80,7 @@ def test_csv_reader_applies_dtypes_to_arrow_and_python_paths(tmp_path):
     python_reader = CsvReader(
         str(p),
         multiline_rows=True,
-        dtypes={"video": datatype.video_file()},
+        dtypes={"video": datatype.video_path()},
     )
     python_row = next(iter(python_reader.read_shard(python_reader.list_shards()[0])))
     assert not hasattr(python_row, "schema")
