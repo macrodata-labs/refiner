@@ -13,6 +13,10 @@ from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline import from_items
 from refiner.pipeline.sinks import JsonlSink
+from refiner.pipeline.sinks.lance import (
+    LanceDatasetCommitReducerSink,
+    LanceDatasetSink,
+)
 from refiner.pipeline.sinks.parquet import ParquetSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import set_active_run_context
@@ -82,6 +86,65 @@ def test_launch_local_writes_parquet_per_shard(tmp_path) -> None:
         table = pq.read_table(path)
         values.extend(int(value) for value in table.column("x").to_pylist())
     assert sorted(values) == [10, 20, 30]
+
+
+def test_launch_local_writes_lance_files_per_shard(tmp_path) -> None:
+    pytest.importorskip("lance")
+    from lance.file import LanceFileReader
+
+    output_dir = tmp_path / "lance-files-output"
+    pipeline = (
+        from_items([{"x": 1}, {"x": 2}, {"x": 3}], items_per_shard=2)
+        .map(lambda row: {"x": int(row["x"]) * 10})
+        .write_lance(output_dir)
+    )
+
+    stats = pipeline.launch_local(
+        name="lance-sink", num_workers=1, rundir=str(tmp_path / "run")
+    )
+
+    assert stats.claimed == 3
+    assert stats.completed == 3
+    assert stats.output_rows == 3
+    written = sorted(path for path in output_dir.iterdir() if path.suffix == ".lance")
+    assert len(written) == 2
+    assert all("__w" in path.name for path in written)
+    values = []
+    for path in written:
+        table = LanceFileReader(str(path)).read_all().to_table()
+        values.extend(int(value) for value in table.column("x").to_pylist())
+    assert sorted(values) == [
+        10,
+        20,
+        30,
+    ]
+
+
+def test_launch_local_writes_lance_dataset(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+
+    output_dir = tmp_path / "lance-output.lance"
+    pipeline = (
+        from_items([{"x": 1}, {"x": 2}, {"x": 3}], items_per_shard=2)
+        .map(lambda row: {"x": int(row["x"]) * 10})
+        .write_lance_dataset(output_dir)
+    )
+
+    stats = pipeline.launch_local(
+        name="lance-dataset-sink", num_workers=1, rundir=str(tmp_path / "run")
+    )
+
+    assert stats.claimed == 3
+    assert stats.completed == 3
+    assert stats.output_rows == 3
+    table = lance.dataset(str(output_dir)).to_table()
+    fragments = lance.dataset(str(output_dir)).get_fragments()
+    assert len(fragments) == 2
+    assert sorted(int(value) for value in table.column("x").to_pylist()) == [
+        10,
+        20,
+        30,
+    ]
 
 
 def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> None:
@@ -575,6 +638,59 @@ def test_parquet_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
     assert pq.read_table(kept).column("x").to_pylist() == [9]
 
 
+def test_lance_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
+    pytest.importorskip("lance")
+    from lance.file import LanceFileReader
+
+    output_dir = tmp_path / "lance-file-cleanup"
+    shard_id = "0123456789ab"
+    worker_ids = ["worker-1", "worker-2"]
+
+    for worker_id, value in zip(worker_ids, [1, 9], strict=True):
+        sink = from_items([]).write_lance(output_dir).sink
+        assert sink is not None
+        with set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(
+                RuntimeLifecycle,
+                _FinalizedWorkersRuntime(
+                    [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_ids[1])]
+                ),
+            ),
+        ):
+            sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
+            sink.on_shard_complete(shard_id)
+
+    reducer = from_items([]).write_lance(output_dir).sink
+    assert reducer is not None
+    reducer = reducer.build_reducer()
+    assert reducer is not None
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(
+            RuntimeLifecycle,
+            _FinalizedWorkersRuntime(
+                [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_ids[1])]
+            ),
+        ),
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    kept = output_dir / f"{shard_id}__w{worker_token_for(worker_ids[1])}.lance"
+    deleted = output_dir / f"{shard_id}__w{worker_token_for(worker_ids[0])}.lance"
+    assert kept.exists()
+    assert not deleted.exists()
+    assert LanceFileReader(str(kept)).read_all().to_table().column("x").to_pylist() == [
+        9
+    ]
+
+
 def test_file_cleanup_reducer_removes_non_finalized_asset_attempt_dirs(
     tmp_path,
 ) -> None:
@@ -598,6 +714,7 @@ def test_file_cleanup_reducer_removes_non_finalized_asset_attempt_dirs(
         reducer_name="cleanup_jsonl",
         assets_subdir="assets",
     )
+
     with set_active_run_context(
         job_id="job",
         stage_index=1,
@@ -615,6 +732,83 @@ def test_file_cleanup_reducer_removes_non_finalized_asset_attempt_dirs(
     assert keep_asset.exists()
     assert unmanaged.exists()
     assert not drop_asset.exists()
+
+
+def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
+    tmp_path, monkeypatch
+) -> None:
+    lance = pytest.importorskip("lance")
+
+    output_dir = tmp_path / "lance-cleanup.lance"
+    shard_id = "0123456789ab"
+    worker_ids = ["worker-1", "worker-2"]
+
+    for worker_id, value in zip(worker_ids, [1, 9], strict=True):
+        sink = LanceDatasetSink(output_dir)
+        with set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(
+                RuntimeLifecycle,
+                _FinalizedWorkersRuntime(
+                    [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_ids[1])]
+                ),
+            ),
+        ):
+            sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
+            sink.on_shard_complete(shard_id)
+
+    reducer = LanceDatasetSink(output_dir).build_reducer()
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+    listed_prefixes: list[str] = []
+    original_find = reducer.output.find
+
+    def _recording_find(path: str):
+        listed_prefixes.append(path)
+        return original_find(path)
+
+    monkeypatch.setattr(reducer.output, "find", _recording_find)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(
+            RuntimeLifecycle,
+            _FinalizedWorkersRuntime(
+                [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_ids[1])]
+            ),
+        ),
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    table = lance.dataset(str(output_dir)).to_table()
+    assert table.column("x").to_pylist() == [9]
+    assert len(list((output_dir / "data").glob("*.lance"))) == 1
+    assert listed_prefixes == ["_refiner_lance_fragments/job"]
+    assert not any((output_dir / "_refiner_lance_fragments" / "job").glob("*.jsonl"))
+
+
+def test_lance_dataset_sink_close_removes_unfinished_fragment_data(tmp_path) -> None:
+    pytest.importorskip("lance")
+
+    output_dir = tmp_path / "lance-unfinished-cleanup.lance"
+    shard_id = "0123456789ab"
+    sink = LanceDatasetSink(output_dir)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        sink.write_block([DictRow({"x": 1}, shard_id=shard_id)])
+        sink.close()
+
+    assert not any((output_dir / "data").glob("*.lance"))
+    assert not any((output_dir / "_refiner_lance_fragments").glob("**/*.jsonl"))
 
 
 def test_file_cleanup_reducer_ignores_extra_template_fields(tmp_path) -> None:

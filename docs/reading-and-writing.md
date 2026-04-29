@@ -174,6 +174,8 @@ Built-in sinks:
 | --- | --- | --- |
 | `.write_jsonl(output, ...)` | JSON Lines files | one output file per worker/shard according to the filename template |
 | `.write_parquet(output, ...)` | Parquet files | columnar output with optional compression |
+| `.write_lance(output, ...)` | Lance files | one Lance file per worker/shard according to the filename template |
+| `.write_lance_dataset(output, ...)` | Lance datasets | writes data fragments in workers, then commits the dataset in a reducer stage |
 | `.write_lerobot(output, ...)` | LeRobot-compatible robotics datasets | materializes frame/video assets and dataset metadata |
 
 Example:
@@ -216,6 +218,58 @@ sinks add a reducer stage after the main writer stage. For `write_jsonl(...)`
 and `write_parquet(...)`, that reducer removes stale shard/worker files and
 uploaded asset attempt folders, keeping only finalized outputs. The output
 prefix should therefore be dedicated to Refiner-managed files.
+
+## Writing Lance files and datasets
+
+Lance support is optional:
+
+```bash
+uv add "macrodata-refiner[lance]"
+```
+
+Use `write_lance(...)` when you want independent Lance files, similar to
+`write_parquet(...)` but using Lance's file format:
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_parquet("s3://my-bucket/raw/*.parquet")
+    .write_lance("s3://my-bucket/lance-files/")
+)
+```
+
+Each finalized shard writes one `{shard_id}__w{worker_id}.lance` file by
+default. Like Parquet and JSONL file sinks, launched execution adds a reducer
+stage that removes stale failed-attempt files.
+
+Use `write_lance_dataset(...)` when you want a committed Lance dataset with
+dataset metadata, transactions, and dataset-level APIs such as
+`lance.dataset(...).take(...)`:
+
+```python
+pipeline = (
+    mdr.read_parquet("s3://my-bucket/raw/*.parquet")
+    .write_lance_dataset("s3://my-bucket/lance/clean.lance")
+)
+```
+
+Supported modes are:
+
+- `create`: create a new Lance dataset; fail if one already exists
+- `overwrite`: replace the target dataset with a new version
+- `append`: append fragments to an existing dataset
+
+`write_lance_dataset(...)` follows Lance's distributed write model. Each worker
+streams rows for a Refiner shard into one uncommitted Lance fragment, then
+records small internal Refiner metadata under `_refiner_lance_fragments/<job_id>/`.
+A 1-worker reducer stage then commits only the fragments produced by finalized
+shard workers. The target path should be dedicated to Refiner-managed Lance
+dataset output.
+
+Refiner leaves Lance's own fragment and file sizing defaults in place. For
+cloud object stores, pass credentials through the runtime environment, for
+example as `launch_cloud(..., secrets={"AWS_ACCESS_KEY_ID": None, ...})`.
 
 ## What Python Functions Actually See
 

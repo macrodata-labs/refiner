@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from fsspec import AbstractFileSystem
 
@@ -27,7 +27,13 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
-from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
+from refiner.pipeline.sinks import (
+    BaseSink,
+    JsonlSink,
+    LanceDatasetSink,
+    LanceSink,
+    ParquetSink,
+)
 from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
@@ -359,6 +365,32 @@ class RefinerPipeline:
                 upload_assets=upload_assets,
                 assets_subdir=assets_subdir,
                 max_asset_uploads_in_flight=max_asset_uploads_in_flight,
+            )
+        )
+
+    def write_lance(
+        self,
+        output: DataFolderLike,
+        *,
+        filename_template: str = "{shard_id}__w{worker_id}.lance",
+    ) -> "RefinerPipeline":
+        return self.with_sink(
+            LanceSink(
+                output=output,
+                filename_template=filename_template,
+            )
+        )
+
+    def write_lance_dataset(
+        self,
+        output: DataFolderLike,
+        *,
+        mode: Literal["create", "append", "overwrite"] = "create",
+    ) -> "RefinerPipeline":
+        return self.with_sink(
+            LanceDatasetSink(
+                output=output,
+                mode=mode,
             )
         )
 
