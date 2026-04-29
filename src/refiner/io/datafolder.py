@@ -6,7 +6,7 @@ from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
-from refiner.io.datafile import DataFile
+from refiner.io.datafile import DataFile, _storage_options_for_path
 
 DataFolderPath: TypeAlias = str | PathLike[str]
 DataFolderSpec: TypeAlias = tuple[DataFolderPath, AbstractFileSystem]
@@ -89,7 +89,7 @@ class DataFolder(DirFileSystem):
             if fs is not None:
                 path = fs._strip_protocol(data)
                 return cls(path, fs=fs)
-            return cls(data, **dict(storage_options or {}))
+            return cls(data, **_storage_options_for_path(data, storage_options))
         raise TypeError(
             "You must pass a DataFolder instance, str path, PathLike, or (path, fs)"
         )

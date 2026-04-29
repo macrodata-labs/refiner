@@ -57,6 +57,10 @@ pipeline = mdr.read_hf_dataset(
 )
 ```
 
+Set `HF_TOKEN` in the environment when reading private or gated datasets, or when
+you want authenticated Hugging Face rate limits. For cloud launches, pass
+`HF_TOKEN` through `secrets`.
+
 Hugging Face `Image`, `Audio`, and `Video` features are marked as embedded asset
 columns automatically. Refiner leaves path values unchanged; use `map(...)` if a
 dataset stores paths that need custom resolution.

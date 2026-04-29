@@ -59,6 +59,127 @@ def test_datafile_copy_writes_destination(tmp_path):
     assert dest_path.read_bytes() == b"payload"
 
 
+def test_datafile_resolve_adds_hf_token_for_huggingface_http_urls(monkeypatch):
+    captured = {}
+
+    def fake_url_to_fs(path, **kwargs):
+        captured["path"] = path
+        captured["kwargs"] = kwargs
+        return MemoryFileSystem(), path
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
+
+    DataFile.resolve("https://huggingface.co/datasets/org/repo/resolve/main/file.mp4")
+
+    assert captured["kwargs"]["headers"] == {"Authorization": "Bearer hf_test"}
+
+
+def test_datafile_resolve_adds_hf_token_for_hf_short_urls(monkeypatch):
+    captured = {}
+
+    def fake_url_to_fs(path, **kwargs):
+        captured["kwargs"] = kwargs
+        return MemoryFileSystem(), path
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
+
+    DataFile.resolve("https://hf.co/datasets/org/repo/resolve/main/file.mp4")
+
+    assert captured["kwargs"]["headers"] == {"Authorization": "Bearer hf_test"}
+
+
+def test_datafile_resolve_preserves_explicit_headers_for_huggingface_http_urls(
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_url_to_fs(path, **kwargs):
+        captured["kwargs"] = kwargs
+        return MemoryFileSystem(), path
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
+
+    DataFile.resolve(
+        "https://huggingface.co/datasets/org/repo/resolve/main/file.mp4",
+        storage_options={"headers": {"Authorization": "Bearer explicit"}},
+    )
+
+    assert captured["kwargs"]["headers"] == {"Authorization": "Bearer explicit"}
+
+
+def test_datafile_resolve_merges_hf_token_with_existing_headers(monkeypatch):
+    captured = {}
+
+    def fake_url_to_fs(path, **kwargs):
+        captured["kwargs"] = kwargs
+        return MemoryFileSystem(), path
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
+
+    DataFile.resolve(
+        "https://huggingface.co/datasets/org/repo/resolve/main/file.mp4",
+        storage_options={"headers": {"User-Agent": "refiner-test"}},
+    )
+
+    assert captured["kwargs"]["headers"] == {
+        "User-Agent": "refiner-test",
+        "Authorization": "Bearer hf_test",
+    }
+
+
+def test_datafile_resolve_preserves_lowercase_authorization_header(monkeypatch):
+    captured = {}
+
+    def fake_url_to_fs(path, **kwargs):
+        captured["kwargs"] = kwargs
+        return MemoryFileSystem(), path
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
+
+    DataFile.resolve(
+        "https://huggingface.co/datasets/org/repo/resolve/main/file.mp4",
+        storage_options={"headers": {"authorization": "Bearer explicit"}},
+    )
+
+    assert captured["kwargs"]["headers"] == {"authorization": "Bearer explicit"}
+
+
+def test_datafolder_resolve_adds_hf_token_for_huggingface_http_urls(monkeypatch):
+    captured = {}
+
+    def fake_url_to_fs(path, **kwargs):
+        captured["path"] = path
+        captured["kwargs"] = kwargs
+        return MemoryFileSystem(), path
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr("refiner.io.datafolder.url_to_fs", fake_url_to_fs)
+
+    DataFolder.resolve("https://huggingface.co/datasets/org/repo/tree/main/assets")
+
+    assert captured["kwargs"]["headers"] == {"Authorization": "Bearer hf_test"}
+
+
+def test_datafileset_resolve_adds_hf_token_for_generic_hf_http_urls(monkeypatch):
+    captured = {}
+
+    def fake_url_to_fs(path, **kwargs):
+        captured["kwargs"] = kwargs
+        return MemoryFileSystem(), path
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr("refiner.io.fileset.url_to_fs", fake_url_to_fs)
+
+    DataFileSet.resolve("https://huggingface.co/datasets/org/repo/resolve/main/file")
+
+    assert captured["kwargs"]["headers"] == {"Authorization": "Bearer hf_test"}
+
+
 def test_datafolder_file_and_open_creates_parent_dirs(tmp_path):
     folder = DataFolder.resolve(str(tmp_path))
 

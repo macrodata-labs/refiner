@@ -72,16 +72,15 @@ def _parquet_builder(data_files: object) -> object:
 def test_hf_dataset_reader_lists_parquet_and_preserves_asset_path_values(
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv("HF_TOKEN", "tok")
     _install_datasets(monkeypatch, config="cfg")
     calls: list[str] = []
-    storage_options: list[object] = []
     parquet_dtypes: list[object] = []
     parquet_filters: list[object] = []
     parquet_inputs: list[object] = []
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
+    def fake_get_json(url: str, *, timeout: float) -> object:
         calls.append(url)
-        assert hf_token == "tok"
         assert timeout == 5.0
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/train":
             return [
@@ -95,8 +94,6 @@ def test_hf_dataset_reader_lists_parquet_and_preserves_asset_path_values(
             parquet_inputs.append(inputs)
             self.dtypes = kwargs["dtypes"]
             self.filter = kwargs["filter"]
-            self.storage_options = kwargs["storage_options"]
-            storage_options.append(self.storage_options)
             parquet_dtypes.append(self.dtypes)
             parquet_filters.append(self.filter)
 
@@ -130,7 +127,6 @@ def test_hf_dataset_reader_lists_parquet_and_preserves_asset_path_values(
             "audio": datatype.audio_path(),
         },
         filter=col("image") == "image.png",
-        hf_token="tok",
         timeout=5.0,
     )
     schema = reader.schema
@@ -144,7 +140,6 @@ def test_hf_dataset_reader_lists_parquet_and_preserves_asset_path_values(
     assert parquet_inputs[0] == [
         "https://huggingface.co/datasets/org/repo/resolve/refs%2Fconvert%2Fparquet/cfg/train/0.parquet"
     ]
-    assert storage_options[0] == {"headers": {"Authorization": "Bearer tok"}}
     assert parquet_dtypes[0] == {
         "frames": datatype.video_path(),
         "image": datatype.image_path(),
@@ -176,8 +171,8 @@ def test_hf_dataset_reader_infers_media_dtypes_from_features(monkeypatch) -> Non
     )
     calls: list[str] = []
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         calls.append(url)
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
             return ["https://example.com/train.parquet"]
@@ -253,8 +248,8 @@ def test_hf_dataset_reader_uses_datasets_server_parquet_files(monkeypatch) -> No
     _install_datasets(monkeypatch, config="cfg")
     delegate_inputs: list[object] = []
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/train":
             return []
         if "datasets-server.huggingface.co/parquet" in url:
@@ -298,8 +293,8 @@ def test_hf_dataset_reader_uses_parquet_builder_data_files(monkeypatch) -> None:
     _install_datasets(monkeypatch, config="cfg", builder=builder)
     delegate_inputs: list[object] = []
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/cfg/train":
             return []
         if "datasets-server.huggingface.co/parquet" in url:
@@ -328,8 +323,8 @@ def test_hf_dataset_reader_uses_parquet_builder_data_files(monkeypatch) -> None:
 def test_hf_dataset_reader_leaves_bytes_only_media_feature_raw(monkeypatch) -> None:
     _install_datasets(monkeypatch, features={"image": _feature("Image")})
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
             return ["https://example.com/train.parquet"]
         raise AssertionError(url)
@@ -373,8 +368,8 @@ def test_hf_asset_path_filter_delegates_to_parquet_reader(
     delegate_columns: list[tuple[str, ...] | None] = []
     delegate_filters: list[object] = []
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
             return ["https://example.com/train.parquet"]
         raise AssertionError(url)
@@ -433,8 +428,8 @@ def test_hf_file_path_filter_runs_after_parquet_reader(monkeypatch) -> None:
     _install_datasets(monkeypatch)
     parquet_filters: list[object] = []
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
             return ["https://example.com/train.parquet"]
         raise AssertionError(url)
@@ -493,8 +488,8 @@ def test_hf_dataset_reader_reads_planned_shard_without_relisting(monkeypatch) ->
         global_ordinal=0,
     )
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         calls.append(url)
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
             return ["https://example.com/train-00000.parquet"]
@@ -535,8 +530,8 @@ def test_hf_dataset_reader_preserves_empty_projection(monkeypatch) -> None:
     _install_datasets(monkeypatch)
     delegate_columns: list[tuple[str, ...] | None] = []
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
             return ["https://example.com/train.parquet"]
         raise AssertionError(url)
@@ -577,8 +572,8 @@ def test_hf_dataset_reader_does_not_mix_fallback_after_parquet_read_error(
 ) -> None:
     _install_datasets(monkeypatch)
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         if url == "https://huggingface.co/api/datasets/org/repo/parquet/default/train":
             return ["https://example.com/train.parquet"]
         raise AssertionError(url)
@@ -646,8 +641,8 @@ def test_hf_dataset_reader_falls_back_to_datasets_streaming(monkeypatch) -> None
         dataset=FakeStreamingDataset(),
     )
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         return _empty_parquet_resolution(url)
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
@@ -683,8 +678,8 @@ def test_hf_dataset_fallback_errors_when_requested_shards_exceed_source_shards(
 
     _install_datasets(monkeypatch, dataset=FakeStreamingDataset())
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         return _empty_parquet_resolution(url)
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
@@ -701,8 +696,8 @@ def test_hf_dataset_fallback_treats_non_positive_shards_as_auto(monkeypatch) -> 
 
     _install_datasets(monkeypatch, dataset=FakeStreamingDataset())
 
-    def fake_get_json(url: str, *, hf_token: str | None, timeout: float) -> object:
-        del hf_token, timeout
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
         return _empty_parquet_resolution(url)
 
     monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
