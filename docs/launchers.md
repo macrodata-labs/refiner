@@ -170,7 +170,8 @@ Continue behavior notes:
 ### Launched writer notes
 
 - some sinks add a 1-worker reducer stage after the main writer stage to finalize or clean up shard outputs
-- for launched file sinks such as `write_jsonl(...)` and `write_parquet(...)`, the output prefix should be dedicated to Refiner-managed files so the reducer stage can safely remove stale shard/worker outputs
+- for launched file sinks such as `write_jsonl(...)`, `write_parquet(...)`, and `write_lance(...)`, the output prefix should be dedicated to Refiner-managed files so the reducer stage can safely remove stale shard/worker outputs
+- for `write_lance_dataset(...)`, workers write one uncommitted Lance fragment per completed Refiner shard and the reducer stage commits only finalized worker fragments, so the Lance dataset path should also be dedicated to Refiner-managed output
 
 ## Authentication
 
