@@ -241,7 +241,7 @@ class Hdf5Reader(BaseReader):
                 yield group_path, h5[group_path]
 
     def _expand_group_glob(self, h5, pattern: str, h5py) -> Iterator[tuple[str, Any]]:
-        visited_recursive_groups: set[Any] = set()
+        active_recursive_groups: set[Any] = set()
 
         def visit(group, path: str, parts: Sequence[str]) -> Iterator[tuple[str, Any]]:
             if not parts:
@@ -251,14 +251,17 @@ class Hdf5Reader(BaseReader):
             part = parts[0]
             rest = parts[1:]
             if part == "**":
-                if group.id in visited_recursive_groups:
+                if group.id in active_recursive_groups:
                     return
-                visited_recursive_groups.add(group.id)
-                yield from visit(group, path, rest)
-                for name, obj in group.items():
-                    if isinstance(obj, h5py.Group):
-                        child_path = f"/{name}" if path == "/" else f"{path}/{name}"
-                        yield from visit(obj, child_path, parts)
+                active_recursive_groups.add(group.id)
+                try:
+                    yield from visit(group, path, rest)
+                    for name, obj in group.items():
+                        if isinstance(obj, h5py.Group):
+                            child_path = f"/{name}" if path == "/" else f"{path}/{name}"
+                            yield from visit(obj, child_path, parts)
+                finally:
+                    active_recursive_groups.remove(group.id)
                 return
 
             if has_magic(part):

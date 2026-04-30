@@ -438,6 +438,29 @@ def test_hdf5_reader_recursive_group_glob_skips_link_cycles(tmp_path: Path) -> N
     assert [row["hdf5_group"] for row in rows] == ["/data"]
 
 
+def test_hdf5_reader_recursive_group_glob_keeps_hard_link_aliases(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "aliases.h5"
+    with h5py.File(path, "w") as f:
+        data = f.create_group("data")
+        episode = data.create_group("left").create_group("episode")
+        episode.create_dataset("actions", data=np.array([1]))
+        data["right"] = data["left"]
+
+    rows = read_hdf5(
+        str(path),
+        groups="/data/**/episode",
+        datasets={"actions": "actions"},
+        file_path_column=None,
+    ).take(10)
+
+    assert [row["hdf5_group"] for row in rows] == [
+        "/data/left/episode",
+        "/data/right/episode",
+    ]
+
+
 def test_hdf5_reader_schema_contains_only_dtype_overrides() -> None:
     reader = Hdf5Reader(
         "missing.h5",
