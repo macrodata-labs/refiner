@@ -91,7 +91,7 @@ class BaseReader(BaseSource):
 
     @property
     def schema(self) -> pa.Schema | None:
-        return schema_with_dtypes(None, self.dtypes)
+        return schema_with_dtypes(None, getattr(self, "dtypes", None))
 
     def describe(self) -> dict[str, Any]:
         # Keep planning metadata cheap: do not resolve/list inputs here.
