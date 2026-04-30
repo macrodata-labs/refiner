@@ -42,9 +42,14 @@ def _decode_value(
             decode_bytes=decode_bytes,
             preserve_arrays=preserve_arrays,
         )
-    if preserve_arrays and hasattr(value, "shape"):
-        return value
     if hasattr(value, "tolist"):
+        if preserve_arrays and getattr(
+            getattr(value, "dtype", None), "kind", None
+        ) not in (
+            "O",
+            "S",
+        ):
+            return value
         return _decode_value(
             value.tolist(),
             decode_bytes=decode_bytes,
@@ -105,6 +110,8 @@ class Hdf5Reader(BaseReader):
         elif isinstance(groups, str):
             group = "/" if groups in ("", "/") else groups
             group = group if group.startswith("/") else f"/{group}"
+            if sum(part == "**" for part in group.split("/")) > 1:
+                raise ValueError("groups glob may contain at most one '**' segment")
             self.groups = group if has_magic(group) else (group,)
         else:
             self.groups = tuple(
@@ -234,6 +241,8 @@ class Hdf5Reader(BaseReader):
                 yield group_path, h5[group_path]
 
     def _expand_group_glob(self, h5, pattern: str, h5py) -> Iterator[tuple[str, Any]]:
+        visited_recursive_groups: set[Any] = set()
+
         def visit(group, path: str, parts: Sequence[str]) -> Iterator[tuple[str, Any]]:
             if not parts:
                 yield path, group
@@ -242,6 +251,9 @@ class Hdf5Reader(BaseReader):
             part = parts[0]
             rest = parts[1:]
             if part == "**":
+                if group.id in visited_recursive_groups:
+                    return
+                visited_recursive_groups.add(group.id)
                 yield from visit(group, path, rest)
                 for name, obj in group.items():
                     if isinstance(obj, h5py.Group):

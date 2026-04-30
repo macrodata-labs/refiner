@@ -235,6 +235,26 @@ def test_hdf5_reader_preserves_fixed_byte_datasets(tmp_path: Path) -> None:
     assert table.column("payload")[0].as_py() == [b"\xff\xfe"]
 
 
+def test_hdf5_reader_decodes_utf8_byte_array_datasets(tmp_path: Path) -> None:
+    path = tmp_path / "strings.h5"
+    with h5py.File(path, "w") as f:
+        group = f.create_group("data").create_group("demo_0")
+        group.create_dataset(
+            "labels",
+            data=np.array(["pick", "place"], dtype=object),
+            dtype=h5py.string_dtype("utf-8"),
+        )
+
+    row = read_hdf5(
+        str(path),
+        groups="/data/demo_0",
+        datasets={"labels": "labels"},
+        file_path_column=None,
+    ).take(1)[0]
+
+    assert row["labels"] == ["pick", "place"]
+
+
 def test_hdf5_reader_arrays_survive_tabular_steps(tmp_path: Path) -> None:
     path = tmp_path / "demo.h5"
     _write_demo_file(path)
@@ -355,6 +375,11 @@ def test_hdf5_reader_rejects_globs_in_group_lists() -> None:
         Hdf5Reader("missing.h5", groups=["/data/demo_*", "/other"])
 
 
+def test_hdf5_reader_rejects_multiple_recursive_group_globs() -> None:
+    with pytest.raises(ValueError, match="at most one"):
+        Hdf5Reader("missing.h5", groups="/data/**/**")
+
+
 def test_hdf5_reader_normalizes_relative_glob_groups(tmp_path: Path) -> None:
     path = tmp_path / "demo.h5"
     _write_demo_file(path)
@@ -394,6 +419,23 @@ def test_hdf5_reader_recursive_group_glob_matches_zero_or_more_segments(
         "/data/demo_1",
         "/data/nested/deeper/demo_2",
     ]
+
+
+def test_hdf5_reader_recursive_group_glob_skips_link_cycles(tmp_path: Path) -> None:
+    path = tmp_path / "cycle.h5"
+    with h5py.File(path, "w") as f:
+        group = f.create_group("data")
+        group.create_dataset("actions", data=np.array([1]))
+        group["self"] = group
+
+    rows = read_hdf5(
+        str(path),
+        groups="/data/**",
+        datasets={"actions": "actions"},
+        file_path_column=None,
+    ).take(10)
+
+    assert [row["hdf5_group"] for row in rows] == ["/data"]
 
 
 def test_hdf5_reader_schema_contains_only_dtype_overrides() -> None:
