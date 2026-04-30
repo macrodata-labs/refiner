@@ -233,6 +233,48 @@ def test_parquet_sink_can_drop_rows_with_missing_assets(tmp_path) -> None:
     assert out.column("label").to_pylist() == ["keep"]
 
 
+def test_parquet_sink_can_drop_rows_with_hf_forbidden_assets(
+    tmp_path, monkeypatch
+) -> None:
+    class ForbiddenFile:
+        def copy(self, _dest: object) -> None:
+            raise RuntimeError("403, message='Forbidden'")
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.assets.DataFile.resolve",
+        lambda _value: ForbiddenFile(),
+    )
+    output_dir = tmp_path / "parquet-drop-hf-forbidden-assets"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    table = datatype.apply_dtypes_to_table(
+        pa.table(
+            {
+                "image": [
+                    "https://huggingface.co/datasets/org/repo/resolve/main/frame.png"
+                ],
+                "label": ["drop"],
+            }
+        ),
+        {"image": datatype.image_path()},
+    )
+    sink = ParquetSink(output_dir, upload_assets=True, missing_asset_policy="drop_row")
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        sink.write_shard_block(shard_id, Tabular(table))
+        sink.on_shard_complete(shard_id)
+
+    worker = worker_token_for(worker_id)
+    written = output_dir / f"{shard_id}__w{worker}.parquet"
+    assert pq.read_table(written).num_rows == 0
+
+
 def test_parquet_sink_can_set_missing_list_assets_to_null(tmp_path) -> None:
     source = tmp_path / "source.png"
     missing = tmp_path / "missing.png"
