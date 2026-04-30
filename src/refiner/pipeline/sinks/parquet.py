@@ -7,6 +7,7 @@ from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
+    apply_dtypes_to_table,
     dtype_to_plan,
     schema_with_dtypes,
 )
@@ -77,7 +78,11 @@ class ParquetSink(BaseSink):
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
         if isinstance(block, Tabular):
-            table = block.table
+            table = apply_dtypes_to_table(
+                block.table,
+                self.dtypes,
+                preserve_metadata=False,
+            )
         else:
             if self._assets is not None:
                 self._assets.require_input_schema()

@@ -105,6 +105,20 @@ def test_write_parquet_dtypes_apply_to_row_blocks(tmp_path) -> None:
     assert table.column("maybe").to_pylist() == [None, "value"]
 
 
+def test_write_parquet_dtypes_apply_to_tabular_blocks(tmp_path) -> None:
+    output_dir = tmp_path / "parquet-tabular-dtypes"
+    sink = ParquetSink(output_dir, dtypes={"image": datatype.image_path()})
+    sink.write_shard_block(
+        "abc",
+        Tabular(pa.table({"image": ["s3://bucket/image.png"]})),
+    )
+    sink.on_shard_complete("abc")
+
+    table = pq.read_table(next(output_dir.glob("*.parquet")))
+    assert datatype.asset_type(table.schema.field("image")) == "image"
+    assert datatype.asset_storage(table.schema.field("image")) == "path"
+
+
 def test_parquet_sink_serializes_numpy_values(tmp_path) -> None:
     output_dir = tmp_path / "parquet-numpy"
     sink = ParquetSink(output_dir)
