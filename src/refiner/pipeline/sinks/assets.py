@@ -304,6 +304,12 @@ class AssetUploadManager:
             missing = isinstance(e, FileNotFoundError) or any(
                 text in message for text in ("404", "entry not found", "no such file")
             )
+            if (
+                not missing
+                and value.startswith("https://huggingface.co/datasets/")
+                and any(text in message for text in ("403", "forbidden"))
+            ):
+                missing = True
             if self.missing_asset_policy == "error" or not missing:
                 raise
             log_throughput("asset_uploads_failed", 1, shard_id, unit="assets")
