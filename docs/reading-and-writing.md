@@ -18,6 +18,7 @@ Built-in readers:
 | reader | what it reads | typical row shape |
 | --- | --- | --- |
 | `read_csv(...)` | CSV files | dict-like rows keyed by column name |
+| `read_hdf5(...)` | HDF5 files | one row per selected HDF5 group |
 | `read_jsonl(...)` | JSON Lines files | dict-like rows from each JSON object |
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
 | `read_hf_dataset(...)` | Hugging Face datasets | rows from generated Parquet shards, with optional file path resolution |
@@ -64,6 +65,91 @@ you want authenticated Hugging Face rate limits. For cloud launches, pass
 Hugging Face `Image`, `Audio`, and `Video` features are marked as embedded asset
 columns automatically. Refiner leaves path values unchanged; use `map(...)` if a
 dataset stores paths that need custom resolution.
+
+## HDF5
+
+HDF5 support lives behind the optional `macrodata-refiner[hdf5]` extra because
+it depends on `h5py`.
+
+```bash
+uv add "macrodata-refiner[hdf5]"
+```
+
+`read_hdf5(...)` treats each selected HDF5 group as one output row. Dataset and
+attribute paths are resolved relative to that group.
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_hdf5(
+    "robot-data/*.hdf5",
+    groups="/data/demo_*",
+    datasets={
+        "actions": "actions",
+        "frames": "obs/agentview_rgb",
+    },
+    attrs={"task": "task"},
+)
+```
+
+For a file shaped like:
+
+```text
+demo.hdf5
+└── data
+    ├── demo_0
+    │   ├── attrs: task="stack blocks"
+    │   ├── actions
+    │   └── obs
+    │       └── agentview_rgb
+    └── demo_1
+        ├── attrs: task="place cup"
+        ├── actions
+        └── obs
+            └── agentview_rgb
+```
+
+this emits rows with columns such as:
+
+- `hdf5_group`: the selected group path, for example `/data/demo_0`
+- `file_path`: the source HDF5 file path
+- `actions`: the selected dataset value
+- `frames`: the selected `obs/agentview_rgb` dataset value
+- `task`: the selected group attribute
+
+`datasets` and `attrs` can be:
+
+- a mapping of output column name to HDF5 path
+- a single HDF5 path string
+- a sequence of HDF5 path strings, as long as the final path components are
+  unique
+
+Use an explicit mapping when paths would derive the same column name:
+
+```python
+pipeline = mdr.read_hdf5(
+    "robot-data/*.hdf5",
+    groups="/data/demo_*",
+    datasets={
+        "left_rgb": "left/rgb",
+        "right_rgb": "right/rgb",
+    },
+)
+```
+
+HDF5 files are planned at file granularity. `list_shards()` does not open HDF5
+files or inspect group metadata. This keeps planning cheap for remote storage,
+but it also means one large HDF5 file is one shard. If you pass `num_shards`,
+the reader uses the shared file-sharding planner and may emit fewer shards when
+there are fewer files.
+
+`groups` accepts `"/"`, one glob such as `"/data/demo_*"`, or a list of exact
+group paths. Missing groups emit no rows for that file. Missing selected
+datasets or attributes default to raising an error. Set
+`missing_policy="drop_row"` to drop rows with missing selected values, or
+`missing_policy="set_null"` to emit `None` for missing selected datasets or attributes.
+If a selected column can be missing from every group in an input file, pass
+`dtypes` for that column so the reader can emit a stable Arrow type.
 
 ## Common Crawl text readers
 
@@ -159,6 +245,7 @@ A shard is the unit of work claimed by a worker. Common shard metadata includes 
 Reader behavior differs by format:
 
 - CSV and JSONL usually shard by file and byte range
+- HDF5 shards by file only; `num_shards` cannot exceed the input file count
 - Parquet shards by file and planned row-group or row ranges
 - LeRobot shards by episode parquet metadata
 - `from_items(...)` shards synthetic in-memory rows into planned chunks

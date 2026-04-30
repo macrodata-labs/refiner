@@ -11,6 +11,7 @@ from refiner.execution.asyncio.runtime import io_executor
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io import DataFile, DataFolder
 from refiner.pipeline import RefinerPipeline
+from refiner.pipeline.data.datatype import DTypeMapping
 from refiner.pipeline.expressions import Expr, col
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.data.row import DictRow, Row
@@ -103,6 +104,7 @@ def read_commoncrawl(
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
     file_path_column: object = _DEFAULT_FILE_PATH_COLUMN,
+    dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a file-backed pipeline over Common Crawl WARC or WET data.
 
@@ -125,6 +127,7 @@ def read_commoncrawl(
         target_shard_bytes: Approximate shard size used for file-backed shard planning.
         num_shards: Optional explicit number of planned shards.
         file_path_column: Output column name for the absolute source file path, or `None`.
+        dtypes: Optional dtype overrides for emitted columns.
     """
     source: BaseSource = CommonCrawlReader(
         dumps=dumps,
@@ -137,6 +140,7 @@ def read_commoncrawl(
         target_shard_bytes=target_shard_bytes,
         num_shards=num_shards,
         file_path_column=file_path_column,
+        dtypes=dtypes,
     )
     return RefinerPipeline(source=source)
 
@@ -215,6 +219,7 @@ class CommonCrawlReader(BaseReader):
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
         file_path_column: object = _DEFAULT_FILE_PATH_COLUMN,
+        dtypes: DTypeMapping | None = None,
     ) -> None:
         check_required_dependencies("read_commoncrawl", ["warcio"], dist="text")
         if not use_https:
@@ -266,6 +271,7 @@ class CommonCrawlReader(BaseReader):
             num_shards=num_shards,
             file_path_column=resolved_file_path_column,
             split_by_bytes=False,
+            dtypes=dtypes,
         )
 
     def list_shards(self) -> list[Shard]:
@@ -308,6 +314,7 @@ class CommonCrawlReader(BaseReader):
             "num_shards": self.num_shards,
             "file_path_column": self.file_path_column,
             "base_url": self.base_url,
+            "dtypes": list(self.dtypes) if self.dtypes else None,
         }
 
     def read_shard(self, shard: Shard) -> Iterator[Row]:

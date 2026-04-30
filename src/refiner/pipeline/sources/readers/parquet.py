@@ -93,10 +93,10 @@ class ParquetReader(BaseReader):
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             file_path_column=file_path_column,
+            dtypes=dtypes,
         )
         self.arrow_batch_size = int(arrow_batch_size)
         self.split_row_groups = split_row_groups
-        self.dtypes = dtypes
 
         ## filter
         # full filter expression
@@ -172,10 +172,6 @@ class ParquetReader(BaseReader):
             }
         )
         return description
-
-    @property
-    def schema(self) -> pa.Schema | None:
-        return schema_with_dtypes(None, self.dtypes)
 
     def _metadata(self, pf: pq.ParquetFile) -> _ParquetMetadata | None:
         """Cache row-group byte starts and row starts for the currently open parquet file."""

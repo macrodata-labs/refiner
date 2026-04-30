@@ -5,6 +5,12 @@ import pyarrow.parquet as pq
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.datatype import (
+    DTypeMapping,
+    apply_dtypes_to_table,
+    dtype_to_plan,
+    schema_with_dtypes,
+)
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.assets import AssetUploadManager, MissingAssetPolicy
@@ -25,6 +31,7 @@ class ParquetSink(BaseSink):
         assets_subdir: str = "assets",
         max_asset_uploads_in_flight: int = 16,
         missing_asset_policy: MissingAssetPolicy = "error",
+        dtypes: DTypeMapping | None = None,
     ):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
@@ -32,6 +39,7 @@ class ParquetSink(BaseSink):
         self.upload_assets = upload_assets
         self.assets_subdir = assets_subdir
         self.missing_asset_policy = missing_asset_policy
+        self.dtypes = dtypes
         self._writers: dict[str, pq.ParquetWriter] = {}
         self._schema: pa.Schema | None = None
         self._assets = (
@@ -49,9 +57,9 @@ class ParquetSink(BaseSink):
             self.assets_subdir = self._assets.assets_subdir
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
-        self._schema = schema
+        self._schema = schema_with_dtypes(schema, self.dtypes, preserve_metadata=False)
         if self._assets is not None:
-            self._assets.set_input_schema(schema)
+            self._assets.set_input_schema(self._schema)
 
     def _relpath(self, shard_id: str) -> str:
         return self.filename_template.format(
@@ -70,7 +78,11 @@ class ParquetSink(BaseSink):
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
         if isinstance(block, Tabular):
-            table = block.table
+            table = apply_dtypes_to_table(
+                block.table,
+                self.dtypes,
+                preserve_metadata=False,
+            )
         else:
             if self._assets is not None:
                 self._assets.require_input_schema()
@@ -116,6 +128,10 @@ class ParquetSink(BaseSink):
             args["upload_assets"] = True
             args["assets_subdir"] = self.assets_subdir
             args["missing_asset_policy"] = self.missing_asset_policy
+        if self.dtypes:
+            args["dtypes"] = {
+                key: dtype_to_plan(dtype) for key, dtype in self.dtypes.items()
+            }
         return ("write_parquet", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:

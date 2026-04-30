@@ -11,7 +11,6 @@ from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
     apply_dtypes_to_table,
-    schema_with_dtypes,
 )
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.data.tabular import Tabular
@@ -58,9 +57,9 @@ class JsonlReader(BaseReader):
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             file_path_column=file_path_column,
+            dtypes=dtypes,
         )
         self.parse_use_threads = parse_use_threads
-        self.dtypes = dtypes
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read one planned JSONL shard by snapping file parts to newline boundaries."""
@@ -109,10 +108,6 @@ class JsonlReader(BaseReader):
                         strict=False,
                     )
                 )
-
-    @property
-    def schema(self) -> pa.Schema | None:
-        return schema_with_dtypes(None, self.dtypes)
 
 
 __all__ = ["JsonlReader"]

@@ -143,6 +143,16 @@ def test_read_commoncrawl_defaults_to_https_transport() -> None:
     assert index_source.describe()["base_url"] == "https://data.commoncrawl.org"
 
 
+def test_read_commoncrawl_schema_contains_dtype_overrides() -> None:
+    source = mdr.text.read_commoncrawl(
+        "CC-MAIN-TEST",
+        dtypes={"content_bytes": mdr.datatype.binary()},
+    ).source
+
+    assert source.schema is not None
+    assert source.schema.field("content_bytes").type == pa.binary()
+
+
 def test_read_commoncrawl_s3_transport_checks_s3fs(monkeypatch) -> None:
     calls: list[tuple[str, tuple[str, ...], str | None]] = []
 

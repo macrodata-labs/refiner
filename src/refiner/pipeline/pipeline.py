@@ -33,10 +33,12 @@ from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
     HFDatasetReader,
+    Hdf5Reader,
     JsonlReader,
     ParquetReader,
 )
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.pipeline.sources.readers.hdf5 import MissingPolicy, PathSelection
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
@@ -354,6 +356,7 @@ class RefinerPipeline:
         assets_subdir: str = "assets",
         max_asset_uploads_in_flight: int = 16,
         missing_asset_policy: MissingAssetPolicy = "error",
+        dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
         return self.with_sink(
             ParquetSink(
@@ -364,6 +367,7 @@ class RefinerPipeline:
                 assets_subdir=assets_subdir,
                 max_asset_uploads_in_flight=max_asset_uploads_in_flight,
                 missing_asset_policy=missing_asset_policy,
+                dtypes=dtypes,
             )
         )
 
@@ -547,6 +551,71 @@ def read_jsonl(
             num_shards=num_shards,
             file_path_column=file_path_column,
             parse_use_threads=parse_use_threads,
+            dtypes=dtypes,
+        )
+    )
+
+
+def read_hdf5(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    groups: str | Sequence[str] | None = None,
+    datasets: PathSelection | None = None,
+    attrs: PathSelection | None = None,
+    file_path_column: str | None = "file_path",
+    group_path_column: str | None = "hdf5_group",
+    missing_policy: MissingPolicy = "error",
+    dtypes: DTypeMapping | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline with an HDF5 reader source.
+
+    HDF5 files are planned as atomic files. Each matched HDF5 group becomes one
+    row, with `datasets` and `attrs` selecting values relative to that group.
+
+    Args:
+        inputs: HDF5 file, glob, directory, or list of files to read.
+        fs: Optional fsspec filesystem for resolving inputs.
+        storage_options: Optional fsspec storage options.
+        recursive: Whether directory inputs should be expanded recursively.
+        target_shard_bytes: Target shard size used when planning file shards.
+        num_shards: Requested number of planned shards. HDF5 files are atomic,
+            so readers may emit fewer shards when there are fewer files.
+        groups: HDF5 group selector to emit as rows. Accepts `"/"`, one glob
+            string, or a sequence of exact group paths. Defaults to the root group.
+        datasets: Dataset selections relative to each matched group. Accepts a
+            mapping of output column name to HDF5 path, one path string, or a
+            sequence of path strings with unique final components.
+        attrs: Attribute selections on each matched group. Accepts the same
+            forms as `datasets`.
+        file_path_column: Output column for the source file path, or `None` to
+            omit it.
+        group_path_column: Output column for the matched HDF5 group path, or
+            `None` to omit it.
+        missing_policy: How to handle missing selected datasets or attrs inside
+            matched groups: `"error"` raises, `"drop_row"` drops the matched
+            group row, and `"set_null"` keeps the row with nulls for missing
+            selected values.
+        dtypes: Optional dtype overrides for output columns.
+    """
+    return RefinerPipeline(
+        source=Hdf5Reader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            groups=groups,
+            datasets=datasets,
+            attrs=attrs,
+            file_path_column=file_path_column,
+            group_path_column=group_path_column,
+            missing_policy=missing_policy,
             dtypes=dtypes,
         )
     )

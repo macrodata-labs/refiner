@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import cast
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -84,6 +85,55 @@ def test_launch_local_writes_parquet_per_shard(tmp_path) -> None:
     assert sorted(values) == [10, 20, 30]
 
 
+def test_write_parquet_dtypes_apply_to_row_blocks(tmp_path) -> None:
+    output_dir = tmp_path / "parquet-dtypes"
+    pipeline = from_items(
+        [{"maybe": None}, {"maybe": "value"}],
+        items_per_shard=2,
+    ).write_parquet(output_dir, dtypes={"maybe": datatype.string()})
+
+    pipeline.launch_local(
+        name="parquet-dtypes",
+        num_workers=1,
+        rundir=str(tmp_path / "run"),
+    )
+
+    written = sorted(path for path in output_dir.iterdir() if path.suffix == ".parquet")
+    assert len(written) == 1
+    table = pq.read_table(written[0])
+    assert table.schema.field("maybe").type == pa.string()
+    assert table.column("maybe").to_pylist() == [None, "value"]
+
+
+def test_write_parquet_dtypes_apply_to_tabular_blocks(tmp_path) -> None:
+    output_dir = tmp_path / "parquet-tabular-dtypes"
+    sink = ParquetSink(output_dir, dtypes={"image": datatype.image_path()})
+    sink.write_shard_block(
+        "abc",
+        Tabular(pa.table({"image": ["s3://bucket/image.png"]})),
+    )
+    sink.on_shard_complete("abc")
+
+    table = pq.read_table(next(output_dir.glob("*.parquet")))
+    assert datatype.asset_type(table.schema.field("image")) == "image"
+    assert datatype.asset_storage(table.schema.field("image")) == "path"
+
+
+def test_parquet_sink_serializes_numpy_values(tmp_path) -> None:
+    output_dir = tmp_path / "parquet-numpy"
+    sink = ParquetSink(output_dir)
+    sink.write_shard_block(
+        "abc",
+        [DictRow({"array": np.array([[1, 2], [3, 4]]), "scalar": np.int64(5)})],
+    )
+    sink.on_shard_complete("abc")
+
+    table = pq.read_table(next(output_dir.glob("*.parquet")))
+    assert table.schema.field("array").type == pa.list_(pa.list_(pa.int64()))
+    assert table.column("array").to_pylist() == [[[1, 2], [3, 4]]]
+    assert table.column("scalar").to_pylist() == [5]
+
+
 def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> None:
     output_dir = tmp_path / "vectorized-output"
     pipeline = (
@@ -116,6 +166,21 @@ def test_jsonl_sink_uses_local_worker_suffix_outside_runtime(tmp_path) -> None:
         f"abc__w{worker_token_for('local')}.jsonl"
     ]
     assert json.loads(written[0].read_text(encoding="utf-8")) == {"x": 1}
+
+
+def test_jsonl_sink_serializes_numpy_values(tmp_path) -> None:
+    sink = JsonlSink(tmp_path)
+    sink.write_shard_block(
+        "abc",
+        [DictRow({"array": np.array([[1, 2], [3, 4]]), "scalar": np.int64(5)})],
+    )
+    sink.on_shard_complete("abc")
+
+    written = sorted(tmp_path.iterdir())
+    assert json.loads(written[0].read_text(encoding="utf-8")) == {
+        "array": [[1, 2], [3, 4]],
+        "scalar": 5,
+    }
 
 
 def test_parquet_sink_uploads_asset_columns(tmp_path) -> None:

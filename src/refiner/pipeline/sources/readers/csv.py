@@ -13,7 +13,6 @@ from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
     apply_dtypes_to_table,
-    schema_with_dtypes,
 )
 from refiner.pipeline.data.shard import FilePart, FilePartsDescriptor
 from refiner.pipeline.data.row import DictRow
@@ -66,11 +65,11 @@ class CsvReader(BaseReader):
             num_shards=num_shards,
             file_path_column=file_path_column,
             split_by_bytes=not multiline_rows,
+            dtypes=dtypes,
         )
         self.multiline_rows = multiline_rows
         self.encoding = encoding
         self.parse_use_threads = parse_use_threads
-        self.dtypes = dtypes
         self._open_header: Optional[list[str]] = None
 
     def _get_handle_and_header(self, source_file):
@@ -227,10 +226,6 @@ class CsvReader(BaseReader):
             yield DictRow(
                 self._with_file_path(dict(zip(header, fields)), source),
             )
-
-    @property
-    def schema(self) -> pa.Schema | None:
-        return schema_with_dtypes(None, self.dtypes)
 
 
 __all__ = ["CsvReader"]

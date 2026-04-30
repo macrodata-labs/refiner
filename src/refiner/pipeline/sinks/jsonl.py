@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from typing import IO
+from typing import Any, IO, cast
 
+import numpy as np
 import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
@@ -15,6 +16,14 @@ from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
+
+
+def _json_default(obj: Any) -> Any:
+    if isinstance(obj, np.ndarray):
+        return cast(Any, obj).tolist()
+    if isinstance(obj, np.generic):
+        return cast(Any, obj).item()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class JsonlSink(BaseSink):
@@ -34,7 +43,11 @@ class JsonlSink(BaseSink):
         self.assets_subdir = assets_subdir
         self.missing_asset_policy = missing_asset_policy
         self._files: dict[str, IO[str]] = {}
-        self._encoder = json.JSONEncoder(ensure_ascii=True, separators=(",", ":"))
+        self._encoder = json.JSONEncoder(
+            ensure_ascii=True,
+            separators=(",", ":"),
+            default=_json_default,
+        )
         self._assets = (
             AssetUploadManager(
                 self.output,
