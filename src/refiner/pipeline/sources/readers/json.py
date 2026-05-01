@@ -74,6 +74,11 @@ class JsonReader(BaseReader):
         self.lines = lines
         self.parse_use_threads = parse_use_threads
 
+    def describe(self) -> dict[str, Any]:
+        description = super().describe()
+        description["lines"] = self.lines
+        return description
+
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read one planned JSON shard."""
         descriptor = shard.descriptor

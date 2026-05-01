@@ -59,6 +59,14 @@ def test_json_reader_schema_exposes_dtype_overrides(tmp_path):
     assert reader.schema.field("video").metadata == {b"asset_type": b"video"}
 
 
+def test_json_reader_describe_includes_lines_flag(tmp_path):
+    p = tmp_path / "data.json"
+    p.write_bytes(orjson.dumps({"x": 1}))
+
+    assert JsonReader(str(p), lines=False).describe()["lines"] is False
+    assert JsonReader(str(p), lines=True).describe()["lines"] is True
+
+
 def test_read_json_defaults_to_whole_json_file(tmp_path):
     p = tmp_path / "data.json"
     p.write_bytes(orjson.dumps({"x": 1}))
