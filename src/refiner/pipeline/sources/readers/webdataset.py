@@ -107,7 +107,7 @@ class WebDatasetReader(BaseReader):
             for member in tar:
                 if not member.isfile():
                     continue
-                sample_key, separator, field_name = member.name.lstrip("/").rpartition(
+                sample_key, separator, field_name = member.name.lstrip("/").partition(
                     "."
                 )
                 if not separator or not sample_key or not field_name:
@@ -128,7 +128,9 @@ class WebDatasetReader(BaseReader):
                     continue
                 with member_file:
                     payload = member_file.read()
-                if self.parse_json and member.name.lower().endswith(".json"):
+                if self.parse_json and (
+                    field_name == "json" or field_name.endswith(".json")
+                ):
                     try:
                         current_row[field_name] = orjson.loads(payload)
                     except orjson.JSONDecodeError as exc:
