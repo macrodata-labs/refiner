@@ -80,6 +80,14 @@ def test_read_files_can_emit_content_without_path_column(tmp_path: Path) -> None
     assert rows == [{"body": b"payload"}]
 
 
+def test_read_files_rejects_empty_output_rows(tmp_path: Path) -> None:
+    path = tmp_path / "payload.bin"
+    path.write_bytes(b"payload")
+
+    with pytest.raises(ValueError, match="file_path_column or content_column"):
+        read_files(str(path), file_path_column=None)
+
+
 def test_read_files_schema_exposes_dtype_override_for_content_column(
     tmp_path: Path,
 ) -> None:
