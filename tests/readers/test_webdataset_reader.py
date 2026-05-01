@@ -59,6 +59,25 @@ def test_webdataset_reader_groups_members_into_samples(tmp_path: Path) -> None:
     assert rows[1]["txt"] == b"caption"
 
 
+def test_webdataset_reader_normalizes_dot_prefixed_member_paths(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "dot-prefix.tar"
+    _write_tar(
+        path,
+        [
+            ("./0001.jpg", b"image"),
+            ("./0001.json", b'{"label": "cat"}'),
+        ],
+    )
+
+    row = read_webdataset(str(path), file_path_column=None).take(1)[0]
+
+    assert row["sample_key"] == "0001"
+    assert row["jpg"] == b"image"
+    assert row["json"] == {"label": "cat"}
+
+
 def test_webdataset_reader_uses_suffix_after_first_dot_as_field_name(
     tmp_path: Path,
 ) -> None:
