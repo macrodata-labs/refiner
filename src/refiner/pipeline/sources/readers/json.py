@@ -13,6 +13,7 @@ from refiner.pipeline.data.datatype import (
     DTypeMapping,
     apply_dtypes_to_table,
 )
+from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
@@ -86,8 +87,11 @@ class JsonReader(BaseReader):
                 row = self._with_file_path(row, source)
                 if row:
                     table = pa.Table.from_pylist([row])
+                elif self.dtypes:
+                    table = pa.table({name: [None] for name in self.dtypes})
                 else:
-                    table = pa.table({name: [None] for name in self.dtypes or {}})
+                    yield DictRow({})
+                    continue
                 yield Tabular(apply_dtypes_to_table(table, self.dtypes, strict=False))
                 continue
 

@@ -118,6 +118,16 @@ def test_read_json_file_can_disable_file_path_column(tmp_path):
     assert row == {"x": 1}
 
 
+def test_read_json_empty_object_without_dtypes_still_emits_row(tmp_path):
+    p = tmp_path / "data.json"
+    p.write_bytes(orjson.dumps({}))
+
+    rows = read_json(str(p), file_path_column=None).take(2)
+
+    assert len(rows) == 1
+    assert rows[0].to_dict() == {}
+
+
 def test_read_json_empty_object_uses_dtypes_for_arrow_schema(tmp_path):
     p = tmp_path / "data.json"
     p.write_bytes(orjson.dumps({}))
