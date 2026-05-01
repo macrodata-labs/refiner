@@ -38,6 +38,8 @@ class FilesReader(BaseReader):
         max_in_flight: int = 8,
         dtypes: DTypeMapping | None = None,
     ):
+        if file_path_column is None and content_column is None:
+            raise ValueError("read_files requires file_path_column or content_column")
         if max_in_flight <= 0:
             raise ValueError("max_in_flight must be > 0")
         if (

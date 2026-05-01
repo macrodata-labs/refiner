@@ -574,6 +574,18 @@ def read_files(
 
     If `content_column` is set, each row includes the file's raw bytes in that
     column. Otherwise files are listed without opening their contents.
+
+    Args:
+        inputs: File, glob, directory, or sequence of fsspec-backed inputs.
+        fs: Optional filesystem for string inputs.
+        storage_options: fsspec options used when `fs` is not provided.
+        recursive: Whether directory inputs are listed recursively.
+        target_shard_bytes: Approximate target bytes per planned shard.
+        num_shards: Optional requested number of planned shards.
+        file_path_column: Path output column, or `None` to omit it.
+        content_column: Raw bytes output column, or `None` for path-only rows.
+        max_in_flight: Concurrent content reads per shard when reading bytes.
+        dtypes: Optional dtype overrides exposed through the source schema.
     """
     return RefinerPipeline(
         source=FilesReader(
