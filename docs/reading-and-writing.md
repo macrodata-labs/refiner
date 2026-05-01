@@ -188,6 +188,8 @@ emits rows like:
 - `sample_key="0001"`, `jpg=<bytes>`, `json=<dict>`
 - `sample_key="0002"`, `jpg=<bytes>`, `txt=<bytes>`
 
+Dots in the basename start the field suffix, so sample keys should not contain dots.
+
 The archive path is added as `file_path` by default. Set
 `file_path_column=None` to omit it, or `sample_key_column=...` to rename the
 sample key column. JSON members are parsed to Python values by default; pass
