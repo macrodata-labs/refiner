@@ -7,6 +7,7 @@ from refiner.pipeline.sources.readers import (
     JsonlReader,
     LeRobotEpisodeReader,
     ParquetReader,
+    WebDatasetReader,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "JsonlReader",
     "LeRobotEpisodeReader",
     "ParquetReader",
+    "WebDatasetReader",
 ]

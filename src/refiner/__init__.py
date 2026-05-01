@@ -14,6 +14,7 @@ from refiner.pipeline import (
     read_jsonl,
     read_lerobot,
     read_parquet,
+    read_webdataset,
     task,
 )
 from refiner.pipeline.expressions import coalesce, col, if_else, lit
@@ -36,6 +37,7 @@ __all__ = [
     "read_jsonl",
     "read_lerobot",
     "read_parquet",
+    "read_webdataset",
     "from_items",
     "from_source",
     "task",
