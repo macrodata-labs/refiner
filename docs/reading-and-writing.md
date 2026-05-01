@@ -18,6 +18,7 @@ Built-in readers:
 | reader | what it reads | typical row shape |
 | --- | --- | --- |
 | `read_csv(...)` | CSV files | dict-like rows keyed by column name |
+| `read_files(...)` | files, folders, or globs | one row per file path, optionally with raw bytes |
 | `read_hdf5(...)` | HDF5 files | one row per selected HDF5 group |
 | `read_jsonl(...)` | JSON Lines files | dict-like rows from each JSON object |
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
@@ -35,6 +36,35 @@ import refiner as mdr
 
 pipeline = mdr.read_parquet("s3://my-bucket/documents/*.parquet")
 ```
+
+## Files
+
+Use `read_files(...)` when you need generic file paths rather than a
+format-specific parser. It accepts the same fsspec-backed paths, globs, folders,
+and `DataFile` / `DataFolder` inputs as other file readers, and emits one row per
+matched file.
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_files("s3://my-bucket/images/**/*.jpg")
+```
+
+By default this is path-only: it lists matching files but does not open their
+contents. Set `content_column` to include raw binary bytes for each file.
+Refiner does not decode those bytes.
+
+```python
+pipeline = mdr.read_files(
+    "images/*.png",
+    content_column="image_bytes",
+    max_in_flight=16,
+    dtypes={"image_bytes": mdr.datatype.image_bytes()},
+)
+```
+
+Set `file_path_column=None` to omit the path column. `recursive=True` applies to
+directory inputs.
 
 ## Hugging Face datasets
 

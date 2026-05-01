@@ -9,6 +9,7 @@ from refiner.pipeline import (
     from_items,
     from_source,
     read_csv,
+    read_files,
     read_hf_dataset,
     read_hdf5,
     read_jsonl,
@@ -31,6 +32,7 @@ robot = robotics
 __all__ = [
     # sources
     "read_csv",
+    "read_files",
     "read_hf_dataset",
     "read_hdf5",
     "read_jsonl",

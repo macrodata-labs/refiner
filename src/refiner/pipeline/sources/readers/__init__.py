@@ -1,5 +1,6 @@
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.sources.readers.csv import CsvReader
+from refiner.pipeline.sources.readers.files import FilesReader
 from refiner.pipeline.sources.readers.hf_dataset import HFDatasetReader
 from refiner.pipeline.sources.readers.hdf5 import Hdf5Reader
 from refiner.pipeline.sources.readers.jsonl import JsonlReader
@@ -10,6 +11,7 @@ from refiner.robotics.lerobot_format import LeRobotRow
 __all__ = [
     "BaseReader",
     "CsvReader",
+    "FilesReader",
     "HFDatasetReader",
     "Hdf5Reader",
     "JsonlReader",
