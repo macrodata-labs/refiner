@@ -36,6 +36,7 @@ from refiner.pipeline.sources import (
     Hdf5Reader,
     JsonlReader,
     ParquetReader,
+    WebDatasetReader,
 )
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy, PathSelection
@@ -616,6 +617,41 @@ def read_hdf5(
             file_path_column=file_path_column,
             group_path_column=group_path_column,
             missing_policy=missing_policy,
+            dtypes=dtypes,
+        )
+    )
+
+
+def read_webdataset(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    file_path_column: str | None = "file_path",
+    sample_key_column: str | None = "sample_key",
+    parse_json: bool = True,
+    dtypes: DTypeMapping | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline with a WebDataset tar reader source.
+
+    WebDataset archives are planned as atomic files and read sequentially. Each
+    sample emits one row; member extensions become field names. JSON members are
+    parsed to Python values by default, while other member payloads are bytes.
+    """
+    return RefinerPipeline(
+        source=WebDatasetReader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            file_path_column=file_path_column,
+            sample_key_column=sample_key_column,
+            parse_json=parse_json,
             dtypes=dtypes,
         )
     )

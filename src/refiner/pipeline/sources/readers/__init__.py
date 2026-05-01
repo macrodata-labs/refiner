@@ -5,6 +5,7 @@ from refiner.pipeline.sources.readers.hdf5 import Hdf5Reader
 from refiner.pipeline.sources.readers.jsonl import JsonlReader
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.parquet import ParquetReader
+from refiner.pipeline.sources.readers.webdataset import WebDatasetReader
 from refiner.robotics.lerobot_format import LeRobotRow
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "LeRobotEpisodeReader",
     "LeRobotRow",
     "ParquetReader",
+    "WebDatasetReader",
 ]

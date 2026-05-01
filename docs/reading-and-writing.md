@@ -21,6 +21,7 @@ Built-in readers:
 | `read_hdf5(...)` | HDF5 files | one row per selected HDF5 group |
 | `read_jsonl(...)` | JSON Lines files | dict-like rows from each JSON object |
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
+| `read_webdataset(...)` | WebDataset tar archives | one row per sample, with member extensions as fields |
 | `read_hf_dataset(...)` | Hugging Face datasets | rows from generated Parquet shards, with optional file path resolution |
 | `read_lerobot(...)` | LeRobot robotics datasets | one row per episode, including frame/video metadata |
 | `text.read_commoncrawl(...)` | Common Crawl WARC or WET files | one row per WARC/WET record with selected WARC/HTTP fields |
@@ -151,6 +152,48 @@ datasets or attributes default to raising an error. Set
 If a selected column can be missing from every group in an input file, pass
 `dtypes` for that column so the reader can emit a stable Arrow type.
 
+## WebDataset
+
+`read_webdataset(...)` reads `.tar`, `.tar.gz`, and `.tgz` archives using the
+same fsspec-backed input handling as the other file readers. Inputs can be
+archive paths, globs, directories, `DataFile` values, or mixed lists of those.
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_webdataset(
+    "s3://my-bucket/shards/*.tar",
+    dtypes={"jpg": mdr.datatype.image_bytes()},
+)
+```
+
+The reader streams each tar archive sequentially and does not load the full
+archive into memory. Archives are planned as atomic files, so `num_shards`
+cannot split one large archive across multiple workers. Members for a sample
+must be contiguous in the archive, which is the standard WebDataset shard
+layout.
+
+Members are grouped by the path before the final extension. The final extension
+becomes the output field name:
+
+```text
+0001.jpg
+0001.json
+0002.jpg
+0002.txt
+```
+
+emits rows like:
+
+- `sample_key="0001"`, `jpg=<bytes>`, `json=<dict>`
+- `sample_key="0002"`, `jpg=<bytes>`, `txt=<bytes>`
+
+The archive path is added as `file_path` by default. Set
+`file_path_column=None` to omit it, or `sample_key_column=...` to rename the
+sample key column. JSON members are parsed to Python values by default; pass
+`parse_json=False` to keep `.json` members as raw bytes. All non-JSON payloads
+are emitted as bytes.
+
 ## Common Crawl text readers
 
 [Common Crawl](https://commoncrawl.org/) publishes large public web crawls.
@@ -247,6 +290,7 @@ Reader behavior differs by format:
 - CSV and JSONL usually shard by file and byte range
 - HDF5 shards by file only; `num_shards` cannot exceed the input file count
 - Parquet shards by file and planned row-group or row ranges
+- WebDataset shards by archive file only; samples are streamed from each archive
 - LeRobot shards by episode parquet metadata
 - `from_items(...)` shards synthetic in-memory rows into planned chunks
 
