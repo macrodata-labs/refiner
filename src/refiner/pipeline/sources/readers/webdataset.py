@@ -107,9 +107,10 @@ class WebDatasetReader(BaseReader):
             for member in tar:
                 if not member.isfile():
                     continue
-                sample_key, separator, field_name = member.name.lstrip("/").partition(
-                    "."
-                )
+                member_path = posixpath.normpath(member.name).lstrip("/")
+                if not member_path or member_path == ".":
+                    continue
+                sample_key, separator, field_name = member_path.partition(".")
                 if not separator or not sample_key or not field_name:
                     continue
                 field_name = field_name.lower()
@@ -134,7 +135,6 @@ class WebDatasetReader(BaseReader):
                     try:
                         current_row[field_name] = orjson.loads(payload)
                     except orjson.JSONDecodeError as exc:
-                        member_path = posixpath.normpath(member.name)
                         raise ValueError(
                             f"Invalid JSON member {member_path!r} in {source.abs_path()!r}"
                         ) from exc
