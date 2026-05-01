@@ -34,7 +34,7 @@ async def summarize(row, generate):
     return {"summary": response.text}
 
 
-pipeline = mdr.read_jsonl("input.jsonl").map_async(
+pipeline = mdr.read_json("input.jsonl", lines=True).map_async(
     mdr.inference.generate(
         fn=summarize,
         provider=endpoint,
@@ -69,7 +69,7 @@ async def summarize(row, generate):
     return {"summary": response.text}
 
 
-pipeline = mdr.read_jsonl("input.jsonl").map_async(
+pipeline = mdr.read_json("input.jsonl", lines=True).map_async(
     mdr.inference.generate(
         fn=summarize,
         provider=provider,

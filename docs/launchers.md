@@ -60,7 +60,7 @@ Use `launch_cloud(...)` to submit the compiled pipeline to Macrodata Cloud.
 import refiner as mdr
 
 pipeline = (
-    mdr.read_jsonl("input/*.jsonl")
+    mdr.read_json("input/*.jsonl", lines=True)
     .filter(lambda row: row["lang"] == "en")
     .write_parquet("hf://datasets/macrodata/my-output")
 )
@@ -107,7 +107,7 @@ Use an exact prior job id when you already know which failed or canceled job you
 import refiner as mdr
 
 pipeline = (
-    mdr.read_jsonl("input/*.jsonl")
+    mdr.read_json("input/*.jsonl", lines=True)
     .map(lambda row: {"x": row["x"]})
     .write_parquet("hf://datasets/macrodata/my-output")
 )
@@ -126,7 +126,7 @@ Use `UUID:stage_index` to pin the reused boundary explicitly:
 import refiner as mdr
 
 pipeline = (
-    mdr.read_jsonl("input/*.jsonl")
+    mdr.read_json("input/*.jsonl", lines=True)
     .map(lambda row: {"x": row["x"]})
     .write_parquet("hf://datasets/macrodata/my-output")
 )
@@ -143,7 +143,7 @@ Use `"infer"` to look up your latest job in the current workspace with the same 
 import refiner as mdr
 
 pipeline = (
-    mdr.read_jsonl("input/*.jsonl")
+    mdr.read_json("input/*.jsonl", lines=True)
     .map(lambda row: {"x": row["x"]})
     .write_parquet("hf://datasets/macrodata/my-output")
 )

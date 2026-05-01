@@ -156,7 +156,7 @@ Example:
 import refiner as mdr
 
 pipeline = (
-    mdr.read_jsonl("input/*.jsonl")
+    mdr.read_json("input/*.jsonl", lines=True)
     .filter(mdr.col("lang") == "en")
     .with_columns(
         text=mdr.col("text").str.strip(),
