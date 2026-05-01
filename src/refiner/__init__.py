@@ -22,6 +22,7 @@ from refiner.pipeline import (
     read_videos,
     SUPPORTED_CUDA_VERSIONS,
     SUPPORTED_GPU_TYPES,
+    read_webdataset,
     task,
 )
 from refiner.pipeline.expressions import coalesce, col, if_else, lit
@@ -54,6 +55,7 @@ __all__ = [
     "read_lerobot",
     "read_parquet",
     "read_videos",
+    "read_webdataset",
     "from_items",
     "from_source",
     "task",
