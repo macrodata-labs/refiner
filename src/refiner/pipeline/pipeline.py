@@ -32,6 +32,7 @@ from refiner.pipeline.sinks.assets import MissingAssetPolicy
 from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
+    FilesReader,
     HFDatasetReader,
     Hdf5Reader,
     JsonlReader,
@@ -551,6 +552,52 @@ def read_jsonl(
             num_shards=num_shards,
             file_path_column=file_path_column,
             parse_use_threads=parse_use_threads,
+            dtypes=dtypes,
+        )
+    )
+
+
+def read_files(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    file_path_column: str | None = "file_path",
+    content_column: str | None = None,
+    max_in_flight: int = 8,
+    dtypes: DTypeMapping | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline that emits one row per resolved file.
+
+    If `content_column` is set, each row includes the file's raw bytes in that
+    column. Otherwise files are listed without opening their contents.
+
+    Args:
+        inputs: File, glob, directory, or sequence of fsspec-backed inputs.
+        fs: Optional filesystem for string inputs.
+        storage_options: fsspec options used when `fs` is not provided.
+        recursive: Whether directory inputs are listed recursively.
+        target_shard_bytes: Approximate target bytes per planned shard.
+        num_shards: Optional requested number of planned shards.
+        file_path_column: Path output column, or `None` to omit it.
+        content_column: Raw bytes output column, or `None` for path-only rows.
+        max_in_flight: Concurrent content reads per shard when reading bytes.
+        dtypes: Optional dtype overrides exposed through the source schema.
+    """
+    return RefinerPipeline(
+        source=FilesReader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            file_path_column=file_path_column,
+            content_column=content_column,
+            max_in_flight=max_in_flight,
             dtypes=dtypes,
         )
     )
