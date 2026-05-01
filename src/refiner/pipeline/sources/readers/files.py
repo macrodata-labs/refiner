@@ -84,17 +84,22 @@ class FilesReader(BaseReader):
                 yield DictRow(self._content_row(source))
             return
 
-        window = AsyncWindow[dict[str, Any]](
-            max_in_flight=self.max_in_flight,
-            preserve_order=True,
-        )
-        for part in descriptor.parts:
-            source = self.fileset.resolve_file(part.source_index, part.path)
-            window.submit_blocking(self._content_row_async(source))
-            for row in window.take_completed():
+        parts = descriptor.parts
+        for start in range(0, len(parts), self.max_in_flight):
+            window: AsyncWindow[dict[str, Any]] = AsyncWindow(
+                max_in_flight=self.max_in_flight,
+                preserve_order=True,
+            )
+            try:
+                for part in parts[start : start + self.max_in_flight]:
+                    source = self.fileset.resolve_file(part.source_index, part.path)
+                    window.submit_blocking(self._content_row_async(source))
+                rows = window.drain()
+            except Exception:
+                window.cancel_pending()
+                raise
+            for row in rows:
                 yield DictRow(row)
-        for row in window.drain():
-            yield DictRow(row)
 
     def _path_row(self, source: DataFile) -> dict[str, Any]:
         if self.file_path_column is None:
