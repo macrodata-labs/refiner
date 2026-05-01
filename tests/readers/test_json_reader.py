@@ -118,14 +118,16 @@ def test_read_json_file_can_disable_file_path_column(tmp_path):
     assert row == {"x": 1}
 
 
-def test_read_json_empty_object_without_file_path_still_emits_row(tmp_path):
+def test_read_json_empty_object_uses_dtypes_for_arrow_schema(tmp_path):
     p = tmp_path / "data.json"
     p.write_bytes(orjson.dumps({}))
 
-    rows = read_json(str(p), file_path_column=None).take(1)
+    reader = JsonReader(str(p), file_path_column=None, dtypes={"x": datatype.int64()})
+    unit = next(iter(reader.read_shard(reader.list_shards()[0])))
 
-    assert len(rows) == 1
-    assert rows[0].to_dict() == {}
+    assert isinstance(unit, Tabular)
+    assert unit.table.schema.field("x").type == datatype.int64()
+    assert unit.to_rows()[0].to_dict() == {"x": None}
 
 
 def test_read_json_file_applies_dtypes(tmp_path):
