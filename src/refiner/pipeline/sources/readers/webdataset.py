@@ -127,6 +127,11 @@ class WebDatasetReader(BaseReader):
                         f"WebDataset member field {field_name!r} collides with a "
                         "metadata column; rename the metadata column or disable it"
                     )
+                if field_name in current_row:
+                    raise ValueError(
+                        f"Duplicate WebDataset field {field_name!r} for sample "
+                        f"{sample_key!r} in {source.abs_path()!r}"
+                    )
                 member_file = tar.extractfile(member)
                 if member_file is None:
                     current_row[field_name] = b""

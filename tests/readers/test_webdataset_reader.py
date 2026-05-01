@@ -204,3 +204,16 @@ def test_webdataset_reader_rejects_member_metadata_collision(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="collides with a metadata column"):
         read_webdataset(str(path)).take(1)
+
+
+def test_webdataset_reader_rejects_duplicate_fields_after_normalization(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "duplicate-field.tar"
+    _write_tar(path, [("0001.jpg", b"lower"), ("0001.JPG", b"upper")])
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate WebDataset field 'jpg' for sample '0001'",
+    ):
+        read_webdataset(str(path)).take(1)
