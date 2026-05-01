@@ -97,6 +97,25 @@ def test_webdataset_reader_uses_suffix_after_first_dot_as_field_name(
     assert row["seg.png"] == b"mask"
 
 
+def test_webdataset_reader_preserves_dots_in_directory_names(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "dotted-directory.tar"
+    _write_tar(
+        path,
+        [
+            ("train.v1/0001.jpg", b"image"),
+            ("train.v1/0001.json", b'{"label": "cat"}'),
+        ],
+    )
+
+    row = read_webdataset(str(path), file_path_column=None).take(1)[0]
+
+    assert row["sample_key"] == "train.v1/0001"
+    assert row["jpg"] == b"image"
+    assert row["json"] == {"label": "cat"}
+
+
 def test_webdataset_reader_preserves_nested_sample_key_prefixes(
     tmp_path: Path,
 ) -> None:

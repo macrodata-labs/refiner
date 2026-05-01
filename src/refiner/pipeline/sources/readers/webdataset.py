@@ -110,9 +110,13 @@ class WebDatasetReader(BaseReader):
                 member_path = posixpath.normpath(member.name).lstrip("/")
                 if not member_path or member_path == ".":
                     continue
-                sample_key, separator, field_name = member_path.partition(".")
-                if not separator or not sample_key or not field_name:
+                directory, basename = posixpath.split(member_path)
+                sample_prefix, separator, field_name = basename.partition(".")
+                if not separator or not sample_prefix or not field_name:
                     continue
+                sample_key = (
+                    f"{directory}/{sample_prefix}" if directory else sample_prefix
+                )
                 field_name = field_name.lower()
                 if current_key is not None and sample_key != current_key:
                     yield from flush()
