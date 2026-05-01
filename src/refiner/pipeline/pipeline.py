@@ -34,7 +34,7 @@ from refiner.pipeline.sources import (
     CsvReader,
     HFDatasetReader,
     Hdf5Reader,
-    JsonlReader,
+    JsonReader,
     ParquetReader,
 )
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
@@ -524,7 +524,7 @@ def read_csv(
     )
 
 
-def read_jsonl(
+def read_json(
     inputs: DataFileSetLike,
     *,
     fs: AbstractFileSystem | None = None,
@@ -535,14 +535,16 @@ def read_jsonl(
     file_path_column: str | None = "file_path",
     parse_use_threads: bool = False,
     dtypes: DTypeMapping | None = None,
+    lines: bool = False,
 ) -> RefinerPipeline:
-    """Create a pipeline with a JSONL reader source.
+    """Create a pipeline with a JSON reader source.
 
     `num_shards` and `target_shard_bytes` affect input shard planning on the
-    reader side. `parse_use_threads` controls Arrow's intra-shard JSON parsing.
+    reader side. `parse_use_threads` controls Arrow's intra-shard JSON parsing
+    when `lines=True`.
     """
     return RefinerPipeline(
-        source=JsonlReader(
+        source=JsonReader(
             inputs,
             fs=fs,
             storage_options=storage_options,
@@ -552,8 +554,17 @@ def read_jsonl(
             file_path_column=file_path_column,
             parse_use_threads=parse_use_threads,
             dtypes=dtypes,
+            lines=lines,
         )
     )
+
+
+def read_jsonl(
+    inputs: DataFileSetLike,
+    **kwargs: Any,
+) -> RefinerPipeline:
+    """Alias for `read_json(..., lines=True)`."""
+    return read_json(inputs, lines=True, **kwargs)
 
 
 def read_hdf5(
@@ -738,7 +749,7 @@ def from_items(
     """Create a pipeline from in-memory rows.
 
     Intended for small/medium inline datasets; large datasets should use file-backed
-    readers (`read_parquet`/`read_jsonl`/`read_csv`). Primitive items are wrapped
+    readers (`read_parquet`/`read_json`/`read_csv`). Primitive items are wrapped
     as ``{"item": value}``.
     """
     return RefinerPipeline(

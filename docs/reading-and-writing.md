@@ -19,7 +19,7 @@ Built-in readers:
 | --- | --- | --- |
 | `read_csv(...)` | CSV files | dict-like rows keyed by column name |
 | `read_hdf5(...)` | HDF5 files | one row per selected HDF5 group |
-| `read_jsonl(...)` | JSON Lines files | dict-like rows from each JSON object |
+| `read_json(...)` | JSON files or JSON Lines files | one row per JSON file by default, or one row per line with `lines=True` |
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
 | `read_hf_dataset(...)` | Hugging Face datasets | rows from generated Parquet shards, with optional file path resolution |
 | `read_lerobot(...)` | LeRobot robotics datasets | one row per episode, including frame/video metadata |
@@ -35,6 +35,32 @@ import refiner as mdr
 
 pipeline = mdr.read_parquet("s3://my-bucket/documents/*.parquet")
 ```
+
+## JSON
+
+Use `read_json(...)` for JSON input. By default, each matched JSON file becomes
+one output row:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_json("data/*.json")
+```
+
+For whole-file JSON, a top-level object emits its keys as columns. A top-level
+array or primitive emits one row with a `value` column containing that JSON
+value. Whole-file JSON inputs are planned at file granularity.
+
+Set `lines=True` for JSONL/NDJSON files with one JSON object per line:
+
+```python
+pipeline = mdr.read_json("data/*.jsonl", lines=True)
+```
+
+In line-delimited mode, Refiner uses Arrow's JSON reader and can shard
+uncompressed files by byte ranges while snapping reads to newline boundaries.
+Directory inputs match `.jsonl`, `.ndjson`, `.jsonlines`, and `.jsonl.gz`.
+`read_jsonl(...)` is a thin alias for `read_json(..., lines=True)`.
 
 ## Hugging Face datasets
 
@@ -244,7 +270,7 @@ A shard is the unit of work claimed by a worker. Common shard metadata includes 
 
 Reader behavior differs by format:
 
-- CSV and JSONL usually shard by file and byte range
+- CSV and line-delimited JSON usually shard by file and byte range
 - HDF5 shards by file only; `num_shards` cannot exceed the input file count
 - Parquet shards by file and planned row-group or row ranges
 - LeRobot shards by episode parquet metadata
