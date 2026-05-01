@@ -59,7 +59,28 @@ def test_webdataset_reader_groups_members_into_samples(tmp_path: Path) -> None:
     assert rows[1]["txt"] == b"caption"
 
 
-def test_webdataset_reader_preserves_nested_sample_keys(tmp_path: Path) -> None:
+def test_webdataset_reader_uses_suffix_after_first_dot_as_field_name(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "compound-fields.tar"
+    _write_tar(
+        path,
+        [
+            ("0001.jpg", b"image"),
+            ("0001.seg.png", b"mask"),
+        ],
+    )
+
+    row = read_webdataset(str(path), file_path_column=None).take(1)[0]
+
+    assert row["sample_key"] == "0001"
+    assert row["jpg"] == b"image"
+    assert row["seg.png"] == b"mask"
+
+
+def test_webdataset_reader_preserves_nested_sample_key_prefixes(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "nested.tar"
     _write_tar(
         path,
@@ -71,9 +92,9 @@ def test_webdataset_reader_preserves_nested_sample_keys(tmp_path: Path) -> None:
 
     row = read_webdataset(str(path), file_path_column=None).take(1)[0]
 
-    assert row["sample_key"] == "split/a.0001"
-    assert row["png"] == b"png"
-    assert row["json"] == {"id": 1}
+    assert row["sample_key"] == "split/a"
+    assert row["0001.png"] == b"png"
+    assert row["0001.json"] == {"id": 1}
 
 
 def test_webdataset_reader_can_return_json_bytes(tmp_path: Path) -> None:

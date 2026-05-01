@@ -173,8 +173,8 @@ cannot split one large archive across multiple workers. Members for a sample
 must be contiguous in the archive, which is the standard WebDataset shard
 layout.
 
-Members are grouped by the path before the final extension. The final extension
-becomes the output field name:
+Members are grouped by the path before the first dot. The suffix after that
+first dot becomes the output field name:
 
 ```text
 0001.jpg
@@ -192,7 +192,7 @@ The archive path is added as `file_path` by default. Set
 `file_path_column=None` to omit it, or `sample_key_column=...` to rename the
 sample key column. JSON members are parsed to Python values by default; pass
 `parse_json=False` to keep `.json` members as raw bytes. All non-JSON payloads
-are emitted as bytes.
+are emitted as bytes. Members without a dot are skipped.
 
 ## Common Crawl text readers
 
