@@ -47,6 +47,13 @@ hdf5 = [
 s3 = [
     "s3fs",
 ]
+tensorflow = [
+    "tensorflow",
+]
+tfds = [
+    "macrodata-refiner[tensorflow]",
+    "tensorflow-datasets",
+]
 testing = [
     "macrodata-refiner[huggingface]",
     "macrodata-refiner[hdf5]",

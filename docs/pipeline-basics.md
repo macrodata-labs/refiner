@@ -39,6 +39,8 @@ Common entry points:
 - `read_jsonl(...)`
 - `read_parquet(...)`
 - `read_lerobot(...)`
+- `read_tfrecords(...)`
+- `read_tfds(...)`
 - `from_items(...)`
 - `from_source(...)`
 

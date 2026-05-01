@@ -23,6 +23,8 @@ Built-in readers:
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
 | `read_hf_dataset(...)` | Hugging Face datasets | rows from generated Parquet shards, with optional file path resolution |
 | `read_lerobot(...)` | LeRobot robotics datasets | one row per episode, including frame/video metadata |
+| `read_tfrecords(...)` | TensorFlow TFRecord files | dict-like rows parsed from `tf.io` feature specs |
+| `read_tfds(...)` | TensorFlow Datasets catalog entries | dict-like rows from TFDS examples |
 | `text.read_commoncrawl(...)` | Common Crawl WARC or WET files | one row per WARC/WET record with selected WARC/HTTP fields |
 | `text.read_commoncrawl_from_index(...)` | Common Crawl WARC records via the parquet index | one row per fetched WARC record, planned from index rows |
 | `from_items(...)` | in-memory Python values | rows from mappings directly, or `{"item": value}` for primitives |
@@ -151,6 +153,63 @@ datasets or attributes default to raising an error. Set
 If a selected column can be missing from every group in an input file, pass
 `dtypes` for that column so the reader can emit a stable Arrow type.
 
+## TensorFlow readers
+
+TensorFlow-backed readers are optional dependencies:
+
+```bash
+uv add "macrodata-refiner[tensorflow]"
+```
+
+```bash
+uv add "macrodata-refiner[tfds]"
+```
+
+Use `read_tfrecords(...)` when you already have TFRecord files and know the
+`tf.io` feature schema:
+
+```python
+import tensorflow as tf
+import refiner as mdr
+
+pipeline = mdr.read_tfrecords(
+    "data/train/*.tfrec.gz",
+    features={
+        "id": tf.io.FixedLenFeature([], tf.int64),
+        "text": tf.io.FixedLenFeature([], tf.string),
+        "embedding": tf.io.FixedLenFeature([768], tf.float32),
+    },
+)
+```
+
+`read_tfrecords(...)` plans work at file granularity. Small files may be grouped
+into one shard, but one large TFRecord file is not split internally. Directory
+and glob inputs include `.tfrecord`, `.tfrecords`, `.tfrec`, and their `.gz` or
+`.zlib` compressed variants. With the default `compression="auto"`, `.gz` uses
+GZIP and `.zlib` uses ZLIB.
+
+By default, Refiner adds a `file_path` column with the source TFRecord path. Set
+`file_path_column=None` to disable it. If your parsed TFRecord already has a
+feature with that name, Refiner keeps the record value and does not overwrite it.
+
+Use `read_tfds(...)` for datasets available through the TensorFlow Datasets
+catalog or a local TFDS `data_dir`:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_tfds(
+    "mnist",
+    split="train",
+    batch_size=1024,
+    examples_per_shard=10_000,
+)
+```
+
+`read_tfds(...)` currently expects a plain split name such as `"train"` or
+`"validation"`. Refiner performs its own example-range slicing for shard
+planning, using either `examples_per_shard=...` or an explicit `num_shards=...`.
+
 ## Common Crawl text readers
 
 [Common Crawl](https://commoncrawl.org/) publishes large public web crawls.
@@ -248,6 +307,8 @@ Reader behavior differs by format:
 - HDF5 shards by file only; `num_shards` cannot exceed the input file count
 - Parquet shards by file and planned row-group or row ranges
 - LeRobot shards by episode parquet metadata
+- TFRecord shards by whole files
+- TFDS shards by example ranges inside one split
 - `from_items(...)` shards synthetic in-memory rows into planned chunks
 
 You can often influence shard planning with options like:
