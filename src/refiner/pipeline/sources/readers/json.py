@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -13,7 +14,6 @@ from refiner.pipeline.data.datatype import (
     DTypeMapping,
     apply_dtypes_to_table,
 )
-from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
@@ -87,17 +87,40 @@ class JsonReader(BaseReader):
             source = self.fileset.resolve_file(part.source_index, part.path)
             if not self.lines:
                 with source.open(mode="rb", compression="infer") as raw:
-                    value = orjson.loads(raw.read())
-                row = value if isinstance(value, dict) else {"value": value}
-                row = self._with_file_path(row, source)
-                if row:
-                    table = pa.Table.from_pylist([row])
-                elif self.dtypes:
-                    table = pa.table({name: [None] for name in self.dtypes})
-                else:
-                    yield DictRow({})
-                    continue
-                yield Tabular(apply_dtypes_to_table(table, self.dtypes, strict=False))
+                    data = raw.read()
+                try:
+                    table = pa_json.read_json(
+                        io.BytesIO(data),
+                        read_options=pa_json.ReadOptions(
+                            use_threads=self.parse_use_threads
+                        ),
+                    )
+                except pa.ArrowInvalid as e:
+                    value = orjson.loads(data)
+                    if isinstance(value, dict):
+                        table = pa.Table.from_pylist([value])
+                    elif isinstance(value, list):
+                        try:
+                            table = pa.Table.from_pylist(value)
+                        except (AttributeError, TypeError) as list_error:
+                            raise ValueError(
+                                "Whole-file JSON must be an object or an array of objects"
+                            ) from list_error
+                    else:
+                        raise ValueError(
+                            "Whole-file JSON must be an object or an array of objects"
+                        ) from e
+                if self.dtypes and table.num_columns == 0 and table.num_rows > 0:
+                    table = pa.table(
+                        {name: [None] * table.num_rows for name in self.dtypes}
+                    )
+                yield Tabular(
+                    apply_dtypes_to_table(
+                        self._table_with_file_path(table, source),
+                        self.dtypes,
+                        strict=False,
+                    )
+                )
                 continue
 
             if part.end == -1:

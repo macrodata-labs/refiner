@@ -39,8 +39,7 @@ pipeline = mdr.read_parquet("s3://my-bucket/documents/*.parquet")
 
 ## JSON
 
-Use `read_json(...)` for JSON input. By default, each matched JSON file becomes
-one output row:
+Use `read_json(...)` for whole-file JSON input:
 
 ```python
 import refiner as mdr
@@ -48,9 +47,10 @@ import refiner as mdr
 pipeline = mdr.read_json("data/*.json")
 ```
 
-For whole-file JSON, a top-level object emits its keys as columns. A top-level
-array or primitive emits one row with a `value` column containing that JSON
-value. Whole-file JSON inputs are planned at file granularity.
+Each matched file is planned at file granularity. A top-level object becomes one
+row with the object keys as columns. A top-level array of objects becomes one row
+per object. Other top-level JSON values are rejected because they are not
+tabular.
 
 Use `read_jsonl(...)` for JSONL/NDJSON files with one JSON object per line:
 

@@ -1,4 +1,5 @@
 import orjson
+import pytest
 
 from refiner.pipeline import read_json, read_jsonl
 from refiner.pipeline.data import datatype
@@ -99,13 +100,32 @@ def test_read_json_file_object_emits_one_row_with_keys(tmp_path):
     assert row == {"x": 1, "name": "demo", "file_path": str(p)}
 
 
-def test_read_json_file_array_emits_one_value_row(tmp_path):
+def test_read_json_file_array_of_objects_emits_rows(tmp_path):
     p = tmp_path / "data.json"
     p.write_bytes(orjson.dumps([{"x": 1}, {"x": 2}]))
 
-    row = read_json(str(p)).take(1)[0].to_dict()
+    rows = [row.to_dict() for row in read_json(str(p)).take(2)]
 
-    assert row == {"value": [{"x": 1}, {"x": 2}], "file_path": str(p)}
+    assert rows == [
+        {"x": 1, "file_path": str(p)},
+        {"x": 2, "file_path": str(p)},
+    ]
+
+
+def test_read_json_file_rejects_primitive_array(tmp_path):
+    p = tmp_path / "data.json"
+    p.write_bytes(orjson.dumps([1, 2, 3]))
+
+    with pytest.raises(ValueError, match="object or an array of objects"):
+        read_json(str(p)).take(1)
+
+
+def test_read_json_file_rejects_primitive(tmp_path):
+    p = tmp_path / "data.json"
+    p.write_bytes(orjson.dumps(1))
+
+    with pytest.raises(ValueError, match="object or an array of objects"):
+        read_json(str(p)).take(1)
 
 
 def test_read_json_file_preserves_existing_file_path_column(tmp_path):
