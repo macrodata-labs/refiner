@@ -86,6 +86,13 @@ class JsonReader(BaseReader):
         for part in descriptor.parts:
             source = self.fileset.resolve_file(part.source_index, part.path)
             if not self.lines:
+                if source.path.lower().endswith(
+                    (".jsonl", ".jsonl.gz", ".ndjson", ".jsonlines")
+                ):
+                    raise ValueError(
+                        "read_json(..., lines=False) expects whole-file JSON; "
+                        "use read_jsonl(...) for line-delimited JSON"
+                    )
                 with source.open(mode="rb", compression="infer") as raw:
                     data = raw.read()
                 try:
@@ -95,6 +102,11 @@ class JsonReader(BaseReader):
                             use_threads=self.parse_use_threads
                         ),
                     )
+                    if table.num_rows > 1:
+                        raise ValueError(
+                            "read_json(..., lines=False) expects one JSON document "
+                            "per file; use read_jsonl(...) for line-delimited JSON"
+                        )
                 except pa.ArrowInvalid as e:
                     value = orjson.loads(data)
                     if isinstance(value, dict):
