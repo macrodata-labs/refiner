@@ -110,10 +110,6 @@ class JsonReader(BaseReader):
                         raise ValueError(
                             "Whole-file JSON must be an object or an array of objects"
                         ) from e
-                if self.dtypes and table.num_columns == 0 and table.num_rows > 0:
-                    table = pa.table(
-                        {name: [None] * table.num_rows for name in self.dtypes}
-                    )
                 yield Tabular(
                     apply_dtypes_to_table(
                         self._table_with_file_path(table, source),
