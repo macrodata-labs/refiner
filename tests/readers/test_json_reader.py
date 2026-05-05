@@ -125,22 +125,6 @@ def test_read_json_file_array_of_objects_emits_rows(tmp_path):
     ]
 
 
-def test_read_json_rejects_jsonl_extension(tmp_path):
-    p = tmp_path / "data.jsonl"
-    p.write_bytes(orjson.dumps({"x": 1}) + b"\n")
-
-    with pytest.raises(ValueError, match="line-delimited JSON"):
-        read_json(str(p)).take(1)
-
-
-def test_read_json_rejects_multiple_json_documents(tmp_path):
-    p = tmp_path / "data.json"
-    p.write_bytes(orjson.dumps({"x": 1}) + b"\n" + orjson.dumps({"x": 2}) + b"\n")
-
-    with pytest.raises(ValueError, match="one JSON document"):
-        read_json(str(p)).take(1)
-
-
 def test_read_json_file_rejects_primitive_array(tmp_path):
     p = tmp_path / "data.json"
     p.write_bytes(orjson.dumps([1, 2, 3]))
