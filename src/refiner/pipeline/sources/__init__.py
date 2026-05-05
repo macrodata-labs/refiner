@@ -4,7 +4,7 @@ from refiner.pipeline.sources.readers import (
     CsvReader,
     HFDatasetReader,
     Hdf5Reader,
-    JsonlReader,
+    JsonReader,
     LeRobotEpisodeReader,
     ParquetReader,
 )
@@ -15,7 +15,7 @@ __all__ = [
     "CsvReader",
     "HFDatasetReader",
     "Hdf5Reader",
-    "JsonlReader",
+    "JsonReader",
     "LeRobotEpisodeReader",
     "ParquetReader",
 ]

@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 
 from refiner.io import DataFile, DataFolder
 from refiner.io.fileset import DataFileSet
-from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl, read_parquet
+from refiner.pipeline import RefinerPipeline, read_csv, read_json, read_parquet
 from refiner.pipeline.expressions import col
 
 
@@ -93,7 +93,9 @@ def test_jsonl_reader_reads_across_multiple_directories() -> None:
         _write_jsonl(first_dir / "a.jsonl", [1, 2])
         _write_jsonl(second_dir / "b.jsonl", [3])
 
-        pipeline = read_jsonl([DataFolder(str(first_dir)), DataFolder(str(second_dir))])
+        pipeline = read_json(
+            [DataFolder(str(first_dir)), DataFolder(str(second_dir))], lines=True
+        )
 
         assert _pipeline_values(pipeline) == [1, 2, 3]
         assert len(pipeline.source.list_shards()) == 1

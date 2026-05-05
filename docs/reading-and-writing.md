@@ -19,7 +19,8 @@ Built-in readers:
 | --- | --- | --- |
 | `read_csv(...)` | CSV files | dict-like rows keyed by column name |
 | `read_hdf5(...)` | HDF5 files | one row per selected HDF5 group |
-| `read_jsonl(...)` | JSON Lines files | dict-like rows from each JSON object |
+| `read_json(...)` | JSON files | one row per JSON file by default |
+| `read_jsonl(...)` | JSON Lines files | one row per line |
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
 | `read_hf_dataset(...)` | Hugging Face datasets | rows from generated Parquet shards, with optional file path resolution |
 | `read_lerobot(...)` | LeRobot robotics datasets | one row per episode, including frame/video metadata |
@@ -35,6 +36,33 @@ import refiner as mdr
 
 pipeline = mdr.read_parquet("s3://my-bucket/documents/*.parquet")
 ```
+
+## JSON
+
+Use `read_json(...)` for whole-file JSON input:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_json("data/*.json")
+```
+
+Each matched file is planned at file granularity. A top-level object becomes one
+row with the object keys as columns. A top-level array of objects becomes one row
+per object. Other top-level JSON values are rejected because they are not
+tabular.
+
+Use `read_jsonl(...)` for JSONL/NDJSON files with one JSON object per line:
+
+```python
+pipeline = mdr.read_jsonl("data/*.jsonl")
+```
+
+In line-delimited mode, Refiner uses Arrow's JSON reader and can shard
+uncompressed files by byte ranges while snapping reads to newline boundaries.
+Directory inputs match `.jsonl`, `.ndjson`, `.jsonlines`, and `.jsonl.gz`.
+`read_jsonl(...)` is a thin alias for `read_json(..., lines=True)` if you need
+to set the mode explicitly.
 
 ## Hugging Face datasets
 
@@ -244,7 +272,7 @@ A shard is the unit of work claimed by a worker. Common shard metadata includes 
 
 Reader behavior differs by format:
 
-- CSV and JSONL usually shard by file and byte range
+- CSV and line-delimited JSON usually shard by file and byte range
 - HDF5 shards by file only; `num_shards` cannot exceed the input file count
 - Parquet shards by file and planned row-group or row ranges
 - LeRobot shards by episode parquet metadata

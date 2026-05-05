@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-from fsspec import AbstractFileSystem
+import orjson
 import pyarrow as pa
 import pyarrow.json as pa_json
+from fsspec import AbstractFileSystem
 
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.datatype import (
@@ -20,14 +22,16 @@ from refiner.pipeline.sources.readers.utils import (
 )
 
 
-class JsonlReader(BaseReader):
-    """JSONL / NDJSON reader sharded by byte ranges (per-file).
+class JsonReader(BaseReader):
+    """JSON reader for line-delimited JSON or one document per file.
 
     Notes:
-        - This reader assumes one JSON value per line (newline-delimited JSON).
-        - `list_shards()` only plans byte spans; `read_shard()` turns them into whole-line reads.
-        - Atomic files (`end=-1`) are read whole and never byte-sliced.
+        - With `lines=True`, this reader assumes one JSON value per line
+          (newline-delimited JSON) and shards splittable files by byte range.
+        - With `lines=False`, each file is one sample and is planned atomically.
     """
+
+    name = "read_json"
 
     def __init__(
         self,
@@ -41,10 +45,13 @@ class JsonlReader(BaseReader):
         file_path_column: str | None = "file_path",
         parse_use_threads: bool = False,
         dtypes: DTypeMapping | None = None,
+        lines: bool = False,
     ):
-        """Create a JSONL reader.
+        """Create a JSON reader.
 
         Args:
+            lines: If True, read newline-delimited JSON. If False, read each
+                matched file as a single JSON value.
             parse_use_threads: Whether pyarrow's JSON parser may use internal threads
                 inside a shard read.
         """
@@ -53,20 +60,67 @@ class JsonlReader(BaseReader):
             fs=fs,
             storage_options=storage_options,
             recursive=recursive,
-            extensions=(".jsonl", ".jsonl.gz", ".ndjson", ".jsonlines"),
+            extensions=(
+                (".jsonl", ".jsonl.gz", ".ndjson", ".jsonlines")
+                if lines
+                else (".json", ".json.gz")
+            ),
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             file_path_column=file_path_column,
+            split_by_bytes=lines,
             dtypes=dtypes,
         )
+        self.lines = lines
         self.parse_use_threads = parse_use_threads
 
+    def describe(self) -> dict[str, Any]:
+        description = super().describe()
+        description["lines"] = self.lines
+        return description
+
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
-        """Read one planned JSONL shard by snapping file parts to newline boundaries."""
+        """Read one planned JSON shard."""
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
         for part in descriptor.parts:
             source = self.fileset.resolve_file(part.source_index, part.path)
+            if not self.lines:
+                with source.open(mode="rb", compression="infer") as raw:
+                    data = raw.read()
+                try:
+                    table = pa_json.read_json(
+                        io.BytesIO(data),
+                        read_options=pa_json.ReadOptions(
+                            use_threads=self.parse_use_threads
+                        ),
+                    )
+                except pa.ArrowInvalid as e:
+                    value = orjson.loads(data)
+                    if isinstance(value, dict):
+                        table = pa.Table.from_pylist([value])
+                    elif isinstance(value, list):
+                        try:
+                            table = pa.Table.from_pylist(value)
+                        except (AttributeError, TypeError) as list_error:
+                            raise ValueError(
+                                "Whole-file JSON must be an object or an array of objects"
+                            ) from list_error
+                    else:
+                        raise ValueError(
+                            "Whole-file JSON must be an object or an array of objects"
+                        ) from e
+                if table.num_columns == 0 or table.num_rows == 0:
+                    continue
+                yield Tabular(
+                    apply_dtypes_to_table(
+                        self._table_with_file_path(table, source),
+                        self.dtypes,
+                        strict=False,
+                    )
+                )
+                continue
+
             if part.end == -1:
                 with source.open(
                     mode="rb",
@@ -110,4 +164,4 @@ class JsonlReader(BaseReader):
                 )
 
 
-__all__ = ["JsonlReader"]
+__all__ = ["JsonReader"]

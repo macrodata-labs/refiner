@@ -36,6 +36,7 @@ Sources define how rows enter the pipeline.
 Common entry points:
 
 - `read_csv(...)`
+- `read_json(...)`
 - `read_jsonl(...)`
 - `read_parquet(...)`
 - `read_lerobot(...)`
