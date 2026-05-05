@@ -19,7 +19,8 @@ Built-in readers:
 | --- | --- | --- |
 | `read_csv(...)` | CSV files | dict-like rows keyed by column name |
 | `read_hdf5(...)` | HDF5 files | one row per selected HDF5 group |
-| `read_json(...)` | JSON files or JSON Lines files | one row per JSON file by default, or one row per line with `lines=True` |
+| `read_json(...)` | JSON files | one row per JSON file by default |
+| `read_jsonl(...)` | JSON Lines files | one row per line |
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
 | `read_hf_dataset(...)` | Hugging Face datasets | rows from generated Parquet shards, with optional file path resolution |
 | `read_lerobot(...)` | LeRobot robotics datasets | one row per episode, including frame/video metadata |
@@ -51,16 +52,17 @@ For whole-file JSON, a top-level object emits its keys as columns. A top-level
 array or primitive emits one row with a `value` column containing that JSON
 value. Whole-file JSON inputs are planned at file granularity.
 
-Set `lines=True` for JSONL/NDJSON files with one JSON object per line:
+Use `read_jsonl(...)` for JSONL/NDJSON files with one JSON object per line:
 
 ```python
-pipeline = mdr.read_json("data/*.jsonl", lines=True)
+pipeline = mdr.read_jsonl("data/*.jsonl")
 ```
 
 In line-delimited mode, Refiner uses Arrow's JSON reader and can shard
 uncompressed files by byte ranges while snapping reads to newline boundaries.
 Directory inputs match `.jsonl`, `.ndjson`, `.jsonlines`, and `.jsonl.gz`.
-`read_jsonl(...)` is a thin alias for `read_json(..., lines=True)`.
+`read_jsonl(...)` is a thin alias for `read_json(..., lines=True)` if you need
+to set the mode explicitly.
 
 ## Hugging Face datasets
 
