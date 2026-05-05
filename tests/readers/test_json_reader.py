@@ -91,6 +91,19 @@ def test_read_jsonl_alias_reads_json_lines(tmp_path):
     assert read_jsonl(str(p)).take(1)[0]["x"] == 1
 
 
+def test_read_jsonl_alias_forwards_reader_options(tmp_path):
+    p = tmp_path / "data.jsonl"
+    p.write_bytes(orjson.dumps({"video": "clip.mp4"}) + b"\n")
+
+    row = read_jsonl(
+        str(p),
+        file_path_column=None,
+        dtypes={"video": datatype.video_path()},
+    ).take(1)[0]
+
+    assert row.to_dict() == {"video": "clip.mp4"}
+
+
 def test_read_json_file_object_emits_one_row_with_keys(tmp_path):
     p = tmp_path / "data.json"
     p.write_bytes(orjson.dumps({"x": 1, "name": "demo"}))

@@ -561,10 +561,29 @@ def read_json(
 
 def read_jsonl(
     inputs: DataFileSetLike,
-    **kwargs: Any,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    file_path_column: str | None = "file_path",
+    parse_use_threads: bool = False,
+    dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Alias for `read_json(..., lines=True)`."""
-    return read_json(inputs, lines=True, **kwargs)
+    return read_json(
+        inputs,
+        fs=fs,
+        storage_options=storage_options,
+        recursive=recursive,
+        target_shard_bytes=target_shard_bytes,
+        num_shards=num_shards,
+        file_path_column=file_path_column,
+        parse_use_threads=parse_use_threads,
+        dtypes=dtypes,
+        lines=True,
+    )
 
 
 def read_hdf5(
