@@ -32,6 +32,7 @@ from refiner.pipeline.sinks.assets import MissingAssetPolicy
 from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
+    FilesReader,
     HFDatasetReader,
     Hdf5Reader,
     JsonReader,
@@ -583,6 +584,61 @@ def read_jsonl(
         parse_use_threads=parse_use_threads,
         dtypes=dtypes,
         lines=True,
+    )
+
+
+def read_files(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    file_path_column: str | None = "file_path",
+    content_column: str | None = None,
+    size_column: str | None = "size",
+    decode_fn: Callable[[bytes], Any] | None = None,
+    max_in_flight: int = 8,
+    dtypes: DTypeMapping | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline that emits one row per resolved file.
+
+    If `content_column` is set, each row includes the file's raw bytes in that
+    column. Pass `decode_fn` to transform those bytes before they are emitted.
+    Otherwise files are listed without opening their contents.
+    If `size_column` is set, each row includes the file size captured during
+    shard planning.
+
+    Args:
+        inputs: File, glob, directory, or sequence of fsspec-backed inputs.
+        fs: Optional filesystem for string inputs.
+        storage_options: fsspec options used when `fs` is not provided.
+        recursive: Whether directory inputs are listed recursively.
+        target_shard_bytes: Approximate target bytes per planned shard.
+        num_shards: Optional requested number of planned shards.
+        file_path_column: Path output column, or `None` to omit it.
+        content_column: Raw bytes output column, or `None` for path-only rows.
+        size_column: File size output column, or `None` to omit it.
+        decode_fn: Optional function applied to raw file bytes when reading content.
+        max_in_flight: Concurrent content reads per shard when reading bytes.
+        dtypes: Optional dtype overrides exposed through the source schema.
+    """
+    return RefinerPipeline(
+        source=FilesReader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            file_path_column=file_path_column,
+            content_column=content_column,
+            size_column=size_column,
+            decode_fn=decode_fn,
+            max_in_flight=max_in_flight,
+            dtypes=dtypes,
+        )
     )
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 SHARD_ID_COLUMN = "__shard_id"
@@ -25,26 +25,34 @@ class FilePart:
     start: int
     end: int
     source_index: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def locality_key(self) -> str:
         return path_hash(self.path, source_index=self.source_index)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "path": self.path,
             "start": int(self.start),
             "end": int(self.end),
             "source_index": int(self.source_index),
         }
+        if self.metadata:
+            out["metadata"] = dict(self.metadata)
+        return out
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> FilePart:
+        metadata = payload.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise ValueError("file part metadata must be an object")
         return cls(
             path=str(payload["path"]),
             start=int(payload["start"]),
             end=int(payload["end"]),
             source_index=int(payload.get("source_index", 0)),
+            metadata=dict(metadata),
         )
 
     def update_hash(self, h: _HashWriter) -> None:
