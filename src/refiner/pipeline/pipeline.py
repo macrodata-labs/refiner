@@ -826,8 +826,9 @@ def read_webdataset(
     """Create a pipeline with a WebDataset tar reader source.
 
     WebDataset archives are planned as atomic files and read sequentially. Each
-    sample emits one row; member extensions become field names. JSON members are
-    parsed to Python values by default, while other member payloads are bytes.
+    sample emits one row; the suffix after the first dot in each member basename
+    becomes the field name. JSON members are parsed to Python values by default,
+    while other member payloads are bytes.
     """
     return RefinerPipeline(
         source=WebDatasetReader(

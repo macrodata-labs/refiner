@@ -21,9 +21,9 @@ class WebDatasetReader(BaseReader):
     """WebDataset tar reader planned at archive granularity.
 
     Each output row is one WebDataset sample. Members are grouped by the path
-    before the final extension, and the final extension becomes the output field
-    name. JSON members are parsed to Python values by default; all other member
-    payloads are emitted as bytes.
+    before the first dot in the basename, and the remaining suffix becomes the
+    output field name. JSON members are parsed to Python values by default; all
+    other member payloads are emitted as bytes.
     """
 
     name = "read_webdataset"
