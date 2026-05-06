@@ -52,7 +52,8 @@ pipeline = mdr.read_files("s3://my-bucket/images/**/*.jpg")
 ```
 
 By default this is path-only: it lists matching files but does not open their
-contents. Set `content_column` to include raw binary bytes for each file.
+contents. It also emits a `size` column from the file metadata captured during
+shard planning. Set `content_column` to include raw binary bytes for each file.
 Refiner does not decode those bytes.
 
 ```python
@@ -64,8 +65,18 @@ pipeline = mdr.read_files(
 )
 ```
 
-Set `file_path_column=None` to omit the path column. `recursive=True` applies to
-directory inputs.
+Pass `decode_fn` with `content_column` to transform bytes as files are read:
+
+```python
+pipeline = mdr.read_files(
+    "documents/*.txt",
+    content_column="text",
+    decode_fn=lambda data: data.decode("utf-8"),
+)
+```
+
+Set `file_path_column=None` to omit the path column, or `size_column=None` to
+omit file sizes. `recursive=True` applies to directory inputs.
 
 ## JSON
 

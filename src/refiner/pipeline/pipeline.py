@@ -597,13 +597,18 @@ def read_files(
     num_shards: int | None = None,
     file_path_column: str | None = "file_path",
     content_column: str | None = None,
+    size_column: str | None = "size",
+    decode_fn: Callable[[bytes], Any] | None = None,
     max_in_flight: int = 8,
     dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline that emits one row per resolved file.
 
     If `content_column` is set, each row includes the file's raw bytes in that
-    column. Otherwise files are listed without opening their contents.
+    column. Pass `decode_fn` to transform those bytes before they are emitted.
+    Otherwise files are listed without opening their contents.
+    If `size_column` is set, each row includes the file size captured during
+    shard planning.
 
     Args:
         inputs: File, glob, directory, or sequence of fsspec-backed inputs.
@@ -614,6 +619,8 @@ def read_files(
         num_shards: Optional requested number of planned shards.
         file_path_column: Path output column, or `None` to omit it.
         content_column: Raw bytes output column, or `None` for path-only rows.
+        size_column: File size output column, or `None` to omit it.
+        decode_fn: Optional function applied to raw file bytes when reading content.
         max_in_flight: Concurrent content reads per shard when reading bytes.
         dtypes: Optional dtype overrides exposed through the source schema.
     """
@@ -627,6 +634,8 @@ def read_files(
             num_shards=num_shards,
             file_path_column=file_path_column,
             content_column=content_column,
+            size_column=size_column,
+            decode_fn=decode_fn,
             max_in_flight=max_in_flight,
             dtypes=dtypes,
         )
