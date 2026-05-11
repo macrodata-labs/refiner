@@ -30,7 +30,6 @@ from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
-    from refiner.pipeline.planning import PlannedStage
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
@@ -204,10 +203,6 @@ class CloudLauncher(BaseLauncher):
             f"Set {_FALLBACK_ENV_VAR}=1 to allow fallback to the latest PyPI version."
         )
 
-    @staticmethod
-    def _stage_gpu(stage: PlannedStage) -> GPU | None:
-        return stage.compute.gpu
-
     def launch(self) -> CloudLaunchResult:
         try:
             client = MacrodataClient()
@@ -233,7 +228,7 @@ class CloudLauncher(BaseLauncher):
                         num_workers=stage.compute.num_workers,
                         cpus_per_worker=stage.compute.cpus_per_worker,
                         mem_mb_per_worker=stage.compute.memory_mb_per_worker,
-                        gpu=self._stage_gpu(stage),
+                        gpu=stage.compute.gpu,
                     ),
                 )
                 for stage in stages
