@@ -23,13 +23,14 @@ from refiner.platform.client import (
     serialize_pipeline_inline,
 )
 from refiner.platform.manifest import refiner_ref_exists_on_remote
-from refiner.pipeline.resources import CUDAVersion, GPU, GPUType, SUPPORTED_GPU_TYPES
+from refiner.pipeline.resources import GPU
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+    from refiner.pipeline.planning import PlannedStage
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
@@ -89,8 +90,7 @@ class CloudLauncher(BaseLauncher):
         num_workers: Requested logical worker count for cloud execution.
         cpus_per_worker: Optional requested CPU cores per worker.
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
-        gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
-        gpu_type: Optional requested GPU type per worker for cloud scheduling.
+        gpu: Optional GPU runtime request for cloud scheduling.
         sync_local_dependencies: Whether to sync submitting environment dependencies.
         secrets: Optional secrets mounted into the cloud runtime.
         env: Optional plain environment variables mounted into the cloud runtime.
@@ -104,8 +104,6 @@ class CloudLauncher(BaseLauncher):
         num_workers: int = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
-        gpus_per_worker: int | None = None,
-        gpu_type: GPUType | None = None,
         gpu: GPU | None = None,
         sync_local_dependencies: bool = True,
         secrets: dict[str, object | None] | None = None,
@@ -118,37 +116,17 @@ class CloudLauncher(BaseLauncher):
             name=name,
             num_workers=num_workers,
             cpus_per_worker=cpus_per_worker,
-            gpus_per_worker=gpus_per_worker,
+            gpus_per_worker=gpu.count if gpu is not None else None,
         )
         normalized_continue_from_job = _parse_continue_from_job(continue_from_job)
         if unsafe_continue and normalized_continue_from_job is None:
             raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
-        if gpu is not None and (gpus_per_worker is not None or gpu_type is not None):
-            raise ValueError("gpu cannot be combined with gpus_per_worker or gpu_type")
-        if gpu is not None:
-            gpus_per_worker = gpu.count
-            gpu_type = gpu.type
-            cuda_version: CUDAVersion | None = gpu.cuda_version
-        else:
-            cuda_version = None
-        if gpus_per_worker is not None and gpus_per_worker <= 0:
-            raise ValueError("gpus_per_worker must be > 0")
-        if gpus_per_worker is not None and gpu_type is None:
-            raise ValueError("gpu_type is required when gpus_per_worker is set")
-        if gpu_type is not None and not gpu_type.strip():
-            raise ValueError("gpu_type must be non-empty")
-        if gpu_type is not None and gpu_type not in SUPPORTED_GPU_TYPES:
-            supported = ", ".join(SUPPORTED_GPU_TYPES)
-            raise ValueError(f"gpu_type must be one of: {supported}")
-        if gpu_type is not None and gpus_per_worker is None:
-            raise ValueError("gpus_per_worker is required when gpu_type is set")
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
-        self.gpus_per_worker = gpus_per_worker
-        self.gpu_type = gpu_type
-        self.cuda_version = cuda_version
+        self.gpu_type = gpu.type if gpu is not None else None
+        self.cuda_version = gpu.cuda_version if gpu is not None else None
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
@@ -228,6 +206,50 @@ class CloudLauncher(BaseLauncher):
             f"Set {_FALLBACK_ENV_VAR}=1 to allow fallback to the latest PyPI version."
         )
 
+    @staticmethod
+    def _cloud_plan_with_structured_gpu(plan: dict[str, object]) -> dict[str, object]:
+        stages = plan.get("stages")
+        if not isinstance(stages, list):
+            return plan
+        resolved_stages: list[object] = []
+        changed = False
+        for stage in stages:
+            if not isinstance(stage, dict):
+                resolved_stages.append(stage)
+                continue
+            stage_dict = cast(dict[str, object], stage)
+            gpu_count = stage_dict.get("gpus_per_worker")
+            gpu_type = stage_dict.get("gpu_type")
+            if not isinstance(gpu_count, int) or not isinstance(gpu_type, str):
+                resolved_stages.append(stage)
+                continue
+            resolved_stage = dict(stage_dict)
+            resolved_stage.pop("gpus_per_worker", None)
+            resolved_stage.pop("gpu_type", None)
+            cuda_version = resolved_stage.pop("cuda_version", None)
+            gpu_payload: dict[str, object] = {
+                "count": gpu_count,
+                "type": gpu_type,
+            }
+            if isinstance(cuda_version, str):
+                gpu_payload["cuda_version"] = cuda_version
+            resolved_stage["gpu"] = gpu_payload
+            resolved_stages.append(resolved_stage)
+            changed = True
+        if not changed:
+            return plan
+        return {**plan, "stages": resolved_stages}
+
+    @staticmethod
+    def _stage_gpu(stage: PlannedStage) -> GPU | None:
+        if stage.compute.gpus_per_worker is None or stage.compute.gpu_type is None:
+            return None
+        return GPU(
+            count=stage.compute.gpus_per_worker,
+            type=stage.compute.gpu_type,
+            cuda_version=stage.compute.cuda_version,
+        )
+
     def launch(self) -> CloudLaunchResult:
         try:
             client = MacrodataClient()
@@ -241,9 +263,12 @@ class CloudLauncher(BaseLauncher):
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
         stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
+        plan = self._cloud_plan_with_structured_gpu(
+            self._compiled_plan(stages, secret_values=secret_values)
+        )
         request = CloudRunCreateRequest(
             name=self.name,
-            plan=self._compiled_plan(stages, secret_values=secret_values),
+            plan=plan,
             stage_payloads=[
                 StagePayload(
                     stage_index=stage.index,
@@ -252,9 +277,7 @@ class CloudLauncher(BaseLauncher):
                         num_workers=stage.compute.num_workers,
                         cpus_per_worker=stage.compute.cpus_per_worker,
                         mem_mb_per_worker=stage.compute.memory_mb_per_worker,
-                        gpus_per_worker=stage.compute.gpus_per_worker,
-                        gpu_type=stage.compute.gpu_type,
-                        cuda_version=stage.compute.cuda_version,
+                        gpu=self._stage_gpu(stage),
                     ),
                 )
                 for stage in stages

@@ -86,8 +86,6 @@ Returned result includes:
 - `cpus_per_worker`: scheduler hint for worker CPU sizing
 - `mem_mb_per_worker`: scheduler hint for worker memory sizing
 - `gpu`: structured scheduler hint for GPU count, GPU type, and CUDA version
-- `gpus_per_worker`: scheduler hint for GPU count per worker
-- `gpu_type`: required when `gpus_per_worker` is set
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
@@ -97,7 +95,7 @@ Returned result includes:
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
 
-`gpu` cannot be combined with `gpus_per_worker` or `gpu_type`. Current SDK literals are:
+Current SDK GPU literals are:
 
 - GPU type: `"h100"`
 - CUDA versions: `"12.4"`, `"12.6"`, `"12.8"`

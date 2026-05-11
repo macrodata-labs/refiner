@@ -10,6 +10,7 @@ from refiner.platform.client import (
     StagePayload,
 )
 from refiner.platform.client import MacrodataApiError
+from refiner.pipeline.resources import GPU
 
 
 def _request() -> CloudRunCreateRequest:
@@ -29,9 +30,7 @@ def _request() -> CloudRunCreateRequest:
                     num_workers=2,
                     cpus_per_worker=4,
                     mem_mb_per_worker=8192,
-                    gpus_per_worker=2,
-                    gpu_type="h100",
-                    cuda_version="12.4",
+                    gpu=GPU(count=2, type="h100", cuda_version="12.4"),
                 ),
             )
         ],
@@ -83,9 +82,11 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
                 "num_workers": 2,
                 "cpus_per_worker": 4,
                 "mem_mb_per_worker": 8192,
-                "gpus_per_worker": 2,
-                "gpu_type": "h100",
-                "cuda_version": "12.4",
+                "gpu": {
+                    "count": 2,
+                    "type": "h100",
+                    "cuda_version": "12.4",
+                },
             },
         }
     ]

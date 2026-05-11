@@ -59,7 +59,12 @@ def main() -> None:
     parser.add_argument("--gpus-per-worker", type=int, default=1)
     parser.add_argument("--cpus-per-worker", type=int, default=None)
     parser.add_argument("--mem-mb-per-worker", type=int, default=None)
-    parser.add_argument("--gpu-type", default=None)
+    parser.add_argument("--gpu-type", choices=mdr.SUPPORTED_GPU_TYPES, default=None)
+    parser.add_argument(
+        "--cuda-version",
+        choices=mdr.SUPPORTED_CUDA_VERSIONS,
+        default=None,
+    )
     args = parser.parse_args()
 
     pipeline = mdr.task(_probe_worker, num_tasks=args.num_tasks)
@@ -82,8 +87,11 @@ def main() -> None:
         num_workers=args.num_workers,
         cpus_per_worker=args.cpus_per_worker,
         mem_mb_per_worker=args.mem_mb_per_worker,
-        gpus_per_worker=args.gpus_per_worker,
-        gpu_type=args.gpu_type,
+        gpu=mdr.GPU(
+            count=args.gpus_per_worker,
+            type=args.gpu_type,
+            cuda_version=args.cuda_version,
+        ),
     )
     print(f"cloud launch submitted: {result}")
     print("worker probe results will be emitted in worker logs")

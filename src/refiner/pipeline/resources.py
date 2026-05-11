@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 GPUType = Literal["h100"]
 CUDAVersion = Literal["12.4", "12.6", "12.8"]
@@ -28,6 +28,15 @@ class GPU:
         ):
             supported = ", ".join(SUPPORTED_CUDA_VERSIONS)
             raise ValueError(f"gpu.cuda_version must be one of: {supported}")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "count": self.count,
+            "type": self.type,
+        }
+        if self.cuda_version is not None:
+            payload["cuda_version"] = self.cuda_version
+        return payload
 
 
 __all__ = [
