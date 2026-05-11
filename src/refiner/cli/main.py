@@ -6,6 +6,7 @@ import sys
 from refiner.cli.commands.auth import register_auth_commands
 from refiner.cli.commands.jobs import register_jobs_command
 from refiner.cli.commands.run import register_run_command
+from refiner.cli.commands.secrets import register_secrets_command
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,6 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_auth_commands(subparsers)
     register_run_command(subparsers)
     register_jobs_command(subparsers)
+    register_secrets_command(subparsers)
 
     return parser
 

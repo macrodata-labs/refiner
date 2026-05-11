@@ -4,12 +4,12 @@ from argparse import Namespace
 import sys
 from typing import Any
 
+from refiner.cli.common import create_client
+from refiner.cli.common import handle_error
+from refiner.cli.common import print_json
 from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.cli.jobs.common import (
-    _client,
-    _handle_error,
     _label_text,
-    _print_json,
     _section_text,
     _value_text,
 )
@@ -141,16 +141,16 @@ def _render_manifest(
 
 def cmd_jobs_manifest(args: Namespace) -> int:
     try:
-        payload = _client().cli_get_job_manifest(job_id=args.job_id)
+        payload = create_client().cli_get_job_manifest(job_id=args.job_id)
     except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
+        return handle_error(err)
     filtered_payload = _filtered_manifest_payload(
         payload,
         show_deps=args.deps,
         show_code=args.code,
     )
     if args.json:
-        return _print_json(filtered_payload)
+        return print_json(filtered_payload)
     return _render_manifest(
         payload,
         show_deps=args.deps,

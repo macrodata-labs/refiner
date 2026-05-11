@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import json
-import re
 import shlex
-import sys
 from typing import Any
 
+from refiner.cli.common import handle_error
+from refiner.cli.common import print_json
 from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.cli.ui.terminal import stdout_is_interactive
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import MacrodataApiError
-from refiner.platform.client import MacrodataClient
 
 _Payload = dict[str, Any]
 _PayloadFetcher = Callable[[], _Payload]
@@ -41,16 +39,6 @@ _LEVEL_COLORS = {
     "ERROR": "\x1b[1;38;5;203m",
     "CRITICAL": "\x1b[1;38;5;203m",
 }
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-
-
-def _client() -> MacrodataClient:
-    return MacrodataClient()
-
-
-def _print_json(payload: dict[str, Any]) -> int:
-    print(json.dumps(payload, indent=2, sort_keys=True))
-    return 0
 
 
 def _status_text(value: Any) -> str:
@@ -120,36 +108,6 @@ def _error_text(value: Any) -> str:
     return f"{_ERROR_COLOR}{text}{_ANSI_RESET}"
 
 
-def _print_table(rows: list[list[str]]) -> None:
-    if not rows:
-        return
-    column_count = len(rows[0])
-
-    def _visible_width(text: str) -> int:
-        return len(_ANSI_RE.sub("", text))
-
-    def _pad_right(text: str, width: int) -> str:
-        return text + (" " * max(0, width - _visible_width(text)))
-
-    widths = [
-        max(_visible_width(row[i]) if i < len(row) else 0 for row in rows)
-        for i in range(column_count)
-    ]
-    for index, row in enumerate(rows):
-        padded = "  ".join(
-            _pad_right(row[i] if i < len(row) else "", widths[i])
-            for i in range(column_count)
-        )
-        print(padded.rstrip())
-        if index == 0:
-            print("  ".join("-" * width for width in widths))
-
-
-def _handle_error(err: Exception) -> int:
-    print(_safe_text(str(err)), file=sys.stderr)
-    return 1
-
-
 def _shell_command(parts: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in parts)
 
@@ -169,8 +127,8 @@ def _run_job_command(
     try:
         payload = fetch()
     except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
-    return _print_json(payload) if as_json else renderer(payload)
+        return handle_error(err)
+    return print_json(payload) if as_json else renderer(payload)
 
 
 def _executor_text(value: Any) -> str:

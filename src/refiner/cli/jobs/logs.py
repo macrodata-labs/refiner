@@ -3,7 +3,6 @@ from __future__ import annotations
 from argparse import Namespace
 from datetime import datetime as _real_datetime
 from datetime import datetime, timezone
-import json
 from loguru import logger
 import re
 import sys
@@ -23,7 +22,9 @@ from refiner.cli.jobs.follow import (
     retry_delay,
     safe_text as _safe_text,
 )
-from refiner.cli.jobs.common import _client, _handle_error
+from refiner.cli.common import create_client
+from refiner.cli.common import handle_error
+from refiner.cli.common import print_json
 from refiner.cli.ui.terminal import stdout_is_interactive
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import MacrodataApiError
@@ -333,7 +334,7 @@ def _stream_logs(
     args: Namespace,
     limit: int,
 ) -> int:
-    client = _client()
+    client = create_client()
     logs_available = True
     poller = ForwardLogPoller(
         start_ms=_now_ms(),
@@ -520,14 +521,14 @@ def cmd_jobs_logs(args: Namespace) -> int:
 
     if args.follow:
         try:
-            startup_job_payload = _client().cli_get_job(job_id=args.job_id)
+            startup_job_payload = create_client().cli_get_job(job_id=args.job_id)
         except KeyboardInterrupt:
             return 130
         except (MacrodataApiError, MacrodataCredentialsError) as err:
             if isinstance(err, MacrodataApiError) and _is_retryable_api_error(err):
                 startup_job_payload = None
             else:
-                return _handle_error(err)
+                return handle_error(err)
         if (
             isinstance(startup_job_payload, dict)
             and _job_status(startup_job_payload) in TERMINAL_JOB_STATUSES
@@ -547,10 +548,10 @@ def cmd_jobs_logs(args: Namespace) -> int:
                 print("Stopped following logs.", file=sys.stderr)
                 return 130
             except (MacrodataApiError, MacrodataCredentialsError) as err:
-                return _handle_error(err)
+                return handle_error(err)
 
     try:
-        payload = _client().cli_get_job_logs(
+        payload = create_client().cli_get_job_logs(
             job_id=args.job_id,
             start_ms=start_ms,
             end_ms=end_ms,
@@ -567,8 +568,7 @@ def cmd_jobs_logs(args: Namespace) -> int:
     except KeyboardInterrupt:
         return 130
     except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
+        return handle_error(err)
     if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0
+        return print_json(payload)
     return _render_logs(payload)

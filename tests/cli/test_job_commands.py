@@ -6,7 +6,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
-from refiner.cli.jobs import common as jobs_common
+from refiner.cli.common import print_table
 from refiner.cli.jobs.attach import cmd_jobs_attach
 from refiner.cli.jobs.control import cmd_jobs_cancel
 from refiner.cli.jobs.get import cmd_jobs_get
@@ -221,14 +221,14 @@ class _FakeClient:
 
 
 def _patch_job_client(monkeypatch, factory) -> None:
-    monkeypatch.setattr(jobs_list_module, "_client", factory)
-    monkeypatch.setattr(jobs_get_module, "_client", factory)
-    monkeypatch.setattr(jobs_attach_module, "_client", factory)
-    monkeypatch.setattr(jobs_logs, "_client", factory)
-    monkeypatch.setattr(jobs_manifest_module, "_client", factory)
-    monkeypatch.setattr(jobs_metrics_module, "_client", factory)
-    monkeypatch.setattr(jobs_workers_module, "_client", factory)
-    monkeypatch.setattr(jobs_control_module, "_client", factory)
+    monkeypatch.setattr(jobs_list_module, "create_client", factory)
+    monkeypatch.setattr(jobs_get_module, "create_client", factory)
+    monkeypatch.setattr(jobs_attach_module, "create_client", factory)
+    monkeypatch.setattr(jobs_logs, "create_client", factory)
+    monkeypatch.setattr(jobs_manifest_module, "create_client", factory)
+    monkeypatch.setattr(jobs_metrics_module, "create_client", factory)
+    monkeypatch.setattr(jobs_workers_module, "create_client", factory)
+    monkeypatch.setattr(jobs_control_module, "create_client", factory)
 
 
 def test_jobs_list_plain_output(monkeypatch, capsys) -> None:
@@ -2954,7 +2954,7 @@ def test_jobs_error_reports_to_stderr(monkeypatch, capsys) -> None:
 
 
 def test_print_table_handles_ragged_rows(capsys) -> None:
-    jobs_common._print_table([["A", "B", "C"], ["1", "2"], ["3"]])
+    print_table([["A", "B", "C"], ["1", "2"], ["3"]])
     out = capsys.readouterr()
 
     assert "A  B  C" in out.out
@@ -2962,7 +2962,7 @@ def test_print_table_handles_ragged_rows(capsys) -> None:
 
 
 def test_print_table_handles_ansi_colored_cells(capsys) -> None:
-    jobs_common._print_table(
+    print_table(
         [
             ["\x1b[38;5;245mIdx\x1b[0m", "\x1b[38;5;245mStatus\x1b[0m", "Name"],
             ["0", "\x1b[1;38;5;77mcompleted\x1b[0m", "stage_0"],

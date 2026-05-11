@@ -3,13 +3,13 @@ from __future__ import annotations
 from argparse import Namespace
 from typing import Any
 
+from refiner.cli.common import create_client
+from refiner.cli.common import print_table
 from refiner.cli.jobs.follow import format_ts as _format_ts
 from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.cli.jobs.common import (
-    _client,
     _dim_text,
     _print_next_command,
-    _print_table,
     _run_job_command,
     _status_text,
     _timestamp_text,
@@ -67,7 +67,7 @@ def _render_workers(payload: dict[str, Any], *, args: Namespace) -> int:
                 _timestamp_text(_format_ts(item.get("endedAt"))),
             ]
         )
-    _print_table(rows)
+    print_table(rows)
     page = payload.get("page")
     if isinstance(page, dict):
         _print_next_command(page.get("nextCursor"), _workers_command_parts(args))
@@ -77,7 +77,7 @@ def _render_workers(payload: dict[str, Any], *, args: Namespace) -> int:
 def cmd_jobs_workers(args: Namespace) -> int:
     return _run_job_command(
         as_json=args.json,
-        fetch=lambda: _client().cli_get_job_workers(
+        fetch=lambda: create_client().cli_get_job_workers(
             job_id=args.job_id,
             stage_index=args.stage,
             limit=args.limit,

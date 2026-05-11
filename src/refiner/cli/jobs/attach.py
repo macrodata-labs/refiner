@@ -3,7 +3,9 @@ from __future__ import annotations
 from argparse import Namespace
 import sys
 
-from refiner.cli.jobs.common import _client, _executor_text, _handle_error
+from refiner.cli.common import create_client
+from refiner.cli.common import handle_error
+from refiner.cli.jobs.common import _executor_text
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import MacrodataApiError
 
@@ -12,10 +14,10 @@ def cmd_jobs_attach(args: Namespace) -> int:
     from refiner.cli.run import cloud
 
     try:
-        client = _client()
+        client = create_client()
         payload = client.cli_get_job(job_id=args.job_id)
     except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
+        return handle_error(err)
 
     job = payload.get("job")
     if not isinstance(job, dict):
@@ -45,4 +47,4 @@ def cmd_jobs_attach(args: Namespace) -> int:
         print(str(code), file=sys.stderr)
         return 1
     except (MacrodataApiError, MacrodataCredentialsError) as err:
-        return _handle_error(err)
+        return handle_error(err)
