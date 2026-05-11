@@ -4,13 +4,13 @@ from argparse import Namespace
 import sys
 from typing import Any
 
+from refiner.cli.common import create_client
+from refiner.cli.common import print_table
 from refiner.cli.jobs.follow import format_ts as _format_ts
 from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.cli.jobs.common import (
-    _client,
     _dim_text,
     _label_text,
-    _print_table,
     _run_job_command,
     _section_text,
     _timestamp_text,
@@ -32,7 +32,7 @@ def _render_inventory_table(metrics: list[dict[str, Any]]) -> None:
                 _metric_details_text(metric),
             ]
         )
-    _print_table(rows)
+    print_table(rows)
 
 
 def _print_metric_field(label: str, value: Any) -> None:
@@ -84,7 +84,7 @@ def _render_metric_rankings(
                     _safe_text(worker.get("ratePerSec")),
                 ]
             )
-        _print_table(rows)
+        print_table(rows)
         return
     if kind == "gauge":
         rows = [
@@ -104,7 +104,7 @@ def _render_metric_rankings(
                     _safe_text(worker.get("maxLast5m")),
                 ]
             )
-        _print_table(rows)
+        print_table(rows)
 
 
 def _render_value_metrics(
@@ -299,7 +299,7 @@ def cmd_jobs_metrics(args: Namespace) -> int:
     sort = "asc" if args.asc else "desc" if args.desc else None
     return _run_job_command(
         as_json=args.json,
-        fetch=lambda: _client().cli_get_job_step_metrics(
+        fetch=lambda: create_client().cli_get_job_step_metrics(
             job_id=args.job_id,
             stage_index=args.stage_index,
             step_index=args.step,
@@ -333,7 +333,7 @@ def cmd_jobs_resource_metrics(args: Namespace) -> int:
         return 1
     return _run_job_command(
         as_json=args.json,
-        fetch=lambda: _client().cli_get_job_metrics(
+        fetch=lambda: create_client().cli_get_job_metrics(
             job_id=args.job_id,
             range_value=args.range,
             start_ms=args.start_ms,

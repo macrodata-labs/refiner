@@ -78,6 +78,51 @@ macrodata run --attach path/to/cloud_pipeline.py
 
 See [Auth](auth.md) for the shared credential lookup order and credential file location.
 
+## Workspace Secrets
+
+Secrets are scoped to the workspace attached to your current API key. The CLI only prints secret names and environments, never values.
+
+### `macrodata secrets list`
+
+Options:
+
+- `--env <name>`
+- `--json`
+
+```bash
+macrodata secrets list
+macrodata secrets list --env production
+```
+
+### `macrodata secrets set`
+
+Adds or replaces a secret. Values are read from an interactive prompt by default or from stdin with `--value-stdin`.
+
+Options:
+
+- `--env <name>`; defaults to `default`
+- `--value-stdin`
+- `--json`
+
+```bash
+macrodata secrets set HF_TOKEN
+printf '%s' "$HF_TOKEN" | macrodata secrets set HF_TOKEN --env production --value-stdin
+```
+
+### `macrodata secrets remove`
+
+Deletes a secret by name. `delete` is accepted as an alias for `remove`.
+
+Options:
+
+- `--env <name>`; defaults to `default`
+- `--json`
+
+```bash
+macrodata secrets remove HF_TOKEN
+macrodata secrets delete HF_TOKEN --env production
+```
+
 ## Job Inspection
 
 Inspect jobs in the workspace attached to your current API key:

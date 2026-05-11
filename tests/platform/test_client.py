@@ -141,3 +141,19 @@ def test_cli_get_job_logs_omits_unset_bounds(monkeypatch) -> None:
     )
 
     assert captured["path"] == "/api/cli/jobs/job-1/logs?anchor=latest"
+
+
+def test_cli_delete_secret_encodes_name_and_env(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"success": True}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    client.cli_delete_secret(name="HF/TOKEN", env="production")
+
+    assert captured["method"] == "DELETE"
+    assert captured["path"] == "/api/cli/secrets/HF%2FTOKEN?env=production"

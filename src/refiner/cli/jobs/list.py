@@ -3,15 +3,15 @@ from __future__ import annotations
 from argparse import Namespace
 from typing import Any
 
+from refiner.cli.common import create_client
+from refiner.cli.common import print_table
 from refiner.cli.jobs.follow import format_ts as _format_ts
 from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.cli.jobs.common import (
-    _client,
     _dim_text,
     _executor_text,
     _kind_text,
     _print_next_command,
-    _print_table,
     _progress_text,
     _run_job_command,
     _started_by_text,
@@ -67,7 +67,7 @@ def _render_list(payload: dict[str, Any], *, args: Namespace) -> int:
                 _started_by_text(item),
             ]
         )
-    _print_table(rows)
+    print_table(rows)
     _print_next_command(payload.get("nextCursor"), _list_command_parts(args))
     return 0
 
@@ -75,7 +75,7 @@ def _render_list(payload: dict[str, Any], *, args: Namespace) -> int:
 def cmd_jobs_list(args: Namespace) -> int:
     return _run_job_command(
         as_json=args.json,
-        fetch=lambda: _client().cli_list_jobs(
+        fetch=lambda: create_client().cli_list_jobs(
             status=args.status,
             executor_kind=args.kind,
             me=args.me,

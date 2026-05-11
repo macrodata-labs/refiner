@@ -4,16 +4,16 @@ from argparse import Namespace
 import sys
 from typing import Any
 
+from refiner.cli.common import create_client
+from refiner.cli.common import print_table
 from refiner.cli.jobs.follow import format_ts as _format_ts
 from refiner.cli.jobs.follow import safe_text as _safe_text
 from refiner.cli.jobs.common import (
-    _client,
     _dim_text,
     _error_text,
     _executor_text,
     _kind_text,
     _label_text,
-    _print_table,
     _run_job_command,
     _section_text,
     _status_text,
@@ -87,7 +87,7 @@ def _url_text(value: str) -> str:
 
 
 def _tracking_url(job: dict[str, Any]) -> str:
-    client = _client()
+    client = create_client()
     if not hasattr(client, "base_url"):
         return "-"
     workspace_slug = job.get("workspaceSlug")
@@ -200,7 +200,7 @@ def _render_job(payload: dict[str, Any]) -> int:
                     _stage_gpu_text(runtime_config),
                 ]
             )
-        _print_table(rows)
+        print_table(rows)
         step_rows = [["Stage", "Step", "Type", "Name", "Summary"]]
         has_steps = False
         for stage in stages:
@@ -225,13 +225,13 @@ def _render_job(payload: dict[str, Any]) -> int:
         if has_steps:
             print(f"\n{_section_text('Steps')}")
             step_rows[0] = [_dim_text(cell) for cell in step_rows[0]]
-            _print_table(step_rows)
+            print_table(step_rows)
     return 0
 
 
 def cmd_jobs_get(args: Namespace) -> int:
     return _run_job_command(
         as_json=args.json,
-        fetch=lambda: _client().cli_get_job(job_id=args.job_id),
+        fetch=lambda: create_client().cli_get_job(job_id=args.job_id),
         renderer=_render_job,
     )

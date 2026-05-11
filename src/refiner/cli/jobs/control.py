@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from argparse import Namespace
 
+from refiner.cli.common import create_client
 from refiner.cli.jobs.follow import safe_text as _safe_text
-from refiner.cli.jobs.common import _client, _run_job_command
+from refiner.cli.jobs.common import _run_job_command
 
 
 def _render_cancel(payload: dict[str, object]) -> int:
@@ -24,6 +25,6 @@ def _render_cancel(payload: dict[str, object]) -> int:
 def cmd_jobs_cancel(args: Namespace) -> int:
     return _run_job_command(
         as_json=args.json,
-        fetch=lambda: _client().cli_cancel_job(job_id=args.job_id),
+        fetch=lambda: create_client().cli_cancel_job(job_id=args.job_id),
         renderer=_render_cancel,
     )

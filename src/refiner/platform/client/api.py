@@ -4,7 +4,7 @@ import importlib.metadata
 import os
 from dataclasses import dataclass
 from typing import Any, TypeVar
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 import msgspec
@@ -435,6 +435,29 @@ class MacrodataClient:
 
     def cli_cancel_job(self, *, job_id: str) -> dict[str, Any]:
         return self._request_raw(method="POST", path=f"/api/cli/jobs/{job_id}/cancel")
+
+    def cli_list_secrets(self, *, env: str | None = None) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path="/api/cli/secrets",
+            query_params={"env": env},
+        )
+
+    def cli_set_secret(
+        self, *, name: str, value: str, env: str = "default"
+    ) -> dict[str, Any]:
+        return self._request_raw(
+            method="POST",
+            path="/api/cli/secrets",
+            json_payload={"env": env, "name": name, "value": value},
+        )
+
+    def cli_delete_secret(self, *, name: str, env: str = "default") -> dict[str, Any]:
+        return self._request_raw(
+            method="DELETE",
+            path=f"/api/cli/secrets/{quote(name, safe='')}",
+            query_params={"env": env},
+        )
 
     def start_worker_services(
         self,

@@ -49,6 +49,15 @@ def test_parser_has_jobs_commands() -> None:
     assert args.me is True
 
 
+def test_parser_has_secrets_commands() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["secrets", "set", "HF_TOKEN", "--env", "production"])
+    assert args.command == "secrets"
+    assert args.secrets_command == "set"
+    assert args.name == "HF_TOKEN"
+    assert args.env == "production"
+
+
 def test_parser_has_jobs_logs_follow_flag() -> None:
     parser = build_parser()
     args = parser.parse_args(["jobs", "logs", "job-1", "--follow"])
