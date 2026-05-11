@@ -6,6 +6,7 @@ from fsspec import AbstractFileSystem
 from refiner.io.datafolder import DataFolderLike
 from refiner.pipeline.expressions import Expr, lit
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.resources import GPU
 from refiner.pipeline.steps import (
     AsyncMapFn,
     BatchFn,
@@ -381,7 +382,7 @@ class RefinerPipeline:
         name: str,
         num_workers: int = 1,
         rundir: str | None = None,
-        gpus_per_worker: int | None = None,
+        gpu: GPU | None = None,
     ) -> "LaunchStats":
         """Launch the pipeline locally.
 
@@ -389,7 +390,8 @@ class RefinerPipeline:
             name: Human-readable run name.
             num_workers: Number of local worker processes.
             rundir: Optional explicit local run directory. Reuse it to resume a prior local run.
-            gpus_per_worker: Optional GPU devices exposed per worker.
+            gpu: Optional GPU devices exposed per worker. `cuda_version` is accepted
+                for API consistency but ignored by local launch.
         """
         from refiner.launchers.local import LocalLauncher
 
@@ -398,7 +400,7 @@ class RefinerPipeline:
             name=name,
             num_workers=num_workers,
             rundir=rundir,
-            gpus_per_worker=gpus_per_worker,
+            gpu=gpu,
         )
         return launcher.launch()
 
@@ -409,8 +411,7 @@ class RefinerPipeline:
         num_workers: int = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
-        gpus_per_worker: int | None = None,
-        gpu_type: str | None = None,
+        gpu: GPU | None = None,
         sync_local_dependencies: bool = True,
         secrets: Mapping[str, object | None] | None = None,
         env: Mapping[str, object | None] | None = None,
@@ -424,8 +425,7 @@ class RefinerPipeline:
             num_workers: Requested logical worker count.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
-            gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
-            gpu_type: Optional requested GPU type per worker for cloud scheduling.
+            gpu: Optional structured GPU request.
             sync_local_dependencies: Sync submitting environment dependencies in cloud image.
             secrets: Extra environment variables to mount inside the cloud image.
                 `None` values are loaded from the submitting environment.
@@ -445,8 +445,7 @@ class RefinerPipeline:
             num_workers=num_workers,
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,
-            gpus_per_worker=gpus_per_worker,
-            gpu_type=gpu_type,
+            gpu=gpu,
             sync_local_dependencies=sync_local_dependencies,
             secrets=dict(secrets) if secrets is not None else None,
             env=dict(env) if env is not None else None,

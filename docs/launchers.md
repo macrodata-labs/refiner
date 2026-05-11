@@ -21,7 +21,7 @@ pipeline = (
 stats = pipeline.launch_local(
     name="local-job",
     num_workers=2,
-    gpus_per_worker=1,
+    gpu=mdr.GPU(count=1, type="h100", cuda_version="12.4"),
 )
 ```
 
@@ -38,7 +38,7 @@ Returned stats include:
 
 - workers always run as subprocesses, even when `num_workers=1`
 - local launch does not pin worker CPUs; if `num_workers` exceeds available CPUs, Refiner logs a warning and still launches the requested worker count
-- `gpus_per_worker` optionally exposes a fixed number of visible GPU devices to each local worker
+- `gpu` optionally exposes a fixed number of visible GPU devices to each local worker; local launch ignores `cuda_version`
 - `REFINER_LOGS` controls the live local console stream when set:
   - `all`: stream every worker log line
   - `none`: suppress live worker log output
@@ -70,8 +70,7 @@ result = pipeline.launch_cloud(
     num_workers=8,
     cpus_per_worker=2,
     mem_mb_per_worker=4096,
-    gpus_per_worker=1,
-    gpu_type="h100",
+    gpu=mdr.GPU(count=1, type="h100", cuda_version="12.4"),
 )
 ```
 
@@ -86,8 +85,7 @@ Returned result includes:
 - `num_workers`: requested logical worker count
 - `cpus_per_worker`: scheduler hint for worker CPU sizing
 - `mem_mb_per_worker`: scheduler hint for worker memory sizing
-- `gpus_per_worker`: scheduler hint for GPU count per worker
-- `gpu_type`: required when `gpus_per_worker` is set
+- `gpu`: structured scheduler hint for GPU count, GPU type, and CUDA version
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
 - `secrets`: env vars sent as secrets
 - `env`: env vars sent as plain runtime environment values
@@ -96,6 +94,11 @@ Returned result includes:
 - `unsafe_continue`: allow continue when the reused stage boundary no longer matches the current pipeline
 
 `secrets` and `env` are both mounted into the cloud runtime, but only `secrets` participate in captured-code redaction.
+
+Current SDK GPU literals are:
+
+- GPU type: `"h100"`
+- CUDA versions: `"12.4"`, `"12.6"`, `"12.8"`
 
 ### Continuing cloud work
 

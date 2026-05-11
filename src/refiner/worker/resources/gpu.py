@@ -51,19 +51,19 @@ def available_gpu_ids() -> list[str]:
     return gpu_ids
 
 
-def build_gpu_sets(*, num_workers: int, gpus_per_worker: int) -> list[list[str]]:
-    if gpus_per_worker <= 0:
-        raise ValueError("gpus_per_worker must be > 0")
+def build_gpu_sets(*, num_workers: int, gpu_count_per_worker: int) -> list[list[str]]:
+    if gpu_count_per_worker <= 0:
+        raise ValueError("gpu_count_per_worker must be > 0")
     gpu_ids = available_gpu_ids()
-    needed = num_workers * gpus_per_worker
+    needed = num_workers * gpu_count_per_worker
     if needed > len(gpu_ids):
         raise ValueError(
-            f"Requested {needed} GPUs ({num_workers} workers x {gpus_per_worker}) but only {len(gpu_ids)} are available"
+            f"Requested {needed} GPUs ({num_workers} workers x {gpu_count_per_worker}) but only {len(gpu_ids)} are available"
         )
     out: list[list[str]] = []
     for index in range(num_workers):
-        start = index * gpus_per_worker
-        out.append(gpu_ids[start : start + gpus_per_worker])
+        start = index * gpu_count_per_worker
+        out.append(gpu_ids[start : start + gpu_count_per_worker])
     return out
 
 

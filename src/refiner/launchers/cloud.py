@@ -23,6 +23,7 @@ from refiner.platform.client import (
     serialize_pipeline_inline,
 )
 from refiner.platform.manifest import refiner_ref_exists_on_remote
+from refiner.pipeline.resources import GPU
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
@@ -88,8 +89,7 @@ class CloudLauncher(BaseLauncher):
         num_workers: Requested logical worker count for cloud execution.
         cpus_per_worker: Optional requested CPU cores per worker.
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
-        gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
-        gpu_type: Optional requested GPU type per worker for cloud scheduling.
+        gpu: Optional GPU runtime request for cloud scheduling.
         sync_local_dependencies: Whether to sync submitting environment dependencies.
         secrets: Optional secrets mounted into the cloud runtime.
         env: Optional plain environment variables mounted into the cloud runtime.
@@ -103,8 +103,7 @@ class CloudLauncher(BaseLauncher):
         num_workers: int = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
-        gpus_per_worker: int | None = None,
-        gpu_type: str | None = None,
+        gpu: GPU | None = None,
         sync_local_dependencies: bool = True,
         secrets: dict[str, object | None] | None = None,
         env: dict[str, object | None] | None = None,
@@ -116,25 +115,15 @@ class CloudLauncher(BaseLauncher):
             name=name,
             num_workers=num_workers,
             cpus_per_worker=cpus_per_worker,
-            gpus_per_worker=gpus_per_worker,
+            gpu=gpu,
         )
         normalized_continue_from_job = _parse_continue_from_job(continue_from_job)
         if unsafe_continue and normalized_continue_from_job is None:
             raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
-        if gpus_per_worker is not None and gpus_per_worker <= 0:
-            raise ValueError("gpus_per_worker must be > 0")
-        if gpus_per_worker is not None and gpu_type is None:
-            raise ValueError("gpu_type is required when gpus_per_worker is set")
-        if gpu_type is not None and not gpu_type.strip():
-            raise ValueError("gpu_type must be non-empty")
-        if gpu_type is not None and gpus_per_worker is None:
-            raise ValueError("gpus_per_worker is required when gpu_type is set")
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
-        self.gpus_per_worker = gpus_per_worker
-        self.gpu_type = gpu_type.strip() if gpu_type is not None else None
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
@@ -227,9 +216,10 @@ class CloudLauncher(BaseLauncher):
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
         stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
+        plan = self._compiled_plan(stages, secret_values=secret_values)
         request = CloudRunCreateRequest(
             name=self.name,
-            plan=self._compiled_plan(stages, secret_values=secret_values),
+            plan=plan,
             stage_payloads=[
                 StagePayload(
                     stage_index=stage.index,
@@ -238,8 +228,7 @@ class CloudLauncher(BaseLauncher):
                         num_workers=stage.compute.num_workers,
                         cpus_per_worker=stage.compute.cpus_per_worker,
                         mem_mb_per_worker=stage.compute.memory_mb_per_worker,
-                        gpus_per_worker=stage.compute.gpus_per_worker,
-                        gpu_type=stage.compute.gpu_type,
+                        gpu=stage.compute.gpu,
                     ),
                 )
                 for stage in stages

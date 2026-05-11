@@ -13,6 +13,7 @@ from refiner.pipeline.planning import (
     compile_planned_stages,
     plan_pipeline_stages,
 )
+from refiner.pipeline.resources import GPU
 from refiner.platform.manifest import build_run_manifest
 
 if TYPE_CHECKING:
@@ -27,7 +28,7 @@ class BaseLauncher(ABC):
         name: str,
         num_workers: int = 1,
         cpus_per_worker: int | None = None,
-        gpus_per_worker: int | None = None,
+        gpu: GPU | None = None,
     ):
         if not name.strip():
             raise ValueError("name must be non-empty")
@@ -39,9 +40,7 @@ class BaseLauncher(ABC):
         if cpus_per_worker is not None and cpus_per_worker <= 0:
             raise ValueError("cpus_per_worker must be > 0")
         self.cpus_per_worker = cpus_per_worker
-        if gpus_per_worker is not None and gpus_per_worker <= 0:
-            raise ValueError("gpus_per_worker must be > 0")
-        self.gpus_per_worker = gpus_per_worker
+        self.gpu = gpu
 
     @staticmethod
     def _build_local_job_id(name: str) -> str:
@@ -95,16 +94,7 @@ class BaseLauncher(ABC):
                 if compute.memory_mb_per_worker is not None
                 else getattr(self, "mem_mb_per_worker", None)
             ),
-            gpus_per_worker=(
-                compute.gpus_per_worker
-                if compute.gpus_per_worker is not None
-                else getattr(self, "gpus_per_worker", None)
-            ),
-            gpu_type=(
-                compute.gpu_type
-                if compute.gpu_type is not None
-                else getattr(self, "gpu_type", None)
-            ),
+            gpu=compute.gpu if compute.gpu is not None else getattr(self, "gpu", None),
         )
 
     def _run_manifest(

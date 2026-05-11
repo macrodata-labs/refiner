@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import cast
 
 from refiner.pipeline import read_jsonl
+from refiner.pipeline.resources import GPU
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
@@ -89,8 +90,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         num_workers=3,
         cpus_per_worker=2,
         mem_mb_per_worker=4096,
-        gpus_per_worker=2,
-        gpu_type="h100",
+        gpu=GPU(count=2, type="h100", cuda_version="12.8"),
     )
 
     assert result.job_id == "job-123"
@@ -105,8 +105,12 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.plan["stages"][0]["requested_num_workers"] == 3
     assert request.plan["stages"][0]["cpus_per_worker"] == 2
     assert request.plan["stages"][0]["memory_mb_per_worker"] == 4096
-    assert request.plan["stages"][0]["gpus_per_worker"] == 2
-    assert request.plan["stages"][0]["gpu_type"] == "h100"
+    assert request.plan["stages"][0]["gpu"] == {
+        "count": 2,
+        "type": "h100",
+        "cuda_version": "12.8",
+    }
+    assert "cuda_version" not in request.plan["stages"][0]
     assert len(request.stage_payloads) == 1
     assert request.stage_payloads[0].stage_index == 0
     assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
@@ -114,8 +118,11 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.num_workers == 3
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
-    assert request.stage_payloads[0].runtime.gpus_per_worker == 2
-    assert request.stage_payloads[0].runtime.gpu_type == "h100"
+    assert request.stage_payloads[0].runtime.gpu == GPU(
+        count=2,
+        type="h100",
+        cuda_version="12.8",
+    )
     assert request.manifest == {
         "version": 1,
         "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
@@ -123,52 +130,35 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     }
 
 
-def test_pipeline_launch_cloud_requires_gpu_type_with_gpu_count(monkeypatch) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+def test_pipeline_launch_cloud_accepts_structured_gpu(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
 
-    with pytest.raises(
-        ValueError,
-        match="gpu_type is required when gpus_per_worker is set",
-    ):
-        read_jsonl("input.jsonl").launch_cloud(
-            name="demo cloud",
-            gpus_per_worker=2,
-        )
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        gpu=GPU(count=1, type="h100", cuda_version="12.4"),
+    )
 
-
-def test_pipeline_launch_cloud_requires_gpu_count_with_gpu_type(monkeypatch) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
-
-    with pytest.raises(
-        ValueError,
-        match="gpus_per_worker is required when gpu_type is set",
-    ):
-        read_jsonl("input.jsonl").launch_cloud(
-            name="demo cloud",
-            gpu_type="h100",
-        )
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.plan["stages"][0]["gpu"] == {
+        "count": 1,
+        "type": "h100",
+        "cuda_version": "12.4",
+    }
+    runtime = request.stage_payloads[0].runtime
+    assert runtime.gpu == GPU(count=1, type="h100", cuda_version="12.4")
 
 
-def test_pipeline_launch_cloud_rejects_non_positive_gpu_count(monkeypatch) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
-
-    with pytest.raises(ValueError, match="gpus_per_worker must be > 0"):
-        read_jsonl("input.jsonl").launch_cloud(
-            name="demo cloud",
-            gpus_per_worker=0,
-            gpu_type="h100",
-        )
-
-
-def test_pipeline_launch_cloud_rejects_blank_gpu_type(monkeypatch) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
-
-    with pytest.raises(ValueError, match="gpu_type must be non-empty"):
-        read_jsonl("input.jsonl").launch_cloud(
-            name="demo cloud",
-            gpus_per_worker=1,
-            gpu_type="   ",
-        )
+def test_gpu_rejects_unsupported_values() -> None:
+    with pytest.raises(ValueError, match="gpu.count must be > 0"):
+        GPU(count=0, type="h100")
+    with pytest.raises(ValueError, match="gpu.type must be one of: h100"):
+        GPU(count=1, type="a100")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="gpu.cuda_version must be one of"):
+        GPU(count=1, type="h100", cuda_version="13.0")  # type: ignore[arg-type]
 
 
 def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> None:
@@ -731,31 +721,30 @@ def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
         name="demo cloud",
         cpus_per_worker=4,
         mem_mb_per_worker=8192,
-        gpus_per_worker=1,
-        gpu_type="h100",
+        gpu=GPU(count=1, type="h100", cuda_version="12.6"),
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.plan["stages"][0]["cpus_per_worker"] == 4
     assert request.plan["stages"][0]["memory_mb_per_worker"] == 8192
-    assert request.plan["stages"][0]["gpus_per_worker"] == 1
-    assert request.plan["stages"][0]["gpu_type"] == "h100"
+    assert request.plan["stages"][0]["gpu"] == {
+        "count": 1,
+        "type": "h100",
+        "cuda_version": "12.6",
+    }
     assert "cpus_per_worker" not in request.plan["stages"][1]
     assert "memory_mb_per_worker" not in request.plan["stages"][1]
-    assert "gpus_per_worker" not in request.plan["stages"][1]
-    assert "gpu_type" not in request.plan["stages"][1]
+    assert "gpu" not in request.plan["stages"][1]
     first_runtime = request.stage_payloads[0].runtime
     second_runtime = request.stage_payloads[1].runtime
     assert first_runtime is not None
     assert second_runtime is not None
     assert first_runtime.cpus_per_worker == 4
     assert first_runtime.mem_mb_per_worker == 8192
-    assert first_runtime.gpus_per_worker == 1
-    assert first_runtime.gpu_type == "h100"
+    assert first_runtime.gpu == GPU(count=1, type="h100", cuda_version="12.6")
     assert second_runtime.cpus_per_worker is None
     assert second_runtime.mem_mb_per_worker is None
-    assert second_runtime.gpus_per_worker is None
-    assert second_runtime.gpu_type is None
+    assert second_runtime.gpu is None
 
 
 def test_pipeline_launch_cloud_auto_attach_uses_stdout_interactivity(
@@ -873,22 +862,6 @@ def test_pipeline_launch_cloud_continue_uses_current_plan_runtime(monkeypatch) -
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.plan is not None
     assert request.plan["stages"][0]["requested_num_workers"] == 1
-
-
-def test_pipeline_launch_cloud_continue_requires_gpu_type_when_gpus_requested(
-    monkeypatch,
-) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
-
-    with pytest.raises(
-        ValueError,
-        match="gpu_type is required when gpus_per_worker is set",
-    ):
-        read_jsonl("input.jsonl").launch_cloud(
-            name="demo cloud",
-            continue_from_job="00000000-0000-1000-8000-000000000123",
-            gpus_per_worker=1,
-        )
 
 
 def test_pipeline_launch_cloud_continue_preserves_fixed_reducer_stage_runtime(
