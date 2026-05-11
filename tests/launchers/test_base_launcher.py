@@ -10,6 +10,7 @@ from refiner.pipeline.planning import (
     PlannedStage,
     StageComputeRequirements,
 )
+from refiner.pipeline.resources import GPU
 
 
 class _DummyLauncher(BaseLauncher):
@@ -24,7 +25,7 @@ class _ResourceHintLauncher(_DummyLauncher):
         return StageComputeRequirements(
             num_workers=compute.num_workers,
             cpus_per_worker=1,
-            gpus_per_worker=2,
+            gpu=GPU(count=2, type="h100", cuda_version="12.4"),
         )
 
 
@@ -127,7 +128,7 @@ def test_compiled_plan_includes_stage_resource_hints(monkeypatch) -> None:
             "index": 0,
             "requested_num_workers": 2,
             "cpus_per_worker": 1,
-            "gpus_per_worker": 2,
+            "gpu": {"count": 2, "type": "h100", "cuda_version": "12.4"},
             "steps": [],
         },
         {
@@ -135,7 +136,7 @@ def test_compiled_plan_includes_stage_resource_hints(monkeypatch) -> None:
             "index": 1,
             "requested_num_workers": 1,
             "cpus_per_worker": 1,
-            "gpus_per_worker": 2,
+            "gpu": {"count": 2, "type": "h100", "cuda_version": "12.4"},
             "steps": [],
         },
     ]

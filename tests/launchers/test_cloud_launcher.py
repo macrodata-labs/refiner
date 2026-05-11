@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from collections.abc import Callable
-from typing import Any, cast
+from typing import cast
 
 from refiner.pipeline import read_jsonl
 from refiner.pipeline.resources import GPU
@@ -110,8 +110,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         "type": "h100",
         "cuda_version": "12.8",
     }
-    assert "gpus_per_worker" not in request.plan["stages"][0]
-    assert "gpu_type" not in request.plan["stages"][0]
     assert "cuda_version" not in request.plan["stages"][0]
     assert len(request.stage_payloads) == 1
     assert request.stage_payloads[0].stage_index == 0
@@ -152,22 +150,6 @@ def test_pipeline_launch_cloud_accepts_structured_gpu(monkeypatch) -> None:
     }
     runtime = request.stage_payloads[0].runtime
     assert runtime.gpu == GPU(count=1, type="h100", cuda_version="12.4")
-
-
-def test_pipeline_launch_cloud_rejects_legacy_gpu_kwargs(monkeypatch) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
-
-    launch_cloud = cast(Any, read_jsonl("input.jsonl").launch_cloud)
-    with pytest.raises(TypeError, match="gpus_per_worker"):
-        launch_cloud(
-            name="demo cloud",
-            gpus_per_worker=1,
-        )
-    with pytest.raises(TypeError, match="gpu_type"):
-        launch_cloud(
-            name="demo cloud",
-            gpu_type="h100",
-        )
 
 
 def test_gpu_rejects_unsupported_values() -> None:

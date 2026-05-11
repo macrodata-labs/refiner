@@ -140,7 +140,7 @@ def test_build_gpu_sets_partitions_gpus(monkeypatch: pytest.MonkeyPatch) -> None
         "refiner.worker.resources.gpu.available_gpu_ids",
         lambda: ["0", "1", "2", "3"],
     )
-    sets = build_gpu_sets(num_workers=2, gpus_per_worker=2)
+    sets = build_gpu_sets(num_workers=2, gpu_count_per_worker=2)
     assert sets == [["0", "1"], ["2", "3"]]
 
 
@@ -152,7 +152,7 @@ def test_build_gpu_sets_raises_when_insufficient(
         lambda: ["0"],
     )
     with pytest.raises(ValueError):
-        build_gpu_sets(num_workers=2, gpus_per_worker=1)
+        build_gpu_sets(num_workers=2, gpu_count_per_worker=1)
 
 
 def test_launch_local_assigns_visible_gpus(
@@ -177,19 +177,6 @@ def test_launch_local_assigns_visible_gpus(
     assert stats.workers == 1
     assert stats.completed == 1
     assert stats.failed == 0
-
-
-def test_launch_local_rejects_legacy_gpu_kwarg(tmp_path) -> None:
-    path = tmp_path / "a.jsonl"
-    path.write_text('{"x": 1}\n')
-    launch_local = cast(Any, read_jsonl(str(path)).launch_local)
-
-    with pytest.raises(TypeError, match="gpus_per_worker"):
-        launch_local(
-            name="local-gpu-launch",
-            gpus_per_worker=1,
-            rundir=str(tmp_path / "run"),
-        )
 
 
 def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
@@ -1612,12 +1599,12 @@ def test_local_launcher_preserves_reducer_stage_resource_opt_out(
             ),
         ),
     ]
-    seen_gpu_hints: list[int | None] = []
+    seen_gpu_hints: list[GPU | None] = []
 
     monkeypatch.setattr(launcher, "_planned_stages", lambda: stages)
 
     def fake_launch_stage(*, stage):  # noqa: ANN001
-        seen_gpu_hints.append(stage.compute.gpus_per_worker)
+        seen_gpu_hints.append(stage.compute.gpu)
         return LaunchStats(
             job_id="job-1",
             workers=1,
@@ -1631,7 +1618,7 @@ def test_local_launcher_preserves_reducer_stage_resource_opt_out(
 
     launcher.launch()
 
-    assert seen_gpu_hints == [1, None]
+    assert seen_gpu_hints == [GPU(count=1, type="h100", cuda_version="12.6"), None]
 
 
 def test_local_launcher_does_not_force_platform_terminal_state(

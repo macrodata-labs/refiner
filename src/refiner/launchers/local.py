@@ -55,7 +55,7 @@ class LocalLauncher(BaseLauncher):
             pipeline=pipeline,
             name=name,
             num_workers=num_workers,
-            gpus_per_worker=gpu.count if gpu is not None else None,
+            gpu=gpu,
         )
         self.job_id: str | None = None
         self.rundir: str | None = (
@@ -287,9 +287,9 @@ class LocalLauncher(BaseLauncher):
         gpu_sets = (
             build_gpu_sets(
                 num_workers=stage_workers,
-                gpus_per_worker=stage.compute.gpus_per_worker,
+                gpu_count_per_worker=stage.compute.gpu.count,
             )
-            if stage.compute.gpus_per_worker is not None
+            if stage.compute.gpu is not None
             else [[] for _ in range(stage_workers)]
         )
         completed_shard_ids = {

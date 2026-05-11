@@ -116,7 +116,7 @@ class CloudLauncher(BaseLauncher):
             name=name,
             num_workers=num_workers,
             cpus_per_worker=cpus_per_worker,
-            gpus_per_worker=gpu.count if gpu is not None else None,
+            gpu=gpu,
         )
         normalized_continue_from_job = _parse_continue_from_job(continue_from_job)
         if unsafe_continue and normalized_continue_from_job is None:
@@ -125,8 +125,6 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("mem_mb_per_worker must be > 0")
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
-        self.gpu_type = gpu.type if gpu is not None else None
-        self.cuda_version = gpu.cuda_version if gpu is not None else None
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
@@ -207,48 +205,8 @@ class CloudLauncher(BaseLauncher):
         )
 
     @staticmethod
-    def _cloud_plan_with_structured_gpu(plan: dict[str, object]) -> dict[str, object]:
-        stages = plan.get("stages")
-        if not isinstance(stages, list):
-            return plan
-        resolved_stages: list[object] = []
-        changed = False
-        for stage in stages:
-            if not isinstance(stage, dict):
-                resolved_stages.append(stage)
-                continue
-            stage_dict = cast(dict[str, object], stage)
-            gpu_count = stage_dict.get("gpus_per_worker")
-            gpu_type = stage_dict.get("gpu_type")
-            if not isinstance(gpu_count, int) or not isinstance(gpu_type, str):
-                resolved_stages.append(stage)
-                continue
-            resolved_stage = dict(stage_dict)
-            resolved_stage.pop("gpus_per_worker", None)
-            resolved_stage.pop("gpu_type", None)
-            cuda_version = resolved_stage.pop("cuda_version", None)
-            gpu_payload: dict[str, object] = {
-                "count": gpu_count,
-                "type": gpu_type,
-            }
-            if isinstance(cuda_version, str):
-                gpu_payload["cuda_version"] = cuda_version
-            resolved_stage["gpu"] = gpu_payload
-            resolved_stages.append(resolved_stage)
-            changed = True
-        if not changed:
-            return plan
-        return {**plan, "stages": resolved_stages}
-
-    @staticmethod
     def _stage_gpu(stage: PlannedStage) -> GPU | None:
-        if stage.compute.gpus_per_worker is None or stage.compute.gpu_type is None:
-            return None
-        return GPU(
-            count=stage.compute.gpus_per_worker,
-            type=stage.compute.gpu_type,
-            cuda_version=stage.compute.cuda_version,
-        )
+        return stage.compute.gpu
 
     def launch(self) -> CloudLaunchResult:
         try:
@@ -263,9 +221,7 @@ class CloudLauncher(BaseLauncher):
         secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
         stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
-        plan = self._cloud_plan_with_structured_gpu(
-            self._compiled_plan(stages, secret_values=secret_values)
-        )
+        plan = self._compiled_plan(stages, secret_values=secret_values)
         request = CloudRunCreateRequest(
             name=self.name,
             plan=plan,
