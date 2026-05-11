@@ -5,6 +5,7 @@ from typing import Any
 
 import msgspec
 
+from refiner.pipeline.resources import CUDAVersion, GPUType
 from refiner.pipeline.data.shard import Shard
 from refiner.worker.lifecycle import FinalizedShardWorker
 
@@ -123,7 +124,8 @@ class CloudRuntimeConfig:
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpus_per_worker: int | None = None
-    gpu_type: str | None = None
+    gpu_type: GPUType | None = None
+    cuda_version: CUDAVersion | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -137,6 +139,8 @@ class CloudRuntimeConfig:
             payload["gpus_per_worker"] = self.gpus_per_worker
         if self.gpu_type is not None:
             payload["gpu_type"] = self.gpu_type
+        if self.cuda_version is not None:
+            payload["cuda_version"] = self.cuda_version
         return payload
 
 

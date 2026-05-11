@@ -6,6 +6,7 @@ from fsspec import AbstractFileSystem
 from refiner.io.datafolder import DataFolderLike
 from refiner.pipeline.expressions import Expr, lit
 from refiner.io.fileset import DataFileSetLike
+from refiner.pipeline.resources import GPU, GPUType
 from refiner.pipeline.steps import (
     AsyncMapFn,
     BatchFn,
@@ -405,7 +406,8 @@ class RefinerPipeline:
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
-        gpu_type: str | None = None,
+        gpu_type: GPUType | None = None,
+        gpu: GPU | None = None,
         sync_local_dependencies: bool = True,
         secrets: Mapping[str, object | None] | None = None,
         env: Mapping[str, object | None] | None = None,
@@ -421,6 +423,8 @@ class RefinerPipeline:
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpus_per_worker: Optional requested GPU count per worker for cloud scheduling.
             gpu_type: Optional requested GPU type per worker for cloud scheduling.
+            gpu: Optional structured GPU request. Cannot be combined with
+                `gpus_per_worker` or `gpu_type`.
             sync_local_dependencies: Sync submitting environment dependencies in cloud image.
             secrets: Extra environment variables to mount inside the cloud image.
                 `None` values are loaded from the submitting environment.
@@ -442,6 +446,7 @@ class RefinerPipeline:
             mem_mb_per_worker=mem_mb_per_worker,
             gpus_per_worker=gpus_per_worker,
             gpu_type=gpu_type,
+            gpu=gpu,
             sync_local_dependencies=sync_local_dependencies,
             secrets=dict(secrets) if secrets is not None else None,
             env=dict(env) if env is not None else None,

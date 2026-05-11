@@ -23,6 +23,7 @@ from refiner.pipeline.steps import (
     WithColumnsStep,
 )
 from refiner.pipeline.data.datatype import dtype_to_plan
+from refiner.pipeline.resources import CUDAVersion, GPUType
 from refiner.platform.manifest import _redact_captured_text
 from refiner.services import RuntimeServiceSpec
 
@@ -39,7 +40,8 @@ class StageComputeRequirements:
     cpus_per_worker: int | None = None
     memory_mb_per_worker: int | None = None
     gpus_per_worker: int | None = None
-    gpu_type: str | None = None
+    gpu_type: GPUType | None = None
+    cuda_version: CUDAVersion | None = None
     inherit_launcher_resources: bool = True
 
     def to_stage_plan_dict(self) -> dict[str, Any]:
@@ -52,6 +54,8 @@ class StageComputeRequirements:
             payload["gpus_per_worker"] = self.gpus_per_worker
         if self.gpu_type is not None:
             payload["gpu_type"] = self.gpu_type
+        if self.cuda_version is not None:
+            payload["cuda_version"] = self.cuda_version
         return payload
 
 

@@ -105,6 +105,11 @@ class BaseLauncher(ABC):
                 if compute.gpu_type is not None
                 else getattr(self, "gpu_type", None)
             ),
+            cuda_version=(
+                compute.cuda_version
+                if compute.cuda_version is not None
+                else getattr(self, "cuda_version", None)
+            ),
         )
 
     def _run_manifest(

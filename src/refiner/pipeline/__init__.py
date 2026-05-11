@@ -11,11 +11,23 @@ from refiner.pipeline.pipeline import (
     read_parquet,
     task,
 )
+from refiner.pipeline.resources import (
+    CUDAVersion,
+    GPU,
+    GPUType,
+    SUPPORTED_CUDA_VERSIONS,
+    SUPPORTED_GPU_TYPES,
+)
 
 __all__ = [
+    "CUDAVersion",
+    "GPU",
+    "GPUType",
     "RefinerPipeline",
     "Row",
     "Shard",
+    "SUPPORTED_CUDA_VERSIONS",
+    "SUPPORTED_GPU_TYPES",
     "read_csv",
     "read_hf_dataset",
     "read_jsonl",

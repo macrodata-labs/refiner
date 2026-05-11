@@ -6,6 +6,9 @@ import refiner.text as text
 import refiner.video as video
 from refiner.pipeline.data import datatype
 from refiner.pipeline import (
+    CUDAVersion,
+    GPU,
+    GPUType,
     from_items,
     from_source,
     read_csv,
@@ -13,6 +16,8 @@ from refiner.pipeline import (
     read_jsonl,
     read_lerobot,
     read_parquet,
+    SUPPORTED_CUDA_VERSIONS,
+    SUPPORTED_GPU_TYPES,
     task,
 )
 from refiner.pipeline.expressions import coalesce, col, if_else, lit
@@ -29,6 +34,11 @@ robot = robotics
 
 __all__ = [
     # sources
+    "CUDAVersion",
+    "GPU",
+    "GPUType",
+    "SUPPORTED_CUDA_VERSIONS",
+    "SUPPORTED_GPU_TYPES",
     "read_csv",
     "read_hf_dataset",
     "read_jsonl",

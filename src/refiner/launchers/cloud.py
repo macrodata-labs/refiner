@@ -23,6 +23,7 @@ from refiner.platform.client import (
     serialize_pipeline_inline,
 )
 from refiner.platform.manifest import refiner_ref_exists_on_remote
+from refiner.pipeline.resources import CUDAVersion, GPU, GPUType, SUPPORTED_GPU_TYPES
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
@@ -104,7 +105,8 @@ class CloudLauncher(BaseLauncher):
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpus_per_worker: int | None = None,
-        gpu_type: str | None = None,
+        gpu_type: GPUType | None = None,
+        gpu: GPU | None = None,
         sync_local_dependencies: bool = True,
         secrets: dict[str, object | None] | None = None,
         env: dict[str, object | None] | None = None,
@@ -123,18 +125,30 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
+        if gpu is not None and (gpus_per_worker is not None or gpu_type is not None):
+            raise ValueError("gpu cannot be combined with gpus_per_worker or gpu_type")
+        if gpu is not None:
+            gpus_per_worker = gpu.count
+            gpu_type = gpu.type
+            cuda_version: CUDAVersion | None = gpu.cuda_version
+        else:
+            cuda_version = None
         if gpus_per_worker is not None and gpus_per_worker <= 0:
             raise ValueError("gpus_per_worker must be > 0")
         if gpus_per_worker is not None and gpu_type is None:
             raise ValueError("gpu_type is required when gpus_per_worker is set")
         if gpu_type is not None and not gpu_type.strip():
             raise ValueError("gpu_type must be non-empty")
+        if gpu_type is not None and gpu_type not in SUPPORTED_GPU_TYPES:
+            supported = ", ".join(SUPPORTED_GPU_TYPES)
+            raise ValueError(f"gpu_type must be one of: {supported}")
         if gpu_type is not None and gpus_per_worker is None:
             raise ValueError("gpus_per_worker is required when gpu_type is set")
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.gpus_per_worker = gpus_per_worker
-        self.gpu_type = gpu_type.strip() if gpu_type is not None else None
+        self.gpu_type = gpu_type
+        self.cuda_version = cuda_version
         self.sync_local_dependencies = sync_local_dependencies
         self.secrets = secrets
         self.env = env
@@ -240,6 +254,7 @@ class CloudLauncher(BaseLauncher):
                         mem_mb_per_worker=stage.compute.memory_mb_per_worker,
                         gpus_per_worker=stage.compute.gpus_per_worker,
                         gpu_type=stage.compute.gpu_type,
+                        cuda_version=stage.compute.cuda_version,
                     ),
                 )
                 for stage in stages
