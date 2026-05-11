@@ -23,6 +23,8 @@ from refiner.platform.client import (
     serialize_pipeline_inline,
 )
 from refiner.platform.manifest import refiner_ref_exists_on_remote
+from refiner.launchers.secrets import SecretInput, SecretPayload, resolve_secret_mapping
+from refiner.launchers.secrets import normalize_secret_sources, resolve_secret_sources
 from refiner.pipeline.resources import GPU
 
 from refiner.job_urls import build_job_tracking_url
@@ -91,7 +93,7 @@ class CloudLauncher(BaseLauncher):
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
         gpu: Optional GPU runtime request for cloud scheduling.
         sync_local_dependencies: Whether to sync submitting environment dependencies.
-        secrets: Optional secrets mounted into the cloud runtime.
+        secrets: Optional secret sources mounted into the cloud runtime.
         env: Optional plain environment variables mounted into the cloud runtime.
     """
 
@@ -105,7 +107,7 @@ class CloudLauncher(BaseLauncher):
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
         sync_local_dependencies: bool = True,
-        secrets: dict[str, object | None] | None = None,
+        secrets: SecretInput | None = None,
         env: dict[str, object | None] | None = None,
         continue_from_job: str | None = None,
         unsafe_continue: bool = False,
@@ -125,43 +127,28 @@ class CloudLauncher(BaseLauncher):
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.sync_local_dependencies = sync_local_dependencies
-        self.secrets = secrets
+        self.secrets = normalize_secret_sources(secrets)
         self.env = env
         self.continue_from_job = normalized_continue_from_job
         self.unsafe_continue = unsafe_continue
 
     @staticmethod
-    def _resolve_env_values(
-        values: dict[str, object | None] | None,
-    ) -> dict[str, str] | None:
-        if not values:
-            return None
-        resolved: dict[str, str] = {}
-        for name, value in values.items():
-            if value is None:
-                env_value = os.environ.get(name)
-                if env_value is None:
-                    raise SystemExit(
-                        f"cloud env {name!r} was set to None but is not present in the environment. Make sure it is being exported."
-                    )
-                resolved[name] = env_value
-                continue
-            resolved[name] = str(value)
-        return resolved
-
-    @staticmethod
-    def _merged_env(
-        secrets: dict[str, str] | None,
+    def _merged_secret_sources(
+        secret_sources: list[SecretPayload] | None,
         env: dict[str, str] | None,
-    ) -> dict[str, str] | None:
-        if secrets and env:
-            overlapping = secrets.keys() & env.keys()
+        explicit_secret_keys: set[str],
+    ) -> list[SecretPayload] | None:
+        sources = list(secret_sources or [])
+        if sources and env:
+            overlapping = explicit_secret_keys & env.keys()
             if overlapping:
                 raise SystemExit(
                     "cloud env keys must not overlap with secrets: "
                     + ", ".join(sorted(overlapping))
                 )
-        return {**(secrets or {}), **(env or {})} or None
+        if env:
+            sources.append(env)
+        return sources or None
 
     @staticmethod
     def _fallback_to_latest_pypi_enabled() -> bool:
@@ -211,9 +198,10 @@ class CloudLauncher(BaseLauncher):
                 "Launching jobs in the Macrodata cloud requires Macrodata "
                 "authentication. Run `macrodata login` or set MACRODATA_API_KEY."
             ) from err
-        resolved_secrets = self._resolve_env_values(self.secrets)
-        resolved_env = self._resolve_env_values(self.env)
-        secret_values = tuple(resolved_secrets.values()) if resolved_secrets else ()
+        resolved_secret_sources, secret_values, explicit_secret_keys = (
+            resolve_secret_sources(self.secrets)
+        )
+        resolved_env = resolve_secret_mapping(self.env) if self.env else None
         stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
         plan = self._compiled_plan(stages, secret_values=secret_values)
@@ -235,7 +223,9 @@ class CloudLauncher(BaseLauncher):
             ],
             manifest=manifest,
             sync_local_dependencies=self.sync_local_dependencies,
-            secrets=self._merged_env(resolved_secrets, resolved_env),
+            secrets=self._merged_secret_sources(
+                resolved_secret_sources, resolved_env, explicit_secret_keys
+            ),
             continue_from_job=self.continue_from_job,
             unsafe_continue=self.unsafe_continue,
         )

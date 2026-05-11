@@ -176,7 +176,7 @@ class CloudRunCreateRequest:
     stage_payloads: list[StagePayload]
     manifest: dict[str, Any] | None = None
     sync_local_dependencies: bool = True
-    secrets: dict[str, str] | None = None
+    secrets: list[dict[str, Any]] | None = None
     continue_from_job: str | None = None
     unsafe_continue: bool = False
 

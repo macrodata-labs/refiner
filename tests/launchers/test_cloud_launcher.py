@@ -14,6 +14,7 @@ from refiner.platform.client import (
     MacrodataApiError,
 )
 from refiner.platform.manifest import _redact_captured_text
+from refiner.launchers.secrets import Secrets
 
 
 def _stub_cloud_submit(
@@ -190,10 +191,87 @@ def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
-    assert request.secrets == {
-        "OPENAI_API_KEY": "env-secret",
-        "MODEL_NAME": "gpt-5",
-    }
+    assert request.secrets == [
+        {
+            "OPENAI_API_KEY": "env-secret",
+            "MODEL_NAME": "gpt-5",
+        }
+    ]
+
+
+def test_pipeline_launch_cloud_accepts_env_secret_source(monkeypatch) -> None:
+    captured = _stub_cloud_submit(
+        monkeypatch,
+        manifest={"version": 1, "script": {"text": "HF_TOKEN should not be redacted"}},
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        secrets=Secrets.env(name="production", keys=["HF_TOKEN"]),
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.secrets == [
+        {"__type__": "__envkeys__", "envname": "production", "keys": ["HF_TOKEN"]}
+    ]
+    assert request.manifest is not None
+    assert request.manifest["script"]["text"] == "HF_TOKEN should not be redacted"
+
+
+def test_pipeline_launch_cloud_rejects_string_env_secret_keys() -> None:
+    with pytest.raises(TypeError, match="sequence of strings"):
+        Secrets.env(keys="HF_TOKEN")
+
+
+def test_pipeline_launch_cloud_accepts_multiple_secret_sources(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        secrets=[
+            Secrets.env(name="default"),
+            Secrets.dict({"MODEL_NAME": "gpt-5"}),
+        ],
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.secrets == [
+        {"__type__": "__envkeys__", "envname": "default"},
+        {"MODEL_NAME": "gpt-5"},
+    ]
+
+
+def test_pipeline_launch_cloud_loads_dotenv_as_dict_secret_source(
+    monkeypatch, tmp_path
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        "HF_TOKEN=hf_secret\nexport MODEL_NAME='gpt-5' # inline comment\nEMPTY=\n",
+        encoding="utf-8",
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        secrets=Secrets.dotenv(dotenv_path),
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.secrets == [
+        {"HF_TOKEN": "hf_secret", "MODEL_NAME": "gpt-5", "EMPTY": ""}
+    ]
 
 
 def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> None:
@@ -218,10 +296,12 @@ def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> No
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
-    assert request.secrets == {
-        "OPENAI_API_KEY": "super-secret-value",
-        "MODEL_NAME": "plain-env-value",
-    }
+    assert request.secrets == [
+        {
+            "OPENAI_API_KEY": "super-secret-value",
+        },
+        {"MODEL_NAME": "plain-env-value"},
+    ]
     assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
 
 
@@ -234,6 +314,19 @@ def test_pipeline_launch_cloud_rejects_overlapping_secret_and_env_keys(
         read_jsonl("input.jsonl").launch_cloud(
             name="demo cloud",
             secrets={"API_KEY": "secret"},
+            env={"API_KEY": "env"},
+        )
+
+
+def test_pipeline_launch_cloud_rejects_overlapping_env_secret_key_and_env(
+    monkeypatch,
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(SystemExit, match="API_KEY"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            secrets=Secrets.env(keys=["API_KEY"]),
             env={"API_KEY": "env"},
         )
 

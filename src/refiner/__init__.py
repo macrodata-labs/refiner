@@ -24,6 +24,7 @@ from refiner.pipeline import (
     task,
 )
 from refiner.pipeline.expressions import coalesce, col, if_else, lit
+from refiner.launchers.secrets import Secrets
 from refiner.worker.metrics.api import (
     log_gauge,
     log_gauges,
@@ -42,6 +43,7 @@ __all__ = [
     "GPUType",
     "SUPPORTED_CUDA_VERSIONS",
     "SUPPORTED_GPU_TYPES",
+    "Secrets",
     "read_csv",
     "read_files",
     "read_hf_dataset",
