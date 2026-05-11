@@ -26,6 +26,7 @@ from refiner.cli.ui.console import (
 )
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
+from refiner.pipeline.resources import GPU
 from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
@@ -169,13 +170,26 @@ def test_launch_local_assigns_visible_gpus(
     stats = pipeline.launch_local(
         name="local-gpu-launch",
         num_workers=1,
-        gpus_per_worker=1,
+        gpu=GPU(count=1, type="h100", cuda_version="12.4"),
         rundir=str(tmp_path / "run"),
     )
 
     assert stats.workers == 1
     assert stats.completed == 1
     assert stats.failed == 0
+
+
+def test_launch_local_rejects_legacy_gpu_kwarg(tmp_path) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text('{"x": 1}\n')
+    launch_local = cast(Any, read_jsonl(str(path)).launch_local)
+
+    with pytest.raises(TypeError, match="gpus_per_worker"):
+        launch_local(
+            name="local-gpu-launch",
+            gpus_per_worker=1,
+            rundir=str(tmp_path / "run"),
+        )
 
 
 def test_launch_local_multi_worker_subprocess_with_lambda(tmp_path) -> None:
@@ -1578,7 +1592,7 @@ def test_local_launcher_preserves_reducer_stage_resource_opt_out(
         pipeline=pipeline,
         name="local-reducer-resources",
         num_workers=1,
-        gpus_per_worker=1,
+        gpu=GPU(count=1, type="h100", cuda_version="12.6"),
     )
 
     stages = [

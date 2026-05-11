@@ -56,10 +56,10 @@ def main() -> None:
     parser.add_argument("--name", default="gpu-probe")
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--num-tasks", type=int, default=1)
-    parser.add_argument("--gpus-per-worker", type=int, default=1)
+    parser.add_argument("--gpu-count", type=int, default=1)
     parser.add_argument("--cpus-per-worker", type=int, default=None)
     parser.add_argument("--mem-mb-per-worker", type=int, default=None)
-    parser.add_argument("--gpu-type", choices=mdr.SUPPORTED_GPU_TYPES, default=None)
+    parser.add_argument("--gpu-type", choices=mdr.SUPPORTED_GPU_TYPES, default="h100")
     parser.add_argument(
         "--cuda-version",
         choices=mdr.SUPPORTED_CUDA_VERSIONS,
@@ -73,14 +73,15 @@ def main() -> None:
         stats = pipeline.launch_local(
             name=args.name,
             num_workers=args.num_workers,
-            gpus_per_worker=args.gpus_per_worker,
+            gpu=mdr.GPU(
+                count=args.gpu_count,
+                type=args.gpu_type,
+                cuda_version=args.cuda_version,
+            ),
         )
         print(f"local launch complete: {stats}")
         print("worker probe results were logged by each worker process")
         return
-
-    if not args.gpu_type:
-        raise SystemExit("--gpu-type is required when --launcher=cloud")
 
     result = pipeline.launch_cloud(
         name=args.name,
@@ -88,7 +89,7 @@ def main() -> None:
         cpus_per_worker=args.cpus_per_worker,
         mem_mb_per_worker=args.mem_mb_per_worker,
         gpu=mdr.GPU(
-            count=args.gpus_per_worker,
+            count=args.gpu_count,
             type=args.gpu_type,
             cuda_version=args.cuda_version,
         ),

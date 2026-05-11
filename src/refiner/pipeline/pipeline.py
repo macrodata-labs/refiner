@@ -377,7 +377,7 @@ class RefinerPipeline:
         name: str,
         num_workers: int = 1,
         rundir: str | None = None,
-        gpus_per_worker: int | None = None,
+        gpu: GPU | None = None,
     ) -> "LaunchStats":
         """Launch the pipeline locally.
 
@@ -385,7 +385,8 @@ class RefinerPipeline:
             name: Human-readable run name.
             num_workers: Number of local worker processes.
             rundir: Optional explicit local run directory. Reuse it to resume a prior local run.
-            gpus_per_worker: Optional GPU devices exposed per worker.
+            gpu: Optional GPU devices exposed per worker. `cuda_version` is accepted
+                for API consistency but ignored by local launch.
         """
         from refiner.launchers.local import LocalLauncher
 
@@ -394,7 +395,7 @@ class RefinerPipeline:
             name=name,
             num_workers=num_workers,
             rundir=rundir,
-            gpus_per_worker=gpus_per_worker,
+            gpu=gpu,
         )
         return launcher.launch()
 

@@ -22,6 +22,7 @@ from refiner.cli.ui.terminal import stdout_is_interactive
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import PlannedStage
+from refiner.pipeline.resources import GPU
 from refiner.platform.auth import MacrodataCredentialsError, current_api_key
 from refiner.platform.client.api import MacrodataClient, request_json
 from refiner.worker.context import logger
@@ -48,13 +49,13 @@ class LocalLauncher(BaseLauncher):
         name: str,
         num_workers: int = 1,
         rundir: str | None = None,
-        gpus_per_worker: int | None = None,
+        gpu: GPU | None = None,
     ):
         super().__init__(
             pipeline=pipeline,
             name=name,
             num_workers=num_workers,
-            gpus_per_worker=gpus_per_worker,
+            gpus_per_worker=gpu.count if gpu is not None else None,
         )
         self.job_id: str | None = None
         self.rundir: str | None = (

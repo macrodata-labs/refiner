@@ -21,7 +21,7 @@ pipeline = (
 stats = pipeline.launch_local(
     name="local-job",
     num_workers=2,
-    gpus_per_worker=1,
+    gpu=mdr.GPU(count=1, type="h100", cuda_version="12.4"),
 )
 ```
 
@@ -38,7 +38,7 @@ Returned stats include:
 
 - workers always run as subprocesses, even when `num_workers=1`
 - local launch does not pin worker CPUs; if `num_workers` exceeds available CPUs, Refiner logs a warning and still launches the requested worker count
-- `gpus_per_worker` optionally exposes a fixed number of visible GPU devices to each local worker
+- `gpu` optionally exposes a fixed number of visible GPU devices to each local worker; local launch ignores `cuda_version`
 - `REFINER_LOGS` controls the live local console stream when set:
   - `all`: stream every worker log line
   - `none`: suppress live worker log output
