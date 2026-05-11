@@ -79,15 +79,6 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 )
 ```
 
-Pass extra VLLM server arguments through `extra_kwargs` on the provider:
-
-```python
-provider = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen3.5-9B",
-    extra_kwargs={"limit-mm-per-prompt": '{"video": 1}'},
-)
-```
-
 #### Supported models
 Only the following models are currently supported. If you are missing one, please create an issue:
 - `Qwen/Qwen3.5-9B`

@@ -15,7 +15,7 @@ def test_collect_pipeline_services_supports_nested_service_config() -> None:
             fn=_noop_inference,
             provider=mdr.inference.VLLMProvider(
                 model="Qwen/Qwen2.5-VL-7B-Instruct",
-                extra_kwargs={"limit-mm-per-prompt": "video=1"},
+                model_max_context=32768,
             ),
         )
     )
@@ -25,5 +25,5 @@ def test_collect_pipeline_services_supports_nested_service_config() -> None:
     assert len(services) == 1
     assert services[0].config == {
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "extra_kwargs": {"limit-mm-per-prompt": "video=1"},
+        "model_max_context": 32768,
     }
