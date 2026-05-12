@@ -87,7 +87,7 @@ Returned result includes:
 - `mem_mb_per_worker`: scheduler hint for worker memory sizing
 - `gpu`: structured scheduler hint for GPU count, GPU type, and CUDA version
 - `sync_local_dependencies`: whether to install the submitting environment's dependencies into the cloud image
-- `secrets`: env vars sent as secrets
+- `secrets`: secret sources mounted into the cloud runtime
 - `env`: env vars sent as plain runtime environment values
 - `continue_from_job`: continue from one exact prior job id (`UUID`), one exact job-and-stage boundary (`UUID:stage_index`), or `"infer"`. `:stage_index` is optional; when omitted, the control plane uses the last resumable boundary in the selected job.
 - exact `UUID` selection is scoped to the current workspace; jobs from other workspaces are not eligible continue sources
@@ -99,6 +99,66 @@ Current SDK GPU literals are:
 
 - GPU type: `"h100"`
 - CUDA versions: `"12.4"`, `"12.6"`, `"12.8"`
+
+### Cloud secrets
+
+Pass `secrets` when a cloud job needs API keys or credentials. The previous mapping form still works:
+
+```python
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    secrets={"HF_TOKEN": None, "OPENAI_API_KEY": "sk-..."},
+)
+```
+
+Mapping values are handled as follows:
+
+- `None` reads the value from the submitting process environment
+- any other value is converted to a string and sent directly
+
+Use `Secrets.env(...)` to mount secrets already saved in a Macrodata workspace secret environment:
+
+```python
+import refiner as mdr
+
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    secrets=mdr.Secrets.env(name="default"),
+)
+```
+
+Pass `keys` to mount only selected names from that environment:
+
+```python
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    secrets=mdr.Secrets.env(name="production", keys=["HF_TOKEN", "AWS_REGION"]),
+)
+```
+
+Use `Secrets.dotenv(...)` to load a local `.env`-style file and send it as explicit dictionary secrets:
+
+```python
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    secrets=mdr.Secrets.dotenv(".env"),
+)
+```
+
+`secrets` can also be a list. Sources are applied in order, and later sources override earlier ones:
+
+```python
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    secrets=[
+        mdr.Secrets.env(name="default"),
+        mdr.Secrets.dotenv(".env.local"),
+        {"HF_TOKEN": None},
+    ],
+)
+```
+
+Explicit dictionary and `.env` values are redacted from captured pipeline code. Workspace secret environment values are resolved by the cloud service, so the submitting process does not see those secret values.
 
 ### Continuing cloud work
 
