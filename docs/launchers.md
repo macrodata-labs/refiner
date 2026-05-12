@@ -102,7 +102,7 @@ Current SDK GPU literals are:
 
 ### Cloud secrets
 
-Pass `secrets` when a cloud job needs API keys or credentials. The previous mapping form still works:
+Pass `secrets` when a cloud job needs API keys or credentials. A dictionary sends explicit secret values:
 
 ```python
 result = pipeline.launch_cloud(
