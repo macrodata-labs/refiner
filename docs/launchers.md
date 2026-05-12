@@ -102,21 +102,7 @@ Current SDK GPU literals are:
 
 ### Cloud secrets
 
-Pass `secrets` when a cloud job needs API keys or credentials. A dictionary sends explicit secret values:
-
-```python
-result = pipeline.launch_cloud(
-    name="cloud-job",
-    secrets={"HF_TOKEN": None, "OPENAI_API_KEY": "sk-..."},
-)
-```
-
-Mapping values are handled as follows:
-
-- `None` reads the value from the submitting process environment
-- any other value is converted to a string and sent directly
-
-Use `Secrets.env(...)` to mount secrets already saved in a Macrodata workspace secret environment:
+Pass `secrets` when a cloud job needs API keys or credentials. Use `Secrets.env(...)` to mount secrets saved in a Macrodata workspace secret environment:
 
 ```python
 import refiner as mdr
@@ -127,6 +113,8 @@ result = pipeline.launch_cloud(
 )
 ```
 
+Workspace secrets can be created in [workspace settings](https://macrodata.co/settings) or with the [`macrodata secrets` CLI](cli.md#workspace-secrets).
+
 Pass `keys` to mount only selected names from that environment:
 
 ```python
@@ -136,7 +124,7 @@ result = pipeline.launch_cloud(
 )
 ```
 
-Use `Secrets.dotenv(...)` to load a local `.env`-style file and send it as explicit dictionary secrets:
+Use `Secrets.dotenv(...)` to load a local `.env`-style file as explicit secrets:
 
 ```python
 result = pipeline.launch_cloud(
@@ -144,6 +132,17 @@ result = pipeline.launch_cloud(
     secrets=mdr.Secrets.dotenv(".env"),
 )
 ```
+
+Use `Secrets.dict(...)` to pass explicit values from code:
+
+```python
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    secrets=mdr.Secrets.dict({"HF_TOKEN": None}),
+)
+```
+
+`None` reads the value from the submitting process environment. Any other value is converted to a string and sent directly.
 
 `secrets` can also be a list. Sources are applied in order, and later sources override earlier ones:
 
@@ -153,12 +152,12 @@ result = pipeline.launch_cloud(
     secrets=[
         mdr.Secrets.env(name="default"),
         mdr.Secrets.dotenv(".env.local"),
-        {"HF_TOKEN": None},
+        mdr.Secrets.dict({"HF_TOKEN": None}),
     ],
 )
 ```
 
-Explicit dictionary and `.env` values are redacted from captured pipeline code. Workspace secret environment values are resolved by the cloud service, so the submitting process does not see those secret values.
+Explicit `Secrets.dict(...)` and `Secrets.dotenv(...)` values are redacted from captured pipeline code. Workspace secret environment values are resolved by the cloud service, so the submitting process does not see those secret values.
 
 Use `env` for plain runtime values that should not be treated as secrets:
 
