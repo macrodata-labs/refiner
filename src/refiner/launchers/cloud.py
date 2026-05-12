@@ -180,18 +180,9 @@ class CloudLauncher(BaseLauncher):
                 "Launching jobs in the Macrodata cloud requires Macrodata "
                 "authentication. Run `macrodata login` or set MACRODATA_API_KEY."
             ) from err
-        resolved_secret_sources, secret_values, explicit_secret_keys = (
-            resolve_secret_sources(self.secrets)
-        )
+        resolved_secret_sources, secret_values = resolve_secret_sources(self.secrets)
         resolved_env = resolve_env_mapping(self.env) if self.env else None
         secret_sources = list(resolved_secret_sources or [])
-        if resolved_env and (
-            overlapping_env_keys := explicit_secret_keys & resolved_env.keys()
-        ):
-            raise SystemExit(
-                "cloud env keys must not overlap with secrets: "
-                + ", ".join(sorted(overlapping_env_keys))
-            )
         if resolved_env:
             secret_sources.append(resolved_env)
         stages = self._resolved_stages()

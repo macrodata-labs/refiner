@@ -305,30 +305,45 @@ def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> No
     assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
 
 
-def test_pipeline_launch_cloud_rejects_overlapping_secret_and_env_keys(
+def test_pipeline_launch_cloud_allows_env_to_override_secret_keys(
     monkeypatch,
 ) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
 
-    with pytest.raises(SystemExit, match="API_KEY"):
-        read_jsonl("input.jsonl").launch_cloud(
-            name="demo cloud",
-            secrets={"API_KEY": "secret"},
-            env={"API_KEY": "env"},
-        )
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        secrets={"API_KEY": "secret"},
+        env={"API_KEY": "env"},
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.secrets == [{"API_KEY": "secret"}, {"API_KEY": "env"}]
 
 
-def test_pipeline_launch_cloud_rejects_overlapping_env_secret_key_and_env(
+def test_pipeline_launch_cloud_allows_env_to_override_env_secret_keys(
     monkeypatch,
 ) -> None:
-    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
 
-    with pytest.raises(SystemExit, match="API_KEY"):
-        read_jsonl("input.jsonl").launch_cloud(
-            name="demo cloud",
-            secrets=Secrets.env(keys=["API_KEY"]),
-            env={"API_KEY": "env"},
-        )
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        secrets=Secrets.env(keys=["API_KEY"]),
+        env={"API_KEY": "env"},
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.secrets == [
+        {"__type__": "__envkeys__", "envname": "default", "keys": ["API_KEY"]},
+        {"API_KEY": "env"},
+    ]
 
 
 def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(

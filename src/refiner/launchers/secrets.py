@@ -64,17 +64,15 @@ def normalize_secret_sources(secrets: SecretInput | None) -> tuple[Secrets, ...]
 
 def resolve_secret_sources(
     sources: Sequence[Secrets],
-) -> tuple[list[SecretPayload] | None, tuple[str, ...], set[str]]:
+) -> tuple[list[SecretPayload] | None, tuple[str, ...]]:
     payloads: list[SecretPayload] = []
     redaction_values: list[str] = []
-    explicit_keys: set[str] = set()
     for source in sources:
         if source._kind == "dict":
             resolved = resolve_env_mapping(source._values or {})
             if resolved:
                 payloads.append(resolved)
                 redaction_values.extend(resolved.values())
-                explicit_keys.update(resolved)
             continue
         payload: SecretPayload = {
             "__type__": "__envkeys__",
@@ -82,9 +80,8 @@ def resolve_secret_sources(
         }
         if source._keys is not None:
             payload["keys"] = list(source._keys)
-            explicit_keys.update(source._keys)
         payloads.append(payload)
-    return payloads or None, tuple(redaction_values), explicit_keys
+    return payloads or None, tuple(redaction_values)
 
 
 def resolve_env_mapping(values: SecretMapping) -> dict[str, str]:
