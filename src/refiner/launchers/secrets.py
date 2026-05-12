@@ -90,15 +90,12 @@ def resolve_secret_sources(
 def resolve_secret_mapping(values: SecretMapping) -> dict[str, str]:
     resolved: dict[str, str] = {}
     for name, value in values.items():
-        if value is None:
-            env_value = os.environ.get(name)
-            if env_value is None:
-                raise SystemExit(
-                    f"cloud env {name!r} was set to None but is not present in the environment. Make sure it is being exported."
-                )
-            resolved[name] = env_value
-            continue
-        resolved[name] = str(value)
+        resolved_value = os.environ.get(name) if value is None else str(value)
+        if resolved_value is None:
+            raise SystemExit(
+                f"cloud env {name!r} was set to None but is not present in the environment. Make sure it is being exported."
+            )
+        resolved[name] = resolved_value
     return resolved
 
 
