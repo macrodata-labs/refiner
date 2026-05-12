@@ -70,7 +70,7 @@ def resolve_secret_sources(
     explicit_keys: set[str] = set()
     for source in sources:
         if source._kind == "dict":
-            resolved = resolve_secret_mapping(source._values or {})
+            resolved = resolve_env_mapping(source._values or {})
             if resolved:
                 payloads.append(resolved)
                 redaction_values.extend(resolved.values())
@@ -87,7 +87,7 @@ def resolve_secret_sources(
     return payloads or None, tuple(redaction_values), explicit_keys
 
 
-def resolve_secret_mapping(values: SecretMapping) -> dict[str, str]:
+def resolve_env_mapping(values: SecretMapping) -> dict[str, str]:
     resolved: dict[str, str] = {}
     for name, value in values.items():
         resolved_value = os.environ.get(name) if value is None else str(value)
@@ -153,4 +153,4 @@ def _strip_inline_comment(value: str) -> str:
     return value
 
 
-__all__ = ["Secrets", "resolve_secret_mapping"]
+__all__ = ["Secrets"]

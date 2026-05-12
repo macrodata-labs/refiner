@@ -23,7 +23,7 @@ from refiner.platform.client import (
     serialize_pipeline_inline,
 )
 from refiner.platform.manifest import refiner_ref_exists_on_remote
-from refiner.launchers.secrets import SecretInput, SecretPayload, resolve_secret_mapping
+from refiner.launchers.secrets import SecretInput, SecretPayload, resolve_env_mapping
 from refiner.launchers.secrets import normalize_secret_sources, resolve_secret_sources
 from refiner.pipeline.resources import GPU
 
@@ -201,7 +201,7 @@ class CloudLauncher(BaseLauncher):
         resolved_secret_sources, secret_values, explicit_secret_keys = (
             resolve_secret_sources(self.secrets)
         )
-        resolved_env = resolve_secret_mapping(self.env) if self.env else None
+        resolved_env = resolve_env_mapping(self.env) if self.env else None
         stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
         plan = self._compiled_plan(stages, secret_values=secret_values)
