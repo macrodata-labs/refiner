@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from refiner.execution.engine import block_num_rows
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
-from refiner.services import ServiceManager
-from refiner.services.discovery import collect_pipeline_services
+from refiner.services import RuntimeServiceSpec, ServiceManager
 from refiner.worker.context import logger, set_active_run_context, set_active_step_index
 from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.metrics.emitter import (
@@ -37,6 +37,7 @@ class Worker:
         worker_name: str | None = None,
         heartbeat_interval_seconds: int = 0,
         runtime_lifecycle: RuntimeLifecycle,
+        runtime_services: Sequence[RuntimeServiceSpec] = (),
         user_metrics_emitter: UserMetricsEmitter | None = None,
     ):
         self.pipeline = pipeline
@@ -46,6 +47,7 @@ class Worker:
         self.worker_name = worker_name
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.runtime_lifecycle = runtime_lifecycle
+        self.runtime_services = tuple(runtime_services)
         self.user_metrics_emitter = (
             NOOP_USER_METRICS_EMITTER
             if user_metrics_emitter is None
@@ -86,7 +88,7 @@ class Worker:
             worker_id=self.worker_id,
             worker_name=self.worker_name,
         )
-        runtime_services = collect_pipeline_services(self.pipeline)
+        runtime_services = self.runtime_services
         sink = self.pipeline.sink or NullSink()
         sink_schema = self.pipeline.output_schema()
         sink.set_input_schema(sink_schema)

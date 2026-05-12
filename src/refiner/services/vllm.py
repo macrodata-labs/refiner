@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
 
@@ -12,40 +12,34 @@ from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
 @dataclass(frozen=True, slots=True)
 class VLLMServiceDefinition:
     model_name_or_path: str
-    model_max_context: int | None = None
-    extra_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    config: Literal["correctness", "throughput"] = "correctness"
     kind: str = "llm"
 
     def __post_init__(self) -> None:
         if not self.model_name_or_path.strip():
             raise ValueError("model_name_or_path must be non-empty")
-        if self.model_max_context is not None and self.model_max_context <= 0:
-            raise ValueError("model_max_context must be > 0 when provided")
-        for key, value in dict(self.extra_kwargs).items():
-            if not str(key).strip():
-                raise ValueError("extra_kwargs keys must be non-empty")
-            if value is None:
-                raise ValueError("extra_kwargs values must be non-null")
+        if self.config not in {"correctness", "throughput"}:
+            raise ValueError("config must be 'correctness' or 'throughput'")
 
     @property
     def name(self) -> str:
         name_source = json.dumps(
-            {
-                "model_name_or_path": self.model_name_or_path,
-                "model_max_context": self.model_max_context,
-                "extra_kwargs": self.extra_kwargs,
-            },
+            self._service_config(),
+            sort_keys=True,
             separators=(",", ":"),
         )
-        return f"vllm-{hashlib.sha1(name_source.encode('utf-8')).hexdigest()[:12]}"
+        return f"vllm-{hashlib.sha256(name_source.encode('utf-8')).hexdigest()[:12]}"
 
     def to_spec(self) -> RuntimeServiceSpec:
-        config: dict[str, Any] = {"model_name_or_path": self.model_name_or_path}
-        if self.model_max_context is not None:
-            config["model_max_context"] = self.model_max_context
-        if self.extra_kwargs:
-            config["extra_kwargs"] = dict(self.extra_kwargs)
-        return RuntimeServiceSpec(name=self.name, kind=self.kind, config=config)
+        return RuntimeServiceSpec(
+            name=self.name, kind=self.kind, config=self._service_config()
+        )
+
+    def _service_config(self) -> dict[str, Any]:
+        return {
+            "model_name_or_path": self.model_name_or_path,
+            "config": self.config,
+        }
 
 
 @dataclass(frozen=True, slots=True)

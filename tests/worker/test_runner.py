@@ -14,6 +14,7 @@ from refiner.pipeline.expressions import col
 from refiner.execution.engine import iter_rows
 from refiner.pipeline.sinks import BaseSink
 from refiner.pipeline.data.shard import FilePart
+from refiner.services import RuntimeServiceSpec
 from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
@@ -249,6 +250,39 @@ def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
     assert runtime_lifecycle.claim_previous[0] is None
     assert runtime_lifecycle.claim_previous[1] == shard1
     assert emitted == [(shard1.id, 3), (shard1.id, 2), (shard2.id, 11)]
+
+
+def test_worker_uses_explicit_runtime_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    shard = _shard("p", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    service = RuntimeServiceSpec(
+        name="vllm-demo",
+        kind="llm",
+        config={"model_name_or_path": "Qwen/Qwen3.5-9B", "config": "correctness"},
+    )
+    started_services: list[tuple[RuntimeServiceSpec, ...]] = []
+
+    class _FakeServiceManager:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        async def start_services(self, services) -> None:
+            started_services.append(tuple(services))
+
+    monkeypatch.setattr("refiner.worker.runner.ServiceManager", _FakeServiceManager)
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader({shard.id: [DictRow({"x": 1})]})),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+        runtime_services=[service],
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert started_services == [(service,)]
 
 
 def test_worker_sends_heartbeat_for_inflight_shards() -> None:

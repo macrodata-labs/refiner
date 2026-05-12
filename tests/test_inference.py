@@ -421,23 +421,19 @@ def test_vllm_provider_includes_model_in_requests(monkeypatch) -> None:
     }
 
 
-def test_vllm_provider_includes_extra_kwargs_in_service_definition() -> None:
+def test_vllm_provider_includes_supported_service_config() -> None:
     provider = VLLMProvider(
         model="Qwen/Qwen2.5-VL-7B-Instruct",
-        model_max_context=32768,
-        extra_kwargs={"limit-mm-per-prompt": "video=1"},
     )
 
     assert provider.to_builtin_args() == {
         "type": "vllm",
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "model_max_context": 32768,
-        "extra_kwargs": {"limit-mm-per-prompt": "video=1"},
+        "config": "correctness",
     }
     assert provider.service_definition().to_spec().config == {
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "model_max_context": 32768,
-        "extra_kwargs": {"limit-mm-per-prompt": "video=1"},
+        "config": "correctness",
     }
 
 

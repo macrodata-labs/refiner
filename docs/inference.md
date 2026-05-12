@@ -49,12 +49,16 @@ Set `OPENAI_API_KEY` in the worker environment before execution. For cloud jobs,
 ### Refiner managed VLLM runtime
 
 Use `VLLMProvider` when launching on Refiner Cloud and you want the platform to start and manage a VLLM server for you.
+Cloud launches include the VLLM runtime service requirements in the submitted
+stage plan and worker payload so the platform can reserve service capacity
+before workers begin processing shards.
 
 ```python
 import refiner as mdr
 
 provider = mdr.inference.VLLMProvider(
     model="google/gemma-4-E4B-it",
+    config="correctness",
 )
 
 async def summarize(row, generate):
@@ -79,14 +83,8 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 )
 ```
 
-Pass extra VLLM server arguments through `extra_kwargs` on the provider:
-
-```python
-provider = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen3.5-9B",
-    extra_kwargs={"limit-mm-per-prompt": '{"video": 1}'},
-)
-```
+Use `config="throughput"` when you want the managed VLLM service to prioritize
+serving throughput over the default correctness-oriented profile.
 
 #### Supported models
 Only the following models are currently supported. If you are missing one, please create an issue:

@@ -43,6 +43,35 @@ def _disable_local_init_api_ping(monkeypatch: pytest.MonkeyPatch, tmp_path) -> N
     monkeypatch.setenv("REFINER_WORKDIR", str(tmp_path))
 
 
+def test_spawn_local_worker_passes_runtime_services_json(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProcess:
+        pass
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return _FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    process = LocalLauncher._spawn_local_worker(
+        pipeline_payload="/tmp/pipeline.cloudpickle",
+        job_id="job-1",
+        stage_index=2,
+        worker_name="worker-a",
+        worker_id="worker-1",
+        rundir="/tmp/run",
+        gpu_ids=("0",),
+        runtime_services_json='[{"name":"vllm-demo"}]',
+    )
+
+    assert isinstance(process, _FakeProcess)
+    cmd = cast(list[str], captured["cmd"])
+    assert cmd[cmd.index("--runtime-services-json") + 1] == '[{"name":"vllm-demo"}]'
+
+
 class _FakeReader(BaseReader):
     def __init__(
         self,

@@ -169,6 +169,34 @@ def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:
     }
 
 
+async def _noop_inference(row, generate):
+    del generate
+    return row
+
+
+def test_compile_pipeline_plan_includes_runtime_services_for_builtin_steps() -> None:
+    pipeline = RefinerPipeline(FakeReader()).map_async(
+        rf.inference.generate(
+            fn=_noop_inference,
+            provider=rf.inference.VLLMProvider(model="Qwen/Qwen3.5-9B"),
+        )
+    )
+
+    stage = compile_pipeline_plan(pipeline)["stages"][0]
+
+    assert stage["runtime_services"] == [
+        {
+            "name": stage["runtime_services"][0]["name"],
+            "kind": "llm",
+            "config": {
+                "model_name_or_path": "Qwen/Qwen3.5-9B",
+                "config": "correctness",
+            },
+        }
+    ]
+    assert stage["runtime_services"][0]["name"].startswith("vllm-")
+
+
 def test_compile_pipeline_plan_includes_lerobot_writer_steps() -> None:
     pipeline = (
         RefinerPipeline(FakeReader())
