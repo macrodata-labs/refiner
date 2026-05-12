@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -62,6 +64,7 @@ import pyarrow as pa
 if TYPE_CHECKING:
     from refiner.launchers.cloud import CloudLaunchResult
     from refiner.launchers.local import LaunchStats
+    from refiner.launchers.secrets import SecretInput
 
 
 class RefinerPipeline:
@@ -413,7 +416,7 @@ class RefinerPipeline:
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
         sync_local_dependencies: bool = True,
-        secrets: Mapping[str, object | None] | None = None,
+        secrets: SecretInput | None = None,
         env: Mapping[str, object | None] | None = None,
         continue_from_job: str | None = None,
         unsafe_continue: bool = False,
@@ -427,8 +430,9 @@ class RefinerPipeline:
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpu: Optional structured GPU request.
             sync_local_dependencies: Sync submitting environment dependencies in cloud image.
-            secrets: Extra environment variables to mount inside the cloud image.
-                `None` values are loaded from the submitting environment.
+            secrets: Secret sources to mount inside the cloud image. A mapping keeps
+                the legacy behavior; `None` values are loaded from the submitting
+                environment. `Secrets.env(...)` references stored workspace secrets.
             env: Extra environment variables to mount inside the cloud image without
                 treating their values as redaction targets. `None` values are loaded
                 from the submitting environment.
@@ -447,7 +451,7 @@ class RefinerPipeline:
             mem_mb_per_worker=mem_mb_per_worker,
             gpu=gpu,
             sync_local_dependencies=sync_local_dependencies,
-            secrets=dict(secrets) if secrets is not None else None,
+            secrets=secrets,
             env=dict(env) if env is not None else None,
             continue_from_job=continue_from_job,
             unsafe_continue=unsafe_continue,
