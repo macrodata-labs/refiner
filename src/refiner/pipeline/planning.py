@@ -26,6 +26,10 @@ from refiner.pipeline.data.datatype import dtype_to_plan
 from refiner.pipeline.resources import GPU
 from refiner.platform.manifest import _redact_captured_text
 from refiner.services import RuntimeServiceSpec
+from refiner.services.discovery import (
+    collect_pipeline_services,
+    runtime_service_specs_to_dicts,
+)
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -507,19 +511,21 @@ def compile_planned_stages(
     *,
     secret_values: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    plan = {
-        "stages": [
-            {
-                "name": stage.name,
-                "index": stage.index,
-                **stage.compute.to_stage_plan_dict(),
-                "steps": _compile_stage_steps(
-                    stage.pipeline, secret_values=secret_values
-                ),
-            }
-            for stage in stages
-        ]
-    }
+    def _stage_payload(stage: PlannedStage) -> dict[str, Any]:
+        payload = {
+            "name": stage.name,
+            "index": stage.index,
+            **stage.compute.to_stage_plan_dict(),
+            "steps": _compile_stage_steps(stage.pipeline, secret_values=secret_values),
+        }
+        runtime_services = collect_pipeline_services(stage.pipeline)
+        if runtime_services:
+            payload["runtime_services"] = runtime_service_specs_to_dicts(
+                runtime_services
+            )
+        return payload
+
+    plan = {"stages": [_stage_payload(stage) for stage in stages]}
     return plan
 
 

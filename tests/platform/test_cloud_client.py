@@ -11,6 +11,7 @@ from refiner.platform.client import (
 )
 from refiner.platform.client import MacrodataApiError
 from refiner.pipeline.resources import GPU
+from refiner.services import RuntimeServiceSpec
 
 
 def _request() -> CloudRunCreateRequest:
@@ -31,6 +32,16 @@ def _request() -> CloudRunCreateRequest:
                     cpus_per_worker=4,
                     mem_mb_per_worker=8192,
                     gpu=GPU(count=2, type="h100", cuda_version="12.4"),
+                ),
+                runtime_services=(
+                    RuntimeServiceSpec(
+                        name="vllm-demo",
+                        kind="llm",
+                        config={
+                            "model_name_or_path": "Qwen/Qwen3.5-9B",
+                            "config": "correctness",
+                        },
+                    ),
                 ),
             )
         ],
@@ -89,6 +100,16 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
                     "cuda_version": "12.4",
                 },
             },
+            "runtime_services": [
+                {
+                    "name": "vllm-demo",
+                    "kind": "llm",
+                    "config": {
+                        "model_name_or_path": "Qwen/Qwen3.5-9B",
+                        "config": "correctness",
+                    },
+                }
+            ],
         }
     ]
     assert json_payload["secrets"] == [{"OPENAI_API_KEY": "test-secret"}]

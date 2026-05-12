@@ -6,6 +6,7 @@ import json
 import cloudpickle
 
 from refiner.pipeline.data.shard import Shard
+from refiner.services.discovery import parse_runtime_service_specs
 from refiner.worker.context import logger
 from refiner.worker.lifecycle import LocalRuntimeLifecycle
 from refiner.worker.metrics.emitter import LocalLogEmitter
@@ -22,6 +23,7 @@ def main() -> int:
     parser.add_argument("--worker-id", type=str, required=True)
     parser.add_argument("--rundir", type=str, required=True)
     parser.add_argument("--gpu-ids", type=str, default="")
+    parser.add_argument("--runtime-services-json", type=str, default="[]")
     args = parser.parse_args()
 
     payload = {
@@ -44,6 +46,10 @@ def main() -> int:
             set_visible_gpu_ids(gpu_ids)
         with open(args.pipeline_payload, "rb") as f:
             pipeline = cloudpickle.load(f)
+        raw_runtime_services = json.loads(args.runtime_services_json)
+        if not isinstance(raw_runtime_services, list):
+            raise ValueError("runtime services payload must be a list")
+        runtime_services = parse_runtime_service_specs(raw_runtime_services)
 
         with open(
             f"{args.rundir}/stage-{args.stage_index}/assignments/worker-{args.worker_id}.json",
@@ -66,6 +72,7 @@ def main() -> int:
             worker_id=args.worker_id,
             worker_name=args.worker_name,
             runtime_lifecycle=runtime_lifecycle,
+            runtime_services=runtime_services,
             user_metrics_emitter=log_emitter,
         ).run()
         payload.update(

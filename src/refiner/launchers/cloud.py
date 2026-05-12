@@ -26,6 +26,7 @@ from refiner.platform.manifest import refiner_ref_exists_on_remote
 from refiner.launchers.secrets import SecretInput, resolve_env_mapping
 from refiner.launchers.secrets import normalize_secret_sources, resolve_secret_sources
 from refiner.pipeline.resources import GPU
+from refiner.services.discovery import collect_pipeline_services
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
@@ -198,6 +199,7 @@ class CloudLauncher(BaseLauncher):
                         mem_mb_per_worker=stage.compute.memory_mb_per_worker,
                         gpu=stage.compute.gpu,
                     ),
+                    runtime_services=collect_pipeline_services(stage.pipeline),
                 )
                 for stage in stages
             ],

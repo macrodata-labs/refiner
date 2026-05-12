@@ -67,7 +67,23 @@ def collect_pipeline_services(
     return tuple(services_by_key.values())
 
 
-__all__ = ["collect_pipeline_services"]
+def runtime_service_specs_to_dicts(
+    services: Sequence[RuntimeServiceSpec],
+) -> list[dict[str, Any]]:
+    return [service.to_dict() for service in services]
+
+
+def parse_runtime_service_specs(
+    services: Sequence[Mapping[str, Any]],
+) -> tuple[RuntimeServiceSpec, ...]:
+    return tuple(RuntimeServiceSpec.from_dict(service) for service in services)
+
+
+__all__ = [
+    "collect_pipeline_services",
+    "parse_runtime_service_specs",
+    "runtime_service_specs_to_dicts",
+]
 
 
 def _service_config_key(config: Mapping[str, Any]) -> str:

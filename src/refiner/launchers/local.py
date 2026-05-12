@@ -25,6 +25,10 @@ from refiner.pipeline.planning import PlannedStage
 from refiner.pipeline.resources import GPU
 from refiner.platform.auth import MacrodataCredentialsError, current_api_key
 from refiner.platform.client.api import MacrodataClient, request_json
+from refiner.services.discovery import (
+    collect_pipeline_services,
+    runtime_service_specs_to_dicts,
+)
 from refiner.worker.context import logger
 from refiner.worker.lifecycle import read_finalized_workers
 from refiner.worker.resources.cpu import available_cpu_ids
@@ -140,6 +144,7 @@ class LocalLauncher(BaseLauncher):
         worker_id: str,
         rundir: str,
         gpu_ids: tuple[str, ...],
+        runtime_services_json: str,
     ) -> subprocess.Popen[str]:
         cmd = [
             sys.executable,
@@ -157,6 +162,8 @@ class LocalLauncher(BaseLauncher):
             worker_id,
             "--rundir",
             rundir,
+            "--runtime-services-json",
+            runtime_services_json,
         ]
         if gpu_ids:
             cmd.extend(["--gpu-ids", ",".join(gpu_ids)])
@@ -322,6 +329,10 @@ class LocalLauncher(BaseLauncher):
         stage_run_dir.mkdir(parents=True, exist_ok=True)
         payload_path = stage_run_dir / "pipeline.cloudpickle"
         payload_path.write_bytes(cloudpickle.dumps(stage.pipeline))
+        runtime_services_json = json.dumps(
+            runtime_service_specs_to_dicts(collect_pipeline_services(stage.pipeline)),
+            separators=(",", ":"),
+        )
         shard_assignments = self._assign_shards(
             shards,
             num_workers=stage_workers,
@@ -353,6 +364,7 @@ class LocalLauncher(BaseLauncher):
                         worker_id=worker_id,
                         rundir=self.rundir,
                         gpu_ids=tuple(gpu_sets[rank]),
+                        runtime_services_json=runtime_services_json,
                     ),
                 )
             )

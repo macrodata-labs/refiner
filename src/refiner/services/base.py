@@ -11,6 +11,19 @@ class RuntimeServiceSpec:
     kind: str
     config: Mapping[str, Any]
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> RuntimeServiceSpec:
+        name = payload.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("runtime service name must be non-empty")
+        kind = payload.get("kind")
+        if not isinstance(kind, str) or not kind.strip():
+            raise ValueError(f"runtime service {name!r} kind must be non-empty")
+        config = payload.get("config")
+        if not isinstance(config, Mapping):
+            raise ValueError(f"runtime service {name!r} config must be an object")
+        return cls(name=name.strip(), kind=kind.strip(), config=dict(config))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,

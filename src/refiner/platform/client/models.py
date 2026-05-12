@@ -7,6 +7,7 @@ import msgspec
 
 from refiner.pipeline.resources import GPU
 from refiner.pipeline.data.shard import Shard
+from refiner.services.base import RuntimeServiceSpec
 from refiner.worker.lifecycle import FinalizedShardWorker
 
 
@@ -159,6 +160,7 @@ class StagePayload:
     stage_index: int
     pipeline_payload: CloudPipelinePayload
     runtime: CloudRuntimeConfig
+    runtime_services: tuple[RuntimeServiceSpec, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -166,6 +168,10 @@ class StagePayload:
             "pipeline_payload": self.pipeline_payload.to_dict(),
             "runtime": self.runtime.to_dict(),
         }
+        if self.runtime_services:
+            payload["runtime_services"] = [
+                service.to_dict() for service in self.runtime_services
+            ]
         return payload
 
 

@@ -4,6 +4,7 @@ import pytest
 from collections.abc import Callable
 from typing import cast
 
+import refiner as mdr
 from refiner.pipeline import read_jsonl
 from refiner.pipeline.resources import GPU
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
@@ -15,6 +16,11 @@ from refiner.platform.client import (
 )
 from refiner.platform.manifest import _redact_captured_text
 from refiner.launchers.secrets import Secrets
+
+
+async def _noop_inference(row, generate):
+    del generate
+    return row
 
 
 def _stub_cloud_submit(
@@ -129,6 +135,34 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
         "script": {"text": "print('hi')"},
     }
+
+
+def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    pipeline = read_jsonl("input.jsonl").map_async(
+        mdr.inference.generate(
+            fn=_noop_inference,
+            provider=mdr.inference.VLLMProvider(model="Qwen/Qwen3.5-9B"),
+        )
+    )
+    pipeline.launch_cloud(name="demo cloud")
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    expected_service = {
+        "name": request.plan["stages"][0]["runtime_services"][0]["name"],
+        "kind": "llm",
+        "config": {
+            "model_name_or_path": "Qwen/Qwen3.5-9B",
+            "config": "correctness",
+        },
+    }
+    assert request.plan["stages"][0]["runtime_services"] == [expected_service]
+    assert request.stage_payloads[0].runtime_services[0].to_dict() == expected_service
 
 
 def test_pipeline_launch_cloud_accepts_structured_gpu(monkeypatch) -> None:
