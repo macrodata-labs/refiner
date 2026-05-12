@@ -89,7 +89,7 @@ def resolve_env_mapping(values: SecretMapping) -> dict[str, str]:
     for name, value in values.items():
         resolved_value = os.environ.get(name) if value is None else str(value)
         if resolved_value is None:
-            raise SystemExit(
+            raise ValueError(
                 f"cloud env {name!r} was set to None but is not present in the environment. Make sure it is being exported."
             )
         resolved[name] = resolved_value

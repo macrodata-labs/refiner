@@ -408,10 +408,10 @@ def test_pipeline_launch_cloud_requires_missing_env_secret(monkeypatch) -> None:
 
     try:
         pipeline.launch_cloud(name="demo cloud", secrets={"OPENAI_API_KEY": None})
-    except SystemExit as err:
+    except ValueError as err:
         assert "OPENAI_API_KEY" in str(err)
     else:  # pragma: no cover
-        raise AssertionError("expected SystemExit")
+        raise AssertionError("expected ValueError")
 
 
 def test_pipeline_launch_cloud_requires_platform_auth_before_secret_resolution(
