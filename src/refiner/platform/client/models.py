@@ -177,6 +177,7 @@ class CloudRunCreateRequest:
     manifest: dict[str, Any] | None = None
     sync_local_dependencies: bool = True
     secrets: list[dict[str, Any]] | None = None
+    env: dict[str, str] | None = None
     continue_from_job: str | None = None
     unsafe_continue: bool = False
 
@@ -193,6 +194,8 @@ class CloudRunCreateRequest:
             payload["manifest"] = self.manifest
         if self.secrets:
             payload["secrets"] = self.secrets
+        if self.env:
+            payload["env"] = self.env
         if self.continue_from_job is not None:
             payload["continue_from_job"] = self.continue_from_job
         if self.unsafe_continue:

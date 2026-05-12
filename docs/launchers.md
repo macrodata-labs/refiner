@@ -160,6 +160,18 @@ result = pipeline.launch_cloud(
 
 Explicit dictionary and `.env` values are redacted from captured pipeline code. Workspace secret environment values are resolved by the cloud service, so the submitting process does not see those secret values.
 
+Use `env` for plain runtime values that should not be treated as secrets:
+
+```python
+result = pipeline.launch_cloud(
+    name="cloud-job",
+    secrets=mdr.Secrets.env(name="default"),
+    env={"MODEL_NAME": "gpt-5"},
+)
+```
+
+If `env` uses the same key as a secret source, the plain `env` value is applied last in the runtime environment. Plain `env` values are not redacted from captured pipeline code.
+
 ### Continuing cloud work
 
 Fresh cloud launch remains the default. Continue only triggers when you pass `continue_from_job`.

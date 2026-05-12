@@ -299,9 +299,9 @@ def test_pipeline_launch_cloud_sends_env_without_redacting_it(monkeypatch) -> No
     assert request.secrets == [
         {
             "OPENAI_API_KEY": "super-secret-value",
-        },
-        {"MODEL_NAME": "plain-env-value"},
+        }
     ]
+    assert request.env == {"MODEL_NAME": "plain-env-value"}
     assert "REDACTED_SECRET" in request.plan["stages"][0]["steps"][1]["args"]["fn"]
 
 
@@ -321,7 +321,8 @@ def test_pipeline_launch_cloud_allows_env_to_override_secret_keys(
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
-    assert request.secrets == [{"API_KEY": "secret"}, {"API_KEY": "env"}]
+    assert request.secrets == [{"API_KEY": "secret"}]
+    assert request.env == {"API_KEY": "env"}
 
 
 def test_pipeline_launch_cloud_allows_env_to_override_env_secret_keys(
@@ -341,9 +342,9 @@ def test_pipeline_launch_cloud_allows_env_to_override_env_secret_keys(
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.secrets == [
-        {"__type__": "__envkeys__", "envname": "default", "keys": ["API_KEY"]},
-        {"API_KEY": "env"},
+        {"__type__": "__envkeys__", "envname": "default", "keys": ["API_KEY"]}
     ]
+    assert request.env == {"API_KEY": "env"}
 
 
 def test_pipeline_launch_cloud_redacts_captured_strings_in_outgoing_request(

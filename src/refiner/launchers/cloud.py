@@ -182,9 +182,6 @@ class CloudLauncher(BaseLauncher):
             ) from err
         resolved_secret_sources, secret_values = resolve_secret_sources(self.secrets)
         resolved_env = resolve_env_mapping(self.env) if self.env else None
-        secret_sources = list(resolved_secret_sources or [])
-        if resolved_env:
-            secret_sources.append(resolved_env)
         stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
         plan = self._compiled_plan(stages, secret_values=secret_values)
@@ -206,7 +203,8 @@ class CloudLauncher(BaseLauncher):
             ],
             manifest=manifest,
             sync_local_dependencies=self.sync_local_dependencies,
-            secrets=secret_sources or None,
+            secrets=resolved_secret_sources,
+            env=resolved_env,
             continue_from_job=self.continue_from_job,
             unsafe_continue=self.unsafe_continue,
         )
