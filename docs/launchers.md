@@ -113,7 +113,7 @@ result = pipeline.launch_cloud(
 )
 ```
 
-Workspace secrets can be created in [workspace settings](https://macrodata.co/settings) under the Secrets tab, or from the CLI with `macrodata secrets set`; see [Workspace Secrets](cli.md#workspace-secrets).
+Workspace secrets can be created in [workspace settings](https://macrodata.co/settings/secrets), or from the CLI with `macrodata secrets set`; see [Workspace Secrets](cli.md#workspace-secrets).
 
 Pass `keys` to mount only selected names from that environment:
 
