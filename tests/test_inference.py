@@ -318,6 +318,37 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
     assert seen == {"calls": 2, "sleeps": 1}
 
 
+def test_openai_endpoint_warns_on_null_chat_content(caplog) -> None:
+    raw_response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning": "Thinking Process: still reasoning",
+                },
+                "finish_reason": "length",
+            }
+        ],
+        "usage": {"completion_tokens": 64},
+    }
+    response = openai_module._parse_inference_response(
+        raw_response,
+        use_chat=True,
+    )
+
+    assert response.text == ""
+    assert response.finish_reason == "length"
+    assert response.usage == {"completion_tokens": 64}
+    assert response.raw == raw_response
+    message = response.raw["choices"][0]["message"]
+    assert message["reasoning"] == "Thinking Process: still reasoning"
+    assert (
+        "chat completion response had null message.content; returning empty text"
+        in caplog.text
+    )
+
+
 def test_openai_endpoint_does_not_retry_on_http_503(monkeypatch) -> None:
     seen: dict[str, int] = {"calls": 0, "sleeps": 0}
 
