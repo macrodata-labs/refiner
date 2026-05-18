@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import random
 from collections.abc import Mapping, Sequence
@@ -13,6 +14,7 @@ _OPENAI_ENDPOINT_TIMEOUT_SECONDS = 600.0
 _OPENAI_ENDPOINT_MAX_RETRIES = 6
 _OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS = 5.0
 _OPENAI_ENDPOINT_RETRY_JITTER_FRACTION = 0.1
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +23,10 @@ class InferenceResponse:
     finish_reason: str | None
     usage: Mapping[str, Any]
     response: Mapping[str, Any]
+
+    @property
+    def raw(self) -> Mapping[str, Any]:
+        return self.response
 
 
 @dataclass(slots=True)
@@ -111,6 +117,15 @@ def _parse_inference_response(
         content = message.get("content")
         if isinstance(content, str):
             text = content
+        elif content is None:
+            logger.warning(
+                "chat completion response had null message.content; returning empty text",
+                extra={
+                    "finish_reason": choice.get("finish_reason"),
+                    "has_reasoning": isinstance(message.get("reasoning"), str),
+                },
+            )
+            text = ""
         elif isinstance(content, Sequence):
             parts: list[str] = []
             for item in content:
