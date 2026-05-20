@@ -29,19 +29,6 @@ class InferenceResponse:
         return self.response
 
 
-@dataclass(frozen=True, slots=True)
-class PoolingResponse:
-    response: Mapping[str, Any]
-
-    @property
-    def raw(self) -> Mapping[str, Any]:
-        return self.response
-
-    @property
-    def data(self) -> Any:
-        return self.response.get("data")
-
-
 @dataclass(slots=True)
 class _OpenAIEndpointClient:
     base_url: str
@@ -87,7 +74,7 @@ class _OpenAIEndpointClient:
             use_chat=use_chat,
         )
 
-    async def pooling(self, payload: Mapping[str, Any]) -> PoolingResponse:
+    async def pooling(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         response_json = await self._post_json(
             "pooling",
             payload,
@@ -95,7 +82,7 @@ class _OpenAIEndpointClient:
         )
         if not isinstance(response_json, Mapping):
             raise RuntimeError("pooling response must be a JSON object")
-        return PoolingResponse(response=response_json)
+        return response_json
 
     async def _post_json(
         self,
@@ -211,4 +198,4 @@ def _retry_delay_seconds(attempt: int) -> float:
     return base_delay * (1.0 + jitter)
 
 
-__all__ = ["InferenceResponse", "PoolingResponse"]
+__all__ = ["InferenceResponse"]

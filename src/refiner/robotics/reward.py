@@ -80,7 +80,7 @@ def reward_score(
                 "messages": [{"role": "user", "content": content}],
             }
         )
-        token_logits = _extract_progress_token_logits(response.raw, len(frames))
+        token_logits = _extract_progress_token_logits(response, len(frames))
         progress = [expected_progress(row) for row in token_logits]
         success = [sigmoid(float(row[10])) for row in token_logits]
         return row.update(
@@ -127,12 +127,24 @@ def softmax(values: Sequence[float]) -> list[float]:
 
 
 def _extract_token_logits(response: Mapping[str, Any]) -> list[list[float]]:
-    logits = _find_token_logits(response.get("data", response))
-    if logits is None:
+    data = response.get("data")
+    if isinstance(data, Sequence) and data and isinstance(data[0], Mapping):
+        data = data[0].get("data")
+    if (
+        not isinstance(data, Sequence)
+        or isinstance(data, (str, bytes, bytearray))
+        or not data
+    ):
         raise ValueError("Robometer pooling response did not contain token logits")
-    if any(len(row) < 13 for row in logits):
+    logits = [list(row) for row in data]
+    if any(
+        not isinstance(row, Sequence)
+        or isinstance(row, (str, bytes, bytearray))
+        or len(row) < 13
+        for row in logits
+    ):
         raise ValueError("Robometer token rows must contain at least 13 logits")
-    return logits
+    return [[float(item) for item in row] for row in logits]
 
 
 def _extract_progress_token_logits(
@@ -145,35 +157,6 @@ def _extract_progress_token_logits(
             "sampled frames"
         )
     return logits[-expected_count:]
-
-
-def _find_token_logits(value: Any) -> list[list[float]] | None:
-    if _looks_like_logits(value):
-        return [[float(item) for item in row] for row in value]
-    if isinstance(value, Mapping):
-        for item in value.values():
-            if (logits := _find_token_logits(item)) is not None:
-                return logits
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        for item in value:
-            if (logits := _find_token_logits(item)) is not None:
-                return logits
-    return None
-
-
-def _looks_like_logits(value: Any) -> bool:
-    return (
-        isinstance(value, Sequence)
-        and not isinstance(value, (str, bytes, bytearray))
-        and bool(value)
-        and all(
-            isinstance(row, Sequence)
-            and not isinstance(row, (str, bytes, bytearray))
-            and len(row) >= 13
-            and all(isinstance(item, int | float) for item in row)
-            for row in value
-        )
-    )
 
 
 def _resolve_video_key(row: LeRobotRow, video_key: str | None) -> str:

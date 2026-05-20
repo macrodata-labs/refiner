@@ -86,38 +86,10 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 Use `config="throughput"` when you want the managed VLLM service to prioritize
 serving throughput over the default correctness-oriented profile.
 
-### VLLM pooling
-
-Use `mdr.inference.pooling(...)` for VLLM services that expose `/pooling`
-instead of chat or text completions. It returns the raw JSON payload as
-`PoolingResponse`.
-
-```python
-import refiner as mdr
-
-async def score(row, pooling):
-    response = await pooling(
-        {
-            "task": "token_classify",
-            "messages": [{"role": "user", "content": row["content"]}],
-        }
-    )
-    return {"pooling_response": response.raw}
-
-
-pipeline = mdr.read_jsonl("input.jsonl").map_async(
-    mdr.inference.pooling(
-        fn=score,
-        provider=mdr.inference.VLLMProvider(model="aliangdw/Robometer-4B"),
-    ),
-)
-```
-
 #### Supported models
 Only the following models are currently supported. If you are missing one, please create an issue:
 - `Qwen/Qwen3.5-9B`
 - `google/gemma-4-E4B-it`
-- `aliangdw/Robometer-4B`
 
 
 ## Examples

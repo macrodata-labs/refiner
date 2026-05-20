@@ -12,7 +12,6 @@ import refiner as mdr
 from refiner.inference import (
     InferenceResponse,
     OpenAIEndpointProvider,
-    PoolingResponse,
     VLLMProvider,
 )
 from refiner.services import VLLMRuntimeServiceBinding
@@ -22,7 +21,7 @@ from refiner.worker.metrics.emitter import UserMetricsEmitter
 
 from refiner.inference import client as openai_module
 
-runtime_module = importlib.import_module("refiner.inference._runtime")
+generate_module = importlib.import_module("refiner.inference.generate")
 
 
 class _MetricRecordingEmitter(UserMetricsEmitter):
@@ -427,7 +426,7 @@ def test_vllm_provider_includes_model_in_requests(monkeypatch) -> None:
 
     monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
     monkeypatch.setattr(
-        runtime_module, "get_active_service_manager", lambda: _FakeServiceManager()
+        generate_module, "get_active_service_manager", lambda: _FakeServiceManager()
     )
 
     provider = VLLMProvider(model="meta-llama/Llama-3.1-8B-Instruct")
@@ -466,97 +465,6 @@ def test_vllm_provider_includes_supported_service_config() -> None:
     assert provider.service_definition().to_spec().config == {
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
         "config": "correctness",
-    }
-
-
-def test_openai_endpoint_pooling_posts_to_pooling_endpoint(monkeypatch) -> None:
-    seen: dict[str, object] = {}
-
-    class _FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> Mapping[str, object]:
-            return {"data": [{"data": [[0.0] * 13]}]}
-
-    class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            seen["base_url"] = str(base_url)
-            seen["headers"] = dict(headers)
-            seen["timeout"] = timeout
-
-        async def post(self, path, *, json):
-            seen["path"] = path
-            seen["payload"] = dict(json)
-            return _FakeResponse()
-
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
-
-    response = asyncio.run(
-        openai_module._OpenAIEndpointClient(
-            base_url="https://api.example.com/v1",
-        ).pooling(
-            {
-                "model": "pooling-model",
-                "task": "token_classify",
-            }
-        )
-    )
-
-    assert response.raw == {"data": [{"data": [[0.0] * 13]}]}
-    assert response.data == [{"data": [[0.0] * 13]}]
-    assert seen["base_url"] == "https://api.example.com"
-    assert seen["path"] == "pooling"
-    assert seen["payload"] == {
-        "model": "pooling-model",
-        "task": "token_classify",
-    }
-
-
-def test_inference_pooling_uses_vllm_runtime_service(monkeypatch) -> None:
-    seen: dict[str, object] = {}
-    provider = VLLMProvider(model="aliangdw/Robometer-4B", config="correctness")
-    service_name = provider.service_definition().name
-
-    async def _fake_pooling(self, payload):
-        seen["payload"] = dict(payload)
-        return PoolingResponse(response={"data": [{"data": [[0.0] * 13]}]})
-
-    class _FakeServiceManager:
-        async def get(self, name: str):
-            seen["service_name"] = name
-            return VLLMRuntimeServiceBinding(
-                name=service_name,
-                kind="llm",
-                endpoint="http://127.0.0.1:8000",
-                api_key="service-secret",
-            )
-
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "pooling", _fake_pooling)
-    monkeypatch.setattr(
-        runtime_module, "get_active_service_manager", lambda: _FakeServiceManager()
-    )
-
-    async def _pooling_fn(row, pooling):
-        del row
-        response = await pooling({"task": "token_classify"})
-        return {"raw": response.raw}
-
-    infer = mdr.inference.pooling(
-        fn=_pooling_fn,
-        provider=provider,
-    )
-
-    async def _invoke() -> object:
-        return await infer(DictRow({"prompt": "hi"}))
-
-    result = asyncio.run(_invoke())
-
-    assert result == {"raw": {"data": [{"data": [[0.0] * 13]}]}}
-    assert seen["service_name"] == service_name
-    assert seen["payload"] == {
-        "model": "aliangdw/Robometer-4B",
-        "task": "token_classify",
     }
 
 
