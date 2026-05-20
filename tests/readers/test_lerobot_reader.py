@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 from typing import cast
 
+import refiner as mdr
 from refiner.video import VideoFile
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
@@ -188,6 +189,50 @@ def test_lerobot_reader_exposes_episode_shard_planning_knobs(tmp_path: Path) -> 
     shards = reader.list_shards()
 
     assert len(shards) == 2
+
+
+def test_lerobot_vectorized_filter_realigns_side_data(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    rows = (
+        mdr.read_lerobot(str(root)).filter(mdr.col("episode_index") == 1).materialize()
+    )
+
+    assert len(rows) == 1
+    row = cast(LeRobotRow, rows[0])
+    assert int(row["episode_index"]) == 1
+    frame_rows = row["frames"].to_rows()
+    assert [int(frame["episode_index"]) for frame in frame_rows] == [1, 1]
+    assert [int(frame["index"]) for frame in frame_rows] == [2, 3]
+
+
+def test_lerobot_row_preserving_vectorized_ops_keep_side_data(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    rows = mdr.read_lerobot(str(root)).select("episode_index").materialize()
+
+    assert [int(row["episode_index"]) for row in rows] == [0, 1]
+    frame_rows = [cast(LeRobotRow, row)["frames"].to_rows() for row in rows]
+    assert int(frame_rows[0][0]["episode_index"]) == 0
+    assert int(frame_rows[1][0]["episode_index"]) == 1
+
+
+def test_lerobot_map_table_can_reorder_rows_with_lineage(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    rows = (
+        mdr.read_lerobot(str(root))
+        .map_table(lambda table: table.sort_by([("episode_index", "descending")]))
+        .materialize()
+    )
+
+    assert [int(row["episode_index"]) for row in rows] == [1, 0]
+    frame_rows = [cast(LeRobotRow, row)["frames"].to_rows() for row in rows]
+    assert int(frame_rows[0][0]["episode_index"]) == 1
+    assert int(frame_rows[1][0]["episode_index"]) == 0
 
 
 def test_lerobot_reader_describe_uses_dataset_roots(tmp_path: Path) -> None:

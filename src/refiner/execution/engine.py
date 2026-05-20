@@ -13,6 +13,7 @@ from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.steps import (
     CastStep,
     DropStep,
+    FilterExprStep,
     FnAsyncRowStep,
     FnBatchStep,
     FnFlatMapStep,
@@ -300,11 +301,26 @@ def _execute_vector_segment(
     pending_rows = RowBuffer()
     current_chunk_rows = max(1, int(vectorized_chunk_rows))
     estimated_row_bytes: float | None = None
+    segment_changes_rows = any(
+        isinstance(op, (FilterExprStep, FnTableStep)) for op in ops
+    )
 
     def _run_block(block: Tabular) -> Tabular:
-        return block.with_table(
-            apply_vectorized_ops(block.table, ops, on_shard_delta=on_shard_delta)
+        return_row_indices = block.needs_row_indices and segment_changes_rows
+        if not return_row_indices:
+            table = apply_vectorized_ops(
+                block.table,
+                ops,
+                on_shard_delta=on_shard_delta,
+            )
+            return block.with_table(table)
+        table, row_indices = apply_vectorized_ops(
+            block.table,
+            ops,
+            on_shard_delta=on_shard_delta,
+            return_row_indices=True,
         )
+        return block.with_table(table, row_indices=row_indices)
 
     def _chunk_rows_for_budget() -> int:
         if (
@@ -392,7 +408,14 @@ def _execute_vector_segment(
                 )
                 split_rows = min(chunk_rows - 1, max(1, scaled_rows))
                 for start in range(0, chunk_rows, split_rows):
-                    queue.append(chunk.with_table(chunk.table.slice(start, split_rows)))
+                    queue.append(
+                        chunk.with_table(
+                            chunk.table.slice(start, split_rows),
+                            row_indices=range(
+                                start, min(start + split_rows, chunk_rows)
+                            ),
+                        )
+                    )
                 current_chunk_rows = min(current_chunk_rows, split_rows)
                 continue
 
@@ -404,10 +427,16 @@ def _execute_vector_segment(
                 split_rows = max(1, chunk_rows // 2)
                 queue.appendleft(
                     chunk.with_table(
-                        chunk.table.slice(split_rows, chunk_rows - split_rows)
+                        chunk.table.slice(split_rows, chunk_rows - split_rows),
+                        row_indices=range(split_rows, chunk_rows),
                     )
                 )
-                queue.appendleft(chunk.with_table(chunk.table.slice(0, split_rows)))
+                queue.appendleft(
+                    chunk.with_table(
+                        chunk.table.slice(0, split_rows),
+                        row_indices=range(0, split_rows),
+                    )
+                )
                 current_chunk_rows = min(current_chunk_rows, split_rows)
                 continue
 

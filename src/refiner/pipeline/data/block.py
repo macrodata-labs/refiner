@@ -84,7 +84,8 @@ def _split_tabular_by_shard_scanned(
             tables_by_shard[shard_id] = block.with_table(data_table)
         else:
             tables_by_shard[shard_id] = block.with_table(
-                data_table.take(pa.array(indices, type=pa.int64()))
+                data_table.take(pa.array(indices, type=pa.int64())),
+                row_indices=indices.tolist(),
             )
     return dict(tables_by_shard), counts
 
@@ -116,11 +117,16 @@ def _split_tabular_by_shard_sorted(
             tables_by_shard[shard_id] = block.with_table(data_table)
         elif np.all(shard_indices[1:] == shard_indices[:-1] + 1):
             tables_by_shard[shard_id] = block.with_table(
-                data_table.slice(int(shard_indices[0]), int(shard_indices.size))
+                data_table.slice(int(shard_indices[0]), int(shard_indices.size)),
+                row_indices=range(
+                    int(shard_indices[0]),
+                    int(shard_indices[0] + shard_indices.size),
+                ),
             )
         else:
             tables_by_shard[shard_id] = block.with_table(
-                data_table.take(pa.array(shard_indices, type=pa.int64()))
+                data_table.take(pa.array(shard_indices, type=pa.int64())),
+                row_indices=shard_indices.tolist(),
             )
         start = end
     return dict(tables_by_shard), counts

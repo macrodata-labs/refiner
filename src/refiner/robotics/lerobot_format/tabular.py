@@ -102,16 +102,39 @@ class LeRobotTabular(Tabular):
     def shard_idx(self) -> int | None:
         return self._tabular.shard_idx
 
-    def with_table(self, table: pa.Table) -> "LeRobotTabular":
-        if table.num_rows != len(self.metadata_by_row):
+    @property
+    def needs_row_indices(self) -> bool:
+        return True
+
+    def with_table(
+        self,
+        table: pa.Table,
+        *,
+        row_indices: Sequence[int] | None = None,
+    ) -> "LeRobotTabular":
+        if row_indices is None:
+            if table.num_rows != len(self.metadata_by_row):
+                raise ValueError(
+                    "LeRobotTabular side data length must match table row count"
+                )
+            metadata_by_row = self.metadata_by_row
+            frames_by_row = self.frames_by_row
+            roots_by_row = self.roots_by_row
+        elif len(row_indices) != table.num_rows:
             raise ValueError(
-                "LeRobotTabular side data length must match table row count"
+                "LeRobotTabular row index length must match table row count"
             )
+        else:
+            metadata_by_row = tuple(
+                self.metadata_by_row[int(idx)] for idx in row_indices
+            )
+            frames_by_row = tuple(self.frames_by_row[int(idx)] for idx in row_indices)
+            roots_by_row = tuple(self.roots_by_row[int(idx)] for idx in row_indices)
         return LeRobotTabular(
             self._tabular.with_table(table),
-            metadata_by_row=self.metadata_by_row,
-            frames_by_row=self.frames_by_row,
-            roots_by_row=self.roots_by_row,
+            metadata_by_row=metadata_by_row,
+            frames_by_row=frames_by_row,
+            roots_by_row=roots_by_row,
         )
 
     def __iter__(self) -> Iterator[Row]:
