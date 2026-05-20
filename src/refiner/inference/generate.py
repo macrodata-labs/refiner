@@ -6,6 +6,7 @@ from typing import Any, TypeAlias
 from refiner.inference._runtime import inference_map
 from refiner.inference.client import InferenceResponse, _OpenAIEndpointClient
 from refiner.inference.providers import OpenAIEndpointProvider, VLLMProvider
+from refiner.inference.rate_limit import AdaptiveRateLimit, RateLimit
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 
@@ -19,7 +20,7 @@ def generate(
     fn: InferenceFn,
     provider: OpenAIEndpointProvider | VLLMProvider,
     default_generation_params: Mapping[str, Any] | None = None,
-    max_concurrent_requests: int = 256,
+    rate_limit: RateLimit | None = None,
 ) -> Callable[[Row], Awaitable[MapResult]]:
     return inference_map(
         name="inference.generate",
@@ -27,7 +28,8 @@ def generate(
         provider=provider,
         defaults=default_generation_params,
         defaults_key="default_generation_params",
-        max_concurrent_requests=max_concurrent_requests,
+        rate_limit=rate_limit or AdaptiveRateLimit(),
+        rate_limit_key="rate_limit",
         call=_generate,
         record=_record_usage,
     )

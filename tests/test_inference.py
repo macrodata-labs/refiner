@@ -10,6 +10,7 @@ import pytest
 
 import refiner as mdr
 from refiner.inference import (
+    GenerationRateLimitError,
     InferenceResponse,
     OpenAIEndpointProvider,
     VLLMProvider,
@@ -389,6 +390,40 @@ def test_openai_endpoint_does_not_retry_on_http_503(monkeypatch) -> None:
         )
 
     assert seen == {"calls": 1, "sleeps": 0}
+
+
+def test_openai_endpoint_raises_rate_limit_with_retry_after(monkeypatch) -> None:
+    request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+    response = httpx.Response(
+        429,
+        request=request,
+        headers={"Retry-After": "2.5"},
+        json={"error": {"message": "Rate limited"}},
+    )
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            del base_url, headers, timeout
+
+        async def post(self, path, *, json):
+            del path, json
+            return response
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+
+    with pytest.raises(GenerationRateLimitError) as error:
+        asyncio.run(
+            openai_module._OpenAIEndpointClient(
+                base_url="https://api.example.com",
+            ).generate(
+                {
+                    "model": "gpt-test",
+                    "messages": [{"role": "user", "content": "hello"}],
+                }
+            )
+        )
+
+    assert error.value.retry_after_seconds == 2.5
 
 
 def test_openai_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
