@@ -68,6 +68,10 @@ class Tabular:
     def schema(self) -> pa.Schema:
         return self.unit.schema
 
+    @property
+    def needs_row_indices(self) -> bool:
+        return False
+
     def column(self, name: str) -> pa.Array | pa.ChunkedArray:
         return self.unit.column(name)
 
@@ -86,7 +90,12 @@ class Tabular:
     def to_rows(self) -> list[Row]:
         return list(self)
 
-    def with_table(self, table: pa.Table) -> "Tabular":
+    def with_table(
+        self,
+        table: pa.Table,
+        *,
+        row_indices: Sequence[int] | None = None,
+    ) -> "Tabular":
         return Tabular(table)
 
 

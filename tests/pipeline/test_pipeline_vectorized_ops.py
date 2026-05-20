@@ -151,18 +151,58 @@ def test_apply_vectorized_op_filter_without_explicit_shard_counts() -> None:
     table = pa.table(
         {SHARD_ID_COLUMN: pa.array(["s1", "s1", "s2"]), "x": pa.array([1, 2, 3])}
     )
-    out, counts = apply_vectorized_op(
+    out, counts, row_indices = apply_vectorized_op(
         table,
         FilterExprStep(predicate=col("x") >= 2, index=1),
     )
 
     assert out.to_pydict()["x"] == [2, 3]
     assert counts == {"s1": 1, "s2": 1}
+    assert row_indices is None
+
+
+def test_apply_vectorized_ops_can_return_filtered_row_indices() -> None:
+    table = pa.table({"x": pa.array([1, 2, 3, 4])})
+
+    out, row_indices = apply_vectorized_ops(
+        table,
+        [FilterExprStep(predicate=col("x").is_in([2, 4]), index=1)],
+        return_row_indices=True,
+    )
+
+    assert out.to_pydict()["x"] == [2, 4]
+    assert row_indices == (1, 3)
+
+
+def test_apply_vectorized_ops_omits_identity_row_indices() -> None:
+    table = pa.table({"x": pa.array([1, 2])})
+
+    out, row_indices = apply_vectorized_ops(
+        table,
+        [FilterExprStep(predicate=col("x") >= 1, index=1)],
+        return_row_indices=True,
+    )
+
+    assert out.to_pydict()["x"] == [1, 2]
+    assert row_indices is None
+
+
+def test_apply_vectorized_ops_keeps_empty_filtered_row_indices() -> None:
+    table = pa.table({"x": pa.array([1, 2])})
+
+    out, row_indices = apply_vectorized_ops(
+        table,
+        [FilterExprStep(predicate=col("x") > 10, index=1)],
+        return_row_indices=True,
+    )
+
+    assert out.to_pydict()["x"] == []
+    assert row_indices == ()
 
 
 def test_apply_vectorized_op_map_table_without_explicit_shard_counts() -> None:
     table = pa.table({SHARD_ID_COLUMN: pa.array(["s1", "s2"]), "x": pa.array([1, 2])})
-    out, counts = apply_vectorized_op(
+    out, counts, row_indices = apply_vectorized_op(
         table,
         FnTableStep(
             fn=lambda current: current.append_column("y", pa.array([10, 20])), index=1
@@ -171,6 +211,40 @@ def test_apply_vectorized_op_map_table_without_explicit_shard_counts() -> None:
 
     assert out.to_pydict()["y"] == [10, 20]
     assert counts == {"s1": 1, "s2": 1}
+    assert row_indices is None
+
+
+def test_apply_vectorized_ops_tracks_map_table_lineage() -> None:
+    table = pa.table({"x": pa.array([1, 2, 3])})
+
+    out, row_indices = apply_vectorized_ops(
+        table,
+        [
+            FnTableStep(
+                fn=lambda current: current.sort_by([("x", "descending")]), index=1
+            )
+        ],
+        return_row_indices=True,
+    )
+
+    assert out.to_pydict()["x"] == [3, 2, 1]
+    assert row_indices == (2, 1, 0)
+
+
+def test_apply_vectorized_ops_requires_map_table_lineage_when_tracking() -> None:
+    table = pa.table({"x": pa.array([1, 2])})
+
+    with pytest.raises(ValueError, match="must preserve __refiner_row_index"):
+        apply_vectorized_ops(
+            table,
+            [
+                FnTableStep(
+                    fn=lambda current: current.drop_columns(["__refiner_row_index"]),
+                    index=1,
+                )
+            ],
+            return_row_indices=True,
+        )
 
 
 def test_map_table_does_not_fall_back_to_row_execution(monkeypatch) -> None:
