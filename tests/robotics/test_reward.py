@@ -86,13 +86,11 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
         "model_name_or_path": "aliangdw/Robometer-4B",
         "config": "correctness",
     }
-    assert result["robometer_progress"] == pytest.approx(
-        [3.0 / 9.0, 8.997 / 9.0], abs=0.001
-    )
+    assert "robometer_progress" not in result
+    assert result["reward_score"] == pytest.approx([3.0 / 9.0, 8.997 / 9.0], abs=0.001)
     assert result["robometer_success"] == pytest.approx(
         [0.5, 1.0 / (1.0 + math.exp(-10.0))]
     )
-    assert result["reward_score"] == pytest.approx(result["robometer_progress"])
     assert seen["sample"] == {
         "episode_index": 7,
         "video_key": "observation.images.main",

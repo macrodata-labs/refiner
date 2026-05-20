@@ -30,7 +30,6 @@ def reward_score(
     task: TaskSource | None = None,
     max_frames: int = 8,
     output_column: str = "reward_score",
-    progress_column: str = "robometer_progress",
     success_column: str = "robometer_success",
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
@@ -42,8 +41,6 @@ def reward_score(
         raise ValueError("max_frames must be > 0")
     if not output_column.strip():
         raise ValueError("output_column must be non-empty")
-    if not progress_column.strip():
-        raise ValueError("progress_column must be non-empty")
     if not success_column.strip():
         raise ValueError("success_column must be non-empty")
 
@@ -86,7 +83,6 @@ def reward_score(
         return row.update(
             {
                 output_column: progress,
-                progress_column: progress,
                 success_column: success,
             }
         )
