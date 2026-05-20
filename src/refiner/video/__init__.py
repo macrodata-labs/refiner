@@ -22,7 +22,7 @@ from refiner.video.transcode import (
     TranscodeWriter,
     VideoTranscodeConfig,
 )
-from refiner.video.types import VideoFile
+from refiner.video.types import VideoFrameArray, VideoFile, VideoSource
 from refiner.video.writer import (
     VideoStreamWriter,
     WrittenVideo,
@@ -33,10 +33,12 @@ __all__ = [
     "DecodedFrameWindow",
     "DecodedVideoFrame",
     "FrameObserver",
+    "VideoFrameArray",
     "PreparedVideoSource",
     "RemuxWriter",
     "TranscodeWriter",
     "VideoFile",
+    "VideoSource",
     "VideoPtsAlignment",
     "VideoStreamWriter",
     "VideoTranscodeConfig",

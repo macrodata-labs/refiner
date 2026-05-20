@@ -1,31 +1,34 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import IO, Any
 from typing import TYPE_CHECKING
 
+from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
 from refiner.pipeline.utils.cache.decoder_cache import (
     OpenedVideoSource,
     VideoSourceProbe,
     get_opened_video_source_cache,
+    open_video_source,
     reset_opened_video_source_cache,
 )
 from refiner.pipeline.utils.cache.lease_cache import CacheLease
 from refiner.utils import check_required_dependencies
 
 if TYPE_CHECKING:
-    from refiner.video.types import VideoFile
+    from refiner.video.types import VideoSource
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
 
-def video_from_timestamp_s(video: VideoFile) -> float:
-    return float(video.from_timestamp_s or 0.0)
+def video_from_timestamp_s(video: "VideoSource") -> float:
+    return float(getattr(video, "from_timestamp_s", None) or 0.0)
 
 
-def video_to_timestamp_s(video: VideoFile) -> float | None:
-    return video.to_timestamp_s
+def video_to_timestamp_s(video: "VideoSource") -> float | None:
+    return getattr(video, "to_timestamp_s", None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,8 +40,9 @@ class VideoPtsAlignment:
 
 @dataclass(slots=True)
 class PreparedVideoSource:
-    lease: CacheLease[str, OpenedVideoSource]
-    video: VideoFile
+    lease: CacheLease[str, OpenedVideoSource] | None
+    source: OpenedVideoSource | None
+    video: VideoSource
     uri: str
     probe: VideoSourceProbe | None
     alignment: VideoPtsAlignment | None
@@ -46,7 +50,11 @@ class PreparedVideoSource:
     stream: Any
 
     def close(self) -> None:
-        self.lease.release()
+        if self.lease is not None:
+            self.lease.release()
+            return
+        if self.source is not None:
+            self.source.close()
 
 
 class RemuxWriter:
@@ -188,7 +196,7 @@ def prepared_source_is_remuxable(prepared: PreparedVideoSource) -> bool:
 def probe_for_remux(
     *,
     probe: VideoSourceProbe | None,
-    video: VideoFile,
+    video: "VideoSource",
 ) -> tuple[VideoSourceProbe | None, VideoPtsAlignment | None]:
     if probe is None:
         return None, None
@@ -209,11 +217,23 @@ def probe_for_remux(
 
 async def prepare_video_source(
     *,
-    video: VideoFile,
+    video: "VideoSource",
 ) -> PreparedVideoSource:
+    from refiner.video.types import VideoFile
+
     check_required_dependencies("video decoding", ["av"], dist="video")
-    lease = await get_opened_video_source_cache().acquire(video.uri)
-    source = lease.resource
+    if isinstance(video, VideoFile):
+        lease = await get_opened_video_source_cache().acquire(video.uri)
+        source = lease.resource
+        source_owner: OpenedVideoSource | None = None
+    else:
+        lease = None
+        source = await asyncio.get_running_loop().run_in_executor(
+            io_executor(),
+            open_video_source,
+            video,
+        )
+        source_owner = source
     try:
         start_pts = 0
         if source.stream.time_base is not None:
@@ -242,6 +262,7 @@ async def prepare_video_source(
         probe, alignment = probe_for_remux(probe=source.probe, video=video)
         return PreparedVideoSource(
             lease=lease,
+            source=source_owner,
             video=video,
             uri=source.uri,
             probe=probe,
@@ -250,7 +271,10 @@ async def prepare_video_source(
             stream=source.stream,
         )
     except Exception:
-        lease.release()
+        if lease is not None:
+            lease.release()
+        elif source_owner is not None:
+            source_owner.close()
         raise
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from fractions import Fraction
 import os
@@ -9,6 +9,7 @@ import numpy as np
 
 from refiner.io import DataFolder
 from refiner.utils import check_required_dependencies
+from refiner.video.arrays import rgb24_frame_array
 from refiner.video.decode import _iter_selected_frames
 from refiner.video.remux import (
     PreparedVideoSource,
@@ -178,6 +179,29 @@ class TranscodeWriter:
 
         if self.frames_written <= 0 or self.duration_s <= from_timestamp:
             raise ValueError("Video segment contains no decodable frames")
+
+        return from_timestamp, self.duration_s
+
+    def append_frame_arrays(
+        self,
+        frames: Iterable[np.ndarray],
+        *,
+        frame_observer: FrameObserver | None = None,
+    ) -> tuple[float, float]:
+        import av
+
+        from_timestamp = self.duration_s
+        segment_frames = 0
+        for frame_index, frame_array in enumerate(frames):
+            rgb = rgb24_frame_array(frame_array)
+            self.ensure_stream(width=rgb.shape[1], height=rgb.shape[0])
+            if frame_observer is not None:
+                frame_observer(frame_index, rgb)
+            self.write_frame(av.VideoFrame.from_ndarray(rgb, format="rgb24"))
+            segment_frames += 1
+
+        if segment_frames <= 0 or self.duration_s <= from_timestamp:
+            raise ValueError("Video segment contains no frames")
 
         return from_timestamp, self.duration_s
 

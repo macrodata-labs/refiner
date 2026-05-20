@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from typing import Literal
 from dataclasses import dataclass, field
 from functools import partial
+from typing import Literal
 
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io import DataFolder
@@ -21,7 +21,7 @@ from refiner.video.transcode import (
     TranscodeWriter,
     VideoTranscodeConfig,
 )
-from refiner.video.types import VideoFile
+from refiner.video.types import VideoFrameArray, VideoSource
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,11 +59,18 @@ class VideoStreamWriter:
 
     async def write_video(
         self,
-        video: VideoFile,
+        video: VideoSource,
         *,
         frame_observer: FrameObserver | None = None,
         force_transcode: bool = False,
     ) -> WrittenVideo:
+        if isinstance(video, VideoFrameArray):
+            _ = force_transcode
+            return await self._commit_video_frame_array(
+                video,
+                frame_observer=frame_observer,
+            )
+
         prepared = await prepare_video_source(video=video)
         try:
             return await self._commit(
@@ -103,6 +110,53 @@ class VideoStreamWriter:
                     force_transcode=force_transcode,
                 ),
             )
+
+    async def _commit_video_frame_array(
+        self,
+        video: VideoFrameArray,
+        *,
+        frame_observer: FrameObserver | None,
+    ) -> WrittenVideo:
+        async with self._commit_lock:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                io_executor(),
+                partial(
+                    self._commit_video_frame_array_sync,
+                    video,
+                    frame_observer=frame_observer,
+                ),
+            )
+
+    def _commit_video_frame_array_sync(
+        self,
+        video: VideoFrameArray,
+        *,
+        frame_observer: FrameObserver | None,
+    ) -> WrittenVideo:
+        writer = self._ensure_transcode_writer(video.fps)
+        file_index = self._next_file_index
+        from_timestamp, to_timestamp = writer.append_frame_arrays(
+            video.iter_frame_arrays(),
+            frame_observer=frame_observer,
+        )
+        if writer.stream is None:
+            raise RuntimeError("Transcode writer did not initialize an output stream")
+        segment = WrittenVideoSegment(
+            stream_key=self.stream_key,
+            file_index=file_index,
+            output_rel=self._current_output_rel,
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+            fps=int(writer.fps),
+            width=int(writer.stream.width),
+            height=int(writer.stream.height),
+            codec=self.transcode_config.codec,
+            pix_fmt=self.transcode_config.pix_fmt,
+        )
+        if writer.size_bytes >= self.video_bytes_limit:
+            self._rotate_writer()
+        return WrittenVideo(segment=segment, mode="transcode")
 
     def _commit_sync(
         self,

@@ -17,7 +17,7 @@ from refiner.video.remux import (
 if TYPE_CHECKING:
     import av
 
-    from refiner.video.types import VideoFile
+    from refiner.video.types import VideoSource
     from refiner.video.transcode import VideoTranscodeConfig
 
 _FRAME_TIMESTAMP_EPSILON_S = 1e-6
@@ -46,7 +46,7 @@ class _NonClosingBytesIO(io.BytesIO):
 
 
 async def export_clip(
-    video: VideoFile,
+    video: VideoSource,
     *,
     force_transcode: bool = False,
     transcode_config: VideoTranscodeConfig | None = None,
@@ -91,7 +91,7 @@ async def export_clip(
 
 
 async def iter_frames(
-    video: VideoFile,
+    video: VideoSource,
 ) -> AsyncIterator[DecodedVideoFrame]:
     prepared = await prepare_video_source(video=video)
     try:
@@ -116,7 +116,7 @@ async def iter_frames(
 
 
 async def iter_frame_windows(
-    video: VideoFile,
+    video: VideoSource,
     *,
     offsets: Sequence[int],
     stride: int = 1,
