@@ -28,6 +28,7 @@ writer, and robotics transforms.
   - [stage-1 writes and stage-2 reduction](#stage-1-writes-and-stage-2-reduction)
   - [performance notes](#lerobot-performance-notes)
 - [motion trimming](#motion-trimming)
+- [reward scoring](#reward-scoring)
 - [merging datasets](#merging-datasets)
 
 ## Reading Datasets
@@ -373,6 +374,33 @@ import refiner as mdr
 - it trims the episode frame table directly
 - it updates video timestamps on the row itself
 - when a video span changes, the corresponding `stats/<video_key>/...` fields are dropped so the writer recomputes them later
+
+## Reward Scoring
+
+Use `mdr.robotics.reward_score(...)` to score LeRobot episodes with Robometer.
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_lerobot("hf://datasets/lerobot/aloha_sim_transfer_cube_human")
+    .map_async(
+        mdr.robotics.reward_score(
+            model="aliangdw/Robometer-4B",
+            video_key="observation.images.top",
+            max_frames=8,
+        ),
+        max_in_flight=256,
+        preserve_order=False,
+    )
+    .write_lerobot("hf://buckets/acme/aloha_scored")
+)
+```
+
+Default outputs are `reward_score`, `robometer_progress`, and
+`robometer_success`. Each output is a list aligned to the sampled frames. The
+Robometer request is formatted as a robotics reward query: task text first, then
+each sampled frame followed by `<|prog_token|>`.
 
 ## Merging Datasets
 

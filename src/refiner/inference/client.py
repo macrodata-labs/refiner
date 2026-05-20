@@ -29,6 +29,19 @@ class InferenceResponse:
         return self.response
 
 
+@dataclass(frozen=True, slots=True)
+class PoolingResponse:
+    response: Mapping[str, Any]
+
+    @property
+    def raw(self) -> Mapping[str, Any]:
+        return self.response
+
+    @property
+    def data(self) -> Any:
+        return self.response.get("data")
+
+
 @dataclass(slots=True)
 class _OpenAIEndpointClient:
     base_url: str
@@ -48,9 +61,7 @@ class _OpenAIEndpointClient:
             headers["Authorization"] = f"Bearer {resolved_api_key}"
         self._resolved_headers = headers
 
-    async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
-        use_chat = "messages" in payload
-        endpoint_path = "v1/chat/completions" if use_chat else "v1/completions"
+    def _ensure_client(self) -> httpx.AsyncClient:
         client = self._client
         if client is None:
             client = httpx.AsyncClient(
@@ -59,6 +70,41 @@ class _OpenAIEndpointClient:
                 timeout=_OPENAI_ENDPOINT_TIMEOUT_SECONDS,
             )
             self._client = client
+        return client
+
+    async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        use_chat = "messages" in payload
+        endpoint_path = "v1/chat/completions" if use_chat else "v1/completions"
+        response_json = await self._post_json(
+            endpoint_path,
+            payload,
+            operation="generation",
+        )
+        if not isinstance(response_json, Mapping):
+            raise RuntimeError("generation response must be a JSON object")
+        return _parse_inference_response(
+            response_json,
+            use_chat=use_chat,
+        )
+
+    async def pooling(self, payload: Mapping[str, Any]) -> PoolingResponse:
+        response_json = await self._post_json(
+            "pooling",
+            payload,
+            operation="pooling",
+        )
+        if not isinstance(response_json, Mapping):
+            raise RuntimeError("pooling response must be a JSON object")
+        return PoolingResponse(response=response_json)
+
+    async def _post_json(
+        self,
+        endpoint_path: str,
+        payload: Mapping[str, Any],
+        *,
+        operation: str,
+    ) -> Any:
+        client = self._ensure_client()
         for attempt in range(_OPENAI_ENDPOINT_MAX_RETRIES):
             try:
                 response = await client.post(endpoint_path, json=dict(payload))
@@ -72,14 +118,14 @@ class _OpenAIEndpointClient:
             ) as err:
                 if attempt + 1 >= _OPENAI_ENDPOINT_MAX_RETRIES:
                     message = (
-                        "generation request failed after "
+                        f"{operation} request failed after "
                         f"{_OPENAI_ENDPOINT_MAX_RETRIES} attempts: "
                         f"{type(err).__name__}: {err}"
                     )
                     raise RuntimeError(message) from err
                 await asyncio.sleep(_retry_delay_seconds(attempt))
         else:
-            raise RuntimeError("generation request failed without a response")
+            raise RuntimeError(f"{operation} request failed without a response")
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -88,17 +134,11 @@ class _OpenAIEndpointClient:
                 detail = str(err.response.json())
             except ValueError:
                 detail = err.response.text.strip()
-            message = f"generation request failed with HTTP {err.response.status_code}"
+            message = f"{operation} request failed with HTTP {err.response.status_code}"
             if detail:
                 message = f"{message}: {detail}"
             raise RuntimeError(message) from err
-        response_json = response.json()
-        if not isinstance(response_json, Mapping):
-            raise RuntimeError("generation response must be a JSON object")
-        return _parse_inference_response(
-            response_json,
-            use_chat=use_chat,
-        )
+        return response.json()
 
 
 def _parse_inference_response(
@@ -171,4 +211,4 @@ def _retry_delay_seconds(attempt: int) -> float:
     return base_delay * (1.0 + jitter)
 
 
-__all__ = ["InferenceResponse"]
+__all__ = ["InferenceResponse", "PoolingResponse"]
