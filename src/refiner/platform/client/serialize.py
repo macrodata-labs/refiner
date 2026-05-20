@@ -1,34 +1,31 @@
 from __future__ import annotations
 
-import base64
 import hashlib
+from dataclasses import dataclass
 
 import cloudpickle
 
-from refiner.platform.client.models import CloudPipelinePayload
 
-INLINE_PIPELINE_PAYLOAD_MAX_BYTES = 1_000_000
+@dataclass(frozen=True, slots=True)
+class PreparedPipelinePayload:
+    """Serialized pipeline payload prepared for cloud file staging."""
 
+    payload_bytes: bytes
+    """Raw cloudpickle payload bytes."""
 
-def serialize_pipeline_inline(
-    pipeline: object,
-    *,
-    max_bytes: int = INLINE_PIPELINE_PAYLOAD_MAX_BYTES,
-) -> CloudPipelinePayload:
-    # This payload is executable-by-design and must only be deserialized
-    # in a trusted tenant boundary for the submitting account.
-    payload_bytes = cloudpickle.dumps(pipeline)
-    size_bytes = len(payload_bytes)
-    if size_bytes > max_bytes:
-        raise ValueError(
-            "Pipeline payload exceeds inline cloud submission limit "
-            f"({size_bytes} bytes > {max_bytes} bytes). "
-            "Artifact uploads are not implemented yet."
+    sha256: str
+    """Lowercase hex SHA-256 digest of payload_bytes."""
+
+    size_bytes: int
+    """Exact payload size in bytes."""
+
+    @classmethod
+    def from_pipeline(cls, pipeline: object) -> PreparedPipelinePayload:
+        # This payload is executable-by-design and must only be deserialized
+        # in a trusted tenant boundary for the submitting account.
+        payload_bytes = cloudpickle.dumps(pipeline)
+        return cls(
+            payload_bytes=payload_bytes,
+            sha256=hashlib.sha256(payload_bytes).hexdigest(),
+            size_bytes=len(payload_bytes),
         )
-
-    return CloudPipelinePayload(
-        format="cloudpickle",
-        bytes_b64=base64.b64encode(payload_bytes).decode("ascii"),
-        sha256=hashlib.sha256(payload_bytes).hexdigest(),
-        size_bytes=size_bytes,
-    )

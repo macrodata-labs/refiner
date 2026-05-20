@@ -1,24 +1,15 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 
-from refiner.platform.client import serialize_pipeline_inline
+import cloudpickle
+
+from refiner.platform.client.serialize import PreparedPipelinePayload
 
 
-def test_serialize_pipeline_inline_returns_base64_and_sha() -> None:
-    payload = serialize_pipeline_inline({"hello": "world"})
+def test_prepared_pipeline_payload_from_pipeline_returns_raw_bytes_and_sha() -> None:
+    payload = PreparedPipelinePayload.from_pipeline({"hello": "world"})
 
-    raw = base64.b64decode(payload.bytes_b64.encode("ascii"))
-    assert payload.format == "cloudpickle"
-    assert payload.size_bytes == len(raw)
-    assert payload.sha256 == hashlib.sha256(raw).hexdigest()
-
-
-def test_serialize_pipeline_inline_enforces_size_limit() -> None:
-    try:
-        serialize_pipeline_inline("x" * 1024, max_bytes=8)
-    except ValueError as err:
-        assert "inline cloud submission limit" in str(err)
-    else:  # pragma: no cover
-        raise AssertionError("expected size limit error")
+    assert cloudpickle.loads(payload.payload_bytes) == {"hello": "world"}
+    assert payload.size_bytes == len(payload.payload_bytes)
+    assert payload.sha256 == hashlib.sha256(payload.payload_bytes).hexdigest()
