@@ -22,6 +22,7 @@ from refiner.worker.metrics.emitter import UserMetricsEmitter
 from refiner.inference import client as openai_module
 
 generate_module = importlib.import_module("refiner.inference.generate")
+runtime_module = importlib.import_module("refiner.inference._runtime")
 
 
 class _MetricRecordingEmitter(UserMetricsEmitter):
@@ -426,7 +427,7 @@ def test_vllm_provider_includes_model_in_requests(monkeypatch) -> None:
 
     monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
     monkeypatch.setattr(
-        generate_module, "get_active_service_manager", lambda: _FakeServiceManager()
+        runtime_module, "get_active_service_manager", lambda: _FakeServiceManager()
     )
 
     provider = VLLMProvider(model="meta-llama/Llama-3.1-8B-Instruct")

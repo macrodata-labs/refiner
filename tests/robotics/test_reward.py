@@ -49,7 +49,7 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
                 endpoint="http://127.0.0.1:8000",
             )
 
-    pooling_module = importlib.import_module("refiner.inference.pooling")
+    runtime_module = importlib.import_module("refiner.inference._runtime")
 
     monkeypatch.setattr(
         reward_module, "_sample_video_frames", _fake_sample_video_frames
@@ -57,7 +57,7 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
     monkeypatch.setattr(reward_module, "_frame_data_url", _fake_frame_data_url)
     monkeypatch.setattr(openai_module._OpenAIEndpointClient, "pooling", _fake_pooling)
     monkeypatch.setattr(
-        pooling_module, "get_active_service_manager", lambda: _FakeServiceManager()
+        runtime_module, "get_active_service_manager", lambda: _FakeServiceManager()
     )
 
     row = LeRobotRow(
