@@ -31,11 +31,13 @@ def test_reward_score_declares_robometer_vllm_service() -> None:
     }
 
 
-def test_expected_progress_uses_softmax_over_progress_bins() -> None:
+def test_expected_progress_uses_softmax_over_progress_bin_centers() -> None:
     logits = [0.0] * 13
     logits[9] = 10.0
 
-    assert reward_module.expected_progress(logits) == pytest.approx(8.997, abs=0.001)
+    assert reward_module.expected_progress(logits) == pytest.approx(
+        8.997 / 9.0, abs=0.001
+    )
 
 
 def test_extract_token_logits_supports_openai_style_pooling_data() -> None:
@@ -114,16 +116,13 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
 
     result = asyncio.run(score(row))
 
-    assert result["robometer_progress"] == pytest.approx([3.0, 8.997], abs=0.001)
+    assert result["robometer_progress"] == pytest.approx(
+        [3.0 / 9.0, 8.997 / 9.0], abs=0.001
+    )
     assert result["robometer_success"] == pytest.approx(
         [0.5, 1.0 / (1.0 + math.exp(-10.0))]
     )
-    assert result["reward_score"] == pytest.approx(
-        [
-            (result["robometer_progress"][0] / 9.0) * result["robometer_success"][0],
-            (result["robometer_progress"][1] / 9.0) * result["robometer_success"][1],
-        ]
-    )
+    assert result["reward_score"] == pytest.approx(result["robometer_progress"])
     assert seen["sample"] == {
         "episode_index": 7,
         "video_key": "observation.images.main",

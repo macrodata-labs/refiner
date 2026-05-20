@@ -401,6 +401,9 @@ Default outputs are `reward_score`, `robometer_progress`, and
 `robometer_success`. Each output is a list aligned to the sampled frames. The
 Robometer request is formatted as a robotics reward query: task text first, then
 each sampled frame followed by `<|prog_token|>`.
+`robometer_progress` and `reward_score` are continuous values in `[0, 1]`
+computed from the softmax-weighted progress-bin centers. `robometer_success` is
+the separate sigmoid success probability.
 
 ## Merging Datasets
 

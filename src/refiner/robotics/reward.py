@@ -32,7 +32,6 @@ def reward_score(
     output_column: str = "reward_score",
     progress_column: str = "robometer_progress",
     success_column: str = "robometer_success",
-    combine_success: bool = True,
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
     """Return an async map function that scores LeRobot episodes with Robometer."""
@@ -84,13 +83,9 @@ def reward_score(
         token_logits = _extract_progress_token_logits(response.raw, len(frames))
         progress = [expected_progress(row) for row in token_logits]
         success = [sigmoid(float(row[10])) for row in token_logits]
-        reward = [
-            (prog / 9.0) * succ if combine_success else prog / 9.0
-            for prog, succ in zip(progress, success)
-        ]
         return row.update(
             {
-                output_column: reward,
+                output_column: progress,
                 progress_column: progress,
                 success_column: success,
             }
@@ -107,7 +102,9 @@ def expected_progress(logits: Sequence[float]) -> float:
     if len(logits) < 10:
         raise ValueError("Robometer token row must contain at least 10 logits")
     probabilities = softmax([float(value) for value in logits[:10]])
-    return sum(index * probability for index, probability in enumerate(probabilities))
+    return sum(
+        (index / 9.0) * probability for index, probability in enumerate(probabilities)
+    )
 
 
 def sigmoid(value: float) -> float:
