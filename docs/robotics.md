@@ -27,6 +27,7 @@ writer, and robotics transforms.
 - [writing datasets](#writing-datasets)
   - [stage-1 writes and stage-2 reduction](#stage-1-writes-and-stage-2-reduction)
   - [performance notes](#lerobot-performance-notes)
+- [slam annotation](#slam-annotation)
 - [motion trimming](#motion-trimming)
 - [merging datasets](#merging-datasets)
 
@@ -342,6 +343,56 @@ The practical consequence is:
 - frame-heavy no-video datasets mostly behave like a parquet writer
 - video-heavy datasets are dominated by source probing, remux/transcode work, and the quality of source clip alignment
 
+## SLAM Annotation
+
+SLAM annotation is episode-level and runs through `batch_map(...)`. The mapper
+receives a batch of `LeRobotRow` episodes, calls the configured MASt3R-SLAM
+backend over that episode batch, and returns the same episodes with SLAM
+metadata plus frame-level pose columns.
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_lerobot("input/")
+    .batch_map(
+        mdr.robotics.annotate_slam(
+            video_key="observation.images.ego",
+            backend=mdr.robotics.MASt3RSLAM(
+                intrinsics="auto",
+                max_resolution=720,
+                dense_geometry=True,
+            ),
+            output_key="slam.mast3r",
+        ),
+        batch_size=8,
+    )
+    .write_lerobot("output/")
+)
+```
+
+The batch still preserves the episode as the SLAM unit: each result corresponds
+to one input episode, and frame-level trajectory rows must match that episode's
+frame count. Batching lets the backend amortize model/runtime setup across
+multiple episodes without turning SLAM into a frame-level transform.
+
+The transform writes episode-level fields such as:
+
+- `slam.mast3r.backend`
+- `slam.mast3r.status`
+- `slam.mast3r.scale_status`
+- `slam.mast3r.confidence`
+- `slam.mast3r.diagnostics`
+- `slam.mast3r.<artifact>_path`
+
+Frame-level trajectory columns are appended to `row.frames` under the same
+namespace, for example:
+
+- `slam.mast3r.world_T_camera`
+- `slam.mast3r.camera_T_world`
+- `slam.mast3r.tracking_confidence`
+- `slam.mast3r.is_keyframe`
+
 ## Motion Trimming
 
 Motion trimming is currently available through `mdr.robotics.motion_trim(...)`.
@@ -396,6 +447,12 @@ import refiner as mdr
     )
 )
 ```
+
+## Internal Notes
+
+`MASt3RSLAM` is the public backend configuration. The row transform is separated
+from the external MASt3R-SLAM runner so the episode contract remains stable
+while runner packaging, CUDA dependencies, and artifact layout evolve.
 
 ## Related Pages
 
