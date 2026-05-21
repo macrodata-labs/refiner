@@ -45,7 +45,9 @@ def inference_map(
 ) -> Callable[[Row], Awaitable[MapResult]]:
     if max_concurrent_requests <= 0:
         raise ValueError("max_concurrent_requests must be > 0")
-    resolved_rate_limit = rate_limit or StaticRateLimit(max_concurrency=max_concurrent_requests)
+    resolved_rate_limit = rate_limit or StaticRateLimit(
+        max_concurrency=max_concurrent_requests
+    )
     client: _OpenAIEndpointClient | None = None
     client_lock = asyncio.Lock()
     adaptive_limiter: AdaptiveRateLimiter | None = (
@@ -164,7 +166,9 @@ def inference_map(
         args["max_concurrent_requests"] = resolved_rate_limit.max_concurrency
     else:
         args[rate_limit_key] = {
-            "type": "adaptive" if isinstance(resolved_rate_limit, AdaptiveRateLimit) else "static",
+            "type": "adaptive"
+            if isinstance(resolved_rate_limit, AdaptiveRateLimit)
+            else "static",
             **asdict(resolved_rate_limit),
         }
     if defaults_key is not None:
