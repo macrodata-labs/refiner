@@ -384,6 +384,74 @@ def test_inference_generate_text_detects_google_video_media_type(monkeypatch) ->
     }
 
 
+def test_inference_generate_text_converts_google_assistant_multimodal_history(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason="STOP",
+            usage={},
+            response={"candidates": []},
+        )
+
+    monkeypatch.setattr(
+        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "reasoning", "text": "I inspected the image."},
+                        {"type": "text", "text": "The image has one label."},
+                        {
+                            "type": "file",
+                            "mediaType": "image",
+                            "data": row["image"],
+                        },
+                    ],
+                },
+                {"role": "user", "content": "Continue."},
+            ],
+        )
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"image": b"\x89PNG\r\n\x1a\nfake"}))
+
+    asyncio.run(_invoke())
+
+    assert seen["payload"] == {
+        "contents": [
+            {
+                "role": "model",
+                "parts": [
+                    {"text": "I inspected the image.", "thought": True},
+                    {"text": "The image has one label."},
+                    {
+                        "inlineData": {
+                            "mimeType": "image/png",
+                            "data": "iVBORw0KGgpmYWtl",
+                        }
+                    },
+                ],
+            },
+            {"role": "user", "parts": [{"text": "Continue."}]},
+        ],
+    }
+
+
 def test_google_endpoint_client_posts_generate_content(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
@@ -583,6 +651,66 @@ def test_inference_generate_text_converts_messages_for_openai_responses(
     }
 
 
+def test_inference_generate_text_converts_openai_responses_assistant_reasoning(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason=None,
+            usage={},
+            response={"output_text": "ok"},
+        )
+
+    monkeypatch.setattr(
+        openai_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "reasoning", "text": "Previous reasoning."},
+                        {"type": "text", "text": "Previous answer."},
+                    ],
+                },
+                {"role": "user", "content": "Continue."},
+            ],
+        )
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIResponsesProvider(model="gpt-5-mini", api_key="secret"),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({}))
+
+    asyncio.run(_invoke())
+
+    assert seen["payload"] == {
+        "model": "gpt-5-mini",
+        "input": [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Previous reasoning."}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Previous answer."}],
+            },
+            {"role": "user", "content": "Continue."},
+        ],
+    }
+
+
 def test_inference_generate_text_detects_openai_image_media_type(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
@@ -731,6 +859,65 @@ def test_inference_generate_text_converts_messages_for_anthropic(monkeypatch) ->
         "system": [{"type": "text", "text": "Use citations."}],
         "thinking": {"type": "enabled", "budgetTokens": 1024},
         "metadata": {"user_id": "user-1"},
+    }
+
+
+def test_inference_generate_text_converts_anthropic_assistant_reasoning(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason="end_turn",
+            usage={},
+            response={"content": [{"type": "text", "text": "ok"}]},
+        )
+
+    monkeypatch.setattr(
+        openai_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "reasoning", "text": "Previous reasoning."},
+                        {"type": "text", "text": "Previous answer.   "},
+                    ],
+                },
+                {"role": "user", "content": "Continue."},
+            ],
+        )
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=AnthropicEndpointProvider(model="claude-sonnet-4-5", api_key="secret"),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({}))
+
+    asyncio.run(_invoke())
+
+    assert seen["payload"] == {
+        "model": "claude-sonnet-4-5",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Previous reasoning."},
+                    {"type": "text", "text": "Previous answer."},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "Continue."}]},
+        ],
     }
 
 

@@ -32,7 +32,20 @@ class FilePart(_ProviderOptionsPart):
     mediaType: str
 
 
+class TextContentPart(TypedDict):
+    type: Literal["text"]
+    text: str
+
+
+class ReasoningContentPart(TypedDict):
+    type: Literal["reasoning"]
+    text: str
+
+
+ResponseContentPart: TypeAlias = TextContentPart | ReasoningContentPart
 UserContent: TypeAlias = str | Sequence[TextPart | ImagePart | FilePart]
+ReasoningPart = ReasoningContentPart
+AssistantContent: TypeAlias = str | Sequence[TextPart | FilePart | ReasoningPart]
 
 
 class SystemMessage(TypedDict):
@@ -47,7 +60,7 @@ class UserMessage(TypedDict):
 
 class AssistantMessage(TypedDict):
     role: Literal["assistant"]
-    content: str
+    content: AssistantContent
 
 
 Message: TypeAlias = SystemMessage | UserMessage | AssistantMessage
@@ -182,19 +195,6 @@ class AnthropicProviderOptions(TypedDict, total=False):
     contextManagement: Mapping[str, Any]
 
 
-class TextContentPart(TypedDict):
-    type: Literal["text"]
-    text: str
-
-
-class ReasoningContentPart(TypedDict):
-    type: Literal["reasoning"]
-    text: str
-
-
-ResponseContentPart: TypeAlias = TextContentPart | ReasoningContentPart
-
-
 class AnthropicCitations(TypedDict):
     enabled: bool
 
@@ -212,6 +212,7 @@ __all__ = [
     "AnthropicProviderOptions",
     "AnthropicThinking",
     "AssistantMessage",
+    "AssistantContent",
     "DataContent",
     "FilePart",
     "GoogleImageConfig",

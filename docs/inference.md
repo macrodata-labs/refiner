@@ -87,6 +87,11 @@ async def summarize(row, generate_text):
 that return reasoning, `InferenceResponse.content` includes normalized
 `{"type": "reasoning", "text": ...}` and `{"type": "text", "text": ...}` parts.
 
+Assistant history can be passed as either plain text or typed content parts.
+Google supports assistant text, reasoning, and in-memory file parts. Anthropic
+supports assistant text and reasoning. OpenAI Responses supports assistant text
+and reasoning. OpenAI-compatible chat endpoints support assistant text history.
+
 ### GoogleEndpointProvider
 Use `GoogleEndpointProvider` for native Gemini requests, including in-memory
 video inputs. Set `GOOGLE_GENERATIVE_AI_API_KEY` in the worker environment, or

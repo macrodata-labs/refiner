@@ -18,8 +18,13 @@ def convert_to_openai_chat_messages(
     for message in messages:
         role = message["role"]
         content = message["content"]
-        if role in {"system", "assistant"}:
+        if role == "system":
             converted.append({"role": role, "content": content})
+            continue
+        if role == "assistant":
+            converted.append(
+                {"role": "assistant", "content": _openai_assistant_text(content)}
+            )
             continue
         if isinstance(content, str):
             converted.append({"role": "user", "content": content})
@@ -66,7 +71,7 @@ def convert_to_google_payload(
             contents.append(
                 {
                     "role": "model",
-                    "parts": [{"text": content}] if content else [],
+                    "parts": _convert_google_assistant_content(content),
                 }
             )
             continue
@@ -94,8 +99,11 @@ def convert_to_openai_responses_input(
     for message in messages:
         role = message["role"]
         content = message["content"]
-        if role in {"system", "assistant"}:
+        if role == "system":
             input_items.append({"role": role, "content": content})
+            continue
+        if role == "assistant":
+            input_items.extend(_convert_openai_responses_assistant_content(content))
             continue
         if isinstance(content, str):
             input_items.append({"role": "user", "content": content})
@@ -133,12 +141,10 @@ def convert_to_anthropic_payload(
             system_parts.append(system_part)
             continue
         if role == "assistant":
-            if not isinstance(content, str):
-                raise ValueError("assistant message content must be a string")
             anthropic_messages.append(
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": content.strip()}],
+                    "content": _convert_anthropic_assistant_content(content),
                 }
             )
             continue
@@ -379,6 +385,121 @@ def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[st
     if cache_control is not None:
         payload["cache_control"] = cache_control
     return payload
+
+
+def _openai_assistant_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, Sequence):
+        raise ValueError("assistant message content must be a string or content parts")
+    text_parts: list[str] = []
+    for part in content:
+        if not isinstance(part, Mapping):
+            continue
+        part = dict(part)
+        part_type = part.get("type")
+        part_text = part.get("text")
+        if part_type == "text" and isinstance(part_text, str):
+            text_parts.append(part_text)
+        elif part_type in {"file", "reasoning"}:
+            raise ValueError(
+                f"openai chat assistant {part_type} parts are not supported"
+            )
+    return "".join(text_parts)
+
+
+def _convert_openai_responses_assistant_content(
+    content: object,
+) -> list[dict[str, Any]]:
+    if isinstance(content, str):
+        return [{"role": "assistant", "content": content}]
+    if not isinstance(content, Sequence):
+        raise ValueError("assistant message content must be a string or content parts")
+    input_items: list[dict[str, Any]] = []
+    text_parts: list[str] = []
+    for part in content:
+        if not isinstance(part, Mapping):
+            continue
+        part = dict(part)
+        part_type = part.get("type")
+        part_text = part.get("text")
+        if part_type == "text" and isinstance(part_text, str):
+            text_parts.append(part_text)
+        elif part_type == "reasoning" and isinstance(part_text, str):
+            input_items.append(
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": part_text}],
+                }
+            )
+        elif part_type == "file":
+            raise ValueError("openai responses assistant file parts are not supported")
+    if text_parts:
+        input_items.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "".join(text_parts)}],
+            }
+        )
+    return input_items
+
+
+def _convert_google_assistant_content(content: object) -> list[dict[str, Any]]:
+    if isinstance(content, str):
+        return [{"text": content}] if content else []
+    if not isinstance(content, Sequence):
+        raise ValueError("assistant message content must be a string or content parts")
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, Mapping):
+            continue
+        part = dict(part)
+        part_type = part.get("type")
+        part_text = part.get("text")
+        if part_type == "text" and isinstance(part_text, str):
+            if part_text:
+                parts.append({"text": part_text})
+        elif part_type == "reasoning" and isinstance(part_text, str):
+            if part_text:
+                parts.append({"text": part_text, "thought": True})
+        elif part_type == "file":
+            data = part.get("data")
+            if _is_url(data):
+                raise ValueError("google assistant file URLs are not supported")
+            media_type = _resolve_media_type(
+                data,
+                declared_media_type=part.get("mediaType"),
+            )
+            parts.append(
+                {
+                    "inlineData": {
+                        "mimeType": media_type,
+                        "data": _base64_data(data),
+                    }
+                }
+            )
+    return parts
+
+
+def _convert_anthropic_assistant_content(content: object) -> list[dict[str, Any]]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content.strip()}]
+    if not isinstance(content, Sequence):
+        raise ValueError("assistant message content must be a string or content parts")
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, Mapping):
+            continue
+        part = dict(part)
+        part_type = part.get("type")
+        part_text = part.get("text")
+        if part_type == "text" and isinstance(part_text, str):
+            parts.append({"type": "text", "text": part_text.strip()})
+        elif part_type == "reasoning" and isinstance(part_text, str):
+            parts.append({"type": "thinking", "thinking": part_text})
+        elif part_type == "file":
+            raise ValueError("anthropic assistant file parts are not supported")
+    return parts
 
 
 def _google_file_part(data: object, media_type: str) -> dict[str, Any]:
