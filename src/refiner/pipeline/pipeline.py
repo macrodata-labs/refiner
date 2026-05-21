@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from fsspec import AbstractFileSystem
 
@@ -158,6 +158,49 @@ class RefinerPipeline:
                 dtypes=dtypes,
             )
         )
+
+    def to_robot_rows(
+        self,
+        *,
+        episode_id_key: str | None = None,
+        task_key: str | None = None,
+        fps: float | None = None,
+        fps_key: str | None = None,
+        robot_type: str | None = None,
+        robot_type_key: str | None = None,
+        nested_frames_key: str | None = None,
+        timestamp_key: str | None = "timestamp",
+        action_key: str | None = "action",
+        state_key: str | Sequence[str] | None = "observation.state",
+        extra_observation_keys: Mapping[str, str] | Iterable[str] | None = None,
+        video_keys: Mapping[str, str] | Iterable[str] | None = None,
+        stats_key: str | None = "stats",
+        stats_prefix: str = "stats/",
+        episode_ends_key: str | None = None,
+    ) -> "RefinerPipeline":
+        from refiner.robotics.row import _robot_row_converter
+
+        converter = _robot_row_converter(
+            episode_id_key=episode_id_key,
+            task_key=task_key,
+            fps=fps,
+            fps_key=fps_key,
+            robot_type=robot_type,
+            robot_type_key=robot_type_key,
+            nested_frames_key=nested_frames_key,
+            timestamp_key=timestamp_key,
+            action_key=action_key,
+            state_key=state_key,
+            extra_observation_keys=extra_observation_keys,
+            video_keys=video_keys,
+            schema=self.output_schema(),
+            stats_key=stats_key,
+            stats_prefix=stats_prefix,
+            episode_ends_key=episode_ends_key,
+        )
+        if episode_ends_key is None:
+            return self.map(cast(MapFn, converter))
+        return self.flat_map(cast(FlatMapFn, converter))
 
     def map_async(
         self,

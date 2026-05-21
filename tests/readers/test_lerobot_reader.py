@@ -174,7 +174,7 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert int(frame_rows[0]["frame_index"]) == 0
     assert int(frame_rows[1]["frame_index"]) == 1
 
-    video = first.videos["observation.images.main"].video
+    video = first.videos["observation.images.main"]
     assert isinstance(video, VideoFile)
     assert video.uri.endswith("/videos/observation.images.main/chunk-000/file-000.mp4")
     assert video.from_timestamp_s == 0.0

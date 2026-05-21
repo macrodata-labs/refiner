@@ -4,68 +4,21 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import pyarrow as pa
+
 from refiner.io import DataFolder
-from refiner.video import VideoFile
+from refiner.video import VideoFile, VideoSource
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.robotics.lerobot_format.metadata.info import DEFAULT_VIDEO_PATH
 from refiner.robotics.lerobot_format.metadata.metadata import LeRobotMetadata
 from refiner.robotics.lerobot_format.metadata.stats import (
     LeRobotFeatureStats,
 )
+from refiner.robotics.row import RoboticsRow
 
 if TYPE_CHECKING:
     from refiner.robotics.lerobot_format.tabular import LeRobotTabular
-
-
-@dataclass(frozen=True, slots=True)
-class LeRobotVideoRef:
-    _row: "LeRobotRow"
-    key: str
-
-    @property
-    def video(self) -> VideoFile:
-        return self._row._build_video_file(self.key)
-
-    @property
-    def uri(self) -> str:
-        return self.video.uri
-
-    @property
-    def from_timestamp_s(self) -> float | None:
-        return self.video.from_timestamp_s
-
-    @property
-    def to_timestamp_s(self) -> float | None:
-        return self.video.to_timestamp_s
-
-    def with_timestamps(
-        self,
-        *,
-        from_timestamp_s: float | None = None,
-        to_timestamp_s: float | None = None,
-    ) -> "LeRobotRow":
-        return self._row.with_video(
-            self.key,
-            from_timestamp_s=from_timestamp_s,
-            to_timestamp_s=to_timestamp_s,
-        )
-
-    def with_uri(self, uri: str) -> "LeRobotRow":
-        return self._row.with_video(self.key, uri=uri)
-
-    def shift(self, delta_s: float) -> "LeRobotRow":
-        from_timestamp = self._row._row.get(f"videos/{self.key}/from_timestamp")
-        to_timestamp = self._row._row.get(f"videos/{self.key}/to_timestamp")
-        return self._row.with_video(
-            self.key,
-            from_timestamp_s=(
-                float(from_timestamp) + delta_s if from_timestamp is not None else None
-            ),
-            to_timestamp_s=(
-                float(to_timestamp) + delta_s if to_timestamp is not None else None
-            ),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,16 +62,15 @@ class LeRobotStatsView(Mapping[str, LeRobotFeatureStats]):
 
 
 @dataclass(frozen=True, slots=True)
-class LeRobotVideosView(Mapping[str, LeRobotVideoRef]):
+class LeRobotVideosView(Mapping[str, VideoFile]):
     _row: "LeRobotRow"
 
-    def __getitem__(self, key: str) -> LeRobotVideoRef:
+    def __getitem__(self, key: str) -> VideoFile:
         row = self._row
         uri_key = f"videos/{key}/uri"
         if uri_key not in row._row:
             row = row.update({uri_key: row._build_default_video_uri(key)})
-        row._build_video_file(key)
-        return LeRobotVideoRef(row, key)
+        return row._build_video_file(key)
 
     def __iter__(self) -> Iterator[str]:
         video_keys = {
@@ -133,7 +85,7 @@ class LeRobotVideosView(Mapping[str, LeRobotVideoRef]):
 
 
 @dataclass(frozen=True, slots=True)
-class LeRobotRow(Row):
+class LeRobotRow(Row, RoboticsRow):
     _row: Row
     metadata: LeRobotMetadata
     frames: Sequence[Row] | Tabular
@@ -166,8 +118,97 @@ class LeRobotRow(Row):
         return int(self._row["episode_index"])
 
     @property
+    def episode_id(self) -> str:
+        episode_id = self._row.get("episode_id")
+        return str(episode_id) if episode_id is not None else str(self.episode_index)
+
+    @property
     def tasks(self) -> list[str]:
         return list(self._row.get("tasks", []))
+
+    @property
+    def task(self) -> str | None:
+        task = self._row.get("task")
+        return task if isinstance(task, str) else None
+
+    @property
+    def num_frames(self) -> int:
+        return self.to_frame_table().num_rows
+
+    def _frame_values(self, key: str) -> Any:
+        return self.to_frame_table().column(key)
+
+    @property
+    def timestamps(self) -> Any:
+        return self._optional_frame_values("timestamp")
+
+    @property
+    def actions(self) -> Any:
+        return self._optional_frame_values("action")
+
+    @property
+    def states(self) -> Any:
+        return self._optional_frame_values("observation.state")
+
+    def observations(self, name: str | None = None) -> Any:
+        table = self.to_frame_table()
+        values: dict[str, Any] = {
+            key[len("observation.") :]: table.column(key)
+            for key in table.names
+            if key.startswith("observation.")
+        }
+        values.update({f"videos/{key}": video for key, video in self.videos.items()})
+        if name is None:
+            return values
+        normalized_name = (
+            name[len("observation.") :] if name.startswith("observation.") else name
+        )
+        return values[normalized_name]
+
+    def _optional_frame_values(self, key: str) -> Any:
+        table = self.to_frame_table()
+        return table.column(key) if key in table.names else None
+
+    def with_timestamps(self, values: Any) -> "LeRobotRow":
+        return self._with_frame_values("timestamp", values)
+
+    def with_actions(self, values: Any) -> "LeRobotRow":
+        return self._with_frame_values("action", values)
+
+    def with_observation(self, key: str, values: Any) -> "LeRobotRow":
+        frame_key = key if key.startswith("observation.") else f"observation.{key}"
+        return self._with_frame_values(frame_key, values)
+
+    def _with_frame_values(self, key: str, values: Any) -> "LeRobotRow":
+        frames = self.to_frame_table()
+        value_type = (
+            frames.table.schema.field(key).type
+            if key in frames.table.column_names
+            else None
+        )
+        column = (
+            values
+            if isinstance(values, (pa.Array, pa.ChunkedArray))
+            else pa.array(values, type=value_type)
+        )
+        return self.update(
+            frames=frames.with_table(set_or_append_column(frames.table, key, column))
+        )
+
+    def to_frame_table(self) -> Tabular:
+        return (
+            self.frames
+            if isinstance(self.frames, Tabular)
+            else Tabular.from_rows(self.frames)
+        )
+
+    @property
+    def fps(self) -> float | None:
+        return self.metadata.info.fps
+
+    @property
+    def robot_type(self) -> str | None:
+        return self.metadata.info.robot_type
 
     @property
     def length(self) -> int:
@@ -202,7 +243,8 @@ class LeRobotRow(Row):
         file_idx = self._row.get(f"videos/{key}/file_index")
         if chunk is None or file_idx is None or self.root is None:
             raise KeyError(key)
-        return DEFAULT_VIDEO_PATH.format(
+        video_path = self.metadata.info.video_path or DEFAULT_VIDEO_PATH
+        return video_path.format(
             video_key=key,
             chunk_index=chunk,
             file_index=file_idx,
@@ -216,21 +258,38 @@ class LeRobotRow(Row):
     def stats(self) -> LeRobotStatsView:
         return LeRobotStatsView(self)
 
+    def select_frames(self, indices: Sequence[int]) -> "LeRobotRow":
+        frames = self.to_frame_table()
+        selected = frames.table.take(pa.array(indices, type=pa.int64()))
+        if "frame_index" in selected.column_names:
+            selected = set_or_append_column(
+                selected,
+                "frame_index",
+                pa.array(range(selected.num_rows), type=pa.int64()),
+            )
+        return self.update(
+            {
+                "length": selected.num_rows,
+                "frames": frames.with_table(selected),
+            }
+        )
+
+    def drop_stats(self, feature: str) -> "LeRobotRow":
+        return self.stats.drop(feature)
+
     def with_video(
         self,
         key: str,
-        *,
-        uri: str | None = None,
-        from_timestamp_s: float | None = None,
-        to_timestamp_s: float | None = None,
+        video: VideoSource,
     ) -> "LeRobotRow":
+        if not isinstance(video, VideoFile):
+            raise TypeError("LeRobotRow.with_video requires a VideoFile")
         patch: dict[str, Any] = {}
-        if uri is not None:
-            patch[f"videos/{key}/uri"] = uri
-        if from_timestamp_s is not None:
-            patch[f"videos/{key}/from_timestamp"] = from_timestamp_s
-        if to_timestamp_s is not None:
-            patch[f"videos/{key}/to_timestamp"] = to_timestamp_s
+        patch[f"videos/{key}/uri"] = video.uri
+        if video.from_timestamp_s is not None:
+            patch[f"videos/{key}/from_timestamp"] = video.from_timestamp_s
+        if video.to_timestamp_s is not None:
+            patch[f"videos/{key}/to_timestamp"] = video.to_timestamp_s
         return self.update(patch)
 
     def with_stats(
@@ -283,6 +342,5 @@ class LeRobotRow(Row):
 __all__ = [
     "LeRobotRow",
     "LeRobotStatsView",
-    "LeRobotVideoRef",
     "LeRobotVideosView",
 ]

@@ -144,17 +144,17 @@ class LeRobotMetaReduceSink(BaseSink):
         )
 
         # tasks
-        for current in tasks_tables[1:]:
-            if not current.equals(tasks_tables[0]):
-                raise ValueError(
-                    "LeRobot reduce encountered mismatched canonical task tables "
-                    "across stage-1 shard outputs"
-                )
-        tasks = (
-            LeRobotTasks({})
-            if not tasks_tables
-            else LeRobotTasks.from_table(tasks_tables[0])
-        )
+        task_items: dict[int, str] = {}
+        for table in tasks_tables:
+            for task_index, task in LeRobotTasks.from_table(table).items():
+                existing = task_items.get(task_index)
+                if existing is not None and existing != task:
+                    raise ValueError(
+                        "LeRobot reduce encountered conflicting task_index "
+                        f"{task_index}: {existing!r} vs {task!r}"
+                    )
+                task_items[task_index] = task
+        tasks = LeRobotTasks(task_items)
 
         # info jsons
         if not info_items:

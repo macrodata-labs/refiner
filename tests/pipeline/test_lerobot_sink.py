@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Iterator, cast
+from typing import Any, Iterator, cast
 
 import av
 import fsspec
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -16,13 +18,17 @@ import refiner as mdr
 from refiner.io import DataFile, DataFolder
 from refiner.video.remux import reset_opened_video_source_cache
 from refiner.video.transcode import VideoTranscodeConfig
+from refiner.video.types import VideoSource
 from refiner.video.writer import VideoStreamWriter
-from refiner.pipeline.data.row import DictRow
+from refiner.pipeline.data.row import DictRow, Row
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
 from refiner.pipeline.sinks.reducer.lerobot import LeRobotMetaReduceSink
+from refiner.robotics.row import RoboticsRow, _robot_row_converter
 from refiner.robotics.lerobot_format import (
     LeRobotInfo,
     LeRobotMetadata,
+    LeRobotRow,
     LeRobotStatsFile,
     LeRobotTasks,
 )
@@ -34,6 +40,177 @@ _ALOHA_REPO_IDS = (
     "macrodata/aloha_static_battery_ep000_004",
     "macrodata/aloha_static_battery_ep005_009",
 )
+
+
+class _FakeRoboticsRow(Row, RoboticsRow):
+    def __init__(
+        self,
+        *,
+        episode_id: str,
+        frame_table: Tabular,
+        task: str | None = None,
+        fps: float | None = None,
+        robot_type: str | None = None,
+        videos: Mapping[str, VideoSource] | None = None,
+    ) -> None:
+        self._data = {"episode_id": episode_id}
+        self._frame_table = frame_table
+        self._task = task
+        self._fps = fps
+        self._robot_type = robot_type
+        self._videos = dict(videos or {})
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    @property
+    def episode_id(self) -> str:
+        return str(self._data["episode_id"])
+
+    @property
+    def num_frames(self) -> int:
+        return self._frame_table.num_rows
+
+    @property
+    def task(self) -> str | None:
+        return self._task
+
+    @property
+    def fps(self) -> float | None:
+        return self._fps
+
+    @property
+    def robot_type(self) -> str | None:
+        return self._robot_type
+
+    @property
+    def videos(self) -> Mapping[str, VideoSource]:
+        return self._videos
+
+    @property
+    def stats(self) -> Mapping[str, Any]:
+        return {}
+
+    def _frame_values(self, key: str) -> Any:
+        return self._frame_table.column(key)
+
+    @property
+    def timestamps(self) -> Any:
+        return (
+            self._frame_values("timestamp")
+            if "timestamp" in self._frame_table.names
+            else None
+        )
+
+    @property
+    def actions(self) -> Any:
+        return (
+            self._frame_values("action")
+            if "action" in self._frame_table.names
+            else None
+        )
+
+    @property
+    def states(self) -> Any:
+        return (
+            self._frame_values("observation.state")
+            if "observation.state" in self._frame_table.names
+            else None
+        )
+
+    def observations(self, name: str | None = None) -> Any:
+        values: dict[str, Any] = {
+            key[len("observation.") :]: self._frame_table.column(key)
+            for key in self._frame_table.names
+            if key.startswith("observation.")
+        }
+        values.update({f"videos/{key}": video for key, video in self.videos.items()})
+        if name is None:
+            return values
+        normalized_name = (
+            name[len("observation.") :] if name.startswith("observation.") else name
+        )
+        return values[normalized_name]
+
+    def with_timestamps(self, values: Any) -> "_FakeRoboticsRow":
+        return self._with_frame_values("timestamp", values)
+
+    def with_actions(self, values: Any) -> "_FakeRoboticsRow":
+        return self._with_frame_values("action", values)
+
+    def with_observation(self, key: str, values: Any) -> "_FakeRoboticsRow":
+        frame_key = key if key.startswith("observation.") else f"observation.{key}"
+        return self._with_frame_values(frame_key, values)
+
+    def _with_frame_values(self, key: str, values: Any) -> "_FakeRoboticsRow":
+        table = self._frame_table.table
+        column = (
+            values
+            if isinstance(values, (pa.Array, pa.ChunkedArray))
+            else pa.array(values)
+        )
+        if key in table.column_names:
+            table = table.set_column(table.column_names.index(key), key, column)
+        else:
+            table = table.append_column(key, column)
+        return self._with_frame_table(self._frame_table.with_table(table))
+
+    def select_frames(self, indices: Sequence[int]) -> "_FakeRoboticsRow":
+        selected = self._frame_table.table.take(pa.array(indices, type=pa.int64()))
+        return self._with_frame_table(self._frame_table.with_table(selected))
+
+    def to_frame_table(self) -> Tabular:
+        return self._frame_table
+
+    def with_video(self, key: str, video: VideoSource) -> "_FakeRoboticsRow":
+        videos = dict(self._videos)
+        videos[key] = video
+        return _FakeRoboticsRow(
+            episode_id=self.episode_id,
+            frame_table=self._frame_table,
+            task=self.task,
+            fps=self.fps,
+            robot_type=self.robot_type,
+            videos=videos,
+        )
+
+    def drop_stats(self, feature: str) -> "_FakeRoboticsRow":
+        _ = feature
+        return self
+
+    def _with_frame_table(self, frame_table: Tabular) -> "_FakeRoboticsRow":
+        return _FakeRoboticsRow(
+            episode_id=self.episode_id,
+            frame_table=frame_table,
+            task=self.task,
+            fps=self.fps,
+            robot_type=self.robot_type,
+            videos=self.videos,
+        )
+
+    def update(
+        self,
+        patch: Mapping[str, Any] | None = None,
+        /,
+        **kwargs: Any,
+    ) -> "_FakeRoboticsRow":
+        data = dict(self._data)
+        data.update(patch or {})
+        data.update(kwargs)
+        return _FakeRoboticsRow(
+            episode_id=str(data["episode_id"]),
+            frame_table=self._frame_table,
+            task=self.task,
+            fps=self.fps,
+            robot_type=self.robot_type,
+            videos=self.videos,
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -119,6 +296,10 @@ def _sampled_frame_count(
     return len(range(0, frame_count, sample_stride))
 
 
+def _robot_row(row: Row, **kwargs: Any) -> RoboticsRow:
+    return cast(RoboticsRow, _robot_row_converter(**kwargs)(row))
+
+
 def _episode(
     *,
     episode_index: int,
@@ -128,26 +309,103 @@ def _episode(
     from_ts: float,
     to_ts: float,
     values: list[float],
-) -> dict:
-    return {
-        "episode_index": episode_index,
-        "task": task,
-        "frames": [
+) -> RoboticsRow:
+    return _robot_row(
+        DictRow(
+            {
+                "episode_id": str(episode_index),
+                "episode_index": episode_index,
+                "task": task,
+                "frames": [
+                    {
+                        "frame_index": i,
+                        "timestamp": float(i) / 10.0,
+                        "task_index": task_index,
+                        "observation.state": [v],
+                    }
+                    for i, v in enumerate(values)
+                ],
+                "observation.images.main": mdr.video.VideoFile(
+                    DataFile.resolve(str(video_path)),
+                    from_timestamp_s=from_ts,
+                    to_timestamp_s=to_ts,
+                ),
+            }
+        ),
+        episode_id_key="episode_id",
+        task_key="task",
+        fps=10,
+        robot_type="mockbot",
+        nested_frames_key="frames",
+        video_keys=("observation.images.main",),
+    )
+
+
+def _robotics_episode(
+    *,
+    episode_index: int,
+    task: str,
+    task_index: int,
+    values: list[float],
+) -> RoboticsRow:
+    return _robot_row(
+        DictRow(
+            {
+                "episode_id": str(episode_index),
+                "episode_index": episode_index,
+                "task": task,
+                "frames": [
+                    {
+                        "frame_index": i,
+                        "timestamp": float(i) / 10.0,
+                        "task_index": task_index,
+                        "observation.state": [v],
+                    }
+                    for i, v in enumerate(values)
+                ],
+            }
+        ),
+        episode_id_key="episode_id",
+        task_key="task",
+        fps=10,
+        robot_type="mockbot",
+        nested_frames_key="frames",
+    )
+
+
+def _lerobot_episode(
+    *,
+    episode_index: int,
+    task: str,
+    task_index: int,
+    values: list[float],
+    metadata: LeRobotMetadata | None = None,
+    shard_id: str | None = None,
+) -> LeRobotRow:
+    frames = [
+        DictRow(
             {
                 "frame_index": i,
                 "timestamp": float(i) / 10.0,
                 "task_index": task_index,
                 "observation.state": [v],
             }
-            for i, v in enumerate(values)
-        ],
-        "observation.images.main": mdr.video.VideoFile(
-            DataFile.resolve(str(video_path)),
-            from_timestamp_s=from_ts,
-            to_timestamp_s=to_ts,
+        )
+        for i, v in enumerate(values)
+    ]
+    return LeRobotRow(
+        DictRow(
+            {
+                "episode_index": episode_index,
+                "episode_id": str(episode_index),
+                "task": task,
+                "length": len(frames),
+            },
+            shard_id=shard_id,
         ),
-        "metadata": _metadata(),
-    }
+        metadata=metadata or _metadata(),
+        frames=frames,
+    )
 
 
 def _metadata(
@@ -257,44 +515,18 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     out_root = tmp_path / "local-launch"
     pipeline = mdr.from_items(
         [
-            {
-                "episode_index": 0,
-                "task": "pick",
-                "frames": [
-                    {
-                        "frame_index": 0,
-                        "timestamp": 0.0,
-                        "task_index": 0,
-                        "observation.state": [1.0],
-                    },
-                    {
-                        "frame_index": 1,
-                        "timestamp": 0.1,
-                        "task_index": 0,
-                        "observation.state": [2.0],
-                    },
-                ],
-                "metadata": _metadata(),
-            },
-            {
-                "episode_index": 1,
-                "task": "place",
-                "frames": [
-                    {
-                        "frame_index": 0,
-                        "timestamp": 0.0,
-                        "task_index": 1,
-                        "observation.state": [3.0],
-                    },
-                    {
-                        "frame_index": 1,
-                        "timestamp": 0.1,
-                        "task_index": 1,
-                        "observation.state": [4.0],
-                    },
-                ],
-                "metadata": _metadata(),
-            },
+            _robotics_episode(
+                episode_index=0,
+                task="pick",
+                task_index=0,
+                values=[1.0, 2.0],
+            ),
+            _robotics_episode(
+                episode_index=1,
+                task="place",
+                task_index=1,
+                values=[3.0, 4.0],
+            ),
         ],
         items_per_shard=1,
     ).write_lerobot(str(out_root))
@@ -309,6 +541,97 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     assert (out_root / "meta" / "info.json").exists()
     assert (out_root / "meta" / "stats.json").exists()
     assert (out_root / "meta" / "tasks.parquet").exists()
+
+
+def test_write_lerobot_accepts_generic_robotics_rows(tmp_path: Path) -> None:
+    out_root = tmp_path / "generic-robotics"
+    rows = [
+        _FakeRoboticsRow(
+            episode_id="demo-pick",
+            task="pick",
+            fps=10,
+            robot_type="mockbot",
+            frame_table=Tabular.from_rows(
+                [
+                    DictRow(
+                        {
+                            "frame_index": 0,
+                            "timestamp": 0.0,
+                            "observation.state": [1.0],
+                        }
+                    ),
+                    DictRow(
+                        {
+                            "frame_index": 1,
+                            "timestamp": 0.1,
+                            "observation.state": [2.0],
+                        }
+                    ),
+                ]
+            ),
+        ),
+        _FakeRoboticsRow(
+            episode_id="demo-place",
+            task="place",
+            fps=10,
+            robot_type="mockbot",
+            frame_table=Tabular.from_rows(
+                [
+                    DictRow(
+                        {
+                            "frame_index": 0,
+                            "timestamp": 0.0,
+                            "observation.state": [3.0],
+                        }
+                    ),
+                    DictRow(
+                        {
+                            "frame_index": 1,
+                            "timestamp": 0.1,
+                            "observation.state": [4.0],
+                        }
+                    ),
+                ]
+            ),
+        ),
+    ]
+
+    finalized: list[FinalizedShardWorker] = []
+    for shard_id, worker_id, row in [
+        ("shard-1", "worker-1", rows[0]),
+        ("shard-2", "worker-2", rows[1]),
+    ]:
+        writer = LeRobotWriterSink(str(out_root))
+        finalized.append(FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id))
+        with set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
+        ):
+            writer.write_shard_block(shard_id, [row])
+            writer.on_shard_complete(shard_id)
+
+    reducer = LeRobotMetaReduceSink(output=str(out_root))
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="local",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime(finalized)),
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    tasks = pq.read_table(out_root / "meta" / "tasks.parquet")
+    assert sorted(tasks.column("task").to_pylist()) == ["pick", "place"]
+    episodes = pq.read_table(
+        out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    )
+    assert sorted(task[0] for task in episodes.column("tasks").to_pylist()) == [
+        "pick",
+        "place",
+    ]
 
 
 def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
@@ -342,24 +665,18 @@ def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
         output_rel_template="videos/{stream_key}/chunk-{chunk_index}/file-{file_index:03d}.mp4",
         output_context={"chunk_index": "000"},
     )
-    asyncio.run(
-        writer.write_video(
-            mdr.video.VideoFile(
-                DataFile.resolve(uri),
-                from_timestamp_s=0.0,
-                to_timestamp_s=0.3,
-            ),
-        )
+    first_video = mdr.video.VideoFile(
+        DataFile.resolve(uri),
+        from_timestamp_s=0.0,
+        to_timestamp_s=0.3,
     )
-    asyncio.run(
-        writer.write_video(
-            mdr.video.VideoFile(
-                DataFile.resolve(uri),
-                from_timestamp_s=0.3,
-                to_timestamp_s=0.6,
-            ),
-        )
+    asyncio.run(first_video.write_to(writer))
+    second_video = mdr.video.VideoFile(
+        DataFile.resolve(uri),
+        from_timestamp_s=0.3,
+        to_timestamp_s=0.6,
     )
+    asyncio.run(second_video.write_to(writer))
     writer.close()
 
     assert read_open_calls == 1
@@ -516,44 +833,20 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
     out_root = tmp_path / "task-index"
     pipeline = mdr.from_items(
         [
-            {
-                "episode_index": 0,
-                "task": "pick",
-                "frames": [
-                    {
-                        "frame_index": 0,
-                        "timestamp": 0.0,
-                        "task_index": 5,
-                        "observation.state": [1.0],
-                    },
-                    {
-                        "frame_index": 1,
-                        "timestamp": 0.1,
-                        "task_index": 5,
-                        "observation.state": [2.0],
-                    },
-                ],
-                "metadata": _metadata({1: "place", 5: "pick"}),
-            },
-            {
-                "episode_index": 1,
-                "task": "place",
-                "frames": [
-                    {
-                        "frame_index": 0,
-                        "timestamp": 0.0,
-                        "task_index": 1,
-                        "observation.state": [3.0],
-                    },
-                    {
-                        "frame_index": 1,
-                        "timestamp": 0.1,
-                        "task_index": 1,
-                        "observation.state": [4.0],
-                    },
-                ],
-                "metadata": _metadata({1: "place", 5: "pick"}),
-            },
+            _lerobot_episode(
+                episode_index=0,
+                task="pick",
+                task_index=5,
+                values=[1.0, 2.0],
+                metadata=_metadata({1: "place", 5: "pick"}),
+            ),
+            _lerobot_episode(
+                episode_index=1,
+                task="place",
+                task_index=1,
+                values=[3.0, 4.0],
+                metadata=_metadata({1: "place", 5: "pick"}),
+            ),
         ],
         items_per_shard=10,
     ).write_lerobot(str(out_root))
@@ -590,20 +883,12 @@ def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> No
         ):
             writer.write_block(
                 [
-                    DictRow(
-                        {
-                            "episode_index": 0,
-                            "task": "pick",
-                            "frames": [
-                                {
-                                    "frame_index": 0,
-                                    "timestamp": 0.0,
-                                    "task_index": 7,
-                                    "observation.state": [1.0],
-                                }
-                            ],
-                            "metadata": _metadata(),
-                        },
+                    _lerobot_episode(
+                        episode_index=0,
+                        task="pick",
+                        task_index=7,
+                        values=[1.0],
+                        metadata=_metadata(),
                         shard_id="shard-1",
                     )
                 ]
@@ -629,49 +914,15 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
     tmp_path: Path,
 ) -> None:
     out_root = tmp_path / "cleanup"
-    row = DictRow(
-        {
-            "episode_index": 0,
-            "task": "pick",
-            "frames": [
-                {
-                    "frame_index": 0,
-                    "timestamp": 0.0,
-                    "task_index": 0,
-                    "observation.state": [1.0],
-                },
-                {
-                    "frame_index": 1,
-                    "timestamp": 0.1,
-                    "task_index": 0,
-                    "observation.state": [2.0],
-                },
-            ],
-            "metadata": _metadata(),
-        },
-        shard_id="shard-1",
-    )
-
     for worker_id, values in [("1", [1.0, 2.0]), ("2", [9.0, 10.0])]:
         writer = LeRobotWriterSink(str(out_root))
         runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime())
-        worker_row = row.update(
-            {
-                "frames": [
-                    {
-                        "frame_index": 0,
-                        "timestamp": 0.0,
-                        "task_index": 0,
-                        "observation.state": [values[0]],
-                    },
-                    {
-                        "frame_index": 1,
-                        "timestamp": 0.1,
-                        "task_index": 0,
-                        "observation.state": [values[1]],
-                    },
-                ],
-            }
+        worker_row = _lerobot_episode(
+            episode_index=0,
+            task="pick",
+            task_index=0,
+            values=values,
+            shard_id="shard-1",
         )
         with set_active_run_context(
             job_id="job",
