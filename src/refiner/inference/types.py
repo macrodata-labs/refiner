@@ -55,9 +55,42 @@ Message: TypeAlias = SystemMessage | UserMessage | AssistantMessage
 
 class OpenAIProviderOptions(TypedDict, total=False):
     imageDetail: Literal["auto", "low", "high"]
-    reasoningEffort: Literal["minimal", "low", "medium", "high"]
-    reasoningSummary: Literal["auto", "concise", "detailed"]
+    logitBias: Mapping[int | str, int | float]
+    logprobs: bool | int
+    parallelToolCalls: bool
+    user: str
+    reasoningEffort: Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+    maxCompletionTokens: int | float
+    store: bool
+    metadata: Mapping[str, Any]
+    prediction: Mapping[str, Any]
+    serviceTier: Literal["auto", "flex", "priority", "default"]
+    strictJsonSchema: bool
+    reasoningSummary: str
     textVerbosity: Literal["low", "medium", "high"]
+    promptCacheKey: str
+    promptCacheRetention: Literal["in_memory", "24h"]
+    safetyIdentifier: str
+    systemMessageMode: Literal["system", "developer", "remove"]
+    forceReasoning: bool
+    conversation: str | None
+    include: (
+        Sequence[
+            Literal[
+                "reasoning.encrypted_content",
+                "file_search_call.results",
+                "message.output_text.logprobs",
+            ]
+        ]
+        | None
+    )
+    instructions: str | None
+    maxToolCalls: int | None
+    previousResponseId: str | None
+    passThroughUnsupportedFiles: bool
+    truncation: Literal["auto", "disabled"] | None
+    contextManagement: Sequence[Mapping[str, Any]] | None
+    allowedTools: Mapping[str, Any]
 
 
 class GoogleThinkingConfig(TypedDict, total=False):
@@ -94,7 +127,16 @@ class GoogleProviderOptions(TypedDict, total=False):
     responseModalities: Sequence[Literal["TEXT", "IMAGE"]]
     thinkingConfig: GoogleThinkingConfig
     cachedContent: str
+    structuredOutputs: bool
     safetySettings: Sequence[GoogleSafetySetting]
+    threshold: Literal[
+        "HARM_BLOCK_THRESHOLD_UNSPECIFIED",
+        "BLOCK_LOW_AND_ABOVE",
+        "BLOCK_MEDIUM_AND_ABOVE",
+        "BLOCK_ONLY_HIGH",
+        "BLOCK_NONE",
+        "OFF",
+    ]
     audioTimestamp: bool
     labels: Mapping[str, str]
     mediaResolution: Literal[
@@ -104,7 +146,11 @@ class GoogleProviderOptions(TypedDict, total=False):
         "MEDIA_RESOLUTION_HIGH",
     ]
     imageConfig: GoogleImageConfig
+    retrievalConfig: Mapping[str, Any]
+    streamFunctionCallArguments: bool
     serviceTier: Literal["standard", "flex", "priority"]
+    sharedRequestType: Literal["priority", "flex", "standard"]
+    requestType: Literal["shared"]
 
 
 class AnthropicCacheControl(TypedDict, total=False):
@@ -119,13 +165,34 @@ class AnthropicThinking(TypedDict, total=False):
 
 
 class AnthropicProviderOptions(TypedDict, total=False):
+    sendReasoning: bool
+    structuredOutputMode: Literal["outputFormat", "jsonTool", "auto"]
     thinking: AnthropicThinking
+    disableParallelToolUse: bool
     cacheControl: AnthropicCacheControl
-    metadata: Mapping[str, str]
+    metadata: Mapping[str, Any]
+    mcpServers: Sequence[Mapping[str, Any]]
+    container: Mapping[str, Any]
+    toolStreaming: bool
     effort: Literal["low", "medium", "high", "xhigh", "max"]
+    taskBudget: Mapping[str, Any]
     speed: Literal["fast", "standard"]
     inferenceGeo: Literal["us", "global"]
     anthropicBeta: Sequence[str]
+    contextManagement: Mapping[str, Any]
+
+
+class TextContentPart(TypedDict):
+    type: Literal["text"]
+    text: str
+
+
+class ReasoningContentPart(TypedDict):
+    type: Literal["reasoning"]
+    text: str
+
+
+ResponseContentPart: TypeAlias = TextContentPart | ReasoningContentPart
 
 
 class AnthropicCitations(TypedDict):
@@ -155,8 +222,11 @@ __all__ = [
     "Message",
     "OpenAIProviderOptions",
     "ProviderOptions",
+    "ReasoningContentPart",
+    "ResponseContentPart",
     "SystemMessage",
     "TextPart",
+    "TextContentPart",
     "UserContent",
     "UserMessage",
 ]

@@ -754,6 +754,98 @@ def test_inference_generate_text_requires_prompt_or_messages() -> None:
         asyncio.run(_invoke())
 
 
+def test_parse_openai_chat_response_includes_reasoning_content() -> None:
+    response = openai_module._parse_inference_response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "reasoning": "think",
+                        "content": "answer",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {},
+        },
+        use_chat=True,
+    )
+
+    assert response.text == "answer"
+    assert list(response.content) == [
+        {"type": "reasoning", "text": "think"},
+        {"type": "text", "text": "answer"},
+    ]
+
+
+def test_parse_openai_responses_response_includes_reasoning_content() -> None:
+    response = openai_module._parse_openai_responses_response(
+        {
+            "output": [
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "think"}],
+                },
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "answer"}],
+                },
+            ],
+            "usage": {},
+        }
+    )
+
+    assert response.text == "answer"
+    assert list(response.content) == [
+        {"type": "reasoning", "text": "think"},
+        {"type": "text", "text": "answer"},
+    ]
+
+
+def test_parse_google_response_includes_reasoning_content() -> None:
+    response = openai_module._parse_google_inference_response(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": "think", "thought": True},
+                            {"text": "answer"},
+                        ]
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {},
+        }
+    )
+
+    assert response.text == "answer"
+    assert list(response.content) == [
+        {"type": "reasoning", "text": "think"},
+        {"type": "text", "text": "answer"},
+    ]
+
+
+def test_parse_anthropic_response_includes_reasoning_content() -> None:
+    response = openai_module._parse_anthropic_inference_response(
+        {
+            "content": [
+                {"type": "thinking", "text": "think"},
+                {"type": "text", "text": "answer"},
+            ],
+            "usage": {},
+            "stop_reason": "end_turn",
+        }
+    )
+
+    assert response.text == "answer"
+    assert list(response.content) == [
+        {"type": "reasoning", "text": "think"},
+        {"type": "text", "text": "answer"},
+    ]
+
+
 def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
     seen: dict[str, object] = {}
 

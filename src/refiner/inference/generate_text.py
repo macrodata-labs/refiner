@@ -189,7 +189,25 @@ def _apply_openai_responses_options(
     if not provider_options:
         return
     openai_options = provider_options.get("openai", {})
-    for key in ("store", "parallelToolCalls", "previousResponseId"):
+    passthrough = {
+        "conversation",
+        "include",
+        "instructions",
+        "logprobs",
+        "maxToolCalls",
+        "metadata",
+        "parallelToolCalls",
+        "previousResponseId",
+        "promptCacheKey",
+        "promptCacheRetention",
+        "safetyIdentifier",
+        "serviceTier",
+        "store",
+        "truncation",
+        "user",
+        "contextManagement",
+    }
+    for key in passthrough:
         if key in openai_options:
             payload[key] = openai_options[key]
 
@@ -211,6 +229,22 @@ def _normalize_openai_reasoning_options(
     if not provider_options:
         return
     openai_options = provider_options.get("openai", {})
+    for key in (
+        "logitBias",
+        "logprobs",
+        "parallelToolCalls",
+        "user",
+        "maxCompletionTokens",
+        "store",
+        "metadata",
+        "prediction",
+        "serviceTier",
+        "promptCacheKey",
+        "promptCacheRetention",
+        "safetyIdentifier",
+    ):
+        if key in openai_options:
+            payload[key] = openai_options[key]
     reasoning: dict[str, Any] = {}
     if "reasoningEffort" in openai_options:
         reasoning["effort"] = openai_options["reasoningEffort"]

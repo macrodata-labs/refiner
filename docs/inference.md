@@ -83,6 +83,10 @@ async def summarize(row, generate_text):
     return {"summary": response.text}
 ```
 
+`InferenceResponse.text` contains the concatenated text output. For providers
+that return reasoning, `InferenceResponse.content` includes normalized
+`{"type": "reasoning", "text": ...}` and `{"type": "text", "text": ...}` parts.
+
 ### GoogleEndpointProvider
 Use `GoogleEndpointProvider` for native Gemini requests, including in-memory
 video inputs. Set `GOOGLE_GENERATIVE_AI_API_KEY` in the worker environment, or

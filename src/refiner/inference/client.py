@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from refiner.inference.types import ResponseContentPart
+
 _OPENAI_ENDPOINT_TIMEOUT_SECONDS = 600.0
 _OPENAI_ENDPOINT_MAX_RETRIES = 6
 _OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS = 5.0
@@ -23,6 +25,7 @@ class InferenceResponse:
     finish_reason: str | None
     usage: Mapping[str, Any]
     response: Mapping[str, Any]
+    content: Sequence[ResponseContentPart] = ()
 
     @property
     def raw(self) -> Mapping[str, Any]:
@@ -308,13 +311,19 @@ def _parse_inference_response(
     choice = choices[0]
     if not isinstance(choice, Mapping):
         raise RuntimeError("generation response choices[0] must be an object")
+    content_parts: list[ResponseContentPart] = []
     if use_chat:
         message = choice.get("message")
         if not isinstance(message, Mapping):
             raise RuntimeError("chat completion response is missing message")
+        reasoning = message.get("reasoning")
+        if isinstance(reasoning, str) and reasoning:
+            content_parts.append({"type": "reasoning", "text": reasoning})
         content = message.get("content")
         if isinstance(content, str):
             text = content
+            if text:
+                content_parts.append({"type": "text", "text": text})
         elif content is None:
             logger.warning(
                 "chat completion response had null message.content; returning empty text",
@@ -336,12 +345,16 @@ def _parse_inference_response(
                     "chat completion response is missing textual content"
                 )
             text = "".join(parts)
+            for part in parts:
+                content_parts.append({"type": "text", "text": part})
         else:
             raise RuntimeError("chat completion response is missing textual content")
     else:
         text = choice.get("text")
         if not isinstance(text, str):
             raise RuntimeError("completion response is missing text")
+        if text:
+            content_parts.append({"type": "text", "text": text})
     usage = response_json.get("usage")
     if not isinstance(usage, Mapping):
         usage = {}
@@ -353,27 +366,43 @@ def _parse_inference_response(
         finish_reason=finish_reason,
         usage=usage,
         response=response_json,
+        content=content_parts,
     )
 
 
 def _parse_openai_responses_response(
     response_json: Mapping[str, Any],
 ) -> InferenceResponse:
-    text_parts: list[str] = []
+    content_parts: list[ResponseContentPart] = []
     output = response_json.get("output")
     if isinstance(output, Sequence):
         for item in output:
             if not isinstance(item, Mapping):
+                continue
+            item_type = item.get("type")
+            if item_type == "reasoning":
+                summary = item.get("summary")
+                if isinstance(summary, Sequence):
+                    for summary_part in summary:
+                        if isinstance(summary_part, Mapping) and isinstance(
+                            summary_part.get("text"), str
+                        ):
+                            content_parts.append(
+                                {"type": "reasoning", "text": summary_part["text"]}
+                            )
                 continue
             content = item.get("content")
             if not isinstance(content, Sequence):
                 continue
             for part in content:
                 if isinstance(part, Mapping) and isinstance(part.get("text"), str):
-                    text_parts.append(part["text"])
-    if not text_parts and isinstance(response_json.get("output_text"), str):
-        text_parts.append(response_json["output_text"])
-    if not text_parts:
+                    content_parts.append({"type": "text", "text": part["text"]})
+    if not _text_from_content(content_parts) and isinstance(
+        response_json.get("output_text"), str
+    ):
+        content_parts.append({"type": "text", "text": response_json["output_text"]})
+    text = _text_from_content(content_parts)
+    if not text:
         raise RuntimeError("openai responses response is missing textual content")
     usage = response_json.get("usage")
     if not isinstance(usage, Mapping):
@@ -386,10 +415,11 @@ def _parse_openai_responses_response(
         "total_tokens": usage.get("total_tokens", 0),
     }
     return InferenceResponse(
-        text="".join(text_parts),
+        text=text,
         finish_reason=None,
         usage=mapped_usage,
         response=response_json,
+        content=content_parts,
     )
 
 
@@ -399,14 +429,17 @@ def _parse_anthropic_inference_response(
     content = response_json.get("content")
     if not isinstance(content, Sequence):
         raise RuntimeError("anthropic response is missing content")
-    text_parts = [
-        part["text"]
-        for part in content
-        if isinstance(part, Mapping)
-        and part.get("type") == "text"
-        and isinstance(part.get("text"), str)
-    ]
-    if not text_parts:
+    content_parts: list[ResponseContentPart] = []
+    for part in content:
+        if not isinstance(part, Mapping) or not isinstance(part.get("text"), str):
+            continue
+        part_type = part.get("type")
+        if part_type == "text":
+            content_parts.append({"type": "text", "text": part["text"]})
+        elif part_type in {"thinking", "reasoning"}:
+            content_parts.append({"type": "reasoning", "text": part["text"]})
+    text = _text_from_content(content_parts)
+    if not text:
         raise RuntimeError("anthropic response is missing textual content")
     usage = response_json.get("usage")
     if not isinstance(usage, Mapping):
@@ -419,10 +452,11 @@ def _parse_anthropic_inference_response(
     if finish_reason is not None and not isinstance(finish_reason, str):
         finish_reason = str(finish_reason)
     return InferenceResponse(
-        text="".join(text_parts),
+        text=text,
         finish_reason=finish_reason,
         usage=mapped_usage,
         response=response_json,
+        content=content_parts,
     )
 
 
@@ -441,11 +475,16 @@ def _parse_google_inference_response(
     parts = content.get("parts")
     if not isinstance(parts, Sequence):
         raise RuntimeError("google generation response is missing content.parts")
-    text_parts: list[str] = []
+    content_parts: list[ResponseContentPart] = []
     for part in parts:
-        if isinstance(part, Mapping) and isinstance(part.get("text"), str):
-            text_parts.append(part["text"])
-    if not text_parts:
+        if not isinstance(part, Mapping) or not isinstance(part.get("text"), str):
+            continue
+        if part.get("thought") is True:
+            content_parts.append({"type": "reasoning", "text": part["text"]})
+        else:
+            content_parts.append({"type": "text", "text": part["text"]})
+    text = _text_from_content(content_parts)
+    if not text:
         raise RuntimeError("google generation response is missing textual content")
     usage_metadata = response_json.get("usageMetadata")
     usage = _google_usage(usage_metadata if isinstance(usage_metadata, Mapping) else {})
@@ -453,11 +492,16 @@ def _parse_google_inference_response(
     if finish_reason is not None and not isinstance(finish_reason, str):
         finish_reason = str(finish_reason)
     return InferenceResponse(
-        text="".join(text_parts),
+        text=text,
         finish_reason=finish_reason,
         usage=usage,
         response=response_json,
+        content=content_parts,
     )
+
+
+def _text_from_content(content: Sequence[ResponseContentPart]) -> str:
+    return "".join(part["text"] for part in content if part["type"] == "text")
 
 
 def _google_usage(usage_metadata: Mapping[str, Any]) -> Mapping[str, Any]:

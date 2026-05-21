@@ -435,18 +435,18 @@ def _anthropic_cache_control(part: Mapping[str, Any]) -> object:
 
 def _apply_google_options(payload: dict[str, Any], options: Mapping[str, Any]) -> None:
     generation_keys = {
+        "audioTimestamp",
+        "imageConfig",
+        "mediaResolution",
         "responseModalities",
         "thinkingConfig",
-        "audioTimestamp",
-        "mediaResolution",
-        "imageConfig",
     }
     generation_config = payload.setdefault("generationConfig", {})
     if isinstance(generation_config, dict):
         for key in generation_keys:
             if key in options:
                 generation_config[key] = options[key]
-    for key in ("safetySettings", "cachedContent", "labels", "serviceTier"):
+    for key in ("cachedContent", "labels", "safetySettings", "serviceTier"):
         if key in options:
             payload[key] = options[key]
 
@@ -455,12 +455,13 @@ def _apply_anthropic_options(
     payload: dict[str, Any], options: Mapping[str, Any]
 ) -> None:
     for key in (
-        "thinking",
-        "metadata",
-        "contextManagement",
         "container",
+        "contextManagement",
+        "metadata",
         "mcpServers",
         "service_tier",
+        "taskBudget",
+        "thinking",
     ):
         if key in options:
             payload[key] = options[key]
