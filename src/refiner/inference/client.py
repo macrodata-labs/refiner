@@ -132,7 +132,7 @@ class _OpenAIEndpointClient:
             message = f"{operation} request failed with HTTP {err.response.status_code}"
             if detail:
                 message = f"{message}: {detail}"
-            if err.response.status_code == 429:
+            if err.response.status_code in {429, 503}:
                 raise GenerationRateLimitError(
                     message,
                     retry_after_seconds=_retry_after_seconds(err.response),

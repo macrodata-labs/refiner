@@ -351,13 +351,14 @@ def test_openai_endpoint_warns_on_null_chat_content(caplog) -> None:
     )
 
 
-def test_openai_endpoint_does_not_retry_on_http_503(monkeypatch) -> None:
+def test_openai_endpoint_treats_http_503_as_rate_limit(monkeypatch) -> None:
     seen: dict[str, int] = {"calls": 0, "sleeps": 0}
 
     request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
     response = httpx.Response(
         503,
         request=request,
+        headers={"Retry-After": "2.5"},
         json={"error": {"message": "Service unavailable"}},
     )
 
@@ -377,7 +378,7 @@ def test_openai_endpoint_does_not_retry_on_http_503(monkeypatch) -> None:
     monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.setattr(openai_module.asyncio, "sleep", _fake_sleep)
 
-    with pytest.raises(RuntimeError, match="generation request failed with HTTP 503"):
+    with pytest.raises(GenerationRateLimitError) as error:
         asyncio.run(
             openai_module._OpenAIEndpointClient(
                 base_url="https://api.example.com",
@@ -389,6 +390,7 @@ def test_openai_endpoint_does_not_retry_on_http_503(monkeypatch) -> None:
             )
         )
 
+    assert error.value.retry_after_seconds == 2.5
     assert seen == {"calls": 1, "sleeps": 0}
 
 
