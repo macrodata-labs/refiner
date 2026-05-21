@@ -14,6 +14,13 @@ _BYTES_WITH_PATH_TYPE = pa.struct(
         pa.field("path", pa.string()),
     ]
 )
+_VIDEO_FRAME_ARRAY_TYPE = pa.large_list(
+    pa.large_list(
+        pa.large_list(
+            pa.list_(pa.uint8(), list_size=3),
+        ),
+    ),
+)
 
 DTypeLike: TypeAlias = str | pa.DataType | pa.Field
 DTypeMapping: TypeAlias = Mapping[str, DTypeLike]
@@ -137,6 +144,10 @@ def video_bytes_with_path() -> pa.Field:
     return asset_bytes_with_path("video")
 
 
+def video_frame_array() -> pa.Field:
+    return _asset_field("video", _VIDEO_FRAME_ARRAY_TYPE)
+
+
 def pdf_path() -> pa.Field:
     return asset_path("pdf")
 
@@ -225,6 +236,8 @@ def asset_storage(field: pa.Field) -> str | None:
         return "bytes"
     if _is_bytes_with_path_type(field_type):
         return "bytes_with_path"
+    if _is_video_frame_array_type(field_type):
+        return "frame_array"
     return None
 
 
@@ -271,6 +284,10 @@ def _is_bytes_with_path_type(field_type: pa.DataType) -> builtins.bool:
     return (
         pa.types.is_binary(bytes_type) or pa.types.is_large_binary(bytes_type)
     ) and (pa.types.is_string(path_type) or pa.types.is_large_string(path_type))
+
+
+def _is_video_frame_array_type(field_type: pa.DataType) -> builtins.bool:
+    return field_type.equals(_VIDEO_FRAME_ARRAY_TYPE)
 
 
 def _replace_field_dtype(
@@ -387,5 +404,6 @@ __all__ = [
     "uint64",
     "video_bytes",
     "video_bytes_with_path",
+    "video_frame_array",
     "video_path",
 ]

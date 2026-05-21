@@ -6,6 +6,8 @@ import numpy as np
 
 import refiner as mdr
 from refiner.io import DataFile
+from refiner.io import DataFolder
+from refiner.video import VideoStreamWriter, VideoTranscodeConfig
 
 
 def _write_video(path, *, num_frames: int = 5, fps: int = 5) -> None:
@@ -29,12 +31,12 @@ def _write_video(path, *, num_frames: int = 5, fps: int = 5) -> None:
             container.mux(packet)
 
 
-async def _collect_frames(video: mdr.video.VideoFile):
+async def _collect_frames(video: mdr.video.VideoSource):
     return [frame async for frame in video.iter_frames()]
 
 
 async def _collect_windows(
-    video: mdr.video.VideoFile,
+    video: mdr.video.VideoSource,
     *,
     offsets: list[int],
     stride: int = 1,
@@ -63,6 +65,49 @@ def test_iter_frames_respects_clip_bounds(tmp_path) -> None:
 
     assert [frame.index for frame in frames] == [0, 1, 2]
     assert [frame.timestamp_s for frame in frames] == [0.2, 0.4, 0.6]
+
+
+def test_video_frame_array_clip_returns_frame_view() -> None:
+    frames = np.stack([np.full((4, 4, 3), value, dtype=np.uint8) for value in range(6)])
+    video = mdr.video.VideoFrameArray(frames, fps=10)
+
+    clipped = video.clipped(from_timestamp_s=0.2, to_timestamp_s=0.5)
+
+    assert isinstance(clipped, mdr.video.VideoFrameArray)
+    clipped_frames = list(clipped.iter_frame_arrays())
+    assert len(clipped_frames) == 3
+    assert clipped_frames[0].shape == (4, 4, 3)
+    assert [int(frame[0, 0, 0]) for frame in clipped_frames] == [2, 3, 4]
+
+
+def test_video_frame_array_iter_frames() -> None:
+    frames = np.stack([np.full((4, 4, 3), value, dtype=np.uint8) for value in range(3)])
+    video = mdr.video.VideoFrameArray(frames, fps=5)
+
+    decoded = asyncio.run(_collect_frames(video))
+
+    assert [frame.index for frame in decoded] == [0, 1, 2]
+    assert [frame.timestamp_s for frame in decoded] == [0.0, 0.2, 0.4]
+
+
+def test_video_stream_writer_accepts_video_frame_array(tmp_path) -> None:
+    video = mdr.video.VideoFrameArray(
+        np.stack([np.full((8, 8, 3), value, dtype=np.uint8) for value in range(4)]),
+        fps=10,
+    )
+    writer = VideoStreamWriter(
+        folder=DataFolder.resolve(tmp_path),
+        stream_key="camera",
+        transcode_config=VideoTranscodeConfig(),
+        video_bytes_limit=1024 * 1024,
+        output_rel_template="videos/{stream_key}/file-{file_index:03d}.mp4",
+    )
+
+    written = asyncio.run(video.write_to(writer))
+    writer.close()
+
+    assert written.segment.fps == 10
+    assert written.segment.to_timestamp == 0.4
 
 
 def test_iter_frame_windows_supports_lookahead(tmp_path) -> None:

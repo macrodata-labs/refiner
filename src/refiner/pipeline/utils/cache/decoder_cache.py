@@ -61,8 +61,8 @@ class OpenedVideoSourceCache(LeaseCache[str, OpenedVideoSource]):
         source = await asyncio.get_running_loop().run_in_executor(
             io_executor(),
             partial(
-                _open_video_source,
-                uri=key,
+                open_video_source,
+                video=DataFile.resolve(key),
             ),
         )
         return source, 0
@@ -106,13 +106,16 @@ def _probe_video_source(
     )
 
 
-def _open_video_source(
-    *,
-    uri: str,
-) -> OpenedVideoSource:
+def open_video_source(video: Any) -> OpenedVideoSource:
     import av
 
-    input_file = DataFile.resolve(uri).open("rb")
+    source_name = str(video)
+    if isinstance(video, DataFile):
+        source_name = str(video)
+        input_file = video.open(mode="rb")
+    else:
+        source_name = str(getattr(video, "uri", type(video).__name__))
+        input_file = video.open()
     try:
         container = av.open(input_file, mode="r")
         stream = cast(
@@ -122,12 +125,12 @@ def _open_video_source(
         if stream is None:
             container.close()
             input_file.close()
-            raise ValueError(f"Video source has no video stream for {uri!r}")
+            raise ValueError(f"Video source has no video stream for {source_name!r}")
         probe = _probe_video_source(
             container=container,
         )
         return OpenedVideoSource(
-            uri=uri,
+            uri=source_name,
             probe=probe,
             input_file=input_file,
             container=container,
@@ -190,5 +193,6 @@ __all__ = [
     "OpenedVideoSourceCache",
     "VideoSourceProbe",
     "get_opened_video_source_cache",
+    "open_video_source",
     "reset_opened_video_source_cache",
 ]

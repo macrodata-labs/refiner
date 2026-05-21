@@ -2,7 +2,6 @@ from refiner.robotics.lerobot_format.tabular import LeRobotTabular
 from refiner.robotics.lerobot_format.row import (
     LeRobotRow,
     LeRobotStatsView,
-    LeRobotVideoRef,
     LeRobotVideosView,
 )
 from refiner.robotics.lerobot_format.metadata import (
@@ -35,7 +34,6 @@ __all__ = [
     "LeRobotStatsView",
     "LeRobotTasks",
     "LeRobotVideoInfo",
-    "LeRobotVideoRef",
     "LeRobotVideosView",
     "compute_feature_stats",
     "compute_table_stats",

@@ -140,21 +140,19 @@ def keep_first_ten_frames(row):
 
 ### Videos
 
-`row.videos` is a mapping from video feature key to `LeRobotVideoRef`.
+`row.videos` is a mapping from video feature key to `VideoSource`.
 
-For each video ref, you can access:
+For LeRobot rows, each source is a clipped `VideoFile`, so you can access:
 
 - `video.uri`
 - `video.from_timestamp_s`
 - `video.to_timestamp_s`
-- `video.video`
-  - the underlying `VideoFile`
 
-You can also decode a `VideoFile` lazily through methods on the handle itself:
+All video sources expose:
 
 - `video.iter_frames()`
 - `video.iter_frame_windows(offsets=[...], stride=...)`
-- `await video.export_clip()`
+- `video.clipped(from_timestamp_s=..., to_timestamp_s=...)`
 
 Example:
 
@@ -163,8 +161,7 @@ def shift_videos_by_half_second(row):
     for key, video in row.videos.items():
         row = row.with_video(
             key,
-            from_timestamp_s=(video.from_timestamp_s or 0.0) + 0.5,
-            to_timestamp_s=(video.to_timestamp_s or 0.0) + 0.5,
+            video.clipped(from_timestamp_s=0.5),
         )
     return row
 ```
@@ -260,6 +257,45 @@ pipeline = (
 For list-valued columns like `tasks`, `col("tasks").is_in(["pick"])` means
 "does this episode contain any task in that set?"
 
+### Adapting Generic Robotics Rows
+
+Use `to_robot_rows(...)` when your data is already organized as generic
+robotics episodes or frame rows and you want the common `RoboticsRow` view:
+
+```python
+pipeline = pipeline.to_robot_rows(
+    episode_id_key="episode_id",
+    fps=30.0,
+    robot_type="aloha",
+    nested_frames_key="frames",
+    timestamp_key="time_s",
+    action_key="actions",
+    state_key="qpos",
+    extra_observation_keys={"images.main": "camera"},
+    video_keys={"images.front": "front_video"},
+)
+```
+
+By default `episode_id_key`, `fps`, and `robot_type` are unset. Pass
+`episode_id_key=` when source rows carry a stable episode id. Pass literal
+`fps=` and `robot_type=` values when they are dataset constants, or pass
+`fps_key=` and `robot_type_key=` when each source row carries those values in
+columns.
+
+For `layout="episode_rows"`, `nested_frames_key=` names the source column that
+contains nested per-frame rows. For `layout="frame_rows"`, it names the grouped
+per-episode frame table written by the adapter. When omitted in `frame_rows`
+mode, Refiner uses an internal hidden key, so unclaimed source columns stay in
+the nested frame table and do not appear as episode metadata unless listed in
+`episode_metadata_keys=`.
+
+Video fields are detected from schema asset metadata, such as
+`dtypes={"front_video": mdr.datatype.video_path()}` on readers that accept
+`dtypes`. For raw rows without asset metadata, pass `video_keys=` to declare
+which source keys are video streams. `extra_observation_keys=` and `video_keys=`
+both accept either a mapping for renames or an iterable of source keys when no
+rename is needed.
+
 ## Writing Datasets
 
 Use `write_lerobot(...)` to write a LeRobot-compatible output dataset:
@@ -267,6 +303,10 @@ Use `write_lerobot(...)` to write a LeRobot-compatible output dataset:
 ```python
 pipeline = pipeline.write_lerobot("hf://buckets/macrodata/my_robotics_output")
 ```
+
+Inputs must be `LeRobotRow` values, such as rows from `read_lerobot(...)`, or
+generic `RoboticsRow` values. For raw robotics rows, call `to_robot_rows(...)`
+before `write_lerobot(...)`.
 
 This is more than a generic file writer. The LeRobot writer handles:
 

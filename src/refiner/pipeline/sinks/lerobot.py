@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -12,7 +13,7 @@ import pyarrow.parquet as pq
 from refiner.execution.asyncio.runtime import submit
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.video import VideoFile
+from refiner.video import VideoSource
 from refiner.video.writer import VideoStreamWriter, VideoTranscodeConfig
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import DictRow, Row
@@ -25,12 +26,15 @@ from refiner.robotics.lerobot_format import (
     LeRobotInfo,
     LeRobotMetadata,
     LeRobotRow,
+    LeRobotStatsFile,
+    LeRobotTasks,
     LeRobotVideoInfo,
     LeRobotVideoStatsAccumulator,
     compute_table_stats,
     default_feature_info_by_key,
     infer_feature_info,
 )
+from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import register_gauge
@@ -55,6 +59,7 @@ class _LeRobotShardState:
     video_writers: dict[str, VideoStreamWriter] = field(
         default_factory=dict, init=False
     )
+    generic_task_to_index: dict[str, int] = field(default_factory=dict, init=False)
 
 
 @dataclass(slots=True)
@@ -243,22 +248,72 @@ class LeRobotWriterSink(BaseSink):
 
     async def _write_row(self, state: _LeRobotShardState, row: Row) -> None:
         """Write one LeRobot episode into staged shard-local outputs."""
-        metadata = row.metadata if isinstance(row, LeRobotRow) else row.get("metadata")
-        if not isinstance(metadata, LeRobotMetadata):
-            raise ValueError("LeRobot writer requires LeRobot metadata on each row")
-
+        is_lerobot_row = isinstance(row, LeRobotRow)
+        is_generic_robotics_row = not is_lerobot_row and isinstance(row, RoboticsRow)
         if isinstance(row, LeRobotRow):
+            metadata = row.metadata
             frames = (
                 row.frames
                 if isinstance(row.frames, Tabular)
                 else Tabular.from_rows(cast(Sequence[Row], row.frames))
             )
+        elif is_generic_robotics_row:
+            robotics_row = cast(RoboticsRow, row)
+            task_index = None
+            if robotics_row.task is not None:
+                task_index = state.generic_task_to_index.get(robotics_row.task)
+                if task_index is None:
+                    digest = hashlib.blake2b(
+                        robotics_row.task.encode("utf-8"),
+                        digest_size=8,
+                    ).digest()
+                    task_index = int.from_bytes(digest, "big") & ((1 << 63) - 1)
+                    existing_task = next(
+                        (
+                            task
+                            for task, index in state.generic_task_to_index.items()
+                            if index == task_index
+                        ),
+                        None,
+                    )
+                    if existing_task is not None:
+                        raise ValueError(
+                            "LeRobot writer encountered colliding task_index values "
+                            f"for {existing_task!r} and {robotics_row.task!r}"
+                        )
+                    state.generic_task_to_index[robotics_row.task] = task_index
+            frames = robotics_row.to_frame_table()
+            if task_index is not None:
+                frames = frames.with_table(
+                    set_or_append_column(
+                        frames.table,
+                        "task_index",
+                        pa.array([task_index] * frames.num_rows, type=pa.int64()),
+                    )
+                )
+            elif "task_index" in frames.table.column_names:
+                frames = frames.with_table(frames.table.drop(["task_index"]))
+
+            metadata = LeRobotMetadata(
+                info=LeRobotInfo(
+                    fps=(
+                        int(robotics_row.fps) if robotics_row.fps is not None else None
+                    ),
+                    robot_type=robotics_row.robot_type,
+                ),
+                stats=LeRobotStatsFile({}),
+                tasks=LeRobotTasks(
+                    {
+                        task_index: task
+                        for task, task_index in state.generic_task_to_index.items()
+                    }
+                ),
+            )
         else:
-            frames = Tabular.from_rows(
-                [
-                    frame if isinstance(frame, Row) else DictRow(frame)
-                    for frame in row["frames"]
-                ]
+            raise ValueError(
+                "write_lerobot requires LeRobotRow or RoboticsRow inputs. "
+                "Call to_robot_rows(...) before write_lerobot(...) when writing "
+                "raw robotics rows."
             )
         if frames.num_rows <= 0:
             # empty frames
@@ -266,29 +321,38 @@ class LeRobotWriterSink(BaseSink):
 
         if isinstance(row, LeRobotRow):
             base_row = row._row
-            video_inputs = [
-                (video_ref.key, video_ref.video) for video_ref in row.videos.values()
-            ]
+            video_inputs = list(row.videos.items())
             source_stats_by_key = {key: row.stats.get(key) for key, _ in video_inputs}
             frame_count = row.length
         else:
-            base_row = DictRow(
-                {
-                    key: value
-                    for key, value in row.items()
-                    if key not in {"frames", "metadata"}
-                    and not isinstance(value, VideoFile)
-                },
-                shard_id=row.shard_id,
-            )
-            video_inputs = [
-                (key, value)
-                for key, value in row.items()
-                if isinstance(value, VideoFile)
-            ]
-            source_stats_by_key: dict[str, LeRobotFeatureStats | None] = {
-                key: None for key, _ in video_inputs
-            }
+            robotics_row = cast(RoboticsRow, row)
+            base_values: dict[str, Any] = {}
+            if isinstance(row, Mapping):
+                base_values.update(
+                    {
+                        key: value
+                        for key, value in row.items()
+                        if key not in {"frames", "metadata"}
+                        and not isinstance(value, VideoSource)
+                    }
+                )
+            try:
+                episode_index = int(robotics_row.episode_id)
+            except ValueError:
+                episode_index = -1
+            if not (0 <= episode_index < 2**63):
+                digest = hashlib.blake2b(
+                    robotics_row.episode_id.encode("utf-8"),
+                    digest_size=8,
+                ).digest()
+                episode_index = int.from_bytes(digest, "big") & ((1 << 63) - 1)
+            base_values.setdefault("episode_index", episode_index)
+            base_values.setdefault("episode_id", robotics_row.episode_id)
+            if robotics_row.task is not None:
+                base_values.setdefault("task", robotics_row.task)
+            base_row = DictRow(base_values, shard_id=row.shard_id)
+            video_inputs = list(robotics_row.videos.items())
+            source_stats_by_key = {key: None for key, _ in video_inputs}
             frame_count = frames.num_rows
 
         if state.metadata is None:
@@ -300,6 +364,8 @@ class LeRobotWriterSink(BaseSink):
             raise ValueError(
                 "LeRobot writer requires stable fps and robot_type within each shard"
             )
+        elif is_generic_robotics_row:
+            state.metadata = metadata
         elif metadata.tasks.index_to_task != state.metadata.tasks.index_to_task:
             raise ValueError(
                 "LeRobot writer encountered mismatched task metadata across episodes"
@@ -410,7 +476,7 @@ class LeRobotWriterSink(BaseSink):
         state: _LeRobotShardState,
         *,
         video_key: str,
-        video: VideoFile,
+        video: VideoSource,
         frame_count: int,
         source_stats: LeRobotFeatureStats | None,
     ) -> tuple[str, dict[str, Any], LeRobotFeatureInfo | None]:
@@ -419,12 +485,11 @@ class LeRobotWriterSink(BaseSink):
             frame_count=frame_count,
             quantile_bins=self.quantile_bins,
         )
-        written = await self._video_writer(state, video_key).write_video(
-            # source video
-            video,
-            # callback to not shove lerobot logic inside video writer
+        written = await video.write_to(
+            self._video_writer(state, video_key),
             frame_observer=accumulator.observe_rgb_frame,
-            # if this episode has no video stats, or if we have been force to manually recompute all episodes, use transcode
+            # Remux can reuse source video stats. Transcode when stats are missing,
+            # explicitly stale, or the caller requests recomputation.
             force_transcode=(
                 self.force_recompute_video_stats
                 or source_stats is None
