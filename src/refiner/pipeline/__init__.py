@@ -13,6 +13,7 @@ from refiner.pipeline.pipeline import (
     read_lerobot,
     read_parquet,
     read_videos,
+    read_zarr,
     task,
 )
 from refiner.pipeline.resources import (
@@ -41,6 +42,7 @@ __all__ = [
     "read_lerobot",
     "read_parquet",
     "read_videos",
+    "read_zarr",
     "from_items",
     "from_source",
     "task",

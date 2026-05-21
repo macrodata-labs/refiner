@@ -30,7 +30,7 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
-from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
+from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink, ZarrSink
 from refiner.pipeline.sinks.assets import MissingAssetPolicy
 from refiner.pipeline.sources import (
     BaseSource,
@@ -40,9 +40,14 @@ from refiner.pipeline.sources import (
     Hdf5Reader,
     JsonReader,
     ParquetReader,
+    ZarrReader,
 )
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy, PathSelection
+from refiner.pipeline.sources.readers.zarr import (
+    MissingPolicy as ZarrMissingPolicy,
+    PathSelection as ZarrPathSelection,
+)
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
@@ -431,6 +436,23 @@ class RefinerPipeline:
             )
         )
 
+    def write_zarr(
+        self,
+        output: DataFolderLike,
+        *,
+        arrays: Mapping[str, str] | None = None,
+        episode_ends_path: str | None = "meta/episode_ends",
+        overwrite: bool = True,
+    ) -> "RefinerPipeline":
+        return self.with_sink(
+            ZarrSink(
+                output=output,
+                arrays=arrays,
+                episode_ends_path=episode_ends_path,
+                overwrite=overwrite,
+            )
+        )
+
     def __iter__(self) -> Iterator[Row]:
         return iter(self.iter_rows())
 
@@ -803,6 +825,33 @@ def read_hdf5(
             attrs=attrs,
             file_path_column=file_path_column,
             group_path_column=group_path_column,
+            missing_policy=missing_policy,
+            dtypes=dtypes,
+        )
+    )
+
+
+def read_zarr(
+    input: DataFolderLike,
+    *,
+    arrays: ZarrPathSelection | None = None,
+    attrs: ZarrPathSelection | None = None,
+    file_path_column: str | None = "file_path",
+    missing_policy: ZarrMissingPolicy = "error",
+    dtypes: DTypeMapping | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline with a Zarr reader source.
+
+    The reader emits one row for the Zarr group. Select arrays with `arrays`
+    and pass `episode_ends_key` to `to_robot_rows(...)` for Diffusion
+    Policy-style dataset arrays.
+    """
+    return RefinerPipeline(
+        source=ZarrReader(
+            input,
+            arrays=arrays,
+            attrs=attrs,
+            file_path_column=file_path_column,
             missing_policy=missing_policy,
             dtypes=dtypes,
         )
