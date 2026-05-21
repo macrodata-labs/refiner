@@ -1,3 +1,4 @@
+import refiner.robotics.egocentric as egocentric
 from refiner.robotics.motion import motion_trim
 from refiner.robotics.lerobot_format import (
     LeRobotFeatureInfo,
@@ -12,6 +13,7 @@ from refiner.robotics.lerobot_format import (
 )
 
 __all__ = [
+    "egocentric",
     "motion_trim",
     "LeRobotRow",
     "LeRobotTabular",

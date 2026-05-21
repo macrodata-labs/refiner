@@ -38,6 +38,10 @@ robotics = [
     "huggingface-hub>=1.4.1",
     "hf>=1.7.1",
 ]
+egocentric = [
+    "macrodata-refiner[robotics]",
+    "rerun-sdk",
+]
 text = [
     "warcio",
 ]
@@ -58,6 +62,7 @@ testing = [
 ]
 all = [
     "macrodata-refiner[testing]",
+    "macrodata-refiner[egocentric]",
 ]
 
 [project.scripts]
@@ -87,6 +92,10 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.ty]
+
+[tool.ty.src]
+exclude = ["examples/egocentric/"]
+
 [tool.ty.terminal]
 error-on-warning = false
 output-format = "concise"

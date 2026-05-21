@@ -28,6 +28,7 @@ writer, and robotics transforms.
   - [stage-1 writes and stage-2 reduction](#stage-1-writes-and-stage-2-reduction)
   - [performance notes](#lerobot-performance-notes)
 - [motion trimming](#motion-trimming)
+- [egocentric hand actions](#egocentric-hand-actions)
 - [merging datasets](#merging-datasets)
 
 ## Reading Datasets
@@ -373,6 +374,18 @@ import refiner as mdr
 - it trims the episode frame table directly
 - it updates video timestamps on the row itself
 - when a video span changes, the corresponding `stats/<video_key>/...` fields are dropped so the writer recomputes them later
+
+## Egocentric Hand Actions
+
+Egocentric hand-action extraction is available under
+`mdr.robotics.egocentric`.
+
+Use `reconstruct_hands_hawor(...)` to call an installed HaWoR command and load
+its normalized reconstruction JSON, then use `make_relative_actions(...)` to
+derive wrist-frame relative actions from world-space wrist poses.
+
+See [Egocentric robotics](egocentric-robotics.md) for the HaWoR artifact
+contract and examples.
 
 ## Merging Datasets
 
