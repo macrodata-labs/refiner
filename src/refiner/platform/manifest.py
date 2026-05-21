@@ -152,8 +152,34 @@ def refiner_ref_exists_on_remote(ref: str) -> bool:
     try:
         with urllib_request.urlopen(request):
             return True
-    except (urllib_error.HTTPError, urllib_error.URLError):
+    except urllib_error.HTTPError as err:
+        if err.code not in {403, 429}:
+            return False
+    except urllib_error.URLError:
+        pass
+    return _refiner_ref_exists_via_git(ref)
+
+
+def _refiner_ref_exists_via_git(ref: str) -> bool:
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "ls-remote",
+                "--heads",
+                "--tags",
+                "https://github.com/macrodata-labs/refiner.git",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
+    if result.returncode != 0:
+        return False
+    return any(line.split(maxsplit=1)[0] == ref for line in result.stdout.splitlines())
 
 
 def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
