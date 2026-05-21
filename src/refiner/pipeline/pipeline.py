@@ -30,7 +30,7 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
-from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
+from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink, RldsSink
 from refiner.pipeline.sinks.assets import MissingAssetPolicy
 from refiner.pipeline.sources import (
     BaseSource,
@@ -428,6 +428,21 @@ class RefinerPipeline:
                 max_asset_uploads_in_flight=max_asset_uploads_in_flight,
                 missing_asset_policy=missing_asset_policy,
                 dtypes=dtypes,
+            )
+        )
+
+    def write_rlds(
+        self,
+        output: DataFolderLike,
+        *,
+        filename_template: str = "{shard_id}__w{worker_id}.tfrecord",
+        compression: str | None = None,
+    ) -> "RefinerPipeline":
+        return self.with_sink(
+            RldsSink(
+                output=output,
+                filename_template=filename_template,
+                compression=compression,
             )
         )
 
