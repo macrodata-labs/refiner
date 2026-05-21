@@ -128,6 +128,177 @@ class _OpenAIEndpointClient:
         return response.json()
 
 
+@dataclass(slots=True)
+class _GoogleEndpointClient:
+    base_url: str
+    model: str
+    api_key: str | None = None
+    headers: Mapping[str, str] | None = None
+    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _resolved_headers: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        headers = dict(self.headers or {})
+        resolved_api_key = self.api_key
+        if resolved_api_key is None:
+            resolved_api_key = os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
+        if resolved_api_key is not None:
+            headers["x-goog-api-key"] = resolved_api_key
+        self._resolved_headers = headers
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        client = self._client
+        if client is None:
+            client = httpx.AsyncClient(
+                base_url=self.base_url.rstrip("/"),
+                headers=self._resolved_headers,
+                timeout=_OPENAI_ENDPOINT_TIMEOUT_SECONDS,
+            )
+            self._client = client
+        return client
+
+    async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        response_json = await self._post_json(
+            f"{_google_model_path(self.model)}:generateContent",
+            payload,
+            operation="google generation",
+        )
+        if not isinstance(response_json, Mapping):
+            raise RuntimeError("google generation response must be a JSON object")
+        return _parse_google_inference_response(response_json)
+
+    async def _post_json(
+        self,
+        endpoint_path: str,
+        payload: Mapping[str, Any],
+        *,
+        operation: str,
+    ) -> Any:
+        client = self._ensure_client()
+        for attempt in range(_OPENAI_ENDPOINT_MAX_RETRIES):
+            try:
+                response = await client.post(endpoint_path, json=dict(payload))
+                break
+            except (
+                ConnectionError,
+                OSError,
+                asyncio.TimeoutError,
+                httpx.NetworkError,
+                httpx.TimeoutException,
+            ) as err:
+                if attempt + 1 >= _OPENAI_ENDPOINT_MAX_RETRIES:
+                    message = (
+                        f"{operation} request failed after "
+                        f"{_OPENAI_ENDPOINT_MAX_RETRIES} attempts: "
+                        f"{type(err).__name__}: {err}"
+                    )
+                    raise RuntimeError(message) from err
+                await asyncio.sleep(_retry_delay_seconds(attempt))
+        else:
+            raise RuntimeError(f"{operation} request failed without a response")
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as err:
+            detail = ""
+            try:
+                detail = str(err.response.json())
+            except ValueError:
+                detail = err.response.text.strip()
+            message = f"{operation} request failed with HTTP {err.response.status_code}"
+            if detail:
+                message = f"{message}: {detail}"
+            raise RuntimeError(message) from err
+        return response.json()
+
+
+@dataclass(slots=True)
+class _OpenAIResponsesClient:
+    base_url: str
+    api_key: str | None = None
+    headers: Mapping[str, str] | None = None
+    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _resolved_headers: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        headers = dict(self.headers or {})
+        resolved_api_key = self.api_key
+        if resolved_api_key is None:
+            resolved_api_key = os.environ.get("OPENAI_API_KEY")
+        if resolved_api_key is not None:
+            headers["Authorization"] = f"Bearer {resolved_api_key}"
+        self._resolved_headers = headers
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        client = self._client
+        if client is None:
+            client = httpx.AsyncClient(
+                base_url=_normalize_openai_base_url(self.base_url),
+                headers=self._resolved_headers,
+                timeout=_OPENAI_ENDPOINT_TIMEOUT_SECONDS,
+            )
+            self._client = client
+        return client
+
+    async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        response_json = await _post_json_with_retries(
+            self._ensure_client(),
+            "v1/responses",
+            payload,
+            operation="openai responses generation",
+        )
+        if not isinstance(response_json, Mapping):
+            raise RuntimeError("openai responses response must be a JSON object")
+        return _parse_openai_responses_response(response_json)
+
+
+@dataclass(slots=True)
+class _AnthropicEndpointClient:
+    base_url: str
+    api_key: str | None = None
+    anthropic_version: str = "2023-06-01"
+    headers: Mapping[str, str] | None = None
+    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _resolved_headers: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        headers = dict(self.headers or {})
+        resolved_api_key = self.api_key
+        if resolved_api_key is None:
+            resolved_api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if resolved_api_key is not None:
+            headers["x-api-key"] = resolved_api_key
+        headers["anthropic-version"] = self.anthropic_version
+        self._resolved_headers = headers
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        client = self._client
+        if client is None:
+            client = httpx.AsyncClient(
+                base_url=self.base_url.rstrip("/"),
+                headers=self._resolved_headers,
+                timeout=_OPENAI_ENDPOINT_TIMEOUT_SECONDS,
+            )
+            self._client = client
+        return client
+
+    async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        response_json = await _post_json_with_retries(
+            self._ensure_client(),
+            "v1/messages",
+            payload,
+            operation="anthropic generation",
+        )
+        if not isinstance(response_json, Mapping):
+            raise RuntimeError("anthropic generation response must be a JSON object")
+        return _parse_anthropic_inference_response(response_json)
+
+
 def _parse_inference_response(
     response_json: Mapping[str, Any], *, use_chat: bool
 ) -> InferenceResponse:
@@ -185,6 +356,121 @@ def _parse_inference_response(
     )
 
 
+def _parse_openai_responses_response(
+    response_json: Mapping[str, Any],
+) -> InferenceResponse:
+    text_parts: list[str] = []
+    output = response_json.get("output")
+    if isinstance(output, Sequence):
+        for item in output:
+            if not isinstance(item, Mapping):
+                continue
+            content = item.get("content")
+            if not isinstance(content, Sequence):
+                continue
+            for part in content:
+                if isinstance(part, Mapping) and isinstance(part.get("text"), str):
+                    text_parts.append(part["text"])
+    if not text_parts and isinstance(response_json.get("output_text"), str):
+        text_parts.append(response_json["output_text"])
+    if not text_parts:
+        raise RuntimeError("openai responses response is missing textual content")
+    usage = response_json.get("usage")
+    if not isinstance(usage, Mapping):
+        usage = {}
+    mapped_usage = {
+        "prompt_tokens": usage.get("input_tokens", usage.get("prompt_tokens", 0)),
+        "completion_tokens": usage.get(
+            "output_tokens", usage.get("completion_tokens", 0)
+        ),
+        "total_tokens": usage.get("total_tokens", 0),
+    }
+    return InferenceResponse(
+        text="".join(text_parts),
+        finish_reason=None,
+        usage=mapped_usage,
+        response=response_json,
+    )
+
+
+def _parse_anthropic_inference_response(
+    response_json: Mapping[str, Any],
+) -> InferenceResponse:
+    content = response_json.get("content")
+    if not isinstance(content, Sequence):
+        raise RuntimeError("anthropic response is missing content")
+    text_parts = [
+        part["text"]
+        for part in content
+        if isinstance(part, Mapping)
+        and part.get("type") == "text"
+        and isinstance(part.get("text"), str)
+    ]
+    if not text_parts:
+        raise RuntimeError("anthropic response is missing textual content")
+    usage = response_json.get("usage")
+    if not isinstance(usage, Mapping):
+        usage = {}
+    mapped_usage = {
+        "prompt_tokens": usage.get("input_tokens", 0),
+        "completion_tokens": usage.get("output_tokens", 0),
+    }
+    finish_reason = response_json.get("stop_reason")
+    if finish_reason is not None and not isinstance(finish_reason, str):
+        finish_reason = str(finish_reason)
+    return InferenceResponse(
+        text="".join(text_parts),
+        finish_reason=finish_reason,
+        usage=mapped_usage,
+        response=response_json,
+    )
+
+
+def _parse_google_inference_response(
+    response_json: Mapping[str, Any],
+) -> InferenceResponse:
+    candidates = response_json.get("candidates")
+    if not isinstance(candidates, Sequence) or not candidates:
+        raise RuntimeError("google generation response is missing candidates[0]")
+    candidate = candidates[0]
+    if not isinstance(candidate, Mapping):
+        raise RuntimeError("google generation response candidates[0] must be an object")
+    content = candidate.get("content")
+    if not isinstance(content, Mapping):
+        raise RuntimeError("google generation response is missing content")
+    parts = content.get("parts")
+    if not isinstance(parts, Sequence):
+        raise RuntimeError("google generation response is missing content.parts")
+    text_parts: list[str] = []
+    for part in parts:
+        if isinstance(part, Mapping) and isinstance(part.get("text"), str):
+            text_parts.append(part["text"])
+    if not text_parts:
+        raise RuntimeError("google generation response is missing textual content")
+    usage_metadata = response_json.get("usageMetadata")
+    usage = _google_usage(usage_metadata if isinstance(usage_metadata, Mapping) else {})
+    finish_reason = candidate.get("finishReason")
+    if finish_reason is not None and not isinstance(finish_reason, str):
+        finish_reason = str(finish_reason)
+    return InferenceResponse(
+        text="".join(text_parts),
+        finish_reason=finish_reason,
+        usage=usage,
+        response=response_json,
+    )
+
+
+def _google_usage(usage_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+    usage: dict[str, Any] = {}
+    if "promptTokenCount" in usage_metadata:
+        usage["prompt_tokens"] = usage_metadata["promptTokenCount"]
+    if "candidatesTokenCount" in usage_metadata:
+        usage["completion_tokens"] = usage_metadata["candidatesTokenCount"]
+    if "totalTokenCount" in usage_metadata:
+        usage["total_tokens"] = usage_metadata["totalTokenCount"]
+    return usage
+
+
 def _normalize_openai_base_url(base_url: str) -> str:
     normalized = base_url.rstrip("/")
     if normalized.endswith("/v1"):
@@ -192,10 +478,57 @@ def _normalize_openai_base_url(base_url: str) -> str:
     return normalized
 
 
+def _google_model_path(model: str) -> str:
+    return model if "/" in model else f"models/{model}"
+
+
 def _retry_delay_seconds(attempt: int) -> float:
     base_delay = _OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS * (2**attempt)
     jitter = (random.random() * 2.0 - 1.0) * _OPENAI_ENDPOINT_RETRY_JITTER_FRACTION
     return base_delay * (1.0 + jitter)
+
+
+async def _post_json_with_retries(
+    client: httpx.AsyncClient,
+    endpoint_path: str,
+    payload: Mapping[str, Any],
+    *,
+    operation: str,
+) -> Any:
+    for attempt in range(_OPENAI_ENDPOINT_MAX_RETRIES):
+        try:
+            response = await client.post(endpoint_path, json=dict(payload))
+            break
+        except (
+            ConnectionError,
+            OSError,
+            asyncio.TimeoutError,
+            httpx.NetworkError,
+            httpx.TimeoutException,
+        ) as err:
+            if attempt + 1 >= _OPENAI_ENDPOINT_MAX_RETRIES:
+                message = (
+                    f"{operation} request failed after "
+                    f"{_OPENAI_ENDPOINT_MAX_RETRIES} attempts: "
+                    f"{type(err).__name__}: {err}"
+                )
+                raise RuntimeError(message) from err
+            await asyncio.sleep(_retry_delay_seconds(attempt))
+    else:
+        raise RuntimeError(f"{operation} request failed without a response")
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as err:
+        detail = ""
+        try:
+            detail = str(err.response.json())
+        except ValueError:
+            detail = err.response.text.strip()
+        message = f"{operation} request failed with HTTP {err.response.status_code}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from err
+    return response.json()
 
 
 __all__ = ["InferenceResponse"]

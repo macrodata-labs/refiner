@@ -10,8 +10,11 @@ import pytest
 
 import refiner as mdr
 from refiner.inference import (
+    AnthropicEndpointProvider,
+    GoogleEndpointProvider,
     InferenceResponse,
     OpenAIEndpointProvider,
+    OpenAIResponsesProvider,
     VLLMProvider,
 )
 from refiner.services import VLLMRuntimeServiceBinding
@@ -108,6 +111,520 @@ def test_inference_generate_invokes_user_fn_and_merges_default_params(
         "temperature": 0.2,
         "prompt": "hi",
     }
+
+
+def test_inference_generate_text_accepts_vercel_style_multimodal_messages(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="combined",
+            finish_reason="stop",
+            usage={"prompt_tokens": 5},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Combine these two images into one composition.",
+                        },
+                        {
+                            "type": "file",
+                            "mediaType": "image/png",
+                            "data": row["first_image"],
+                        },
+                        {
+                            "type": "file",
+                            "mediaType": "image/jpeg",
+                            "data": "https://example.com/second.jpg",
+                        },
+                    ],
+                },
+            ],
+            temperature=0,
+            providerOptions={"openai": {"reasoningEffort": "low"}},
+        )
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
+        default_generation_params={"max_tokens": 256},
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"first_image": b"png-bytes"}))
+
+    result = asyncio.run(_invoke())
+
+    assert result == {"output": "combined"}
+    assert seen["payload"] == {
+        "model": "gpt-test",
+        "max_tokens": 256,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Combine these two images into one composition.",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,cG5nLWJ5dGVz",
+                        },
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/second.jpg"},
+                    },
+                ],
+            },
+        ],
+        "temperature": 0,
+        "providerOptions": {"openai": {"reasoningEffort": "low"}},
+        "reasoning": {"effort": "low"},
+    }
+
+
+def test_inference_generate_text_accepts_prompt(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="hello",
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(prompt=f"Summarize {row['topic']}.")
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"topic": "logs"}))
+
+    result = asyncio.run(_invoke())
+
+    assert result == {"output": "hello"}
+    assert seen["payload"] == {
+        "model": "gpt-test",
+        "prompt": "Summarize logs.",
+    }
+
+
+def test_google_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
+    provider = GoogleEndpointProvider(
+        model="gemini-2.5-flash",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        api_key="secret",
+    )
+
+    assert provider.to_builtin_args() == {
+        "type": "google_endpoint",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "model": "gemini-2.5-flash",
+    }
+
+
+def test_inference_generate_text_converts_messages_for_google(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="video summary",
+            finish_reason="STOP",
+            usage={"prompt_tokens": 9},
+            response={"candidates": []},
+        )
+
+    monkeypatch.setattr(
+        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(
+            messages=[
+                {"role": "system", "content": "You are a video annotator."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this video."},
+                        {
+                            "type": "file",
+                            "mediaType": "video/mp4",
+                            "data": row["video"],
+                        },
+                    ],
+                },
+            ],
+            temperature=0.1,
+        )
+        return {"summary": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+        default_generation_params={"max_tokens": 128},
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"video": b"mp4-bytes"}))
+
+    result = asyncio.run(_invoke())
+
+    assert result == {"summary": "video summary"}
+    assert seen["payload"] == {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "Summarize this video."},
+                    {
+                        "inlineData": {
+                            "mimeType": "video/mp4",
+                            "data": "bXA0LWJ5dGVz",
+                        },
+                    },
+                ],
+            }
+        ],
+        "systemInstruction": {"parts": [{"text": "You are a video annotator."}]},
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 128},
+    }
+
+
+def test_google_endpoint_client_posts_generate_content(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, object]:
+            return {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "ok"}]},
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 3,
+                    "candidatesTokenCount": 2,
+                    "totalTokenCount": 5,
+                },
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            seen["base_url"] = str(base_url)
+            seen["headers"] = dict(headers)
+            seen["timeout"] = timeout
+
+        async def post(self, path, *, json):
+            seen["path"] = path
+            seen["payload"] = dict(json)
+            return _FakeResponse()
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+
+    response = asyncio.run(
+        openai_module._GoogleEndpointClient(
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            model="gemini-2.5-flash",
+            api_key="secret",
+        ).generate_text({"contents": [{"role": "user", "parts": [{"text": "hi"}]}]})
+    )
+
+    assert response.text == "ok"
+    assert response.finish_reason == "STOP"
+    assert response.usage == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+    }
+    assert seen["headers"] == {"x-goog-api-key": "secret"}
+    assert seen["path"] == "models/gemini-2.5-flash:generateContent"
+
+
+def test_inference_generate_text_applies_google_provider_options(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason="STOP",
+            usage={},
+            response={"candidates": []},
+        )
+
+    monkeypatch.setattr(
+        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        return {
+            "output": (
+                await generate_text(
+                    prompt="Generate an image caption.",
+                    providerOptions={
+                        "google": {
+                            "thinkingConfig": {"thinkingBudget": 128},
+                            "responseModalities": ["TEXT"],
+                            "safetySettings": [
+                                {
+                                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                                    "threshold": "BLOCK_ONLY_HIGH",
+                                }
+                            ],
+                            "cachedContent": "cachedContents/abc",
+                            "serviceTier": "flex",
+                        }
+                    },
+                )
+            ).text
+        }
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({}))
+
+    asyncio.run(_invoke())
+
+    assert seen["payload"] == {
+        "contents": [
+            {"role": "user", "parts": [{"text": "Generate an image caption."}]}
+        ],
+        "generationConfig": {
+            "thinkingConfig": {"thinkingBudget": 128},
+            "responseModalities": ["TEXT"],
+        },
+        "safetySettings": [
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_ONLY_HIGH",
+            }
+        ],
+        "cachedContent": "cachedContents/abc",
+        "serviceTier": "flex",
+    }
+
+
+def test_inference_generate_text_converts_messages_for_openai_responses(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason=None,
+            usage={},
+            response={"output_text": "ok"},
+        )
+
+    monkeypatch.setattr(
+        openai_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Read this PDF."},
+                        {
+                            "type": "file",
+                            "mediaType": "application/pdf",
+                            "data": row["pdf"],
+                        },
+                    ],
+                }
+            ],
+            providerOptions={
+                "openai": {
+                    "reasoningEffort": "low",
+                    "textVerbosity": "low",
+                    "store": False,
+                }
+            },
+            max_tokens=64,
+        )
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIResponsesProvider(model="gpt-5-mini", api_key="secret"),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"pdf": b"pdf-bytes"}))
+
+    asyncio.run(_invoke())
+
+    assert seen["payload"] == {
+        "model": "gpt-5-mini",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Read this PDF."},
+                    {
+                        "type": "input_file",
+                        "filename": "part-1.pdf",
+                        "file_data": "data:application/pdf;base64,cGRmLWJ5dGVz",
+                    },
+                ],
+            }
+        ],
+        "max_output_tokens": 64,
+        "store": False,
+        "reasoning": {"effort": "low"},
+        "text": {"verbosity": "low"},
+    }
+
+
+def test_inference_generate_text_converts_messages_for_anthropic(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason="end_turn",
+            usage={},
+            response={"content": [{"type": "text", "text": "ok"}]},
+        )
+
+    monkeypatch.setattr(
+        openai_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(
+            messages=[
+                {"role": "system", "content": "Use citations."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this document."},
+                        {
+                            "type": "file",
+                            "mediaType": "application/pdf",
+                            "filename": "paper.pdf",
+                            "data": row["pdf"],
+                            "providerOptions": {
+                                "anthropic": {
+                                    "title": "Paper",
+                                    "citations": {"enabled": True},
+                                    "cacheControl": {"type": "ephemeral"},
+                                }
+                            },
+                        },
+                    ],
+                },
+            ],
+            providerOptions={
+                "anthropic": {
+                    "thinking": {"type": "enabled", "budgetTokens": 1024},
+                    "metadata": {"user_id": "user-1"},
+                }
+            },
+            max_tokens=256,
+        )
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=AnthropicEndpointProvider(model="claude-sonnet-4-5", api_key="secret"),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"pdf": b"pdf-bytes"}))
+
+    asyncio.run(_invoke())
+
+    assert seen["payload"] == {
+        "model": "claude-sonnet-4-5",
+        "max_tokens": 256,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize this document."},
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": "cGRmLWJ5dGVz",
+                        },
+                        "title": "Paper",
+                        "citations": {"enabled": True},
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+            }
+        ],
+        "system": [{"type": "text", "text": "Use citations."}],
+        "thinking": {"type": "enabled", "budgetTokens": 1024},
+        "metadata": {"user_id": "user-1"},
+    }
+
+
+def test_inference_generate_text_requires_prompt_or_messages() -> None:
+    async def _inference_fn(row, generate_text):
+        del row
+        await generate_text()
+        return {}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({}))
+
+    with pytest.raises(ValueError, match="pass exactly one of messages or prompt"):
+        asyncio.run(_invoke())
 
 
 def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:

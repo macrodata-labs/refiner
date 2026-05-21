@@ -5,8 +5,19 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeAlias, cast
 
-from refiner.inference.client import _OpenAIEndpointClient
-from refiner.inference.providers import OpenAIEndpointProvider, VLLMProvider
+from refiner.inference.client import (
+    _AnthropicEndpointClient,
+    _GoogleEndpointClient,
+    _OpenAIEndpointClient,
+    _OpenAIResponsesClient,
+)
+from refiner.inference.providers import (
+    AnthropicEndpointProvider,
+    GoogleEndpointProvider,
+    OpenAIEndpointProvider,
+    OpenAIResponsesProvider,
+    VLLMProvider,
+)
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.services import VLLMRuntimeServiceBinding
@@ -15,12 +26,16 @@ from refiner.worker.metrics.api import register_gauge
 
 _REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
-Provider: TypeAlias = OpenAIEndpointProvider | VLLMProvider
+Provider: TypeAlias = (
+    AnthropicEndpointProvider
+    | GoogleEndpointProvider
+    | OpenAIEndpointProvider
+    | OpenAIResponsesProvider
+    | VLLMProvider
+)
 RequestFn: TypeAlias = Callable[[Mapping[str, Any]], Awaitable[Any]]
 MapFn: TypeAlias = Callable[[Row, RequestFn], Awaitable[MapResult] | MapResult]
-ClientCall: TypeAlias = Callable[
-    [_OpenAIEndpointClient, Mapping[str, Any]], Awaitable[Any]
-]
+ClientCall: TypeAlias = Callable[[Any, Mapping[str, Any]], Awaitable[Any]]
 
 
 def inference_map(
@@ -30,13 +45,20 @@ def inference_map(
     provider: Provider,
     defaults: Mapping[str, Any] | None,
     defaults_key: str | None = None,
+    merge_defaults: bool = True,
     max_concurrent_requests: int = 256,
     call: ClientCall,
     record: Callable[[Row, Any], None] | None = None,
 ) -> Callable[[Row], Awaitable[MapResult]]:
     if max_concurrent_requests <= 0:
         raise ValueError("max_concurrent_requests must be > 0")
-    client: _OpenAIEndpointClient | None = None
+    client: (
+        _AnthropicEndpointClient
+        | _GoogleEndpointClient
+        | _OpenAIEndpointClient
+        | _OpenAIResponsesClient
+        | None
+    ) = None
     client_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(max_concurrent_requests)
     gauges_registered = False
@@ -51,7 +73,12 @@ def inference_map(
         register_gauge("running_requests", lambda: running_requests, unit="requests")
         gauges_registered = True
 
-    async def _client() -> _OpenAIEndpointClient:
+    async def _client() -> (
+        _AnthropicEndpointClient
+        | _GoogleEndpointClient
+        | _OpenAIEndpointClient
+        | _OpenAIResponsesClient
+    ):
         nonlocal client
         if client is not None:
             return client
@@ -60,6 +87,23 @@ def inference_map(
                 return client
             if isinstance(provider, OpenAIEndpointProvider):
                 client = _OpenAIEndpointClient(base_url=provider.base_url)
+            elif isinstance(provider, OpenAIResponsesProvider):
+                client = _OpenAIResponsesClient(
+                    base_url=provider.base_url,
+                    api_key=provider.api_key,
+                )
+            elif isinstance(provider, GoogleEndpointProvider):
+                client = _GoogleEndpointClient(
+                    base_url=provider.base_url,
+                    model=provider.model,
+                    api_key=provider.api_key,
+                )
+            elif isinstance(provider, AnthropicEndpointProvider):
+                client = _AnthropicEndpointClient(
+                    base_url=provider.base_url,
+                    api_key=provider.api_key,
+                    anthropic_version=provider.anthropic_version,
+                )
             else:
                 service_name = provider.service_definition().name
                 service_manager = get_active_service_manager()
@@ -82,10 +126,11 @@ def inference_map(
     async def _request(row: Row, payload: Mapping[str, Any]) -> Any:
         nonlocal running_requests, waiting_requests
         request_payload = {
-            "model": provider.model,
-            **dict(defaults or {}),
+            **(dict(defaults or {}) if merge_defaults else {}),
             **dict(payload),
         }
+        if not isinstance(provider, GoogleEndpointProvider):
+            request_payload = {"model": provider.model, **request_payload}
         resolved_client = await _client()
         waiting_requests += 1
         await semaphore.acquire()

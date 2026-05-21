@@ -28,6 +28,80 @@ class OpenAIEndpointProvider:
 
 
 @dataclass(frozen=True, slots=True)
+class GoogleEndpointProvider:
+    model: str
+    base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    api_key: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.model.strip():
+            raise ValueError("model must be non-empty")
+        if not self.base_url.strip():
+            raise ValueError("base_url must be non-empty")
+
+    def service_definition(self) -> None:
+        return None
+
+    def to_builtin_args(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "type": "google_endpoint",
+            "base_url": self.base_url,
+            "model": self.model,
+        }
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAIResponsesProvider:
+    model: str
+    base_url: str = "https://api.openai.com"
+    api_key: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.model.strip():
+            raise ValueError("model must be non-empty")
+        if not self.base_url.strip():
+            raise ValueError("base_url must be non-empty")
+
+    def service_definition(self) -> None:
+        return None
+
+    def to_builtin_args(self) -> dict[str, object]:
+        return {
+            "type": "openai_responses",
+            "base_url": self.base_url,
+            "model": self.model,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AnthropicEndpointProvider:
+    model: str
+    base_url: str = "https://api.anthropic.com"
+    api_key: str | None = None
+    anthropic_version: str = "2023-06-01"
+
+    def __post_init__(self) -> None:
+        if not self.model.strip():
+            raise ValueError("model must be non-empty")
+        if not self.base_url.strip():
+            raise ValueError("base_url must be non-empty")
+        if not self.anthropic_version.strip():
+            raise ValueError("anthropic_version must be non-empty")
+
+    def service_definition(self) -> None:
+        return None
+
+    def to_builtin_args(self) -> dict[str, object]:
+        return {
+            "type": "anthropic_endpoint",
+            "base_url": self.base_url,
+            "model": self.model,
+            "anthropic_version": self.anthropic_version,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class VLLMProvider:
     model: str
     config: Literal["correctness", "throughput"] = "correctness"
@@ -53,4 +127,10 @@ class VLLMProvider:
         return payload
 
 
-__all__ = ["OpenAIEndpointProvider", "VLLMProvider"]
+__all__ = [
+    "AnthropicEndpointProvider",
+    "GoogleEndpointProvider",
+    "OpenAIEndpointProvider",
+    "OpenAIResponsesProvider",
+    "VLLMProvider",
+]
