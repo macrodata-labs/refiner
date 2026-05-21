@@ -19,6 +19,7 @@
 - [LeRobot](reading-data/lerobot.md)
 - [HDF5](reading-data/hdf5.md)
 - [Zarr](reading-data/zarr.md)
+- [MCAP](reading-data/mcap.md)
 - [Tabular Files](reading-data/tabular-files.md)
 - [Files and Videos](reading-data/files-and-videos.md)
 - [Hugging Face](reading-data/hugging-face.md)

@@ -39,6 +39,7 @@ from refiner.pipeline.sources import (
     HFDatasetReader,
     Hdf5Reader,
     JsonReader,
+    McapReader,
     ParquetReader,
     ZarrReader,
 )
@@ -909,6 +910,34 @@ def read_zarr(
             index_column=index_column,
             file_path_column=file_path_column,
             dtypes=dtypes,
+        )
+    )
+
+
+def read_mcap(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    topics: Sequence[str] | None = None,
+    file_path_column: str | None = "file_path",
+    data_column: str = "data",
+) -> RefinerPipeline:
+    """Create a pipeline with an MCAP raw-message reader source."""
+    return RefinerPipeline(
+        source=McapReader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            topics=topics,
+            file_path_column=file_path_column,
+            data_column=data_column,
         )
     )
 

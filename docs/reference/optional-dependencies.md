@@ -13,6 +13,7 @@ Install extras based on the data and operations you use.
 | `egocentric` | Egocentric hand tracking. |
 | `hdf5` | HDF5 reader support. |
 | `zarr` | Zarr reader and writer support. |
+| `mcap` | MCAP robotics log reader support. |
 | `video` | Video decode/write support. |
 | `text` | Common Crawl text readers. |
 | `s3` | S3 filesystem support. |
@@ -24,5 +25,6 @@ Examples:
 pip install macrodata-refiner[hf,video]
 pip install macrodata-refiner[hf]
 pip install macrodata-refiner[hdf5,zarr]
+pip install macrodata-refiner[mcap]
 pip install macrodata-refiner[egocentric]
 ```
