@@ -69,6 +69,12 @@ parts for OpenAI-compatible endpoints, `input_file` parts for
 `GoogleEndpointProvider`, and Anthropic image/document blocks for
 `AnthropicEndpointProvider`.
 
+For byte-like media, `mediaType` may be either a full MIME type
+(`"image/png"`, `"video/mp4"`) or a top-level media type/wildcard
+(`"image"`, `"image/*"`, `"video"`). Refiner detects common byte signatures
+such as PNG, JPEG, PDF, MP4, WAV, MP3, GIF, and WebP before sending the
+provider request.
+
 For single-turn text-only calls, pass `prompt` instead of `messages`:
 
 ```python

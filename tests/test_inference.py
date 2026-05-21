@@ -320,6 +320,70 @@ def test_inference_generate_text_converts_messages_for_google(monkeypatch) -> No
     }
 
 
+def test_inference_generate_text_detects_google_video_media_type(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="video summary",
+            finish_reason="STOP",
+            usage={},
+            response={"candidates": []},
+        )
+
+    monkeypatch.setattr(
+        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this video."},
+                        {
+                            "type": "file",
+                            "mediaType": "video",
+                            "data": row["video"],
+                        },
+                    ],
+                },
+            ],
+        )
+        return {"summary": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+    )
+
+    mp4_bytes = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00"
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"video": mp4_bytes}))
+
+    asyncio.run(_invoke())
+
+    assert seen["payload"] == {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "Summarize this video."},
+                    {
+                        "inlineData": {
+                            "mimeType": "video/mp4",
+                            "data": "AAAAGGZ0eXBpc29tAAAAAA==",
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+
+
 def test_google_endpoint_client_posts_generate_content(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
@@ -516,6 +580,69 @@ def test_inference_generate_text_converts_messages_for_openai_responses(
         "store": False,
         "reasoning": {"effort": "low"},
         "text": {"verbosity": "low"},
+    }
+
+
+def test_inference_generate_text_detects_openai_image_media_type(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image."},
+                        {
+                            "type": "file",
+                            "mediaType": "image/*",
+                            "data": row["image"],
+                        },
+                    ],
+                }
+            ],
+        )
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
+    )
+
+    png_bytes = b"\x89PNG\r\n\x1a\nfake"
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"image": png_bytes}))
+
+    asyncio.run(_invoke())
+
+    assert seen["payload"] == {
+        "model": "gpt-test",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgpmYWtl"},
+                    },
+                ],
+            }
+        ],
     }
 
 

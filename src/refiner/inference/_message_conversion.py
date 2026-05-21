@@ -8,6 +8,7 @@ from typing import Any, cast
 from refiner.inference.types import Message
 
 _DATA_URL_PATTERN = re.compile(r"^data:([^;,]+);base64,(.+)$", re.DOTALL)
+_WILDCARD_MEDIA_SUFFIX = "/*"
 
 
 def convert_to_openai_chat_messages(
@@ -167,17 +168,25 @@ def _convert_openai_user_part(part: Mapping[str, Any], index: int) -> dict[str, 
     if part_type == "text":
         return {"type": "text", "text": part["text"]}
     if part_type == "image":
+        image_data = part.get("image")
         return _openai_image_url_part(
-            part.get("image"),
-            media_type=part.get("mediaType"),
+            image_data,
+            media_type=_resolve_media_type(
+                image_data,
+                declared_media_type=part.get("mediaType"),
+                default_top_level="image",
+            ),
             detail=_provider_option(part, "openai", "imageDetail"),
         )
     if part_type != "file":
         raise ValueError(f"unsupported content part type {part_type!r}")
 
-    media_type = _media_type(part)
-    top_level = _top_level_media_type(media_type)
     data = part.get("data")
+    media_type = _resolve_media_type(
+        data,
+        declared_media_type=part.get("mediaType"),
+    )
+    top_level = _top_level_media_type(media_type)
     if top_level == "image":
         return _openai_image_url_part(
             data,
@@ -187,7 +196,11 @@ def _convert_openai_user_part(part: Mapping[str, Any], index: int) -> dict[str, 
     if top_level == "audio":
         if _is_url(data):
             raise ValueError("openai audio file parts with URLs are not supported")
-        full_media_type = _full_media_type(media_type)
+        full_media_type = _resolve_media_type(
+            data,
+            declared_media_type=media_type,
+            default_top_level="audio",
+        )
         if full_media_type in {"audio/wav", "audio/x-wav"}:
             audio_format = "wav"
         elif full_media_type in {"audio/mp3", "audio/mpeg"}:
@@ -204,7 +217,7 @@ def _convert_openai_user_part(part: Mapping[str, Any], index: int) -> dict[str, 
                 "format": audio_format,
             },
         }
-    full_media_type = _full_media_type(media_type)
+    full_media_type = _resolve_media_type(data, declared_media_type=media_type)
     if full_media_type != "application/pdf":
         raise ValueError(
             f"openai file part media type {full_media_type} is unsupported"
@@ -227,10 +240,16 @@ def _convert_openai_responses_part(
     if part_type == "text":
         return {"type": "input_text", "text": part["text"]}
     if part_type == "image":
+        image_data = part.get("image")
         image_part: dict[str, Any] = {
             "type": "input_image",
             "image_url": _data_or_url(
-                part.get("image"), _media_type_value(part.get("mediaType"))
+                image_data,
+                _resolve_media_type(
+                    image_data,
+                    declared_media_type=part.get("mediaType"),
+                    default_top_level="image",
+                ),
             ),
         }
         detail = _provider_option(part, "openai", "imageDetail")
@@ -240,8 +259,8 @@ def _convert_openai_responses_part(
     if part_type != "file":
         raise ValueError(f"unsupported content part type {part_type!r}")
 
-    media_type = _media_type(part)
     data = part.get("data")
+    media_type = _resolve_media_type(data, declared_media_type=part.get("mediaType"))
     if _top_level_media_type(media_type) == "image":
         image_part: dict[str, Any] = {
             "type": "input_image",
@@ -253,7 +272,7 @@ def _convert_openai_responses_part(
         return image_part
     if _is_url(data):
         return {"type": "input_file", "file_url": str(data)}
-    full_media_type = _full_media_type(media_type)
+    full_media_type = _resolve_media_type(data, declared_media_type=media_type)
     return {
         "type": "input_file",
         "filename": part.get(
@@ -272,9 +291,7 @@ def _openai_image_url_part(
     media_type: object,
     detail: object,
 ) -> dict[str, Any]:
-    image_url: dict[str, Any] = {
-        "url": _data_or_url(data, _media_type_value(media_type))
-    }
+    image_url: dict[str, Any] = {"url": _data_or_url(data, str(media_type))}
     if detail is not None:
         image_url["detail"] = detail
     return {"type": "image_url", "image_url": image_url}
@@ -285,11 +302,21 @@ def _convert_google_user_part(part: Mapping[str, Any]) -> dict[str, Any]:
     if part_type == "text":
         return {"text": part["text"]}
     if part_type == "image":
+        image_data = part.get("image")
         return _google_file_part(
-            part.get("image"), _media_type_value(part.get("mediaType"))
+            image_data,
+            _resolve_media_type(
+                image_data,
+                declared_media_type=part.get("mediaType"),
+                default_top_level="image",
+            ),
         )
     if part_type == "file":
-        return _google_file_part(part.get("data"), _media_type(part))
+        file_data = part.get("data")
+        return _google_file_part(
+            file_data,
+            _resolve_media_type(file_data, declared_media_type=part.get("mediaType")),
+        )
     raise ValueError(f"unsupported content part type {part_type!r}")
 
 
@@ -302,10 +329,16 @@ def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[st
             payload["cache_control"] = cache_control
         return payload
     if part_type == "image":
+        image_data = part.get("image")
         payload: dict[str, Any] = {
             "type": "image",
             "source": _anthropic_image_source(
-                part.get("image"), _media_type_value(part.get("mediaType"))
+                image_data,
+                _resolve_media_type(
+                    image_data,
+                    declared_media_type=part.get("mediaType"),
+                    default_top_level="image",
+                ),
             ),
         }
         if cache_control is not None:
@@ -314,8 +347,8 @@ def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[st
     if part_type != "file":
         raise ValueError(f"unsupported content part type {part_type!r}")
 
-    media_type = _media_type(part)
     data = part.get("data")
+    media_type = _resolve_media_type(data, declared_media_type=part.get("mediaType"))
     top_level = _top_level_media_type(media_type)
     payload: dict[str, Any]
     if top_level == "image":
@@ -323,7 +356,7 @@ def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[st
             "type": "image",
             "source": _anthropic_image_source(data, media_type),
         }
-    elif _full_media_type(media_type) == "application/pdf":
+    elif media_type == "application/pdf":
         payload = {
             "type": "document",
             "source": _anthropic_document_source(data, "application/pdf"),
@@ -456,27 +489,84 @@ def _provider_options(provider_options: object, provider: str) -> Mapping[str, A
     return options
 
 
-def _media_type(part: Mapping[str, Any]) -> str:
-    media_type = part.get("mediaType")
-    if isinstance(media_type, str) and media_type:
-        return media_type
-    return "application/octet-stream"
-
-
-def _media_type_value(value: object) -> str:
-    if isinstance(value, str) and value:
-        return value
-    return "application/octet-stream"
-
-
 def _top_level_media_type(media_type: str) -> str:
     return media_type.split("/", 1)[0]
 
 
-def _full_media_type(media_type: str) -> str:
-    if "/" in media_type:
+def _resolve_media_type(
+    data: object,
+    *,
+    declared_media_type: object,
+    default_top_level: str | None = None,
+) -> str:
+    parsed = _parse_data_url(data)
+    if parsed is not None:
+        return parsed[0]
+    media_type = _declared_media_type(declared_media_type)
+    if media_type is not None and _is_full_media_type(media_type):
         return media_type
-    return f"{media_type}/octet-stream"
+    detected = _detect_media_type(data)
+    if detected is not None:
+        if media_type is None:
+            return detected
+        if _top_level_media_type(detected) == _top_level_media_type(media_type):
+            return detected
+    if media_type is not None:
+        if media_type.endswith(_WILDCARD_MEDIA_SUFFIX):
+            return media_type.removesuffix(_WILDCARD_MEDIA_SUFFIX)
+        return media_type
+    if default_top_level == "image":
+        return "image/png"
+    return "application/octet-stream"
+
+
+def _declared_media_type(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    media_type = value.strip()
+    if not media_type:
+        return None
+    return media_type
+
+
+def _is_full_media_type(media_type: str | None) -> bool:
+    if media_type is None:
+        return False
+    if media_type.endswith(_WILDCARD_MEDIA_SUFFIX):
+        return False
+    top_level, separator, subtype = media_type.partition("/")
+    return bool(top_level and separator and subtype)
+
+
+def _detect_media_type(data: object) -> str | None:
+    if not isinstance(data, bytes | bytearray | memoryview):
+        return None
+    raw = bytes(data)
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if raw.startswith(b"GIF87a") or raw.startswith(b"GIF89a"):
+        return "image/gif"
+    if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        return "image/webp"
+    if raw.startswith(b"%PDF-"):
+        return "application/pdf"
+    if raw.startswith(b"RIFF") and raw[8:12] == b"WAVE":
+        return "audio/wav"
+    if raw.startswith(b"ID3") or _looks_like_mp3_frame(raw):
+        return "audio/mpeg"
+    if len(raw) >= 12 and raw[4:8] == b"ftyp":
+        brand = raw[8:12]
+        if brand in {b"M4A ", b"M4B ", b"mp42", b"isom", b"iso2"}:
+            return "video/mp4"
+    if raw.startswith(b"OggS"):
+        return "audio/ogg"
+    return None
+
+
+def _looks_like_mp3_frame(raw: bytes) -> bool:
+    return len(raw) >= 2 and raw[0] == 0xFF and (raw[1] & 0xE0) == 0xE0
 
 
 def _data_or_url(data: object, media_type: str) -> str:
