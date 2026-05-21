@@ -53,10 +53,13 @@ def ensure_hawor_runtime():
             setup,
             shell=True,
             check=False,
+            capture_output=True,
+            text=True,
         )
         if completed.returncode != 0:
             raise RuntimeError(
-                f"HaWoR setup failed with exit code {completed.returncode}"
+                "HaWoR setup failed with exit code "
+                f"{completed.returncode}\n{_tail_output(completed.stdout, completed.stderr)}"
             )
     if not _hawor_renderer_available():
         raise RuntimeError(
@@ -64,6 +67,17 @@ def ensure_hawor_runtime():
             "for official HaWoR hand masks."
         )
     _HAWOR_READY = True
+
+
+def _tail_output(
+    stdout: str | None, stderr: str | None, *, max_lines: int = 160
+) -> str:
+    lines = []
+    if stdout:
+        lines.extend(["--- setup stdout tail ---", *stdout.splitlines()[-max_lines:]])
+    if stderr:
+        lines.extend(["--- setup stderr tail ---", *stderr.splitlines()[-max_lines:]])
+    return "\n".join(lines) if lines else "(setup produced no captured output)"
 
 
 def _hawor_renderer_available() -> bool:
