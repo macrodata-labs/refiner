@@ -3,10 +3,12 @@ from typing import Any, cast
 
 import pytest
 
-from refiner import datatype, read_files
+from refiner import datatype, read_files, read_videos
 from refiner.io import DataFile
 from refiner.pipeline.data.row import Row
+from refiner.pipeline import read_videos as pipeline_read_videos
 import refiner.pipeline.sources.readers.files as files_reader_module
+import refiner.pipeline.pipeline as pipeline_module
 from refiner.pipeline.sources.readers.files import FilesReader
 
 
@@ -252,3 +254,86 @@ def test_read_files_schema_exposes_dtype_override_for_content_column(
 
     assert schema is not None
     assert schema.field("body").metadata == {b"asset_type": b"file"}
+
+
+def test_read_videos_defaults_to_video_path_column(tmp_path: Path) -> None:
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"video")
+
+    pipeline = read_videos(str(path))
+    schema = pipeline.source.schema
+    rows = [row.to_dict() for row in pipeline.materialize()]
+
+    assert rows == [{"video_path": str(path), "size": 5}]
+    assert schema is not None
+    assert schema.field("video_path").metadata == {b"asset_type": b"video"}
+    assert read_videos is pipeline_read_videos
+
+
+def test_read_videos_marks_custom_path_column_as_video(tmp_path: Path) -> None:
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"video")
+
+    schema = read_videos(
+        str(path),
+        file_path_column="source_video",
+        dtypes={"label": datatype.large_string()},
+    ).source.schema
+
+    assert schema is not None
+    assert schema.field("source_video").metadata == {b"asset_type": b"video"}
+    assert schema.field("label").type == datatype.large_string()
+
+
+def test_read_videos_preserves_explicit_path_column_dtype(tmp_path: Path) -> None:
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"video")
+
+    schema = read_videos(
+        str(path),
+        dtypes={"video_path": datatype.file_path()},
+    ).source.schema
+
+    assert schema is not None
+    assert schema.field("video_path").metadata == {b"asset_type": b"file"}
+
+
+def test_read_videos_forwards_file_listing_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_read_files(inputs, **kwargs):
+        captured["inputs"] = inputs
+        captured.update(kwargs)
+        return "pipeline"
+
+    monkeypatch.setattr(pipeline_module, "read_files", fake_read_files)
+
+    pipeline = read_videos(
+        "videos/**/*.mp4",
+        fs=cast(Any, "fs"),
+        storage_options={"token": "secret"},
+        recursive=True,
+        target_shard_bytes=123,
+        num_shards=4,
+        file_path_column="clip",
+        size_column=None,
+        dtypes={"label": datatype.large_string()},
+    )
+
+    assert pipeline == "pipeline"
+    assert captured == {
+        "inputs": "videos/**/*.mp4",
+        "fs": "fs",
+        "storage_options": {"token": "secret"},
+        "recursive": True,
+        "target_shard_bytes": 123,
+        "num_shards": 4,
+        "file_path_column": "clip",
+        "size_column": None,
+        "dtypes": {
+            "label": datatype.large_string(),
+            "clip": datatype.video_path(),
+        },
+    }
