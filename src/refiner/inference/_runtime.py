@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict
 from typing import Any, TypeAlias, cast
@@ -86,7 +87,10 @@ def inference_map(
             if client is not None:
                 return client
             if isinstance(provider, OpenAIEndpointProvider):
-                client = _OpenAIEndpointClient(base_url=provider.base_url)
+                client = _OpenAIEndpointClient(
+                    base_url=provider.base_url,
+                    api_key=os.environ.get(provider.api_key_env_var),
+                )
             else:
                 service_name = provider.service_definition().name
                 service_manager = get_active_service_manager()

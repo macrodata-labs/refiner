@@ -67,6 +67,15 @@ def test_openai_endpoint_requires_non_empty_model() -> None:
         OpenAIEndpointProvider(base_url="https://api.example.com", model=" ")
 
 
+def test_openai_endpoint_requires_non_empty_api_key_env_var() -> None:
+    with pytest.raises(ValueError, match="api_key_env_var must be non-empty"):
+        OpenAIEndpointProvider(
+            base_url="https://api.example.com",
+            model="gpt-test",
+            api_key_env_var=" ",
+        )
+
+
 def test_inference_generate_invokes_user_fn_and_merges_default_params(
     monkeypatch,
 ) -> None:
@@ -162,6 +171,56 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["headers"] == {"Authorization": "Bearer secret"}
+
+
+def test_openai_endpoint_accepts_custom_api_key_env_var(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, object]:
+            return {
+                "choices": [
+                    {
+                        "text": "ok",
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {},
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            seen["headers"] = dict(headers)
+
+        async def post(self, path, *, json):
+            return _FakeResponse()
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-secret")
+
+    async def _inference_fn(row, generate):
+        response = await generate({"prompt": row["prompt"]})
+        return {"output": response.text}
+
+    infer = mdr.inference.generate(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com",
+            model="gpt-test",
+            api_key_env_var="GOOGLE_API_KEY",
+        ),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"prompt": "hi"}))
+
+    result = asyncio.run(_invoke())
+
+    assert result == {"output": "ok"}
+    assert seen["headers"] == {"Authorization": "Bearer google-secret"}
 
 
 def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
@@ -438,6 +497,7 @@ def test_openai_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
         "type": "openai_endpoint",
         "base_url": "https://api.example.com",
         "model": "gpt-test",
+        "api_key_env_var": "OPENAI_API_KEY",
     }
 
 
