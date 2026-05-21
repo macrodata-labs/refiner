@@ -45,6 +45,7 @@ from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy, PathSelection
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
+from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
@@ -642,6 +643,50 @@ def read_files(
             max_in_flight=max_in_flight,
             dtypes=dtypes,
         )
+    )
+
+
+def read_videos(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    file_path_column: str | None = "video_path",
+    size_column: str | None = "size",
+    dtypes: DTypeMapping | None = None,
+) -> RefinerPipeline:
+    """Create a path-only file reader whose path column is marked as video.
+
+    This is a convenience wrapper around `read_files` that defaults the path
+    column to `"video_path"` and marks it with `mdr.datatype.video_path()`.
+
+    Args:
+        inputs: Video file, glob, directory, or sequence of fsspec-backed inputs.
+        fs: Optional filesystem for string inputs.
+        storage_options: fsspec options used when `fs` is not provided.
+        recursive: Whether directory inputs are listed recursively.
+        target_shard_bytes: Approximate target bytes per planned shard.
+        num_shards: Optional requested number of planned shards.
+        file_path_column: Path output column, or `None` to omit it.
+        size_column: File size output column, or `None` to omit it.
+        dtypes: Optional dtype overrides exposed through the source schema.
+    """
+    video_dtypes = dict(dtypes or {})
+    if file_path_column is not None and file_path_column not in video_dtypes:
+        video_dtypes[file_path_column] = datatype.video_path()
+    return read_files(
+        inputs,
+        fs=fs,
+        storage_options=storage_options,
+        recursive=recursive,
+        target_shard_bytes=target_shard_bytes,
+        num_shards=num_shards,
+        file_path_column=file_path_column,
+        size_column=size_column,
+        dtypes=video_dtypes,
     )
 
 

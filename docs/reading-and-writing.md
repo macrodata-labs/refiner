@@ -19,6 +19,7 @@ Built-in readers:
 | --- | --- | --- |
 | `read_csv(...)` | CSV files | dict-like rows keyed by column name |
 | `read_files(...)` | files, folders, or globs | one row per file path, optionally with raw bytes |
+| `read_videos(...)` | video files, folders, or globs | one row per video path |
 | `read_hdf5(...)` | HDF5 files | one row per selected HDF5 group |
 | `read_json(...)` | JSON files | one row per JSON file by default |
 | `read_jsonl(...)` | JSON Lines files | one row per line |
@@ -77,6 +78,13 @@ pipeline = mdr.read_files(
 
 Set `file_path_column=None` to omit the path column, or `size_column=None` to
 omit file sizes. `recursive=True` applies to directory inputs.
+
+For path-only video datasets, use `read_videos(...)`. It wraps `read_files(...)`
+with a default `video_path` column marked as `mdr.datatype.video_path()`.
+
+```python
+pipeline = mdr.read_videos("videos/**/*.mp4", recursive=True)
+```
 
 ## JSON
 
