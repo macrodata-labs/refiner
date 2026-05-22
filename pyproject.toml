@@ -44,6 +44,9 @@ text = [
 hdf5 = [
     "h5py",
 ]
+tensorflow = [
+    "tensorflow",
+]
 s3 = [
     "s3fs",
 ]
