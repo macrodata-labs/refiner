@@ -8,12 +8,15 @@ from refiner.services import VLLMServiceDefinition
 class OpenAIEndpointProvider:
     base_url: str
     model: str
+    api_key_env_var: str = "OPENAI_API_KEY"
 
     def __post_init__(self) -> None:
         if not self.base_url.strip():
             raise ValueError("base_url must be non-empty")
         if not self.model.strip():
             raise ValueError("model must be non-empty")
+        if not self.api_key_env_var.strip():
+            raise ValueError("api_key_env_var must be non-empty")
 
     def service_definition(self) -> None:
         return None
@@ -23,6 +26,7 @@ class OpenAIEndpointProvider:
             "type": "openai_endpoint",
             "base_url": self.base_url,
             "model": self.model,
+            "api_key_env_var": self.api_key_env_var,
         }
         return payload
 

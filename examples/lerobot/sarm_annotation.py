@@ -187,7 +187,9 @@ if __name__ == "__main__":
                 fn=annotate_dense_subtasks,
                 provider=PROVIDER,
                 default_generation_params={"temperature": 0.1},
-                max_concurrent_requests=MAX_IN_FLIGHT,
+                rate_limit=mdr.inference.AdaptiveRateLimit(
+                    max_concurrency=MAX_IN_FLIGHT
+                ),
             ),
             max_in_flight=MAX_IN_FLIGHT,
         )

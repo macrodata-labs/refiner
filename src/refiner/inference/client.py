@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import email.utils
 import logging
 import os
 import random
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,6 +17,12 @@ _OPENAI_ENDPOINT_MAX_RETRIES = 6
 _OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS = 5.0
 _OPENAI_ENDPOINT_RETRY_JITTER_FRACTION = 0.1
 logger = logging.getLogger(__name__)
+
+
+class GenerationRateLimitError(RuntimeError):
+    def __init__(self, message: str, *, retry_after_seconds: float | None = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +132,11 @@ class _OpenAIEndpointClient:
             message = f"{operation} request failed with HTTP {err.response.status_code}"
             if detail:
                 message = f"{message}: {detail}"
+            if err.response.status_code in {429, 503}:
+                raise GenerationRateLimitError(
+                    message,
+                    retry_after_seconds=_retry_after_seconds(err.response),
+                ) from err
             raise RuntimeError(message) from err
         return response.json()
 
@@ -198,4 +211,23 @@ def _retry_delay_seconds(attempt: int) -> float:
     return base_delay * (1.0 + jitter)
 
 
-__all__ = ["InferenceResponse"]
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    raw = response.headers.get("Retry-After")
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            parsed = email.utils.parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed is None:
+            return None
+        return max(0.0, parsed.timestamp() - time.time())
+
+
+__all__ = ["GenerationRateLimitError", "InferenceResponse"]
