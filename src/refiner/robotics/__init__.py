@@ -3,6 +3,7 @@ from refiner.robotics.reward import reward_score
 from refiner.robotics.row import (
     RoboticsRow,
 )
+from refiner.robotics.tabular import RoboticsTabular
 from refiner.robotics.lerobot_format import (
     LeRobotFeatureInfo,
     LeRobotFeatureStats,
@@ -19,6 +20,7 @@ __all__ = [
     "motion_trim",
     "reward_score",
     "RoboticsRow",
+    "RoboticsTabular",
     "LeRobotRow",
     "LeRobotTabular",
     "LeRobotFeatureInfo",

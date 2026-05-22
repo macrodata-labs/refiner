@@ -7,6 +7,7 @@ import pytest
 
 from refiner.pipeline import from_items
 from refiner.pipeline.data import datatype
+from refiner.pipeline.expressions import col
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import Tabular
@@ -299,6 +300,160 @@ def test_pipeline_to_robot_rows_forwards_literals_and_explicit_keys() -> None:
     assert isinstance(keyed_row, RoboticsRow)
     assert keyed_row.fps == 7.0
     assert keyed_row.robot_type == "keybot"
+
+
+def test_to_robot_rows_preserves_robotics_view_after_vectorized_filter() -> None:
+    rows = (
+        from_items(
+            [
+                {
+                    "episode_id": "episode-0",
+                    "keep": False,
+                    "frames": [
+                        {
+                            "timestamp": 0.0,
+                            "action": [0.0],
+                            "observation.state": [1.0],
+                        }
+                    ],
+                },
+                {
+                    "episode_id": "episode-1",
+                    "keep": True,
+                    "frames": [
+                        {
+                            "timestamp": 0.0,
+                            "action": [1.0],
+                            "observation.state": [2.0],
+                        }
+                    ],
+                },
+            ]
+        )
+        .to_robot_rows(
+            episode_id_key="episode_id",
+            nested_frames_key="frames",
+        )
+        .filter(col("keep"))
+        .materialize()
+    )
+
+    assert len(rows) == 1
+    row = cast(RoboticsRow, rows[0])
+    assert isinstance(row, RoboticsRow)
+    assert row.episode_id == "episode-1"
+    assert row.num_frames == 1
+    assert row.actions.to_pylist() == [[1.0]]
+    assert row.states.to_pylist() == [[2.0]]
+
+
+def test_to_robot_rows_preserves_nested_frame_side_data_after_mutation() -> None:
+    rows = (
+        from_items(
+            [
+                {
+                    "episode_id": "episode-1",
+                    "keep": True,
+                    "frames": [
+                        {
+                            "timestamp": 0.0,
+                            "action": [0.0],
+                            "observation.state": [1.0],
+                        }
+                    ],
+                }
+            ]
+        )
+        .to_robot_rows(
+            episode_id_key="episode_id",
+            nested_frames_key="frames",
+        )
+        .map(lambda row: cast(RoboticsRow, row).with_actions([[2.0]]))
+        .filter(col("keep"))
+        .materialize()
+    )
+
+    assert len(rows) == 1
+    row = cast(RoboticsRow, rows[0])
+    assert isinstance(row, RoboticsRow)
+    assert row.actions.to_pylist() == [[2.0]]
+    assert row.states.to_pylist() == [[1.0]]
+
+
+def test_to_robot_rows_realigns_side_data_when_arrow_rows_are_reordered() -> None:
+    table = (
+        from_items(
+            [
+                {
+                    "episode_id": "episode-0",
+                    "rank": 1,
+                    "frames": [
+                        {
+                            "timestamp": 0.0,
+                            "action": [0.0],
+                            "observation.state": [10.0],
+                        }
+                    ],
+                },
+                {
+                    "episode_id": "episode-1",
+                    "rank": 0,
+                    "frames": [
+                        {
+                            "timestamp": 0.0,
+                            "action": [1.0],
+                            "observation.state": [20.0],
+                        }
+                    ],
+                },
+            ]
+        )
+        .to_robot_rows(
+            episode_id_key="episode_id",
+            nested_frames_key="frames",
+        )
+        .map(lambda row: cast(RoboticsRow, row).with_actions([[row["rank"]]]))
+        .map_table(lambda table: table.sort_by([("rank", "ascending")]))
+        .materialize()
+    )
+
+    rows = [cast(RoboticsRow, row) for row in table]
+    assert [row.episode_id for row in rows] == ["episode-1", "episode-0"]
+    assert [row.actions.to_pylist() for row in rows] == [[[0]], [[1]]]
+    assert [row.states.to_pylist() for row in rows] == [[[20.0]], [[10.0]]]
+
+
+def test_to_robot_rows_falls_back_for_mixed_row_batches() -> None:
+    rows = (
+        from_items(
+            [
+                {
+                    "episode_id": "episode-1",
+                    "keep": True,
+                    "action": [[0.0]],
+                    "observation.state": [[1.0]],
+                },
+                {
+                    "episode_id": "episode-2",
+                    "keep": True,
+                    "action": [[1.0]],
+                    "observation.state": [[2.0]],
+                },
+            ]
+        )
+        .to_robot_rows(episode_id_key="episode_id")
+        .map(
+            lambda row: (
+                row
+                if cast(RoboticsRow, row).episode_id == "episode-1"
+                else DictRow({"episode_id": row["episode_id"], "keep": row["keep"]})
+            )
+        )
+        .filter(col("keep"))
+        .materialize()
+    )
+
+    assert [row["episode_id"] for row in rows] == ["episode-1", "episode-2"]
 
 
 def test_to_robot_rows_output_can_be_motion_trimmed() -> None:
