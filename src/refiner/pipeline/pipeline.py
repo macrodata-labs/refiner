@@ -178,6 +178,17 @@ class RefinerPipeline:
         stats_prefix: str = "stats/",
         episode_ends_key: str | None = None,
     ) -> "RefinerPipeline":
+        """Expose rows through the RoboticsRow semantic view.
+
+        This does not materialize semantic properties such as ``episode_id`` or
+        ``num_frames`` as physical table columns. Vectorized operations after this
+        step still address the underlying source columns, so use the original key
+        names in expressions unless you have explicitly created new columns. Row-level
+        operations and iteration can still access the semantic properties directly:
+        ``.filter(lambda row: row.episode_id == "ep-1")`` uses the view property,
+        while ``.filter(col("episode_id") == "ep-1")`` requires a physical
+        ``episode_id`` column.
+        """
         from refiner.robotics.row import _robot_row_converter
 
         converter = _robot_row_converter(

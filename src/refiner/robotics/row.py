@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace as dataclass_replace
-from typing import Any, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast, runtime_checkable
 
 import pyarrow as pa
 
@@ -11,6 +11,9 @@ from refiner.pipeline.data.datatype import asset_storage, asset_type
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.data.tabular import set_or_append_column
 from refiner.video import VideoSource, video_from_storage_value
+
+if TYPE_CHECKING:
+    from refiner.robotics.tabular import RoboticsTabular
 
 
 RoboticsRowT = TypeVar("RoboticsRowT", bound="RoboticsRow")
@@ -189,6 +192,12 @@ class _RoboticsRowView(Row, RoboticsRow):
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
+
+    @property
+    def tabular_type(self) -> type["RoboticsTabular"]:
+        from refiner.robotics.tabular import RoboticsTabular
+
+        return RoboticsTabular
 
     @property
     def shard_id(self) -> str | None:
@@ -425,6 +434,12 @@ class _RoboticsRowView(Row, RoboticsRow):
         **kwargs: Any,
     ) -> "_RoboticsRowView":
         return self._replace(self._row.update(patch, **kwargs))
+
+    def drop(self, *keys: str) -> "_RoboticsRowView":
+        return self._replace(self._row.drop(*keys))
+
+    def with_shard_id(self, shard_id: str) -> "_RoboticsRowView":
+        return self._replace(self._row.with_shard_id(shard_id))
 
     def _nested_frame_table(self) -> Tabular | None:
         nested_frames_key = _valid_nested_frames_key(

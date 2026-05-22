@@ -634,6 +634,65 @@ def test_write_lerobot_accepts_generic_robotics_rows(tmp_path: Path) -> None:
     ]
 
 
+def test_write_lerobot_accepts_to_robot_rows_after_vectorized_filter(
+    tmp_path: Path,
+) -> None:
+    out_root = tmp_path / "generic-filtered"
+
+    stats = (
+        mdr.from_items(
+            [
+                {
+                    "episode_id": "episode-0",
+                    "task": "drop",
+                    "keep": False,
+                    "frames": [
+                        {
+                            "timestamp": 0.0,
+                            "action": [0.0],
+                            "observation.state": [1.0],
+                        }
+                    ],
+                },
+                {
+                    "episode_id": "episode-1",
+                    "task": "keep",
+                    "keep": True,
+                    "frames": [
+                        {
+                            "timestamp": 0.0,
+                            "action": [1.0],
+                            "observation.state": [2.0],
+                        }
+                    ],
+                },
+            ]
+        )
+        .to_robot_rows(
+            episode_id_key="episode_id",
+            task_key="task",
+            nested_frames_key="frames",
+            fps=10,
+            robot_type="mockbot",
+        )
+        .filter(mdr.col("keep"))
+        .write_lerobot(str(out_root))
+        .launch_local(
+            name="generic-filtered-write-lerobot",
+            num_workers=1,
+            rundir=str(tmp_path / "workdir-generic-filtered"),
+        )
+    )
+
+    assert stats.failed == 0
+    rows = mdr.read_lerobot(str(out_root)).materialize()
+    assert len(rows) == 1
+    assert rows[0]["tasks"] == ["keep"]
+    assert cast(LeRobotRow, rows[0]).to_frame_table().column("action").to_pylist() == [
+        [1.0]
+    ]
+
+
 def test_lerobot_video_writer_reuses_opened_remux_source_for_same_uri(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
