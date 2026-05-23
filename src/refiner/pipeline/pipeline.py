@@ -814,6 +814,7 @@ def read_zarr(
     attrs: PathSelection | None = None,
     row_ends: str | None = None,
     split_leading_axis: bool = False,
+    leading_axis_row_size: int = 1,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
     index_column: str | None = "index",
@@ -825,10 +826,11 @@ def read_zarr(
     The reader has three modes:
     - group mode: one Zarr group becomes one row
     - row_ends mode: cumulative offsets define whole-row source slices
-    - split_leading_axis mode: aligned axis-0 windows define output rows
+    - split_leading_axis mode: fixed-size leading-axis slices define output rows
 
     Missing selected arrays or attributes raise immediately. `row_ends` and
-    `split_leading_axis` are mutually exclusive.
+    `split_leading_axis` are mutually exclusive. `target_shard_bytes` and
+    `num_shards` affect shard planning, not logical row size.
     """
     return RefinerPipeline(
         source=ZarrReader(
@@ -837,6 +839,7 @@ def read_zarr(
             attrs=attrs,
             row_ends=row_ends,
             split_leading_axis=split_leading_axis,
+            leading_axis_row_size=leading_axis_row_size,
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             index_column=index_column,

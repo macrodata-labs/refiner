@@ -293,24 +293,27 @@ their leading dimension, while selected attrs are repeated on each row.
 of every selected array.
 
 If a Zarr store has aligned arrays but no episode boundaries, use
-`split_leading_axis=True` to emit one row per leading-axis item:
+`split_leading_axis=True` to emit fixed-size rows along the leading axis:
 
 ```python
-windows = mdr.read_zarr(
+rows = mdr.read_zarr(
     "replay_buffer.zarr",
     arrays={
         "action": "data/action",
         "frames": "data/rgb",
     },
     split_leading_axis=True,
+    leading_axis_row_size=1,
     target_shard_bytes=128 * 1024**2,
 )
 ```
 
-This mode requires selected arrays to have the same leading dimension. Refiner
-plans shards from array metadata and avoids splitting shards below the largest
-selected leading-axis chunk where possible. Use `num_shards` when you need a
-target shard count instead of byte-sized packing.
+This mode requires selected arrays to have the same leading dimension, and that
+dimension must be divisible by `leading_axis_row_size`. Each output row contains
+`leading_axis_row_size` contiguous items from every selected array. Refiner plans
+shards from array metadata and avoids splitting shards below the largest selected
+leading-axis chunk where possible. Use `num_shards` when you need a target shard
+count instead of byte-sized packing.
 
 `row_ends` is reader control metadata, not an output selection. If you also want
 the raw offsets as a column in non-split mode, select that path through `arrays`.

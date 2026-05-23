@@ -54,7 +54,7 @@ class _ArrayInfo:
 
 
 class ZarrReader(BaseSource):
-    """Read a Zarr group as one row, episode rows, or leading-axis windows."""
+    """Read a Zarr group as one row, episode rows, or leading-axis rows."""
 
     name = "read_zarr"
 
@@ -66,6 +66,7 @@ class ZarrReader(BaseSource):
         attrs: PathSelection | None = None,
         row_ends: str | None = None,
         split_leading_axis: bool = False,
+        leading_axis_row_size: int = 1,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
         index_column: str | None = "index",
@@ -82,12 +83,14 @@ class ZarrReader(BaseSource):
             row_ends: Optional Zarr array path containing cumulative end offsets.
                 When set, emitted rows are whole source ranges and never split
                 across these boundaries.
-            split_leading_axis: Emit aligned leading-axis windows when no
+            split_leading_axis: Emit fixed-size leading-axis rows when no
                 ``row_ends`` path is provided.
-            target_shard_bytes: Approximate byte target used to pack output rows
-                into shards in split modes.
+            leading_axis_row_size: Number of leading-axis items in each logical
+                row when ``split_leading_axis`` is enabled.
+            target_shard_bytes: Approximate byte target used to pack logical
+                rows into shards in split modes.
             num_shards: Optional target shard count for split modes.
-            index_column: Output metadata column containing the episode/window
+            index_column: Output metadata column containing the logical row
                 index in split modes, or None to omit it.
             file_path_column: Output metadata column containing the source path,
                 or None to omit it.
@@ -97,6 +100,10 @@ class ZarrReader(BaseSource):
         check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
         if row_ends is not None and split_leading_axis:
             raise ValueError("row_ends and split_leading_axis are mutually exclusive")
+        if leading_axis_row_size <= 0:
+            raise ValueError("leading_axis_row_size must be greater than zero")
+        if leading_axis_row_size != 1 and not split_leading_axis:
+            raise ValueError("leading_axis_row_size requires split_leading_axis=True")
         if target_shard_bytes <= 0:
             raise ValueError("target_shard_bytes must be greater than zero")
         if num_shards is not None and num_shards <= 0:
@@ -109,6 +116,7 @@ class ZarrReader(BaseSource):
         )
         self.row_ends = row_ends
         self.split_leading_axis = split_leading_axis
+        self.leading_axis_row_size = leading_axis_row_size
         self.target_shard_bytes = target_shard_bytes
         self.num_shards = num_shards
         self.index_column = index_column
@@ -137,6 +145,7 @@ class ZarrReader(BaseSource):
             "attrs": dict(self.attrs) if self.attrs is not None else None,
             "row_ends": self.row_ends,
             "split_leading_axis": self.split_leading_axis,
+            "leading_axis_row_size": self.leading_axis_row_size,
             "target_shard_bytes": self.target_shard_bytes,
             "num_shards": self.num_shards,
             "index_column": self.index_column,
@@ -215,18 +224,21 @@ class ZarrReader(BaseSource):
         if self.split_leading_axis:
             descriptor = shard.descriptor
             assert isinstance(descriptor, RowRangeDescriptor)
+            raw_start = descriptor.start * self.leading_axis_row_size
+            raw_end = descriptor.end * self.leading_axis_row_size
             block = self._read_arrays(
                 group,
                 arrays,
-                start=descriptor.start,
-                end=descriptor.end,
+                start=raw_start,
+                end=raw_end,
             )
             attrs = self._read_attrs(group)
             for row_index in range(descriptor.start, descriptor.end):
+                offset = (row_index - descriptor.start) * self.leading_axis_row_size
                 row = self._row_metadata(index=row_index)
                 row.update(
                     {
-                        name: value[row_index - descriptor.start]
+                        name: value[offset : offset + self.leading_axis_row_size]
                         for name, value in block.items()
                     }
                 )
@@ -327,8 +339,9 @@ class ZarrReader(BaseSource):
         if not self._is_split_mode:
             return [(0, 1)]
         if self.split_leading_axis:
-            return _leading_axis_ranges(
+            return _leading_axis_shard_ranges(
                 infos,
+                row_size=self.leading_axis_row_size,
                 target_shard_bytes=self.target_shard_bytes,
                 num_shards=self.num_shards,
             )
@@ -498,9 +511,10 @@ def _validate_source_ranges(
             )
 
 
-def _leading_axis_ranges(
+def _leading_axis_shard_ranges(
     infos: Sequence[_ArrayInfo],
     *,
+    row_size: int,
     target_shard_bytes: int,
     num_shards: int | None,
 ) -> list[tuple[int, int]]:
@@ -512,14 +526,22 @@ def _leading_axis_ranges(
     length = lengths.pop()
     if length == 0:
         return []
+    if length % row_size != 0:
+        raise ValueError("Zarr leading dimension must be divisible by row size")
+    row_count = length // row_size
     if num_shards is not None:
-        step = ceil(length / num_shards)
+        step = ceil(row_count / num_shards)
     else:
-        bytes_per_step = sum(info.bytes_per_step for info in infos)
-        target_steps = max(1, target_shard_bytes // max(1, bytes_per_step))
-        base = max(1, max(info.leading_chunk for info in infos))
-        step = max(base, (target_steps // base) * base)
-    return [(start, min(start + step, length)) for start in range(0, length, step)]
+        bytes_per_row = sum(info.bytes_per_step for info in infos) * row_size
+        target_rows = max(1, target_shard_bytes // max(1, bytes_per_row))
+        chunk_rows = max(
+            1,
+            ceil(max(info.leading_chunk for info in infos) / row_size),
+        )
+        step = max(chunk_rows, (target_rows // chunk_rows) * chunk_rows)
+    return [
+        (start, min(start + step, row_count)) for start in range(0, row_count, step)
+    ]
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:

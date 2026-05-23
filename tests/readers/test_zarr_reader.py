@@ -249,9 +249,31 @@ def test_read_zarr_split_leading_axis_emits_one_row_per_index(tmp_path: Path) ->
     rows = pipeline.take(3)
 
     assert [row["index"] for row in rows] == [0, 1, 2]
-    assert [row["action"].shape for row in rows] == [(1,), (1,), (1,)]
-    assert [row["rgb"].shape for row in rows] == [(4, 4, 3)] * 3
-    np.testing.assert_allclose(rows[1]["action"], [1.0])
+    assert [row["action"].shape for row in rows] == [(1, 1), (1, 1), (1, 1)]
+    assert [row["rgb"].shape for row in rows] == [(1, 4, 4, 3)] * 3
+    np.testing.assert_allclose(rows[1]["action"], [[1.0]])
+
+
+def test_read_zarr_split_leading_axis_uses_row_size(tmp_path: Path) -> None:
+    path = tmp_path / "leading_axis_rows.zarr"
+    root = zarr.open_group(str(path), mode="w")
+    root.create_dataset(
+        "data/action",
+        data=np.arange(6, dtype=np.float32).reshape(6, 1),
+        chunks=(2, 1),
+    )
+
+    rows = mdr.read_zarr(
+        path,
+        arrays={"action": "data/action"},
+        split_leading_axis=True,
+        leading_axis_row_size=2,
+        file_path_column=None,
+    ).take(3)
+
+    assert [row["index"] for row in rows] == [0, 1, 2]
+    assert [row["action"].shape for row in rows] == [(2, 1), (2, 1), (2, 1)]
+    np.testing.assert_allclose(rows[1]["action"], [[2.0], [3.0]])
 
 
 def test_read_zarr_split_leading_axis_requires_aligned_lengths(tmp_path: Path) -> None:
@@ -267,6 +289,33 @@ def test_read_zarr_split_leading_axis_requires_aligned_lengths(tmp_path: Path) -
             split_leading_axis=True,
             file_path_column=None,
         ).take(1)
+
+
+def test_read_zarr_split_leading_axis_requires_full_rows(tmp_path: Path) -> None:
+    path = tmp_path / "partial-leading-axis-row.zarr"
+    root = zarr.open_group(str(path), mode="w")
+    root.create_dataset("data/action", data=np.zeros((5, 1), dtype=np.float32))
+
+    with pytest.raises(ValueError, match="divisible by row size"):
+        mdr.read_zarr(
+            path,
+            arrays={"action": "data/action"},
+            split_leading_axis=True,
+            leading_axis_row_size=2,
+            file_path_column=None,
+        ).take(1)
+
+
+def test_read_zarr_leading_axis_row_size_requires_split_mode(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    with pytest.raises(ValueError, match="requires split_leading_axis"):
+        mdr.read_zarr(
+            path,
+            arrays={"action": "data/action"},
+            leading_axis_row_size=2,
+        )
 
 
 def test_read_zarr_rejects_non_monotonic_row_ends(tmp_path: Path) -> None:
