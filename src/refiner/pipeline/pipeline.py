@@ -438,6 +438,8 @@ class RefinerPipeline:
         arrays: Mapping[str, str] | None = None,
         episode_ends_path: str | None = "meta/episode_ends",
         store_template: str = "{shard_id}__w{worker_id}.zarr",
+        video_frame_batch_size: int = 64,
+        reduce_to_single_store: bool = False,
         overwrite: bool = True,
     ) -> "RefinerPipeline":
         return self.with_sink(
@@ -446,6 +448,8 @@ class RefinerPipeline:
                 arrays=arrays,
                 episode_ends_path=episode_ends_path,
                 store_template=store_template,
+                video_frame_batch_size=video_frame_batch_size,
+                reduce_to_single_store=reduce_to_single_store,
                 overwrite=overwrite,
             )
         )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import math
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import IO, TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -27,6 +27,8 @@ class VideoSource(Protocol):
     ) -> "VideoSource": ...
 
     def iter_frames(self) -> AsyncIterator[DecodedVideoFrame]: ...
+
+    def iter_frame_arrays(self) -> AsyncIterator[np.ndarray]: ...
 
     def iter_frame_windows(
         self,
@@ -108,6 +110,10 @@ class VideoFile:
 
         return iter_encoded_frames(self)
 
+    async def iter_frame_arrays(self) -> AsyncIterator[np.ndarray]:
+        async for frame in self.iter_frames():
+            yield frame.frame.to_ndarray(format="rgb24")
+
     def iter_frame_windows(
         self,
         *,
@@ -172,6 +178,10 @@ class VideoBytes:
 
         return iter_encoded_frames(self)
 
+    async def iter_frame_arrays(self) -> AsyncIterator[np.ndarray]:
+        async for frame in self.iter_frames():
+            yield frame.frame.to_ndarray(format="rgb24")
+
     def iter_frame_windows(
         self,
         *,
@@ -233,8 +243,13 @@ class VideoFrameArray:
     def duration_s(self) -> float:
         return self.frame_count / float(self.fps)
 
-    def iter_frame_arrays(self) -> Iterator[np.ndarray]:
-        yield from self._array
+    @property
+    def frame_arrays(self) -> np.ndarray:
+        return self._array
+
+    async def iter_frame_arrays(self) -> AsyncIterator[np.ndarray]:
+        for frame in self._array:
+            yield frame
 
     def clipped(
         self,

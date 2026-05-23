@@ -11,6 +11,7 @@ import zarr
 
 import refiner as mdr
 from refiner.io.datafolder import DataFolder
+from refiner.io import DataFile
 from refiner.robotics.row import RoboticsRow
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.row import Row
@@ -53,6 +54,27 @@ def _write_policy_zarr(path: Path) -> None:
     _create_array(root, "meta/episode_ends", data=np.asarray([2, 5], dtype=np.int64))
     root.attrs["dataset_id"] = "pusht"
     root.attrs["task"] = "push tee"
+
+
+def _write_video(path: Path, *, num_frames: int = 3, fps: int = 5) -> None:
+    import av
+
+    with av.open(str(path), mode="w") as container:
+        stream = container.add_stream("mpeg4", rate=fps)
+        stream.width = 4
+        stream.height = 4
+        stream.pix_fmt = "yuv420p"
+
+        for value in range(num_frames):
+            frame = av.VideoFrame.from_ndarray(
+                np.full((4, 4, 3), value, dtype=np.uint8),
+                format="rgb24",
+            )
+            for packet in stream.encode(frame):
+                container.mux(packet)
+
+        for packet in stream.encode(None):
+            container.mux(packet)
 
 
 def test_read_zarr_reads_selected_arrays_and_attrs(tmp_path: Path) -> None:
@@ -741,6 +763,46 @@ def test_write_zarr_roundtrips_lerobot_rows(tmp_path: Path) -> None:
     )
 
 
+def test_write_zarr_can_reduce_to_single_store(tmp_path: Path) -> None:
+    zarr_out = tmp_path / "single.zarr"
+
+    (
+        mdr.from_items(
+            [
+                {"action": [[0.0], [0.1]], "state": [[1.0], [1.1]]},
+                {"action": [[0.2]], "state": [[1.2]]},
+            ],
+            items_per_shard=1,
+        )
+        .write_zarr(
+            str(zarr_out),
+            arrays={
+                "data/action": "action",
+                "data/state": "state",
+            },
+            reduce_to_single_store=True,
+        )
+        .launch_local(
+            name="zarr-single-store", num_workers=1, rundir=str(tmp_path / "run")
+        )
+    )
+
+    row = mdr.read_zarr(
+        zarr_out,
+        arrays={
+            "action": "data/action",
+            "state": "data/state",
+            "episode_ends": "meta/episode_ends",
+        },
+        file_path_column=None,
+    ).take(1)[0]
+
+    np.testing.assert_allclose(row["action"], [[0.0], [0.1], [0.2]])
+    np.testing.assert_allclose(row["state"], [[1.0], [1.1], [1.2]])
+    assert row["episode_ends"].tolist() == [2, 3]
+    assert not (zarr_out / "_parts").exists()
+
+
 def test_write_zarr_rejects_rows_missing_inferred_default_arrays(
     tmp_path: Path,
 ) -> None:
@@ -849,3 +911,46 @@ def test_write_zarr_materializes_frame_array_videos(tmp_path: Path) -> None:
     ).take(1)[0]
     np.testing.assert_array_equal(row["rgb"], frames)
     np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
+
+
+def test_write_zarr_streams_encoded_videos(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "encoded-video.zarr"
+    _write_video(source, num_frames=3, fps=5)
+
+    rows = list(
+        mdr.from_items(
+            [
+                {
+                    "episode_id": "episode-1",
+                    "clip": mdr.video.VideoFile(DataFile.resolve(source)),
+                    "action": [[0.0], [0.1], [0.2]],
+                }
+            ]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"observation.images.front": "clip"},
+        )
+    )
+
+    ZarrSink(
+        str(output),
+        arrays={
+            "data/action": "action",
+            "data/rgb": "observation.images.front",
+        },
+        video_frame_batch_size=2,
+    ).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    row = mdr.read_zarr(
+        zarr_store,
+        arrays={"action": "data/action", "rgb": "data/rgb"},
+        file_path_column=None,
+    ).take(1)[0]
+    assert row["rgb"].shape == (3, 4, 4, 3)
+    assert row["rgb"].dtype == np.uint8
+    np.testing.assert_allclose(row["action"], [[0.0], [0.1], [0.2]])

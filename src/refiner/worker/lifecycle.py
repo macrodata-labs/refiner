@@ -13,6 +13,7 @@ from refiner.worker.context import worker_token_for
 class FinalizedShardWorker(msgspec.Struct, frozen=True):
     shard_id: str
     worker_id: str
+    global_ordinal: int | None = None
 
     @property
     def worker_token(self) -> str:
@@ -53,11 +54,25 @@ def read_finalized_workers(
             except Exception:
                 continue
             shard_id = payload.get("shard_id") if isinstance(payload, dict) else None
+            global_ordinal = (
+                payload.get("global_ordinal") if isinstance(payload, dict) else None
+            )
             if isinstance(shard_id, str):
                 rows.append(
-                    FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)
+                    FinalizedShardWorker(
+                        shard_id=shard_id,
+                        worker_id=worker_id,
+                        global_ordinal=(
+                            global_ordinal if isinstance(global_ordinal, int) else None
+                        ),
+                    )
                 )
-    rows.sort(key=lambda row: row.shard_id)
+    rows.sort(
+        key=lambda row: (
+            row.global_ordinal is None,
+            row.global_ordinal if row.global_ordinal is not None else row.shard_id,
+        )
+    )
     return rows
 
 
@@ -90,7 +105,15 @@ class LocalRuntimeLifecycle:
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"shard_id": shard.id}, sort_keys=True))
+            handle.write(
+                json.dumps(
+                    {
+                        "global_ordinal": shard.global_ordinal,
+                        "shard_id": shard.id,
+                    },
+                    sort_keys=True,
+                )
+            )
             handle.write("\n")
         return None
 

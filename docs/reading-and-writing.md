@@ -510,15 +510,18 @@ import refiner as mdr
 The `arrays` mapping is from output Zarr path to source row key. For
 `RoboticsRow` inputs, omitting `arrays` writes the available default robotics
 arrays: actions, states, and timestamps. The default schema is inferred once and
-later rows must expose the same fields.
+later rows must expose the same fields. Video sources selected through `arrays`
+are decoded as RGB frame arrays and appended in bounded batches controlled by
+`video_frame_batch_size`.
 
 By default, `write_zarr(...)` also writes cumulative episode boundaries to
 `meta/episode_ends`. Set `episode_ends_path=None` to omit them.
 
 Launched runs write isolated stores per shard/worker using
 `store_template="{shard_id}__w{worker_id}.zarr"`. This avoids concurrent workers
-mutating the same Zarr group. Read the resulting stores individually or merge
-them in a later workflow if you need a single physical store.
+mutating the same Zarr group. Read the resulting stores individually, or set
+`reduce_to_single_store=True` to add a reducer stage that streams the shard-local
+stores into one final Zarr group at the requested output path.
 
 When you run a writer through `launch_local(...)` or `launch_cloud(...)`, some
 sinks add a reducer stage after the main writer stage. For `write_jsonl(...)`
