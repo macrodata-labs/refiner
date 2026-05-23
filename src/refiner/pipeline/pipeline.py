@@ -40,9 +40,10 @@ from refiner.pipeline.sources import (
     Hdf5Reader,
     JsonReader,
     ParquetReader,
+    ZarrReader,
 )
+from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
-from refiner.pipeline.sources.readers.hdf5 import MissingPolicy, PathSelection
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
@@ -59,7 +60,10 @@ from refiner.execution.engine import (
 )
 from refiner.execution.operators.row import ShardDeltaFn
 from refiner.pipeline.sources.base import SourceUnit
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    PathSelection,
+)
 import pyarrow as pa
 
 if TYPE_CHECKING:
@@ -176,7 +180,6 @@ class RefinerPipeline:
         video_keys: Mapping[str, str] | Iterable[str] | None = None,
         stats_key: str | None = "stats",
         stats_prefix: str = "stats/",
-        episode_ends_key: str | None = None,
     ) -> "RefinerPipeline":
         """Expose rows through the RoboticsRow semantic view.
 
@@ -207,11 +210,8 @@ class RefinerPipeline:
             schema=self.output_schema(),
             stats_key=stats_key,
             stats_prefix=stats_prefix,
-            episode_ends_key=episode_ends_key,
         )
-        if episode_ends_key is None:
-            return self.map(cast(MapFn, converter))
-        return self.flat_map(cast(FlatMapFn, converter))
+        return self.map(cast(MapFn, converter))
 
     def map_async(
         self,
@@ -804,6 +804,51 @@ def read_hdf5(
             file_path_column=file_path_column,
             group_path_column=group_path_column,
             missing_policy=missing_policy,
+            dtypes=dtypes,
+        )
+    )
+
+
+def read_zarr(
+    input: DataFolderLike,
+    *,
+    arrays: PathSelection | None = None,
+    attrs: PathSelection | None = None,
+    row_ends: str | None = None,
+    split_leading_axis: bool = False,
+    leading_axis_row_size: int = 1,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    row_batch_size: int | None = None,
+    index_column: str | None = "index",
+    file_path_column: str | None = "file_path",
+    dtypes: DTypeMapping | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline with a Zarr reader source.
+
+    The reader has three modes:
+    - group mode: one Zarr group becomes one row
+    - row_ends mode: cumulative offsets define whole-row source slices
+    - split_leading_axis mode: fixed-size leading-axis slices define output rows
+
+    Missing selected arrays or attributes raise immediately. `row_ends` and
+    `split_leading_axis` are mutually exclusive. `target_shard_bytes` and
+    `num_shards` affect shard planning, not logical row size. `row_batch_size`
+    bounds how many logical rows are loaded per array block within each shard.
+    """
+    return RefinerPipeline(
+        source=ZarrReader(
+            input,
+            arrays=arrays,
+            attrs=attrs,
+            row_ends=row_ends,
+            split_leading_axis=split_leading_axis,
+            leading_axis_row_size=leading_axis_row_size,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            row_batch_size=row_batch_size,
+            index_column=index_column,
+            file_path_column=file_path_column,
             dtypes=dtypes,
         )
     )

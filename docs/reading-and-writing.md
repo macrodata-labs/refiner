@@ -228,6 +228,104 @@ datasets or attributes default to raising an error. Set
 If a selected column can be missing from every group in an input file, pass
 `dtypes` for that column so the reader can emit a stable Arrow type.
 
+## Zarr
+
+Zarr support lives behind the optional `macrodata-refiner[zarr]` extra.
+
+```bash
+uv add "macrodata-refiner[zarr]"
+```
+
+`read_zarr(...)` reads one Zarr group, including directory stores and
+`.zarr.zip` stores. By default, the group becomes one output row and selected
+arrays are loaded as full array values.
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_zarr(
+    "replay_buffer.zarr",
+    arrays={
+        "action": "data/action",
+        "state": "data/state",
+    },
+    attrs={"task": "task"},
+)
+```
+
+`arrays` and `attrs` accept the same selection forms as HDF5: a mapping from
+output column name to Zarr path, one path string, or a sequence of path strings
+with unique final components. Use a mapping when derived names would collide.
+
+For robotics-style replay buffers, pass `row_ends` to split concatenated arrays
+into logical rows, usually episodes:
+
+```python
+episodes = mdr.read_zarr(
+    "replay_buffer.zarr",
+    arrays={
+        "action": "data/action",
+        "observation.state": "data/state",
+        "frames": "data/rgb",
+    },
+    attrs={"task": "task"},
+    row_ends="meta/episode_ends",
+    index_column="episode_id",
+    file_path_column=None,
+)
+```
+
+For a store shaped like:
+
+```text
+replay_buffer.zarr
+├── data
+│   ├── action            # shape [total_steps, action_dim]
+│   ├── state             # shape [total_steps, state_dim]
+│   └── rgb               # shape [total_steps, height, width, channels]
+└── meta
+    └── episode_ends      # cumulative end offsets, for example [152, 319, 477]
+```
+
+this emits one row per `[start:end]` slice. The selected arrays are sliced along
+their leading dimension, while selected attrs are repeated on each row.
+`index_column` receives the row/episode index when `row_ends` is set. Set it to
+`None` to omit that metadata. The final row end must match the leading dimension
+of every selected array.
+
+If a Zarr store has aligned arrays but no episode boundaries, use
+`split_leading_axis=True` to emit fixed-size rows along the leading axis:
+
+```python
+rows = mdr.read_zarr(
+    "replay_buffer.zarr",
+    arrays={
+        "action": "data/action",
+        "frames": "data/rgb",
+    },
+    split_leading_axis=True,
+    leading_axis_row_size=1,
+    target_shard_bytes=128 * 1024**2,
+)
+```
+
+Shard planning in this mode uses chunk metadata from the selected array with the
+largest per-row byte size (`dtype.itemsize * product(shape[1:])`). This keeps
+large image/video arrays in control of shard boundaries, so tiny action/state
+arrays stored as one huge chunk do not force Refiner to load a much larger image
+block than necessary.
+
+This mode requires selected arrays to have the same leading dimension, and that
+dimension must be divisible by `leading_axis_row_size`. Each output row contains
+`leading_axis_row_size` contiguous items from every selected array. Refiner plans
+shards from array metadata and tries to keep shard boundaries aligned with the
+dominant array's leading-axis chunks. Use `num_shards` when you need a target
+shard count instead of byte-sized packing.
+
+By default, split readers load one shard block at a time and slice logical rows
+from that block. Set `row_batch_size` to cap how many logical rows are loaded per
+block when a shard would otherwise materialize too much data.
+
 ## Common Crawl text readers
 
 [Common Crawl](https://commoncrawl.org/) publishes large public web crawls.

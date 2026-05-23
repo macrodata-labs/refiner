@@ -44,6 +44,10 @@ text = [
 hdf5 = [
     "h5py",
 ]
+zarr = [
+    "zarr>=2.18,<3",
+    "numcodecs<0.16",
+]
 s3 = [
     "s3fs",
 ]
@@ -51,6 +55,7 @@ testing = [
     "macrodata-refiner[huggingface]",
     "macrodata-refiner[hdf5]",
     "macrodata-refiner[robotics]",
+    "macrodata-refiner[zarr]",
     "macrodata-refiner[text]",
     "macrodata-refiner[s3]",
     "pytest>=8.0.0",
