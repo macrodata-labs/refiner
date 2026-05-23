@@ -44,15 +44,32 @@ class ZarrSink(BaseSink):
         self._stores: dict[str, _ShardStore] = {}
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
+        arrays_by_path: dict[str, list[np.ndarray]] = {}
+        episode_lengths: list[int] = []
         count = 0
         for row in block:
-            self._write_row(shard_id, row)
+            length = self._collect_row(row, arrays_by_path)
+            if length is not None:
+                episode_lengths.append(length)
             count += 1
+        if arrays_by_path:
+            store = self._store(shard_id)
+            for zarr_path, arrays in arrays_by_path.items():
+                self._append_array(store, zarr_path, np.concatenate(arrays, axis=0))
+            if self.episode_ends_path is not None and episode_lengths:
+                episode_ends = store.row_end + np.cumsum(
+                    np.asarray(episode_lengths, dtype=np.int64)
+                )
+                store.row_end = int(episode_ends[-1])
+                self._append_array(store, self.episode_ends_path, episode_ends)
         return count
 
-    def _write_row(self, shard_id: str, row: Row) -> None:
+    def _collect_row(
+        self,
+        row: Row,
+        arrays_by_path: dict[str, list[np.ndarray]],
+    ) -> int | None:
         arrays = self.arrays or _default_robotics_arrays(row)
-        store = self._store(shard_id)
         lengths: list[int] = []
         for zarr_path, source_key in arrays.items():
             value = _row_value(row, source_key)
@@ -62,17 +79,13 @@ class ZarrSink(BaseSink):
             if array.ndim == 0:
                 array = array.reshape(1)
             lengths.append(int(array.shape[0]))
-            self._append_array(store, zarr_path, array)
-        if lengths and self.episode_ends_path is not None:
-            length = lengths[0]
-            if any(item != length for item in lengths):
-                raise ValueError("Zarr arrays for one row must have matching lengths")
-            store.row_end += length
-            self._append_array(
-                store,
-                self.episode_ends_path,
-                np.asarray([store.row_end], dtype=np.int64),
-            )
+            arrays_by_path.setdefault(zarr_path, []).append(array)
+        if not lengths:
+            return None
+        length = lengths[0]
+        if any(item != length for item in lengths):
+            raise ValueError("Zarr arrays for one row must have matching lengths")
+        return length
 
     def _store(self, shard_id: str) -> _ShardStore:
         relpath = self.store_template.format(
@@ -92,6 +105,13 @@ class ZarrSink(BaseSink):
         )
         self._stores[relpath] = store
         return store
+
+    def on_shard_complete(self, shard_id: str) -> None:
+        relpath = self.store_template.format(
+            shard_id=shard_id,
+            worker_id=get_active_worker_token(),
+        )
+        self._stores.pop(relpath, None)
 
     def _append_array(
         self,

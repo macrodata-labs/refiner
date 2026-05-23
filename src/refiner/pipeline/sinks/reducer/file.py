@@ -159,8 +159,13 @@ class FileCleanupReducerSink(BaseSink):
             managed_path = rel_path
             match = self._managed_path_pattern.fullmatch(managed_path)
             if match is None and self.recursive:
-                managed_path = rel_path.split("/", maxsplit=1)[0]
-                match = self._managed_path_pattern.fullmatch(managed_path)
+                parts = rel_path.split("/")
+                for index in range(1, len(parts)):
+                    candidate = "/".join(parts[:index])
+                    match = self._managed_path_pattern.fullmatch(candidate)
+                    if match is not None:
+                        managed_path = candidate
+                        break
             if match is None:
                 continue
             if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
