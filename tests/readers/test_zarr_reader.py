@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import cast
 
 import numpy as np
+import pytest
 import zarr
 
 import refiner as mdr
@@ -73,6 +74,34 @@ def test_read_zarr_splits_arrays_by_row_ends(tmp_path: Path) -> None:
         rows[0]["frames"],
         np.arange(2 * 4 * 4 * 3).reshape(2, 4, 4, 3),
     )
+
+
+def test_read_zarr_allows_attrs_only_reads(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    row = mdr.read_zarr(
+        path,
+        arrays={},
+        attrs={"task": "task"},
+        file_path_column=None,
+    ).take(1)[0]
+
+    assert list(row) == ["task"]
+    assert row["task"] == "push tee"
+
+
+def test_read_zarr_rejects_duplicate_output_names(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    with pytest.raises(ValueError, match="duplicate output names"):
+        mdr.read_zarr(
+            path,
+            arrays={"task": "data/action"},
+            attrs={"task": "task"},
+            file_path_column=None,
+        )
 
 
 def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:

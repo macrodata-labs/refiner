@@ -20,9 +20,7 @@ MissingPolicy = Literal["error", "drop_row", "set_null"]
 PathSelection = Mapping[str, str] | Sequence[str] | str
 
 
-def _selection_map(value: PathSelection | None) -> dict[str, str]:
-    if value is None:
-        return {}
+def _selection_map(value: PathSelection) -> dict[str, str]:
     if isinstance(value, str):
         return {value.rsplit("/", 1)[-1]: value}
     if isinstance(value, Mapping):
@@ -67,8 +65,10 @@ class ZarrReader(BaseSource):
         dtypes: DTypeMapping | None = None,
     ):
         self.root = DataFolder.resolve(input)
-        self.arrays = _selection_map(arrays)
-        self.attrs = _selection_map(attrs)
+        check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
+        self.arrays = None if arrays is None else _selection_map(arrays)
+        self.attrs = None if attrs is None else _selection_map(attrs)
+        _validate_output_names(self.arrays or {}, self.attrs or {})
         self.row_ends = row_ends
         self.file_path_column = file_path_column
         self.missing_policy = missing_policy
@@ -85,8 +85,8 @@ class ZarrReader(BaseSource):
     def describe(self) -> dict[str, Any]:
         return {
             "path": self.root.abs_path(),
-            "arrays": dict(self.arrays),
-            "attrs": dict(self.attrs),
+            "arrays": dict(self.arrays) if self.arrays is not None else None,
+            "attrs": dict(self.attrs) if self.attrs is not None else None,
             "row_ends": self.row_ends,
             "file_path_column": self.file_path_column,
             "missing_policy": self.missing_policy,
@@ -111,13 +111,14 @@ class ZarrReader(BaseSource):
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         del shard
-        check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
         import zarr
 
         group = zarr.open_group(self.root.abs_path(), mode="r")
-        arrays = self.arrays or {
-            path: path for path in _iter_array_paths(group) if path != self.row_ends
-        }
+        arrays = (
+            {path: path for path in _iter_array_paths(group) if path != self.row_ends}
+            if self.arrays is None
+            else self.arrays
+        )
         if self.row_ends is not None:
             try:
                 row_ends = [int(value) for value in group[self.row_ends][:]]
@@ -163,7 +164,7 @@ class ZarrReader(BaseSource):
                     row[output_name] = None
                     continue
                 raise KeyError(f"Zarr array not found: {path}") from None
-        for output_name, attr_name in self.attrs.items():
+        for output_name, attr_name in (self.attrs or {}).items():
             if attr_name not in group.attrs:
                 if self.missing_policy == "drop_row":
                     return None
@@ -173,6 +174,16 @@ class ZarrReader(BaseSource):
                 raise KeyError(f"Zarr attr not found: {attr_name}")
             row[output_name] = _decode_value(group.attrs[attr_name])
         return row
+
+
+def _validate_output_names(
+    arrays: Mapping[str, str],
+    attrs: Mapping[str, str],
+) -> None:
+    duplicates = set(arrays).intersection(attrs)
+    if duplicates:
+        names = ", ".join(sorted(repr(name) for name in duplicates))
+        raise ValueError(f"Zarr arrays and attrs use duplicate output names: {names}")
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
