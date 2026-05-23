@@ -12,6 +12,7 @@ import zarr
 import refiner as mdr
 from refiner.io.datafolder import DataFolder
 from refiner.robotics.row import RoboticsRow
+from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import RowRangeDescriptor
 from refiner.pipeline.sinks.zarr import ZarrSink
@@ -786,3 +787,65 @@ def test_write_zarr_rejects_episode_ends_path_collision(tmp_path: Path) -> None:
             str(tmp_path / "collision.zarr"),
             arrays={"meta/episode_ends": "action"},
         )
+
+
+def test_write_zarr_rejects_shape_drift_before_appending_bad_row(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "shape-mismatch.zarr"
+    rows: list[Row] = [
+        DictRow({"action": [[0.0]], "state": [[1.0, 2.0]]}, shard_id="shard"),
+        DictRow({"action": [[0.1]], "state": [[1.1]]}, shard_id="shard"),
+    ]
+
+    with pytest.raises(ValueError, match="matching trailing shapes"):
+        ZarrSink(
+            str(output),
+            arrays={
+                "data/action": "action",
+                "data/state": "state",
+            },
+        ).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    row = mdr.read_zarr(
+        zarr_store,
+        arrays={"action": "data/action", "state": "data/state"},
+        file_path_column=None,
+    ).take(1)[0]
+    assert row["action"].shape == (1, 1)
+    assert row["state"].shape == (1, 2)
+
+
+def test_write_zarr_materializes_frame_array_videos(tmp_path: Path) -> None:
+    output = tmp_path / "video.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "frames": frames, "action": [[0.0], [0.1]]}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"observation.images.front": "frames"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(
+        str(output),
+        arrays={
+            "data/action": "action",
+            "data/rgb": "observation.images.front",
+        },
+    ).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    row = mdr.read_zarr(
+        zarr_store,
+        arrays={"action": "data/action", "rgb": "data/rgb"},
+        file_path_column=None,
+    ).take(1)[0]
+    np.testing.assert_array_equal(row["rgb"], frames)
+    np.testing.assert_allclose(row["action"], [[0.0], [0.1]])

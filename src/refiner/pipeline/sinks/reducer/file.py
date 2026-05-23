@@ -57,6 +57,19 @@ def _compile_managed_path_pattern(filename_template: str) -> re.Pattern[str]:
     return re.compile("^" + "".join(parts) + "$")
 
 
+def _managed_listing_prefix(filename_template: str) -> str:
+    literal_prefix = ""
+    for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
+        filename_template
+    ):
+        literal_prefix += literal_text
+        if field_name is not None:
+            break
+    if "/" not in literal_prefix:
+        return ""
+    return literal_prefix.rsplit("/", maxsplit=1)[0]
+
+
 class FileCleanupReducerSink(BaseSink):
     """Delete non-finalized deterministic file-sink outputs."""
 
@@ -75,6 +88,7 @@ class FileCleanupReducerSink(BaseSink):
         self.assets_subdir = assets_subdir
         self.recursive = recursive
         self._managed_path_pattern = _compile_managed_path_pattern(filename_template)
+        self._managed_listing_prefix = _managed_listing_prefix(filename_template)
         self._cleanup_ran = False
 
     def write_shard_block(self, shard_id, block) -> None:
@@ -119,10 +133,7 @@ class FileCleanupReducerSink(BaseSink):
             for row in get_finalized_workers(stage_index=stage_index - 1)
         }
 
-        try:
-            listed_paths = self.output.find("")
-        except FileNotFoundError:
-            listed_paths = []
+        listed_paths = list(self._listed_cleanup_paths())
 
         assets_prefix = (
             f"{self.assets_subdir.rstrip('/')}/"
@@ -177,6 +188,23 @@ class FileCleanupReducerSink(BaseSink):
                 self.output.rm(managed_path, recursive=self.recursive)
             except FileNotFoundError:
                 continue
+
+    def _listed_cleanup_paths(self) -> list[str]:
+        if not self.recursive or self.assets_subdir is not None:
+            try:
+                return self.output.find("")
+            except FileNotFoundError:
+                return []
+
+        try:
+            paths = self.output.ls(self._managed_listing_prefix, detail=False)
+        except FileNotFoundError:
+            return []
+        return [
+            path
+            for path in paths
+            if isinstance(path, str) and not path.rstrip("/").endswith("/.")
+        ]
 
 
 __all__ = ["FileCleanupReducerSink"]

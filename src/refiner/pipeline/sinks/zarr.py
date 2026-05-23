@@ -15,6 +15,7 @@ from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
+from refiner.video import VideoFrameArray
 from refiner.worker.context import get_active_worker_token
 
 
@@ -47,32 +48,27 @@ class ZarrSink(BaseSink):
         self._default_arrays: dict[str, str] | None = None
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
-        arrays_by_path: dict[str, list[np.ndarray]] = {}
-        episode_lengths: list[int] = []
         count = 0
         for row in block:
-            length = self._collect_row(row, arrays_by_path)
-            if length is not None:
-                episode_lengths.append(length)
+            row_arrays, length = self._row_arrays(row)
+            if row_arrays:
+                store = self._store(shard_id)
+                self._validate_store_append(store, row_arrays)
+                for zarr_path, array in row_arrays.items():
+                    self._append_array(store, zarr_path, array)
+                if self.episode_ends_path is not None and length is not None:
+                    store.row_end += length
+                    self._append_array(
+                        store,
+                        self.episode_ends_path,
+                        np.asarray([store.row_end], dtype=np.int64),
+                    )
             count += 1
-        if arrays_by_path:
-            store = self._store(shard_id)
-            for zarr_path, arrays in arrays_by_path.items():
-                self._append_array(store, zarr_path, np.concatenate(arrays, axis=0))
-            if self.episode_ends_path is not None and episode_lengths:
-                episode_ends = store.row_end + np.cumsum(
-                    np.asarray(episode_lengths, dtype=np.int64)
-                )
-                store.row_end = int(episode_ends[-1])
-                self._append_array(store, self.episode_ends_path, episode_ends)
         return count
 
-    def _collect_row(
-        self,
-        row: Row,
-        arrays_by_path: dict[str, list[np.ndarray]],
-    ) -> int | None:
+    def _row_arrays(self, row: Row) -> tuple[dict[str, np.ndarray], int | None]:
         arrays = self._arrays_for_row(row)
+        row_arrays: dict[str, np.ndarray] = {}
         lengths: list[int] = []
         for zarr_path, source_key in arrays.items():
             value = _row_value(row, source_key)
@@ -82,13 +78,13 @@ class ZarrSink(BaseSink):
             if array.ndim == 0:
                 array = array.reshape(1)
             lengths.append(int(array.shape[0]))
-            arrays_by_path.setdefault(zarr_path, []).append(array)
+            row_arrays[zarr_path] = array
         if not lengths:
-            return None
+            return {}, None
         length = lengths[0]
         if any(item != length for item in lengths):
             raise ValueError("Zarr arrays for one row must have matching lengths")
-        return length
+        return row_arrays, length
 
     def _arrays_for_row(self, row: Row) -> dict[str, str]:
         if self.arrays is not None:
@@ -148,6 +144,22 @@ class ZarrSink(BaseSink):
             store.arrays[path] = dataset
         dataset.append(array, axis=0)
 
+    def _validate_store_append(
+        self,
+        store: _ShardStore,
+        row_arrays: Mapping[str, np.ndarray],
+    ) -> None:
+        for path, array in row_arrays.items():
+            dataset = store.arrays.get(path)
+            if dataset is None:
+                continue
+            if tuple(dataset.shape[1:]) != tuple(array.shape[1:]):
+                raise ValueError(
+                    f"Zarr arrays for {path!r} must have matching trailing shapes"
+                )
+            if dataset.dtype != array.dtype:
+                raise ValueError(f"Zarr arrays for {path!r} must have matching dtypes")
+
     def close(self) -> None:
         self._stores.clear()
 
@@ -205,7 +217,18 @@ def _row_value(row: Row, key: str) -> Any:
         if key == "timestamp":
             return row.timestamps
         if key.startswith("observation."):
-            return row.observations(key)
+            try:
+                return row.observations(key)
+            except KeyError:
+                video = row.videos.get(key)
+                if isinstance(video, VideoFrameArray):
+                    return np.asarray(list(video.iter_frame_arrays()))
+                if video is not None:
+                    raise ValueError(
+                        "write_zarr can only materialize video observations backed "
+                        f"by frame arrays, got {type(video).__name__} for {key!r}"
+                    )
+                raise
     return row[key]
 
 
