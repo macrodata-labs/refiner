@@ -314,6 +314,43 @@ def test_read_zarr_split_leading_axis_uses_row_size(tmp_path: Path) -> None:
     np.testing.assert_allclose(rows[1]["action"], [[2.0], [3.0]])
 
 
+def test_read_zarr_split_leading_axis_uses_row_batch_size(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "leading_axis_batched.zarr"
+    root = _open_test_zarr(path, mode="w")
+    _create_array(
+        root,
+        "data/action",
+        data=np.arange(6, dtype=np.float32).reshape(6, 1),
+        chunks=(1, 1),
+    )
+
+    pipeline = mdr.read_zarr(
+        path,
+        arrays={"action": "data/action"},
+        split_leading_axis=True,
+        row_batch_size=2,
+        file_path_column=None,
+    )
+    source = cast(Any, pipeline.source)
+    shards = source.list_shards()
+    calls: list[tuple[int | None, int | None]] = []
+    read_arrays = source._read_arrays
+
+    def record_read_arrays(arrays, *, start=None, end=None):
+        calls.append((start, end))
+        return read_arrays(arrays, start=start, end=end)
+
+    monkeypatch.setattr(source, "_read_arrays", record_read_arrays)
+    rows = list(source.read_shard(shards[0]))
+
+    assert [row["index"] for row in rows] == list(range(6))
+    np.testing.assert_allclose(rows[5]["action"], [[5.0]])
+    assert calls == [(0, 2), (2, 4), (4, 6)]
+
+
 def test_read_zarr_split_leading_axis_uses_dominant_array_chunks(
     tmp_path: Path,
 ) -> None:
@@ -390,6 +427,19 @@ def test_read_zarr_leading_axis_row_size_requires_split_mode(tmp_path: Path) -> 
             path,
             arrays={"action": "data/action"},
             leading_axis_row_size=2,
+        )
+
+
+def test_read_zarr_rejects_invalid_row_batch_size(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    with pytest.raises(ValueError, match="row_batch_size"):
+        mdr.read_zarr(
+            path,
+            arrays={"action": "data/action"},
+            split_leading_axis=True,
+            row_batch_size=0,
         )
 
 

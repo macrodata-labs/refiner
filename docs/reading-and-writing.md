@@ -322,6 +322,10 @@ shards from array metadata and tries to keep shard boundaries aligned with the
 dominant array's leading-axis chunks. Use `num_shards` when you need a target
 shard count instead of byte-sized packing.
 
+By default, split readers load one shard block at a time and slice logical rows
+from that block. Set `row_batch_size` to cap how many logical rows are loaded per
+block when a shard would otherwise materialize too much data.
+
 `row_ends` is reader control metadata, not an output selection. If you also want
 the raw offsets as a column in non-split mode, select that path through `arrays`.
 

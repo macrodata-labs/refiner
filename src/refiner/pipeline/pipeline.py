@@ -819,6 +819,7 @@ def read_zarr(
     leading_axis_row_size: int = 1,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    row_batch_size: int | None = None,
     index_column: str | None = "index",
     file_path_column: str | None = "file_path",
     dtypes: DTypeMapping | None = None,
@@ -832,7 +833,8 @@ def read_zarr(
 
     Missing selected arrays or attributes raise immediately. `row_ends` and
     `split_leading_axis` are mutually exclusive. `target_shard_bytes` and
-    `num_shards` affect shard planning, not logical row size.
+    `num_shards` affect shard planning, not logical row size. `row_batch_size`
+    bounds how many logical rows are loaded per array block within each shard.
     """
     return RefinerPipeline(
         source=ZarrReader(
@@ -844,6 +846,7 @@ def read_zarr(
             leading_axis_row_size=leading_axis_row_size,
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
+            row_batch_size=row_batch_size,
             index_column=index_column,
             file_path_column=file_path_column,
             dtypes=dtypes,
