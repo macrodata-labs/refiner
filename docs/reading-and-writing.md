@@ -237,9 +237,8 @@ uv add "macrodata-refiner[zarr]"
 ```
 
 `read_zarr(...)` reads one Zarr group, including directory stores and
-`.zarr.zip` stores. Local zip stores use Zarr's native zip support; remote zip
-stores are mounted through fsspec with block caching disabled. By default, the
-group becomes one output row and selected arrays are loaded as full array values.
+`.zarr.zip` stores. By default, the group becomes one output row and selected
+arrays are loaded as full array values.
 
 ```python
 import refiner as mdr
