@@ -122,6 +122,12 @@ class ZarrReader(BaseSource):
         self.attrs = (
             None if attrs is None else path_selection_map(attrs, format_name="Zarr")
         )
+        if row_ends is not None and self.arrays is not None:
+            for output_name, path in self.arrays.items():
+                if path == row_ends:
+                    raise ValueError(
+                        f"Zarr array selection {output_name!r} cannot also be row_ends"
+                    )
         self.row_ends = row_ends
         self.split_leading_axis = split_leading_axis
         self.leading_axis_row_size = leading_axis_row_size
@@ -566,4 +572,4 @@ def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
             yield from _iter_array_paths(item, path)
 
 
-__all__ = ["PathSelection", "ZarrReader"]
+__all__ = ["ZarrReader"]

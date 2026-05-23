@@ -277,6 +277,19 @@ def test_read_zarr_rejects_reserved_index_output_name(tmp_path: Path) -> None:
         )
 
 
+def test_read_zarr_rejects_selecting_row_ends_as_output_array(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    with pytest.raises(ValueError, match="cannot also be row_ends"):
+        mdr.read_zarr(
+            path,
+            arrays={"episode_ends": "meta/episode_ends"},
+            row_ends="meta/episode_ends",
+            file_path_column=None,
+        )
+
+
 def test_read_zarr_rejects_duplicate_metadata_column_names(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
