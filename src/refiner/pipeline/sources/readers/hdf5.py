@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 import fnmatch
 from glob import has_magic
-from typing import Any
+from typing import Any, Literal
 
 from fsspec import AbstractFileSystem
 
@@ -13,13 +13,12 @@ from refiner.pipeline.data.datatype import DTypeMapping, dtype_to_plan
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
-from refiner.pipeline.sources.readers.selection import (
-    MissingPolicy,
-    PathSelection,
-    path_selection_map,
-)
+from refiner.pipeline.sources.readers.selection import PathSelection, path_selection_map
 from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 from refiner.utils import check_required_dependencies
+
+
+MissingPolicy = Literal["error", "drop_row", "set_null"]
 
 
 def _decode_value(

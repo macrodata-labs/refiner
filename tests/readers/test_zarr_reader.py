@@ -60,6 +60,20 @@ def test_read_zarr_reads_selected_arrays_and_attrs(tmp_path: Path) -> None:
     np.testing.assert_allclose(row["action"][:2], [[0.0], [0.1]])
 
 
+def test_read_zarr_reads_scalar_arrays(tmp_path: Path) -> None:
+    path = tmp_path / "scalar.zarr"
+    root = zarr.open_group(str(path), mode="w")
+    root.create_dataset("version", data=np.asarray(3, dtype=np.int64), shape=())
+
+    row = mdr.read_zarr(
+        path,
+        arrays={"version": "version"},
+        file_path_column=None,
+    ).take(1)[0]
+
+    assert row["version"] == 3
+
+
 def test_read_zarr_splits_arrays_by_row_ends(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)

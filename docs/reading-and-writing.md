@@ -302,7 +302,7 @@ windows = mdr.read_zarr(
         "frames": "data/rgb",
     },
     split_leading_axis=True,
-    target_shard_bytes=256 * 1024**2,
+    target_shard_bytes=128 * 1024**2,
 )
 ```
 

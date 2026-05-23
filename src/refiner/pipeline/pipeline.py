@@ -42,8 +42,9 @@ from refiner.pipeline.sources import (
     ParquetReader,
     ZarrReader,
 )
+from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
-from refiner.pipeline.sources.readers.selection import MissingPolicy, PathSelection
+from refiner.pipeline.sources.readers.selection import PathSelection
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
@@ -813,7 +814,7 @@ def read_zarr(
     attrs: PathSelection | None = None,
     row_ends: str | None = None,
     split_leading_axis: bool = False,
-    target_shard_bytes: int = 256 * 1024**2,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
     index_column: str | None = "index",
     file_path_column: str | None = "file_path",

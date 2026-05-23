@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Literal, cast
+from typing import cast
 
 
-MissingPolicy = Literal["error", "drop_row", "set_null"]
 PathSelection = Mapping[str, str] | Sequence[str] | str
 
 
@@ -31,4 +30,4 @@ def path_selection_map(
     return out
 
 
-__all__ = ["MissingPolicy", "PathSelection", "path_selection_map"]
+__all__ = ["PathSelection", "path_selection_map"]

@@ -8,7 +8,6 @@ from typing import Any
 import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.io.zarr import zarr_store
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
     dtype_to_plan,
@@ -21,9 +20,8 @@ from refiner.pipeline.sources.readers.selection import (
     PathSelection,
     path_selection_map,
 )
+from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 from refiner.utils import check_required_dependencies
-
-DEFAULT_TARGET_SHARD_BYTES = 256 * 1024**2
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +160,10 @@ class ZarrReader(BaseSource):
         path = self.root.abs_path()
         import zarr
 
-        group = zarr.open_group(store=zarr_store(self.root), mode="r")
+        group = zarr.open_group(
+            store=zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r"),
+            mode="r",
+        )
         arrays = self._array_selection(group)
         _validate_output_names(
             arrays,
@@ -184,19 +185,30 @@ class ZarrReader(BaseSource):
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         import zarr
 
-        group = zarr.open_group(store=zarr_store(self.root), mode="r")
+        group = zarr.open_group(
+            store=zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r"),
+            mode="r",
+        )
         arrays = self._array_selection(group)
         _validate_output_names(
             arrays,
             self.attrs or {},
             reserved=self._reserved_output_names(split=self._is_split_mode),
         )
+        infos = self._array_infos(group, arrays)
         if self._is_split_mode:
             descriptor = shard.descriptor
             assert isinstance(descriptor, RowRangeDescriptor)
-            source_ranges = self._source_ranges(group, self._array_infos(group, arrays))
-            for row_index in range(descriptor.start, descriptor.end):
-                start, end = source_ranges[row_index]
+            source_ranges = self._source_ranges(
+                group,
+                infos,
+                output_rows=(descriptor.start, descriptor.end),
+            )
+            for row_index, (start, end) in zip(
+                range(descriptor.start, descriptor.end),
+                source_ranges,
+                strict=True,
+            ):
                 row = self._row_metadata(index=row_index)
                 row.update(self._read_arrays(group, arrays, start=start, end=end))
                 yield DictRow(self._read_attrs(group, row))
@@ -259,21 +271,44 @@ class ZarrReader(BaseSource):
         self,
         group: Any,
         infos: Sequence[_ArrayInfo],
+        *,
+        output_rows: tuple[int, int] | None = None,
     ) -> list[tuple[int, int]]:
         if self.row_ends is not None:
             try:
-                ends = [int(value) for value in group[self.row_ends][:]]
+                row_ends_array = group[self.row_ends]
             except KeyError:
                 raise KeyError(
                     f"Zarr row_ends array not found: {self.row_ends}"
                 ) from None
-            ranges = _ranges_from_ends(ends)
+            if output_rows is None:
+                ranges = _ranges_from_ends([int(value) for value in row_ends_array[:]])
+            else:
+                row_start, row_end = output_rows
+                if row_end < row_start:
+                    raise ValueError("Zarr shard row range is invalid")
+                if row_start == row_end:
+                    return []
+                read_start = max(0, row_start - 1)
+                values = [int(value) for value in row_ends_array[read_start:row_end]]
+                if len(values) != row_end - read_start:
+                    raise ValueError("Zarr shard row range exceeds row_ends length")
+                previous = 0 if row_start == 0 else values[0]
+                ranges = []
+                for value in values if row_start == 0 else values[1:]:
+                    if value < previous:
+                        raise ValueError("Zarr row_ends must be monotonic increasing")
+                    ranges.append((previous, value))
+                    previous = value
             _validate_source_ranges(ranges, infos, label="row_ends")
             return ranges
-        return _leading_axis_ranges(
+        ranges = _leading_axis_ranges(
             infos,
             target_shard_bytes=self.target_shard_bytes,
             num_shards=self.num_shards,
+        )
+        return (
+            ranges if output_rows is None else ranges[output_rows[0] : output_rows[1]]
         )
 
     def _split_ranges(
@@ -304,11 +339,15 @@ class ZarrReader(BaseSource):
         row: dict[str, Any] = {}
         for output_name, path in arrays.items():
             try:
-                row[output_name] = (
-                    group[path][start:end] if start is not None else group[path][:]
-                )
+                array = group[path]
             except KeyError:
                 raise KeyError(f"Zarr array not found: {path}") from None
+            if start is not None:
+                row[output_name] = array[start:end]
+            elif array.shape == ():
+                row[output_name] = array[()]
+            else:
+                row[output_name] = array[:]
         return row
 
     def _read_attrs(self, group: Any, row: dict[str, Any]) -> dict[str, Any]:
