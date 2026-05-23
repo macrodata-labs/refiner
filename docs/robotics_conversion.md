@@ -77,3 +77,43 @@ pipeline = (
     )
 )
 ```
+
+## Zarr Replay Buffers
+
+Some robotics replay buffers are stored as unzipped Zarr directory stores with
+frame-aligned arrays under `data/` and cumulative episode boundaries under
+`meta/episode_ends`.
+
+Reference datasets:
+
+- RoboCasa MT4 N216:
+  `hf://datasets/ahad-j/robocasa_mt4_N216_zarr/mt4_N216.zarr`
+  (`https://huggingface.co/datasets/ahad-j/robocasa_mt4_N216_zarr`)
+- MetaWorld MT4 N200:
+  `hf://datasets/runningkiwi/metaworld_mt4_n200_zarr`
+  (`https://huggingface.co/datasets/runningkiwi/metaworld_mt4_n200_zarr`)
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_zarr(
+        "hf://datasets/ahad-j/robocasa_mt4_N216_zarr/mt4_N216.zarr",
+        arrays={
+            "action": "data/action",
+            "eef_pos": "data/robot0_eef_pos",
+            "joint_pos": "data/robot0_joint_pos",
+            "gripper_qpos": "data/robot0_gripper_qpos",
+            "wrist": "data/robot0_eye_in_hand_rgb",
+        },
+        row_ends="meta/episode_ends",
+        index_column="episode_id",
+    )
+    .to_robot_rows(
+        episode_id_key="episode_id",
+        action_key="action",
+        state_key=("eef_pos", "joint_pos", "gripper_qpos"),
+        video_keys=("wrist",),
+    )
+)
+```
