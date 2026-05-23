@@ -42,6 +42,7 @@ class ZarrSink(BaseSink):
         self.store_template = store_template
         self.overwrite = overwrite
         self._stores: dict[str, _ShardStore] = {}
+        self._default_arrays: dict[str, str] | None = None
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
         arrays_by_path: dict[str, list[np.ndarray]] = {}
@@ -69,7 +70,7 @@ class ZarrSink(BaseSink):
         row: Row,
         arrays_by_path: dict[str, list[np.ndarray]],
     ) -> int | None:
-        arrays = self.arrays or _default_robotics_arrays(row)
+        arrays = self._arrays_for_row(row)
         lengths: list[int] = []
         for zarr_path, source_key in arrays.items():
             value = _row_value(row, source_key)
@@ -86,6 +87,13 @@ class ZarrSink(BaseSink):
         if any(item != length for item in lengths):
             raise ValueError("Zarr arrays for one row must have matching lengths")
         return length
+
+    def _arrays_for_row(self, row: Row) -> dict[str, str]:
+        if self.arrays is not None:
+            return self.arrays
+        if self._default_arrays is None:
+            self._default_arrays = _default_robotics_arrays(row)
+        return self._default_arrays
 
     def _store(self, shard_id: str) -> _ShardStore:
         relpath = self.store_template.format(

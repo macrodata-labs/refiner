@@ -14,6 +14,7 @@ from refiner.io.datafolder import DataFolder
 from refiner.robotics.row import RoboticsRow
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import RowRangeDescriptor
+from refiner.pipeline.sinks.zarr import ZarrSink
 
 
 def _open_test_zarr(path: Path, *, mode: Literal["r", "r+", "a", "w", "w-"]):
@@ -733,3 +734,24 @@ def test_write_zarr_roundtrips_lerobot_rows(tmp_path: Path) -> None:
         np.sort(row["state"].reshape(-1)),
         np.asarray([10.0, 10.1, 20.0, 20.1, 20.2]),
     )
+
+
+def test_write_zarr_rejects_rows_missing_inferred_default_arrays(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "missing-default-array.zarr"
+    rows = list(
+        mdr.from_items(
+            [
+                {"action": [[0.0]], "observation.state": [[1.0]]},
+                {"action": [[0.1]]},
+            ]
+        ).to_robot_rows(
+            action_key="action",
+            state_key="observation.state",
+            timestamp_key=None,
+        )
+    )
+
+    with pytest.raises(ValueError, match="observation.state"):
+        ZarrSink(str(output)).write_block(rows)
