@@ -954,3 +954,38 @@ def test_write_zarr_streams_encoded_videos(tmp_path: Path) -> None:
     assert row["rgb"].shape == (3, 4, 4, 3)
     assert row["rgb"].dtype == np.uint8
     np.testing.assert_allclose(row["action"], [[0.0], [0.1], [0.2]])
+
+
+def test_write_zarr_rejects_video_length_mismatch_before_final_append(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "video-length-mismatch.zarr"
+    frames = np.zeros((3, 4, 4, 3), dtype=np.uint8)
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "frames": frames, "action": [[0.0], [0.1]]}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"observation.images.front": "frames"},
+            fps=10,
+        )
+    )
+
+    with pytest.raises(ValueError, match="matching lengths"):
+        ZarrSink(
+            str(output),
+            arrays={
+                "data/action": "action",
+                "data/rgb": "observation.images.front",
+            },
+            video_frame_batch_size=2,
+        ).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    root = _open_test_zarr(zarr_store, mode="r")
+    assert "data/action" not in root
+    assert "data/rgb" not in root
+    assert "__tmp" not in root

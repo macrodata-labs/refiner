@@ -438,7 +438,7 @@ class RefinerPipeline:
         arrays: Mapping[str, str] | None = None,
         episode_ends_path: str | None = "meta/episode_ends",
         store_template: str = "{shard_id}__w{worker_id}.zarr",
-        video_frame_batch_size: int = 64,
+        video_frame_batch_size: int = 8,
         reduce_to_single_store: bool = False,
         overwrite: bool = True,
     ) -> "RefinerPipeline":

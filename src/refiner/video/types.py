@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import math
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import IO, TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -27,8 +27,6 @@ class VideoSource(Protocol):
     ) -> "VideoSource": ...
 
     def iter_frames(self) -> AsyncIterator[DecodedVideoFrame]: ...
-
-    def iter_frame_arrays(self) -> AsyncIterator[np.ndarray]: ...
 
     def iter_frame_windows(
         self,
@@ -247,9 +245,8 @@ class VideoFrameArray:
     def frame_arrays(self) -> np.ndarray:
         return self._array
 
-    async def iter_frame_arrays(self) -> AsyncIterator[np.ndarray]:
-        for frame in self._array:
-            yield frame
+    def iter_frame_arrays(self) -> "_FrameArrayView":
+        return _FrameArrayView(self._array)
 
     def clipped(
         self,
@@ -342,6 +339,18 @@ def video_from_storage_value(
         except ValueError:
             return None
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class _FrameArrayView:
+    frames: np.ndarray
+
+    def __iter__(self) -> Iterator[np.ndarray]:
+        yield from self.frames
+
+    async def __aiter__(self) -> AsyncIterator[np.ndarray]:
+        for frame in self.frames:
+            yield frame
 
 
 __all__ = [

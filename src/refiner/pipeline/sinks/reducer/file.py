@@ -70,6 +70,10 @@ def _managed_listing_prefix(filename_template: str) -> str:
     return literal_prefix.rsplit("/", maxsplit=1)[0]
 
 
+def _path_depth(path: str) -> int:
+    return len([part for part in path.split("/") if part])
+
+
 class FileCleanupReducerSink(BaseSink):
     """Delete non-finalized deterministic file-sink outputs."""
 
@@ -89,6 +93,7 @@ class FileCleanupReducerSink(BaseSink):
         self.recursive = recursive
         self._managed_path_pattern = _compile_managed_path_pattern(filename_template)
         self._managed_listing_prefix = _managed_listing_prefix(filename_template)
+        self._managed_path_depth = _path_depth(filename_template)
         self._cleanup_ran = False
 
     def write_shard_block(self, shard_id, block) -> None:
@@ -196,10 +201,18 @@ class FileCleanupReducerSink(BaseSink):
             except FileNotFoundError:
                 return []
 
-        try:
-            paths = self.output.ls(self._managed_listing_prefix, detail=False)
-        except FileNotFoundError:
-            return []
+        paths = [self._managed_listing_prefix]
+        depth = max(
+            1, self._managed_path_depth - _path_depth(self._managed_listing_prefix)
+        )
+        for _ in range(depth):
+            next_paths: list[str] = []
+            for path in paths:
+                try:
+                    next_paths.extend(self.output.ls(path, detail=False))
+                except FileNotFoundError:
+                    continue
+            paths = next_paths
         return [
             path
             for path in paths

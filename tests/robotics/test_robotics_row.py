@@ -121,9 +121,8 @@ def test_to_robot_rows_uses_video_frame_array_asset_schema() -> None:
 
     video = robotics_row.videos["camera"]
     assert isinstance(video, VideoFrameArray)
-    video_frames = asyncio.run(
-        _collect_frame_arrays(video),
-    )
+    assert len(list(video.iter_frame_arrays())) == 2
+    video_frames = asyncio.run(_collect_frame_arrays(video))
     assert len(video_frames) == 2
     assert video_frames[0].shape == (4, 5, 3)
     assert video.fps == 12
