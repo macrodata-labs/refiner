@@ -61,6 +61,7 @@ class ZarrReader(BaseSource):
         arrays: PathSelection | None = None,
         attrs: PathSelection | None = None,
         row_ends: str | None = None,
+        rows_per_shard: int = 128,
         row_index_column: str | None = "row_index",
         file_path_column: str | None = "file_path",
         missing_policy: MissingPolicy = "error",
@@ -72,6 +73,7 @@ class ZarrReader(BaseSource):
         self.attrs = None if attrs is None else _selection_map(attrs)
         _validate_output_names(self.arrays or {}, self.attrs or {})
         self.row_ends = row_ends
+        self.rows_per_shard = rows_per_shard
         self.row_index_column = row_index_column
         self.file_path_column = file_path_column
         self.missing_policy = missing_policy
@@ -91,6 +93,7 @@ class ZarrReader(BaseSource):
             "arrays": dict(self.arrays) if self.arrays is not None else None,
             "attrs": dict(self.attrs) if self.attrs is not None else None,
             "row_ends": self.row_ends,
+            "rows_per_shard": self.rows_per_shard,
             "row_index_column": self.row_index_column,
             "file_path_column": self.file_path_column,
             "missing_policy": self.missing_policy,
@@ -104,19 +107,21 @@ class ZarrReader(BaseSource):
     def list_shards(self) -> list[Shard]:
         path = self.root.abs_path()
         if self.row_ends is not None:
+            if self.rows_per_shard <= 0:
+                raise ValueError("rows_per_shard must be greater than zero")
             import zarr
 
             group = zarr.open_group(store=zarr_store(self.root), mode="r")
             row_count = len(group[self.row_ends])
             return [
                 Shard.from_row_range(
-                    start=index,
-                    end=index + 1,
+                    start=start,
+                    end=min(start + self.rows_per_shard, row_count),
                     global_ordinal=index,
                     start_key=path,
                     end_key=path,
                 )
-                for index in range(row_count)
+                for index, start in enumerate(range(0, row_count, self.rows_per_shard))
             ]
         return [
             Shard.from_row_range(

@@ -551,8 +551,36 @@ def _robot_row_converter(
     video_keys: Mapping[str, str] | Iterable[str] | None = None,
     stats_key: str | None = "stats",
     stats_prefix: str = "stats/",
+    episode_ends_key: str | None = None,
     schema: pa.Schema | None = None,
-) -> Callable[[Row], Row]:
+) -> Callable[[Row], Row] | Callable[[Row], Iterable[Row]]:
+    if episode_ends_key is not None:
+
+        def split_row(row: Row) -> Iterable[Row]:
+            return cast(
+                Iterable[Row],
+                _rows_from_episode_ends(
+                    row,
+                    episode_id_key=episode_id_key,
+                    task_key=task_key,
+                    fps=fps,
+                    fps_key=fps_key,
+                    robot_type=robot_type,
+                    robot_type_key=robot_type_key,
+                    timestamp_key=timestamp_key,
+                    action_key=action_key,
+                    state_key=state_key,
+                    extra_observation_keys=extra_observation_keys,
+                    video_keys=video_keys,
+                    schema=schema,
+                    stats_key=stats_key,
+                    stats_prefix=stats_prefix,
+                    episode_ends_key=episode_ends_key,
+                ),
+            )
+
+        return split_row
+
     spec = _RoboticsRowSpec.from_options(
         episode_id_key=episode_id_key,
         task_key=task_key,
@@ -586,6 +614,90 @@ def _valid_nested_frames_key(row: Row, key: str | None) -> str | None:
     if isinstance(value, str | bytes):
         return None
     return key if isinstance(value, Sequence) else None
+
+
+def _rows_from_episode_ends(
+    row: Row,
+    *,
+    episode_id_key: str | None,
+    task_key: str | None,
+    fps: float | None,
+    fps_key: str | None,
+    robot_type: str | None,
+    robot_type_key: str | None,
+    timestamp_key: str | None,
+    action_key: str | None,
+    state_key: str | Sequence[str] | None,
+    extra_observation_keys: Mapping[str, str] | Iterable[str] | None,
+    video_keys: Mapping[str, str] | Iterable[str] | None,
+    schema: pa.Schema | None,
+    stats_key: str | None,
+    stats_prefix: str,
+    episode_ends_key: str,
+) -> Iterator[RoboticsRow]:
+    episode_ends = [int(value) for value in _get_path(row, episode_ends_key)]
+    spec = _RoboticsRowSpec.from_options(
+        episode_id_key=episode_id_key,
+        task_key=task_key,
+        fps=fps,
+        fps_key=fps_key,
+        robot_type=robot_type,
+        robot_type_key=robot_type_key,
+        nested_frames_key=None,
+        timestamp_key=timestamp_key,
+        action_key=action_key,
+        state_key=state_key,
+        extra_observation_keys=extra_observation_keys,
+        video_keys=video_keys,
+        schema=schema,
+        stats_key=stats_key,
+        stats_prefix=stats_prefix,
+    )
+    start = 0
+    for episode_idx, end in enumerate(episode_ends):
+        if episode_id_key is None:
+            split_row = row
+        else:
+            split_row = row.update(
+                {episode_id_key: f"{row.get(episode_id_key, '-1')}-{episode_idx}"}
+            )
+        for source_key in spec.frame_source_map.values():
+            for key in _source_keys(source_key):
+                if _has_path(row, key):
+                    split_row = split_row.update(
+                        _set_path(
+                            split_row,
+                            key,
+                            _slice_values(_get_path(row, key), start, end),
+                        )
+                    )
+        video_fps = int(spec.wrap(row).fps or 30)
+        for source_key, storage in spec.video_source_map.values():
+            if not _has_path(row, source_key):
+                continue
+            value = _get_path(row, source_key)
+            video = video_from_storage_value(storage, value, fps=video_fps)
+            if video is None:
+                continue
+            clip_fps = int(getattr(video, "fps", video_fps))
+            split_row = split_row.update(
+                _set_path(
+                    split_row,
+                    source_key,
+                    video.clipped(
+                        from_timestamp_s=start / clip_fps,
+                        to_timestamp_s=end / clip_fps,
+                    ),
+                )
+            )
+        if task_key is not None and task_key in row:
+            split_row = split_row.update({task_key: row[task_key]})
+        if fps_key is not None and fps_key in row:
+            split_row = split_row.update({fps_key: row[fps_key]})
+        if robot_type_key is not None and robot_type_key in row:
+            split_row = split_row.update({robot_type_key: row[robot_type_key]})
+        yield spec.wrap(split_row)
+        start = end
 
 
 def _video_sources(
@@ -739,6 +851,12 @@ def _set_path(row: Mapping[str, Any], key: str, values: Any) -> dict[str, Any]:
         current = next_child
     current[tail[-1]] = values
     return {head: root}
+
+
+def _slice_values(values: Any, start: int, end: int) -> Any:
+    if isinstance(values, pa.ChunkedArray | pa.Array):
+        return values.slice(start, end - start)
+    return values[start:end]
 
 
 def _select_frame_table(table: Tabular, indices: Sequence[int]) -> Tabular:

@@ -34,7 +34,10 @@ def _robot_rows(
         converter = _robot_row_converter(**cast(Any, {**kwargs, "schema": rows.schema}))
         return [cast(RoboticsRow, converter(row)) for row in rows]
     converter = _robot_row_converter(**kwargs)
-    return [cast(RoboticsRow, converter(rows))]
+    converted = converter(rows)
+    if kwargs.get("episode_ends_key") is not None:
+        return [cast(RoboticsRow, row) for row in converted]
+    return [cast(RoboticsRow, converted)]
 
 
 def test_to_robot_rows_does_not_treat_video_uri_frames_as_frame_table() -> None:
@@ -624,6 +627,118 @@ def test_to_robot_rows_flattens_nested_frame_dicts() -> None:
 
     assert robotics_row.num_frames == 2
     assert robotics_row.states.to_pylist() == [[0.0], [1.0]]
+
+
+def test_to_robot_rows_splits_dataset_arrays_with_episode_ends() -> None:
+    row = DictRow(
+        {
+            "dataset_id": "pusht",
+            "meta": {"episode_ends": [2, 5]},
+            "data": {
+                "obs": [[0.0], [0.1], [1.0], [1.1], [1.2]],
+                "action": [[0.0], [0.1], [1.0], [1.1], [1.2]],
+            },
+        }
+    )
+
+    rows = list(
+        _robot_rows(
+            row,
+            episode_id_key="dataset_id",
+            episode_ends_key="meta/episode_ends",
+            timestamp_key=None,
+            state_key="data/obs",
+            action_key="data/action",
+        )
+    )
+
+    assert [row.episode_id for row in rows] == ["pusht-0", "pusht-1"]
+    assert [row.num_frames for row in rows] == [2, 3]
+    assert rows[1].actions == [[1.0], [1.1], [1.2]]
+
+
+def test_to_robot_rows_splits_video_frame_arrays_with_episode_ends() -> None:
+    frames = np.arange(5 * 2 * 2 * 3, dtype=np.uint8).reshape(5, 2, 2, 3)
+    row = DictRow(
+        {
+            "dataset_id": "pusht",
+            "episode_ends": [2, 5],
+            "actions": [[0.0], [0.1], [1.0], [1.1], [1.2]],
+            "front": frames,
+        }
+    )
+
+    rows = list(
+        _robot_rows(
+            row,
+            episode_id_key="dataset_id",
+            episode_ends_key="episode_ends",
+            timestamp_key=None,
+            action_key="actions",
+            state_key=None,
+            video_keys={"observation.images.front": "front"},
+            fps=10,
+        )
+    )
+
+    videos = [row.videos["observation.images.front"] for row in rows]
+
+    assert [
+        video.frame_count for video in videos if isinstance(video, VideoFrameArray)
+    ] == [
+        2,
+        3,
+    ]
+    assert isinstance(videos[0], VideoFrameArray)
+    assert isinstance(videos[1], VideoFrameArray)
+    np.testing.assert_array_equal(
+        np.asarray(list(videos[0].iter_frame_arrays())),
+        frames[:2],
+    )
+    np.testing.assert_array_equal(
+        np.asarray(list(videos[1].iter_frame_arrays())),
+        frames[2:],
+    )
+
+
+def test_to_robot_rows_splits_tuple_state_key_sources_with_episode_ends() -> None:
+    row = DictRow(
+        {
+            "dataset_id": "robomimic",
+            "meta": {"episode_ends": [2, 4]},
+            "actions": [[0.0], [0.1], [1.0], [1.1]],
+            "obs": {
+                "joint_pos": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
+                "joint_vel": [[0.1], [0.2], [0.3], [0.4]],
+                "eef_pos": np.asarray(
+                    [[10.0, 11.0], [12.0, 13.0], [14.0, 15.0], [16.0, 17.0]],
+                    dtype=np.float32,
+                ),
+            },
+        }
+    )
+
+    rows = list(
+        _robot_rows(
+            row,
+            episode_id_key="dataset_id",
+            episode_ends_key="meta/episode_ends",
+            timestamp_key=None,
+            action_key="actions",
+            state_key=("obs/joint_pos", "obs/joint_vel", "obs/eef_pos"),
+        )
+    )
+
+    assert [row.episode_id for row in rows] == ["robomimic-0", "robomimic-1"]
+    assert [row.num_frames for row in rows] == [2, 2]
+    assert rows[0].states == [
+        [1.0, 2.0, 0.1, 10.0, 11.0],
+        [3.0, 4.0, 0.2, 12.0, 13.0],
+    ]
+    assert rows[1].states == [
+        [5.0, 6.0, 0.3, 14.0, 15.0],
+        [7.0, 8.0, 0.4, 16.0, 17.0],
+    ]
 
 
 def test_motion_trim_works_with_mapped_semantic_keys() -> None:

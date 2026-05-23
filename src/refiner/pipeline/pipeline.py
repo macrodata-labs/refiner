@@ -181,6 +181,7 @@ class RefinerPipeline:
         video_keys: Mapping[str, str] | Iterable[str] | None = None,
         stats_key: str | None = "stats",
         stats_prefix: str = "stats/",
+        episode_ends_key: str | None = None,
     ) -> "RefinerPipeline":
         """Expose rows through the RoboticsRow semantic view.
 
@@ -211,8 +212,11 @@ class RefinerPipeline:
             schema=self.output_schema(),
             stats_key=stats_key,
             stats_prefix=stats_prefix,
+            episode_ends_key=episode_ends_key,
         )
-        return self.map(cast(MapFn, converter))
+        if episode_ends_key is None:
+            return self.map(cast(MapFn, converter))
+        return self.flat_map(cast(FlatMapFn, converter))
 
     def map_async(
         self,
@@ -816,6 +820,7 @@ def read_zarr(
     arrays: ZarrPathSelection | None = None,
     attrs: ZarrPathSelection | None = None,
     row_ends: str | None = None,
+    rows_per_shard: int = 128,
     row_index_column: str | None = "row_index",
     file_path_column: str | None = "file_path",
     missing_policy: ZarrMissingPolicy = "error",
@@ -833,6 +838,7 @@ def read_zarr(
             arrays=arrays,
             attrs=attrs,
             row_ends=row_ends,
+            rows_per_shard=rows_per_shard,
             row_index_column=row_index_column,
             file_path_column=file_path_column,
             missing_policy=missing_policy,

@@ -86,6 +86,7 @@ def test_read_zarr_plans_one_shard_per_row_end(tmp_path: Path) -> None:
         path,
         arrays={"action": "data/action"},
         row_ends="meta/episode_ends",
+        rows_per_shard=1,
         file_path_column=None,
     )
 
