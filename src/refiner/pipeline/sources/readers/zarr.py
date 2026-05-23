@@ -47,7 +47,7 @@ class ZarrReader(BaseSource):
         arrays: PathSelection | None = None,
         attrs: PathSelection | None = None,
         row_ends: str | None = None,
-        rows_per_shard: int = 128,
+        rows_per_shard: int = 1,
         row_index_column: str | None = "row_index",
         file_path_column: str | None = "file_path",
         missing_policy: ZarrMissingPolicy = "error",
@@ -178,6 +178,13 @@ class ZarrReader(BaseSource):
                 raise KeyError(
                     f"Zarr row_ends array not found: {self.row_ends}"
                 ) from None
+            _validate_row_ends(
+                row_ends,
+                start=start,
+                group=group,
+                arrays=arrays,
+                missing_policy=self.missing_policy,
+            )
             shard_start = start
             shard_end = row_ends[-1] if row_ends else start
             shard_arrays = self._read_arrays(
@@ -186,8 +193,6 @@ class ZarrReader(BaseSource):
                 start=shard_start,
                 end=shard_end,
             )
-            if shard_arrays is None:
-                return
             for offset, end in enumerate(row_ends):
                 row = self._row_metadata(row_index=descriptor.start + offset)
                 relative_start = start - shard_start
@@ -197,20 +202,15 @@ class ZarrReader(BaseSource):
                         None if value is None else value[relative_start:relative_end]
                     )
                 row = self._read_attrs(group, row)
-                if row is None:
-                    return
                 yield DictRow(row)
                 start = end
             return
 
         row = self._row_metadata(row_index=None)
         row_arrays = self._read_arrays(group, arrays)
-        if row_arrays is None:
-            return
         row.update(row_arrays)
         row = self._read_attrs(group, row)
-        if row is not None:
-            yield DictRow(row)
+        yield DictRow(row)
 
     def _reserved_output_names(self, *, row_index: bool) -> set[str]:
         names = set()
@@ -235,7 +235,7 @@ class ZarrReader(BaseSource):
         *,
         start: int | None = None,
         end: int | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         row: dict[str, Any] = {}
         for output_name, path in arrays.items():
             try:
@@ -249,7 +249,7 @@ class ZarrReader(BaseSource):
                 raise KeyError(f"Zarr array not found: {path}") from None
         return row
 
-    def _read_attrs(self, group: Any, row: dict[str, Any]) -> dict[str, Any] | None:
+    def _read_attrs(self, group: Any, row: dict[str, Any]) -> dict[str, Any]:
         for output_name, attr_name in (self.attrs or {}).items():
             if attr_name not in group.attrs:
                 if self.missing_policy == "set_null":
@@ -274,6 +274,32 @@ def _validate_output_names(
     if reserved_matches:
         names = ", ".join(sorted(repr(name) for name in reserved_matches))
         raise ValueError(f"Zarr selections use reserved output names: {names}")
+
+
+def _validate_row_ends(
+    row_ends: list[int],
+    *,
+    start: int,
+    group: Any,
+    arrays: Mapping[str, str],
+    missing_policy: ZarrMissingPolicy,
+) -> None:
+    previous = start
+    for end in row_ends:
+        if end < previous:
+            raise ValueError("Zarr row_ends must be monotonic increasing")
+        previous = end
+    for output_name, path in arrays.items():
+        try:
+            length = int(group[path].shape[0])
+        except KeyError:
+            if missing_policy == "set_null":
+                continue
+            raise KeyError(f"Zarr array not found: {path}") from None
+        if row_ends and row_ends[-1] > length:
+            raise ValueError(
+                f"Zarr row_ends exceed leading dimension for {output_name!r}"
+            )
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:

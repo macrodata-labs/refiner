@@ -201,6 +201,36 @@ def test_read_zarr_missing_set_null_keeps_group_row(tmp_path: Path) -> None:
     assert row["missing_attr"] is None
 
 
+def test_read_zarr_rejects_non_monotonic_row_ends(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+    root = zarr.open_group(str(path), mode="a")
+    root["meta/episode_ends"][:] = np.asarray([3, 2], dtype=np.int64)
+
+    with pytest.raises(ValueError, match="row_ends must be monotonic"):
+        mdr.read_zarr(
+            path,
+            arrays={"action": "data/action"},
+            row_ends="meta/episode_ends",
+            file_path_column=None,
+        ).take(1)
+
+
+def test_read_zarr_rejects_out_of_range_row_ends(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+    root = zarr.open_group(str(path), mode="a")
+    root["meta/episode_ends"][:] = np.asarray([2, 6], dtype=np.int64)
+
+    with pytest.raises(ValueError, match="row_ends exceed"):
+        mdr.read_zarr(
+            path,
+            arrays={"action": "data/action"},
+            row_ends="meta/episode_ends",
+            file_path_column=None,
+        ).take(2)
+
+
 def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     lerobot_out = tmp_path / "lerobot"

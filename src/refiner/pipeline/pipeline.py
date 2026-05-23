@@ -813,7 +813,7 @@ def read_zarr(
     arrays: PathSelection | None = None,
     attrs: PathSelection | None = None,
     row_ends: str | None = None,
-    rows_per_shard: int = 128,
+    rows_per_shard: int = 1,
     row_index_column: str | None = "row_index",
     file_path_column: str | None = "file_path",
     missing_policy: ZarrMissingPolicy = "error",

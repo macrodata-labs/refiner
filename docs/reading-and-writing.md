@@ -228,6 +228,82 @@ datasets or attributes default to raising an error. Set
 If a selected column can be missing from every group in an input file, pass
 `dtypes` for that column so the reader can emit a stable Arrow type.
 
+## Zarr
+
+Zarr support lives behind the optional `macrodata-refiner[zarr]` extra.
+
+```bash
+uv add "macrodata-refiner[zarr]"
+```
+
+`read_zarr(...)` reads one Zarr group. By default, the group becomes one output
+row and selected arrays are loaded as full array values.
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_zarr(
+    "replay_buffer.zarr",
+    arrays={
+        "action": "data/action",
+        "state": "data/state",
+    },
+    attrs={"task": "task"},
+)
+```
+
+`arrays` and `attrs` accept the same selection forms as HDF5: a mapping from
+output column name to Zarr path, one path string, or a sequence of path strings
+with unique final components. Use a mapping when derived names would collide.
+
+For robotics-style replay buffers, pass `row_ends` to split concatenated arrays
+into logical rows, usually episodes:
+
+```python
+episodes = mdr.read_zarr(
+    "replay_buffer.zarr",
+    arrays={
+        "action": "data/action",
+        "observation.state": "data/state",
+        "frames": "data/rgb",
+    },
+    attrs={"task": "task"},
+    row_ends="meta/episode_ends",
+    row_index_column="episode_id",
+    file_path_column=None,
+)
+```
+
+For a store shaped like:
+
+```text
+replay_buffer.zarr
+├── data
+│   ├── action            # shape [total_steps, action_dim]
+│   ├── state             # shape [total_steps, state_dim]
+│   └── rgb               # shape [total_steps, height, width, channels]
+└── meta
+    └── episode_ends      # cumulative end offsets, for example [152, 319, 477]
+```
+
+this emits one row per `[start:end]` slice. The selected arrays are sliced along
+their leading dimension, while selected attrs are repeated on each row.
+`row_index_column` receives the row/episode index when `row_ends` is set. Set it
+to `None` to omit that metadata.
+
+When `row_ends` is set, `rows_per_shard` controls how many output rows are read
+as one shard. The default is `1` so image-heavy robotics episodes are not batched
+into a large in-memory slice by default. Increase it only when each row slice is
+small enough to materialize together.
+
+`row_ends` is reader control metadata, not an output selection. If you also want
+the raw offsets as a column in non-split mode, select that path through `arrays`.
+
+Missing selected arrays or attrs default to raising an error. Set
+`missing_policy="set_null"` to keep the group row and emit `None` for missing
+selected values. Zarr does not support `drop_row` because a selected path is
+missing at the group schema level rather than per output row.
+
 ## Common Crawl text readers
 
 [Common Crawl](https://commoncrawl.org/) publishes large public web crawls.
