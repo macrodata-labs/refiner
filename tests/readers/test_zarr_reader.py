@@ -222,7 +222,7 @@ def test_read_zarr_split_leading_axis_emits_aligned_windows(tmp_path: Path) -> N
     root.create_dataset(
         "data/action",
         data=np.arange(5, dtype=np.float32).reshape(5, 1),
-        chunks=(5, 1),
+        chunks=(1, 1),
     )
     root.create_dataset(
         "data/rgb",
@@ -290,6 +290,21 @@ def test_read_zarr_rejects_out_of_range_row_ends(tmp_path: Path) -> None:
     root["meta/episode_ends"][:] = np.asarray([2, 6], dtype=np.int64)
 
     with pytest.raises(ValueError, match="row_ends exceed"):
+        mdr.read_zarr(
+            path,
+            arrays={"action": "data/action"},
+            row_ends="meta/episode_ends",
+            file_path_column=None,
+        ).take(2)
+
+
+def test_read_zarr_rejects_short_row_ends(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+    root = zarr.open_group(str(path), mode="a")
+    root["meta/episode_ends"][:] = np.asarray([2, 4], dtype=np.int64)
+
+    with pytest.raises(ValueError, match="end before leading dimension"):
         mdr.read_zarr(
             path,
             arrays={"action": "data/action"},

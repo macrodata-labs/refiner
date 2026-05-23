@@ -20,7 +20,10 @@ from refiner.pipeline.sources.readers.selection import (
     PathSelection,
     path_selection_map,
 )
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    decode_value,
+)
 from refiner.utils import check_required_dependencies
 
 
@@ -48,17 +51,6 @@ class _ArrayInfo:
     def bytes_per_step(self) -> int:
         trailing_shape = self.shape[1:]
         return max(1, int(self.dtype.itemsize) * int(prod(trailing_shape or (1,))))
-
-
-def _decode_value(value: Any) -> Any:
-    if hasattr(value, "shape") and value.shape == ():
-        return _decode_value(value.item())
-    if isinstance(value, bytes):
-        try:
-            return value.decode("utf-8")
-        except UnicodeDecodeError:
-            return value
-    return value
 
 
 class ZarrReader(BaseSource):
@@ -203,7 +195,7 @@ class ZarrReader(BaseSource):
             block_start = source_ranges[0][0]
             block_end = source_ranges[-1][1]
             block = self._read_arrays(group, arrays, start=block_start, end=block_end)
-            attrs = self._read_attrs(group, {})
+            attrs = self._read_attrs(group)
             for row_index, (start, end) in zip(
                 range(descriptor.start, descriptor.end),
                 source_ranges,
@@ -232,12 +224,14 @@ class ZarrReader(BaseSource):
                     end=descriptor.end,
                 )
             )
-            yield DictRow(self._read_attrs(group, row))
+            row.update(self._read_attrs(group))
+            yield DictRow(row)
             return
 
         row = self._row_metadata(index=None)
         row.update(self._read_arrays(group, arrays))
-        yield DictRow(self._read_attrs(group, row))
+        row.update(self._read_attrs(group))
+        yield DictRow(row)
 
     def _open_group(self) -> Any:
         import zarr
@@ -383,7 +377,12 @@ class ZarrReader(BaseSource):
             current_bytes += row_bytes
             previous_end = end
         ranges.append((shard_start, row_count))
-        _validate_source_ranges([(0, previous_end)], infos, label="row_ends")
+        _validate_source_ranges(
+            [(0, previous_end)],
+            infos,
+            label="row_ends",
+            require_exact=True,
+        )
         return ranges
 
     def _read_arrays(
@@ -408,12 +407,13 @@ class ZarrReader(BaseSource):
                 row[output_name] = array[:]
         return row
 
-    def _read_attrs(self, group: Any, row: dict[str, Any]) -> dict[str, Any]:
+    def _read_attrs(self, group: Any) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
         for output_name, attr_name in (self.attrs or {}).items():
             if attr_name not in group.attrs:
                 raise KeyError(f"Zarr attr not found: {attr_name}")
-            row[output_name] = _decode_value(group.attrs[attr_name])
-        return row
+            attrs[output_name] = decode_value(group.attrs[attr_name])
+        return attrs
 
 
 def _validate_output_names(
@@ -463,7 +463,12 @@ def _validate_row_ends(
         if end < previous_end:
             raise ValueError("Zarr row_ends must be monotonic increasing")
         previous_end = end
-    _validate_source_ranges([(0, previous_end)], infos, label="row_ends")
+    _validate_source_ranges(
+        [(0, previous_end)],
+        infos,
+        label="row_ends",
+        require_exact=True,
+    )
 
 
 def _validate_source_ranges(
@@ -471,6 +476,7 @@ def _validate_source_ranges(
     infos: Sequence[_ArrayInfo],
     *,
     label: str,
+    require_exact: bool = False,
 ) -> None:
     if not infos:
         return
@@ -479,6 +485,10 @@ def _validate_source_ranges(
         if final_end > info.leading_length:
             raise ValueError(
                 f"Zarr {label} exceed leading dimension for {info.output_name!r}"
+            )
+        if require_exact and final_end != info.leading_length:
+            raise ValueError(
+                f"Zarr {label} end before leading dimension for {info.output_name!r}"
             )
 
 
@@ -501,8 +511,7 @@ def _leading_axis_ranges(
     else:
         bytes_per_step = sum(info.bytes_per_step for info in infos)
         target_steps = max(1, target_shard_bytes // max(1, bytes_per_step))
-        heavy = max(infos, key=lambda info: info.bytes_per_step)
-        base = max(1, heavy.leading_chunk)
+        base = max(1, max(info.leading_chunk for info in infos))
         step = max(base, (target_steps // base) * base)
     return [(start, min(start + step, length)) for start in range(0, length, step)]
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from typing import Optional
+from typing import Any, Optional
 
 from fsspec import AbstractFileSystem
 
@@ -10,6 +10,52 @@ DEFAULT_TARGET_SHARD_BYTES = 128 * 1024 * 1024
 
 # Extensions that generally imply whole-file/container compression (not safely splittable by byte offsets).
 NON_SPLITTABLE_WHOLEFILE_EXTS = (".gz", ".bz2", ".xz", ".zip", ".zst")
+
+
+def decode_value(
+    value: Any,
+    *,
+    decode_bytes: bool = True,
+    preserve_arrays: bool = False,
+) -> Any:
+    if isinstance(value, bytes):
+        if not decode_bytes:
+            return value
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return value
+    if isinstance(value, str) and any("\udc80" <= char <= "\udcff" for char in value):
+        return value.encode("utf-8", errors="surrogateescape")
+    if hasattr(value, "shape") and value.shape == ():
+        return decode_value(
+            value.item(),
+            decode_bytes=decode_bytes,
+            preserve_arrays=preserve_arrays,
+        )
+    if hasattr(value, "tolist"):
+        if preserve_arrays and getattr(
+            getattr(value, "dtype", None), "kind", None
+        ) not in (
+            "O",
+            "S",
+        ):
+            return value
+        return decode_value(
+            value.tolist(),
+            decode_bytes=decode_bytes,
+            preserve_arrays=preserve_arrays,
+        )
+    if isinstance(value, list):
+        return [
+            decode_value(
+                item,
+                decode_bytes=decode_bytes,
+                preserve_arrays=preserve_arrays,
+            )
+            for item in value
+        ]
+    return value
 
 
 def is_splittable_by_bytes(fs: AbstractFileSystem, path: str) -> bool:
@@ -98,6 +144,7 @@ class BoundedBinaryReader(io.RawIOBase):
 __all__ = [
     "DEFAULT_TARGET_SHARD_BYTES",
     "NON_SPLITTABLE_WHOLEFILE_EXTS",
+    "decode_value",
     "is_splittable_by_bytes",
     "align_byte_range_to_newlines",
     "BoundedBinaryReader",

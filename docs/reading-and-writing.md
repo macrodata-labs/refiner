@@ -289,7 +289,8 @@ replay_buffer.zarr
 this emits one row per `[start:end]` slice. The selected arrays are sliced along
 their leading dimension, while selected attrs are repeated on each row.
 `index_column` receives the row/episode index when `row_ends` is set. Set it to
-`None` to omit that metadata.
+`None` to omit that metadata. The final row end must match the leading dimension
+of every selected array.
 
 If a Zarr store has aligned arrays but no episode boundaries, use
 `split_leading_axis=True` to emit leading-axis windows:
@@ -307,9 +308,9 @@ windows = mdr.read_zarr(
 ```
 
 This mode requires selected arrays to have the same leading dimension. Refiner
-chooses contiguous windows from array metadata, using the byte-heavy array's
-chunking to avoid unnecessary chunk splits where possible. Use `num_shards` when
-you need a target shard count instead of byte-sized packing.
+chooses contiguous windows from array metadata and avoids splitting below the
+largest selected leading-axis chunk where possible. Use `num_shards` when you
+need a target shard count instead of byte-sized packing.
 
 `row_ends` is reader control metadata, not an output selection. If you also want
 the raw offsets as a column in non-split mode, select that path through `arrays`.

@@ -14,57 +14,14 @@ from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
 from refiner.pipeline.sources.readers.selection import PathSelection, path_selection_map
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    decode_value,
+)
 from refiner.utils import check_required_dependencies
 
 
 MissingPolicy = Literal["error", "drop_row", "set_null"]
-
-
-def _decode_value(
-    value: Any,
-    *,
-    decode_bytes: bool = True,
-    preserve_arrays: bool = False,
-) -> Any:
-    if isinstance(value, bytes):
-        if not decode_bytes:
-            return value
-        try:
-            return value.decode("utf-8")
-        except UnicodeDecodeError:
-            return value
-    if isinstance(value, str) and any("\udc80" <= char <= "\udcff" for char in value):
-        return value.encode("utf-8", errors="surrogateescape")
-    if hasattr(value, "shape") and value.shape == ():
-        return _decode_value(
-            value.item(),
-            decode_bytes=decode_bytes,
-            preserve_arrays=preserve_arrays,
-        )
-    if hasattr(value, "tolist"):
-        if preserve_arrays and getattr(
-            getattr(value, "dtype", None), "kind", None
-        ) not in (
-            "O",
-            "S",
-        ):
-            return value
-        return _decode_value(
-            value.tolist(),
-            decode_bytes=decode_bytes,
-            preserve_arrays=preserve_arrays,
-        )
-    if isinstance(value, list):
-        return [
-            _decode_value(
-                item,
-                decode_bytes=decode_bytes,
-                preserve_arrays=preserve_arrays,
-            )
-            for item in value
-        ]
-    return value
 
 
 class Hdf5Reader(BaseReader):
@@ -289,7 +246,7 @@ class Hdf5Reader(BaseReader):
                 raise TypeError(
                     f"HDF5 path under {group_path} is not a dataset: {dataset_path}"
                 )
-            row[output_name] = _decode_value(
+            row[output_name] = decode_value(
                 dataset[()],
                 decode_bytes=dataset.dtype.kind != "S",
                 preserve_arrays=True,
@@ -303,7 +260,7 @@ class Hdf5Reader(BaseReader):
                     row[output_name] = None
                     continue
                 raise KeyError(f"HDF5 attr not found on {group_path}: {attr_name}")
-            row[output_name] = _decode_value(group.attrs[attr_name])
+            row[output_name] = decode_value(group.attrs[attr_name])
 
         return self._with_file_path(row, source)
 
