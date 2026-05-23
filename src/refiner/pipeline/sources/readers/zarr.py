@@ -79,20 +79,21 @@ class ZarrReader(BaseSource):
         zip_input: DataFileLike | None = None
         if isinstance(input, DataFolder) and input.path.endswith(".zip"):
             zip_input = (input.path, input.fs)
-        elif isinstance(input, PathLike):
-            input = str(input)
-        if isinstance(input, str) and input.endswith(".zip"):
-            zip_input = input
-        elif (
-            isinstance(input, tuple)
-            and len(input) == 2
-            and isinstance(input[1], AbstractFileSystem)
-        ):
-            path = input[0]
-            if isinstance(path, PathLike):
-                path = str(path)
-            if isinstance(path, str) and path.endswith(".zip"):
-                zip_input = (path, input[1])
+        else:
+            if isinstance(input, PathLike):
+                input = str(input)
+            if isinstance(input, str) and input.endswith(".zip"):
+                zip_input = input
+            elif (
+                isinstance(input, tuple)
+                and len(input) == 2
+                and isinstance(input[1], AbstractFileSystem)
+            ):
+                path = input[0]
+                if isinstance(path, PathLike):
+                    path = str(path)
+                if isinstance(path, str) and path.endswith(".zip"):
+                    zip_input = (path, input[1])
 
         if zip_input is not None:
             self.zip_file = DataFile.resolve(zip_input)
@@ -278,10 +279,10 @@ class ZarrReader(BaseSource):
                     zip_fs.close()
                 if handle is not None:
                     handle.close()
-            return
-        assert self.root is not None
-        store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
-        yield zarr.open_group(store=store, mode="r")
+        else:
+            assert self.root is not None
+            store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
+            yield zarr.open_group(store=store, mode="r")
 
     def _reserved_output_names(self, *, split: bool) -> set[str]:
         names = set()
