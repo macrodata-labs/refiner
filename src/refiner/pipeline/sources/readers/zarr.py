@@ -257,7 +257,9 @@ class ZarrReader(BaseSource):
                 if self.zip_file.is_local
                 else zarr.storage.FSStore(
                     "/",
-                    fs=ZipFileSystem(fo=self.zip_file.open("rb"), mode="r"),
+                    fs=ZipFileSystem(
+                        fo=self.zip_file.open("rb", cache_type="none"), mode="r"
+                    ),
                     mode="r",
                 )
             )

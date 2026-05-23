@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 from typing import Any, Literal, cast
 
+from fsspec.implementations.memory import MemoryFileSystem
 import numpy as np
 import pytest
 import zarr
@@ -133,6 +134,40 @@ def test_read_zarr_reads_zip_store(tmp_path: Path) -> None:
     assert row["file_path"] == str(zip_path)
     assert row["action"].shape == (2, 1)
     assert row["frames"].shape == (2, 4, 4, 3)
+
+
+def test_read_zarr_reads_remote_zip_without_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+    zip_path = Path(shutil.make_archive(str(path), "zip", root_dir=path))
+
+    fs = MemoryFileSystem()
+    remote_path = "/policy.zarr.zip"
+    with zip_path.open("rb") as src, fs.open(remote_path, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+
+    open_calls: list[dict[str, Any]] = []
+    original_open = fs.open
+
+    def record_open(path, mode="rb", **kwargs):
+        if path == remote_path and mode == "rb":
+            open_calls.append(kwargs)
+        return original_open(path, mode=mode, **kwargs)
+
+    monkeypatch.setattr(fs, "open", record_open)
+
+    row = mdr.read_zarr(
+        (remote_path, fs),
+        arrays={"action": "data/action"},
+        row_ends="meta/episode_ends",
+    ).take(1)[0]
+
+    assert row["action"].shape == (2, 1)
+    assert open_calls
+    assert open_calls[0]["cache_type"] == "none"
 
 
 def test_read_zarr_plans_row_ends_with_num_shards(tmp_path: Path) -> None:
