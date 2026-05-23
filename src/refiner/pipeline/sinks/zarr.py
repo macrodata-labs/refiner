@@ -39,6 +39,8 @@ class ZarrSink(BaseSink):
         self.output = DataFolder.resolve(output)
         self.arrays = dict(arrays) if arrays is not None else None
         self.episode_ends_path = episode_ends_path
+        if self.arrays is not None:
+            _validate_array_paths(self.arrays, episode_ends_path)
         self.store_template = store_template
         self.overwrite = overwrite
         self._stores: dict[str, _ShardStore] = {}
@@ -91,8 +93,15 @@ class ZarrSink(BaseSink):
     def _arrays_for_row(self, row: Row) -> dict[str, str]:
         if self.arrays is not None:
             return self.arrays
+        default_arrays = _default_robotics_arrays(row)
         if self._default_arrays is None:
-            self._default_arrays = _default_robotics_arrays(row)
+            self._default_arrays = default_arrays
+            _validate_array_paths(self._default_arrays, self.episode_ends_path)
+        elif default_arrays != self._default_arrays:
+            raise ValueError(
+                "Zarr default arrays changed across rows; pass arrays=... "
+                "to write an explicit stable schema"
+            )
         return self._default_arrays
 
     def _store(self, shard_id: str) -> _ShardStore:
@@ -175,6 +184,16 @@ def _default_robotics_arrays(row: Row) -> dict[str, str]:
     if row.timestamps is not None:
         arrays["data/timestamp"] = "timestamp"
     return arrays
+
+
+def _validate_array_paths(
+    arrays: Mapping[str, str],
+    episode_ends_path: str | None,
+) -> None:
+    if episode_ends_path is not None and episode_ends_path in arrays:
+        raise ValueError(
+            f"Zarr array path collides with episode_ends_path: {episode_ends_path}"
+        )
 
 
 def _row_value(row: Row, key: str) -> Any:

@@ -715,23 +715,27 @@ def test_write_zarr_roundtrips_lerobot_rows(tmp_path: Path) -> None:
         )
     )
 
-    zarr_store = next(zarr_out.glob("*.zarr"))
-    row = mdr.read_zarr(
-        zarr_store,
-        arrays={
-            "action": "data/action",
-            "state": "data/state",
-            "episode_ends": "meta/episode_ends",
-        },
-        file_path_column=None,
-    ).take(1)[0]
+    rows = [
+        mdr.read_zarr(
+            zarr_store,
+            arrays={
+                "action": "data/action",
+                "state": "data/state",
+                "episode_ends": "meta/episode_ends",
+            },
+            file_path_column=None,
+        ).take(1)[0]
+        for zarr_store in sorted(zarr_out.glob("*.zarr"))
+    ]
 
-    episode_ends = row["episode_ends"].tolist()
+    episode_ends = np.concatenate([row["episode_ends"] for row in rows]).tolist()
     assert episode_ends[-1] == 5
     assert sorted(np.diff([0, *episode_ends]).tolist()) == [2, 3]
-    assert row["action"].shape == (5, 1)
+    action = np.concatenate([row["action"] for row in rows])
+    state = np.concatenate([row["state"] for row in rows])
+    assert action.shape == (5, 1)
     np.testing.assert_allclose(
-        np.sort(row["state"].reshape(-1)),
+        np.sort(state.reshape(-1)),
         np.asarray([10.0, 10.1, 20.0, 20.1, 20.2]),
     )
 
@@ -753,5 +757,32 @@ def test_write_zarr_rejects_rows_missing_inferred_default_arrays(
         )
     )
 
-    with pytest.raises(ValueError, match="observation.state"):
+    with pytest.raises(ValueError, match="default arrays changed"):
         ZarrSink(str(output)).write_block(rows)
+
+
+def test_write_zarr_rejects_late_default_arrays(tmp_path: Path) -> None:
+    output = tmp_path / "late-default-array.zarr"
+    rows = list(
+        mdr.from_items(
+            [
+                {"action": [[0.0]]},
+                {"action": [[0.1]], "observation.state": [[1.1]]},
+            ]
+        ).to_robot_rows(
+            action_key="action",
+            state_key="observation.state",
+            timestamp_key=None,
+        )
+    )
+
+    with pytest.raises(ValueError, match="default arrays changed"):
+        ZarrSink(str(output)).write_block(rows)
+
+
+def test_write_zarr_rejects_episode_ends_path_collision(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="collides with episode_ends_path"):
+        ZarrSink(
+            str(tmp_path / "collision.zarr"),
+            arrays={"meta/episode_ends": "action"},
+        )
