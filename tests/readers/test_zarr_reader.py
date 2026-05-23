@@ -152,6 +152,30 @@ def test_read_zarr_reads_zip_datafolder(tmp_path: Path) -> None:
     assert row["action"].shape == (2, 1)
 
 
+def test_read_zarr_reads_remote_store(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    fs = MemoryFileSystem()
+    remote_root = "/policy.zarr"
+    for source_path in path.rglob("*"):
+        if source_path.is_file():
+            relative_path = source_path.relative_to(path)
+            remote_path = f"{remote_root}/{relative_path}"
+            fs.makedirs(str(Path(remote_path).parent), exist_ok=True)
+            with source_path.open("rb") as src, fs.open(remote_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+    row = mdr.read_zarr(
+        (remote_root, fs),
+        arrays={"action": "data/action"},
+        row_ends="meta/episode_ends",
+    ).take(1)[0]
+
+    assert row["file_path"] == "memory:///policy.zarr"
+    assert row["action"].shape == (2, 1)
+
+
 def test_read_zarr_reads_remote_zip_without_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
