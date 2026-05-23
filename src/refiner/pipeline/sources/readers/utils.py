@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Mapping, Sequence
 from typing import Any, Optional
+from typing import cast
 
 from fsspec import AbstractFileSystem
 
 DEFAULT_TARGET_SHARD_BYTES = 128 * 1024 * 1024
+PathSelection = Mapping[str, str] | Sequence[str] | str
 
 
 # Extensions that generally imply whole-file/container compression (not safely splittable by byte offsets).
@@ -56,6 +59,29 @@ def decode_value(
             for item in value
         ]
     return value
+
+
+def path_selection_map(
+    value: PathSelection | None,
+    *,
+    format_name: str,
+) -> dict[str, str]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        return {value.rsplit("/", 1)[-1]: value}
+    if isinstance(value, Mapping):
+        return dict(cast(Mapping[str, str], value))
+    out: dict[str, str] = {}
+    for path in value:
+        name = path.rsplit("/", 1)[-1]
+        if name in out:
+            raise ValueError(
+                f"{format_name} path selections must have unique derived column names; "
+                f"use an explicit mapping for duplicate name {name!r}"
+            )
+        out[name] = path
+    return out
 
 
 def is_splittable_by_bytes(fs: AbstractFileSystem, path: str) -> bool:
@@ -144,7 +170,9 @@ class BoundedBinaryReader(io.RawIOBase):
 __all__ = [
     "DEFAULT_TARGET_SHARD_BYTES",
     "NON_SPLITTABLE_WHOLEFILE_EXTS",
+    "PathSelection",
     "decode_value",
+    "path_selection_map",
     "is_splittable_by_bytes",
     "align_byte_range_to_newlines",
     "BoundedBinaryReader",

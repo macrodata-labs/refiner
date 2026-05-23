@@ -44,7 +44,6 @@ from refiner.pipeline.sources import (
 )
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
-from refiner.pipeline.sources.readers.selection import PathSelection
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
@@ -61,7 +60,10 @@ from refiner.execution.engine import (
 )
 from refiner.execution.operators.row import ShardDeltaFn
 from refiner.pipeline.sources.base import SourceUnit
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    PathSelection,
+)
 import pyarrow as pa
 
 if TYPE_CHECKING:

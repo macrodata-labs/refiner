@@ -13,10 +13,11 @@ from refiner.pipeline.data.datatype import DTypeMapping, dtype_to_plan
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
-from refiner.pipeline.sources.readers.selection import PathSelection, path_selection_map
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
+    PathSelection,
     decode_value,
+    path_selection_map,
 )
 from refiner.utils import check_required_dependencies
 
