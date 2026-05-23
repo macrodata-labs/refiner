@@ -441,6 +441,7 @@ Built-in sinks:
 | `.write_jsonl(output, ...)` | JSON Lines files | one output file per worker/shard according to the filename template |
 | `.write_parquet(output, ...)` | Parquet files | columnar output with optional compression |
 | `.write_lerobot(output, ...)` | LeRobot-compatible robotics datasets | materializes frame/video assets and dataset metadata |
+| `.write_zarr(output, ...)` | Zarr stores | one store per shard/worker according to the store template |
 
 Example:
 
@@ -488,11 +489,43 @@ pipeline = pipeline.map(
 pipeline = pipeline.cast(video=mdr.datatype.video_path())
 ```
 
+Use `write_zarr(...)` when you want chunked array output, usually for robotics
+episode rows or replay-buffer style data:
+
+```python
+import refiner as mdr
+
+(
+    mdr.read_lerobot("hf://datasets/user/robot-data")
+    .write_zarr(
+        "s3://my-bucket/robot-data-zarr/",
+        arrays={
+            "data/action": "action",
+            "data/state": "observation.state",
+        },
+    )
+)
+```
+
+The `arrays` mapping is from output Zarr path to source row key. For
+`RoboticsRow` inputs, omitting `arrays` writes the available default robotics
+arrays: actions, states, and timestamps. The default schema is inferred once and
+later rows must expose the same fields.
+
+By default, `write_zarr(...)` also writes cumulative episode boundaries to
+`meta/episode_ends`. Set `episode_ends_path=None` to omit them.
+
+Launched runs write isolated stores per shard/worker using
+`store_template="{shard_id}__w{worker_id}.zarr"`. This avoids concurrent workers
+mutating the same Zarr group. Read the resulting stores individually or merge
+them in a later workflow if you need a single physical store.
+
 When you run a writer through `launch_local(...)` or `launch_cloud(...)`, some
 sinks add a reducer stage after the main writer stage. For `write_jsonl(...)`
 and `write_parquet(...)`, that reducer removes stale shard/worker files and
-uploaded asset attempt folders, keeping only finalized outputs. The output
-prefix should therefore be dedicated to Refiner-managed files.
+uploaded asset attempt folders, keeping only finalized outputs. `write_zarr(...)`
+also removes stale shard/worker store directories. The output prefix should
+therefore be dedicated to Refiner-managed files.
 
 ## What Python Functions Actually See
 
