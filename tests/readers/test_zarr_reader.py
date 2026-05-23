@@ -32,6 +32,14 @@ def _write_policy_zarr(path: Path) -> None:
     root.attrs["task"] = "push tee"
 
 
+def test_read_zarr_rejects_reserved_file_path_output_name(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    with pytest.raises(ValueError, match="reserved output names"):
+        mdr.read_zarr(path, arrays={"file_path": "data/action"})
+
+
 def test_read_zarr_reads_selected_arrays_and_attrs(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
@@ -129,6 +137,46 @@ def test_read_zarr_rejects_duplicate_output_names(tmp_path: Path) -> None:
             attrs={"task": "task"},
             file_path_column=None,
         )
+
+
+def test_read_zarr_rejects_discovered_array_attr_collisions(tmp_path: Path) -> None:
+    path = tmp_path / "collision.zarr"
+    root = zarr.open_group(str(path), mode="w")
+    root.create_dataset("task", data=np.asarray([1], dtype=np.int64))
+    root.attrs["task"] = "push tee"
+
+    pipeline = mdr.read_zarr(path, attrs={"task": "task"}, file_path_column=None)
+
+    with pytest.raises(ValueError, match="duplicate output names"):
+        pipeline.take(1)
+
+
+def test_read_zarr_rejects_reserved_row_index_output_name(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    with pytest.raises(ValueError, match="reserved output names"):
+        mdr.read_zarr(
+            path,
+            arrays={"row_index": "data/action"},
+            row_ends="meta/episode_ends",
+            file_path_column=None,
+        )
+
+
+def test_read_zarr_drop_row_handles_missing_row_ends(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    pipeline = mdr.read_zarr(
+        path,
+        arrays={"action": "data/action"},
+        row_ends="meta/missing_episode_ends",
+        missing_policy="drop_row",
+        file_path_column=None,
+    )
+
+    assert pipeline.source.list_shards() == []
 
 
 def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:

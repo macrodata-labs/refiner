@@ -71,13 +71,17 @@ class ZarrReader(BaseSource):
         check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
         self.arrays = None if arrays is None else _selection_map(arrays)
         self.attrs = None if attrs is None else _selection_map(attrs)
-        _validate_output_names(self.arrays or {}, self.attrs or {})
         self.row_ends = row_ends
         self.rows_per_shard = rows_per_shard
         self.row_index_column = row_index_column
         self.file_path_column = file_path_column
         self.missing_policy = missing_policy
         self.dtypes = dtypes
+        _validate_output_names(
+            self.arrays or {},
+            self.attrs or {},
+            reserved=self._reserved_output_names(row_index=row_ends is not None),
+        )
         if missing_policy not in ("error", "drop_row", "set_null"):
             raise ValueError(
                 "missing_policy must be one of 'error', 'drop_row', or 'set_null'"
@@ -112,7 +116,14 @@ class ZarrReader(BaseSource):
             import zarr
 
             group = zarr.open_group(store=zarr_store(self.root), mode="r")
-            row_count = len(group[self.row_ends])
+            try:
+                row_count = len(group[self.row_ends])
+            except KeyError:
+                if self.missing_policy == "drop_row":
+                    return []
+                raise KeyError(
+                    f"Zarr row_ends array not found: {self.row_ends}"
+                ) from None
             return [
                 Shard.from_row_range(
                     start=start,
@@ -141,6 +152,11 @@ class ZarrReader(BaseSource):
             {path: path for path in _iter_array_paths(group) if path != self.row_ends}
             if self.arrays is None
             else self.arrays
+        )
+        _validate_output_names(
+            arrays,
+            self.attrs or {},
+            reserved=self._reserved_output_names(row_index=self.row_ends is not None),
         )
         if self.row_ends is not None:
             descriptor = shard.descriptor
@@ -179,6 +195,14 @@ class ZarrReader(BaseSource):
         row = self._read_row(group, arrays)
         if row is not None:
             yield DictRow(row)
+
+    def _reserved_output_names(self, *, row_index: bool) -> set[str]:
+        names = set()
+        if self.file_path_column is not None:
+            names.add(self.file_path_column)
+        if row_index and self.row_index_column is not None:
+            names.add(self.row_index_column)
+        return names
 
     def _read_row(
         self,
@@ -221,11 +245,17 @@ class ZarrReader(BaseSource):
 def _validate_output_names(
     arrays: Mapping[str, str],
     attrs: Mapping[str, str],
+    *,
+    reserved: set[str] | None = None,
 ) -> None:
     duplicates = set(arrays).intersection(attrs)
     if duplicates:
         names = ", ".join(sorted(repr(name) for name in duplicates))
         raise ValueError(f"Zarr arrays and attrs use duplicate output names: {names}")
+    reserved_matches = set(arrays).union(attrs).intersection(reserved or set())
+    if reserved_matches:
+        names = ", ".join(sorted(repr(name) for name in reserved_matches))
+        raise ValueError(f"Zarr selections use reserved output names: {names}")
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
