@@ -30,7 +30,7 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
-from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink, ZarrSink
+from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
 from refiner.pipeline.sinks.assets import MissingAssetPolicy
 from refiner.pipeline.sources import (
     BaseSource,
@@ -429,23 +429,6 @@ class RefinerPipeline:
                 max_asset_uploads_in_flight=max_asset_uploads_in_flight,
                 missing_asset_policy=missing_asset_policy,
                 dtypes=dtypes,
-            )
-        )
-
-    def write_zarr(
-        self,
-        output: DataFolderLike,
-        *,
-        arrays: Mapping[str, str] | None = None,
-        episode_ends_path: str | None = "meta/episode_ends",
-        overwrite: bool = True,
-    ) -> "RefinerPipeline":
-        return self.with_sink(
-            ZarrSink(
-                output=output,
-                arrays=arrays,
-                episode_ends_path=episode_ends_path,
-                overwrite=overwrite,
             )
         )
 

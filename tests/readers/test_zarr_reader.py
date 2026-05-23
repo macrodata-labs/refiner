@@ -78,7 +78,6 @@ def test_read_zarr_splits_arrays_by_row_ends(tmp_path: Path) -> None:
 def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     lerobot_out = tmp_path / "lerobot"
-    zarr_out = tmp_path / "roundtrip.zarr"
     _write_policy_zarr(path)
 
     (
@@ -114,35 +113,3 @@ def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
     ]
     assert [episode.num_frames for episode in episodes] == [2, 3]
     assert [episode.task for episode in episodes] == ["push tee", "push tee"]
-
-    (
-        mdr.read_lerobot(str(lerobot_out))
-        .write_zarr(
-            str(zarr_out),
-            arrays={
-                "data/action": "action",
-                "data/state": "observation.state",
-            },
-        )
-        .launch_local(
-            name="lerobot-to-zarr", num_workers=1, rundir=str(tmp_path / "run2")
-        )
-    )
-
-    row = mdr.read_zarr(
-        zarr_out,
-        arrays={
-            "action": "data/action",
-            "state": "data/state",
-            "episode_ends": "meta/episode_ends",
-        },
-        file_path_column=None,
-    ).take(1)[0]
-
-    assert row["episode_ends"].tolist() == [2, 5]
-    np.testing.assert_allclose(
-        row["action"], np.asarray([[0.0], [0.1], [1.0], [1.1], [1.2]])
-    )
-    np.testing.assert_allclose(
-        row["state"], np.asarray([[10.0], [10.1], [20.0], [20.1], [20.2]])
-    )
