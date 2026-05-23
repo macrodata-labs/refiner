@@ -1,11 +1,133 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import numpy as np
 
 HandSide = Literal["left", "right"]
+
+
+@dataclass(frozen=True, slots=True)
+class EgocentricRecording:
+    """Composable egocentric reconstruction state.
+
+    Each stage adds one field instead of hiding the whole reconstruction behind
+    one research backend. Hand payloads intentionally remain dictionaries
+    because MANO, joints, and confidence fields vary across upstream methods.
+    """
+
+    timestamps: list[float]
+    video_path: str | None = None
+    metadata: dict[str, Any] | None = None
+    depth: dict[str, Any] | None = None
+    camera: dict[str, Any] | None = None
+    hands_camera: dict[HandSide, dict[str, Any]] | None = None
+    hands_world: dict[HandSide, dict[str, Any]] | None = None
+
+    @classmethod
+    def from_hawor(
+        cls, result: "HaworResult", *, video_path: str | None = None
+    ) -> "EgocentricRecording":
+        hands_camera: dict[HandSide, dict[str, Any]] = {}
+        hands_world: dict[HandSide, dict[str, Any]] = {}
+
+        for side in ("left", "right"):
+            hand = result.hand(side)
+            if hand is None:
+                continue
+            camera_payload = {
+                key: value
+                for key, value in hand.items()
+                if key.startswith("T_camera_")
+                or key.endswith("_camera")
+                or key in {"joints_camera", "mano_pose", "mano_shape", "confidence"}
+            }
+            world_payload = {
+                key: value
+                for key, value in hand.items()
+                if key.startswith("T_world_")
+                or key.endswith("_world")
+                or key in {"joints_world", "mano_pose", "mano_shape", "confidence"}
+            }
+            if camera_payload:
+                hands_camera[side] = camera_payload
+            if world_payload:
+                hands_world[side] = world_payload
+
+        return cls(
+            timestamps=list(result.timestamps),
+            video_path=video_path,
+            metadata=None if result.metadata is None else dict(result.metadata),
+            camera=dict(result.camera),
+            hands_camera=hands_camera or None,
+            hands_world=hands_world or None,
+        )
+
+    def replace(self, **changes: Any) -> "EgocentricRecording":
+        return replace(self, **changes)
+
+    def to_hawor_result(self) -> "HaworResult":
+        camera = self.camera
+        if camera is None:
+            raise ValueError(
+                "EgocentricRecording requires camera to export HaWoR result"
+            )
+
+        hands: dict[HandSide, dict[str, Any] | None] = {"left": None, "right": None}
+        for side in ("left", "right"):
+            payload: dict[str, Any] = {}
+            if self.hands_camera and side in self.hands_camera:
+                payload.update(self.hands_camera[side])
+            if self.hands_world and side in self.hands_world:
+                payload.update(self.hands_world[side])
+            if payload:
+                hands[side] = payload
+
+        return HaworResult(
+            timestamps=list(self.timestamps),
+            camera=dict(camera),
+            left_hand=hands["left"],
+            right_hand=hands["right"],
+            metadata=None if self.metadata is None else dict(self.metadata),
+        )
+
+    def validate(self) -> None:
+        frame_count = len(self.timestamps)
+        if frame_count == 0:
+            raise ValueError("Egocentric recording requires non-empty timestamps")
+        if self.camera is not None:
+            _validate_series_length(
+                self.camera,
+                "T_world_camera",
+                frame_count,
+                owner="camera",
+                required=False,
+                prefix="Egocentric recording",
+            )
+        for owner, hands in (
+            ("hands_camera", self.hands_camera),
+            ("hands_world", self.hands_world),
+        ):
+            if hands is None:
+                continue
+            for side, hand in hands.items():
+                for key in (
+                    "T_camera_wrist",
+                    "T_world_wrist",
+                    "joints_camera",
+                    "joints_world",
+                    "mano_pose",
+                    "confidence",
+                ):
+                    _validate_series_length(
+                        hand,
+                        key,
+                        frame_count,
+                        owner=f"{owner}.{side}",
+                        required=False,
+                        prefix="Egocentric recording",
+                    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +187,7 @@ class HaworResult:
             frame_count,
             owner="camera",
             required=False,
+            prefix="HaWoR result",
         )
         for side in ("left", "right"):
             hand = self.hand(side)
@@ -76,6 +199,7 @@ class HaworResult:
                 frame_count,
                 owner=f"{side}_hand",
                 required=False,
+                prefix="HaWoR result",
             )
             _validate_series_length(
                 hand,
@@ -83,6 +207,7 @@ class HaworResult:
                 frame_count,
                 owner=f"{side}_hand",
                 required=False,
+                prefix="HaWoR result",
             )
             _validate_series_length(
                 hand,
@@ -90,6 +215,7 @@ class HaworResult:
                 frame_count,
                 owner=f"{side}_hand",
                 required=False,
+                prefix="HaWoR result",
             )
             _validate_series_length(
                 hand,
@@ -97,6 +223,7 @@ class HaworResult:
                 frame_count,
                 owner=f"{side}_hand",
                 required=False,
+                prefix="HaWoR result",
             )
 
 
@@ -130,16 +257,17 @@ def _validate_series_length(
     *,
     owner: str,
     required: bool,
+    prefix: str,
 ) -> None:
     if key not in payload:
         if required:
-            raise ValueError(f"HaWoR result {owner} requires '{key}'")
+            raise ValueError(f"{prefix} {owner} requires '{key}'")
         return
     try:
         length = len(payload[key])
     except TypeError as exc:
-        raise ValueError(f"HaWoR result {owner}.{key} must be a sequence") from exc
+        raise ValueError(f"{prefix} {owner}.{key} must be a sequence") from exc
     if length != expected:
         raise ValueError(
-            f"HaWoR result {owner}.{key} has {length} entries, expected {expected}"
+            f"{prefix} {owner}.{key} has {length} entries, expected {expected}"
         )

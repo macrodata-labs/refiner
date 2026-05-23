@@ -82,6 +82,8 @@ PY
 
 (
   cd "$HAWOR_ROOT/thirdparty/DROID-SLAM"
+  rm -rf build dist droid_backends.egg-info
+  rm -f droid_backends*.so thirdparty/lietorch/lietorch_backends*.so
   python - <<'PY'
 from pathlib import Path
 
@@ -112,10 +114,24 @@ for source in Path("thirdparty/lietorch/lietorch").rglob("*"):
     text = text.replace(".device().scalar_type()", ".device().type()")
     source.write_text(text)
 PY
-  if ! python setup.py install > /tmp/droid-slam-build.log 2>&1; then
+  if ! python setup.py build_ext --inplace > /tmp/droid-slam-build.log 2>&1; then
     tail -400 /tmp/droid-slam-build.log >&2
     exit 1
   fi
+  python - <<'PY'
+import torch  # noqa: F401
+import droid_backends
+
+doc = droid_backends.ba.__doc__ or ""
+expected = "arg14: bool"
+unexpected = "arg27: float"
+if expected not in doc or unexpected in doc:
+    raise RuntimeError(
+        "DROID-SLAM droid_backends.ba ABI mismatch. Expected the local "
+        f"15-argument binding, got: {doc}"
+    )
+print("DROID-SLAM droid_backends.ba ABI verified")
+PY
 )
 
 mkdir -p \

@@ -23,13 +23,14 @@ git -C "$HAWOR_ROOT" submodule update --init --recursive
 
 python -m pip install --upgrade pip
 
-if ! python - <<'PY'
+if [ "${HAWOR_FORCE_TORCH_INSTALL:-0}" = "1" ] || ! python - <<'PY'
 import torch
 PY
 then
   python -m pip install \
+    ${HAWOR_FORCE_TORCH_INSTALL:+--force-reinstall} \
     ${HAWOR_TORCH_PACKAGES:-torch torchvision} \
-    --index-url "${HAWOR_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
+    --index-url "${HAWOR_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 fi
 
 python -m pip install wheel ninja
@@ -39,6 +40,8 @@ import sys
 
 source, output = map(Path, sys.argv[1:])
 skip = ("torch-scatter",)
+if __import__("os").environ.get("HAWOR_SKIP_RENDERER") == "1":
+    skip = (*skip, "pytorch3d")
 lines = [
     line
     for line in source.read_text().splitlines()
@@ -47,15 +50,27 @@ lines = [
 output.write_text("\n".join(lines) + "\n")
 PY
 python -m pip install --no-build-isolation -r /tmp/hawor-requirements-runtime.txt
+if [ "${HAWOR_FORCE_TORCH_INSTALL:-0}" = "1" ]; then
+  python -m pip install \
+    --force-reinstall \
+    ${HAWOR_TORCH_PACKAGES:-torch torchvision} \
+    --index-url "${HAWOR_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
+fi
 TORCH_BASE_VERSION="$(python - <<'PY'
 import torch
 print(torch.__version__.split("+", 1)[0])
 PY
 )"
-python -m pip install torch-scatter -f "https://data.pyg.org/whl/torch-${TORCH_BASE_VERSION}+cu124.html"
+TORCH_CUDA_TAG="$(python - <<'PY'
+import torch
+cuda = torch.version.cuda or "12.4"
+print("cu" + cuda.replace(".", ""))
+PY
+)"
+python -m pip install torch-scatter -f "https://data.pyg.org/whl/torch-${TORCH_BASE_VERSION}+${TORCH_CUDA_TAG}.html"
 python -m pip install pytorch-lightning==2.2.4 --no-deps
 python -m pip install lightning-utilities torchmetrics==1.4.0
-python -m pip install huggingface-hub scipy imageio-ffmpeg
+python -m pip install huggingface-hub scipy imageio-ffmpeg requests
 python - <<'PY'
 from pathlib import Path
 import imageio_ffmpeg
@@ -68,19 +83,23 @@ if not target.exists():
 os.chmod(source, 0o755)
 PY
 
-(
-  cd "$HAWOR_ROOT"
-  python - <<'PY'
+if [ "${HAWOR_SKIP_RENDERER:-0}" != "1" ]; then
+  (
+    cd "$HAWOR_ROOT"
+    python - <<'PY'
 import pytorch3d
 from lib.vis.renderer import Renderer
 
 version = getattr(pytorch3d, "__version__", "unknown")
 print(f"PyTorch3D renderer available: {version}; {Renderer.__name__}")
 PY
-)
+  )
+fi
 
 (
   cd "$HAWOR_ROOT/thirdparty/DROID-SLAM"
+  rm -rf build dist droid_backends.egg-info
+  rm -f droid_backends*.so thirdparty/lietorch/lietorch_backends*.so
   python - <<'PY'
 from pathlib import Path
 
@@ -111,10 +130,24 @@ for source in Path("thirdparty/lietorch/lietorch").rglob("*"):
     text = text.replace(".device().scalar_type()", ".device().type()")
     source.write_text(text)
 PY
-  if ! python setup.py install > /tmp/droid-slam-build.log 2>&1; then
+  if ! python setup.py build_ext --inplace > /tmp/droid-slam-build.log 2>&1; then
     tail -400 /tmp/droid-slam-build.log >&2
     exit 1
   fi
+  python - <<'PY'
+import torch  # noqa: F401
+import droid_backends
+
+doc = droid_backends.ba.__doc__ or ""
+expected = "arg14: bool"
+unexpected = "arg27: float"
+if expected not in doc or unexpected in doc:
+    raise RuntimeError(
+        "DROID-SLAM droid_backends.ba ABI mismatch. Expected the local "
+        f"15-argument binding, got: {doc}"
+    )
+print("DROID-SLAM droid_backends.ba ABI verified")
+PY
 )
 
 mkdir -p \
@@ -131,12 +164,34 @@ download_if_missing() {
   if [ ! -s "$output" ]; then
     python - <<'PY' "$url" "$output"
 from pathlib import Path
-from urllib.request import urlretrieve
+import requests
 import sys
+import time
 
 url, output = sys.argv[1], Path(sys.argv[2])
 output.parent.mkdir(parents=True, exist_ok=True)
-urlretrieve(url, output)
+partial = output.with_suffix(output.suffix + ".partial")
+last_error = None
+for attempt in range(1, 11):
+    headers = {}
+    if partial.exists():
+        headers["Range"] = f"bytes={partial.stat().st_size}-"
+    try:
+        with requests.get(url, headers=headers, stream=True, timeout=(30, 600)) as response:
+            mode = "ab" if response.status_code == 206 and partial.exists() else "wb"
+            response.raise_for_status()
+            with partial.open(mode) as handle:
+                for chunk in response.iter_content(chunk_size=16 * 1024 * 1024):
+                    if chunk:
+                        handle.write(chunk)
+        partial.replace(output)
+        break
+    except Exception as exc:
+        last_error = exc
+        print(f"download failed attempt={attempt} url={url}: {exc}", flush=True)
+        time.sleep(min(60, attempt * 5))
+else:
+    raise RuntimeError(f"failed to download {url}: {last_error}")
 PY
   fi
 }
