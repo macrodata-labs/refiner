@@ -689,8 +689,9 @@ def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
         )
     )
 
+    zarr_store = next(zarr_out.glob("*.zarr"))
     row = mdr.read_zarr(
-        zarr_out,
+        zarr_store,
         arrays={
             "action": "data/action",
             "state": "data/state",

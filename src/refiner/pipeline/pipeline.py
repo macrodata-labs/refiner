@@ -437,6 +437,7 @@ class RefinerPipeline:
         *,
         arrays: Mapping[str, str] | None = None,
         episode_ends_path: str | None = "meta/episode_ends",
+        store_template: str = "{shard_id}__w{worker_id}.zarr",
         overwrite: bool = True,
     ) -> "RefinerPipeline":
         return self.with_sink(
@@ -444,6 +445,7 @@ class RefinerPipeline:
                 output=output,
                 arrays=arrays,
                 episode_ends_path=episode_ends_path,
+                store_template=store_template,
                 overwrite=overwrite,
             )
         )
