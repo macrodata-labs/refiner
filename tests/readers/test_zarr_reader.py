@@ -241,9 +241,9 @@ def test_read_zarr_split_leading_axis_emits_aligned_windows(tmp_path: Path) -> N
     shards = pipeline.source.list_shards()
     ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
     assert [(item.start, item.end) for item in ranges] == [
-        (0, 1),
-        (1, 2),
-        (2, 3),
+        (0, 2),
+        (2, 4),
+        (4, 5),
     ]
 
     rows = pipeline.take(3)

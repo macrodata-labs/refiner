@@ -158,19 +158,17 @@ class ZarrReader(BaseSource):
 
     def list_shards(self) -> list[Shard]:
         path = self.root.abs_path()
-        import zarr
 
-        group = zarr.open_group(
-            store=zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r"),
-            mode="r",
-        )
+        group = self._open_group()
         arrays = self._array_selection(group)
         _validate_output_names(
             arrays,
             self.attrs or {},
             reserved=self._reserved_output_names(split=self._is_split_mode),
         )
-        split_ranges = self._split_ranges(group, self._array_infos(group, arrays))
+        split_ranges = self._planned_shard_ranges(
+            group, self._array_infos(group, arrays)
+        )
         return [
             Shard.from_row_range(
                 start=start,
@@ -183,12 +181,7 @@ class ZarrReader(BaseSource):
         ]
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
-        import zarr
-
-        group = zarr.open_group(
-            store=zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r"),
-            mode="r",
-        )
+        group = self._open_group()
         arrays = self._array_selection(group)
         _validate_output_names(
             arrays,
@@ -196,27 +189,61 @@ class ZarrReader(BaseSource):
             reserved=self._reserved_output_names(split=self._is_split_mode),
         )
         infos = self._array_infos(group, arrays)
-        if self._is_split_mode:
+        if self.row_ends is not None:
             descriptor = shard.descriptor
             assert isinstance(descriptor, RowRangeDescriptor)
-            source_ranges = self._source_ranges(
+            source_ranges = self._row_end_source_ranges(
                 group,
                 infos,
-                output_rows=(descriptor.start, descriptor.end),
+                row_start=descriptor.start,
+                row_end=descriptor.end,
             )
+            if not source_ranges:
+                return
+            block_start = source_ranges[0][0]
+            block_end = source_ranges[-1][1]
+            block = self._read_arrays(group, arrays, start=block_start, end=block_end)
+            attrs = self._read_attrs(group, {})
             for row_index, (start, end) in zip(
                 range(descriptor.start, descriptor.end),
                 source_ranges,
                 strict=True,
             ):
                 row = self._row_metadata(index=row_index)
-                row.update(self._read_arrays(group, arrays, start=start, end=end))
-                yield DictRow(self._read_attrs(group, row))
+                row.update(
+                    {
+                        name: value[start - block_start : end - block_start]
+                        for name, value in block.items()
+                    }
+                )
+                row.update(attrs)
+                yield DictRow(row)
+            return
+
+        if self.split_leading_axis:
+            descriptor = shard.descriptor
+            assert isinstance(descriptor, RowRangeDescriptor)
+            row = self._row_metadata(index=shard.global_ordinal)
+            row.update(
+                self._read_arrays(
+                    group,
+                    arrays,
+                    start=descriptor.start,
+                    end=descriptor.end,
+                )
+            )
+            yield DictRow(self._read_attrs(group, row))
             return
 
         row = self._row_metadata(index=None)
         row.update(self._read_arrays(group, arrays))
         yield DictRow(self._read_attrs(group, row))
+
+    def _open_group(self) -> Any:
+        import zarr
+
+        store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
+        return zarr.open_group(store=store, mode="r")
 
     @property
     def _is_split_mode(self) -> bool:
@@ -267,51 +294,32 @@ class ZarrReader(BaseSource):
             )
         return infos
 
-    def _source_ranges(
+    def _row_end_source_ranges(
         self,
         group: Any,
         infos: Sequence[_ArrayInfo],
         *,
-        output_rows: tuple[int, int] | None = None,
+        row_start: int,
+        row_end: int,
     ) -> list[tuple[int, int]]:
-        if self.row_ends is not None:
-            try:
-                row_ends_array = group[self.row_ends]
-            except KeyError:
-                raise KeyError(
-                    f"Zarr row_ends array not found: {self.row_ends}"
-                ) from None
-            if output_rows is None:
-                ranges = _ranges_from_ends([int(value) for value in row_ends_array[:]])
-            else:
-                row_start, row_end = output_rows
-                if row_end < row_start:
-                    raise ValueError("Zarr shard row range is invalid")
-                if row_start == row_end:
-                    return []
-                read_start = max(0, row_start - 1)
-                values = [int(value) for value in row_ends_array[read_start:row_end]]
-                if len(values) != row_end - read_start:
-                    raise ValueError("Zarr shard row range exceeds row_ends length")
-                previous = 0 if row_start == 0 else values[0]
-                ranges = []
-                for value in values if row_start == 0 else values[1:]:
-                    if value < previous:
-                        raise ValueError("Zarr row_ends must be monotonic increasing")
-                    ranges.append((previous, value))
-                    previous = value
-            _validate_source_ranges(ranges, infos, label="row_ends")
-            return ranges
-        ranges = _leading_axis_ranges(
-            infos,
-            target_shard_bytes=self.target_shard_bytes,
-            num_shards=self.num_shards,
+        if row_end < row_start:
+            raise ValueError("Zarr shard row range is invalid")
+        if row_start == row_end:
+            return []
+        row_ends_array = self._row_ends_array(group)
+        read_start = max(0, row_start - 1)
+        values = [int(value) for value in row_ends_array[read_start:row_end]]
+        if len(values) != row_end - read_start:
+            raise ValueError("Zarr shard row range exceeds row_ends length")
+        ranges = (
+            _ranges_from_ends(values)
+            if row_start == 0
+            else _ranges_from_ends(values[1:], start=values[0])
         )
-        return (
-            ranges if output_rows is None else ranges[output_rows[0] : output_rows[1]]
-        )
+        _validate_source_ranges(ranges, infos, label="row_ends")
+        return ranges
 
-    def _split_ranges(
+    def _planned_shard_ranges(
         self,
         group: Any,
         infos: Sequence[_ArrayInfo],
@@ -319,14 +327,64 @@ class ZarrReader(BaseSource):
         if not self._is_split_mode:
             return [(0, 1)]
         if self.split_leading_axis:
-            source_ranges = self._source_ranges(group, infos)
-            return [(index, index + 1) for index in range(len(source_ranges))]
-        return _pack_output_rows(
-            self._source_ranges(group, infos),
-            infos,
-            target_shard_bytes=self.target_shard_bytes,
-            num_shards=self.num_shards,
-        )
+            return _leading_axis_ranges(
+                infos,
+                target_shard_bytes=self.target_shard_bytes,
+                num_shards=self.num_shards,
+            )
+        return self._row_end_shard_ranges(group, infos)
+
+    def _row_ends_array(self, group: Any) -> Any:
+        try:
+            row_ends_array = group[self.row_ends]
+        except KeyError:
+            raise KeyError(f"Zarr row_ends array not found: {self.row_ends}") from None
+        if len(row_ends_array.shape) != 1:
+            raise ValueError("Zarr row_ends must be one-dimensional")
+        return row_ends_array
+
+    def _row_end_shard_ranges(
+        self,
+        group: Any,
+        infos: Sequence[_ArrayInfo],
+    ) -> list[tuple[int, int]]:
+        row_ends_array = self._row_ends_array(group)
+        row_count = int(row_ends_array.shape[0])
+        if row_count == 0:
+            return []
+        if self.num_shards is not None:
+            _validate_row_ends(row_ends_array, infos)
+            step = ceil(row_count / self.num_shards)
+            return [
+                (start, min(start + step, row_count))
+                for start in range(0, row_count, step)
+            ]
+
+        bytes_per_step = sum(info.bytes_per_step for info in infos)
+        if bytes_per_step <= 0:
+            _validate_row_ends(row_ends_array, infos)
+            return [(0, row_count)]
+
+        ranges: list[tuple[int, int]] = []
+        shard_start = 0
+        current_bytes = 0
+        previous_end = 0
+        for row_index, end in _iter_row_ends(row_ends_array):
+            if end < previous_end:
+                raise ValueError("Zarr row_ends must be monotonic increasing")
+            row_bytes = max(1, end - previous_end) * bytes_per_step
+            if (
+                row_index > shard_start
+                and current_bytes + row_bytes > self.target_shard_bytes
+            ):
+                ranges.append((shard_start, row_index))
+                shard_start = row_index
+                current_bytes = 0
+            current_bytes += row_bytes
+            previous_end = end
+        ranges.append((shard_start, row_count))
+        _validate_source_ranges([(0, previous_end)], infos, label="row_ends")
+        return ranges
 
     def _read_arrays(
         self,
@@ -374,15 +432,38 @@ def _validate_output_names(
         raise ValueError(f"Zarr selections use reserved output names: {names}")
 
 
-def _ranges_from_ends(ends: Sequence[int]) -> list[tuple[int, int]]:
+def _ranges_from_ends(
+    ends: Sequence[int],
+    *,
+    start: int = 0,
+) -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
-    start = 0
     for end in ends:
         if end < start:
             raise ValueError("Zarr row_ends must be monotonic increasing")
         ranges.append((start, end))
         start = end
     return ranges
+
+
+def _iter_row_ends(array: Any) -> Iterator[tuple[int, int]]:
+    chunk = max(1, int(array.chunks[0]) if array.chunks else 8192)
+    length = int(array.shape[0])
+    for start in range(0, length, chunk):
+        for offset, value in enumerate(array[start : min(start + chunk, length)]):
+            yield start + offset, int(value)
+
+
+def _validate_row_ends(
+    array: Any,
+    infos: Sequence[_ArrayInfo],
+) -> None:
+    previous_end = 0
+    for _, end in _iter_row_ends(array):
+        if end < previous_end:
+            raise ValueError("Zarr row_ends must be monotonic increasing")
+        previous_end = end
+    _validate_source_ranges([(0, previous_end)], infos, label="row_ends")
 
 
 def _validate_source_ranges(
@@ -424,39 +505,6 @@ def _leading_axis_ranges(
         base = max(1, heavy.leading_chunk)
         step = max(base, (target_steps // base) * base)
     return [(start, min(start + step, length)) for start in range(0, length, step)]
-
-
-def _pack_output_rows(
-    source_ranges: Sequence[tuple[int, int]],
-    infos: Sequence[_ArrayInfo],
-    *,
-    target_shard_bytes: int,
-    num_shards: int | None,
-) -> list[tuple[int, int]]:
-    if not source_ranges:
-        return []
-    if num_shards is not None:
-        step = ceil(len(source_ranges) / num_shards)
-        return [
-            (start, min(start + step, len(source_ranges)))
-            for start in range(0, len(source_ranges), step)
-        ]
-
-    bytes_per_step = sum(info.bytes_per_step for info in infos)
-    if bytes_per_step <= 0:
-        return [(0, len(source_ranges))]
-    ranges: list[tuple[int, int]] = []
-    start_index = 0
-    current_bytes = 0
-    for index, (start, end) in enumerate(source_ranges):
-        row_bytes = max(1, end - start) * bytes_per_step
-        if index > start_index and current_bytes + row_bytes > target_shard_bytes:
-            ranges.append((start_index, index))
-            start_index = index
-            current_bytes = 0
-        current_bytes += row_bytes
-    ranges.append((start_index, len(source_ranges)))
-    return ranges
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
