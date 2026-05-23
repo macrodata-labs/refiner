@@ -164,6 +164,19 @@ def test_read_zarr_rejects_reserved_row_index_output_name(tmp_path: Path) -> Non
         )
 
 
+def test_read_zarr_rejects_duplicate_metadata_column_names(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    with pytest.raises(ValueError, match="must be distinct"):
+        mdr.read_zarr(
+            path,
+            row_ends="meta/episode_ends",
+            file_path_column="metadata",
+            row_index_column="metadata",
+        )
+
+
 def test_read_zarr_drop_row_handles_missing_row_ends(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)

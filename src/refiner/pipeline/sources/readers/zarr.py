@@ -86,6 +86,12 @@ class ZarrReader(BaseSource):
             raise ValueError(
                 "missing_policy must be one of 'error', 'drop_row', or 'set_null'"
             )
+        if (
+            row_ends is not None
+            and file_path_column is not None
+            and file_path_column == row_index_column
+        ):
+            raise ValueError("file_path_column and row_index_column must be distinct")
 
     @property
     def schema(self) -> pa.Schema | None:
