@@ -96,10 +96,12 @@ class ZarrReader(BaseSource):
         _validate_output_names(
             self.arrays or {},
             self.attrs or {},
-            reserved=self._reserved_output_names(split=self._is_split_mode),
+            reserved=self._reserved_output_names(
+                split=row_ends is not None or split_leading_axis
+            ),
         )
         if (
-            self._is_split_mode
+            (row_ends is not None or split_leading_axis)
             and file_path_column is not None
             and file_path_column == index_column
         ):
@@ -214,10 +216,6 @@ class ZarrReader(BaseSource):
         store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
         return zarr.open_group(store=store, mode="r")
 
-    @property
-    def _is_split_mode(self) -> bool:
-        return self.row_ends is not None or self.split_leading_axis
-
     def _reserved_output_names(self, *, split: bool) -> set[str]:
         names = set()
         if self.file_path_column is not None:
@@ -251,7 +249,9 @@ class ZarrReader(BaseSource):
             _validate_output_names(
                 paths,
                 self.attrs or {},
-                reserved=self._reserved_output_names(split=self._is_split_mode),
+                reserved=self._reserved_output_names(
+                    split=self.row_ends is not None or self.split_leading_axis
+                ),
             )
         arrays: dict[str, Any] = {}
         for output_name, path in paths.items():
@@ -293,7 +293,7 @@ class ZarrReader(BaseSource):
         group: Any,
         arrays: Mapping[str, Any],
     ) -> list[tuple[int, int]]:
-        if not self._is_split_mode:
+        if self.row_ends is None and not self.split_leading_axis:
             return [(0, 1)]
 
         if self.split_leading_axis:
@@ -329,7 +329,12 @@ class ZarrReader(BaseSource):
                 chunk_rows = max(
                     1,
                     ceil(
-                        max(_leading_chunk(array) for array in arrays.values())
+                        max(
+                            int(array.chunks[0])
+                            if array.chunks
+                            else int(array.shape[0])
+                            for array in arrays.values()
+                        )
                         / self.leading_axis_row_size
                     ),
                 )
@@ -469,10 +474,6 @@ def _check_final_end(
 def _leading_item_bytes(array: Any) -> int:
     trailing_shape = tuple(int(value) for value in array.shape[1:])
     return max(1, int(array.dtype.itemsize) * int(prod(trailing_shape or (1,))))
-
-
-def _leading_chunk(array: Any) -> int:
-    return int(array.chunks[0]) if array.chunks else int(array.shape[0])
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
