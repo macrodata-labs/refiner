@@ -249,6 +249,31 @@ def test_to_robot_rows_preserves_explicit_fps_and_robot_type_keys() -> None:
     assert robotics_row.robot_type == "aloha"
 
 
+def test_to_robot_rows_reuses_literal_fps_and_robot_type_for_episode_splits() -> None:
+    row = DictRow(
+        {
+            "dataset_id": "pusht",
+            "episode_ends": [1, 2],
+            "action": [[0.0], [1.0]],
+        }
+    )
+
+    rows = list(
+        _robot_rows(
+            row,
+            episode_id_key="dataset_id",
+            episode_ends_key="episode_ends",
+            timestamp_key=None,
+            state_key=None,
+            fps=30.0,
+            robot_type="pusht",
+        )
+    )
+
+    assert [row.fps for row in rows] == [30.0, 30.0]
+    assert [row.robot_type for row in rows] == ["pusht", "pusht"]
+
+
 def test_pipeline_to_robot_rows_forwards_literals_and_explicit_keys() -> None:
     literal_row = (
         from_items([{"episode_id": "episode-1"}])
