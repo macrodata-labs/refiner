@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from math import ceil, prod
+from operator import index as integer_index
 from typing import Any
 
 import pyarrow as pa
@@ -212,8 +213,15 @@ class ZarrReader(BaseSource):
 
     def _open_group(self) -> Any:
         import zarr
+        import zarr.storage
 
-        store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
+        if hasattr(zarr.storage, "FsspecStore"):
+            store = zarr.storage.FsspecStore.from_url(
+                self.root.abs_path(),
+                read_only=True,
+            )
+        else:
+            store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
         return zarr.open_group(store=store, mode="r")
 
     def _reserved_output_names(self, *, split: bool) -> set[str]:
@@ -275,7 +283,9 @@ class ZarrReader(BaseSource):
             return []
         row_ends_array = self._row_ends_array(group)
         read_start = max(0, row_start - 1)
-        values = [int(value) for value in row_ends_array[read_start:row_end]]
+        values = [
+            _row_end_offset(value) for value in row_ends_array[read_start:row_end]
+        ]
         if len(values) != row_end - read_start:
             raise ValueError("Zarr shard row range exceeds row_ends length")
         ranges: list[tuple[int, int]] = []
@@ -440,7 +450,16 @@ def _iter_row_ends(array: Any) -> Iterator[tuple[int, int]]:
     length = int(array.shape[0])
     for start in range(0, length, chunk):
         for offset, value in enumerate(array[start : min(start + chunk, length)]):
-            yield start + offset, int(value)
+            yield start + offset, _row_end_offset(value)
+
+
+def _row_end_offset(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("Zarr row_ends must contain integer offsets")
+    try:
+        return integer_index(value)
+    except TypeError:
+        raise ValueError("Zarr row_ends must contain integer offsets") from None
 
 
 def _validate_row_ends(array: Any) -> int:
@@ -460,6 +479,10 @@ def _check_final_end(
     exact: bool = False,
 ) -> None:
     for output_name, array in arrays.items():
+        if not array.shape:
+            raise ValueError(
+                f"Zarr selected array {output_name!r} must have a leading dimension"
+            )
         leading_length = int(array.shape[0])
         if final_end > leading_length:
             raise ValueError(
@@ -477,7 +500,8 @@ def _leading_item_bytes(array: Any) -> int:
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
-    for name, item in group.items():
+    items = group.items() if hasattr(group, "items") else group.members()
+    for name, item in items:
         path = f"{prefix}/{name}" if prefix else name
         if hasattr(item, "shape"):
             yield path

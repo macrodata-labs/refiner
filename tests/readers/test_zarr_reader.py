@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import pytest
@@ -13,21 +13,39 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import RowRangeDescriptor
 
 
+def _open_test_zarr(path: Path, *, mode: Literal["r", "r+", "a", "w", "w-"]):
+    kwargs: dict[str, Any] = {"mode": mode, "zarr_format": 2}
+    try:
+        return zarr.open_group(str(path), **kwargs)
+    except TypeError:
+        return zarr.open_group(str(path), mode=mode)
+
+
+def _create_array(root, name: str, data, **kwargs):
+    if hasattr(root, "create_array"):
+        kwargs.pop("shape", None)
+        return root.create_array(name, data=data, **kwargs)
+    return root.create_dataset(name, data=data, **kwargs)
+
+
 def _write_policy_zarr(path: Path) -> None:
-    root = zarr.open_group(str(path), mode="w")
-    root.create_dataset(
+    root = _open_test_zarr(path, mode="w")
+    _create_array(
+        root,
         "data/action",
         data=np.asarray([[0.0], [0.1], [1.0], [1.1], [1.2]], dtype=np.float32),
     )
-    root.create_dataset(
+    _create_array(
+        root,
         "data/state",
         data=np.asarray([[10.0], [10.1], [20.0], [20.1], [20.2]], dtype=np.float32),
     )
-    root.create_dataset(
+    _create_array(
+        root,
         "data/rgb",
         data=np.arange(5 * 4 * 4 * 3, dtype=np.uint8).reshape(5, 4, 4, 3),
     )
-    root.create_dataset("meta/episode_ends", data=np.asarray([2, 5], dtype=np.int64))
+    _create_array(root, "meta/episode_ends", data=np.asarray([2, 5], dtype=np.int64))
     root.attrs["dataset_id"] = "pusht"
     root.attrs["task"] = "push tee"
 
@@ -62,8 +80,8 @@ def test_read_zarr_reads_selected_arrays_and_attrs(tmp_path: Path) -> None:
 
 def test_read_zarr_reads_scalar_arrays(tmp_path: Path) -> None:
     path = tmp_path / "scalar.zarr"
-    root = zarr.open_group(str(path), mode="w")
-    root.create_dataset("version", data=np.asarray(3, dtype=np.int64), shape=())
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "version", data=np.asarray(3, dtype=np.int64), shape=())
 
     row = mdr.read_zarr(
         path,
@@ -155,8 +173,8 @@ def test_read_zarr_rejects_duplicate_output_names(tmp_path: Path) -> None:
 
 def test_read_zarr_rejects_discovered_array_attr_collisions(tmp_path: Path) -> None:
     path = tmp_path / "collision.zarr"
-    root = zarr.open_group(str(path), mode="w")
-    root.create_dataset("task", data=np.asarray([1], dtype=np.int64))
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "task", data=np.asarray([1], dtype=np.int64))
     root.attrs["task"] = "push tee"
 
     pipeline = mdr.read_zarr(path, attrs={"task": "task"}, file_path_column=None)
@@ -218,13 +236,15 @@ def test_read_zarr_rejects_missing_selected_attrs(tmp_path: Path) -> None:
 
 def test_read_zarr_split_leading_axis_emits_one_row_per_index(tmp_path: Path) -> None:
     path = tmp_path / "leading_axis.zarr"
-    root = zarr.open_group(str(path), mode="w")
-    root.create_dataset(
+    root = _open_test_zarr(path, mode="w")
+    _create_array(
+        root,
         "data/action",
         data=np.arange(5, dtype=np.float32).reshape(5, 1),
         chunks=(1, 1),
     )
-    root.create_dataset(
+    _create_array(
+        root,
         "data/rgb",
         data=np.arange(5 * 4 * 4 * 3, dtype=np.uint8).reshape(5, 4, 4, 3),
         chunks=(2, 4, 4, 3),
@@ -256,8 +276,9 @@ def test_read_zarr_split_leading_axis_emits_one_row_per_index(tmp_path: Path) ->
 
 def test_read_zarr_split_leading_axis_uses_row_size(tmp_path: Path) -> None:
     path = tmp_path / "leading_axis_rows.zarr"
-    root = zarr.open_group(str(path), mode="w")
-    root.create_dataset(
+    root = _open_test_zarr(path, mode="w")
+    _create_array(
+        root,
         "data/action",
         data=np.arange(6, dtype=np.float32).reshape(6, 1),
         chunks=(2, 1),
@@ -278,9 +299,9 @@ def test_read_zarr_split_leading_axis_uses_row_size(tmp_path: Path) -> None:
 
 def test_read_zarr_split_leading_axis_requires_aligned_lengths(tmp_path: Path) -> None:
     path = tmp_path / "misaligned.zarr"
-    root = zarr.open_group(str(path), mode="w")
-    root.create_dataset("data/action", data=np.zeros((5, 1), dtype=np.float32))
-    root.create_dataset("data/state", data=np.zeros((4, 1), dtype=np.float32))
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "data/action", data=np.zeros((5, 1), dtype=np.float32))
+    _create_array(root, "data/state", data=np.zeros((4, 1), dtype=np.float32))
 
     with pytest.raises(ValueError, match="same leading dimension"):
         mdr.read_zarr(
@@ -293,8 +314,8 @@ def test_read_zarr_split_leading_axis_requires_aligned_lengths(tmp_path: Path) -
 
 def test_read_zarr_split_leading_axis_requires_full_rows(tmp_path: Path) -> None:
     path = tmp_path / "partial-leading-axis-row.zarr"
-    root = zarr.open_group(str(path), mode="w")
-    root.create_dataset("data/action", data=np.zeros((5, 1), dtype=np.float32))
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "data/action", data=np.zeros((5, 1), dtype=np.float32))
 
     with pytest.raises(ValueError, match="divisible by row size"):
         mdr.read_zarr(
@@ -321,7 +342,7 @@ def test_read_zarr_leading_axis_row_size_requires_split_mode(tmp_path: Path) -> 
 def test_read_zarr_rejects_non_monotonic_row_ends(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
-    root = zarr.open_group(str(path), mode="a")
+    root = _open_test_zarr(path, mode="a")
     root["meta/episode_ends"][:] = np.asarray([3, 2], dtype=np.int64)
 
     with pytest.raises(ValueError, match="row_ends must be monotonic"):
@@ -333,10 +354,25 @@ def test_read_zarr_rejects_non_monotonic_row_ends(tmp_path: Path) -> None:
         ).take(1)
 
 
+def test_read_zarr_rejects_non_integer_row_ends(tmp_path: Path) -> None:
+    path = tmp_path / "float-row-ends.zarr"
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "data/action", data=np.zeros((5, 1), dtype=np.float32))
+    _create_array(root, "meta/episode_ends", data=np.asarray([2.5, 5.0]))
+
+    with pytest.raises(ValueError, match="integer offsets"):
+        mdr.read_zarr(
+            path,
+            arrays={"action": "data/action"},
+            row_ends="meta/episode_ends",
+            file_path_column=None,
+        ).take(1)
+
+
 def test_read_zarr_rejects_out_of_range_row_ends(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
-    root = zarr.open_group(str(path), mode="a")
+    root = _open_test_zarr(path, mode="a")
     root["meta/episode_ends"][:] = np.asarray([2, 6], dtype=np.int64)
 
     with pytest.raises(ValueError, match="row_ends exceed"):
@@ -351,7 +387,7 @@ def test_read_zarr_rejects_out_of_range_row_ends(tmp_path: Path) -> None:
 def test_read_zarr_rejects_short_row_ends(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
-    root = zarr.open_group(str(path), mode="a")
+    root = _open_test_zarr(path, mode="a")
     root["meta/episode_ends"][:] = np.asarray([2, 4], dtype=np.int64)
 
     with pytest.raises(ValueError, match="end before leading dimension"):
@@ -361,6 +397,21 @@ def test_read_zarr_rejects_short_row_ends(tmp_path: Path) -> None:
             row_ends="meta/episode_ends",
             file_path_column=None,
         ).take(2)
+
+
+def test_read_zarr_rejects_scalar_arrays_in_row_ends_mode(tmp_path: Path) -> None:
+    path = tmp_path / "scalar-row-ends.zarr"
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "version", data=np.asarray(3, dtype=np.int64), shape=())
+    _create_array(root, "meta/episode_ends", data=np.asarray([1], dtype=np.int64))
+
+    with pytest.raises(ValueError, match="must have a leading dimension"):
+        mdr.read_zarr(
+            path,
+            arrays={"version": "version"},
+            row_ends="meta/episode_ends",
+            file_path_column=None,
+        ).take(1)
 
 
 def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:

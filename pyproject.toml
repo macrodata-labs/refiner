@@ -45,7 +45,9 @@ hdf5 = [
     "h5py",
 ]
 zarr = [
-    "zarr>=2.18,<3",
+    "zarr>=2.18,<3; python_version < '3.11'",
+    "zarr>=3; python_version >= '3.11'",
+    "numcodecs<0.16; python_version < '3.11'",
 ]
 s3 = [
     "s3fs",
