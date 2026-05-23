@@ -43,11 +43,7 @@ from refiner.pipeline.sources import (
     ZarrReader,
 )
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
-from refiner.pipeline.sources.readers.hdf5 import MissingPolicy, PathSelection
-from refiner.pipeline.sources.readers.zarr import (
-    MissingPolicy as ZarrMissingPolicy,
-    PathSelection as ZarrPathSelection,
-)
+from refiner.pipeline.sources.readers.selection import MissingPolicy, PathSelection
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
@@ -817,13 +813,13 @@ def read_hdf5(
 def read_zarr(
     input: DataFolderLike,
     *,
-    arrays: ZarrPathSelection | None = None,
-    attrs: ZarrPathSelection | None = None,
+    arrays: PathSelection | None = None,
+    attrs: PathSelection | None = None,
     row_ends: str | None = None,
     rows_per_shard: int = 128,
     row_index_column: str | None = "row_index",
     file_path_column: str | None = "file_path",
-    missing_policy: ZarrMissingPolicy = "error",
+    missing_policy: MissingPolicy = "error",
     dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with a Zarr reader source.

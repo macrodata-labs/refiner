@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
-from typing import Any, Literal, cast
+from collections.abc import Iterator, Mapping
+from typing import Any
 
 import pyarrow as pa
 
@@ -15,27 +15,12 @@ from refiner.pipeline.data.datatype import (
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
+from refiner.pipeline.sources.readers.selection import (
+    MissingPolicy,
+    PathSelection,
+    path_selection_map,
+)
 from refiner.utils import check_required_dependencies
-
-MissingPolicy = Literal["error", "drop_row", "set_null"]
-PathSelection = Mapping[str, str] | Sequence[str] | str
-
-
-def _selection_map(value: PathSelection) -> dict[str, str]:
-    if isinstance(value, str):
-        return {value.rsplit("/", 1)[-1]: value}
-    if isinstance(value, Mapping):
-        return dict(cast(Mapping[str, str], value))
-    out: dict[str, str] = {}
-    for path in value:
-        name = path.rsplit("/", 1)[-1]
-        if name in out:
-            raise ValueError(
-                "Zarr path selections must have unique derived column names; "
-                f"use an explicit mapping for duplicate name {name!r}"
-            )
-        out[name] = path
-    return out
 
 
 def _decode_value(value: Any) -> Any:
@@ -69,8 +54,22 @@ class ZarrReader(BaseSource):
     ):
         self.root = DataFolder.resolve(input)
         check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
-        self.arrays = None if arrays is None else _selection_map(arrays)
-        self.attrs = None if attrs is None else _selection_map(attrs)
+        self.arrays = (
+            None
+            if arrays is None
+            else path_selection_map(
+                arrays,
+                format_name="Zarr",
+            )
+        )
+        self.attrs = (
+            None
+            if attrs is None
+            else path_selection_map(
+                attrs,
+                format_name="Zarr",
+            )
+        )
         self.row_ends = row_ends
         self.rows_per_shard = rows_per_shard
         self.row_index_column = row_index_column

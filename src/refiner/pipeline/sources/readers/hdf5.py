@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 import fnmatch
 from glob import has_magic
-from typing import Any, Literal, cast
+from typing import Any
 
 from fsspec import AbstractFileSystem
 
@@ -13,12 +13,13 @@ from refiner.pipeline.data.datatype import DTypeMapping, dtype_to_plan
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
+from refiner.pipeline.sources.readers.selection import (
+    MissingPolicy,
+    PathSelection,
+    path_selection_map,
+)
 from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 from refiner.utils import check_required_dependencies
-
-
-MissingPolicy = Literal["error", "drop_row", "set_null"]
-PathSelection = Mapping[str, str] | Sequence[str] | str
 
 
 def _decode_value(
@@ -140,22 +141,7 @@ class Hdf5Reader(BaseReader):
     def _mapping(
         value: PathSelection | None,
     ) -> dict[str, str]:
-        if value is None:
-            return {}
-        if isinstance(value, str):
-            return {value.rsplit("/", 1)[-1]: value}
-        if isinstance(value, Mapping):
-            return dict(cast(Mapping[str, str], value))
-        out: dict[str, str] = {}
-        for path in value:
-            name = path.rsplit("/", 1)[-1]
-            if name in out:
-                raise ValueError(
-                    "HDF5 path selections must have unique derived column names; "
-                    f"use an explicit mapping for duplicate name {name!r}"
-                )
-            out[name] = path
-        return out
+        return path_selection_map(value, format_name="HDF5")
 
     def describe(self) -> dict[str, Any]:
         description = super().describe()
