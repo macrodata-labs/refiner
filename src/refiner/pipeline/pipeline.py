@@ -44,6 +44,7 @@ from refiner.pipeline.sources import (
 )
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.selection import MissingPolicy, PathSelection
+from refiner.pipeline.sources.readers.zarr import ZarrMissingPolicy
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
@@ -177,7 +178,6 @@ class RefinerPipeline:
         video_keys: Mapping[str, str] | Iterable[str] | None = None,
         stats_key: str | None = "stats",
         stats_prefix: str = "stats/",
-        episode_ends_key: str | None = None,
     ) -> "RefinerPipeline":
         """Expose rows through the RoboticsRow semantic view.
 
@@ -208,11 +208,8 @@ class RefinerPipeline:
             schema=self.output_schema(),
             stats_key=stats_key,
             stats_prefix=stats_prefix,
-            episode_ends_key=episode_ends_key,
         )
-        if episode_ends_key is None:
-            return self.map(cast(MapFn, converter))
-        return self.flat_map(cast(FlatMapFn, converter))
+        return self.map(cast(MapFn, converter))
 
     def map_async(
         self,
@@ -819,7 +816,7 @@ def read_zarr(
     rows_per_shard: int = 128,
     row_index_column: str | None = "row_index",
     file_path_column: str | None = "file_path",
-    missing_policy: MissingPolicy = "error",
+    missing_policy: ZarrMissingPolicy = "error",
     dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with a Zarr reader source.

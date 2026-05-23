@@ -177,19 +177,28 @@ def test_read_zarr_rejects_duplicate_metadata_column_names(tmp_path: Path) -> No
         )
 
 
-def test_read_zarr_drop_row_handles_missing_row_ends(tmp_path: Path) -> None:
+def test_read_zarr_rejects_drop_row_missing_policy(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
 
-    pipeline = mdr.read_zarr(
-        path,
-        arrays={"action": "data/action"},
-        row_ends="meta/missing_episode_ends",
-        missing_policy="drop_row",
-        file_path_column=None,
-    )
+    with pytest.raises(ValueError, match="missing_policy"):
+        mdr.read_zarr(path, missing_policy="drop_row")  # type: ignore[arg-type]
 
-    assert pipeline.source.list_shards() == []
+
+def test_read_zarr_missing_set_null_keeps_group_row(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    row = mdr.read_zarr(
+        path,
+        arrays={"missing": "data/missing"},
+        attrs={"missing_attr": "missing_attr"},
+        missing_policy="set_null",
+        file_path_column=None,
+    ).take(1)[0]
+
+    assert row["missing"] is None
+    assert row["missing_attr"] is None
 
 
 def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:

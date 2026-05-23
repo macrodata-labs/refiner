@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow as pa
 
@@ -16,11 +16,12 @@ from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.pipeline.sources.readers.selection import (
-    MissingPolicy,
     PathSelection,
     path_selection_map,
 )
 from refiner.utils import check_required_dependencies
+
+ZarrMissingPolicy = Literal["error", "set_null"]
 
 
 def _decode_value(value: Any) -> Any:
@@ -49,7 +50,7 @@ class ZarrReader(BaseSource):
         rows_per_shard: int = 128,
         row_index_column: str | None = "row_index",
         file_path_column: str | None = "file_path",
-        missing_policy: MissingPolicy = "error",
+        missing_policy: ZarrMissingPolicy = "error",
         dtypes: DTypeMapping | None = None,
     ):
         self.root = DataFolder.resolve(input)
@@ -81,10 +82,8 @@ class ZarrReader(BaseSource):
             self.attrs or {},
             reserved=self._reserved_output_names(row_index=row_ends is not None),
         )
-        if missing_policy not in ("error", "drop_row", "set_null"):
-            raise ValueError(
-                "missing_policy must be one of 'error', 'drop_row', or 'set_null'"
-            )
+        if missing_policy not in ("error", "set_null"):
+            raise ValueError("missing_policy must be one of 'error' or 'set_null'")
         if (
             row_ends is not None
             and file_path_column is not None
@@ -124,8 +123,6 @@ class ZarrReader(BaseSource):
             try:
                 row_count = len(group[self.row_ends])
             except KeyError:
-                if self.missing_policy == "drop_row":
-                    return []
                 raise KeyError(
                     f"Zarr row_ends array not found: {self.row_ends}"
                 ) from None
@@ -178,8 +175,6 @@ class ZarrReader(BaseSource):
                     else int(ends_array[descriptor.start - 1])
                 )
             except KeyError:
-                if self.missing_policy == "drop_row":
-                    return
                 raise KeyError(
                     f"Zarr row_ends array not found: {self.row_ends}"
                 ) from None
@@ -248,8 +243,6 @@ class ZarrReader(BaseSource):
                     group[path][start:end] if start is not None else group[path][:]
                 )
             except KeyError:
-                if self.missing_policy == "drop_row":
-                    return None
                 if self.missing_policy == "set_null":
                     row[output_name] = None
                     continue
@@ -259,8 +252,6 @@ class ZarrReader(BaseSource):
     def _read_attrs(self, group: Any, row: dict[str, Any]) -> dict[str, Any] | None:
         for output_name, attr_name in (self.attrs or {}).items():
             if attr_name not in group.attrs:
-                if self.missing_policy == "drop_row":
-                    return None
                 if self.missing_policy == "set_null":
                     row[output_name] = None
                     continue
@@ -294,4 +285,4 @@ def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
             yield from _iter_array_paths(item, path)
 
 
-__all__ = ["MissingPolicy", "PathSelection", "ZarrReader"]
+__all__ = ["PathSelection", "ZarrMissingPolicy", "ZarrReader"]
