@@ -128,9 +128,9 @@ def test_read_zarr_reads_zip_store(tmp_path: Path) -> None:
         str(zip_path),
         arrays={"action": "data/action", "frames": "data/rgb"},
         row_ends="meta/episode_ends",
-        file_path_column=None,
     ).take(1)[0]
 
+    assert row["file_path"] == str(zip_path)
     assert row["action"].shape == (2, 1)
     assert row["frames"].shape == (2, 4, 4, 3)
 

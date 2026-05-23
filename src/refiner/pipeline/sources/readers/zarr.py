@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from math import ceil, prod
 from operator import index as integer_index
-from typing import Any, cast
+from os import PathLike
+from typing import Any
 
+from fsspec import AbstractFileSystem
+from fsspec.implementations.zip import ZipFileSystem
 import pyarrow as pa
 
+from refiner.io.datafile import DataFile, DataFileLike
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
@@ -68,7 +72,32 @@ class ZarrReader(BaseSource):
                 or None to omit it.
             dtypes: Optional dtype overrides for output columns.
         """
-        self.root = DataFolder.resolve(input)
+        zip_input: DataFileLike | None = None
+        if isinstance(input, PathLike):
+            input = str(input)
+        if isinstance(input, str) and input.endswith(".zip"):
+            zip_input = input
+        elif (
+            isinstance(input, tuple)
+            and len(input) == 2
+            and isinstance(input[1], AbstractFileSystem)
+        ):
+            path = input[0]
+            if isinstance(path, PathLike):
+                path = str(path)
+            if isinstance(path, str) and path.endswith(".zip"):
+                zip_input = (path, input[1])
+
+        if zip_input is not None:
+            zip_file = DataFile.resolve(zip_input)
+            self.root = DataFolder(
+                "/",
+                fs=ZipFileSystem(fo=zip_file.open("rb"), mode="r"),
+            )
+            self.source_path = zip_file.abs_path()
+        else:
+            self.root = DataFolder.resolve(input)
+            self.source_path = self.root.abs_path()
         check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
         if row_ends is not None and split_leading_axis:
             raise ValueError("row_ends and split_leading_axis are mutually exclusive")
@@ -114,7 +143,7 @@ class ZarrReader(BaseSource):
 
     def describe(self) -> dict[str, Any]:
         return {
-            "path": self.root.abs_path(),
+            "path": self.source_path,
             "arrays": dict(self.arrays) if self.arrays is not None else None,
             "attrs": dict(self.attrs) if self.attrs is not None else None,
             "row_ends": self.row_ends,
@@ -132,7 +161,7 @@ class ZarrReader(BaseSource):
         }
 
     def list_shards(self) -> list[Shard]:
-        path = self.root.abs_path()
+        path = self.source_path
 
         group = self._open_group()
         arrays = self._selected_arrays(group, validate_names=True)
@@ -215,30 +244,7 @@ class ZarrReader(BaseSource):
         import zarr
         import zarr.storage
 
-        path = self.root.abs_path()
-        if path.endswith(".zip"):
-            store = zarr.storage.ZipStore(path, mode="r")
-        elif hasattr(zarr.storage, "FsspecStore"):
-            fs = self.root.fs
-            if fs.async_impl and not fs.asynchronous:
-                import json
-
-                import fsspec
-
-                fs_config = json.loads(fs.to_json())
-                fs_config["asynchronous"] = True
-                fs = fsspec.AbstractFileSystem.from_json(json.dumps(fs_config))
-            elif not fs.async_impl:
-                from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
-
-                fs = AsyncFileSystemWrapper(fs, asynchronous=True)
-            store = zarr.storage.FsspecStore(
-                fs=cast(Any, fs),
-                path=self.root._join("").rstrip("/"),
-                read_only=True,
-            )
-        else:
-            store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
+        store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
         return zarr.open_group(store=store, mode="r")
 
     def _reserved_output_names(self, *, split: bool) -> set[str]:
@@ -252,7 +258,7 @@ class ZarrReader(BaseSource):
     def _row_metadata(self, *, index: int | None) -> dict[str, Any]:
         row: dict[str, Any] = {}
         if self.file_path_column is not None:
-            row[self.file_path_column] = self.root.abs_path()
+            row[self.file_path_column] = self.source_path
         if self.index_column is not None and index is not None:
             row[self.index_column] = index
         return row
