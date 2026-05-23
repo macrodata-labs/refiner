@@ -44,7 +44,6 @@ from refiner.pipeline.sources import (
 )
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.selection import MissingPolicy, PathSelection
-from refiner.pipeline.sources.readers.zarr import ZarrMissingPolicy
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
@@ -813,17 +812,22 @@ def read_zarr(
     arrays: PathSelection | None = None,
     attrs: PathSelection | None = None,
     row_ends: str | None = None,
-    rows_per_shard: int = 1,
-    row_index_column: str | None = "row_index",
+    split_leading_axis: bool = False,
+    target_shard_bytes: int = 256 * 1024**2,
+    num_shards: int | None = None,
+    index_column: str | None = "index",
     file_path_column: str | None = "file_path",
-    missing_policy: ZarrMissingPolicy = "error",
     dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with a Zarr reader source.
 
-    The reader emits one row for the Zarr group. If `row_ends` is provided,
-    it reads that Zarr array as cumulative end offsets and emits one row per
-    `[start:end]` slice.
+    The reader has three modes:
+    - group mode: one Zarr group becomes one row
+    - row_ends mode: cumulative offsets define whole-row source slices
+    - split_leading_axis mode: aligned axis-0 windows define output rows
+
+    Missing selected arrays or attributes raise immediately. `row_ends` and
+    `split_leading_axis` are mutually exclusive.
     """
     return RefinerPipeline(
         source=ZarrReader(
@@ -831,10 +835,11 @@ def read_zarr(
             arrays=arrays,
             attrs=attrs,
             row_ends=row_ends,
-            rows_per_shard=rows_per_shard,
-            row_index_column=row_index_column,
+            split_leading_axis=split_leading_axis,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            index_column=index_column,
             file_path_column=file_path_column,
-            missing_policy=missing_policy,
             dtypes=dtypes,
         )
     )

@@ -269,7 +269,7 @@ episodes = mdr.read_zarr(
     },
     attrs={"task": "task"},
     row_ends="meta/episode_ends",
-    row_index_column="episode_id",
+    index_column="episode_id",
     file_path_column=None,
 )
 ```
@@ -288,21 +288,34 @@ replay_buffer.zarr
 
 this emits one row per `[start:end]` slice. The selected arrays are sliced along
 their leading dimension, while selected attrs are repeated on each row.
-`row_index_column` receives the row/episode index when `row_ends` is set. Set it
-to `None` to omit that metadata.
+`index_column` receives the row/episode index when `row_ends` is set. Set it to
+`None` to omit that metadata.
 
-When `row_ends` is set, `rows_per_shard` controls how many output rows are read
-as one shard. The default is `1` so image-heavy robotics episodes are not batched
-into a large in-memory slice by default. Increase it only when each row slice is
-small enough to materialize together.
+If a Zarr store has aligned arrays but no episode boundaries, use
+`split_leading_axis=True` to emit leading-axis windows:
+
+```python
+windows = mdr.read_zarr(
+    "replay_buffer.zarr",
+    arrays={
+        "action": "data/action",
+        "frames": "data/rgb",
+    },
+    split_leading_axis=True,
+    target_shard_bytes=256 * 1024**2,
+)
+```
+
+This mode requires selected arrays to have the same leading dimension. Refiner
+chooses contiguous windows from array metadata, using the byte-heavy array's
+chunking to avoid unnecessary chunk splits where possible. Use `num_shards` when
+you need a target shard count instead of byte-sized packing.
 
 `row_ends` is reader control metadata, not an output selection. If you also want
 the raw offsets as a column in non-split mode, select that path through `arrays`.
 
-Missing selected arrays or attrs default to raising an error. Set
-`missing_policy="set_null"` to keep the group row and emit `None` for missing
-selected values. Zarr does not support `drop_row` because a selected path is
-missing at the group schema level rather than per output row.
+Missing selected arrays or attrs always raise. Zarr selections describe group
+schema, not row-local optional fields.
 
 ## Common Crawl text readers
 

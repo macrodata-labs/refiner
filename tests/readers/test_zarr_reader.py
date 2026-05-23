@@ -86,7 +86,7 @@ def test_read_zarr_splits_arrays_by_row_ends(tmp_path: Path) -> None:
     )
 
 
-def test_read_zarr_plans_one_shard_per_row_end(tmp_path: Path) -> None:
+def test_read_zarr_plans_row_ends_with_num_shards(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
 
@@ -94,7 +94,7 @@ def test_read_zarr_plans_one_shard_per_row_end(tmp_path: Path) -> None:
         path,
         arrays={"action": "data/action"},
         row_ends="meta/episode_ends",
-        rows_per_shard=1,
+        num_shards=2,
         file_path_column=None,
     )
 
@@ -107,7 +107,7 @@ def test_read_zarr_plans_one_shard_per_row_end(tmp_path: Path) -> None:
 
     rows = [cast(Row, row) for row in pipeline.source.read_shard(shards[1])]
     assert len(rows) == 1
-    assert rows[0]["row_index"] == 1
+    assert rows[0]["index"] == 1
     np.testing.assert_allclose(rows[0]["action"], [[1.0], [1.1], [1.2]])
 
 
@@ -151,14 +151,14 @@ def test_read_zarr_rejects_discovered_array_attr_collisions(tmp_path: Path) -> N
         pipeline.take(1)
 
 
-def test_read_zarr_rejects_reserved_row_index_output_name(tmp_path: Path) -> None:
+def test_read_zarr_rejects_reserved_index_output_name(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
 
     with pytest.raises(ValueError, match="reserved output names"):
         mdr.read_zarr(
             path,
-            arrays={"row_index": "data/action"},
+            arrays={"index": "data/action"},
             row_ends="meta/episode_ends",
             file_path_column=None,
         )
@@ -173,32 +173,85 @@ def test_read_zarr_rejects_duplicate_metadata_column_names(tmp_path: Path) -> No
             path,
             row_ends="meta/episode_ends",
             file_path_column="metadata",
-            row_index_column="metadata",
+            index_column="metadata",
         )
 
 
-def test_read_zarr_rejects_drop_row_missing_policy(tmp_path: Path) -> None:
+def test_read_zarr_rejects_missing_selected_paths(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
 
-    with pytest.raises(ValueError, match="missing_policy"):
-        mdr.read_zarr(path, missing_policy="drop_row")  # type: ignore[arg-type]
+    with pytest.raises(KeyError, match="Zarr array not found"):
+        mdr.read_zarr(
+            path,
+            arrays={"missing": "data/missing"},
+            file_path_column=None,
+        ).take(1)
 
 
-def test_read_zarr_missing_set_null_keeps_group_row(tmp_path: Path) -> None:
+def test_read_zarr_rejects_missing_selected_attrs(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
 
-    row = mdr.read_zarr(
+    with pytest.raises(KeyError, match="Zarr attr not found"):
+        mdr.read_zarr(
+            path,
+            arrays={},
+            attrs={"missing_attr": "missing_attr"},
+            file_path_column=None,
+        ).take(1)
+
+
+def test_read_zarr_split_leading_axis_emits_aligned_windows(tmp_path: Path) -> None:
+    path = tmp_path / "windows.zarr"
+    root = zarr.open_group(str(path), mode="w")
+    root.create_dataset(
+        "data/action",
+        data=np.arange(5, dtype=np.float32).reshape(5, 1),
+        chunks=(5, 1),
+    )
+    root.create_dataset(
+        "data/rgb",
+        data=np.arange(5 * 4 * 4 * 3, dtype=np.uint8).reshape(5, 4, 4, 3),
+        chunks=(2, 4, 4, 3),
+    )
+
+    pipeline = mdr.read_zarr(
         path,
-        arrays={"missing": "data/missing"},
-        attrs={"missing_attr": "missing_attr"},
-        missing_policy="set_null",
+        arrays={"action": "data/action", "rgb": "data/rgb"},
+        split_leading_axis=True,
+        target_shard_bytes=96,
         file_path_column=None,
-    ).take(1)[0]
+    )
 
-    assert row["missing"] is None
-    assert row["missing_attr"] is None
+    shards = pipeline.source.list_shards()
+    ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
+    assert [(item.start, item.end) for item in ranges] == [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+    ]
+
+    rows = pipeline.take(3)
+
+    assert [row["index"] for row in rows] == [0, 1, 2]
+    assert [len(row["action"]) for row in rows] == [2, 2, 1]
+    np.testing.assert_allclose(rows[1]["action"], [[2.0], [3.0]])
+
+
+def test_read_zarr_split_leading_axis_requires_aligned_lengths(tmp_path: Path) -> None:
+    path = tmp_path / "misaligned.zarr"
+    root = zarr.open_group(str(path), mode="w")
+    root.create_dataset("data/action", data=np.zeros((5, 1), dtype=np.float32))
+    root.create_dataset("data/state", data=np.zeros((4, 1), dtype=np.float32))
+
+    with pytest.raises(ValueError, match="same leading dimension"):
+        mdr.read_zarr(
+            path,
+            arrays={"action": "data/action", "state": "data/state"},
+            split_leading_axis=True,
+            file_path_column=None,
+        ).take(1)
 
 
 def test_read_zarr_rejects_non_monotonic_row_ends(tmp_path: Path) -> None:
@@ -249,7 +302,7 @@ def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
             file_path_column=None,
         )
         .to_robot_rows(
-            episode_id_key="row_index",
+            episode_id_key="index",
             task_key="task",
             action_key="action",
             state_key="observation.state",

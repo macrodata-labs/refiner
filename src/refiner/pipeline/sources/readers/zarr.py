@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
-from typing import Any, Literal
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from math import ceil, prod
+from typing import Any
 
 import pyarrow as pa
 
@@ -21,7 +23,33 @@ from refiner.pipeline.sources.readers.selection import (
 )
 from refiner.utils import check_required_dependencies
 
-ZarrMissingPolicy = Literal["error", "set_null"]
+DEFAULT_TARGET_SHARD_BYTES = 256 * 1024**2
+
+
+@dataclass(frozen=True, slots=True)
+class _ArrayInfo:
+    output_name: str
+    path: str
+    shape: tuple[int, ...]
+    chunks: tuple[int, ...]
+    dtype: Any
+
+    @property
+    def leading_length(self) -> int:
+        if not self.shape:
+            raise ValueError(
+                f"Zarr array {self.path!r} must have a leading dimension to split"
+            )
+        return int(self.shape[0])
+
+    @property
+    def leading_chunk(self) -> int:
+        return int(self.chunks[0]) if self.chunks else self.leading_length
+
+    @property
+    def bytes_per_step(self) -> int:
+        trailing_shape = self.shape[1:]
+        return max(1, int(self.dtype.itemsize) * int(prod(trailing_shape or (1,))))
 
 
 def _decode_value(value: Any) -> Any:
@@ -36,7 +64,7 @@ def _decode_value(value: Any) -> Any:
 
 
 class ZarrReader(BaseSource):
-    """Read one Zarr group as one row, or split arrays by cumulative row ends."""
+    """Read a Zarr group as one row, episode rows, or leading-axis windows."""
 
     name = "read_zarr"
 
@@ -47,49 +75,66 @@ class ZarrReader(BaseSource):
         arrays: PathSelection | None = None,
         attrs: PathSelection | None = None,
         row_ends: str | None = None,
-        rows_per_shard: int = 1,
-        row_index_column: str | None = "row_index",
+        split_leading_axis: bool = False,
+        target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+        num_shards: int | None = None,
+        index_column: str | None = "index",
         file_path_column: str | None = "file_path",
-        missing_policy: ZarrMissingPolicy = "error",
         dtypes: DTypeMapping | None = None,
     ):
+        """Create a Zarr reader.
+
+        Args:
+            input: Zarr group path.
+            arrays: Array selections as output-name to Zarr-path mapping, a
+                single path, a path sequence, or None to discover all arrays.
+            attrs: Attribute selections with the same shape as ``arrays``.
+            row_ends: Optional Zarr array path containing cumulative end offsets.
+                When set, emitted rows are whole source ranges and never split
+                across these boundaries.
+            split_leading_axis: Emit aligned leading-axis windows when no
+                ``row_ends`` path is provided.
+            target_shard_bytes: Approximate byte target used to pack output rows
+                into shards in split modes.
+            num_shards: Optional target shard count for split modes.
+            index_column: Output metadata column containing the episode/window
+                index in split modes, or None to omit it.
+            file_path_column: Output metadata column containing the source path,
+                or None to omit it.
+            dtypes: Optional dtype overrides for output columns.
+        """
         self.root = DataFolder.resolve(input)
         check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
+        if row_ends is not None and split_leading_axis:
+            raise ValueError("row_ends and split_leading_axis are mutually exclusive")
+        if target_shard_bytes <= 0:
+            raise ValueError("target_shard_bytes must be greater than zero")
+        if num_shards is not None and num_shards <= 0:
+            raise ValueError("num_shards must be greater than zero")
         self.arrays = (
-            None
-            if arrays is None
-            else path_selection_map(
-                arrays,
-                format_name="Zarr",
-            )
+            None if arrays is None else path_selection_map(arrays, format_name="Zarr")
         )
         self.attrs = (
-            None
-            if attrs is None
-            else path_selection_map(
-                attrs,
-                format_name="Zarr",
-            )
+            None if attrs is None else path_selection_map(attrs, format_name="Zarr")
         )
         self.row_ends = row_ends
-        self.rows_per_shard = rows_per_shard
-        self.row_index_column = row_index_column
+        self.split_leading_axis = split_leading_axis
+        self.target_shard_bytes = target_shard_bytes
+        self.num_shards = num_shards
+        self.index_column = index_column
         self.file_path_column = file_path_column
-        self.missing_policy = missing_policy
         self.dtypes = dtypes
         _validate_output_names(
             self.arrays or {},
             self.attrs or {},
-            reserved=self._reserved_output_names(row_index=row_ends is not None),
+            reserved=self._reserved_output_names(split=self._is_split_mode),
         )
-        if missing_policy not in ("error", "set_null"):
-            raise ValueError("missing_policy must be one of 'error' or 'set_null'")
         if (
-            row_ends is not None
+            self._is_split_mode
             and file_path_column is not None
-            and file_path_column == row_index_column
+            and file_path_column == index_column
         ):
-            raise ValueError("file_path_column and row_index_column must be distinct")
+            raise ValueError("file_path_column and index_column must be distinct")
 
     @property
     def schema(self) -> pa.Schema | None:
@@ -101,10 +146,11 @@ class ZarrReader(BaseSource):
             "arrays": dict(self.arrays) if self.arrays is not None else None,
             "attrs": dict(self.attrs) if self.attrs is not None else None,
             "row_ends": self.row_ends,
-            "rows_per_shard": self.rows_per_shard,
-            "row_index_column": self.row_index_column,
+            "split_leading_axis": self.split_leading_axis,
+            "target_shard_bytes": self.target_shard_bytes,
+            "num_shards": self.num_shards,
+            "index_column": self.index_column,
             "file_path_column": self.file_path_column,
-            "missing_policy": self.missing_policy,
             "dtypes": (
                 {key: dtype_to_plan(dtype) for key, dtype in self.dtypes.items()}
                 if self.dtypes
@@ -114,119 +160,138 @@ class ZarrReader(BaseSource):
 
     def list_shards(self) -> list[Shard]:
         path = self.root.abs_path()
-        if self.row_ends is not None:
-            if self.rows_per_shard <= 0:
-                raise ValueError("rows_per_shard must be greater than zero")
-            import zarr
+        import zarr
 
-            group = zarr.open_group(store=zarr_store(self.root), mode="r")
-            try:
-                row_count = len(group[self.row_ends])
-            except KeyError:
-                raise KeyError(
-                    f"Zarr row_ends array not found: {self.row_ends}"
-                ) from None
-            return [
-                Shard.from_row_range(
-                    start=start,
-                    end=min(start + self.rows_per_shard, row_count),
-                    global_ordinal=index,
-                    start_key=path,
-                    end_key=path,
-                )
-                for index, start in enumerate(range(0, row_count, self.rows_per_shard))
-            ]
+        group = zarr.open_group(store=zarr_store(self.root), mode="r")
+        arrays = self._array_selection(group)
+        _validate_output_names(
+            arrays,
+            self.attrs or {},
+            reserved=self._reserved_output_names(split=self._is_split_mode),
+        )
+        split_ranges = self._split_ranges(group, self._array_infos(group, arrays))
         return [
             Shard.from_row_range(
-                start=0,
-                end=1,
-                global_ordinal=0,
+                start=start,
+                end=end,
+                global_ordinal=index,
                 start_key=path,
                 end_key=path,
             )
+            for index, (start, end) in enumerate(split_ranges)
         ]
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         import zarr
 
         group = zarr.open_group(store=zarr_store(self.root), mode="r")
-        arrays = (
-            {path: path for path in _iter_array_paths(group) if path != self.row_ends}
-            if self.arrays is None
-            else self.arrays
-        )
+        arrays = self._array_selection(group)
         _validate_output_names(
             arrays,
             self.attrs or {},
-            reserved=self._reserved_output_names(row_index=self.row_ends is not None),
+            reserved=self._reserved_output_names(split=self._is_split_mode),
         )
-        if self.row_ends is not None:
+        if self._is_split_mode:
             descriptor = shard.descriptor
             assert isinstance(descriptor, RowRangeDescriptor)
+            source_ranges = self._source_ranges(group, self._array_infos(group, arrays))
+            for row_index in range(descriptor.start, descriptor.end):
+                start, end = source_ranges[row_index]
+                row = self._row_metadata(index=row_index)
+                row.update(self._read_arrays(group, arrays, start=start, end=end))
+                yield DictRow(self._read_attrs(group, row))
+            return
+
+        row = self._row_metadata(index=None)
+        row.update(self._read_arrays(group, arrays))
+        yield DictRow(self._read_attrs(group, row))
+
+    @property
+    def _is_split_mode(self) -> bool:
+        return self.row_ends is not None or self.split_leading_axis
+
+    def _reserved_output_names(self, *, split: bool) -> set[str]:
+        names = set()
+        if self.file_path_column is not None:
+            names.add(self.file_path_column)
+        if split and self.index_column is not None:
+            names.add(self.index_column)
+        return names
+
+    def _row_metadata(self, *, index: int | None) -> dict[str, Any]:
+        row: dict[str, Any] = {}
+        if self.file_path_column is not None:
+            row[self.file_path_column] = self.root.abs_path()
+        if self.index_column is not None and index is not None:
+            row[self.index_column] = index
+        return row
+
+    def _array_selection(self, group: Any) -> dict[str, str]:
+        if self.arrays is not None:
+            return self.arrays
+        return {
+            path: path for path in _iter_array_paths(group) if path != self.row_ends
+        }
+
+    def _array_infos(
+        self,
+        group: Any,
+        arrays: Mapping[str, str],
+    ) -> list[_ArrayInfo]:
+        infos: list[_ArrayInfo] = []
+        for output_name, path in arrays.items():
             try:
-                ends_array = group[self.row_ends]
-                row_ends = [
-                    int(value)
-                    for value in ends_array[descriptor.start : descriptor.end]
-                ]
-                start = (
-                    0
-                    if descriptor.start == 0
-                    else int(ends_array[descriptor.start - 1])
+                array = group[path]
+            except KeyError:
+                raise KeyError(f"Zarr array not found: {path}") from None
+            infos.append(
+                _ArrayInfo(
+                    output_name=output_name,
+                    path=path,
+                    shape=tuple(int(value) for value in array.shape),
+                    chunks=tuple(int(value) for value in array.chunks),
+                    dtype=array.dtype,
                 )
+            )
+        return infos
+
+    def _source_ranges(
+        self,
+        group: Any,
+        infos: Sequence[_ArrayInfo],
+    ) -> list[tuple[int, int]]:
+        if self.row_ends is not None:
+            try:
+                ends = [int(value) for value in group[self.row_ends][:]]
             except KeyError:
                 raise KeyError(
                     f"Zarr row_ends array not found: {self.row_ends}"
                 ) from None
-            _validate_row_ends(
-                row_ends,
-                start=start,
-                group=group,
-                arrays=arrays,
-                missing_policy=self.missing_policy,
-            )
-            shard_start = start
-            shard_end = row_ends[-1] if row_ends else start
-            shard_arrays = self._read_arrays(
-                group,
-                arrays,
-                start=shard_start,
-                end=shard_end,
-            )
-            for offset, end in enumerate(row_ends):
-                row = self._row_metadata(row_index=descriptor.start + offset)
-                relative_start = start - shard_start
-                relative_end = end - shard_start
-                for output_name, value in shard_arrays.items():
-                    row[output_name] = (
-                        None if value is None else value[relative_start:relative_end]
-                    )
-                row = self._read_attrs(group, row)
-                yield DictRow(row)
-                start = end
-            return
+            ranges = _ranges_from_ends(ends)
+            _validate_source_ranges(ranges, infos, label="row_ends")
+            return ranges
+        return _leading_axis_ranges(
+            infos,
+            target_shard_bytes=self.target_shard_bytes,
+            num_shards=self.num_shards,
+        )
 
-        row = self._row_metadata(row_index=None)
-        row_arrays = self._read_arrays(group, arrays)
-        row.update(row_arrays)
-        row = self._read_attrs(group, row)
-        yield DictRow(row)
-
-    def _reserved_output_names(self, *, row_index: bool) -> set[str]:
-        names = set()
-        if self.file_path_column is not None:
-            names.add(self.file_path_column)
-        if row_index and self.row_index_column is not None:
-            names.add(self.row_index_column)
-        return names
-
-    def _row_metadata(self, *, row_index: int | None) -> dict[str, Any]:
-        row: dict[str, Any] = {}
-        if self.file_path_column is not None:
-            row[self.file_path_column] = self.root.abs_path()
-        if self.row_index_column is not None and row_index is not None:
-            row[self.row_index_column] = row_index
-        return row
+    def _split_ranges(
+        self,
+        group: Any,
+        infos: Sequence[_ArrayInfo],
+    ) -> list[tuple[int, int]]:
+        if not self._is_split_mode:
+            return [(0, 1)]
+        if self.split_leading_axis:
+            source_ranges = self._source_ranges(group, infos)
+            return [(index, index + 1) for index in range(len(source_ranges))]
+        return _pack_output_rows(
+            self._source_ranges(group, infos),
+            infos,
+            target_shard_bytes=self.target_shard_bytes,
+            num_shards=self.num_shards,
+        )
 
     def _read_arrays(
         self,
@@ -243,18 +308,12 @@ class ZarrReader(BaseSource):
                     group[path][start:end] if start is not None else group[path][:]
                 )
             except KeyError:
-                if self.missing_policy == "set_null":
-                    row[output_name] = None
-                    continue
                 raise KeyError(f"Zarr array not found: {path}") from None
         return row
 
     def _read_attrs(self, group: Any, row: dict[str, Any]) -> dict[str, Any]:
         for output_name, attr_name in (self.attrs or {}).items():
             if attr_name not in group.attrs:
-                if self.missing_policy == "set_null":
-                    row[output_name] = None
-                    continue
                 raise KeyError(f"Zarr attr not found: {attr_name}")
             row[output_name] = _decode_value(group.attrs[attr_name])
         return row
@@ -276,30 +335,89 @@ def _validate_output_names(
         raise ValueError(f"Zarr selections use reserved output names: {names}")
 
 
-def _validate_row_ends(
-    row_ends: list[int],
-    *,
-    start: int,
-    group: Any,
-    arrays: Mapping[str, str],
-    missing_policy: ZarrMissingPolicy,
-) -> None:
-    previous = start
-    for end in row_ends:
-        if end < previous:
+def _ranges_from_ends(ends: Sequence[int]) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    for end in ends:
+        if end < start:
             raise ValueError("Zarr row_ends must be monotonic increasing")
-        previous = end
-    for output_name, path in arrays.items():
-        try:
-            length = int(group[path].shape[0])
-        except KeyError:
-            if missing_policy == "set_null":
-                continue
-            raise KeyError(f"Zarr array not found: {path}") from None
-        if row_ends and row_ends[-1] > length:
+        ranges.append((start, end))
+        start = end
+    return ranges
+
+
+def _validate_source_ranges(
+    ranges: Sequence[tuple[int, int]],
+    infos: Sequence[_ArrayInfo],
+    *,
+    label: str,
+) -> None:
+    if not infos:
+        return
+    final_end = ranges[-1][1] if ranges else 0
+    for info in infos:
+        if final_end > info.leading_length:
             raise ValueError(
-                f"Zarr row_ends exceed leading dimension for {output_name!r}"
+                f"Zarr {label} exceed leading dimension for {info.output_name!r}"
             )
+
+
+def _leading_axis_ranges(
+    infos: Sequence[_ArrayInfo],
+    *,
+    target_shard_bytes: int,
+    num_shards: int | None,
+) -> list[tuple[int, int]]:
+    if not infos:
+        raise ValueError("split_leading_axis requires at least one selected array")
+    lengths = {info.leading_length for info in infos}
+    if len(lengths) != 1:
+        raise ValueError("Zarr selected arrays must have the same leading dimension")
+    length = lengths.pop()
+    if length == 0:
+        return []
+    if num_shards is not None:
+        step = ceil(length / num_shards)
+    else:
+        bytes_per_step = sum(info.bytes_per_step for info in infos)
+        target_steps = max(1, target_shard_bytes // max(1, bytes_per_step))
+        heavy = max(infos, key=lambda info: info.bytes_per_step)
+        base = max(1, heavy.leading_chunk)
+        step = max(base, (target_steps // base) * base)
+    return [(start, min(start + step, length)) for start in range(0, length, step)]
+
+
+def _pack_output_rows(
+    source_ranges: Sequence[tuple[int, int]],
+    infos: Sequence[_ArrayInfo],
+    *,
+    target_shard_bytes: int,
+    num_shards: int | None,
+) -> list[tuple[int, int]]:
+    if not source_ranges:
+        return []
+    if num_shards is not None:
+        step = ceil(len(source_ranges) / num_shards)
+        return [
+            (start, min(start + step, len(source_ranges)))
+            for start in range(0, len(source_ranges), step)
+        ]
+
+    bytes_per_step = sum(info.bytes_per_step for info in infos)
+    if bytes_per_step <= 0:
+        return [(0, len(source_ranges))]
+    ranges: list[tuple[int, int]] = []
+    start_index = 0
+    current_bytes = 0
+    for index, (start, end) in enumerate(source_ranges):
+        row_bytes = max(1, end - start) * bytes_per_step
+        if index > start_index and current_bytes + row_bytes > target_shard_bytes:
+            ranges.append((start_index, index))
+            start_index = index
+            current_bytes = 0
+        current_bytes += row_bytes
+    ranges.append((start_index, len(source_ranges)))
+    return ranges
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
@@ -311,4 +429,4 @@ def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
             yield from _iter_array_paths(item, path)
 
 
-__all__ = ["PathSelection", "ZarrMissingPolicy", "ZarrReader"]
+__all__ = ["PathSelection", "ZarrReader"]
