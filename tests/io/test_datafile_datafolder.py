@@ -203,6 +203,17 @@ def test_datafolder_resolve_with_path_fs_tuple(tmp_path):
     assert folder.exists("out.txt")
 
 
+def test_datafolder_resolve_strips_protocol_root_from_url():
+    fs = MemoryFileSystem()
+    fs.pipe("/bucket/root/file.txt", b"ok")
+
+    folder = DataFolder("memory://bucket/root")
+
+    assert folder.path == "/bucket/root"
+    assert folder.abs_path() == "memory:///bucket/root"
+    assert folder.open("file.txt").read() == b"ok"
+
+
 class _CountingMemoryFS(MemoryFileSystem):
     def __init__(self):
         super().__init__()
