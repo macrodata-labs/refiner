@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from importlib import import_module
 from math import ceil, prod
 from operator import index as integer_index
 from os import PathLike
@@ -263,73 +262,11 @@ class ZarrReader(BaseSource):
         import zarr
         import zarr.storage
 
-        if not hasattr(zarr.storage, "FSStore"):
-            if self.zip_file is not None:
-                if self.zip_file.is_local:
-                    store = zarr.storage.ZipStore(self.zip_file.abs_path(), mode="r")
-                    try:
-                        yield zarr.open_group(store=store, mode="r")
-                    finally:
-                        store.close()
-                    return
-
-                handle = self.zip_file.open("rb", cache_type="none")
-                zip_fs = ZipFileSystem(fo=handle, mode="r")
-                try:
-                    make_async = getattr(
-                        import_module("zarr.storage._fsspec"), "_make_async"
-                    )
-                    store = zarr.storage.FsspecStore(
-                        fs=make_async(zip_fs),
-                        path="",
-                        read_only=True,
-                        allowed_exceptions=(
-                            FileNotFoundError,
-                            IsADirectoryError,
-                            NotADirectoryError,
-                            KeyError,
-                        ),
-                    )
-                    try:
-                        open_kwargs: dict[str, Any] = {
-                            "store": store,
-                            "mode": "r",
-                            "zarr_format": 2,
-                            "use_consolidated": False,
-                        }
-                        yield zarr.open_group(**open_kwargs)
-                    finally:
-                        store.close()
-                finally:
-                    zip_fs.close()
-                    handle.close()
-                return
-
-            assert self.root is not None
-            make_async = getattr(import_module("zarr.storage._fsspec"), "_make_async")
-
-            protocol = self.root.fs.protocol
-            if protocol == "file" or (
-                not isinstance(protocol, str) and "file" in protocol
-            ):
-                store = zarr.storage.LocalStore(self.root._join(""), read_only=True)
-            else:
-                store = zarr.storage.FsspecStore(
-                    fs=make_async(self.root.fs),
-                    path=self.root._join(""),
-                    read_only=True,
-                )
-            try:
-                yield zarr.open_group(store=store, mode="r")
-            finally:
-                store.close()
-            return
-
         if self.zip_file is not None:
             handle = None
             zip_fs = None
             if self.zip_file.is_local:
-                store = getattr(zarr, "ZipStore")(self.zip_file.abs_path(), mode="r")
+                store = zarr.ZipStore(self.zip_file.abs_path(), mode="r")
             else:
                 handle = self.zip_file.open("rb", cache_type="none")
                 zip_fs = ZipFileSystem(fo=handle, mode="r")
