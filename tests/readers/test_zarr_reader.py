@@ -10,6 +10,7 @@ import pytest
 import zarr
 
 import refiner as mdr
+from refiner.io.datafolder import DataFolder
 from refiner.robotics.row import RoboticsRow
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import RowRangeDescriptor
@@ -136,6 +137,21 @@ def test_read_zarr_reads_zip_store(tmp_path: Path) -> None:
     assert row["frames"].shape == (2, 4, 4, 3)
 
 
+def test_read_zarr_reads_zip_datafolder(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+    zip_path = Path(shutil.make_archive(str(path), "zip", root_dir=path))
+
+    row = mdr.read_zarr(
+        DataFolder(str(zip_path)),
+        arrays={"action": "data/action"},
+        row_ends="meta/episode_ends",
+    ).take(1)[0]
+
+    assert row["file_path"] == str(zip_path)
+    assert row["action"].shape == (2, 1)
+
+
 def test_read_zarr_reads_remote_zip_without_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -150,11 +166,23 @@ def test_read_zarr_reads_remote_zip_without_cache(
         shutil.copyfileobj(src, dst)
 
     open_calls: list[dict[str, Any]] = []
+    opened_files: list[int] = []
+    closed_files: list[int] = []
     original_open = fs.open
 
     def record_open(path, mode="rb", **kwargs):
         if path == remote_path and mode == "rb":
             open_calls.append(kwargs)
+            file = original_open(path, mode=mode, **kwargs)
+            opened_files.append(id(file))
+            original_close = file.close
+
+            def record_close():
+                closed_files.append(id(file))
+                original_close()
+
+            file.close = record_close
+            return file
         return original_open(path, mode=mode, **kwargs)
 
     monkeypatch.setattr(fs, "open", record_open)
@@ -168,6 +196,7 @@ def test_read_zarr_reads_remote_zip_without_cache(
     assert row["action"].shape == (2, 1)
     assert open_calls
     assert open_calls[0]["cache_type"] == "none"
+    assert set(closed_files) == set(opened_files)
 
 
 def test_read_zarr_plans_row_ends_with_num_shards(tmp_path: Path) -> None:
@@ -536,6 +565,21 @@ def test_read_zarr_rejects_short_row_ends(tmp_path: Path) -> None:
             row_ends="meta/episode_ends",
             file_path_column=None,
         ).take(2)
+
+
+def test_read_zarr_rejects_empty_row_ends_for_nonempty_arrays(tmp_path: Path) -> None:
+    path = tmp_path / "empty-row-ends.zarr"
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "data/action", data=np.zeros((2, 1), dtype=np.float32))
+    _create_array(root, "meta/episode_ends", data=np.asarray([], dtype=np.int64))
+
+    with pytest.raises(ValueError, match="end before leading dimension"):
+        mdr.read_zarr(
+            path,
+            arrays={"action": "data/action"},
+            row_ends="meta/episode_ends",
+            file_path_column=None,
+        ).take(1)
 
 
 def test_read_zarr_rejects_scalar_arrays_in_row_ends_mode(tmp_path: Path) -> None:

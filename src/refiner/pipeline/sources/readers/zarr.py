@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from math import ceil, prod
 from operator import index as integer_index
 from os import PathLike
@@ -76,7 +77,9 @@ class ZarrReader(BaseSource):
             dtypes: Optional dtype overrides for output columns.
         """
         zip_input: DataFileLike | None = None
-        if isinstance(input, PathLike):
+        if isinstance(input, DataFolder) and input.path.endswith(".zip"):
+            zip_input = (input.path, input.fs)
+        elif isinstance(input, PathLike):
             input = str(input)
         if isinstance(input, str) and input.endswith(".zip"):
             zip_input = input
@@ -166,104 +169,119 @@ class ZarrReader(BaseSource):
         }
 
     def list_shards(self) -> list[Shard]:
-        group = self._open_group()
-        arrays = self._selected_arrays(group)
-        split_ranges = self._shard_ranges(group, arrays)
-        return [
-            Shard.from_row_range(
-                start=start,
-                end=end,
-                global_ordinal=index,
-                start_key=self.source_path,
-                end_key=self.source_path,
-            )
-            for index, (start, end) in enumerate(split_ranges)
-        ]
+        with self._open_group() as group:
+            arrays = self._selected_arrays(group)
+            split_ranges = self._shard_ranges(group, arrays)
+            return [
+                Shard.from_row_range(
+                    start=start,
+                    end=end,
+                    global_ordinal=index,
+                    start_key=self.source_path,
+                    end_key=self.source_path,
+                )
+                for index, (start, end) in enumerate(split_ranges)
+            ]
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
-        group = self._open_group()
-        arrays = self._selected_arrays(group)
-        if self.row_ends is not None:
-            descriptor = shard.descriptor
-            assert isinstance(descriptor, RowRangeDescriptor)
-            source_ranges = self._row_end_ranges(
-                group,
-                arrays,
-                row_start=descriptor.start,
-                row_end=descriptor.end,
-            )
-            if not source_ranges:
-                return
-            attrs = self._read_attrs(group)
-            batch_size = self.row_batch_size or len(source_ranges)
-            for batch_offset in range(0, len(source_ranges), batch_size):
-                batch = source_ranges[batch_offset : batch_offset + batch_size]
-                block_start = batch[0][0]
-                block_end = batch[-1][1]
-                block = self._read_arrays(arrays, start=block_start, end=block_end)
-                for offset, (start, end) in enumerate(batch, start=batch_offset):
-                    row = self._row_metadata(index=descriptor.start + offset)
-                    row.update(
-                        {
-                            name: value[start - block_start : end - block_start]
-                            for name, value in block.items()
-                        }
-                    )
-                    row.update(attrs)
-                    yield DictRow(row)
-            return
-
-        if self.split_leading_axis:
-            descriptor = shard.descriptor
-            assert isinstance(descriptor, RowRangeDescriptor)
-            attrs = self._read_attrs(group)
-            batch_size = self.row_batch_size or descriptor.end - descriptor.start
-            for batch_start in range(descriptor.start, descriptor.end, batch_size):
-                batch_end = min(batch_start + batch_size, descriptor.end)
-                raw_start = batch_start * self.leading_axis_row_size
-                raw_end = batch_end * self.leading_axis_row_size
-                block = self._read_arrays(
+        with self._open_group() as group:
+            arrays = self._selected_arrays(group)
+            if self.row_ends is not None:
+                descriptor = shard.descriptor
+                assert isinstance(descriptor, RowRangeDescriptor)
+                source_ranges = self._row_end_ranges(
+                    group,
                     arrays,
-                    start=raw_start,
-                    end=raw_end,
+                    row_start=descriptor.start,
+                    row_end=descriptor.end,
                 )
-                for row_index in range(batch_start, batch_end):
-                    offset = (row_index - batch_start) * self.leading_axis_row_size
-                    row = self._row_metadata(index=row_index)
-                    row.update(
-                        {
-                            name: value[offset : offset + self.leading_axis_row_size]
-                            for name, value in block.items()
-                        }
+                if not source_ranges:
+                    return
+                attrs = self._read_attrs(group)
+                batch_size = self.row_batch_size or len(source_ranges)
+                for batch_offset in range(0, len(source_ranges), batch_size):
+                    batch = source_ranges[batch_offset : batch_offset + batch_size]
+                    block_start = batch[0][0]
+                    block_end = batch[-1][1]
+                    block = self._read_arrays(arrays, start=block_start, end=block_end)
+                    for offset, (start, end) in enumerate(batch, start=batch_offset):
+                        row = self._row_metadata(index=descriptor.start + offset)
+                        row.update(
+                            {
+                                name: value[start - block_start : end - block_start]
+                                for name, value in block.items()
+                            }
+                        )
+                        row.update(attrs)
+                        yield DictRow(row)
+                return
+
+            if self.split_leading_axis:
+                descriptor = shard.descriptor
+                assert isinstance(descriptor, RowRangeDescriptor)
+                attrs = self._read_attrs(group)
+                batch_size = self.row_batch_size or descriptor.end - descriptor.start
+                for batch_start in range(descriptor.start, descriptor.end, batch_size):
+                    batch_end = min(batch_start + batch_size, descriptor.end)
+                    raw_start = batch_start * self.leading_axis_row_size
+                    raw_end = batch_end * self.leading_axis_row_size
+                    block = self._read_arrays(
+                        arrays,
+                        start=raw_start,
+                        end=raw_end,
                     )
-                    row.update(attrs)
-                    yield DictRow(row)
-            return
+                    for row_index in range(batch_start, batch_end):
+                        offset = (row_index - batch_start) * self.leading_axis_row_size
+                        row = self._row_metadata(index=row_index)
+                        row.update(
+                            {
+                                name: value[
+                                    offset : offset + self.leading_axis_row_size
+                                ]
+                                for name, value in block.items()
+                            }
+                        )
+                        row.update(attrs)
+                        yield DictRow(row)
+                return
 
-        row = self._row_metadata(index=None)
-        row.update(self._read_arrays(arrays))
-        row.update(self._read_attrs(group))
-        yield DictRow(row)
+            row = self._row_metadata(index=None)
+            row.update(self._read_arrays(arrays))
+            row.update(self._read_attrs(group))
+            yield DictRow(row)
 
+    @contextmanager
     def _open_group(self) -> Any:
         import zarr
         import zarr.storage
 
         if self.zip_file is not None:
+            handle = None
+            zip_fs = None
             if self.zip_file.is_local:
                 store = zarr.ZipStore(self.zip_file.abs_path(), mode="r")
             else:
+                handle = self.zip_file.open("rb", cache_type="none")
+                zip_fs = ZipFileSystem(fo=handle, mode="r")
                 store = zarr.storage.FSStore(
                     "/",
-                    fs=ZipFileSystem(
-                        fo=self.zip_file.open("rb", cache_type="none"), mode="r"
-                    ),
+                    fs=zip_fs,
                     mode="r",
                 )
-            return zarr.open_group(store=store, mode="r")
+            try:
+                yield zarr.open_group(store=store, mode="r")
+            finally:
+                close_store = getattr(store, "close", None)
+                if callable(close_store):
+                    close_store()
+                if zip_fs is not None:
+                    zip_fs.close()
+                if handle is not None:
+                    handle.close()
+            return
         assert self.root is not None
         store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
-        return zarr.open_group(store=store, mode="r")
+        yield zarr.open_group(store=store, mode="r")
 
     def _reserved_output_names(self, *, split: bool) -> set[str]:
         names = set()
@@ -397,6 +415,7 @@ class ZarrReader(BaseSource):
         row_ends_array = self._row_ends_array(group)
         row_count = int(row_ends_array.shape[0])
         if row_count == 0:
+            _check_final_end(arrays, 0, label="row_ends", exact=True)
             return []
         if self.num_shards is not None or not arrays:
             final_end = _validate_row_ends(row_ends_array)
