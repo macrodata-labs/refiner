@@ -309,16 +309,18 @@ rows = mdr.read_zarr(
 )
 ```
 
-Shard planning in this mode aligns to the dominant selected arrays by per-row
-size, so large image arrays drive chunking instead of tiny low-dimensional
-state/action arrays that may be stored as one large chunk.
+Shard planning in this mode uses chunk metadata from the selected array with the
+largest per-row byte size (`dtype.itemsize * product(shape[1:])`). This keeps
+large image/video arrays in control of shard boundaries, so tiny action/state
+arrays stored as one huge chunk do not force Refiner to load a much larger image
+block than necessary.
 
 This mode requires selected arrays to have the same leading dimension, and that
 dimension must be divisible by `leading_axis_row_size`. Each output row contains
 `leading_axis_row_size` contiguous items from every selected array. Refiner plans
-shards from array metadata and avoids splitting shards below the largest selected
-leading-axis chunk where possible. Use `num_shards` when you need a target shard
-count instead of byte-sized packing.
+shards from array metadata and tries to keep shard boundaries aligned with the
+dominant array's leading-axis chunks. Use `num_shards` when you need a target
+shard count instead of byte-sized packing.
 
 `row_ends` is reader control metadata, not an output selection. If you also want
 the raw offsets as a column in non-split mode, select that path through `arrays`.
