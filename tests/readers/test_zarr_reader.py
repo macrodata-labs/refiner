@@ -216,8 +216,8 @@ def test_read_zarr_rejects_missing_selected_attrs(tmp_path: Path) -> None:
         ).take(1)
 
 
-def test_read_zarr_split_leading_axis_emits_aligned_windows(tmp_path: Path) -> None:
-    path = tmp_path / "windows.zarr"
+def test_read_zarr_split_leading_axis_emits_one_row_per_index(tmp_path: Path) -> None:
+    path = tmp_path / "leading_axis.zarr"
     root = zarr.open_group(str(path), mode="w")
     root.create_dataset(
         "data/action",
@@ -249,8 +249,9 @@ def test_read_zarr_split_leading_axis_emits_aligned_windows(tmp_path: Path) -> N
     rows = pipeline.take(3)
 
     assert [row["index"] for row in rows] == [0, 1, 2]
-    assert [len(row["action"]) for row in rows] == [2, 2, 1]
-    np.testing.assert_allclose(rows[1]["action"], [[2.0], [3.0]])
+    assert [row["action"].shape for row in rows] == [(1,), (1,), (1,)]
+    assert [row["rgb"].shape for row in rows] == [(4, 4, 3)] * 3
+    np.testing.assert_allclose(rows[1]["action"], [1.0])
 
 
 def test_read_zarr_split_leading_axis_requires_aligned_lengths(tmp_path: Path) -> None:

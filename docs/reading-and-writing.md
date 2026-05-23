@@ -293,7 +293,7 @@ their leading dimension, while selected attrs are repeated on each row.
 of every selected array.
 
 If a Zarr store has aligned arrays but no episode boundaries, use
-`split_leading_axis=True` to emit leading-axis windows:
+`split_leading_axis=True` to emit one row per leading-axis item:
 
 ```python
 windows = mdr.read_zarr(
@@ -308,9 +308,9 @@ windows = mdr.read_zarr(
 ```
 
 This mode requires selected arrays to have the same leading dimension. Refiner
-chooses contiguous windows from array metadata and avoids splitting below the
-largest selected leading-axis chunk where possible. Use `num_shards` when you
-need a target shard count instead of byte-sized packing.
+plans shards from array metadata and avoids splitting shards below the largest
+selected leading-axis chunk where possible. Use `num_shards` when you need a
+target shard count instead of byte-sized packing.
 
 `row_ends` is reader control metadata, not an output selection. If you also want
 the raw offsets as a column in non-split mode, select that path through `arrays`.

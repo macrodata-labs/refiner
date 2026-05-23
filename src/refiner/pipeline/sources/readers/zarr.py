@@ -215,17 +215,23 @@ class ZarrReader(BaseSource):
         if self.split_leading_axis:
             descriptor = shard.descriptor
             assert isinstance(descriptor, RowRangeDescriptor)
-            row = self._row_metadata(index=shard.global_ordinal)
-            row.update(
-                self._read_arrays(
-                    group,
-                    arrays,
-                    start=descriptor.start,
-                    end=descriptor.end,
-                )
+            block = self._read_arrays(
+                group,
+                arrays,
+                start=descriptor.start,
+                end=descriptor.end,
             )
-            row.update(self._read_attrs(group))
-            yield DictRow(row)
+            attrs = self._read_attrs(group)
+            for row_index in range(descriptor.start, descriptor.end):
+                row = self._row_metadata(index=row_index)
+                row.update(
+                    {
+                        name: value[row_index - descriptor.start]
+                        for name, value in block.items()
+                    }
+                )
+                row.update(attrs)
+                yield DictRow(row)
             return
 
         row = self._row_metadata(index=None)
