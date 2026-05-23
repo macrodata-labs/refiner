@@ -182,11 +182,6 @@ class ZarrReader(BaseSource):
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         group = self._open_group()
         arrays = self._array_selection(group)
-        _validate_output_names(
-            arrays,
-            self.attrs or {},
-            reserved=self._reserved_output_names(split=self._is_split_mode),
-        )
         infos = self._array_infos(group, arrays)
         if self.row_ends is not None:
             descriptor = shard.descriptor
