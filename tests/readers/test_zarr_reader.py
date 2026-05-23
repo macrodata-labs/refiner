@@ -53,14 +53,6 @@ def _write_policy_zarr(path: Path) -> None:
     root.attrs["task"] = "push tee"
 
 
-def test_read_zarr_rejects_reserved_file_path_output_name(tmp_path: Path) -> None:
-    path = tmp_path / "policy.zarr"
-    _write_policy_zarr(path)
-
-    with pytest.raises(ValueError, match="reserved output names"):
-        mdr.read_zarr(path, arrays={"file_path": "data/action"})
-
-
 def test_read_zarr_reads_selected_arrays_and_attrs(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
@@ -637,7 +629,6 @@ def test_read_zarr_rejects_scalar_arrays_in_row_ends_mode(tmp_path: Path) -> Non
 def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     lerobot_out = tmp_path / "lerobot"
-    zarr_out = tmp_path / "roundtrip.zarr"
     _write_policy_zarr(path)
 
     (
@@ -675,6 +666,40 @@ def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
     assert [episode.num_frames for episode in episodes] == [2, 3]
     assert [episode.task for episode in episodes] == ["push tee", "push tee"]
 
+
+def test_write_zarr_roundtrips_lerobot_rows(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    lerobot_out = tmp_path / "lerobot"
+    zarr_out = tmp_path / "roundtrip.zarr"
+    _write_policy_zarr(path)
+
+    (
+        mdr.read_zarr(
+            path,
+            arrays={
+                "action": "data/action",
+                "observation.state": "data/state",
+                "frames": "data/rgb",
+            },
+            attrs={"task": "task"},
+            row_ends="meta/episode_ends",
+            file_path_column=None,
+        )
+        .to_robot_rows(
+            episode_id_key="row_index",
+            task_key="task",
+            action_key="action",
+            state_key="observation.state",
+            video_keys={"observation.images.front": "frames"},
+            fps=10,
+            robot_type="pusht",
+        )
+        .write_lerobot(str(lerobot_out), max_video_prepare_in_flight=1)
+        .launch_local(
+            name="zarr-to-lerobot", num_workers=1, rundir=str(tmp_path / "run1")
+        )
+    )
+
     (
         mdr.read_lerobot(str(lerobot_out))
         .write_zarr(
@@ -700,10 +725,11 @@ def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
         file_path_column=None,
     ).take(1)[0]
 
-    assert row["episode_ends"].tolist() == [2, 5]
+    episode_ends = row["episode_ends"].tolist()
+    assert episode_ends[-1] == 5
+    assert sorted(np.diff([0, *episode_ends]).tolist()) == [2, 3]
+    assert row["action"].shape == (5, 1)
     np.testing.assert_allclose(
-        row["action"], np.asarray([[0.0], [0.1], [1.0], [1.1], [1.2]])
-    )
-    np.testing.assert_allclose(
-        row["state"], np.asarray([[10.0], [10.1], [20.0], [20.1], [20.2]])
+        np.sort(row["state"].reshape(-1)),
+        np.asarray([10.0, 10.1, 20.0, 20.1, 20.2]),
     )

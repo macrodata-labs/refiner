@@ -929,6 +929,42 @@ def test_file_cleanup_reducer_ignores_extra_template_fields(tmp_path) -> None:
     assert unmanaged_file.exists()
 
 
+def test_file_cleanup_reducer_removes_non_finalized_directories(tmp_path) -> None:
+    output_dir = tmp_path / "zarr-cleanup"
+    shard_id = "0123456789ab"
+    winner_worker_id = "worker-2"
+    loser_worker_id = "worker-1"
+    winner_dir = output_dir / f"{shard_id}__w{worker_token_for(winner_worker_id)}.zarr"
+    loser_dir = output_dir / f"{shard_id}__w{worker_token_for(loser_worker_id)}.zarr"
+    (winner_dir / "data").mkdir(parents=True)
+    (loser_dir / "data").mkdir(parents=True)
+    (winner_dir / "data" / "0").write_bytes(b"keep")
+    (loser_dir / "data" / "0").write_bytes(b"drop")
+
+    reducer = FileCleanupReducerSink(
+        output_dir,
+        filename_template="{shard_id}__w{worker_id}.zarr",
+        reducer_name="cleanup_zarr",
+        recursive=True,
+    )
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(
+            RuntimeLifecycle,
+            _FinalizedWorkersRuntime(
+                [FinalizedShardWorker(shard_id=shard_id, worker_id=winner_worker_id)]
+            ),
+        ),
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert winner_dir.exists()
+    assert not loser_dir.exists()
+
+
 def test_file_cleanup_reducer_tolerates_duplicate_listed_paths(
     tmp_path, monkeypatch
 ) -> None:

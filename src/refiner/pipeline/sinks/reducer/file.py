@@ -67,11 +67,13 @@ class FileCleanupReducerSink(BaseSink):
         filename_template: str,
         reducer_name: str,
         assets_subdir: str | None = None,
+        recursive: bool = False,
     ) -> None:
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
         self.reducer_name = reducer_name
         self.assets_subdir = assets_subdir
+        self.recursive = recursive
         self._managed_path_pattern = _compile_managed_path_pattern(filename_template)
         self._cleanup_ran = False
 
@@ -90,6 +92,8 @@ class FileCleanupReducerSink(BaseSink):
         }
         if self.assets_subdir is not None:
             args["assets_subdir"] = self.assets_subdir
+        if self.recursive:
+            args["recursive"] = True
         return (
             self.reducer_name,
             "writer",
@@ -127,6 +131,7 @@ class FileCleanupReducerSink(BaseSink):
         )
 
         removed_asset_attempts: set[str] = set()
+        removed_managed_paths: set[str] = set()
         # Extra template fields are treated as structure only. Authority is decided
         # solely from the finalized (shard_id, worker_id) pair extracted from each
         # managed path.
@@ -151,13 +156,20 @@ class FileCleanupReducerSink(BaseSink):
                     continue
                 continue
 
-            match = self._managed_path_pattern.fullmatch(rel_path)
+            managed_path = rel_path
+            match = self._managed_path_pattern.fullmatch(managed_path)
+            if match is None and self.recursive:
+                managed_path = rel_path.split("/", maxsplit=1)[0]
+                match = self._managed_path_pattern.fullmatch(managed_path)
             if match is None:
                 continue
             if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
                 continue
+            if managed_path in removed_managed_paths:
+                continue
+            removed_managed_paths.add(managed_path)
             try:
-                self.output.rm(rel_path)
+                self.output.rm(managed_path, recursive=self.recursive)
             except FileNotFoundError:
                 continue
 

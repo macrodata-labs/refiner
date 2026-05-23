@@ -8,9 +8,11 @@ import numpy as np
 import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.io.zarr import zarr_store
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.sinks.base import BaseSink
+from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
@@ -42,9 +44,8 @@ class ZarrSink(BaseSink):
         self._stores: dict[str, _ShardStore] = {}
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
-        rows = block
         count = 0
-        for row in rows:
+        for row in block:
             self._write_row(shard_id, row)
             count += 1
         return count
@@ -81,10 +82,14 @@ class ZarrSink(BaseSink):
         store = self._stores.get(relpath)
         if store is not None:
             return store
+        mode = "w" if self.overwrite else "w-"
         import zarr
 
-        mode = "w" if self.overwrite else "w-"
-        store = _ShardStore(zarr.open_group(self.output.abs_path(relpath), mode=mode))
+        store = _ShardStore(
+            zarr.open_group(
+                store=zarr_store(self.output, relpath, mode=mode), mode=mode
+            )
+        )
         self._stores[relpath] = store
         return store
 
@@ -122,6 +127,14 @@ class ZarrSink(BaseSink):
             },
         )
 
+    def build_reducer(self) -> BaseSink | None:
+        return FileCleanupReducerSink(
+            output=self.output,
+            filename_template=self.store_template,
+            reducer_name="write_zarr_reduce",
+            recursive=True,
+        )
+
 
 def _default_robotics_arrays(row: Row) -> dict[str, str]:
     if not isinstance(row, RoboticsRow):
@@ -150,7 +163,11 @@ def _row_value(row: Row, key: str) -> Any:
 
 
 def _as_array(value: Any) -> np.ndarray:
-    if isinstance(value, pa.ChunkedArray | pa.Array):
+    if isinstance(value, pa.ChunkedArray):
+        return _as_array(value.combine_chunks())
+    if isinstance(value, pa.Array):
+        if pa.types.is_primitive(value.type):
+            return value.to_numpy(zero_copy_only=False)
         return np.asarray(value.to_pylist())
     if isinstance(value, Iterable) and not isinstance(value, str | bytes | np.ndarray):
         return np.asarray(list(cast(Iterable[Any], value)))
