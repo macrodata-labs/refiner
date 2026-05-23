@@ -6,13 +6,14 @@ from typing import Any, Literal, cast
 import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.io.zarr import zarr_store
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
     dtype_to_plan,
     schema_with_dtypes,
 )
 from refiner.pipeline.data.row import DictRow
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.utils import check_required_dependencies
 
@@ -60,6 +61,7 @@ class ZarrReader(BaseSource):
         arrays: PathSelection | None = None,
         attrs: PathSelection | None = None,
         row_ends: str | None = None,
+        row_index_column: str | None = "row_index",
         file_path_column: str | None = "file_path",
         missing_policy: MissingPolicy = "error",
         dtypes: DTypeMapping | None = None,
@@ -70,6 +72,7 @@ class ZarrReader(BaseSource):
         self.attrs = None if attrs is None else _selection_map(attrs)
         _validate_output_names(self.arrays or {}, self.attrs or {})
         self.row_ends = row_ends
+        self.row_index_column = row_index_column
         self.file_path_column = file_path_column
         self.missing_policy = missing_policy
         self.dtypes = dtypes
@@ -88,6 +91,7 @@ class ZarrReader(BaseSource):
             "arrays": dict(self.arrays) if self.arrays is not None else None,
             "attrs": dict(self.attrs) if self.attrs is not None else None,
             "row_ends": self.row_ends,
+            "row_index_column": self.row_index_column,
             "file_path_column": self.file_path_column,
             "missing_policy": self.missing_policy,
             "dtypes": (
@@ -99,6 +103,21 @@ class ZarrReader(BaseSource):
 
     def list_shards(self) -> list[Shard]:
         path = self.root.abs_path()
+        if self.row_ends is not None:
+            import zarr
+
+            group = zarr.open_group(store=zarr_store(self.root), mode="r")
+            row_count = len(group[self.row_ends])
+            return [
+                Shard.from_row_range(
+                    start=index,
+                    end=index + 1,
+                    global_ordinal=index,
+                    start_key=path,
+                    end_key=path,
+                )
+                for index in range(row_count)
+            ]
         return [
             Shard.from_row_range(
                 start=0,
@@ -110,27 +129,42 @@ class ZarrReader(BaseSource):
         ]
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
-        del shard
         import zarr
 
-        group = zarr.open_group(self.root.abs_path(), mode="r")
+        group = zarr.open_group(store=zarr_store(self.root), mode="r")
         arrays = (
             {path: path for path in _iter_array_paths(group) if path != self.row_ends}
             if self.arrays is None
             else self.arrays
         )
         if self.row_ends is not None:
+            descriptor = shard.descriptor
+            assert isinstance(descriptor, RowRangeDescriptor)
             try:
-                row_ends = [int(value) for value in group[self.row_ends][:]]
+                ends_array = group[self.row_ends]
+                row_ends = [
+                    int(value)
+                    for value in ends_array[descriptor.start : descriptor.end]
+                ]
+                start = (
+                    0
+                    if descriptor.start == 0
+                    else int(ends_array[descriptor.start - 1])
+                )
             except KeyError:
                 if self.missing_policy == "drop_row":
                     return
                 raise KeyError(
                     f"Zarr row_ends array not found: {self.row_ends}"
                 ) from None
-            start = 0
-            for end in row_ends:
-                row = self._read_row(group, arrays, start=start, end=end)
+            for offset, end in enumerate(row_ends):
+                row = self._read_row(
+                    group,
+                    arrays,
+                    start=start,
+                    end=end,
+                    row_index=descriptor.start + offset,
+                )
                 if row is None:
                     return
                 yield DictRow(row)
@@ -148,10 +182,13 @@ class ZarrReader(BaseSource):
         *,
         start: int | None = None,
         end: int | None = None,
+        row_index: int | None = None,
     ) -> dict[str, Any] | None:
         row: dict[str, Any] = {}
         if self.file_path_column is not None:
             row[self.file_path_column] = self.root.abs_path()
+        if self.row_index_column is not None and row_index is not None:
+            row[self.row_index_column] = row_index
         for output_name, path in arrays.items():
             try:
                 row[output_name] = (

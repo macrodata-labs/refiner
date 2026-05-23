@@ -9,6 +9,8 @@ import zarr
 
 import refiner as mdr
 from refiner.robotics.row import RoboticsRow
+from refiner.pipeline.data.row import Row
+from refiner.pipeline.data.shard import RowRangeDescriptor
 
 
 def _write_policy_zarr(path: Path) -> None:
@@ -76,6 +78,30 @@ def test_read_zarr_splits_arrays_by_row_ends(tmp_path: Path) -> None:
     )
 
 
+def test_read_zarr_plans_one_shard_per_row_end(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    pipeline = mdr.read_zarr(
+        path,
+        arrays={"action": "data/action"},
+        row_ends="meta/episode_ends",
+        file_path_column=None,
+    )
+
+    shards = pipeline.source.list_shards()
+    ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
+    assert [(item.start, item.end) for item in ranges] == [
+        (0, 1),
+        (1, 2),
+    ]
+
+    rows = [cast(Row, row) for row in pipeline.source.read_shard(shards[1])]
+    assert len(rows) == 1
+    assert rows[0]["row_index"] == 1
+    np.testing.assert_allclose(rows[0]["action"], [[1.0], [1.1], [1.2]])
+
+
 def test_read_zarr_allows_attrs_only_reads(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
@@ -122,7 +148,7 @@ def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
             file_path_column=None,
         )
         .to_robot_rows(
-            episode_id_key="dataset_id",
+            episode_id_key="row_index",
             task_key="task",
             action_key="action",
             state_key="observation.state",
@@ -140,5 +166,6 @@ def test_zarr_to_robot_rows_and_lerobot_roundtrip(tmp_path: Path) -> None:
         cast(RoboticsRow, row)
         for row in mdr.read_lerobot(str(lerobot_out)).materialize()
     ]
+    episodes.sort(key=lambda episode: int(episode.episode_id))
     assert [episode.num_frames for episode in episodes] == [2, 3]
     assert [episode.task for episode in episodes] == ["push tee", "push tee"]
