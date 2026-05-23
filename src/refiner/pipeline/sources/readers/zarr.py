@@ -166,8 +166,6 @@ class ZarrReader(BaseSource):
         }
 
     def list_shards(self) -> list[Shard]:
-        path = self.source_path
-
         group = self._open_group()
         arrays = self._selected_arrays(group)
         split_ranges = self._shard_ranges(group, arrays)
@@ -176,8 +174,8 @@ class ZarrReader(BaseSource):
                 start=start,
                 end=end,
                 global_ordinal=index,
-                start_key=path,
-                end_key=path,
+                start_key=self.source_path,
+                end_key=self.source_path,
             )
             for index, (start, end) in enumerate(split_ranges)
         ]

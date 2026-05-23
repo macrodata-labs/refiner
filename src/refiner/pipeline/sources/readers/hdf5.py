@@ -84,8 +84,8 @@ class Hdf5Reader(BaseReader):
                 raise ValueError(
                     "groups accepts a single glob string or a list of exact group paths"
                 )
-        self.datasets = self._mapping(datasets)
-        self.attrs = self._mapping(attrs)
+        self.datasets = path_selection_map(datasets, format_name="HDF5")
+        self.attrs = path_selection_map(attrs, format_name="HDF5")
         self.group_path_column = group_path_column
         self.missing_policy = missing_policy
         if missing_policy not in ("error", "drop_row", "set_null"):
@@ -93,12 +93,6 @@ class Hdf5Reader(BaseReader):
                 "missing_policy must be one of 'error', 'drop_row', or 'set_null'"
             )
         self._validate_column_names()
-
-    @staticmethod
-    def _mapping(
-        value: PathSelection | None,
-    ) -> dict[str, str]:
-        return path_selection_map(value, format_name="HDF5")
 
     def describe(self) -> dict[str, Any]:
         description = super().describe()
