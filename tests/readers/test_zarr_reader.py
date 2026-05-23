@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 from typing import Any, Literal, cast
 
 import numpy as np
@@ -116,6 +117,22 @@ def test_read_zarr_splits_arrays_by_row_ends(tmp_path: Path) -> None:
         rows[0]["frames"],
         np.arange(2 * 4 * 4 * 3).reshape(2, 4, 4, 3),
     )
+
+
+def test_read_zarr_reads_zip_store(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+    zip_path = Path(shutil.make_archive(str(path), "zip", root_dir=path))
+
+    row = mdr.read_zarr(
+        str(zip_path),
+        arrays={"action": "data/action", "frames": "data/rgb"},
+        row_ends="meta/episode_ends",
+        file_path_column=None,
+    ).take(1)[0]
+
+    assert row["action"].shape == (2, 1)
+    assert row["frames"].shape == (2, 4, 4, 3)
 
 
 def test_read_zarr_plans_row_ends_with_num_shards(tmp_path: Path) -> None:
@@ -295,6 +312,43 @@ def test_read_zarr_split_leading_axis_uses_row_size(tmp_path: Path) -> None:
     assert [row["index"] for row in rows] == [0, 1, 2]
     assert [row["action"].shape for row in rows] == [(2, 1), (2, 1), (2, 1)]
     np.testing.assert_allclose(rows[1]["action"], [[2.0], [3.0]])
+
+
+def test_read_zarr_split_leading_axis_uses_dominant_array_chunks(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "image_dominant_chunks.zarr"
+    root = _open_test_zarr(path, mode="w")
+    _create_array(
+        root,
+        "data/action",
+        data=np.arange(10, dtype=np.float32).reshape(10, 1),
+        chunks=(10, 1),
+    )
+    _create_array(
+        root,
+        "data/rgb",
+        data=np.zeros((10, 4, 4, 3), dtype=np.uint8),
+        chunks=(2, 4, 4, 3),
+    )
+
+    pipeline = mdr.read_zarr(
+        path,
+        arrays={"action": "data/action", "rgb": "data/rgb"},
+        split_leading_axis=True,
+        target_shard_bytes=160,
+        file_path_column=None,
+    )
+
+    shards = pipeline.source.list_shards()
+    ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
+    assert [(item.start, item.end) for item in ranges] == [
+        (0, 2),
+        (2, 4),
+        (4, 6),
+        (6, 8),
+        (8, 10),
+    ]
 
 
 def test_read_zarr_split_leading_axis_requires_aligned_lengths(tmp_path: Path) -> None:

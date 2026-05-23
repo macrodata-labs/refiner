@@ -215,9 +215,12 @@ class ZarrReader(BaseSource):
         import zarr
         import zarr.storage
 
-        if hasattr(zarr.storage, "FsspecStore"):
+        path = self.root.abs_path()
+        if path.endswith(".zip"):
+            store = zarr.storage.ZipStore(path, mode="r")
+        elif hasattr(zarr.storage, "FsspecStore"):
             store = zarr.storage.FsspecStore.from_url(
-                self.root.abs_path(),
+                path,
                 read_only=True,
             )
         else:
@@ -331,11 +334,15 @@ class ZarrReader(BaseSource):
             if self.num_shards is not None:
                 step = ceil(row_count / self.num_shards)
             else:
+                item_bytes = [
+                    (array, _leading_item_bytes(array)) for array in arrays.values()
+                ]
                 bytes_per_row = (
-                    sum(_leading_item_bytes(array) for array in arrays.values())
+                    sum(bytes_count for _, bytes_count in item_bytes)
                     * self.leading_axis_row_size
                 )
                 target_rows = max(1, self.target_shard_bytes // max(1, bytes_per_row))
+                largest_item_bytes = max(bytes_count for _, bytes_count in item_bytes)
                 chunk_rows = max(
                     1,
                     ceil(
@@ -343,7 +350,8 @@ class ZarrReader(BaseSource):
                             int(array.chunks[0])
                             if array.chunks
                             else int(array.shape[0])
-                            for array in arrays.values()
+                            for array, bytes_count in item_bytes
+                            if bytes_count == largest_item_bytes
                         )
                         / self.leading_axis_row_size
                     ),

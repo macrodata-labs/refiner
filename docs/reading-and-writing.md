@@ -236,8 +236,9 @@ Zarr support lives behind the optional `macrodata-refiner[zarr]` extra.
 uv add "macrodata-refiner[zarr]"
 ```
 
-`read_zarr(...)` reads one Zarr group. By default, the group becomes one output
-row and selected arrays are loaded as full array values.
+`read_zarr(...)` reads one Zarr group, including directory stores and local
+`.zarr.zip` stores. By default, the group becomes one output row and selected
+arrays are loaded as full array values.
 
 ```python
 import refiner as mdr
@@ -307,6 +308,10 @@ rows = mdr.read_zarr(
     target_shard_bytes=128 * 1024**2,
 )
 ```
+
+Shard planning in this mode aligns to the dominant selected arrays by per-row
+size, so large image arrays drive chunking instead of tiny low-dimensional
+state/action arrays that may be stored as one large chunk.
 
 This mode requires selected arrays to have the same leading dimension, and that
 dimension must be divisible by `leading_axis_row_size`. Each output row contains
