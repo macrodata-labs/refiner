@@ -169,7 +169,7 @@ class ZarrReader(BaseSource):
         path = self.source_path
 
         group = self._open_group()
-        arrays = self._selected_arrays(group, validate_names=True)
+        arrays = self._selected_arrays(group)
         split_ranges = self._shard_ranges(group, arrays)
         return [
             Shard.from_row_range(
@@ -252,17 +252,16 @@ class ZarrReader(BaseSource):
         import zarr.storage
 
         if self.zip_file is not None:
-            store = (
-                zarr.ZipStore(self.zip_file.abs_path(), mode="r")
-                if self.zip_file.is_local
-                else zarr.storage.FSStore(
+            if self.zip_file.is_local:
+                store = zarr.ZipStore(self.zip_file.abs_path(), mode="r")
+            else:
+                store = zarr.storage.FSStore(
                     "/",
                     fs=ZipFileSystem(
                         fo=self.zip_file.open("rb", cache_type="none"), mode="r"
                     ),
                     mode="r",
                 )
-            )
             return zarr.open_group(store=store, mode="r")
         assert self.root is not None
         store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
@@ -284,20 +283,11 @@ class ZarrReader(BaseSource):
             row[self.index_column] = index
         return row
 
-    def _selected_arrays(
-        self,
-        group: Any,
-        *,
-        validate_names: bool = False,
-    ) -> dict[str, Any]:
-        paths = (
-            self.arrays
-            if self.arrays is not None
-            else {
+    def _selected_arrays(self, group: Any) -> dict[str, Any]:
+        if self.arrays is None:
+            paths = {
                 path: path for path in _iter_array_paths(group) if path != self.row_ends
             }
-        )
-        if validate_names:
             _validate_output_names(
                 paths,
                 self.attrs or {},
@@ -305,6 +295,9 @@ class ZarrReader(BaseSource):
                     split=self.row_ends is not None or self.split_leading_axis
                 ),
             )
+        else:
+            paths = self.arrays
+
         arrays: dict[str, Any] = {}
         for output_name, path in paths.items():
             try:
@@ -407,9 +400,11 @@ class ZarrReader(BaseSource):
         row_count = int(row_ends_array.shape[0])
         if row_count == 0:
             return []
-        if self.num_shards is not None:
+        if self.num_shards is not None or not arrays:
             final_end = _validate_row_ends(row_ends_array)
             _check_final_end(arrays, final_end, label="row_ends", exact=True)
+            if self.num_shards is None:
+                return [(0, row_count)]
             step = ceil(row_count / self.num_shards)
             return [
                 (start, min(start + step, row_count))
@@ -417,11 +412,6 @@ class ZarrReader(BaseSource):
             ]
 
         bytes_per_step = sum(_leading_item_bytes(array) for array in arrays.values())
-        if bytes_per_step <= 0:
-            final_end = _validate_row_ends(row_ends_array)
-            _check_final_end(arrays, final_end, label="row_ends", exact=True)
-            return [(0, row_count)]
-
         ranges: list[tuple[int, int]] = []
         shard_start = 0
         current_bytes = 0
