@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from math import ceil, prod
 from operator import index as integer_index
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 
@@ -219,8 +219,22 @@ class ZarrReader(BaseSource):
         if path.endswith(".zip"):
             store = zarr.storage.ZipStore(path, mode="r")
         elif hasattr(zarr.storage, "FsspecStore"):
-            store = zarr.storage.FsspecStore.from_url(
-                path,
+            fs = self.root.fs
+            if fs.async_impl and not fs.asynchronous:
+                import json
+
+                import fsspec
+
+                fs_config = json.loads(fs.to_json())
+                fs_config["asynchronous"] = True
+                fs = fsspec.AbstractFileSystem.from_json(json.dumps(fs_config))
+            elif not fs.async_impl:
+                from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
+
+                fs = AsyncFileSystemWrapper(fs, asynchronous=True)
+            store = zarr.storage.FsspecStore(
+                fs=cast(Any, fs),
+                path=self.root._join("").rstrip("/"),
                 read_only=True,
             )
         else:
