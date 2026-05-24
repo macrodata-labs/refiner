@@ -73,13 +73,13 @@ class ZarrSink(BaseSink):
             if pending_store is None or not pending_arrays:
                 return
             store = pending_store
-            rollback_lengths: dict[str, int | None] = {}
             previous_row_end = store.row_end
-            for zarr_path in pending_arrays:
-                dataset = store.arrays.get(zarr_path)
-                rollback_lengths[zarr_path] = (
-                    None if dataset is None else int(dataset.shape[0])
-                )
+            rollback_lengths = {
+                zarr_path: None
+                if (dataset := store.arrays.get(zarr_path)) is None
+                else int(dataset.shape[0])
+                for zarr_path in pending_arrays
+            }
             if self.episode_ends_path is not None:
                 dataset = store.arrays.get(self.episode_ends_path)
                 rollback_lengths[self.episode_ends_path] = (
@@ -92,8 +92,6 @@ class ZarrSink(BaseSink):
                     )
                     for zarr_path, arrays in pending_arrays.items()
                 }
-                for zarr_path, array in combined.items():
-                    self._validate_array_append(store, zarr_path, array)
                 for zarr_path, array in combined.items():
                     self._append_array(store, zarr_path, array)
                 if self.episode_ends_path is not None:
@@ -141,19 +139,15 @@ class ZarrSink(BaseSink):
                         "Zarr arrays for one row must have matching lengths"
                     )
                 row_bytes = sum(array.nbytes for array in row_arrays.values())
-                if (
-                    pending_arrays
-                    and pending_bytes + row_bytes > self.array_chunk_bytes
-                ):
-                    flush_pending()
-                if pending_arrays and len(pending_lengths) >= _MAX_INITIAL_CHUNK_ROWS:
-                    flush_pending()
-                if pending_arrays and set(row_arrays) != set(pending_arrays):
-                    flush_pending()
-                if pending_arrays and any(
-                    pending_arrays[zarr_path][0].shape[1:] != array.shape[1:]
-                    or pending_arrays[zarr_path][0].dtype != array.dtype
-                    for zarr_path, array in row_arrays.items()
+                if pending_arrays and (
+                    pending_bytes + row_bytes > self.array_chunk_bytes
+                    or len(pending_lengths) >= _MAX_INITIAL_CHUNK_ROWS
+                    or set(row_arrays) != set(pending_arrays)
+                    or any(
+                        pending_arrays[zarr_path][0].shape[1:] != array.shape[1:]
+                        or pending_arrays[zarr_path][0].dtype != array.dtype
+                        for zarr_path, array in row_arrays.items()
+                    )
                 ):
                     flush_pending()
                 store = self._store(shard_id)
@@ -175,22 +169,20 @@ class ZarrSink(BaseSink):
         lengths: list[int],
     ) -> None:
         store = self._store(shard_id)
-        if not lengths:
-            expected_length = None
-        else:
-            expected_length = lengths[0]
-            if any(item != expected_length for item in lengths):
-                raise ValueError("Zarr arrays for one row must have matching lengths")
+        expected_length = lengths[0] if lengths else None
+        if expected_length is not None and any(
+            item != expected_length for item in lengths
+        ):
+            raise ValueError("Zarr arrays for one row must have matching lengths")
 
-        rollback_lengths: dict[str, int | None] = {}
-        for zarr_path in [*row_arrays, *(path for path, _ in row_videos)]:
-            dataset = store.arrays.get(zarr_path)
-            rollback_lengths[zarr_path] = (
-                None if dataset is None else int(dataset.shape[0])
-            )
+        previous_row_end = store.row_end
+        rollback_lengths = {
+            zarr_path: None
+            if (dataset := store.arrays.get(zarr_path)) is None
+            else int(dataset.shape[0])
+            for zarr_path in [*row_arrays, *(path for path, _ in row_videos)]
+        }
         try:
-            for zarr_path, array in row_arrays.items():
-                self._validate_array_append(store, zarr_path, array)
             for zarr_path, array in row_arrays.items():
                 self._append_array(store, zarr_path, array)
             for zarr_path, video in row_videos:
@@ -214,12 +206,13 @@ class ZarrSink(BaseSink):
                 rollback_lengths[self.episode_ends_path] = (
                     None if dataset is None else int(dataset.shape[0])
                 )
-                store.row_end += lengths[0]
+                row_end = store.row_end + lengths[0]
                 self._append_array(
                     store,
                     self.episode_ends_path,
-                    np.asarray([store.row_end], dtype=np.int64),
+                    np.asarray([row_end], dtype=np.int64),
                 )
+                store.row_end = row_end
         except Exception:
             for zarr_path, length in rollback_lengths.items():
                 if length is None:
@@ -228,11 +221,7 @@ class ZarrSink(BaseSink):
                 dataset = store.arrays.get(zarr_path)
                 if dataset is not None:
                     dataset.resize((length, *dataset.shape[1:]))
-            if self.episode_ends_path is not None:
-                dataset = store.arrays.get(self.episode_ends_path)
-                store.row_end = (
-                    0 if dataset is None or dataset.shape[0] == 0 else int(dataset[-1])
-                )
+            store.row_end = previous_row_end
             raise
 
     def _row_values(
@@ -265,57 +254,20 @@ class ZarrSink(BaseSink):
         *,
         expected_length: int | None = None,
     ) -> int:
-        if isinstance(video, VideoFrameArray):
-            if expected_length is not None and video.frame_count != expected_length:
-                raise ValueError("Zarr arrays for one row must have matching lengths")
-            if video.frame_count == 0:
-                empty = np.asarray(video.frames, dtype=np.uint8)
-                self._append_array(store, path, empty[:0])
-                return 0
-            batch: list[np.ndarray] = []
-            batch_limit: int | None = None
-            for frame in video.iter_frame_arrays():
-                batch.append(frame)
-                if batch_limit is None:
-                    batch_limit = self._video_batch_limit(frame)
-                if len(batch) >= batch_limit:
-                    self._append_array(
-                        store,
-                        path,
-                        np.stack(batch, axis=0),
-                        chunks=(batch_limit, *frame.shape),
-                    )
-                    batch.clear()
-            if batch:
-                self._append_array(
-                    store,
-                    path,
-                    np.stack(batch, axis=0),
-                    chunks=(batch_limit or len(batch), *batch[0].shape),
-                )
-            return video.frame_count
-
         batch: list[np.ndarray] = []
         batch_limit: int | None = None
         count = 0
-        async for frame in video.iter_frames():
-            batch.append(frame.frame.to_ndarray(format="rgb24"))
+
+        def append_frame(frame: np.ndarray) -> None:
+            nonlocal batch_limit
+            batch.append(frame)
             if batch_limit is None:
-                batch_limit = self._video_batch_limit(batch[0])
-            if len(batch) >= batch_limit:
-                if expected_length is not None and count + len(batch) > expected_length:
-                    raise ValueError(
-                        "Zarr arrays for one row must have matching lengths"
-                    )
-                self._append_array(
-                    store,
-                    path,
-                    np.stack(batch, axis=0),
-                    chunks=(batch_limit, *batch[0].shape),
-                )
-                count += len(batch)
-                batch.clear()
-        if batch:
+                batch_limit = self._video_batch_limit(frame)
+
+        def flush_batch() -> None:
+            nonlocal count
+            if not batch:
+                return
             if expected_length is not None and count + len(batch) > expected_length:
                 raise ValueError("Zarr arrays for one row must have matching lengths")
             self._append_array(
@@ -325,6 +277,27 @@ class ZarrSink(BaseSink):
                 chunks=(batch_limit or len(batch), *batch[0].shape),
             )
             count += len(batch)
+            batch.clear()
+
+        if isinstance(video, VideoFrameArray):
+            if expected_length is not None and video.frame_count != expected_length:
+                raise ValueError("Zarr arrays for one row must have matching lengths")
+            if video.frame_count == 0:
+                empty = np.asarray(video.frames, dtype=np.uint8)
+                self._append_array(store, path, empty[:0])
+                return 0
+            for frame in video.iter_frame_arrays():
+                append_frame(frame)
+                if batch_limit is not None and len(batch) >= batch_limit:
+                    flush_batch()
+            flush_batch()
+            return count
+
+        async for frame in video.iter_frames():
+            append_frame(frame.frame.to_ndarray(format="rgb24"))
+            if batch_limit is not None and len(batch) >= batch_limit:
+                flush_batch()
+        flush_batch()
         if count == 0:
             raise ValueError("Zarr video source produced no frames")
         if expected_length is not None and count != expected_length:
@@ -403,17 +376,6 @@ class ZarrSink(BaseSink):
             array,
             chunks=chunks or _chunk_shape(array, self.array_chunk_bytes),
         )
-
-    def _validate_array_append(
-        self,
-        store: _ZarrWriteState,
-        path: str,
-        array: np.ndarray,
-    ) -> None:
-        dataset = store.arrays.get(path)
-        if dataset is None:
-            return
-        _validate_array_schema(path, dataset, array)
 
     def _drop_array(self, store: _ZarrWriteState, path: str) -> None:
         store.arrays.pop(path, None)
