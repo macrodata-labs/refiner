@@ -112,10 +112,7 @@ class FileCleanupReducerSink(BaseSink):
             )
 
         keep_pairs = {
-            (
-                row.shard_id,
-                row.worker_token,
-            )
+            (row.shard_id, row.worker_token)
             for row in get_finalized_workers(stage_index=stage_index - 1)
         }
 
@@ -138,7 +135,7 @@ class FileCleanupReducerSink(BaseSink):
                     next_paths.extend(
                         item
                         for item in self.output.ls(path, detail=False)
-                        if isinstance(item, str) and pattern.fullmatch(item)
+                        if pattern.fullmatch(item)
                     )
                 except (FileNotFoundError, NotADirectoryError):
                     continue
@@ -148,16 +145,11 @@ class FileCleanupReducerSink(BaseSink):
         # Extra template fields are structure only. Authority is decided from
         # the finalized (shard_id, worker_id) pair extracted from the path.
         for rel_path in paths:
-            if not isinstance(rel_path, str) or not rel_path or rel_path == ".":
-                continue
-            if rel_path.rstrip("/").endswith("/."):
-                continue
             match = self._output_path_patterns[-1].fullmatch(rel_path)
             if match is None:
                 continue
-            if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
-                continue
-            paths_to_delete.add(rel_path)
+            if (match.group("shard_id"), match.group("worker_id")) not in keep_pairs:
+                paths_to_delete.add(rel_path)
 
         if self.assets_subdir is not None:
             asset_prefix = f"{self.assets_subdir.rstrip('/')}/"
@@ -166,17 +158,17 @@ class FileCleanupReducerSink(BaseSink):
             except FileNotFoundError:
                 asset_paths = []
             for rel_path in asset_paths:
-                if not isinstance(rel_path, str) or not rel_path.startswith(
-                    asset_prefix
-                ):
+                if not rel_path.startswith(asset_prefix):
                     continue
                 attempt_dir = rel_path[len(asset_prefix) :].split("/", maxsplit=1)[0]
                 match = ASSET_ATTEMPT_DIR_RE.fullmatch(attempt_dir)
                 if match is None:
                     continue
-                if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
-                    continue
-                paths_to_delete.add(f"{asset_prefix}{attempt_dir}")
+                if (
+                    match.group("shard_id"),
+                    match.group("worker_id"),
+                ) not in keep_pairs:
+                    paths_to_delete.add(f"{asset_prefix}{attempt_dir}")
 
         for path in sorted(paths_to_delete):
             try:

@@ -49,22 +49,8 @@ class ZarrReducerSink(FileCleanupReducerSink):
             self._merge()
             return
 
-        stage_index = get_active_stage_index()
-        if stage_index is None or stage_index <= 0:
-            raise ValueError(
-                "write_zarr_reduce requires an active reducer stage with a prior writer stage"
-            )
-        relpaths = [
-            _render_store_relpath(
-                self.store_template,
-                shard_id=row.shard_id,
-                worker_id=row.worker_token,
-            )
-            for row in sort_finalized_workers(
-                get_finalized_workers(stage_index=stage_index - 1)
-            )
-        ]
-        _validate_zarr_stores(self.output, relpaths)
+        relpaths = self._finalized_store_paths()
+        self._collect_stores(relpaths, for_merge=False)
         _remove_parts(self.output)
         self._clear_root_payload_except(relpaths)
 
@@ -110,26 +96,10 @@ class ZarrReducerSink(FileCleanupReducerSink):
         if self._merged:
             return
 
-        stage_index = get_active_stage_index()
-        if stage_index is None or stage_index <= 0:
-            raise ValueError(
-                "write_zarr_reduce requires an active reducer stage with a prior writer stage"
-            )
+        expected_parts = self._finalized_store_paths(prefix="_parts/")
+        import zarr
 
-        expected_parts = [
-            "_parts/"
-            + _render_store_relpath(
-                self.store_template,
-                shard_id=row.shard_id,
-                worker_id=row.worker_token,
-            )
-            for row in sort_finalized_workers(
-                get_finalized_workers(stage_index=stage_index - 1),
-            )
-        ]
         if not expected_parts:
-            import zarr
-
             final = zarr.open_group(
                 store=_zarr_store(self.output, "", mode="a"),
                 mode="a",
@@ -138,10 +108,7 @@ class ZarrReducerSink(FileCleanupReducerSink):
             self._merged = True
             return
 
-        parts = self._collect_parts(expected_parts)
-
-        import zarr
-
+        parts = self._collect_stores(expected_parts, for_merge=True)
         final = zarr.open_group(
             store=_zarr_store(self.output, "", mode="a"),
             mode="a",
@@ -157,49 +124,37 @@ class ZarrReducerSink(FileCleanupReducerSink):
             )
             for path in sorted(paths):
                 source_array = source[path]
-                if path == self.episode_ends_path:
-                    if source_array.shape[0] == 0:
-                        continue
-                    part_last = row_offset
-                    batch_size = _batch_length(
-                        source_array,
-                        self.array_chunk_bytes,
-                    )
-                    for start in range(0, int(source_array.shape[0]), batch_size):
-                        end = min(int(source_array.shape[0]), start + batch_size)
-                        values = np.asarray(source_array[start:end], dtype=np.int64)
-                        _append_zarr_array(
-                            final,
-                            arrays,
-                            path,
-                            values + row_offset,
-                            chunks=getattr(source_array, "chunks", None),
-                            compressor=getattr(source_array, "compressor", None),
-                        )
-                        part_last = int(values[-1])
-                    row_offset += part_last
+                chunks = getattr(source_array, "chunks", None)
+                compressor = getattr(source_array, "compressor", None)
+                if source_array.shape[0] == 0 and path == self.episode_ends_path:
                     continue
-                batch_size = _batch_length(source_array, self.array_chunk_bytes)
                 if source_array.shape[0] == 0:
                     _append_zarr_array(
                         final,
                         arrays,
                         path,
                         np.asarray(source_array[:0]),
-                        chunks=getattr(source_array, "chunks", None),
-                        compressor=getattr(source_array, "compressor", None),
+                        chunks=chunks,
+                        compressor=compressor,
                     )
                     continue
-                for start in range(0, int(source_array.shape[0]), batch_size):
-                    end = min(int(source_array.shape[0]), start + batch_size)
+
+                part_end = 0
+                for values in _array_batches(source_array, self.array_chunk_bytes):
+                    if path == self.episode_ends_path:
+                        values = np.asarray(values, dtype=np.int64)
+                        part_end = int(values[-1])
+                        values = values + row_offset
                     _append_zarr_array(
                         final,
                         arrays,
                         path,
-                        np.asarray(source_array[start:end]),
-                        chunks=getattr(source_array, "chunks", None),
-                        compressor=getattr(source_array, "compressor", None),
+                        values,
+                        chunks=chunks,
+                        compressor=compressor,
                     )
+                if path == self.episode_ends_path:
+                    row_offset += part_end
         self._merged = True
 
     def on_shard_finalized(self, shard_id: str) -> None:
@@ -207,23 +162,40 @@ class ZarrReducerSink(FileCleanupReducerSink):
         if not self.reduce_to_single_store or not self._merged:
             return
         _remove_parts(self.output)
-        try:
-            if not self.output.ls("_parts"):
-                self.output.rmdir("_parts")
-        except (FileNotFoundError, OSError, ValueError):
-            pass
 
-    def _collect_parts(
-        self, expected_parts: Iterable[str]
+    def _finalized_store_paths(self, prefix: str = "") -> list[str]:
+        stage_index = get_active_stage_index()
+        if stage_index is None or stage_index <= 0:
+            raise ValueError(
+                "write_zarr_reduce requires an active reducer stage with a prior writer stage"
+            )
+        return [
+            prefix
+            + _render_store_relpath(
+                self.store_template,
+                shard_id=row.shard_id,
+                worker_id=row.worker_token,
+            )
+            for row in sort_finalized_workers(
+                get_finalized_workers(stage_index=stage_index - 1)
+            )
+        ]
+
+    def _collect_stores(
+        self,
+        relpaths: Iterable[str],
+        *,
+        for_merge: bool,
     ) -> list[tuple[str, set[str]]]:
         import zarr
 
-        parts: list[tuple[str, set[str]]] = []
+        stores: list[tuple[str, set[str]]] = []
         payload_paths: set[str] | None = None
         schemas: dict[str, tuple[tuple[int, ...], np.dtype[Any]]] = {}
-        for relpath in expected_parts:
+        for relpath in relpaths:
             if not self.output.exists(relpath):
-                raise ValueError(f"Zarr part store is missing: {relpath}")
+                kind = "part store" if for_merge else "store"
+                raise ValueError(f"Zarr {kind} is missing: {relpath}")
             source = zarr.open_group(
                 store=_zarr_store(self.output, relpath, mode="r"),
                 mode="r",
@@ -231,23 +203,24 @@ class ZarrReducerSink(FileCleanupReducerSink):
             source_paths = set(_iter_array_paths(source))
             if not source_paths:
                 continue
-            source_payload_paths = {
-                path for path in source_paths if path != self.episode_ends_path
-            }
             if (
-                self.episode_ends_path is not None
-                and source_payload_paths
+                for_merge
+                and self.episode_ends_path is not None
+                and (source_paths - {self.episode_ends_path})
                 and self.episode_ends_path not in source_paths
             ):
                 raise ValueError(
                     f"Zarr part stores must contain {self.episode_ends_path!r}"
                 )
+            source_payload_paths = source_paths
+            if for_merge and self.episode_ends_path is not None:
+                source_payload_paths = source_paths - {self.episode_ends_path}
             if payload_paths is None:
                 payload_paths = source_payload_paths
             elif source_payload_paths != payload_paths:
-                raise ValueError(
-                    "Zarr part stores must contain the same payload arrays"
-                )
+                kind = "part stores" if for_merge else "stores"
+                payload = " payload" if for_merge else ""
+                raise ValueError(f"Zarr {kind} must contain the same{payload} arrays")
             for path in source_paths:
                 source_array = source[path]
                 schema = (tuple(source_array.shape[1:]), np.dtype(source_array.dtype))
@@ -260,8 +233,8 @@ class ZarrReducerSink(FileCleanupReducerSink):
                     raise ValueError(
                         f"Zarr arrays for {path!r} must have matching dtypes"
                     )
-            parts.append((relpath, source_paths))
-        return parts
+            stores.append((relpath, source_paths))
+        return stores
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterable[str]:
@@ -273,42 +246,17 @@ def _iter_array_paths(group: Any, prefix: str = "") -> Iterable[str]:
             yield from _iter_array_paths(item, path)
 
 
+def _array_batches(array: Any, max_bytes: int) -> Iterable[np.ndarray]:
+    batch_size = _batch_length(array, max_bytes)
+    for start in range(0, int(array.shape[0]), batch_size):
+        yield np.asarray(array[start : min(int(array.shape[0]), start + batch_size)])
+
+
 def _remove_parts(output: DataFolder) -> None:
     try:
         output.rm("_parts", recursive=True)
     except FileNotFoundError:
         pass
-
-
-def _validate_zarr_stores(output: DataFolder, relpaths: Iterable[str]) -> None:
-    import zarr
-
-    payload_paths: set[str] | None = None
-    schemas: dict[str, tuple[tuple[int, ...], np.dtype[Any]]] = {}
-    for relpath in relpaths:
-        if not output.exists(relpath):
-            raise ValueError(f"Zarr store is missing: {relpath}")
-        source = zarr.open_group(
-            store=_zarr_store(output, relpath, mode="r"),
-            mode="r",
-        )
-        source_paths = set(_iter_array_paths(source))
-        if not source_paths:
-            continue
-        if payload_paths is None:
-            payload_paths = source_paths
-        elif source_paths != payload_paths:
-            raise ValueError("Zarr stores must contain the same arrays")
-        for path in source_paths:
-            source_array = source[path]
-            schema = (tuple(source_array.shape[1:]), np.dtype(source_array.dtype))
-            previous = schemas.setdefault(path, schema)
-            if previous != schema:
-                if previous[0] != schema[0]:
-                    raise ValueError(
-                        f"Zarr arrays for {path!r} must have matching trailing shapes"
-                    )
-                raise ValueError(f"Zarr arrays for {path!r} must have matching dtypes")
 
 
 def _clear_final_group(group: Any) -> None:
