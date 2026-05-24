@@ -223,5 +223,16 @@ if __name__ == "__main__":
         mem_mb_per_worker=int(os.environ.get("REFINER_MEM_MB_PER_WORKER", "32768")),
         gpu=mdr.GPU(count=1, type="h100", cuda_version="12.4"),
         secrets=mdr.Secrets.env(name="default", keys=["HF_TOKEN"]),
-        env={"MACRODATA_BASE_URL": "https://dev.macrodata.co"},
+        env={
+            "MACRODATA_BASE_URL": "https://dev.macrodata.co",
+            "HAWOR_SAFETENSORS_REPO": os.environ.get(
+                "HAWOR_SAFETENSORS_REPO",
+                "macrodata/egovision-safetensors",
+            ),
+            "HAWOR_SAFETENSORS_REPO_TYPE": os.environ.get(
+                "HAWOR_SAFETENSORS_REPO_TYPE",
+                "model",
+            ),
+            "REFINER_EGO_CLIP_SECONDS": str(CLIP_SECONDS),
+        },
     )

@@ -199,8 +199,8 @@ def parse_args() -> argparse.Namespace:
         description="Patch HaWoR to load Macrodata safetensors assets natively."
     )
     parser.add_argument("--hawor-root", type=Path, default=Path("/opt/HaWoR"))
-    parser.add_argument("--repo-id", default="macrodata/hawor-safetensors")
-    parser.add_argument("--repo-type", default="dataset")
+    parser.add_argument("--repo-id", default="macrodata/egovision-safetensors")
+    parser.add_argument("--repo-type", default="model")
     return parser.parse_args()
 
 

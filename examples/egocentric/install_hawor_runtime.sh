@@ -6,7 +6,8 @@ HAWOR_REPO="${HAWOR_REPO:-https://github.com/ThunderVVV/HaWoR.git}"
 HAWOR_REF="${HAWOR_REF:-main}"
 REFINER_EXPORT="${REFINER_EXPORT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hawor_refiner_export.py}"
 REFINER_PATCH_SAFETENSORS="${REFINER_PATCH_SAFETENSORS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/patch_hawor_safetensors_native.py}"
-HAWOR_SAFETENSORS_REPO="${HAWOR_SAFETENSORS_REPO:-macrodata/hawor-safetensors}"
+HAWOR_SAFETENSORS_REPO="${HAWOR_SAFETENSORS_REPO:-macrodata/egovision-safetensors}"
+HAWOR_SAFETENSORS_REPO_TYPE="${HAWOR_SAFETENSORS_REPO_TYPE:-model}"
 export CC="${CC:-gcc}"
 export CXX="${CXX:-g++}"
 export MAX_JOBS="${MAX_JOBS:-8}"
@@ -173,6 +174,7 @@ download_if_missing \
 
 python "$REFINER_PATCH_SAFETENSORS" \
   --repo-id "$HAWOR_SAFETENSORS_REPO" \
+  --repo-type "$HAWOR_SAFETENSORS_REPO_TYPE" \
   --hawor-root "$HAWOR_ROOT"
 
 cp "$REFINER_EXPORT" "$HAWOR_ROOT/refiner_export.py"
