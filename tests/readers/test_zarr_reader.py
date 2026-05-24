@@ -10,13 +10,27 @@ import pytest
 import zarr
 
 import refiner as mdr
+from refiner.cli.run.local import LocalLaunchResumeError
 from refiner.io.datafolder import DataFolder
 from refiner.io import DataFile
 from refiner.robotics.row import RoboticsRow
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import RowRangeDescriptor
-from refiner.pipeline.sinks.zarr import ZarrSink
+from refiner.pipeline.sinks.zarr import _ZarrMergeReducerSink, ZarrSink
+from refiner.worker.context import set_active_run_context, worker_token_for
+from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
+
+
+class _FinalizedWorkersRuntime:
+    def __init__(self, rows: list[FinalizedShardWorker]) -> None:
+        self._rows = rows
+
+    def finalized_workers(
+        self, *, stage_index: int | None = None
+    ) -> list[FinalizedShardWorker]:
+        assert stage_index == 0
+        return self._rows
 
 
 def _open_test_zarr(path: Path, *, mode: Literal["r", "r+", "a", "w", "w-"]):
@@ -54,6 +68,12 @@ def _write_policy_zarr(path: Path) -> None:
     _create_array(root, "meta/episode_ends", data=np.asarray([2, 5], dtype=np.int64))
     root.attrs["dataset_id"] = "pusht"
     root.attrs["task"] = "push tee"
+
+
+def _write_part_zarr(path: Path, arrays: dict[str, np.ndarray]) -> None:
+    root = _open_test_zarr(path, mode="w")
+    for name, data in arrays.items():
+        _create_array(root, name, data=data)
 
 
 def _write_video(path: Path, *, num_frames: int = 3, fps: int = 5) -> None:
@@ -808,6 +828,30 @@ def test_write_zarr_rejects_store_template_without_worker_id(tmp_path: Path) -> 
         ZarrSink(str(tmp_path / "template.zarr"), store_template="{shard_id}.zarr")
 
 
+def test_write_zarr_rejects_invalid_reduce_batch_bytes(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="reduce_array_batch_bytes"):
+        ZarrSink(str(tmp_path / "bad-batch.zarr"), reduce_array_batch_bytes=0)
+
+
+def test_write_zarr_rejects_empty_array_mapping(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="arrays must not be empty"):
+        ZarrSink(str(tmp_path / "empty-arrays.zarr"), arrays={})
+
+
+def test_write_zarr_rejects_empty_default_robotics_arrays(tmp_path: Path) -> None:
+    rows = list(
+        mdr.from_items([{"episode_id": "episode-1"}]).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key=None,
+            state_key=None,
+            timestamp_key=None,
+        )
+    )
+
+    with pytest.raises(ValueError, match="inferred no default robotics arrays"):
+        ZarrSink(str(tmp_path / "empty-defaults.zarr")).write_block(rows)
+
+
 def test_write_zarr_single_store_overwrite_ignores_stale_parts(tmp_path: Path) -> None:
     zarr_out = tmp_path / "single-overwrite.zarr"
 
@@ -849,7 +893,92 @@ def test_write_zarr_single_store_overwrite_ignores_stale_parts(tmp_path: Path) -
         file_path_column=None,
     ).take(1)[0]
     np.testing.assert_allclose(row["action"], [[1.0]])
-    assert stale_part.exists()
+    assert not stale_part.exists()
+
+
+def test_write_zarr_single_store_rejects_existing_output_when_not_overwriting(
+    tmp_path: Path,
+) -> None:
+    zarr_out = tmp_path / "single-no-overwrite.zarr"
+
+    (
+        mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
+        .write_zarr(
+            str(zarr_out),
+            arrays={"data/action": "action"},
+            reduce_to_single_store=True,
+        )
+        .launch_local(
+            name="zarr-single-no-overwrite-first",
+            num_workers=1,
+            rundir=str(tmp_path / "run-no-overwrite-first"),
+        )
+    )
+
+    with pytest.raises(LocalLaunchResumeError):
+        (
+            mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
+            .write_zarr(
+                str(zarr_out),
+                arrays={"data/action": "action"},
+                reduce_to_single_store=True,
+                overwrite=False,
+            )
+            .launch_local(
+                name="zarr-single-no-overwrite-second",
+                num_workers=1,
+                rundir=str(tmp_path / "run-no-overwrite-second"),
+            )
+        )
+
+    row = mdr.read_zarr(
+        zarr_out,
+        arrays={"action": "data/action"},
+        file_path_column=None,
+    ).take(1)[0]
+    np.testing.assert_allclose(row["action"], [[0.0]])
+
+
+def test_write_zarr_rejects_existing_non_reduced_output_when_not_overwriting(
+    tmp_path: Path,
+) -> None:
+    zarr_out = tmp_path / "sharded-no-overwrite.zarr"
+
+    (
+        mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
+        .write_zarr(str(zarr_out), arrays={"data/action": "action"})
+        .launch_local(
+            name="zarr-sharded-no-overwrite-first",
+            num_workers=1,
+            rundir=str(tmp_path / "run-sharded-no-overwrite-first"),
+        )
+    )
+
+    with pytest.raises(LocalLaunchResumeError):
+        (
+            mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
+            .write_zarr(
+                str(zarr_out),
+                arrays={"data/action": "action"},
+                overwrite=False,
+            )
+            .launch_local(
+                name="zarr-sharded-no-overwrite-second",
+                num_workers=1,
+                rundir=str(tmp_path / "run-sharded-no-overwrite-second"),
+            )
+        )
+
+    rows = [
+        mdr.read_zarr(
+            store,
+            arrays={"action": "data/action"},
+            file_path_column=None,
+        ).take(1)[0]
+        for store in zarr_out.glob("*.zarr")
+    ]
+    assert len(rows) == 1
+    np.testing.assert_allclose(rows[0]["action"], [[0.0]])
 
 
 def test_write_zarr_single_store_skips_empty_shards(tmp_path: Path) -> None:
@@ -874,6 +1003,71 @@ def test_write_zarr_single_store_skips_empty_shards(tmp_path: Path) -> None:
     )
 
     assert not (zarr_out / "_parts").exists()
+
+
+def test_write_zarr_single_store_rejects_inconsistent_part_payloads(
+    tmp_path: Path,
+) -> None:
+    zarr_out = tmp_path / "single-inconsistent-parts.zarr"
+    first_worker = "worker-a"
+    second_worker = "worker-b"
+    first_part = (
+        zarr_out
+        / "_parts"
+        / "local"
+        / f"shard-a__w{worker_token_for(first_worker)}.zarr"
+    )
+    second_part = (
+        zarr_out
+        / "_parts"
+        / "local"
+        / f"shard-b__w{worker_token_for(second_worker)}.zarr"
+    )
+    _write_part_zarr(
+        first_part,
+        {
+            "data/action": np.asarray([[0.0]], dtype=np.float32),
+            "meta/episode_ends": np.asarray([1], dtype=np.int64),
+        },
+    )
+    _write_part_zarr(
+        second_part,
+        {
+            "data/action": np.asarray([[1.0]], dtype=np.float32),
+            "data/state": np.asarray([[2.0]], dtype=np.float32),
+            "meta/episode_ends": np.asarray([1], dtype=np.int64),
+        },
+    )
+
+    runtime = _FinalizedWorkersRuntime(
+        [
+            FinalizedShardWorker(
+                shard_id="shard-a",
+                worker_id=first_worker,
+                global_ordinal=0,
+            ),
+            FinalizedShardWorker(
+                shard_id="shard-b",
+                worker_id=second_worker,
+                global_ordinal=1,
+            ),
+        ]
+    )
+    with set_active_run_context(
+        job_id="local",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
+    ):
+        with pytest.raises(ValueError, match="same payload arrays"):
+            _ZarrMergeReducerSink(
+                str(zarr_out),
+                store_template="{shard_id}__w{worker_id}.zarr",
+                episode_ends_path="meta/episode_ends",
+                reduce_array_batch_bytes=1024,
+                overwrite=True,
+            ).write_block([DictRow({}, shard_id="reduce")])
 
 
 def test_write_zarr_rejects_rows_missing_inferred_default_arrays(

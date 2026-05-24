@@ -45,6 +45,7 @@ class ZarrSink(BaseSink):
         store_template: str = "{shard_id}__w{worker_id}.zarr",
         video_frame_batch_size: int = 8,
         array_chunk_bytes: int = _DEFAULT_ARRAY_CHUNK_BYTES,
+        reduce_array_batch_bytes: int | None = None,
         reduce_to_single_store: bool = False,
         overwrite: bool = True,
     ):
@@ -53,19 +54,29 @@ class ZarrSink(BaseSink):
             raise ValueError("video_frame_batch_size must be greater than zero")
         if array_chunk_bytes <= 0:
             raise ValueError("array_chunk_bytes must be greater than zero")
+        if reduce_array_batch_bytes is not None and reduce_array_batch_bytes <= 0:
+            raise ValueError("reduce_array_batch_bytes must be greater than zero")
         _validate_store_template(store_template)
         self.output = DataFolder.resolve(output)
         self.arrays = dict(arrays) if arrays is not None else None
         self.episode_ends_path = episode_ends_path
         if self.arrays is not None:
+            if not self.arrays:
+                raise ValueError("write_zarr arrays must not be empty")
             _validate_array_paths(self.arrays, episode_ends_path)
         self.store_template = store_template
         self.video_frame_batch_size = video_frame_batch_size
         self.array_chunk_bytes = array_chunk_bytes
+        self.reduce_array_batch_bytes = (
+            array_chunk_bytes
+            if reduce_array_batch_bytes is None
+            else reduce_array_batch_bytes
+        )
         self.reduce_to_single_store = reduce_to_single_store
         self.overwrite = overwrite
         self._stores: dict[str, _ShardStore] = {}
         self._default_arrays: dict[str, str] | None = None
+        self._checked_no_overwrite = False
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
         count = 0
@@ -201,6 +212,10 @@ class ZarrSink(BaseSink):
         default_arrays = _default_robotics_arrays(row)
         if self._default_arrays is None:
             self._default_arrays = default_arrays
+            if not self._default_arrays:
+                raise ValueError(
+                    "write_zarr inferred no default robotics arrays; pass arrays=..."
+                )
             _validate_array_paths(self._default_arrays, self.episode_ends_path)
         elif default_arrays != self._default_arrays:
             raise ValueError(
@@ -210,6 +225,7 @@ class ZarrSink(BaseSink):
         return self._default_arrays
 
     def _store(self, shard_id: str) -> _ShardStore:
+        self._check_no_overwrite_output()
         relpath = self._store_relpath(shard_id)
         store = self._stores.get(relpath)
         if store is not None:
@@ -224,6 +240,17 @@ class ZarrSink(BaseSink):
         )
         self._stores[relpath] = store
         return store
+
+    def _check_no_overwrite_output(self) -> None:
+        if self.overwrite or self._checked_no_overwrite:
+            return
+        self._checked_no_overwrite = True
+        try:
+            entries = self.output.ls("", detail=False)
+        except FileNotFoundError:
+            return
+        if entries:
+            raise ValueError("write_zarr output already exists and overwrite=False")
 
     def _store_relpath(self, shard_id: str) -> str:
         relpath = self.store_template.format(
@@ -293,6 +320,7 @@ class ZarrSink(BaseSink):
                 "store_template": self.store_template,
                 "video_frame_batch_size": self.video_frame_batch_size,
                 "array_chunk_bytes": self.array_chunk_bytes,
+                "reduce_array_batch_bytes": self.reduce_array_batch_bytes,
                 "reduce_to_single_store": self.reduce_to_single_store,
                 "overwrite": self.overwrite,
             },
@@ -300,11 +328,11 @@ class ZarrSink(BaseSink):
 
     def build_reducer(self) -> BaseSink | None:
         if self.reduce_to_single_store:
-            return ZarrMergeReducerSink(
+            return _ZarrMergeReducerSink(
                 output=self.output,
                 store_template=self.store_template,
                 episode_ends_path=self.episode_ends_path,
-                array_chunk_bytes=self.array_chunk_bytes,
+                reduce_array_batch_bytes=self.reduce_array_batch_bytes,
                 overwrite=self.overwrite,
             )
         return FileCleanupReducerSink(
@@ -315,21 +343,21 @@ class ZarrSink(BaseSink):
         )
 
 
-class ZarrMergeReducerSink(BaseSink):
+class _ZarrMergeReducerSink(BaseSink):
     def __init__(
         self,
         output: DataFolderLike,
         *,
         store_template: str,
         episode_ends_path: str | None,
-        array_chunk_bytes: int,
+        reduce_array_batch_bytes: int,
         overwrite: bool,
     ) -> None:
         check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
         self.output = DataFolder.resolve(output)
         self.store_template = store_template
         self.episode_ends_path = episode_ends_path
-        self.array_chunk_bytes = array_chunk_bytes
+        self.reduce_array_batch_bytes = reduce_array_batch_bytes
         self.overwrite = overwrite
         self._merged = False
 
@@ -339,7 +367,11 @@ class ZarrMergeReducerSink(BaseSink):
 
     def write_shard_block(self, shard_id, block) -> None:
         del shard_id, block
-        self._merge()
+        try:
+            self._merge()
+        except Exception:
+            self._remove_current_parts()
+            raise
 
     def describe(self) -> tuple[str, str, dict[str, object]]:
         return (
@@ -348,7 +380,7 @@ class ZarrMergeReducerSink(BaseSink):
             {
                 "path": self.output.abs_path(),
                 "store_template": self.store_template,
-                "array_chunk_bytes": self.array_chunk_bytes,
+                "reduce_array_batch_bytes": self.reduce_array_batch_bytes,
                 "reduce_to_single_store": True,
             },
         )
@@ -372,6 +404,8 @@ class ZarrMergeReducerSink(BaseSink):
         )
         if self.overwrite:
             _clear_final_group(final)
+        elif _group_has_payload(final):
+            raise ValueError("write_zarr output already exists and overwrite=False")
 
         stores = sorted(
             get_finalized_workers(stage_index=stage_index - 1),
@@ -382,6 +416,7 @@ class ZarrMergeReducerSink(BaseSink):
         )
         row_offset = 0
         arrays: dict[str, Any] = {}
+        payload_paths: set[str] | None = None
         for row in stores:
             relpath = self._part_relpath(row.shard_id, row.worker_token)
             if not self.output.exists(relpath):
@@ -390,13 +425,26 @@ class ZarrMergeReducerSink(BaseSink):
                 store=zarr_store(self.output, relpath, mode="r"),
                 mode="r",
             )
-            for path in iter_zarr_array_paths(source):
+            source_paths = set(iter_zarr_array_paths(source))
+            source_payload_paths = {
+                path for path in source_paths if path != self.episode_ends_path
+            }
+            if payload_paths is None:
+                payload_paths = source_payload_paths
+            elif source_payload_paths != payload_paths:
+                raise ValueError(
+                    "Zarr part stores must contain the same payload arrays"
+                )
+            for path in sorted(source_paths):
                 source_array = source[path]
                 if path == self.episode_ends_path:
                     if source_array.shape[0] == 0:
                         continue
                     part_last = row_offset
-                    batch_size = _batch_length(source_array, self.array_chunk_bytes)
+                    batch_size = _batch_length(
+                        source_array,
+                        self.reduce_array_batch_bytes,
+                    )
                     for start in range(0, int(source_array.shape[0]), batch_size):
                         end = min(int(source_array.shape[0]), start + batch_size)
                         values = np.asarray(source_array[start:end], dtype=np.int64)
@@ -410,7 +458,7 @@ class ZarrMergeReducerSink(BaseSink):
                         part_last = int(values[-1])
                     row_offset += part_last
                     continue
-                batch_size = _batch_length(source_array, self.array_chunk_bytes)
+                batch_size = _batch_length(source_array, self.reduce_array_batch_bytes)
                 for start in range(0, int(source_array.shape[0]), batch_size):
                     end = min(int(source_array.shape[0]), start + batch_size)
                     _append_reduced_array(
@@ -421,10 +469,9 @@ class ZarrMergeReducerSink(BaseSink):
                         source_array,
                     )
 
-        try:
-            self.output.rm(f"_parts/{get_active_job_id()}", recursive=True)
-        except FileNotFoundError:
-            pass
+        self._remove_current_parts()
+        if self.overwrite:
+            self._remove_stale_parts()
         try:
             if not self.output.ls("_parts"):
                 self.output.rmdir("_parts")
@@ -438,6 +485,20 @@ class ZarrMergeReducerSink(BaseSink):
                 worker_id=worker_token,
             )
         )
+
+    def _remove_current_parts(self) -> None:
+        try:
+            self.output.rm(f"_parts/{get_active_job_id()}", recursive=True)
+        except FileNotFoundError:
+            pass
+
+    def _remove_stale_parts(self) -> None:
+        try:
+            for path in self.output.ls("_parts", detail=False):
+                if path != f"_parts/{get_active_job_id()}":
+                    self.output.rm(path, recursive=True)
+        except FileNotFoundError:
+            pass
 
 
 def _default_robotics_arrays(row: Row) -> dict[str, str]:
@@ -520,6 +581,10 @@ def _clear_final_group(group: Any) -> None:
             del group[key]
 
 
+def _group_has_payload(group: Any) -> bool:
+    return any(key != "_parts" for key in {*group.array_keys(), *group.group_keys()})
+
+
 def _chunk_shape(array: np.ndarray, target_bytes: int) -> tuple[int, ...]:
     return (_batch_length(array, target_bytes), *array.shape[1:])
 
@@ -551,4 +616,4 @@ def _append_reduced_array(
     dataset.append(values, axis=0)
 
 
-__all__ = ["ZarrMergeReducerSink", "ZarrSink"]
+__all__ = ["ZarrSink"]

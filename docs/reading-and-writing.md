@@ -512,7 +512,11 @@ The `arrays` mapping is from output Zarr path to source row key. For
 arrays: actions, states, and timestamps. The default schema is inferred once and
 later rows must expose the same fields. Video sources selected through `arrays`
 are decoded as RGB frame arrays and appended in bounded batches controlled by
-`video_frame_batch_size`.
+`video_frame_batch_size`. `array_chunk_bytes` controls the target chunk size for
+new arrays. When `reduce_to_single_store=True`, the reducer copies shard-local
+arrays into the final store in read/write batches controlled by
+`reduce_array_batch_bytes`; by default it uses the same value as
+`array_chunk_bytes`.
 
 By default, `write_zarr(...)` also writes cumulative episode boundaries to
 `meta/episode_ends`. Set `episode_ends_path=None` to omit them.
