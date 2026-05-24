@@ -440,10 +440,31 @@ class RefinerPipeline:
         store_template: str = "{shard_id}__w{worker_id}.zarr",
         video_frame_batch_size: int = 8,
         array_chunk_bytes: int = 8 * 1024 * 1024,
-        reduce_array_batch_bytes: int | None = None,
-        reduce_to_single_store: bool = False,
+        reduce_to_single_store: bool = True,
         overwrite: bool = True,
     ) -> "RefinerPipeline":
+        """Write rows to Zarr array stores.
+
+        Args:
+            output: Output folder or URL prefix for the Zarr store(s).
+            arrays: Mapping from output Zarr array path to source row key. If
+                omitted for ``RoboticsRow`` inputs, writes the available default
+                robotics arrays: actions, states, and timestamps.
+            episode_ends_path: Output Zarr path for cumulative row/episode end
+                offsets. Set to None to omit episode boundaries.
+            store_template: Per-shard store path template. Must include
+                ``{shard_id}`` and ``{worker_id}``.
+            video_frame_batch_size: Maximum decoded video frames to append per
+                video write batch.
+            array_chunk_bytes: Target byte size for chunks created for newly
+                written arrays and for read/write batches when reducing shard
+                stores into a single store.
+            reduce_to_single_store: If True, add a reducer stage that merges
+                shard-local stores into one Zarr group at ``output``. Defaults
+                to True.
+            overwrite: If True, replace Refiner-managed output at the target.
+                If False, fail when final output already exists.
+        """
         return self.with_sink(
             ZarrSink(
                 output=output,
@@ -452,7 +473,6 @@ class RefinerPipeline:
                 store_template=store_template,
                 video_frame_batch_size=video_frame_batch_size,
                 array_chunk_bytes=array_chunk_bytes,
-                reduce_array_batch_bytes=reduce_array_batch_bytes,
                 reduce_to_single_store=reduce_to_single_store,
                 overwrite=overwrite,
             )

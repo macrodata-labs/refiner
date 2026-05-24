@@ -513,19 +513,18 @@ arrays: actions, states, and timestamps. The default schema is inferred once and
 later rows must expose the same fields. Video sources selected through `arrays`
 are decoded as RGB frame arrays and appended in bounded batches controlled by
 `video_frame_batch_size`. `array_chunk_bytes` controls the target chunk size for
-new arrays. When `reduce_to_single_store=True`, the reducer copies shard-local
-arrays into the final store in read/write batches controlled by
-`reduce_array_batch_bytes`; by default it uses the same value as
-`array_chunk_bytes`.
+new arrays and the reducer read/write batch size when shard-local stores are
+merged into a final store.
 
 By default, `write_zarr(...)` also writes cumulative episode boundaries to
 `meta/episode_ends`. Set `episode_ends_path=None` to omit them.
 
 Launched runs write isolated stores per shard/worker using
 `store_template="{shard_id}__w{worker_id}.zarr"`. This avoids concurrent workers
-mutating the same Zarr group. Read the resulting stores individually, or set
-`reduce_to_single_store=True` to add a reducer stage that streams the shard-local
-stores into one final Zarr group at the requested output path.
+mutating the same Zarr group. By default, a reducer stage streams those
+shard-local stores into one final Zarr group at the requested output path. Set
+`reduce_to_single_store=False` to keep the isolated stores and read them
+individually.
 
 When you run a writer through `launch_local(...)` or `launch_cloud(...)`, some
 sinks add a reducer stage after the main writer stage. For `write_jsonl(...)`

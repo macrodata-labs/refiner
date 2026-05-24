@@ -56,8 +56,7 @@ class ZarrSink(BaseSink):
         store_template: str = "{shard_id}__w{worker_id}.zarr",
         video_frame_batch_size: int = 8,
         array_chunk_bytes: int = _DEFAULT_ARRAY_CHUNK_BYTES,
-        reduce_array_batch_bytes: int | None = None,
-        reduce_to_single_store: bool = False,
+        reduce_to_single_store: bool = True,
         overwrite: bool = True,
     ):
         check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
@@ -65,8 +64,6 @@ class ZarrSink(BaseSink):
             raise ValueError("video_frame_batch_size must be greater than zero")
         if array_chunk_bytes <= 0:
             raise ValueError("array_chunk_bytes must be greater than zero")
-        if reduce_array_batch_bytes is not None and reduce_array_batch_bytes <= 0:
-            raise ValueError("reduce_array_batch_bytes must be greater than zero")
         _validate_store_template(store_template)
         self.output = DataFolder.resolve(output)
         self.arrays = dict(arrays) if arrays is not None else None
@@ -78,11 +75,6 @@ class ZarrSink(BaseSink):
         self.store_template = store_template
         self.video_frame_batch_size = video_frame_batch_size
         self.array_chunk_bytes = array_chunk_bytes
-        self.reduce_array_batch_bytes = (
-            array_chunk_bytes
-            if reduce_array_batch_bytes is None
-            else reduce_array_batch_bytes
-        )
         self.reduce_to_single_store = reduce_to_single_store
         self.overwrite = overwrite
         self._stores: dict[str, _ShardStore] = {}
@@ -522,7 +514,6 @@ class ZarrSink(BaseSink):
                 "store_template": self.store_template,
                 "video_frame_batch_size": self.video_frame_batch_size,
                 "array_chunk_bytes": self.array_chunk_bytes,
-                "reduce_array_batch_bytes": self.reduce_array_batch_bytes,
                 "reduce_to_single_store": self.reduce_to_single_store,
                 "overwrite": self.overwrite,
             },
@@ -534,7 +525,7 @@ class ZarrSink(BaseSink):
                 output=self.output,
                 store_template=self.store_template,
                 episode_ends_path=self.episode_ends_path,
-                reduce_array_batch_bytes=self.reduce_array_batch_bytes,
+                array_chunk_bytes=self.array_chunk_bytes,
                 overwrite=self.overwrite,
             )
         if not self.overwrite:
@@ -728,14 +719,14 @@ class _ZarrMergeReducerSink(BaseSink):
         *,
         store_template: str,
         episode_ends_path: str | None,
-        reduce_array_batch_bytes: int,
+        array_chunk_bytes: int,
         overwrite: bool,
     ) -> None:
         check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
         self.output = DataFolder.resolve(output)
         self.store_template = store_template
         self.episode_ends_path = episode_ends_path
-        self.reduce_array_batch_bytes = reduce_array_batch_bytes
+        self.array_chunk_bytes = array_chunk_bytes
         self.overwrite = overwrite
         self._merged = False
 
@@ -754,7 +745,7 @@ class _ZarrMergeReducerSink(BaseSink):
             {
                 "path": self.output.abs_path(),
                 "store_template": self.store_template,
-                "reduce_array_batch_bytes": self.reduce_array_batch_bytes,
+                "array_chunk_bytes": self.array_chunk_bytes,
                 "reduce_to_single_store": True,
             },
         )
@@ -831,7 +822,7 @@ class _ZarrMergeReducerSink(BaseSink):
                         part_last = row_offset
                         batch_size = _batch_length(
                             source_array,
-                            self.reduce_array_batch_bytes,
+                            self.array_chunk_bytes,
                         )
                         for start in range(0, int(source_array.shape[0]), batch_size):
                             end = min(int(source_array.shape[0]), start + batch_size)
@@ -847,9 +838,7 @@ class _ZarrMergeReducerSink(BaseSink):
                             part_last = int(values[-1])
                         row_offset += part_last
                         continue
-                    batch_size = _batch_length(
-                        source_array, self.reduce_array_batch_bytes
-                    )
+                    batch_size = _batch_length(source_array, self.array_chunk_bytes)
                     if source_array.shape[0] == 0:
                         _append_zarr_array(
                             final,

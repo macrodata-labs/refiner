@@ -772,6 +772,7 @@ def test_write_zarr_roundtrips_lerobot_rows(tmp_path: Path) -> None:
                 "data/action": "action",
                 "data/state": "observation.state",
             },
+            reduce_to_single_store=False,
         )
         .launch_local(
             name="lerobot-to-zarr", num_workers=1, rundir=str(tmp_path / "run2")
@@ -936,11 +937,6 @@ def test_write_zarr_rejects_reserved_paths(tmp_path: Path) -> None:
         )
 
 
-def test_write_zarr_rejects_invalid_reduce_batch_bytes(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="reduce_array_batch_bytes"):
-        ZarrSink(str(tmp_path / "bad-batch.zarr"), reduce_array_batch_bytes=0)
-
-
 def test_write_zarr_rejects_empty_array_mapping(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="arrays must not be empty"):
         ZarrSink(str(tmp_path / "empty-arrays.zarr"), arrays={})
@@ -1028,7 +1024,11 @@ def test_write_zarr_sharded_overwrite_removes_single_store_payload_and_parts(
 
     (
         mdr.from_items([{"action": [[1.0], [2.0]]}], items_per_shard=1)
-        .write_zarr(str(zarr_out), arrays={"data/action": "action"})
+        .write_zarr(
+            str(zarr_out),
+            arrays={"data/action": "action"},
+            reduce_to_single_store=False,
+        )
         .launch_local(
             name="zarr-sharded-overwrite-second",
             num_workers=1,
@@ -1078,6 +1078,7 @@ def test_write_zarr_sharded_overwrite_clears_payload_under_store_prefix(
             str(zarr_out),
             arrays={"data/action": "action"},
             store_template="split/{shard_id}__w{worker_id}.zarr",
+            reduce_to_single_store=False,
         )
         .launch_local(
             name="zarr-sharded-nested-overwrite-second",
@@ -1212,7 +1213,11 @@ def test_write_zarr_rejects_existing_non_reduced_output_when_not_overwriting(
 
     (
         mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
-        .write_zarr(str(zarr_out), arrays={"data/action": "action"})
+        .write_zarr(
+            str(zarr_out),
+            arrays={"data/action": "action"},
+            reduce_to_single_store=False,
+        )
         .launch_local(
             name="zarr-sharded-no-overwrite-first",
             num_workers=1,
@@ -1227,6 +1232,7 @@ def test_write_zarr_rejects_existing_non_reduced_output_when_not_overwriting(
                 str(zarr_out),
                 arrays={"data/action": "action"},
                 overwrite=False,
+                reduce_to_single_store=False,
             )
             .launch_local(
                 name="zarr-sharded-no-overwrite-second",
@@ -1273,6 +1279,7 @@ def test_write_zarr_non_reduced_no_overwrite_preserves_parts_on_conflict_for_res
             str(zarr_out),
             arrays={"data/action": "action"},
             overwrite=False,
+            reduce_to_single_store=False,
         ).build_reducer()
         assert reducer is not None
         with pytest.raises(ValueError, match="output already exists"):
@@ -1292,6 +1299,7 @@ def test_write_zarr_non_reduced_no_overwrite_preserves_parts_on_conflict_for_res
             str(zarr_out),
             arrays={"data/action": "action"},
             overwrite=False,
+            reduce_to_single_store=False,
         ).build_reducer()
         assert reducer is not None
         reducer.write_block([DictRow({}, shard_id="reduce")])
@@ -1321,6 +1329,7 @@ def test_write_zarr_non_reduced_no_overwrite_preserves_finalized_retry_output(
         str(zarr_out),
         arrays={"data/action": "action"},
         overwrite=False,
+        reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None
 
@@ -1349,6 +1358,7 @@ def test_write_zarr_non_reduced_no_overwrite_rejects_missing_finalized_part(
         str(zarr_out),
         arrays={"data/action": "action"},
         overwrite=False,
+        reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None
 
@@ -1374,6 +1384,7 @@ def test_write_zarr_non_reduced_no_overwrite_rejects_unsafe_finalized_part_path(
         str(zarr_out),
         arrays={"data/action": "action"},
         overwrite=False,
+        reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None
 
@@ -1430,6 +1441,7 @@ def test_write_zarr_empty_shard_completion_removes_stale_store(
         ZarrSink(
             str(zarr_out),
             arrays={"data/action": "action"},
+            reduce_to_single_store=False,
         ).on_shard_complete("shard-a")
 
     assert not stale.exists()
@@ -1476,6 +1488,7 @@ def test_write_zarr_non_reduced_no_overwrite_skips_empty_parts(
             str(zarr_out),
             arrays={"data/action": "action"},
             overwrite=False,
+            reduce_to_single_store=False,
         )
         .launch_local(
             name="zarr-sharded-empty-no-overwrite",
@@ -1499,6 +1512,7 @@ def test_write_zarr_non_reduced_no_overwrite_empty_publish_is_retryable(
         str(zarr_out),
         arrays={"data/action": "action"},
         overwrite=False,
+        reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None
 
@@ -1524,6 +1538,7 @@ def test_write_zarr_non_reduced_rejects_empty_existing_output_when_not_overwriti
             str(zarr_out),
             arrays={"data/action": "action"},
             overwrite=False,
+            reduce_to_single_store=False,
         )
         .launch_local(
             name="zarr-sharded-empty-existing-first",
@@ -1539,6 +1554,7 @@ def test_write_zarr_non_reduced_rejects_empty_existing_output_when_not_overwriti
                 str(zarr_out),
                 arrays={"data/action": "action"},
                 overwrite=False,
+                reduce_to_single_store=False,
             )
             .launch_local(
                 name="zarr-sharded-empty-existing-second",
@@ -1574,6 +1590,7 @@ def test_write_zarr_non_reduced_no_overwrite_retry_removes_partial_publish(
         str(zarr_out),
         arrays={"data/action": "action"},
         overwrite=False,
+        reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None
     runtime = _FinalizedWorkersRuntime(
@@ -1616,6 +1633,7 @@ def test_write_zarr_non_reduced_no_overwrite_retry_keeps_final_when_part_missing
         str(zarr_out),
         arrays={"data/action": "action"},
         overwrite=False,
+        reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None
     runtime = _FinalizedWorkersRuntime(
@@ -1659,6 +1677,7 @@ def test_write_zarr_non_reduced_no_overwrite_replaces_stale_staging_part(
             str(zarr_out),
             arrays={"data/action": "action"},
             overwrite=False,
+            reduce_to_single_store=False,
         ).write_block([DictRow({"action": [[1.0]]}, shard_id=shard_id)])
 
     row = mdr.read_zarr(
@@ -1692,6 +1711,7 @@ def test_write_zarr_non_reduced_no_overwrite_completed_publish_is_retryable(
         str(zarr_out),
         arrays={"data/action": "action"},
         overwrite=False,
+        reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None
     runtime = _FinalizedWorkersRuntime(
@@ -1729,6 +1749,7 @@ def test_write_zarr_allows_fresh_non_reduced_multiworker_no_overwrite(
             str(zarr_out),
             arrays={"data/action": "action"},
             overwrite=False,
+            reduce_to_single_store=False,
         )
         .launch_local(
             name="zarr-sharded-fresh-no-overwrite",
@@ -1777,6 +1798,7 @@ def test_write_zarr_rejects_sharded_schema_drift_after_cleanup(
     reducer = ZarrSink(
         str(zarr_out),
         arrays={"data/action": "action"},
+        reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None
     runtime = _FinalizedWorkersRuntime(
@@ -1826,6 +1848,7 @@ def test_write_zarr_no_overwrite_rejects_part_schema_drift_before_publish(
         str(zarr_out),
         arrays={"data/action": "action"},
         overwrite=False,
+        reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None
     runtime = _FinalizedWorkersRuntime(
@@ -2006,7 +2029,7 @@ def test_write_zarr_single_store_rejects_inconsistent_part_payloads(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
-                reduce_array_batch_bytes=1024,
+                array_chunk_bytes=1024,
                 overwrite=True,
             ).write_block([DictRow({}, shard_id="reduce")])
     assert first_part.exists()
@@ -2044,7 +2067,7 @@ def test_write_zarr_single_store_rejects_part_missing_episode_ends(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
-                reduce_array_batch_bytes=1024,
+                array_chunk_bytes=1024,
                 overwrite=True,
             ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2082,7 +2105,7 @@ def test_write_zarr_single_store_rejects_missing_finalized_part(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
-                reduce_array_batch_bytes=1024,
+                array_chunk_bytes=1024,
                 overwrite=True,
             ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2138,7 +2161,7 @@ def test_write_zarr_single_store_completed_merge_is_retryable(
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
-            reduce_array_batch_bytes=1024,
+            array_chunk_bytes=1024,
             overwrite=True,
         ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2179,7 +2202,7 @@ def test_write_zarr_single_store_zero_shard_overwrite_ignores_stale_done_marker(
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
-            reduce_array_batch_bytes=1024,
+            array_chunk_bytes=1024,
             overwrite=True,
         ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2215,7 +2238,7 @@ def test_write_zarr_single_store_zero_shard_no_overwrite_rejects_existing_output
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
-                reduce_array_batch_bytes=1024,
+                array_chunk_bytes=1024,
                 overwrite=False,
             ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2240,7 +2263,7 @@ def test_write_zarr_single_store_zero_shard_no_overwrite_done_marker_is_retryabl
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
-            reduce_array_batch_bytes=1024,
+            array_chunk_bytes=1024,
             overwrite=False,
         ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2283,7 +2306,7 @@ def test_write_zarr_single_store_no_overwrite_started_merge_is_retryable(
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
-            reduce_array_batch_bytes=1024,
+            array_chunk_bytes=1024,
             overwrite=False,
         ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2331,7 +2354,7 @@ def test_write_zarr_single_store_no_overwrite_recovers_empty_root_without_marker
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
-            reduce_array_batch_bytes=1024,
+            array_chunk_bytes=1024,
             overwrite=False,
         ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2384,7 +2407,7 @@ def test_write_zarr_single_store_no_overwrite_started_merge_replaces_partial_out
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
-            reduce_array_batch_bytes=1024,
+            array_chunk_bytes=1024,
             overwrite=False,
         ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2429,7 +2452,7 @@ def test_write_zarr_single_store_parts_are_resume_stable(tmp_path: Path) -> None
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
-            reduce_array_batch_bytes=1024,
+            array_chunk_bytes=1024,
             overwrite=True,
         ).write_block([DictRow({}, shard_id="reduce")])
 
@@ -2520,7 +2543,7 @@ def test_write_zarr_single_store_rejects_part_dtype_drift(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
-                reduce_array_batch_bytes=1024,
+                array_chunk_bytes=1024,
                 overwrite=True,
             ).write_block([DictRow({}, shard_id="reduce")])
     assert first_part.exists()
@@ -2591,6 +2614,7 @@ def test_write_zarr_rejects_shape_drift_before_appending_bad_row(
                 "data/action": "action",
                 "data/state": "state",
             },
+            reduce_to_single_store=False,
         ).write_block(rows)
 
     zarr_store = next(output.glob("*.zarr"))
@@ -2625,6 +2649,7 @@ def test_write_zarr_materializes_frame_array_videos(tmp_path: Path) -> None:
             "data/action": "action",
             "data/rgb": "observation.images.front",
         },
+        reduce_to_single_store=False,
     ).write_block(rows)
 
     zarr_store = next(output.glob("*.zarr"))
@@ -2654,6 +2679,7 @@ def test_write_zarr_materializes_empty_frame_array_videos(tmp_path: Path) -> Non
     ZarrSink(
         str(output),
         arrays={"data/rgb": "observation.images.front"},
+        reduce_to_single_store=False,
     ).write_block(rows)
 
     root = _open_test_zarr(next(output.glob("*.zarr")), mode="r")
@@ -2684,6 +2710,7 @@ def test_write_zarr_uses_byte_budgeted_chunks_for_large_rows(tmp_path: Path) -> 
             "data/rgb": "observation.images.front",
         },
         array_chunk_bytes=50,
+        reduce_to_single_store=False,
     ).write_block(rows)
 
     root = _open_test_zarr(next(output.glob("*.zarr")), mode="r")
@@ -2695,6 +2722,7 @@ def test_write_zarr_caps_low_dimensional_initial_chunks(tmp_path: Path) -> None:
     ZarrSink(
         str(output),
         arrays={"data/action": "action"},
+        reduce_to_single_store=False,
     ).write_block(
         [
             DictRow(
@@ -2738,6 +2766,7 @@ def test_write_zarr_streams_encoded_videos(tmp_path: Path) -> None:
             "data/rgb": "observation.images.front",
         },
         video_frame_batch_size=2,
+        reduce_to_single_store=False,
     ).write_block(rows)
 
     zarr_store = next(output.glob("*.zarr"))
@@ -2799,6 +2828,7 @@ def test_write_zarr_rejects_video_length_mismatch_before_final_append(
                 "data/rgb": "observation.images.front",
             },
             video_frame_batch_size=2,
+            reduce_to_single_store=False,
         ).write_block(rows)
 
     zarr_store = next(output.glob("*.zarr"))
