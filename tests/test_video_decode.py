@@ -74,7 +74,6 @@ def test_video_frame_array_clip_returns_frame_view() -> None:
     clipped = video.clipped(from_timestamp_s=0.2, to_timestamp_s=0.5)
 
     assert isinstance(clipped, mdr.video.VideoFrameArray)
-    assert len(list(clipped.iter_frame_arrays())) == 3
     clipped_frames = list(clipped.iter_frame_arrays())
     assert len(clipped_frames) == 3
     assert clipped_frames[0].shape == (4, 4, 3)

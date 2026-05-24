@@ -19,13 +19,14 @@ from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameArray, VideoSource
 from refiner.worker.context import (
-    get_active_job_id,
     get_active_stage_index,
     get_active_worker_token,
     get_finalized_workers,
 )
 
 _DEFAULT_ARRAY_CHUNK_BYTES = 8 * 1024 * 1024
+_MAX_INITIAL_CHUNK_ROWS = 1024
+_DONE_MARKER_RELPATH = "_refiner/write_zarr.done"
 
 
 @dataclass
@@ -33,6 +34,12 @@ class _ShardStore:
     root: Any
     arrays: dict[str, Any] = field(default_factory=dict)
     row_end: int = 0
+
+
+@dataclass(frozen=True)
+class _PartStore:
+    relpath: str
+    paths: set[str]
 
 
 class ZarrSink(BaseSink):
@@ -177,19 +184,29 @@ class ZarrSink(BaseSink):
         expected_length: int | None = None,
     ) -> int:
         if isinstance(video, VideoFrameArray):
-            frames = video.frame_arrays
-            if expected_length is not None and int(frames.shape[0]) != expected_length:
+            if expected_length is not None and video.frame_count != expected_length:
                 raise ValueError("Zarr arrays for one row must have matching lengths")
-            for start in range(0, int(frames.shape[0]), self.video_frame_batch_size):
-                end = min(int(frames.shape[0]), start + self.video_frame_batch_size)
-                self._append_array(store, path, frames[start:end])
-            return int(frames.shape[0])
+            batch: list[np.ndarray] = []
+            batch_limit: int | None = None
+            for frame in video.iter_frame_arrays():
+                batch.append(frame)
+                if batch_limit is None:
+                    batch_limit = self._video_batch_limit(frame)
+                if len(batch) >= batch_limit:
+                    self._append_array(store, path, np.stack(batch, axis=0))
+                    batch.clear()
+            if batch:
+                self._append_array(store, path, np.stack(batch, axis=0))
+            return video.frame_count
 
         batch: list[np.ndarray] = []
+        batch_limit: int | None = None
         count = 0
         async for frame in video.iter_frames():
             batch.append(frame.frame.to_ndarray(format="rgb24"))
-            if len(batch) >= self.video_frame_batch_size:
+            if batch_limit is None:
+                batch_limit = self._video_batch_limit(batch[0])
+            if len(batch) >= batch_limit:
                 if expected_length is not None and count + len(batch) > expected_length:
                     raise ValueError(
                         "Zarr arrays for one row must have matching lengths"
@@ -205,6 +222,14 @@ class ZarrSink(BaseSink):
         if expected_length is not None and count != expected_length:
             raise ValueError("Zarr arrays for one row must have matching lengths")
         return count
+
+    def _video_batch_limit(self, frame: np.ndarray) -> int:
+        return max(
+            self.video_frame_batch_size,
+            _batch_length_for_shape(
+                (1, *frame.shape), frame.dtype, self.array_chunk_bytes
+            ),
+        )
 
     def _arrays_for_row(self, row: Row) -> dict[str, str]:
         if self.arrays is not None:
@@ -242,14 +267,14 @@ class ZarrSink(BaseSink):
         return store
 
     def _check_no_overwrite_output(self) -> None:
-        if self.overwrite or self._checked_no_overwrite:
+        if (
+            self.overwrite
+            or self._checked_no_overwrite
+            or not self.reduce_to_single_store
+        ):
             return
         self._checked_no_overwrite = True
-        try:
-            entries = self.output.ls("", detail=False)
-        except FileNotFoundError:
-            return
-        if entries:
+        if _output_has_payload(self.output):
             raise ValueError("write_zarr output already exists and overwrite=False")
 
     def _store_relpath(self, shard_id: str) -> str:
@@ -262,7 +287,16 @@ class ZarrSink(BaseSink):
         return relpath
 
     def on_shard_complete(self, shard_id: str) -> None:
+        if (
+            self.reduce_to_single_store
+            and self._store_relpath(shard_id) not in self._stores
+        ):
+            with self.output.open(self._empty_marker_relpath(shard_id), mode="wb"):
+                pass
         self._stores.pop(self._store_relpath(shard_id), None)
+
+    def _empty_marker_relpath(self, shard_id: str) -> str:
+        return self._store_relpath(shard_id) + ".empty"
 
     def _append_array(
         self,
@@ -270,18 +304,13 @@ class ZarrSink(BaseSink):
         path: str,
         array: np.ndarray,
     ) -> None:
-        dataset = store.arrays.get(path)
-        if dataset is None:
-            dataset = store.root.create_dataset(
-                path,
-                shape=(0, *array.shape[1:]),
-                chunks=_chunk_shape(array, self.array_chunk_bytes),
-                dtype=array.dtype,
-            )
-            store.arrays[path] = dataset
-        else:
-            self._validate_array_append(store, path, array)
-        dataset.append(array, axis=0)
+        _append_zarr_array(
+            store.root,
+            store.arrays,
+            path,
+            array,
+            chunks=_chunk_shape(array, self.array_chunk_bytes),
+        )
 
     def _validate_array_append(
         self,
@@ -292,12 +321,7 @@ class ZarrSink(BaseSink):
         dataset = store.arrays.get(path)
         if dataset is None:
             return
-        if tuple(dataset.shape[1:]) != tuple(array.shape[1:]):
-            raise ValueError(
-                f"Zarr arrays for {path!r} must have matching trailing shapes"
-            )
-        if dataset.dtype != array.dtype:
-            raise ValueError(f"Zarr arrays for {path!r} must have matching dtypes")
+        _validate_array_schema(path, dataset, array)
 
     def _drop_array(self, store: _ShardStore, path: str) -> None:
         store.arrays.pop(path, None)
@@ -340,6 +364,7 @@ class ZarrSink(BaseSink):
             filename_template=self.store_template,
             reducer_name="write_zarr_reduce",
             recursive=True,
+            overwrite=self.overwrite,
         )
 
 
@@ -367,11 +392,7 @@ class _ZarrMergeReducerSink(BaseSink):
 
     def write_shard_block(self, shard_id, block) -> None:
         del shard_id, block
-        try:
-            self._merge()
-        except Exception:
-            self._remove_current_parts()
-            raise
+        self._merge()
 
     def describe(self) -> tuple[str, str, dict[str, object]]:
         return (
@@ -396,6 +417,17 @@ class _ZarrMergeReducerSink(BaseSink):
                 "write_zarr_reduce requires an active reducer stage with a prior writer stage"
             )
 
+        expected_parts = self._expected_parts(stage_index)
+        if self.output.exists(_DONE_MARKER_RELPATH) and not any(
+            self.output.exists(relpath) or self.output.exists(f"{relpath}.empty")
+            for relpath in expected_parts
+        ):
+            return
+
+        parts = self._collect_parts(expected_parts)
+        if not self.overwrite and _output_has_payload(self.output):
+            raise ValueError("write_zarr output already exists and overwrite=False")
+
         import zarr
 
         final = zarr.open_group(
@@ -404,79 +436,83 @@ class _ZarrMergeReducerSink(BaseSink):
         )
         if self.overwrite:
             _clear_final_group(final)
-        elif _group_has_payload(final):
-            raise ValueError("write_zarr output already exists and overwrite=False")
 
-        stores = sorted(
-            get_finalized_workers(stage_index=stage_index - 1),
-            key=lambda row: (
-                row.global_ordinal is None,
-                row.global_ordinal if row.global_ordinal is not None else row.shard_id,
-            ),
-        )
-        row_offset = 0
-        arrays: dict[str, Any] = {}
-        payload_paths: set[str] | None = None
-        for row in stores:
-            relpath = self._part_relpath(row.shard_id, row.worker_token)
-            if not self.output.exists(relpath):
-                continue
-            source = zarr.open_group(
-                store=zarr_store(self.output, relpath, mode="r"),
-                mode="r",
-            )
-            source_paths = set(iter_zarr_array_paths(source))
-            source_payload_paths = {
-                path for path in source_paths if path != self.episode_ends_path
-            }
-            if payload_paths is None:
-                payload_paths = source_payload_paths
-            elif source_payload_paths != payload_paths:
-                raise ValueError(
-                    "Zarr part stores must contain the same payload arrays"
+        try:
+            row_offset = 0
+            arrays: dict[str, Any] = {}
+            for part in parts:
+                source = zarr.open_group(
+                    store=zarr_store(self.output, part.relpath, mode="r"),
+                    mode="r",
                 )
-            for path in sorted(source_paths):
-                source_array = source[path]
-                if path == self.episode_ends_path:
-                    if source_array.shape[0] == 0:
+                for path in sorted(part.paths):
+                    source_array = source[path]
+                    if path == self.episode_ends_path:
+                        if source_array.shape[0] == 0:
+                            continue
+                        part_last = row_offset
+                        batch_size = _batch_length(
+                            source_array,
+                            self.reduce_array_batch_bytes,
+                        )
+                        for start in range(0, int(source_array.shape[0]), batch_size):
+                            end = min(int(source_array.shape[0]), start + batch_size)
+                            values = np.asarray(source_array[start:end], dtype=np.int64)
+                            _append_zarr_array(
+                                final,
+                                arrays,
+                                path,
+                                values + row_offset,
+                                chunks=getattr(source_array, "chunks", None),
+                                compressor=getattr(source_array, "compressor", None),
+                            )
+                            part_last = int(values[-1])
+                        row_offset += part_last
                         continue
-                    part_last = row_offset
                     batch_size = _batch_length(
-                        source_array,
-                        self.reduce_array_batch_bytes,
+                        source_array, self.reduce_array_batch_bytes
                     )
-                    for start in range(0, int(source_array.shape[0]), batch_size):
-                        end = min(int(source_array.shape[0]), start + batch_size)
-                        values = np.asarray(source_array[start:end], dtype=np.int64)
-                        _append_reduced_array(
+                    if source_array.shape[0] == 0:
+                        _append_zarr_array(
                             final,
                             arrays,
                             path,
-                            values + row_offset,
-                            source_array,
+                            np.asarray(source_array[:0]),
+                            chunks=getattr(source_array, "chunks", None),
+                            compressor=getattr(source_array, "compressor", None),
                         )
-                        part_last = int(values[-1])
-                    row_offset += part_last
-                    continue
-                batch_size = _batch_length(source_array, self.reduce_array_batch_bytes)
-                for start in range(0, int(source_array.shape[0]), batch_size):
-                    end = min(int(source_array.shape[0]), start + batch_size)
-                    _append_reduced_array(
-                        final,
-                        arrays,
-                        path,
-                        np.asarray(source_array[start:end]),
-                        source_array,
-                    )
+                        continue
+                    for start in range(0, int(source_array.shape[0]), batch_size):
+                        end = min(int(source_array.shape[0]), start + batch_size)
+                        _append_zarr_array(
+                            final,
+                            arrays,
+                            path,
+                            np.asarray(source_array[start:end]),
+                            chunks=getattr(source_array, "chunks", None),
+                            compressor=getattr(source_array, "compressor", None),
+                        )
+        except Exception:
+            if not self.overwrite:
+                _clear_final_group(final)
+            raise
 
-        self._remove_current_parts()
-        if self.overwrite:
-            self._remove_stale_parts()
+        with self.output.open(_DONE_MARKER_RELPATH, mode="wb"):
+            pass
+        self._remove_parts()
         try:
             if not self.output.ls("_parts"):
                 self.output.rmdir("_parts")
         except (FileNotFoundError, OSError, ValueError):
             pass
+
+    def _expected_parts(self, stage_index: int) -> list[str]:
+        return [
+            self._part_relpath(row.shard_id, row.worker_token)
+            for row in _sort_finalized_workers(
+                get_finalized_workers(stage_index=stage_index - 1),
+            )
+        ]
 
     def _part_relpath(self, shard_id: str, worker_token: str) -> str:
         return _part_store_relpath(
@@ -486,17 +522,51 @@ class _ZarrMergeReducerSink(BaseSink):
             )
         )
 
-    def _remove_current_parts(self) -> None:
-        try:
-            self.output.rm(f"_parts/{get_active_job_id()}", recursive=True)
-        except FileNotFoundError:
-            pass
+    def _collect_parts(self, expected_parts: Iterable[str]) -> list[_PartStore]:
+        import zarr
 
-    def _remove_stale_parts(self) -> None:
+        parts: list[_PartStore] = []
+        payload_paths: set[str] | None = None
+        schemas: dict[str, tuple[tuple[int, ...], np.dtype[Any]]] = {}
+        for relpath in expected_parts:
+            if not self.output.exists(relpath):
+                if self.output.exists(f"{relpath}.empty"):
+                    continue
+                raise ValueError(f"Zarr part store is missing: {relpath}")
+            source = zarr.open_group(
+                store=zarr_store(self.output, relpath, mode="r"),
+                mode="r",
+            )
+            source_paths = set(iter_zarr_array_paths(source))
+            if not source_paths:
+                continue
+            source_payload_paths = {
+                path for path in source_paths if path != self.episode_ends_path
+            }
+            if payload_paths is None:
+                payload_paths = source_payload_paths
+            elif source_payload_paths != payload_paths:
+                raise ValueError(
+                    "Zarr part stores must contain the same payload arrays"
+                )
+            for path in source_paths:
+                source_array = source[path]
+                schema = (tuple(source_array.shape[1:]), np.dtype(source_array.dtype))
+                previous = schemas.setdefault(path, schema)
+                if previous != schema:
+                    if previous[0] != schema[0]:
+                        raise ValueError(
+                            f"Zarr arrays for {path!r} must have matching trailing shapes"
+                        )
+                    raise ValueError(
+                        f"Zarr arrays for {path!r} must have matching dtypes"
+                    )
+            parts.append(_PartStore(relpath=relpath, paths=source_paths))
+        return parts
+
+    def _remove_parts(self) -> None:
         try:
-            for path in self.output.ls("_parts", detail=False):
-                if path != f"_parts/{get_active_job_id()}":
-                    self.output.rm(path, recursive=True)
+            self.output.rm("_parts", recursive=True)
         except FileNotFoundError:
             pass
 
@@ -572,47 +642,104 @@ def _as_array(value: Any) -> np.ndarray:
 
 
 def _part_store_relpath(relpath: str) -> str:
-    return f"_parts/{get_active_job_id()}/{relpath}"
+    return f"_parts/{relpath}"
+
+
+def _sort_finalized_workers(rows: Iterable[Any]) -> list[Any]:
+    return sorted(
+        rows,
+        key=lambda row: (
+            row.global_ordinal is None,
+            row.global_ordinal if row.global_ordinal is not None else row.shard_id,
+        ),
+    )
 
 
 def _clear_final_group(group: Any) -> None:
     for key in sorted({*group.array_keys(), *group.group_keys()}):
         if key != "_parts":
             del group[key]
+    group.attrs.clear()
 
 
 def _group_has_payload(group: Any) -> bool:
-    return any(key != "_parts" for key in {*group.array_keys(), *group.group_keys()})
+    return bool(group.attrs) or any(
+        key != "_parts" for key in {*group.array_keys(), *group.group_keys()}
+    )
+
+
+def _output_has_payload(output: DataFolder) -> bool:
+    import zarr
+
+    try:
+        entries = output.ls("", detail=False)
+    except FileNotFoundError:
+        return False
+    non_part_entries = [
+        entry
+        for entry in entries
+        if str(entry).split("/", maxsplit=1)[0] not in {"_parts", "_refiner"}
+    ]
+    if not non_part_entries:
+        return False
+    try:
+        group = zarr.open_group(store=zarr_store(output, "", mode="r"), mode="r")
+    except Exception:
+        return True
+    return _group_has_payload(group)
 
 
 def _chunk_shape(array: np.ndarray, target_bytes: int) -> tuple[int, ...]:
-    return (_batch_length(array, target_bytes), *array.shape[1:])
+    chunk_rows = min(
+        _batch_length(array, target_bytes),
+        max(int(array.shape[0]), _MAX_INITIAL_CHUNK_ROWS),
+    )
+    return (chunk_rows, *array.shape[1:])
 
 
 def _batch_length(array: Any, target_bytes: int) -> int:
-    dtype = np.dtype(array.dtype)
-    row_values = int(np.prod(tuple(array.shape[1:]), dtype=np.int64))
+    return _batch_length_for_shape(tuple(array.shape), array.dtype, target_bytes)
+
+
+def _batch_length_for_shape(
+    shape: tuple[int, ...],
+    dtype: np.dtype[Any] | type[Any],
+    target_bytes: int,
+) -> int:
+    dtype = np.dtype(dtype)
+    row_values = int(np.prod(shape[1:], dtype=np.int64))
     row_bytes = max(1, dtype.itemsize * max(1, row_values))
     return max(1, target_bytes // row_bytes)
 
 
-def _append_reduced_array(
+def _validate_array_schema(path: str, dataset: Any, values: np.ndarray) -> None:
+    if tuple(dataset.shape[1:]) != tuple(values.shape[1:]):
+        raise ValueError(f"Zarr arrays for {path!r} must have matching trailing shapes")
+    if dataset.dtype != values.dtype:
+        raise ValueError(f"Zarr arrays for {path!r} must have matching dtypes")
+
+
+def _append_zarr_array(
     root: Any,
     arrays: dict[str, Any],
     path: str,
     values: np.ndarray,
-    source_array: Any,
+    *,
+    chunks: tuple[int, ...] | None = None,
+    compressor: Any = None,
 ) -> None:
     dataset = arrays.get(path)
     if dataset is None:
         dataset = root.create_dataset(
             path,
             shape=(0, *values.shape[1:]),
-            chunks=getattr(source_array, "chunks", None),
-            dtype=source_array.dtype,
-            compressor=getattr(source_array, "compressor", None),
+            chunks=chunks,
+            dtype=values.dtype,
+            compressor=compressor,
         )
         arrays[path] = dataset
+    else:
+        _validate_array_schema(path, dataset, values)
     dataset.append(values, axis=0)
 
 

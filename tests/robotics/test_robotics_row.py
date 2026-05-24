@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import Any, cast
 
 import numpy as np
@@ -119,7 +120,6 @@ def test_to_robot_rows_uses_video_frame_array_asset_schema() -> None:
 
     video = robotics_row.videos["camera"]
     assert isinstance(video, VideoFrameArray)
-    assert len(list(video.iter_frame_arrays())) == 2
     video_frames = list(video.iter_frame_arrays())
     assert len(video_frames) == 2
     assert video_frames[0].shape == (4, 5, 3)

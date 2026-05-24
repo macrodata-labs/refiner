@@ -233,10 +233,6 @@ class VideoFrameArray:
     def duration_s(self) -> float:
         return self.frame_count / float(self.fps)
 
-    @property
-    def frame_arrays(self) -> np.ndarray:
-        return self._array
-
     def iter_frame_arrays(self) -> Iterator[np.ndarray]:
         yield from self._array
 

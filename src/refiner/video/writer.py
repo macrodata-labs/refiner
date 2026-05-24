@@ -141,7 +141,7 @@ class VideoStreamWriter:
         writer = self._ensure_transcode_writer(video.fps)
         file_index = self._next_file_index
         from_timestamp, to_timestamp = writer.append_frame_arrays(
-            video.frame_arrays,
+            video.iter_frame_arrays(),
             frame_observer=frame_observer,
         )
         if writer.stream is None:

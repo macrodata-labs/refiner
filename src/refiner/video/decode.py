@@ -63,7 +63,7 @@ async def export_clip(
             fps=video.fps,
             movflags=None,
         )
-        writer.append_frame_arrays(video.frame_arrays)
+        writer.append_frame_arrays(video.iter_frame_arrays())
         writer.close()
         return output_file.getvalue()
     encoded_video = cast("VideoFile | VideoBytes", video)

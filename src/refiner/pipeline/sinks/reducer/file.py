@@ -85,15 +85,15 @@ class FileCleanupReducerSink(BaseSink):
         reducer_name: str,
         assets_subdir: str | None = None,
         recursive: bool = False,
+        overwrite: bool = True,
     ) -> None:
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
         self.reducer_name = reducer_name
         self.assets_subdir = assets_subdir
         self.recursive = recursive
+        self.overwrite = overwrite
         self._managed_path_pattern = _compile_managed_path_pattern(filename_template)
-        self._managed_listing_prefix = _managed_listing_prefix(filename_template)
-        self._managed_path_depth = _path_depth(filename_template)
         self._cleanup_ran = False
 
     def write_shard_block(self, shard_id, block) -> None:
@@ -113,6 +113,8 @@ class FileCleanupReducerSink(BaseSink):
             args["assets_subdir"] = self.assets_subdir
         if self.recursive:
             args["recursive"] = True
+        if not self.overwrite:
+            args["overwrite"] = False
         return (
             self.reducer_name,
             "writer",
@@ -146,8 +148,8 @@ class FileCleanupReducerSink(BaseSink):
             else None
         )
 
-        removed_asset_attempts: set[str] = set()
-        removed_managed_paths: set[str] = set()
+        stale_asset_attempts: set[str] = set()
+        stale_managed_paths: set[str] = set()
         # Extra template fields are treated as structure only. Authority is decided
         # solely from the finalized (shard_id, worker_id) pair extracted from each
         # managed path.
@@ -161,15 +163,10 @@ class FileCleanupReducerSink(BaseSink):
                 match = ASSET_ATTEMPT_DIR_RE.fullmatch(attempt_dir)
                 if match is None:
                     continue
+                asset_path = f"{assets_prefix}{attempt_dir}"
                 if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
                     continue
-                if attempt_dir in removed_asset_attempts:
-                    continue
-                removed_asset_attempts.add(attempt_dir)
-                try:
-                    self.output.rm(f"{assets_prefix}{attempt_dir}", recursive=True)
-                except FileNotFoundError:
-                    continue
+                stale_asset_attempts.add(asset_path)
                 continue
 
             managed_path = rel_path
@@ -186,11 +183,19 @@ class FileCleanupReducerSink(BaseSink):
                 continue
             if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
                 continue
-            if managed_path in removed_managed_paths:
-                continue
-            removed_managed_paths.add(managed_path)
+            stale_managed_paths.add(managed_path)
+
+        if not self.overwrite and (stale_asset_attempts or stale_managed_paths):
+            raise ValueError(f"{self.reducer_name} output already exists")
+
+        for path in sorted(stale_asset_attempts):
             try:
-                self.output.rm(managed_path, recursive=self.recursive)
+                self.output.rm(path, recursive=True)
+            except FileNotFoundError:
+                continue
+        for path in sorted(stale_managed_paths):
+            try:
+                self.output.rm(path, recursive=self.recursive)
             except FileNotFoundError:
                 continue
 
@@ -201,9 +206,10 @@ class FileCleanupReducerSink(BaseSink):
             except FileNotFoundError:
                 return []
 
-        paths = [self._managed_listing_prefix]
+        listing_prefix = _managed_listing_prefix(self.filename_template)
+        paths = [listing_prefix]
         depth = max(
-            1, self._managed_path_depth - _path_depth(self._managed_listing_prefix)
+            1, _path_depth(self.filename_template) - _path_depth(listing_prefix)
         )
         for _ in range(depth):
             next_paths: list[str] = []
