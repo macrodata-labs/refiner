@@ -259,11 +259,11 @@ class ZarrSink(BaseSink):
         return self._default_arrays
 
     def _store(self, shard_id: str) -> _ShardStore:
-        if self.reduce_to_single_store:
+        self._check_no_overwrite_output()
+        if self.reduce_to_single_store and self.overwrite:
             self._clear_merge_marker_once()
         if not self.overwrite and not self.reduce_to_single_store:
             self._clear_publish_markers_once()
-        self._check_no_overwrite_output()
         relpath = self._store_relpath(shard_id)
         store = self._stores.get(relpath)
         if store is not None:
@@ -283,7 +283,7 @@ class ZarrSink(BaseSink):
         if self.overwrite or self._checked_no_overwrite:
             return
         self._checked_no_overwrite = True
-        if _output_has_payload(self.output):
+        if _output_has_existing_store(self.output):
             raise ValueError("write_zarr output already exists and overwrite=False")
 
     def _clear_publish_markers_once(self) -> None:
@@ -318,7 +318,8 @@ class ZarrSink(BaseSink):
         return relpath
 
     def on_shard_complete(self, shard_id: str) -> None:
-        if self.reduce_to_single_store:
+        self._check_no_overwrite_output()
+        if self.reduce_to_single_store and self.overwrite:
             self._clear_merge_marker_once()
         if not self.overwrite and not self.reduce_to_single_store:
             self._clear_publish_markers_once()
@@ -721,13 +722,21 @@ def _validate_array_paths(
 
 
 def _validate_store_template(store_template: str) -> None:
-    fields = {
-        field_name
-        for _literal_text, field_name, _format_spec, _conversion in Formatter().parse(
-            store_template
-        )
-        if field_name is not None
-    }
+    fields: set[str] = set()
+    for _literal_text, field_name, format_spec, conversion in Formatter().parse(
+        store_template
+    ):
+        if field_name is None:
+            continue
+        if conversion is not None or format_spec:
+            raise ValueError(
+                "store_template only supports plain {shard_id} and {worker_id} fields"
+            )
+        if field_name not in {"shard_id", "worker_id"}:
+            raise ValueError(
+                "store_template only supports plain {shard_id} and {worker_id} fields"
+            )
+        fields.add(field_name)
     missing_fields = {"shard_id", "worker_id"}.difference(fields)
     if missing_fields:
         raise ValueError(

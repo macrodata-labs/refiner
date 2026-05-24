@@ -851,6 +851,19 @@ def test_write_zarr_rejects_store_template_without_worker_id(tmp_path: Path) -> 
         ZarrSink(str(tmp_path / "template.zarr"), store_template="{shard_id}.zarr")
 
 
+def test_write_zarr_rejects_unsupported_store_template_fields(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="store_template only supports"):
+        ZarrSink(
+            str(tmp_path / "extra-template.zarr"),
+            store_template="{shard_id}__w{worker_id}__{part}.zarr",
+        )
+    with pytest.raises(ValueError, match="store_template only supports"):
+        ZarrSink(
+            str(tmp_path / "format-template.zarr"),
+            store_template="{shard_id:>12}__w{worker_id}.zarr",
+        )
+
+
 def test_write_zarr_rejects_invalid_reduce_batch_bytes(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="reduce_array_batch_bytes"):
         ZarrSink(str(tmp_path / "bad-batch.zarr"), reduce_array_batch_bytes=0)
@@ -1148,6 +1161,45 @@ def test_write_zarr_non_reduced_no_overwrite_skips_empty_parts(
             rundir=str(tmp_path / "run-sharded-empty-no-overwrite"),
         )
     )
+
+    assert not list(zarr_out.glob("*.zarr"))
+    assert not (zarr_out / "_parts").exists()
+
+
+def test_write_zarr_non_reduced_rejects_empty_existing_output_when_not_overwriting(
+    tmp_path: Path,
+) -> None:
+    zarr_out = tmp_path / "sharded-empty-existing-no-overwrite.zarr"
+
+    (
+        mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
+        .filter(lambda row: False)
+        .write_zarr(
+            str(zarr_out),
+            arrays={"data/action": "action"},
+            overwrite=False,
+        )
+        .launch_local(
+            name="zarr-sharded-empty-existing-first",
+            num_workers=1,
+            rundir=str(tmp_path / "run-sharded-empty-existing-first"),
+        )
+    )
+
+    with pytest.raises(LocalLaunchResumeError):
+        (
+            mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
+            .write_zarr(
+                str(zarr_out),
+                arrays={"data/action": "action"},
+                overwrite=False,
+            )
+            .launch_local(
+                name="zarr-sharded-empty-existing-second",
+                num_workers=1,
+                rundir=str(tmp_path / "run-sharded-empty-existing-second"),
+            )
+        )
 
     assert not list(zarr_out.glob("*.zarr"))
     assert not (zarr_out / "_parts").exists()
