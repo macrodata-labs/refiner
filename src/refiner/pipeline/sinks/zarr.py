@@ -497,6 +497,9 @@ class _ZarrPublishPartsReducerSink(BaseSink):
             pass
 
         try:
+            _validate_zarr_stores(
+                self.output, (_part_store_relpath(relpath) for relpath in parts)
+            )
             for final_relpath in parts:
                 part_relpath = _part_store_relpath(final_relpath)
                 if not self.output.exists(part_relpath):
@@ -624,7 +627,9 @@ class _ZarrMergeReducerSink(BaseSink):
         )
         if self.overwrite:
             _clear_final_group(final)
-        elif not self.output.exists(_MERGE_STARTED_MARKER_RELPATH):
+        elif self.output.exists(_MERGE_STARTED_MARKER_RELPATH):
+            _clear_final_group(final)
+        else:
             with self.output.open(_MERGE_STARTED_MARKER_RELPATH, mode="wb"):
                 pass
 
@@ -786,6 +791,8 @@ def _validate_array_paths(
     arrays: Mapping[str, str],
     episode_ends_path: str | None,
 ) -> None:
+    for path in arrays:
+        _validate_public_zarr_path(path, "Zarr array path")
     if episode_ends_path is not None and episode_ends_path in arrays:
         raise ValueError(
             f"Zarr array path collides with episode_ends_path: {episode_ends_path}"
@@ -793,6 +800,7 @@ def _validate_array_paths(
 
 
 def _validate_store_template(store_template: str) -> None:
+    _validate_public_zarr_path(store_template, "store_template")
     fields: set[str] = set()
     for _literal_text, field_name, format_spec, conversion in Formatter().parse(
         store_template
@@ -814,6 +822,12 @@ def _validate_store_template(store_template: str) -> None:
             "store_template requires fields: "
             + ", ".join(f"{{{field_name}}}" for field_name in sorted(missing_fields))
         )
+
+
+def _validate_public_zarr_path(path: str, label: str) -> None:
+    root = str(path).lstrip("/").split("/", maxsplit=1)[0]
+    if root in {"_parts", "_refiner"}:
+        raise ValueError(f"{label} must not use reserved root: {root}")
 
 
 def _row_value(row: Row, key: str) -> Any:
