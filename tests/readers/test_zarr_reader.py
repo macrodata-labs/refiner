@@ -1113,6 +1113,7 @@ def test_write_zarr_non_reduced_cleanup_rejects_missing_finalized_store(
             ZarrReducerSink(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
+                reduce_to_single_store=False,
             ).write_block([DictRow({}, shard_id="reduce")])
 
 
@@ -1164,6 +1165,7 @@ def test_write_zarr_non_reduced_cleanup_keeps_empty_stores_retryable(
             ZarrReducerSink(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
+                reduce_to_single_store=False,
             ).write_block([DictRow({}, shard_id="reduce")])
 
     assert empty_store.exists()

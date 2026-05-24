@@ -28,7 +28,7 @@ class ZarrReducerSink(FileCleanupReducerSink):
         store_template: str,
         episode_ends_path: str | None = None,
         array_chunk_bytes: int = _DEFAULT_ARRAY_CHUNK_BYTES,
-        reduce_to_single_store: bool = False,
+        reduce_to_single_store: bool = True,
     ) -> None:
         check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
         super().__init__(
