@@ -5,10 +5,11 @@ from typing import Any
 
 import numpy as np
 
-from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.io.datafolder import DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.pipeline.sinks.zarr import (
+    _DEFAULT_ARRAY_CHUNK_BYTES,
     _append_zarr_array,
     _batch_length,
     _render_store_relpath,
@@ -26,7 +27,7 @@ class ZarrReducerSink(FileCleanupReducerSink):
         *,
         store_template: str,
         episode_ends_path: str | None = None,
-        array_chunk_bytes: int = 8 * 1024 * 1024,
+        array_chunk_bytes: int = _DEFAULT_ARRAY_CHUNK_BYTES,
         reduce_to_single_store: bool = False,
     ) -> None:
         check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
@@ -51,7 +52,10 @@ class ZarrReducerSink(FileCleanupReducerSink):
 
         relpaths = self._finalized_store_paths()
         self._collect_stores(relpaths, for_merge=False)
-        _remove_parts(self.output)
+        try:
+            self.output.rm("_parts", recursive=True)
+        except FileNotFoundError:
+            pass
         self._clear_root_payload_except(relpaths)
 
     def _clear_root_payload_except(self, relpaths: Iterable[str]) -> None:
@@ -71,10 +75,11 @@ class ZarrReducerSink(FileCleanupReducerSink):
                     continue
                 if path in keep_paths:
                     continue
-                if any(keep_path.startswith(f"{path}/") for keep_path in keep_paths):
-                    if key in group_keys:
-                        clear_group(group[key], path)
-                        continue
+                if key in group_keys and any(
+                    keep_path.startswith(f"{path}/") for keep_path in keep_paths
+                ):
+                    clear_group(group[key], path)
+                    continue
                 del group[key]
             group.attrs.clear()
 
@@ -99,21 +104,15 @@ class ZarrReducerSink(FileCleanupReducerSink):
         expected_parts = self._finalized_store_paths(prefix="_parts/")
         import zarr
 
-        if not expected_parts:
-            final = zarr.open_group(
-                store=_zarr_store(self.output, "", mode="a"),
-                mode="a",
-            )
-            _clear_final_group(final)
-            self._merged = True
-            return
-
         parts = self._collect_stores(expected_parts, for_merge=True)
         final = zarr.open_group(
             store=_zarr_store(self.output, "", mode="a"),
             mode="a",
         )
-        _clear_final_group(final)
+        for key in sorted({*final.array_keys(), *final.group_keys()}):
+            if key != "_parts":
+                del final[key]
+        final.attrs.clear()
 
         row_offset = 0
         arrays: dict[str, Any] = {}
@@ -140,7 +139,10 @@ class ZarrReducerSink(FileCleanupReducerSink):
                     continue
 
                 part_end = 0
-                for values in _array_batches(source_array, self.array_chunk_bytes):
+                batch_size = _batch_length(source_array, self.array_chunk_bytes)
+                for start in range(0, int(source_array.shape[0]), batch_size):
+                    end = min(int(source_array.shape[0]), start + batch_size)
+                    values = np.asarray(source_array[start:end])
                     if path == self.episode_ends_path:
                         values = np.asarray(values, dtype=np.int64)
                         part_end = int(values[-1])
@@ -161,7 +163,10 @@ class ZarrReducerSink(FileCleanupReducerSink):
         del shard_id
         if not self.reduce_to_single_store or not self._merged:
             return
-        _remove_parts(self.output)
+        try:
+            self.output.rm("_parts", recursive=True)
+        except FileNotFoundError:
+            pass
 
     def _finalized_store_paths(self, prefix: str = "") -> list[str]:
         stage_index = get_active_stage_index()
@@ -192,6 +197,7 @@ class ZarrReducerSink(FileCleanupReducerSink):
         stores: list[tuple[str, set[str]]] = []
         payload_paths: set[str] | None = None
         schemas: dict[str, tuple[tuple[int, ...], np.dtype[Any]]] = {}
+        episode_path = self.episode_ends_path if for_merge else None
         for relpath in relpaths:
             if not self.output.exists(relpath):
                 kind = "part store" if for_merge else "store"
@@ -203,18 +209,17 @@ class ZarrReducerSink(FileCleanupReducerSink):
             source_paths = set(_iter_array_paths(source))
             if not source_paths:
                 continue
+            source_payload_paths = (
+                source_paths - {episode_path}
+                if episode_path is not None
+                else source_paths
+            )
             if (
-                for_merge
-                and self.episode_ends_path is not None
-                and (source_paths - {self.episode_ends_path})
-                and self.episode_ends_path not in source_paths
+                episode_path is not None
+                and source_payload_paths
+                and episode_path not in source_paths
             ):
-                raise ValueError(
-                    f"Zarr part stores must contain {self.episode_ends_path!r}"
-                )
-            source_payload_paths = source_paths
-            if for_merge and self.episode_ends_path is not None:
-                source_payload_paths = source_paths - {self.episode_ends_path}
+                raise ValueError(f"Zarr part stores must contain {episode_path!r}")
             if payload_paths is None:
                 payload_paths = source_payload_paths
             elif source_payload_paths != payload_paths:
@@ -244,26 +249,6 @@ def _iter_array_paths(group: Any, prefix: str = "") -> Iterable[str]:
             yield path
         else:
             yield from _iter_array_paths(item, path)
-
-
-def _array_batches(array: Any, max_bytes: int) -> Iterable[np.ndarray]:
-    batch_size = _batch_length(array, max_bytes)
-    for start in range(0, int(array.shape[0]), batch_size):
-        yield np.asarray(array[start : min(int(array.shape[0]), start + batch_size)])
-
-
-def _remove_parts(output: DataFolder) -> None:
-    try:
-        output.rm("_parts", recursive=True)
-    except FileNotFoundError:
-        pass
-
-
-def _clear_final_group(group: Any) -> None:
-    for key in sorted({*group.array_keys(), *group.group_keys()}):
-        if key != "_parts":
-            del group[key]
-    group.attrs.clear()
 
 
 __all__ = ["ZarrReducerSink"]
