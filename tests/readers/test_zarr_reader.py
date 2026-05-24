@@ -1119,10 +1119,10 @@ def test_write_zarr_non_reduced_cleanup_rejects_missing_finalized_store(
             ).write_block([DictRow({}, shard_id="reduce")])
 
 
-def test_write_zarr_empty_shard_completion_removes_stale_store(
+def test_write_zarr_empty_shard_completion_replaces_stale_store(
     tmp_path: Path,
 ) -> None:
-    zarr_out = tmp_path / "empty-shard-removes-stale-store.zarr"
+    zarr_out = tmp_path / "empty-shard-replaces-stale-store.zarr"
     worker_id = "worker-a"
     stale = zarr_out / f"shard-a__w{worker_token_for(worker_id)}.zarr"
     _write_part_zarr(stale, {"data/action": np.asarray([[9.0]], dtype=np.float32)})
@@ -1140,18 +1140,18 @@ def test_write_zarr_empty_shard_completion_removes_stale_store(
             reduce_to_single_store=False,
         ).on_shard_complete("shard-a")
 
-    assert not stale.exists()
-    assert stale.with_name(stale.name + ".empty").exists()
+    root = _open_test_zarr(stale, mode="r")
+    assert not list(root.array_keys())
+    assert not list(root.group_keys())
 
 
-def test_write_zarr_non_reduced_cleanup_keeps_empty_markers_retryable(
+def test_write_zarr_non_reduced_cleanup_keeps_empty_stores_retryable(
     tmp_path: Path,
 ) -> None:
     zarr_out = tmp_path / "sharded-empty-cleanup-retry.zarr"
     worker_id = "worker-a"
-    marker = zarr_out / f"shard-a__w{worker_token_for(worker_id)}.zarr.empty"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
+    empty_store = zarr_out / f"shard-a__w{worker_token_for(worker_id)}.zarr"
+    _open_test_zarr(empty_store, mode="w")
 
     runtime = _FinalizedWorkersRuntime(
         [FinalizedShardWorker(shard_id="shard-a", worker_id=worker_id)]
@@ -1169,7 +1169,7 @@ def test_write_zarr_non_reduced_cleanup_keeps_empty_markers_retryable(
                 store_template="{shard_id}__w{worker_id}.zarr",
             ).write_block([DictRow({}, shard_id="reduce")])
 
-    assert marker.exists()
+    assert empty_store.exists()
 
 
 def test_write_zarr_rejects_sharded_schema_drift_after_cleanup(
@@ -1502,7 +1502,7 @@ def test_write_zarr_single_store_removes_parts_only_on_completion(
         )
         reducer.write_block([DictRow({}, shard_id="reduce")])
         assert part.exists()
-        reducer.on_shard_complete("reduce")
+        reducer.on_shard_finalized("reduce")
 
     row = mdr.read_zarr(
         zarr_out,

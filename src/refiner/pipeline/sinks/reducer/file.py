@@ -57,23 +57,6 @@ def _compile_managed_path_pattern(filename_template: str) -> re.Pattern[str]:
     return re.compile("^" + "".join(parts) + "$")
 
 
-def _managed_listing_prefix(filename_template: str) -> str:
-    literal_prefix = ""
-    for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
-        filename_template
-    ):
-        literal_prefix += literal_text
-        if field_name is not None:
-            break
-    if "/" not in literal_prefix:
-        return ""
-    return literal_prefix.rsplit("/", maxsplit=1)[0]
-
-
-def _path_depth(path: str) -> int:
-    return len([part for part in path.split("/") if part])
-
-
 class FileCleanupReducerSink(BaseSink):
     """Delete non-finalized deterministic file-sink outputs."""
 
@@ -136,7 +119,45 @@ class FileCleanupReducerSink(BaseSink):
             for row in get_finalized_workers(stage_index=stage_index - 1)
         }
 
-        listed_paths = list(self._listed_cleanup_paths())
+        if not self.recursive or self.assets_subdir is not None:
+            try:
+                listed_paths = self.output.find("")
+            except FileNotFoundError:
+                listed_paths = []
+        else:
+            literal_prefix = ""
+            for (
+                literal_text,
+                field_name,
+                _format_spec,
+                _conversion,
+            ) in Formatter().parse(self.filename_template):
+                literal_prefix += literal_text
+                if field_name is not None:
+                    break
+            listing_prefix = (
+                ""
+                if "/" not in literal_prefix
+                else literal_prefix.rsplit("/", maxsplit=1)[0]
+            )
+            paths = [listing_prefix]
+            template_depth = len(
+                [part for part in self.filename_template.split("/") if part]
+            )
+            prefix_depth = len([part for part in listing_prefix.split("/") if part])
+            for _ in range(max(1, template_depth - prefix_depth)):
+                next_paths: list[str] = []
+                for path in paths:
+                    try:
+                        next_paths.extend(self.output.ls(path, detail=False))
+                    except (FileNotFoundError, NotADirectoryError):
+                        continue
+                paths = next_paths
+            listed_paths = [
+                path
+                for path in paths
+                if isinstance(path, str) and not path.rstrip("/").endswith("/.")
+            ]
 
         assets_prefix = (
             f"{self.assets_subdir.rstrip('/')}/"
@@ -166,10 +187,6 @@ class FileCleanupReducerSink(BaseSink):
                 continue
 
             managed_path = rel_path
-            marker_path = None
-            if rel_path.endswith(".empty"):
-                managed_path = rel_path[: -len(".empty")]
-                marker_path = rel_path
             match = self._managed_path_pattern.fullmatch(managed_path)
             if match is None and self.recursive:
                 parts = managed_path.split("/")
@@ -183,7 +200,7 @@ class FileCleanupReducerSink(BaseSink):
                 continue
             if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
                 continue
-            stale_managed_paths.add(marker_path or managed_path)
+            stale_managed_paths.add(managed_path)
 
         for path in sorted(stale_asset_attempts):
             try:
@@ -195,32 +212,6 @@ class FileCleanupReducerSink(BaseSink):
                 self.output.rm(path, recursive=self.recursive)
             except FileNotFoundError:
                 continue
-
-    def _listed_cleanup_paths(self) -> list[str]:
-        if not self.recursive or self.assets_subdir is not None:
-            try:
-                return self.output.find("")
-            except FileNotFoundError:
-                return []
-
-        listing_prefix = _managed_listing_prefix(self.filename_template)
-        paths = [listing_prefix]
-        depth = max(
-            1, _path_depth(self.filename_template) - _path_depth(listing_prefix)
-        )
-        for _ in range(depth):
-            next_paths: list[str] = []
-            for path in paths:
-                try:
-                    next_paths.extend(self.output.ls(path, detail=False))
-                except (FileNotFoundError, NotADirectoryError):
-                    continue
-            paths = next_paths
-        return [
-            path
-            for path in paths
-            if isinstance(path, str) and not path.rstrip("/").endswith("/.")
-        ]
 
 
 __all__ = ["FileCleanupReducerSink"]

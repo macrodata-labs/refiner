@@ -467,6 +467,41 @@ def test_worker_completes_shards_only_after_sink_drain() -> None:
     assert runtime_lifecycle.completed_ids == [shard.id]
 
 
+def test_worker_runs_post_completion_sink_hook_after_runtime_complete() -> None:
+    shard = _shard("p", 0, 1)
+    events: list[str] = []
+
+    class _OrderedRuntimeLifecycle(_FakeRuntimeLifecycle):
+        def complete(self, shard: Shard) -> None:
+            super().complete(shard)
+            events.append("runtime_complete")
+
+    class _OrderedSink(_RecordingSink):
+        def on_shard_complete(self, shard_id: str) -> None:
+            super().on_shard_complete(shard_id)
+            events.append("sink_complete")
+
+        def on_shard_finalized(self, shard_id: str) -> None:
+            events.append("sink_finalized")
+
+    runtime_lifecycle = _OrderedRuntimeLifecycle([shard])
+    sink = _OrderedSink()
+    worker = Worker(
+        pipeline=RefinerPipeline(
+            source=_FakeReader({shard.id: [DictRow({"x": 1})]})
+        ).with_sink(sink),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert events == ["sink_complete", "runtime_complete", "sink_finalized"]
+
+
 def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

@@ -35,12 +35,6 @@ class _ShardStore:
     row_end: int = 0
 
 
-@dataclass(frozen=True)
-class _PartStore:
-    relpath: str
-    paths: set[str]
-
-
 class ZarrSink(BaseSink):
     def __init__(
         self,
@@ -186,70 +180,66 @@ class ZarrSink(BaseSink):
         row_videos: list[tuple[str, VideoSource]],
         lengths: list[int],
     ) -> None:
-        store: _ShardStore | None = None
-        if row_arrays or row_videos:
-            store = self._store(shard_id)
+        store = self._store(shard_id)
         if not lengths:
             expected_length = None
         else:
             expected_length = lengths[0]
             if any(item != expected_length for item in lengths):
                 raise ValueError("Zarr arrays for one row must have matching lengths")
-        if store is not None:
-            rollback_lengths: dict[str, int | None] = {}
-            for zarr_path in [*row_arrays, *(path for path, _ in row_videos)]:
-                dataset = store.arrays.get(zarr_path)
-                rollback_lengths[zarr_path] = (
+
+        rollback_lengths: dict[str, int | None] = {}
+        for zarr_path in [*row_arrays, *(path for path, _ in row_videos)]:
+            dataset = store.arrays.get(zarr_path)
+            rollback_lengths[zarr_path] = (
+                None if dataset is None else int(dataset.shape[0])
+            )
+        try:
+            for zarr_path, array in row_arrays.items():
+                self._validate_array_append(store, zarr_path, array)
+            for zarr_path, array in row_arrays.items():
+                self._append_array(store, zarr_path, array)
+            for zarr_path, video in row_videos:
+                video_length = submit(
+                    self._append_video(
+                        store,
+                        zarr_path,
+                        video,
+                        expected_length=expected_length,
+                    )
+                ).result()
+                lengths.append(video_length)
+            if lengths:
+                length = lengths[0]
+                if any(item != length for item in lengths):
+                    raise ValueError(
+                        "Zarr arrays for one row must have matching lengths"
+                    )
+            if lengths and self.episode_ends_path is not None:
+                dataset = store.arrays.get(self.episode_ends_path)
+                rollback_lengths[self.episode_ends_path] = (
                     None if dataset is None else int(dataset.shape[0])
                 )
-            try:
-                for zarr_path, array in row_arrays.items():
-                    self._validate_array_append(store, zarr_path, array)
-                for zarr_path, array in row_arrays.items():
-                    self._append_array(store, zarr_path, array)
-                for zarr_path, video in row_videos:
-                    video_length = submit(
-                        self._append_video(
-                            store,
-                            zarr_path,
-                            video,
-                            expected_length=expected_length,
-                        )
-                    ).result()
-                    lengths.append(video_length)
-                if lengths:
-                    length = lengths[0]
-                    if any(item != length for item in lengths):
-                        raise ValueError(
-                            "Zarr arrays for one row must have matching lengths"
-                        )
-                if lengths and self.episode_ends_path is not None:
-                    dataset = store.arrays.get(self.episode_ends_path)
-                    rollback_lengths[self.episode_ends_path] = (
-                        None if dataset is None else int(dataset.shape[0])
-                    )
-                    store.row_end += lengths[0]
-                    self._append_array(
-                        store,
-                        self.episode_ends_path,
-                        np.asarray([store.row_end], dtype=np.int64),
-                    )
-            except Exception:
-                for zarr_path, length in rollback_lengths.items():
-                    if length is None:
-                        self._drop_array(store, zarr_path)
-                        continue
-                    dataset = store.arrays.get(zarr_path)
-                    if dataset is not None:
-                        dataset.resize((length, *dataset.shape[1:]))
-                if self.episode_ends_path is not None:
-                    dataset = store.arrays.get(self.episode_ends_path)
-                    store.row_end = (
-                        0
-                        if dataset is None or dataset.shape[0] == 0
-                        else int(dataset[-1])
-                    )
-                raise
+                store.row_end += lengths[0]
+                self._append_array(
+                    store,
+                    self.episode_ends_path,
+                    np.asarray([store.row_end], dtype=np.int64),
+                )
+        except Exception:
+            for zarr_path, length in rollback_lengths.items():
+                if length is None:
+                    self._drop_array(store, zarr_path)
+                    continue
+                dataset = store.arrays.get(zarr_path)
+                if dataset is not None:
+                    dataset.resize((length, *dataset.shape[1:]))
+            if self.episode_ends_path is not None:
+                dataset = store.arrays.get(self.episode_ends_path)
+                store.row_end = (
+                    0 if dataset is None or dataset.shape[0] == 0 else int(dataset[-1])
+                )
+            raise
 
     def _row_values(
         self,
@@ -383,10 +373,6 @@ class ZarrSink(BaseSink):
         store = _ShardStore(
             zarr.open_group(store=_zarr_store(self.output, relpath, mode="w"), mode="w")
         )
-        try:
-            self.output.rm(self._empty_marker_relpath(shard_id))
-        except FileNotFoundError:
-            pass
         self._stores[relpath] = store
         return store
 
@@ -397,22 +383,16 @@ class ZarrSink(BaseSink):
             worker_id=get_active_worker_token(),
         )
         if self.reduce_to_single_store:
-            return _part_store_relpath(relpath)
+            return f"_parts/{relpath}"
         return relpath
 
     def on_shard_complete(self, shard_id: str) -> None:
         relpath = self._store_relpath(shard_id)
         if relpath not in self._stores:
-            try:
-                self.output.rm(relpath, recursive=True)
-            except FileNotFoundError:
-                pass
-            with self.output.open(self._empty_marker_relpath(shard_id), mode="wb"):
-                pass
-        self._stores.pop(relpath, None)
+            import zarr
 
-    def _empty_marker_relpath(self, shard_id: str) -> str:
-        return self._store_relpath(shard_id) + ".empty"
+            zarr.open_group(store=_zarr_store(self.output, relpath, mode="w"), mode="w")
+        self._stores.pop(relpath, None)
 
     def _append_array(
         self,
@@ -558,7 +538,6 @@ class _ZarrMergeReducerSink(BaseSink):
         self.episode_ends_path = episode_ends_path
         self.array_chunk_bytes = array_chunk_bytes
         self._merged = False
-        self._remove_parts_on_complete = False
 
     @property
     def counts_output_rows(self) -> bool:
@@ -583,7 +562,6 @@ class _ZarrMergeReducerSink(BaseSink):
     def _merge(self) -> None:
         if self._merged:
             return
-        self._merged = True
 
         stage_index = get_active_stage_index()
         if stage_index is None or stage_index <= 0:
@@ -591,7 +569,17 @@ class _ZarrMergeReducerSink(BaseSink):
                 "write_zarr_reduce requires an active reducer stage with a prior writer stage"
             )
 
-        expected_parts = self._expected_parts(stage_index)
+        expected_parts = [
+            "_parts/"
+            + _render_store_relpath(
+                self.store_template,
+                shard_id=row.shard_id,
+                worker_id=row.worker_token,
+            )
+            for row in sort_finalized_workers(
+                get_finalized_workers(stage_index=stage_index - 1),
+            )
+        ]
         if not expected_parts:
             import zarr
 
@@ -600,7 +588,7 @@ class _ZarrMergeReducerSink(BaseSink):
                 mode="a",
             )
             _clear_final_group(final)
-            self._remove_parts_on_complete = True
+            self._merged = True
             return
 
         parts = self._collect_parts(expected_parts)
@@ -615,12 +603,12 @@ class _ZarrMergeReducerSink(BaseSink):
 
         row_offset = 0
         arrays: dict[str, Any] = {}
-        for part in parts:
+        for relpath, paths in parts:
             source = zarr.open_group(
-                store=_zarr_store(self.output, part.relpath, mode="r"),
+                store=_zarr_store(self.output, relpath, mode="r"),
                 mode="r",
             )
-            for path in sorted(part.paths):
+            for path in sorted(paths):
                 source_array = source[path]
                 if path == self.episode_ends_path:
                     if source_array.shape[0] == 0:
@@ -665,46 +653,29 @@ class _ZarrMergeReducerSink(BaseSink):
                         chunks=getattr(source_array, "chunks", None),
                         compressor=getattr(source_array, "compressor", None),
                     )
+        self._merged = True
 
-        self._remove_parts_on_complete = True
-
-    def on_shard_complete(self, shard_id: str) -> None:
+    def on_shard_finalized(self, shard_id: str) -> None:
         del shard_id
-        if not self._remove_parts_on_complete:
+        if not self._merged:
             return
-        _remove_parts(self.output, best_effort=True)
+        _remove_parts(self.output)
         try:
             if not self.output.ls("_parts"):
                 self.output.rmdir("_parts")
         except (FileNotFoundError, OSError, ValueError):
             pass
 
-    def _expected_parts(self, stage_index: int) -> list[str]:
-        return [
-            self._part_relpath(row.shard_id, row.worker_token)
-            for row in sort_finalized_workers(
-                get_finalized_workers(stage_index=stage_index - 1),
-            )
-        ]
-
-    def _part_relpath(self, shard_id: str, worker_token: str) -> str:
-        relpath = _render_store_relpath(
-            self.store_template,
-            shard_id=shard_id,
-            worker_id=worker_token,
-        )
-        return _part_store_relpath(relpath)
-
-    def _collect_parts(self, expected_parts: Iterable[str]) -> list[_PartStore]:
+    def _collect_parts(
+        self, expected_parts: Iterable[str]
+    ) -> list[tuple[str, set[str]]]:
         import zarr
 
-        parts: list[_PartStore] = []
+        parts: list[tuple[str, set[str]]] = []
         payload_paths: set[str] | None = None
         schemas: dict[str, tuple[tuple[int, ...], np.dtype[Any]]] = {}
         for relpath in expected_parts:
             if not self.output.exists(relpath):
-                if self.output.exists(f"{relpath}.empty"):
-                    continue
                 raise ValueError(f"Zarr part store is missing: {relpath}")
             source = zarr.open_group(
                 store=_zarr_store(self.output, relpath, mode="r"),
@@ -742,7 +713,7 @@ class _ZarrMergeReducerSink(BaseSink):
                     raise ValueError(
                         f"Zarr arrays for {path!r} must have matching dtypes"
                     )
-            parts.append(_PartStore(relpath=relpath, paths=source_paths))
+            parts.append((relpath, source_paths))
         return parts
 
 
@@ -852,10 +823,6 @@ def _as_array(value: Any) -> np.ndarray:
     return np.asarray(value)
 
 
-def _part_store_relpath(relpath: str) -> str:
-    return f"_parts/{relpath}"
-
-
 def _zarr_store(output: DataFolder, path: str = "", *, mode: str = "r"):
     import zarr
 
@@ -876,14 +843,11 @@ def _iter_array_paths(group: Any, prefix: str = "") -> Iterable[str]:
             yield from _iter_array_paths(item, path)
 
 
-def _remove_parts(output: DataFolder, *, best_effort: bool = False) -> None:
+def _remove_parts(output: DataFolder) -> None:
     try:
         output.rm("_parts", recursive=True)
     except FileNotFoundError:
         pass
-    except (OSError, ValueError):
-        if not best_effort:
-            raise
 
 
 def _validate_zarr_stores(output: DataFolder, relpaths: Iterable[str]) -> None:
@@ -893,14 +857,14 @@ def _validate_zarr_stores(output: DataFolder, relpaths: Iterable[str]) -> None:
     schemas: dict[str, tuple[tuple[int, ...], np.dtype[Any]]] = {}
     for relpath in relpaths:
         if not output.exists(relpath):
-            if output.exists(f"{relpath}.empty"):
-                continue
             raise ValueError(f"Zarr store is missing: {relpath}")
         source = zarr.open_group(
             store=_zarr_store(output, relpath, mode="r"),
             mode="r",
         )
         source_paths = set(_iter_array_paths(source))
+        if not source_paths:
+            continue
         if payload_paths is None:
             payload_paths = source_paths
         elif source_paths != payload_paths:
