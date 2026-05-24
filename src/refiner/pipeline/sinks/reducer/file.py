@@ -166,9 +166,13 @@ class FileCleanupReducerSink(BaseSink):
                 continue
 
             managed_path = rel_path
+            marker_path = None
+            if rel_path.endswith(".empty"):
+                managed_path = rel_path[: -len(".empty")]
+                marker_path = rel_path
             match = self._managed_path_pattern.fullmatch(managed_path)
             if match is None and self.recursive:
-                parts = rel_path.split("/")
+                parts = managed_path.split("/")
                 for index in range(1, len(parts)):
                     candidate = "/".join(parts[:index])
                     match = self._managed_path_pattern.fullmatch(candidate)
@@ -179,7 +183,7 @@ class FileCleanupReducerSink(BaseSink):
                 continue
             if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
                 continue
-            stale_managed_paths.add(managed_path)
+            stale_managed_paths.add(marker_path or managed_path)
 
         for path in sorted(stale_asset_attempts):
             try:
@@ -209,7 +213,7 @@ class FileCleanupReducerSink(BaseSink):
             for path in paths:
                 try:
                     next_paths.extend(self.output.ls(path, detail=False))
-                except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
+                except (FileNotFoundError, NotADirectoryError):
                     continue
             paths = next_paths
         return [

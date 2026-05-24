@@ -965,6 +965,45 @@ def test_file_cleanup_reducer_removes_non_finalized_directories(tmp_path) -> Non
     assert not loser_dir.exists()
 
 
+def test_file_cleanup_reducer_removes_non_finalized_empty_markers(tmp_path) -> None:
+    output_dir = tmp_path / "zarr-cleanup-empty-markers"
+    shard_id = "0123456789ab"
+    winner_worker_id = "worker-2"
+    loser_worker_id = "worker-1"
+    winner_marker = (
+        output_dir / f"{shard_id}__w{worker_token_for(winner_worker_id)}.zarr.empty"
+    )
+    loser_marker = (
+        output_dir / f"{shard_id}__w{worker_token_for(loser_worker_id)}.zarr.empty"
+    )
+    output_dir.mkdir(parents=True)
+    winner_marker.write_bytes(b"")
+    loser_marker.write_bytes(b"")
+
+    reducer = FileCleanupReducerSink(
+        output_dir,
+        filename_template="{shard_id}__w{worker_id}.zarr",
+        reducer_name="cleanup_zarr",
+        recursive=True,
+    )
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(
+            RuntimeLifecycle,
+            _FinalizedWorkersRuntime(
+                [FinalizedShardWorker(shard_id=shard_id, worker_id=winner_worker_id)]
+            ),
+        ),
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert winner_marker.exists()
+    assert not loser_marker.exists()
+
+
 def test_file_cleanup_reducer_removes_non_finalized_nested_directories(
     tmp_path,
 ) -> None:
@@ -1089,6 +1128,34 @@ def test_file_cleanup_reducer_ignores_files_during_recursive_traversal(
     assert winner_dir.exists()
     assert not loser_dir.exists()
     assert (output_dir / "split" / "README.txt").read_text(encoding="utf-8") == "notes"
+
+
+def test_file_cleanup_reducer_propagates_recursive_listing_errors(
+    tmp_path, monkeypatch
+) -> None:
+    output_dir = tmp_path / "zarr-cleanup-list-error"
+    output_dir.mkdir()
+    reducer = FileCleanupReducerSink(
+        output_dir,
+        filename_template="{shard_id}__w{worker_id}.zarr",
+        reducer_name="cleanup_zarr",
+        recursive=True,
+    )
+
+    def fail_ls(*_args, **_kwargs):
+        raise OSError("list failed")
+
+    monkeypatch.setattr(reducer.output, "ls", fail_ls)
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        with pytest.raises(OSError, match="list failed"):
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
 
 def test_file_cleanup_reducer_tolerates_duplicate_listed_paths(
