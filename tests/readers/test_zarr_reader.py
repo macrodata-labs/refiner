@@ -16,11 +16,11 @@ from refiner.robotics.row import RoboticsRow
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import RowRangeDescriptor
-from refiner.pipeline.sinks.zarr import (
-    _ZarrCleanupReducerSink,
-    _ZarrMergeReducerSink,
-    ZarrSink,
+from refiner.pipeline.sinks.reducer.zarr import (
+    ZarrCleanupReducerSink,
+    ZarrMergeReducerSink,
 )
+from refiner.pipeline.sinks.zarr import ZarrSink
 from refiner.worker.context import set_active_run_context, worker_token_for
 from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 
@@ -1113,7 +1113,7 @@ def test_write_zarr_non_reduced_cleanup_rejects_missing_finalized_store(
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
         with pytest.raises(ValueError, match="Zarr store is missing"):
-            _ZarrCleanupReducerSink(
+            ZarrCleanupReducerSink(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
             ).write_block([DictRow({}, shard_id="reduce")])
@@ -1164,7 +1164,7 @@ def test_write_zarr_non_reduced_cleanup_keeps_empty_stores_retryable(
             worker_name=None,
             runtime_lifecycle=cast(RuntimeLifecycle, runtime),
         ):
-            _ZarrCleanupReducerSink(
+            ZarrCleanupReducerSink(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
             ).write_block([DictRow({}, shard_id="reduce")])
@@ -1374,7 +1374,7 @@ def test_write_zarr_single_store_rejects_inconsistent_part_payloads(
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
         with pytest.raises(ValueError, match="same payload arrays"):
-            _ZarrMergeReducerSink(
+            ZarrMergeReducerSink(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
@@ -1411,7 +1411,7 @@ def test_write_zarr_single_store_rejects_part_missing_episode_ends(
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
         with pytest.raises(ValueError, match="meta/episode_ends"):
-            _ZarrMergeReducerSink(
+            ZarrMergeReducerSink(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
@@ -1448,7 +1448,7 @@ def test_write_zarr_single_store_rejects_missing_finalized_part(
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
         with pytest.raises(ValueError, match="part store is missing"):
-            _ZarrMergeReducerSink(
+            ZarrMergeReducerSink(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
@@ -1494,7 +1494,7 @@ def test_write_zarr_single_store_removes_parts_only_on_completion(
         worker_name=None,
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
-        reducer = _ZarrMergeReducerSink(
+        reducer = ZarrMergeReducerSink(
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
@@ -1534,7 +1534,7 @@ def test_write_zarr_single_store_zero_shard_replace_clears_existing_output(
         worker_name=None,
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
-        _ZarrMergeReducerSink(
+        ZarrMergeReducerSink(
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
@@ -1573,7 +1573,7 @@ def test_write_zarr_single_store_parts_are_resume_stable(tmp_path: Path) -> None
         worker_name=None,
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
-        _ZarrMergeReducerSink(
+        ZarrMergeReducerSink(
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
@@ -1663,7 +1663,7 @@ def test_write_zarr_single_store_rejects_part_dtype_drift(
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
         with pytest.raises(ValueError, match="matching dtypes"):
-            _ZarrMergeReducerSink(
+            ZarrMergeReducerSink(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
