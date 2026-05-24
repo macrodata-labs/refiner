@@ -945,7 +945,6 @@ def test_file_cleanup_reducer_removes_non_finalized_directories(tmp_path) -> Non
         output_dir,
         filename_template="{shard_id}__w{worker_id}.zarr",
         reducer_name="cleanup_zarr",
-        recursive=True,
     )
     with set_active_run_context(
         job_id="job",
@@ -987,7 +986,6 @@ def test_file_cleanup_reducer_removes_non_finalized_nested_directories(
         output_dir,
         filename_template="split/{shard_id}__w{worker_id}.zarr",
         reducer_name="cleanup_zarr",
-        recursive=True,
     )
     with set_active_run_context(
         job_id="job",
@@ -1027,7 +1025,6 @@ def test_file_cleanup_reducer_removes_dynamic_nested_directories(tmp_path) -> No
         output_dir,
         filename_template="split/{shard_id}/{worker_id}.zarr",
         reducer_name="cleanup_zarr",
-        recursive=True,
     )
     with set_active_run_context(
         job_id="job",
@@ -1047,7 +1044,7 @@ def test_file_cleanup_reducer_removes_dynamic_nested_directories(tmp_path) -> No
     assert not loser_dir.exists()
 
 
-def test_file_cleanup_reducer_ignores_files_during_recursive_traversal(
+def test_file_cleanup_reducer_ignores_files_during_template_listing(
     tmp_path,
 ) -> None:
     output_dir = tmp_path / "zarr-cleanup-mixed"
@@ -1070,7 +1067,6 @@ def test_file_cleanup_reducer_ignores_files_during_recursive_traversal(
         output_dir,
         filename_template="split/{shard_id}/{worker_id}.zarr",
         reducer_name="cleanup_zarr",
-        recursive=True,
     )
     with set_active_run_context(
         job_id="job",
@@ -1091,7 +1087,7 @@ def test_file_cleanup_reducer_ignores_files_during_recursive_traversal(
     assert (output_dir / "split" / "README.txt").read_text(encoding="utf-8") == "notes"
 
 
-def test_file_cleanup_reducer_propagates_recursive_listing_errors(
+def test_file_cleanup_reducer_propagates_template_listing_errors(
     tmp_path, monkeypatch
 ) -> None:
     output_dir = tmp_path / "zarr-cleanup-list-error"
@@ -1100,7 +1096,6 @@ def test_file_cleanup_reducer_propagates_recursive_listing_errors(
         output_dir,
         filename_template="{shard_id}__w{worker_id}.zarr",
         reducer_name="cleanup_zarr",
-        recursive=True,
     )
 
     def fail_ls(*_args, **_kwargs):
@@ -1141,8 +1136,12 @@ def test_file_cleanup_reducer_tolerates_duplicate_listed_paths(
     )
     monkeypatch.setattr(
         reducer.output,
-        "find",
-        lambda _: [winner_path.name, winner_path.name, loser_path.name],
+        "ls",
+        lambda *_args, **_kwargs: [
+            winner_path.name,
+            winner_path.name,
+            loser_path.name,
+        ],
     )
 
     with set_active_run_context(

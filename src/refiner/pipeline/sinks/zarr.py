@@ -468,7 +468,6 @@ class _ZarrCleanupReducerSink(BaseSink):
             output=self.output,
             filename_template=store_template,
             reducer_name="write_zarr_reduce",
-            recursive=True,
         )
 
     @property
