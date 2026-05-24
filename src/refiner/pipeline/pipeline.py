@@ -441,7 +441,6 @@ class RefinerPipeline:
         video_frame_batch_size: int = 8,
         array_chunk_bytes: int = 8 * 1024 * 1024,
         reduce_to_single_store: bool = True,
-        overwrite: bool = True,
     ) -> "RefinerPipeline":
         """Write rows to Zarr array stores.
 
@@ -462,8 +461,6 @@ class RefinerPipeline:
             reduce_to_single_store: If True, add a reducer stage that merges
                 shard-local stores into one Zarr group at ``output``. Defaults
                 to True.
-            overwrite: If True, replace Refiner-managed output at the target.
-                If False, fail when final output already exists.
         """
         return self.with_sink(
             ZarrSink(
@@ -474,7 +471,6 @@ class RefinerPipeline:
                 video_frame_batch_size=video_frame_batch_size,
                 array_chunk_bytes=array_chunk_bytes,
                 reduce_to_single_store=reduce_to_single_store,
-                overwrite=overwrite,
             )
         )
 

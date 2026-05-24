@@ -10,7 +10,6 @@ import pytest
 import zarr
 
 import refiner as mdr
-from refiner.cli.run.local import LocalLaunchResumeError
 from refiner.io.datafolder import DataFolder
 from refiner.io import DataFile
 from refiner.robotics.row import RoboticsRow
@@ -956,8 +955,8 @@ def test_write_zarr_rejects_empty_default_robotics_arrays(tmp_path: Path) -> Non
         ZarrSink(str(tmp_path / "empty-defaults.zarr")).write_block(rows)
 
 
-def test_write_zarr_single_store_overwrite_ignores_stale_parts(tmp_path: Path) -> None:
-    zarr_out = tmp_path / "single-overwrite.zarr"
+def test_write_zarr_single_store_replace_ignores_stale_parts(tmp_path: Path) -> None:
+    zarr_out = tmp_path / "single-replace.zarr"
 
     (
         mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
@@ -967,7 +966,7 @@ def test_write_zarr_single_store_overwrite_ignores_stale_parts(tmp_path: Path) -
             reduce_to_single_store=True,
         )
         .launch_local(
-            name="zarr-single-overwrite-first",
+            name="zarr-single-replace-first",
             num_workers=1,
             rundir=str(tmp_path / "run-first"),
         )
@@ -985,7 +984,7 @@ def test_write_zarr_single_store_overwrite_ignores_stale_parts(tmp_path: Path) -
             reduce_to_single_store=True,
         )
         .launch_local(
-            name="zarr-single-overwrite-second",
+            name="zarr-single-replace-second",
             num_workers=1,
             rundir=str(tmp_path / "run-second"),
         )
@@ -1000,10 +999,10 @@ def test_write_zarr_single_store_overwrite_ignores_stale_parts(tmp_path: Path) -
     assert not stale_part.exists()
 
 
-def test_write_zarr_sharded_overwrite_removes_single_store_payload_and_parts(
+def test_write_zarr_sharded_replace_removes_single_store_payload_and_parts(
     tmp_path: Path,
 ) -> None:
-    zarr_out = tmp_path / "sharded-overwrites-single-store.zarr"
+    zarr_out = tmp_path / "sharded-replaces-single-store.zarr"
 
     (
         mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
@@ -1013,9 +1012,9 @@ def test_write_zarr_sharded_overwrite_removes_single_store_payload_and_parts(
             reduce_to_single_store=True,
         )
         .launch_local(
-            name="zarr-sharded-overwrite-first",
+            name="zarr-sharded-replace-first",
             num_workers=1,
-            rundir=str(tmp_path / "run-sharded-overwrite-first"),
+            rundir=str(tmp_path / "run-sharded-replace-first"),
         )
     )
     stale_part = zarr_out / "_parts" / "old__wold.zarr"
@@ -1030,9 +1029,9 @@ def test_write_zarr_sharded_overwrite_removes_single_store_payload_and_parts(
             reduce_to_single_store=False,
         )
         .launch_local(
-            name="zarr-sharded-overwrite-second",
+            name="zarr-sharded-replace-second",
             num_workers=1,
-            rundir=str(tmp_path / "run-sharded-overwrite-second"),
+            rundir=str(tmp_path / "run-sharded-replace-second"),
         )
     )
 
@@ -1053,10 +1052,10 @@ def test_write_zarr_sharded_overwrite_removes_single_store_payload_and_parts(
     assert row["episode_ends"].tolist() == [2]
 
 
-def test_write_zarr_sharded_overwrite_clears_payload_under_store_prefix(
+def test_write_zarr_sharded_replace_clears_payload_under_store_prefix(
     tmp_path: Path,
 ) -> None:
-    zarr_out = tmp_path / "sharded-overwrites-nested-single-store.zarr"
+    zarr_out = tmp_path / "sharded-replaces-nested-single-store.zarr"
 
     (
         mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
@@ -1066,9 +1065,9 @@ def test_write_zarr_sharded_overwrite_clears_payload_under_store_prefix(
             reduce_to_single_store=True,
         )
         .launch_local(
-            name="zarr-sharded-nested-overwrite-first",
+            name="zarr-sharded-nested-replace-first",
             num_workers=1,
-            rundir=str(tmp_path / "run-sharded-nested-overwrite-first"),
+            rundir=str(tmp_path / "run-sharded-nested-replace-first"),
         )
     )
 
@@ -1081,9 +1080,9 @@ def test_write_zarr_sharded_overwrite_clears_payload_under_store_prefix(
             reduce_to_single_store=False,
         )
         .launch_local(
-            name="zarr-sharded-nested-overwrite-second",
+            name="zarr-sharded-nested-replace-second",
             num_workers=1,
-            rundir=str(tmp_path / "run-sharded-nested-overwrite-second"),
+            rundir=str(tmp_path / "run-sharded-nested-replace-second"),
         )
     )
 
@@ -1097,309 +1096,6 @@ def test_write_zarr_sharded_overwrite_clears_payload_under_store_prefix(
         file_path_column=None,
     ).take(1)[0]
     np.testing.assert_allclose(row["action"], [[1.0], [2.0]])
-
-
-def test_write_zarr_single_store_rejects_existing_output_when_not_overwriting(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "single-no-overwrite.zarr"
-
-    (
-        mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
-        .write_zarr(
-            str(zarr_out),
-            arrays={"data/action": "action"},
-            reduce_to_single_store=True,
-        )
-        .launch_local(
-            name="zarr-single-no-overwrite-first",
-            num_workers=1,
-            rundir=str(tmp_path / "run-no-overwrite-first"),
-        )
-    )
-
-    with pytest.raises(LocalLaunchResumeError):
-        (
-            mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
-            .write_zarr(
-                str(zarr_out),
-                arrays={"data/action": "action"},
-                reduce_to_single_store=True,
-                overwrite=False,
-            )
-            .launch_local(
-                name="zarr-single-no-overwrite-second",
-                num_workers=1,
-                rundir=str(tmp_path / "run-no-overwrite-second"),
-            )
-        )
-
-    row = mdr.read_zarr(
-        zarr_out,
-        arrays={"action": "data/action"},
-        file_path_column=None,
-    ).take(1)[0]
-    np.testing.assert_allclose(row["action"], [[0.0]])
-
-
-def test_write_zarr_single_store_rejects_attrs_only_output_when_not_overwriting(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "single-attrs-no-overwrite.zarr"
-    root = _open_test_zarr(zarr_out, mode="w")
-    root.attrs["task"] = "old"
-
-    with pytest.raises(LocalLaunchResumeError):
-        (
-            mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
-            .write_zarr(
-                str(zarr_out),
-                arrays={"data/action": "action"},
-                reduce_to_single_store=True,
-                overwrite=False,
-            )
-            .launch_local(
-                name="zarr-single-attrs-no-overwrite",
-                num_workers=1,
-                rundir=str(tmp_path / "run-attrs-no-overwrite"),
-            )
-        )
-
-    root = _open_test_zarr(zarr_out, mode="r")
-    assert dict(root.attrs) == {"task": "old"}
-
-
-def test_write_zarr_single_store_rejects_empty_existing_store_when_not_overwriting(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "single-empty-existing-no-overwrite.zarr"
-
-    (
-        mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
-        .filter(lambda row: False)
-        .write_zarr(
-            str(zarr_out),
-            arrays={"data/action": "action"},
-            reduce_to_single_store=True,
-        )
-        .launch_local(
-            name="zarr-single-empty-existing-first",
-            num_workers=1,
-            rundir=str(tmp_path / "run-empty-existing-first"),
-        )
-    )
-
-    with pytest.raises(LocalLaunchResumeError):
-        (
-            mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
-            .write_zarr(
-                str(zarr_out),
-                arrays={"data/action": "action"},
-                reduce_to_single_store=True,
-                overwrite=False,
-            )
-            .launch_local(
-                name="zarr-single-empty-existing-second",
-                num_workers=1,
-                rundir=str(tmp_path / "run-empty-existing-second"),
-            )
-        )
-
-
-def test_write_zarr_rejects_existing_non_reduced_output_when_not_overwriting(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite.zarr"
-
-    (
-        mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
-        .write_zarr(
-            str(zarr_out),
-            arrays={"data/action": "action"},
-            reduce_to_single_store=False,
-        )
-        .launch_local(
-            name="zarr-sharded-no-overwrite-first",
-            num_workers=1,
-            rundir=str(tmp_path / "run-sharded-no-overwrite-first"),
-        )
-    )
-
-    with pytest.raises(LocalLaunchResumeError):
-        (
-            mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
-            .write_zarr(
-                str(zarr_out),
-                arrays={"data/action": "action"},
-                overwrite=False,
-                reduce_to_single_store=False,
-            )
-            .launch_local(
-                name="zarr-sharded-no-overwrite-second",
-                num_workers=1,
-                rundir=str(tmp_path / "run-sharded-no-overwrite-second"),
-            )
-        )
-
-    rows = [
-        mdr.read_zarr(
-            store,
-            arrays={"action": "data/action"},
-            file_path_column=None,
-        ).take(1)[0]
-        for store in zarr_out.glob("*.zarr")
-    ]
-    assert sorted(float(row["action"][0][0]) for row in rows) == [0.0]
-    assert not (zarr_out / "_parts").exists()
-
-
-def test_write_zarr_non_reduced_no_overwrite_preserves_parts_on_conflict_for_resume(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-conflict-resume.zarr"
-    shard_id = "0123456789ab"
-    worker_id = "worker-a"
-    relpath = f"{shard_id}__w{worker_token_for(worker_id)}.zarr"
-    part = zarr_out / "_parts" / relpath
-    existing = zarr_out / "existing.zarr"
-    _write_part_zarr(part, {"data/action": np.asarray([[1.0]], dtype=np.float32)})
-    _write_part_zarr(existing, {"data/action": np.asarray([[0.0]], dtype=np.float32)})
-
-    runtime = _FinalizedWorkersRuntime(
-        [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
-    )
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        reducer = ZarrSink(
-            str(zarr_out),
-            arrays={"data/action": "action"},
-            overwrite=False,
-            reduce_to_single_store=False,
-        ).build_reducer()
-        assert reducer is not None
-        with pytest.raises(ValueError, match="output already exists"):
-            reducer.write_block([DictRow({}, shard_id="reduce")])
-
-    assert part.exists()
-    shutil.rmtree(existing)
-
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        reducer = ZarrSink(
-            str(zarr_out),
-            arrays={"data/action": "action"},
-            overwrite=False,
-            reduce_to_single_store=False,
-        ).build_reducer()
-        assert reducer is not None
-        reducer.write_block([DictRow({}, shard_id="reduce")])
-
-    assert not part.exists()
-    row = mdr.read_zarr(
-        zarr_out / relpath,
-        arrays={"action": "data/action"},
-        file_path_column=None,
-    ).take(1)[0]
-    np.testing.assert_allclose(row["action"], [[1.0]])
-
-
-def test_write_zarr_non_reduced_no_overwrite_preserves_finalized_retry_output(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-retry.zarr"
-    shard_id = "0123456789ab"
-    loser_worker_id = "loser"
-    winner_worker_id = "winner"
-    loser = zarr_out / f"{shard_id}__w{worker_token_for(loser_worker_id)}.zarr"
-    winner = zarr_out / f"{shard_id}__w{worker_token_for(winner_worker_id)}.zarr"
-    _write_part_zarr(loser, {"data/action": np.asarray([[0.0]], dtype=np.float32)})
-    _write_part_zarr(winner, {"data/action": np.asarray([[1.0]], dtype=np.float32)})
-
-    reducer = ZarrSink(
-        str(zarr_out),
-        arrays={"data/action": "action"},
-        overwrite=False,
-        reduce_to_single_store=False,
-    ).build_reducer()
-    assert reducer is not None
-
-    runtime = _FinalizedWorkersRuntime(
-        [FinalizedShardWorker(shard_id=shard_id, worker_id=winner_worker_id)]
-    )
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        with pytest.raises(ValueError, match="output already exists"):
-            reducer.write_block([DictRow({}, shard_id="reduce")])
-
-    assert loser.exists()
-    assert winner.exists()
-
-
-def test_write_zarr_non_reduced_no_overwrite_rejects_missing_finalized_part(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-missing-part.zarr"
-    reducer = ZarrSink(
-        str(zarr_out),
-        arrays={"data/action": "action"},
-        overwrite=False,
-        reduce_to_single_store=False,
-    ).build_reducer()
-    assert reducer is not None
-
-    runtime = _FinalizedWorkersRuntime(
-        [FinalizedShardWorker(shard_id="shard-a", worker_id="worker-a")]
-    )
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        with pytest.raises(ValueError, match="Zarr store is missing"):
-            reducer.write_block([DictRow({}, shard_id="reduce")])
-
-
-def test_write_zarr_non_reduced_no_overwrite_rejects_unsafe_finalized_part_path(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-unsafe-finalized.zarr"
-    reducer = ZarrSink(
-        str(zarr_out),
-        arrays={"data/action": "action"},
-        overwrite=False,
-        reduce_to_single_store=False,
-    ).build_reducer()
-    assert reducer is not None
-
-    runtime = _FinalizedWorkersRuntime(
-        [FinalizedShardWorker(shard_id="../escape", worker_id="worker-a")]
-    )
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        with pytest.raises(ValueError, match="must not contain"):
-            reducer.write_block([DictRow({}, shard_id="reduce")])
 
 
 def test_write_zarr_non_reduced_cleanup_rejects_missing_finalized_store(
@@ -1476,302 +1172,6 @@ def test_write_zarr_non_reduced_cleanup_keeps_empty_markers_retryable(
     assert marker.exists()
 
 
-def test_write_zarr_non_reduced_no_overwrite_skips_empty_parts(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-empty-part.zarr"
-
-    (
-        mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
-        .filter(lambda row: False)
-        .write_zarr(
-            str(zarr_out),
-            arrays={"data/action": "action"},
-            overwrite=False,
-            reduce_to_single_store=False,
-        )
-        .launch_local(
-            name="zarr-sharded-empty-no-overwrite",
-            num_workers=1,
-            rundir=str(tmp_path / "run-sharded-empty-no-overwrite"),
-        )
-    )
-
-    assert not list(zarr_out.glob("*.zarr"))
-    assert not (zarr_out / "_parts").exists()
-
-
-def test_write_zarr_non_reduced_no_overwrite_empty_publish_is_retryable(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-empty-publish-retry.zarr"
-    marker = zarr_out / "_refiner" / "write_zarr_publish.done"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
-    reducer = ZarrSink(
-        str(zarr_out),
-        arrays={"data/action": "action"},
-        overwrite=False,
-        reduce_to_single_store=False,
-    ).build_reducer()
-    assert reducer is not None
-
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
-    ):
-        reducer.write_block([DictRow({}, shard_id="reduce")])
-
-
-def test_write_zarr_non_reduced_rejects_empty_existing_output_when_not_overwriting(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-empty-existing-no-overwrite.zarr"
-
-    (
-        mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
-        .filter(lambda row: False)
-        .write_zarr(
-            str(zarr_out),
-            arrays={"data/action": "action"},
-            overwrite=False,
-            reduce_to_single_store=False,
-        )
-        .launch_local(
-            name="zarr-sharded-empty-existing-first",
-            num_workers=1,
-            rundir=str(tmp_path / "run-sharded-empty-existing-first"),
-        )
-    )
-
-    with pytest.raises(LocalLaunchResumeError):
-        (
-            mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
-            .write_zarr(
-                str(zarr_out),
-                arrays={"data/action": "action"},
-                overwrite=False,
-                reduce_to_single_store=False,
-            )
-            .launch_local(
-                name="zarr-sharded-empty-existing-second",
-                num_workers=1,
-                rundir=str(tmp_path / "run-sharded-empty-existing-second"),
-            )
-        )
-
-    assert not list(zarr_out.glob("*.zarr"))
-    assert not (zarr_out / "_parts").exists()
-
-
-def test_write_zarr_non_reduced_no_overwrite_retry_removes_partial_publish(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-partial-publish.zarr"
-    shard_id = "0123456789ab"
-    worker_id = "worker-a"
-    relpath = f"{shard_id}__w{worker_token_for(worker_id)}.zarr"
-    _write_part_zarr(
-        zarr_out / "_parts" / relpath,
-        {"data/action": np.asarray([[1.0]], dtype=np.float32)},
-    )
-    _write_part_zarr(
-        zarr_out / relpath,
-        {"data/action": np.asarray([[0.0]], dtype=np.float32)},
-    )
-    marker = zarr_out / "_refiner" / "write_zarr_publish.started"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
-
-    reducer = ZarrSink(
-        str(zarr_out),
-        arrays={"data/action": "action"},
-        overwrite=False,
-        reduce_to_single_store=False,
-    ).build_reducer()
-    assert reducer is not None
-    runtime = _FinalizedWorkersRuntime(
-        [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
-    )
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        reducer.write_block([DictRow({}, shard_id="reduce")])
-
-    row = mdr.read_zarr(
-        zarr_out / relpath,
-        arrays={"action": "data/action"},
-        file_path_column=None,
-    ).take(1)[0]
-    np.testing.assert_allclose(row["action"], [[1.0]])
-    assert not (zarr_out / "_parts").exists()
-
-
-def test_write_zarr_non_reduced_no_overwrite_retry_keeps_final_when_part_missing(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-retry-missing-part.zarr"
-    shard_id = "0123456789ab"
-    worker_id = "worker-a"
-    relpath = f"{shard_id}__w{worker_token_for(worker_id)}.zarr"
-    _write_part_zarr(
-        zarr_out / relpath,
-        {"data/action": np.asarray([[0.0]], dtype=np.float32)},
-    )
-    marker = zarr_out / "_refiner" / "write_zarr_publish.started"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
-
-    reducer = ZarrSink(
-        str(zarr_out),
-        arrays={"data/action": "action"},
-        overwrite=False,
-        reduce_to_single_store=False,
-    ).build_reducer()
-    assert reducer is not None
-    runtime = _FinalizedWorkersRuntime(
-        [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
-    )
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        with pytest.raises(ValueError, match="Zarr store is missing"):
-            reducer.write_block([DictRow({}, shard_id="reduce")])
-
-    row = mdr.read_zarr(
-        zarr_out / relpath,
-        arrays={"action": "data/action"},
-        file_path_column=None,
-    ).take(1)[0]
-    np.testing.assert_allclose(row["action"], [[0.0]])
-
-
-def test_write_zarr_non_reduced_no_overwrite_replaces_stale_staging_part(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-stale-staging.zarr"
-    shard_id = "shard-a"
-    worker_id = "worker-a"
-    part = zarr_out / "_parts" / f"{shard_id}__w{worker_token_for(worker_id)}.zarr"
-    _write_part_zarr(part, {"data/action": np.asarray([[0.0]], dtype=np.float32)})
-
-    with set_active_run_context(
-        job_id="local",
-        stage_index=0,
-        worker_id=worker_id,
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
-    ):
-        ZarrSink(
-            str(zarr_out),
-            arrays={"data/action": "action"},
-            overwrite=False,
-            reduce_to_single_store=False,
-        ).write_block([DictRow({"action": [[1.0]]}, shard_id=shard_id)])
-
-    row = mdr.read_zarr(
-        part,
-        arrays={"action": "data/action"},
-        file_path_column=None,
-    ).take(1)[0]
-    np.testing.assert_allclose(row["action"], [[1.0]])
-
-
-def test_write_zarr_non_reduced_no_overwrite_completed_publish_is_retryable(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-complete-retry.zarr"
-    shard_id = "0123456789ab"
-    worker_id = "worker-a"
-    relpath = f"{shard_id}__w{worker_token_for(worker_id)}.zarr"
-    _write_part_zarr(
-        zarr_out / relpath,
-        {"data/action": np.asarray([[1.0]], dtype=np.float32)},
-    )
-    _write_part_zarr(
-        zarr_out / "_parts" / relpath,
-        {"data/action": np.asarray([[1.0]], dtype=np.float32)},
-    )
-    marker = zarr_out / "_refiner" / "write_zarr_publish.done"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
-
-    reducer = ZarrSink(
-        str(zarr_out),
-        arrays={"data/action": "action"},
-        overwrite=False,
-        reduce_to_single_store=False,
-    ).build_reducer()
-    assert reducer is not None
-    runtime = _FinalizedWorkersRuntime(
-        [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
-    )
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        reducer.write_block([DictRow({}, shard_id="reduce")])
-
-    row = mdr.read_zarr(
-        zarr_out / relpath,
-        arrays={"action": "data/action"},
-        file_path_column=None,
-    ).take(1)[0]
-    np.testing.assert_allclose(row["action"], [[1.0]])
-    assert not (zarr_out / "_parts").exists()
-
-
-def test_write_zarr_allows_fresh_non_reduced_multiworker_no_overwrite(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-fresh-no-overwrite.zarr"
-
-    (
-        mdr.from_items(
-            [{"action": [[0.0]]}, {"action": [[1.0]]}],
-            items_per_shard=1,
-        )
-        .write_zarr(
-            str(zarr_out),
-            arrays={"data/action": "action"},
-            overwrite=False,
-            reduce_to_single_store=False,
-        )
-        .launch_local(
-            name="zarr-sharded-fresh-no-overwrite",
-            num_workers=2,
-            rundir=str(tmp_path / "run-sharded-fresh-no-overwrite"),
-        )
-    )
-
-    rows = [
-        mdr.read_zarr(
-            store,
-            arrays={"action": "data/action"},
-            file_path_column=None,
-        ).take(1)[0]
-        for store in sorted(zarr_out.glob("*.zarr"))
-    ]
-    assert len(rows) == 2
-    assert sorted(float(row["action"][0][0]) for row in rows) == [0.0, 1.0]
-    assert not (zarr_out / "_parts").exists()
-    assert not (zarr_out / "_refiner" / "write_zarr_publish.started").exists()
-
-
 def test_write_zarr_rejects_sharded_schema_drift_after_cleanup(
     tmp_path: Path,
 ) -> None:
@@ -1827,57 +1227,6 @@ def test_write_zarr_rejects_sharded_schema_drift_after_cleanup(
             reducer.write_block([DictRow({}, shard_id="reduce")])
 
 
-def test_write_zarr_no_overwrite_rejects_part_schema_drift_before_publish(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "sharded-no-overwrite-schema-drift.zarr"
-    first_worker = "worker-a"
-    second_worker = "worker-b"
-    _write_part_zarr(
-        zarr_out / "_parts" / f"shard-a__w{worker_token_for(first_worker)}.zarr",
-        {"data/action": np.asarray([[0.0]], dtype=np.float32)},
-    )
-    _write_part_zarr(
-        zarr_out / "_parts" / f"shard-b__w{worker_token_for(second_worker)}.zarr",
-        {
-            "data/action": np.asarray([[1.0]], dtype=np.float32),
-            "data/state": np.asarray([[2.0]], dtype=np.float32),
-        },
-    )
-    reducer = ZarrSink(
-        str(zarr_out),
-        arrays={"data/action": "action"},
-        overwrite=False,
-        reduce_to_single_store=False,
-    ).build_reducer()
-    assert reducer is not None
-    runtime = _FinalizedWorkersRuntime(
-        [
-            FinalizedShardWorker(
-                shard_id="shard-a",
-                worker_id=first_worker,
-                global_ordinal=0,
-            ),
-            FinalizedShardWorker(
-                shard_id="shard-b",
-                worker_id=second_worker,
-                global_ordinal=1,
-            ),
-        ]
-    )
-
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        with pytest.raises(ValueError, match="same arrays"):
-            reducer.write_block([DictRow({}, shard_id="reduce")])
-    assert not list(zarr_out.glob("*.zarr"))
-
-
 def test_write_zarr_single_store_skips_empty_shards(tmp_path: Path) -> None:
     zarr_out = tmp_path / "single-empty-shards.zarr"
 
@@ -1902,10 +1251,10 @@ def test_write_zarr_single_store_skips_empty_shards(tmp_path: Path) -> None:
     assert not (zarr_out / "_parts").exists()
 
 
-def test_write_zarr_single_store_empty_overwrite_ignores_stale_done_marker(
+def test_write_zarr_single_store_empty_replace_ignores_stale_done_marker(
     tmp_path: Path,
 ) -> None:
-    zarr_out = tmp_path / "single-empty-overwrite-stale-done.zarr"
+    zarr_out = tmp_path / "single-empty-replace-stale-done.zarr"
 
     (
         mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
@@ -2030,7 +1379,6 @@ def test_write_zarr_single_store_rejects_inconsistent_part_payloads(
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
                 array_chunk_bytes=1024,
-                overwrite=True,
             ).write_block([DictRow({}, shard_id="reduce")])
     assert first_part.exists()
     assert second_part.exists()
@@ -2068,7 +1416,6 @@ def test_write_zarr_single_store_rejects_part_missing_episode_ends(
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
                 array_chunk_bytes=1024,
-                overwrite=True,
             ).write_block([DictRow({}, shard_id="reduce")])
 
 
@@ -2106,7 +1453,6 @@ def test_write_zarr_single_store_rejects_missing_finalized_part(
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
                 array_chunk_bytes=1024,
-                overwrite=True,
             ).write_block([DictRow({}, shard_id="reduce")])
 
     row = mdr.read_zarr(
@@ -2118,28 +1464,19 @@ def test_write_zarr_single_store_rejects_missing_finalized_part(
     assert row["episode_ends"].tolist() == [1]
 
 
-def test_write_zarr_single_store_completed_merge_is_retryable(
+def test_write_zarr_single_store_removes_parts_only_on_completion(
     tmp_path: Path,
 ) -> None:
-    zarr_out = tmp_path / "single-completed-retry.zarr"
+    zarr_out = tmp_path / "single-complete-cleans-parts.zarr"
     worker_id = "worker-a"
+    part = zarr_out / "_parts" / f"shard-a__w{worker_token_for(worker_id)}.zarr"
     _write_part_zarr(
-        zarr_out,
+        part,
         {
             "data/action": np.asarray([[9.0]], dtype=np.float32),
             "meta/episode_ends": np.asarray([1], dtype=np.int64),
         },
     )
-    _write_part_zarr(
-        zarr_out / "_parts" / f"shard-a__w{worker_token_for(worker_id)}.zarr",
-        {
-            "data/action": np.asarray([[9.0]], dtype=np.float32),
-            "meta/episode_ends": np.asarray([1], dtype=np.int64),
-        },
-    )
-    marker = zarr_out / "_refiner" / "write_zarr.done"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
     runtime = _FinalizedWorkersRuntime(
         [
             FinalizedShardWorker(
@@ -2157,13 +1494,15 @@ def test_write_zarr_single_store_completed_merge_is_retryable(
         worker_name=None,
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
-        _ZarrMergeReducerSink(
+        reducer = _ZarrMergeReducerSink(
             str(zarr_out),
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
             array_chunk_bytes=1024,
-            overwrite=True,
-        ).write_block([DictRow({}, shard_id="reduce")])
+        )
+        reducer.write_block([DictRow({}, shard_id="reduce")])
+        assert part.exists()
+        reducer.on_shard_complete("reduce")
 
     row = mdr.read_zarr(
         zarr_out,
@@ -2175,10 +1514,10 @@ def test_write_zarr_single_store_completed_merge_is_retryable(
     assert not (zarr_out / "_parts").exists()
 
 
-def test_write_zarr_single_store_zero_shard_overwrite_ignores_stale_done_marker(
+def test_write_zarr_single_store_zero_shard_replace_clears_existing_output(
     tmp_path: Path,
 ) -> None:
-    zarr_out = tmp_path / "single-zero-shard-overwrite.zarr"
+    zarr_out = tmp_path / "single-zero-shard-replace.zarr"
     _write_part_zarr(
         zarr_out,
         {
@@ -2186,9 +1525,6 @@ def test_write_zarr_single_store_zero_shard_overwrite_ignores_stale_done_marker(
             "meta/episode_ends": np.asarray([1], dtype=np.int64),
         },
     )
-    marker = zarr_out / "_refiner" / "write_zarr.done"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
     runtime = _FinalizedWorkersRuntime([])
 
     with set_active_run_context(
@@ -2203,221 +1539,10 @@ def test_write_zarr_single_store_zero_shard_overwrite_ignores_stale_done_marker(
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
             array_chunk_bytes=1024,
-            overwrite=True,
         ).write_block([DictRow({}, shard_id="reduce")])
 
     root = _open_test_zarr(zarr_out, mode="r")
     assert "data/action" not in root
-
-
-def test_write_zarr_single_store_zero_shard_no_overwrite_rejects_existing_output(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "single-zero-shard-no-overwrite.zarr"
-    _write_part_zarr(
-        zarr_out,
-        {
-            "data/action": np.asarray([[9.0]], dtype=np.float32),
-            "meta/episode_ends": np.asarray([1], dtype=np.int64),
-        },
-    )
-    marker = zarr_out / "_refiner" / "write_zarr.done"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
-    runtime = _FinalizedWorkersRuntime([])
-
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        with pytest.raises(ValueError, match="output already exists"):
-            _ZarrMergeReducerSink(
-                str(zarr_out),
-                store_template="{shard_id}__w{worker_id}.zarr",
-                episode_ends_path="meta/episode_ends",
-                array_chunk_bytes=1024,
-                overwrite=False,
-            ).write_block([DictRow({}, shard_id="reduce")])
-
-
-def test_write_zarr_single_store_zero_shard_no_overwrite_done_marker_is_retryable(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "single-zero-shard-no-overwrite-done-retry.zarr"
-    marker = zarr_out / "_refiner" / "write_zarr.done"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
-    runtime = _FinalizedWorkersRuntime([])
-
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        _ZarrMergeReducerSink(
-            str(zarr_out),
-            store_template="{shard_id}__w{worker_id}.zarr",
-            episode_ends_path="meta/episode_ends",
-            array_chunk_bytes=1024,
-            overwrite=False,
-        ).write_block([DictRow({}, shard_id="reduce")])
-
-
-def test_write_zarr_single_store_no_overwrite_started_merge_is_retryable(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "single-no-overwrite-started-retry.zarr"
-    worker_id = "worker-a"
-    root = _open_test_zarr(zarr_out, mode="w")
-    assert dict(root.attrs) == {}
-    _write_part_zarr(
-        zarr_out / "_parts" / f"shard-a__w{worker_token_for(worker_id)}.zarr",
-        {
-            "data/action": np.asarray([[3.0]], dtype=np.float32),
-            "meta/episode_ends": np.asarray([1], dtype=np.int64),
-        },
-    )
-    marker = zarr_out / "_refiner" / "write_zarr.started"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
-    runtime = _FinalizedWorkersRuntime(
-        [
-            FinalizedShardWorker(
-                shard_id="shard-a",
-                worker_id=worker_id,
-                global_ordinal=0,
-            )
-        ]
-    )
-
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        _ZarrMergeReducerSink(
-            str(zarr_out),
-            store_template="{shard_id}__w{worker_id}.zarr",
-            episode_ends_path="meta/episode_ends",
-            array_chunk_bytes=1024,
-            overwrite=False,
-        ).write_block([DictRow({}, shard_id="reduce")])
-
-    row = mdr.read_zarr(
-        zarr_out,
-        arrays={"action": "data/action", "episode_ends": "meta/episode_ends"},
-        file_path_column=None,
-    ).take(1)[0]
-    np.testing.assert_allclose(row["action"], [[3.0]])
-    assert row["episode_ends"].tolist() == [1]
-
-
-def test_write_zarr_single_store_no_overwrite_recovers_empty_root_without_marker(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "single-no-overwrite-empty-root-retry.zarr"
-    worker_id = "worker-a"
-    root = _open_test_zarr(zarr_out, mode="w")
-    assert list(root.array_keys()) == []
-    _write_part_zarr(
-        zarr_out / "_parts" / f"shard-a__w{worker_token_for(worker_id)}.zarr",
-        {
-            "data/action": np.asarray([[3.0]], dtype=np.float32),
-            "meta/episode_ends": np.asarray([1], dtype=np.int64),
-        },
-    )
-    runtime = _FinalizedWorkersRuntime(
-        [
-            FinalizedShardWorker(
-                shard_id="shard-a",
-                worker_id=worker_id,
-                global_ordinal=0,
-            )
-        ]
-    )
-
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        _ZarrMergeReducerSink(
-            str(zarr_out),
-            store_template="{shard_id}__w{worker_id}.zarr",
-            episode_ends_path="meta/episode_ends",
-            array_chunk_bytes=1024,
-            overwrite=False,
-        ).write_block([DictRow({}, shard_id="reduce")])
-
-    row = mdr.read_zarr(
-        zarr_out,
-        arrays={"action": "data/action", "episode_ends": "meta/episode_ends"},
-        file_path_column=None,
-    ).take(1)[0]
-    np.testing.assert_allclose(row["action"], [[3.0]])
-    assert row["episode_ends"].tolist() == [1]
-
-
-def test_write_zarr_single_store_no_overwrite_started_merge_replaces_partial_output(
-    tmp_path: Path,
-) -> None:
-    zarr_out = tmp_path / "single-no-overwrite-started-partial.zarr"
-    worker_id = "worker-a"
-    _write_part_zarr(
-        zarr_out,
-        {"data/action": np.asarray([[0.0]], dtype=np.float32)},
-    )
-    _write_part_zarr(
-        zarr_out / "_parts" / f"shard-a__w{worker_token_for(worker_id)}.zarr",
-        {
-            "data/action": np.asarray([[3.0]], dtype=np.float32),
-            "meta/episode_ends": np.asarray([1], dtype=np.int64),
-        },
-    )
-    marker = zarr_out / "_refiner" / "write_zarr.started"
-    marker.parent.mkdir(parents=True)
-    marker.write_bytes(b"")
-    runtime = _FinalizedWorkersRuntime(
-        [
-            FinalizedShardWorker(
-                shard_id="shard-a",
-                worker_id=worker_id,
-                global_ordinal=0,
-            )
-        ]
-    )
-
-    with set_active_run_context(
-        job_id="local",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
-    ):
-        _ZarrMergeReducerSink(
-            str(zarr_out),
-            store_template="{shard_id}__w{worker_id}.zarr",
-            episode_ends_path="meta/episode_ends",
-            array_chunk_bytes=1024,
-            overwrite=False,
-        ).write_block([DictRow({}, shard_id="reduce")])
-
-    row = mdr.read_zarr(
-        zarr_out,
-        arrays={"action": "data/action", "episode_ends": "meta/episode_ends"},
-        file_path_column=None,
-    ).take(1)[0]
-    np.testing.assert_allclose(row["action"], [[3.0]])
-    assert row["episode_ends"].tolist() == [1]
 
 
 def test_write_zarr_single_store_parts_are_resume_stable(tmp_path: Path) -> None:
@@ -2453,7 +1578,6 @@ def test_write_zarr_single_store_parts_are_resume_stable(tmp_path: Path) -> None
             store_template="{shard_id}__w{worker_id}.zarr",
             episode_ends_path="meta/episode_ends",
             array_chunk_bytes=1024,
-            overwrite=True,
         ).write_block([DictRow({}, shard_id="reduce")])
 
     row = mdr.read_zarr(
@@ -2465,10 +1589,10 @@ def test_write_zarr_single_store_parts_are_resume_stable(tmp_path: Path) -> None
     assert row["episode_ends"].tolist() == [1]
 
 
-def test_write_zarr_single_store_overwrite_clears_root_attrs(
+def test_write_zarr_single_store_replace_clears_root_attrs(
     tmp_path: Path,
 ) -> None:
-    zarr_out = tmp_path / "single-overwrite-attrs.zarr"
+    zarr_out = tmp_path / "single-replace-attrs.zarr"
     root = _open_test_zarr(zarr_out, mode="w")
     root.attrs["task"] = "old"
 
@@ -2480,9 +1604,9 @@ def test_write_zarr_single_store_overwrite_clears_root_attrs(
             reduce_to_single_store=True,
         )
         .launch_local(
-            name="zarr-single-overwrite-attrs",
+            name="zarr-single-replace-attrs",
             num_workers=1,
-            rundir=str(tmp_path / "run-overwrite-attrs"),
+            rundir=str(tmp_path / "run-replace-attrs"),
         )
     )
 
@@ -2544,7 +1668,6 @@ def test_write_zarr_single_store_rejects_part_dtype_drift(
                 store_template="{shard_id}__w{worker_id}.zarr",
                 episode_ends_path="meta/episode_ends",
                 array_chunk_bytes=1024,
-                overwrite=True,
             ).write_block([DictRow({}, shard_id="reduce")])
     assert first_part.exists()
     assert second_part.exists()
