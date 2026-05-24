@@ -13,7 +13,6 @@ import pyarrow as pa
 
 from refiner.io.datafile import DataFile, DataFileLike
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.io.zarr import iter_zarr_array_paths, zarr_store
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
     dtype_to_plan,
@@ -288,7 +287,7 @@ class ZarrReader(BaseSource):
                     handle.close()
         else:
             assert self.root is not None
-            store = zarr_store(self.root, mode="r")
+            store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
             yield zarr.open_group(store=store, mode="r")
 
     def _reserved_output_names(self, *, split: bool) -> set[str]:
@@ -310,9 +309,7 @@ class ZarrReader(BaseSource):
     def _selected_arrays(self, group: Any) -> dict[str, Any]:
         if self.arrays is None:
             paths = {
-                path: path
-                for path in iter_zarr_array_paths(group)
-                if path != self.row_ends
+                path: path for path in _iter_array_paths(group) if path != self.row_ends
             }
             _validate_output_names(
                 paths,
@@ -563,6 +560,15 @@ def _check_final_end(
 def _leading_item_bytes(array: Any) -> int:
     trailing_shape = tuple(int(value) for value in array.shape[1:])
     return max(1, int(array.dtype.itemsize) * int(prod(trailing_shape or (1,))))
+
+
+def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
+    for name, item in group.items():
+        path = f"{prefix}/{name}" if prefix else name
+        if hasattr(item, "shape"):
+            yield path
+        else:
+            yield from _iter_array_paths(item, path)
 
 
 __all__ = ["ZarrReader"]

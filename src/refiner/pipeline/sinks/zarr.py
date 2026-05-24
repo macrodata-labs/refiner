@@ -10,7 +10,6 @@ import pyarrow as pa
 
 from refiner.execution.asyncio.runtime import submit
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.io.zarr import iter_zarr_array_paths, zarr_store
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.sinks.base import BaseSink
@@ -398,7 +397,7 @@ class ZarrSink(BaseSink):
 
         store = _ShardStore(
             zarr.open_group(
-                store=zarr_store(self.output, relpath, mode=mode), mode=mode
+                store=_zarr_store(self.output, relpath, mode=mode), mode=mode
             )
         )
         try:
@@ -580,7 +579,7 @@ class _ZarrCleanupReducerSink(BaseSink):
 
         keep_paths = set(relpaths)
         try:
-            root = zarr.open_group(store=zarr_store(self.output, "", mode="r+"))
+            root = zarr.open_group(store=_zarr_store(self.output, "", mode="r+"))
         except Exception:
             return
 
@@ -773,7 +772,7 @@ class _ZarrMergeReducerSink(BaseSink):
             import zarr
 
             final = zarr.open_group(
-                store=zarr_store(self.output, "", mode="a"),
+                store=_zarr_store(self.output, "", mode="a"),
                 mode="a",
             )
             if self.overwrite:
@@ -795,7 +794,7 @@ class _ZarrMergeReducerSink(BaseSink):
         import zarr
 
         final = zarr.open_group(
-            store=zarr_store(self.output, "", mode="a"),
+            store=_zarr_store(self.output, "", mode="a"),
             mode="a",
         )
         if self.overwrite:
@@ -811,7 +810,7 @@ class _ZarrMergeReducerSink(BaseSink):
             arrays: dict[str, Any] = {}
             for part in parts:
                 source = zarr.open_group(
-                    store=zarr_store(self.output, part.relpath, mode="r"),
+                    store=_zarr_store(self.output, part.relpath, mode="r"),
                     mode="r",
                 )
                 for path in sorted(part.paths):
@@ -905,10 +904,10 @@ class _ZarrMergeReducerSink(BaseSink):
                     continue
                 raise ValueError(f"Zarr part store is missing: {relpath}")
             source = zarr.open_group(
-                store=zarr_store(self.output, relpath, mode="r"),
+                store=_zarr_store(self.output, relpath, mode="r"),
                 mode="r",
             )
-            source_paths = set(iter_zarr_array_paths(source))
+            source_paths = set(_iter_array_paths(source))
             if not source_paths:
                 continue
             source_payload_paths = {
@@ -1054,6 +1053,26 @@ def _part_store_relpath(relpath: str) -> str:
     return f"_parts/{relpath}"
 
 
+def _zarr_store(output: DataFolder, path: str = "", *, mode: str = "r"):
+    import zarr
+
+    return zarr.storage.FSStore(
+        output._join(path),
+        fs=output.fs,
+        mode=mode,
+        create=mode in {"w", "w-", "a"},
+    )
+
+
+def _iter_array_paths(group: Any, prefix: str = "") -> Iterable[str]:
+    for name, item in group.items():
+        path = f"{prefix}/{name}" if prefix else name
+        if hasattr(item, "shape"):
+            yield path
+        else:
+            yield from _iter_array_paths(item, path)
+
+
 def _remove_parts(output: DataFolder, *, best_effort: bool = False) -> None:
     try:
         output.rm("_parts", recursive=True)
@@ -1075,10 +1094,10 @@ def _validate_zarr_stores(output: DataFolder, relpaths: Iterable[str]) -> None:
                 continue
             raise ValueError(f"Zarr store is missing: {relpath}")
         source = zarr.open_group(
-            store=zarr_store(output, relpath, mode="r"),
+            store=_zarr_store(output, relpath, mode="r"),
             mode="r",
         )
-        source_paths = set(iter_zarr_array_paths(source))
+        source_paths = set(_iter_array_paths(source))
         if payload_paths is None:
             payload_paths = source_paths
         elif source_paths != payload_paths:
@@ -1123,7 +1142,7 @@ def _output_has_payload(output: DataFolder) -> bool:
     if not non_part_entries:
         return False
     try:
-        group = zarr.open_group(store=zarr_store(output, "", mode="r"), mode="r")
+        group = zarr.open_group(store=_zarr_store(output, "", mode="r"), mode="r")
     except Exception:
         return True
     return _group_has_payload(group)

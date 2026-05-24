@@ -529,9 +529,8 @@ individually.
 When you run a writer through `launch_local(...)` or `launch_cloud(...)`, some
 sinks add a reducer stage after the main writer stage. For `write_jsonl(...)`
 and `write_parquet(...)`, that reducer removes stale shard/worker files and
-uploaded asset attempt folders, keeping only finalized outputs. `write_zarr(...)`
-also removes stale shard/worker store directories. The output prefix should
-therefore be dedicated to Refiner-managed files.
+uploaded asset attempt folders, keeping only finalized outputs. The output
+prefix should therefore be dedicated to Refiner-managed files.
 
 ## What Python Functions Actually See
 
