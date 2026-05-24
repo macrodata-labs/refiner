@@ -20,7 +20,7 @@ _FIELD_PATTERNS = {
 _DEFAULT_FIELD_PATTERN = r"[^/]+"
 
 
-def _compile_managed_path_pattern(filename_template: str) -> re.Pattern[str]:
+def _compile_output_path_pattern(filename_template: str) -> re.Pattern[str]:
     parts: list[str] = []
     seen_fields: set[str] = set()
 
@@ -72,7 +72,7 @@ class FileCleanupReducerSink(BaseSink):
         self.filename_template = filename_template
         self.reducer_name = reducer_name
         self.assets_subdir = assets_subdir
-        self._managed_path_pattern = _compile_managed_path_pattern(filename_template)
+        self._output_path_pattern = _compile_output_path_pattern(filename_template)
         self._cleanup_ran = False
 
     def write_shard_block(self, shard_id, block) -> None:
@@ -115,27 +115,20 @@ class FileCleanupReducerSink(BaseSink):
             for row in get_finalized_workers(stage_index=stage_index - 1)
         }
 
+        template_parts = [part for part in self.filename_template.split("/") if part]
         literal_prefix = ""
-        for (
-            literal_text,
-            field_name,
-            _format_spec,
-            _conversion,
-        ) in Formatter().parse(self.filename_template):
+        for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
+            self.filename_template
+        ):
             literal_prefix += literal_text
             if field_name is not None:
                 break
         listing_prefix = (
-            ""
-            if "/" not in literal_prefix
-            else literal_prefix.rsplit("/", maxsplit=1)[0]
+            "" if "/" not in literal_prefix else literal_prefix.rsplit("/", 1)[0]
         )
         paths = [listing_prefix]
-        template_depth = len(
-            [part for part in self.filename_template.split("/") if part]
-        )
-        prefix_depth = len([part for part in listing_prefix.split("/") if part])
-        for _ in range(max(1, template_depth - prefix_depth)):
+        prefix_parts = [part for part in listing_prefix.split("/") if part]
+        for _ in range(max(1, len(template_parts) - len(prefix_parts))):
             next_paths: list[str] = []
             for path in paths:
                 try:
@@ -143,64 +136,42 @@ class FileCleanupReducerSink(BaseSink):
                 except (FileNotFoundError, NotADirectoryError):
                     continue
             paths = next_paths
-        listed_paths = [
-            path
-            for path in paths
-            if isinstance(path, str) and not path.rstrip("/").endswith("/.")
-        ]
 
-        if self.assets_subdir is not None:
-            try:
-                asset_paths = self.output.find(self.assets_subdir)
-            except FileNotFoundError:
-                asset_paths = []
-        else:
-            asset_paths = []
-
-        assets_prefix = (
-            f"{self.assets_subdir.rstrip('/')}/"
-            if self.assets_subdir is not None
-            else None
-        )
-
-        stale_asset_attempts: set[str] = set()
-        stale_managed_paths: set[str] = set()
-        # Extra template fields are treated as structure only. Authority is decided
-        # solely from the finalized (shard_id, worker_id) pair extracted from each
-        # managed path.
-        for rel_path in asset_paths:
+        paths_to_delete: set[str] = set()
+        # Extra template fields are structure only. Authority is decided from
+        # the finalized (shard_id, worker_id) pair extracted from the path.
+        for rel_path in paths:
             if not isinstance(rel_path, str) or not rel_path or rel_path == ".":
                 continue
-            if assets_prefix is not None and (
-                rel_path == self.assets_subdir or rel_path.startswith(assets_prefix)
-            ):
-                attempt_dir = rel_path[len(assets_prefix) :].split("/", maxsplit=1)[0]
-                match = ASSET_ATTEMPT_DIR_RE.fullmatch(attempt_dir)
-                if match is None:
-                    continue
-                asset_path = f"{assets_prefix}{attempt_dir}"
-                if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
-                    continue
-                stale_asset_attempts.add(asset_path)
+            if rel_path.rstrip("/").endswith("/."):
                 continue
-
-        for rel_path in listed_paths:
-            if not isinstance(rel_path, str) or not rel_path or rel_path == ".":
-                continue
-            managed_path = rel_path
-            match = self._managed_path_pattern.fullmatch(managed_path)
+            match = self._output_path_pattern.fullmatch(rel_path)
             if match is None:
                 continue
             if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
                 continue
-            stale_managed_paths.add(managed_path)
+            paths_to_delete.add(rel_path)
 
-        for path in sorted(stale_asset_attempts):
+        if self.assets_subdir is not None:
+            asset_prefix = f"{self.assets_subdir.rstrip('/')}/"
             try:
-                self.output.rm(path, recursive=True)
+                asset_paths = self.output.find(self.assets_subdir)
             except FileNotFoundError:
-                continue
-        for path in sorted(stale_managed_paths):
+                asset_paths = []
+            for rel_path in asset_paths:
+                if not isinstance(rel_path, str) or not rel_path.startswith(
+                    asset_prefix
+                ):
+                    continue
+                attempt_dir = rel_path[len(asset_prefix) :].split("/", maxsplit=1)[0]
+                match = ASSET_ATTEMPT_DIR_RE.fullmatch(attempt_dir)
+                if match is None:
+                    continue
+                if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
+                    continue
+                paths_to_delete.add(f"{asset_prefix}{attempt_dir}")
+
+        for path in sorted(paths_to_delete):
             try:
                 self.output.rm(path, recursive=True)
             except FileNotFoundError:
