@@ -581,11 +581,34 @@ class _ZarrCleanupReducerSink(BaseSink):
             )
         ]
         _validate_zarr_stores(self.output, relpaths)
-        for relpath in relpaths:
-            try:
-                self.output.rm(f"{relpath}.empty")
-            except FileNotFoundError:
-                pass
+        _remove_parts(self.output)
+        self._clear_root_payload_except(relpaths)
+
+    def _clear_root_payload_except(self, relpaths: Iterable[str]) -> None:
+        import zarr
+
+        keep_paths = set(relpaths)
+        try:
+            root = zarr.open_group(store=zarr_store(self.output, "", mode="r+"))
+        except Exception:
+            return
+
+        def clear_group(group: Any, prefix: str = "") -> None:
+            group_keys = set(group.group_keys())
+            for key in sorted({*group.array_keys(), *group_keys}):
+                path = f"{prefix}/{key}" if prefix else key
+                if path == "_refiner" or path.startswith("_refiner/"):
+                    continue
+                if path in keep_paths:
+                    continue
+                if any(keep_path.startswith(f"{path}/") for keep_path in keep_paths):
+                    if key in group_keys:
+                        clear_group(group[key], path)
+                        continue
+                del group[key]
+            group.attrs.clear()
+
+        clear_group(root)
 
 
 class _ZarrPublishPartsReducerSink(BaseSink):
@@ -644,13 +667,14 @@ class _ZarrPublishPartsReducerSink(BaseSink):
             return
 
         has_existing_output = _output_has_existing_store(self.output)
+        parts_validated = False
         if has_existing_output and self.output.exists(_PUBLISH_STARTED_MARKER_RELPATH):
             _validate_zarr_stores(
                 self.output, (_part_store_relpath(relpath) for relpath in parts)
             )
+            parts_validated = True
         if has_existing_output:
             if not self.output.exists(_PUBLISH_STARTED_MARKER_RELPATH):
-                _remove_parts(self.output)
                 raise ValueError("write_zarr output already exists and overwrite=False")
             self._remove_publish_targets(parts)
 
@@ -658,9 +682,10 @@ class _ZarrPublishPartsReducerSink(BaseSink):
             pass
 
         try:
-            _validate_zarr_stores(
-                self.output, (_part_store_relpath(relpath) for relpath in parts)
-            )
+            if not parts_validated:
+                _validate_zarr_stores(
+                    self.output, (_part_store_relpath(relpath) for relpath in parts)
+                )
             for final_relpath in parts:
                 part_relpath = _part_store_relpath(final_relpath)
                 if not self.output.exists(part_relpath):

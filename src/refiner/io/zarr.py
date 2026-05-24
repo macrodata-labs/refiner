@@ -11,7 +11,7 @@ def zarr_store(
     folder: DataFolder,
     path: str = "",
     *,
-    mode: Literal["r", "w", "w-", "a"] = "r",
+    mode: Literal["r", "r+", "w", "w-", "a"] = "r",
 ):
     import zarr
 
