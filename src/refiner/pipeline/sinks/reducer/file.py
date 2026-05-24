@@ -85,14 +85,12 @@ class FileCleanupReducerSink(BaseSink):
         reducer_name: str,
         assets_subdir: str | None = None,
         recursive: bool = False,
-        overwrite: bool = True,
     ) -> None:
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
         self.reducer_name = reducer_name
         self.assets_subdir = assets_subdir
         self.recursive = recursive
-        self.overwrite = overwrite
         self._managed_path_pattern = _compile_managed_path_pattern(filename_template)
         self._cleanup_ran = False
 
@@ -113,8 +111,6 @@ class FileCleanupReducerSink(BaseSink):
             args["assets_subdir"] = self.assets_subdir
         if self.recursive:
             args["recursive"] = True
-        if not self.overwrite:
-            args["overwrite"] = False
         return (
             self.reducer_name,
             "writer",
@@ -185,9 +181,6 @@ class FileCleanupReducerSink(BaseSink):
                 continue
             stale_managed_paths.add(managed_path)
 
-        if not self.overwrite and (stale_asset_attempts or stale_managed_paths):
-            raise ValueError(f"{self.reducer_name} output already exists")
-
         for path in sorted(stale_asset_attempts):
             try:
                 self.output.rm(path, recursive=True)
@@ -216,7 +209,7 @@ class FileCleanupReducerSink(BaseSink):
             for path in paths:
                 try:
                     next_paths.extend(self.output.ls(path, detail=False))
-                except FileNotFoundError:
+                except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
                     continue
             paths = next_paths
         return [

@@ -67,13 +67,16 @@ def read_finalized_workers(
                         ),
                     )
                 )
-    rows.sort(
-        key=lambda row: (
-            row.global_ordinal is None,
-            row.global_ordinal if row.global_ordinal is not None else row.shard_id,
-        )
-    )
-    return rows
+    return sort_finalized_workers(rows)
+
+
+def sort_finalized_workers(
+    rows: Iterable[FinalizedShardWorker],
+) -> list[FinalizedShardWorker]:
+    rows = list(rows)
+    if any(row.global_ordinal is None for row in rows):
+        return sorted(rows, key=lambda row: row.shard_id)
+    return sorted(rows, key=lambda row: row.global_ordinal)
 
 
 class LocalRuntimeLifecycle:
@@ -135,4 +138,5 @@ __all__ = [
     "LocalRuntimeLifecycle",
     "RuntimeLifecycle",
     "read_finalized_workers",
+    "sort_finalized_workers",
 ]

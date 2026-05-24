@@ -19,7 +19,7 @@ from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
-from refiner.worker.lifecycle import FinalizedShardWorker
+from refiner.worker.lifecycle import FinalizedShardWorker, sort_finalized_workers
 
 
 class _FakeReader(BaseReader):
@@ -69,6 +69,20 @@ class _FakeRuntimeLifecycle:
 
 def _shard(path: str, start: int, end: int) -> Shard:
     return Shard.from_file_parts([FilePart(path=path, start=start, end=end)])
+
+
+def test_sort_finalized_workers_uses_legacy_order_when_any_ordinal_is_missing() -> None:
+    rows = [
+        FinalizedShardWorker("shard-c", "worker-c", global_ordinal=0),
+        FinalizedShardWorker("shard-a", "worker-a"),
+        FinalizedShardWorker("shard-b", "worker-b", global_ordinal=1),
+    ]
+
+    assert [row.shard_id for row in sort_finalized_workers(rows)] == [
+        "shard-a",
+        "shard-b",
+        "shard-c",
+    ]
 
 
 class _NoopTelemetryEmitter:

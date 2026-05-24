@@ -23,10 +23,13 @@ from refiner.worker.context import (
     get_active_worker_token,
     get_finalized_workers,
 )
+from refiner.worker.lifecycle import sort_finalized_workers
 
 _DEFAULT_ARRAY_CHUNK_BYTES = 8 * 1024 * 1024
 _MAX_INITIAL_CHUNK_ROWS = 1024
 _DONE_MARKER_RELPATH = "_refiner/write_zarr.done"
+_PUBLISH_STARTED_MARKER_RELPATH = "_refiner/write_zarr_publish.started"
+_PUBLISH_DONE_MARKER_RELPATH = "_refiner/write_zarr_publish.done"
 
 
 @dataclass
@@ -84,6 +87,8 @@ class ZarrSink(BaseSink):
         self._stores: dict[str, _ShardStore] = {}
         self._default_arrays: dict[str, str] | None = None
         self._checked_no_overwrite = False
+        self._cleared_publish_markers = False
+        self._cleared_merge_marker = False
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
         count = 0
@@ -186,6 +191,10 @@ class ZarrSink(BaseSink):
         if isinstance(video, VideoFrameArray):
             if expected_length is not None and video.frame_count != expected_length:
                 raise ValueError("Zarr arrays for one row must have matching lengths")
+            if video.frame_count == 0:
+                empty = np.asarray(video.frames, dtype=np.uint8)
+                self._append_array(store, path, empty[:0])
+                return 0
             batch: list[np.ndarray] = []
             batch_limit: int | None = None
             for frame in video.iter_frame_arrays():
@@ -224,7 +233,7 @@ class ZarrSink(BaseSink):
         return count
 
     def _video_batch_limit(self, frame: np.ndarray) -> int:
-        return max(
+        return min(
             self.video_frame_batch_size,
             _batch_length_for_shape(
                 (1, *frame.shape), frame.dtype, self.array_chunk_bytes
@@ -250,6 +259,10 @@ class ZarrSink(BaseSink):
         return self._default_arrays
 
     def _store(self, shard_id: str) -> _ShardStore:
+        if self.reduce_to_single_store:
+            self._clear_merge_marker_once()
+        if not self.overwrite and not self.reduce_to_single_store:
+            self._clear_publish_markers_once()
         self._check_no_overwrite_output()
         relpath = self._store_relpath(shard_id)
         store = self._stores.get(relpath)
@@ -267,30 +280,51 @@ class ZarrSink(BaseSink):
         return store
 
     def _check_no_overwrite_output(self) -> None:
-        if (
-            self.overwrite
-            or self._checked_no_overwrite
-            or not self.reduce_to_single_store
-        ):
+        if self.overwrite or self._checked_no_overwrite:
             return
         self._checked_no_overwrite = True
         if _output_has_payload(self.output):
             raise ValueError("write_zarr output already exists and overwrite=False")
+
+    def _clear_publish_markers_once(self) -> None:
+        if self._cleared_publish_markers:
+            return
+        self._cleared_publish_markers = True
+        for marker in (
+            _PUBLISH_STARTED_MARKER_RELPATH,
+            _PUBLISH_DONE_MARKER_RELPATH,
+        ):
+            try:
+                self.output.rm(marker)
+            except FileNotFoundError:
+                pass
+
+    def _clear_merge_marker_once(self) -> None:
+        if self._cleared_merge_marker:
+            return
+        self._cleared_merge_marker = True
+        try:
+            self.output.rm(_DONE_MARKER_RELPATH)
+        except FileNotFoundError:
+            pass
 
     def _store_relpath(self, shard_id: str) -> str:
         relpath = self.store_template.format(
             shard_id=shard_id,
             worker_id=get_active_worker_token(),
         )
-        if self.reduce_to_single_store:
+        if self.reduce_to_single_store or not self.overwrite:
             return _part_store_relpath(relpath)
         return relpath
 
     def on_shard_complete(self, shard_id: str) -> None:
-        if (
-            self.reduce_to_single_store
-            and self._store_relpath(shard_id) not in self._stores
-        ):
+        if self.reduce_to_single_store:
+            self._clear_merge_marker_once()
+        if not self.overwrite and not self.reduce_to_single_store:
+            self._clear_publish_markers_once()
+        if (self.reduce_to_single_store or not self.overwrite) and self._store_relpath(
+            shard_id
+        ) not in self._stores:
             with self.output.open(self._empty_marker_relpath(shard_id), mode="wb"):
                 pass
         self._stores.pop(self._store_relpath(shard_id), None)
@@ -359,13 +393,107 @@ class ZarrSink(BaseSink):
                 reduce_array_batch_bytes=self.reduce_array_batch_bytes,
                 overwrite=self.overwrite,
             )
+        if not self.overwrite:
+            return _ZarrPublishPartsReducerSink(
+                output=self.output,
+                store_template=self.store_template,
+            )
         return FileCleanupReducerSink(
             output=self.output,
             filename_template=self.store_template,
             reducer_name="write_zarr_reduce",
             recursive=True,
-            overwrite=self.overwrite,
         )
+
+
+class _ZarrPublishPartsReducerSink(BaseSink):
+    def __init__(
+        self,
+        output: DataFolderLike,
+        *,
+        store_template: str,
+    ) -> None:
+        self.output = DataFolder.resolve(output)
+        self.store_template = store_template
+        self._published = False
+
+    @property
+    def counts_output_rows(self) -> bool:
+        return False
+
+    def write_shard_block(self, shard_id, block) -> None:
+        del shard_id, block
+        if self._published:
+            return
+        self._published = True
+
+        stage_index = get_active_stage_index()
+        if stage_index is None or stage_index <= 0:
+            raise ValueError(
+                "write_zarr_publish requires an active reducer stage with a prior writer stage"
+            )
+
+        parts = [
+            self.store_template.format(
+                shard_id=row.shard_id, worker_id=row.worker_token
+            )
+            for row in sort_finalized_workers(
+                get_finalized_workers(stage_index=stage_index - 1)
+            )
+        ]
+        if self.output.exists(_PUBLISH_DONE_MARKER_RELPATH):
+            self._remove_parts()
+            return
+
+        if _output_has_existing_store(self.output):
+            if not self.output.exists(_PUBLISH_STARTED_MARKER_RELPATH):
+                self._remove_parts()
+                raise ValueError("write_zarr output already exists and overwrite=False")
+            self._remove_publish_targets(parts)
+
+        with self.output.open(_PUBLISH_STARTED_MARKER_RELPATH, mode="wb"):
+            pass
+
+        try:
+            for final_relpath in parts:
+                part_relpath = _part_store_relpath(final_relpath)
+                if not self.output.exists(part_relpath):
+                    if self.output.exists(part_relpath + ".empty"):
+                        continue
+                    raise ValueError(f"Zarr part store is missing: {part_relpath}")
+                target_parent = final_relpath.rsplit("/", maxsplit=1)[0]
+                if target_parent != final_relpath:
+                    self.output.makedirs(target_parent, exist_ok=True)
+                self.output.copy(
+                    part_relpath,
+                    final_relpath,
+                    recursive=True,
+                    on_error="raise",
+                )
+        except Exception:
+            self._remove_publish_targets(parts)
+            raise
+
+        with self.output.open(_PUBLISH_DONE_MARKER_RELPATH, mode="wb"):
+            pass
+        try:
+            self.output.rm(_PUBLISH_STARTED_MARKER_RELPATH)
+        except FileNotFoundError:
+            pass
+        self._remove_parts()
+
+    def _remove_publish_targets(self, relpaths: Iterable[str]) -> None:
+        for relpath in relpaths:
+            try:
+                self.output.rm(relpath, recursive=True)
+            except FileNotFoundError:
+                continue
+
+    def _remove_parts(self) -> None:
+        try:
+            self.output.rm("_parts", recursive=True)
+        except FileNotFoundError:
+            pass
 
 
 class _ZarrMergeReducerSink(BaseSink):
@@ -418,14 +546,12 @@ class _ZarrMergeReducerSink(BaseSink):
             )
 
         expected_parts = self._expected_parts(stage_index)
-        if self.output.exists(_DONE_MARKER_RELPATH) and not any(
-            self.output.exists(relpath) or self.output.exists(f"{relpath}.empty")
-            for relpath in expected_parts
-        ):
+        if self.output.exists(_DONE_MARKER_RELPATH):
+            self._remove_parts()
             return
 
         parts = self._collect_parts(expected_parts)
-        if not self.overwrite and _output_has_payload(self.output):
+        if not self.overwrite and _output_has_existing_store(self.output):
             raise ValueError("write_zarr output already exists and overwrite=False")
 
         import zarr
@@ -509,7 +635,7 @@ class _ZarrMergeReducerSink(BaseSink):
     def _expected_parts(self, stage_index: int) -> list[str]:
         return [
             self._part_relpath(row.shard_id, row.worker_token)
-            for row in _sort_finalized_workers(
+            for row in sort_finalized_workers(
                 get_finalized_workers(stage_index=stage_index - 1),
             )
         ]
@@ -645,16 +771,6 @@ def _part_store_relpath(relpath: str) -> str:
     return f"_parts/{relpath}"
 
 
-def _sort_finalized_workers(rows: Iterable[Any]) -> list[Any]:
-    return sorted(
-        rows,
-        key=lambda row: (
-            row.global_ordinal is None,
-            row.global_ordinal if row.global_ordinal is not None else row.shard_id,
-        ),
-    )
-
-
 def _clear_final_group(group: Any) -> None:
     for key in sorted({*group.array_keys(), *group.group_keys()}):
         if key != "_parts":
@@ -687,6 +803,25 @@ def _output_has_payload(output: DataFolder) -> bool:
     except Exception:
         return True
     return _group_has_payload(group)
+
+
+def _output_has_existing_store(output: DataFolder) -> bool:
+    if _output_has_payload(output):
+        return True
+    if output.exists(_DONE_MARKER_RELPATH) or output.exists(
+        _PUBLISH_DONE_MARKER_RELPATH
+    ):
+        return True
+    try:
+        entries = output.ls("", detail=False)
+    except FileNotFoundError:
+        return False
+    for entry in entries:
+        root = str(entry).split("/", maxsplit=1)[0]
+        if root in {"_parts", "_refiner"}:
+            continue
+        return True
+    return False
 
 
 def _chunk_shape(array: np.ndarray, target_bytes: int) -> tuple[int, ...]:

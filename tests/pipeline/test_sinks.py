@@ -1047,6 +1047,50 @@ def test_file_cleanup_reducer_removes_dynamic_nested_directories(tmp_path) -> No
     assert not loser_dir.exists()
 
 
+def test_file_cleanup_reducer_ignores_files_during_recursive_traversal(
+    tmp_path,
+) -> None:
+    output_dir = tmp_path / "zarr-cleanup-mixed"
+    shard_id = "0123456789ab"
+    winner_worker_id = "worker-2"
+    loser_worker_id = "worker-1"
+    winner_dir = (
+        output_dir / "split" / shard_id / f"{worker_token_for(winner_worker_id)}.zarr"
+    )
+    loser_dir = (
+        output_dir / "split" / shard_id / f"{worker_token_for(loser_worker_id)}.zarr"
+    )
+    (winner_dir / "data").mkdir(parents=True)
+    (loser_dir / "data").mkdir(parents=True)
+    (winner_dir / "data" / "0").write_bytes(b"keep")
+    (loser_dir / "data" / "0").write_bytes(b"drop")
+    (output_dir / "split" / "README.txt").write_text("notes", encoding="utf-8")
+
+    reducer = FileCleanupReducerSink(
+        output_dir,
+        filename_template="split/{shard_id}/{worker_id}.zarr",
+        reducer_name="cleanup_zarr",
+        recursive=True,
+    )
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(
+            RuntimeLifecycle,
+            _FinalizedWorkersRuntime(
+                [FinalizedShardWorker(shard_id=shard_id, worker_id=winner_worker_id)]
+            ),
+        ),
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert winner_dir.exists()
+    assert not loser_dir.exists()
+    assert (output_dir / "split" / "README.txt").read_text(encoding="utf-8") == "notes"
+
+
 def test_file_cleanup_reducer_tolerates_duplicate_listed_paths(
     tmp_path, monkeypatch
 ) -> None:
