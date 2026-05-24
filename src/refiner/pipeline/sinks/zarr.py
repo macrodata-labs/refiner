@@ -359,6 +359,8 @@ class ZarrSink(BaseSink):
                 chunks=(batch_limit or len(batch), *batch[0].shape),
             )
             count += len(batch)
+        if count == 0:
+            raise ValueError("Zarr video source produced no frames")
         if expected_length is not None and count != expected_length:
             raise ValueError("Zarr arrays for one row must have matching lengths")
         return count
@@ -444,11 +446,11 @@ class ZarrSink(BaseSink):
             pass
 
     def _store_relpath(self, shard_id: str) -> str:
-        relpath = self.store_template.format(
+        relpath = _render_store_relpath(
+            self.store_template,
             shard_id=shard_id,
             worker_id=get_active_worker_token(),
         )
-        _validate_public_zarr_path(relpath, "rendered store path")
         if self.reduce_to_single_store or not self.overwrite:
             return _part_store_relpath(relpath)
         return relpath
@@ -569,8 +571,10 @@ class _ZarrCleanupReducerSink(BaseSink):
                 "write_zarr_reduce requires an active reducer stage with a prior writer stage"
             )
         relpaths = [
-            self.store_template.format(
-                shard_id=row.shard_id, worker_id=row.worker_token
+            _render_store_relpath(
+                self.store_template,
+                shard_id=row.shard_id,
+                worker_id=row.worker_token,
             )
             for row in sort_finalized_workers(
                 get_finalized_workers(stage_index=stage_index - 1)
@@ -612,8 +616,10 @@ class _ZarrPublishPartsReducerSink(BaseSink):
             )
 
         parts = [
-            self.store_template.format(
-                shard_id=row.shard_id, worker_id=row.worker_token
+            _render_store_relpath(
+                self.store_template,
+                shard_id=row.shard_id,
+                worker_id=row.worker_token,
             )
             for row in sort_finalized_workers(
                 get_finalized_workers(stage_index=stage_index - 1)
@@ -866,11 +872,11 @@ class _ZarrMergeReducerSink(BaseSink):
         ]
 
     def _part_relpath(self, shard_id: str, worker_token: str) -> str:
-        relpath = self.store_template.format(
+        relpath = _render_store_relpath(
+            self.store_template,
             shard_id=shard_id,
             worker_id=worker_token,
         )
-        _validate_public_zarr_path(relpath, "rendered store path")
         return _part_store_relpath(relpath)
 
     def _collect_parts(self, expected_parts: Iterable[str]) -> list[_PartStore]:
@@ -974,6 +980,17 @@ def _validate_store_template(store_template: str) -> None:
             "store_template requires fields: "
             + ", ".join(f"{{{field_name}}}" for field_name in sorted(missing_fields))
         )
+
+
+def _render_store_relpath(
+    store_template: str,
+    *,
+    shard_id: str,
+    worker_id: str,
+) -> str:
+    relpath = store_template.format(shard_id=shard_id, worker_id=worker_id)
+    _validate_public_zarr_path(relpath, "rendered store path")
+    return relpath
 
 
 def _validate_public_zarr_path(path: str, label: str) -> None:

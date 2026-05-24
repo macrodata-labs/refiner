@@ -37,6 +37,22 @@ class _FinalizedWorkersRuntime:
         return self._rows
 
 
+class _EmptyVideoSource:
+    def clipped(self, **_kwargs):
+        return self
+
+    async def iter_frames(self):
+        if False:
+            yield None
+
+    async def iter_frame_windows(self, **_kwargs):
+        if False:
+            yield None
+
+    async def write_to(self, writer, **_kwargs):
+        raise NotImplementedError
+
+
 def _open_test_zarr(path: Path, *, mode: Literal["r", "r+", "a", "w", "w-"]):
     kwargs: dict[str, Any] = {"mode": mode, "zarr_format": 2}
     try:
@@ -1195,6 +1211,31 @@ def test_write_zarr_non_reduced_no_overwrite_rejects_missing_finalized_part(
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
         with pytest.raises(ValueError, match="Zarr store is missing"):
+            reducer.write_block([DictRow({}, shard_id="reduce")])
+
+
+def test_write_zarr_non_reduced_no_overwrite_rejects_unsafe_finalized_part_path(
+    tmp_path: Path,
+) -> None:
+    zarr_out = tmp_path / "sharded-no-overwrite-unsafe-finalized.zarr"
+    reducer = ZarrSink(
+        str(zarr_out),
+        arrays={"data/action": "action"},
+        overwrite=False,
+    ).build_reducer()
+    assert reducer is not None
+
+    runtime = _FinalizedWorkersRuntime(
+        [FinalizedShardWorker(shard_id="../escape", worker_id="worker-a")]
+    )
+    with set_active_run_context(
+        job_id="local",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
+    ):
+        with pytest.raises(ValueError, match="must not contain"):
             reducer.write_block([DictRow({}, shard_id="reduce")])
 
 
@@ -2528,6 +2569,28 @@ def test_write_zarr_streams_encoded_videos(tmp_path: Path) -> None:
     assert row["rgb"].shape == (3, 4, 4, 3)
     assert row["rgb"].dtype == np.uint8
     np.testing.assert_allclose(row["action"], [[0.0], [0.1], [0.2]])
+
+
+def test_write_zarr_rejects_empty_encoded_video_source(tmp_path: Path) -> None:
+    output = tmp_path / "empty-encoded-video.zarr"
+
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "clip": _EmptyVideoSource()}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key=None,
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"observation.images.front": "clip"},
+        )
+    )
+
+    with pytest.raises(ValueError, match="produced no frames"):
+        ZarrSink(
+            str(output),
+            arrays={"data/rgb": "observation.images.front"},
+        ).write_block(rows)
 
 
 def test_write_zarr_rejects_video_length_mismatch_before_final_append(
