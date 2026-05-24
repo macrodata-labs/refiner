@@ -439,6 +439,7 @@ class RefinerPipeline:
         episode_ends_path: str | None = "meta/episode_ends",
         store_template: str = "{shard_id}__w{worker_id}.zarr",
         video_frame_batch_size: int = 8,
+        array_chunk_bytes: int = 8 * 1024 * 1024,
         reduce_to_single_store: bool = False,
         overwrite: bool = True,
     ) -> "RefinerPipeline":
@@ -449,6 +450,7 @@ class RefinerPipeline:
                 episode_ends_path=episode_ends_path,
                 store_template=store_template,
                 video_frame_batch_size=video_frame_batch_size,
+                array_chunk_bytes=array_chunk_bytes,
                 reduce_to_single_store=reduce_to_single_store,
                 overwrite=overwrite,
             )

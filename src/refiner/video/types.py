@@ -108,10 +108,6 @@ class VideoFile:
 
         return iter_encoded_frames(self)
 
-    async def iter_frame_arrays(self) -> AsyncIterator[np.ndarray]:
-        async for frame in self.iter_frames():
-            yield frame.frame.to_ndarray(format="rgb24")
-
     def iter_frame_windows(
         self,
         *,
@@ -175,10 +171,6 @@ class VideoBytes:
         from refiner.video.decode import iter_encoded_frames
 
         return iter_encoded_frames(self)
-
-    async def iter_frame_arrays(self) -> AsyncIterator[np.ndarray]:
-        async for frame in self.iter_frames():
-            yield frame.frame.to_ndarray(format="rgb24")
 
     def iter_frame_windows(
         self,
@@ -245,8 +237,8 @@ class VideoFrameArray:
     def frame_arrays(self) -> np.ndarray:
         return self._array
 
-    def iter_frame_arrays(self) -> "_FrameArrayView":
-        return _FrameArrayView(self._array)
+    def iter_frame_arrays(self) -> Iterator[np.ndarray]:
+        yield from self._array
 
     def clipped(
         self,
@@ -339,18 +331,6 @@ def video_from_storage_value(
         except ValueError:
             return None
     return None
-
-
-@dataclass(frozen=True, slots=True)
-class _FrameArrayView:
-    frames: np.ndarray
-
-    def __iter__(self) -> Iterator[np.ndarray]:
-        yield from self.frames
-
-    async def __aiter__(self) -> AsyncIterator[np.ndarray]:
-        for frame in self.frames:
-            yield frame
 
 
 __all__ = [

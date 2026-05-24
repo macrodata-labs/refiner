@@ -803,6 +803,79 @@ def test_write_zarr_can_reduce_to_single_store(tmp_path: Path) -> None:
     assert not (zarr_out / "_parts").exists()
 
 
+def test_write_zarr_rejects_store_template_without_worker_id(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="store_template requires fields"):
+        ZarrSink(str(tmp_path / "template.zarr"), store_template="{shard_id}.zarr")
+
+
+def test_write_zarr_single_store_overwrite_ignores_stale_parts(tmp_path: Path) -> None:
+    zarr_out = tmp_path / "single-overwrite.zarr"
+
+    (
+        mdr.from_items([{"action": [[0.0]]}], items_per_shard=1)
+        .write_zarr(
+            str(zarr_out),
+            arrays={"data/action": "action"},
+            reduce_to_single_store=True,
+        )
+        .launch_local(
+            name="zarr-single-overwrite-first",
+            num_workers=1,
+            rundir=str(tmp_path / "run-first"),
+        )
+    )
+
+    stale_part = zarr_out / "_parts" / "old-job" / "old__wold.zarr"
+    stale_part.mkdir(parents=True)
+    (stale_part / ".zgroup").write_text('{"zarr_format": 2}', encoding="utf-8")
+
+    (
+        mdr.from_items([{"action": [[1.0]]}], items_per_shard=1)
+        .write_zarr(
+            str(zarr_out),
+            arrays={"data/action": "action"},
+            reduce_to_single_store=True,
+        )
+        .launch_local(
+            name="zarr-single-overwrite-second",
+            num_workers=1,
+            rundir=str(tmp_path / "run-second"),
+        )
+    )
+
+    row = mdr.read_zarr(
+        zarr_out,
+        arrays={"action": "data/action"},
+        file_path_column=None,
+    ).take(1)[0]
+    np.testing.assert_allclose(row["action"], [[1.0]])
+    assert stale_part.exists()
+
+
+def test_write_zarr_single_store_skips_empty_shards(tmp_path: Path) -> None:
+    zarr_out = tmp_path / "single-empty-shards.zarr"
+
+    (
+        mdr.from_items(
+            [{"action": [[0.0]]}, {"action": [[0.1]]}],
+            items_per_shard=1,
+        )
+        .filter(lambda row: False)
+        .write_zarr(
+            str(zarr_out),
+            arrays={"data/action": "action"},
+            reduce_to_single_store=True,
+        )
+        .launch_local(
+            name="zarr-single-empty-shards",
+            num_workers=2,
+            rundir=str(tmp_path / "run-empty"),
+        )
+    )
+
+    assert not (zarr_out / "_parts").exists()
+
+
 def test_write_zarr_rejects_rows_missing_inferred_default_arrays(
     tmp_path: Path,
 ) -> None:
@@ -911,6 +984,35 @@ def test_write_zarr_materializes_frame_array_videos(tmp_path: Path) -> None:
     ).take(1)[0]
     np.testing.assert_array_equal(row["rgb"], frames)
     np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
+
+
+def test_write_zarr_uses_byte_budgeted_chunks_for_large_rows(tmp_path: Path) -> None:
+    output = tmp_path / "video-chunks.zarr"
+    frames = np.zeros((2, 4, 4, 3), dtype=np.uint8)
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "frames": frames, "action": [[0.0], [0.1]]}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"observation.images.front": "frames"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(
+        str(output),
+        arrays={
+            "data/action": "action",
+            "data/rgb": "observation.images.front",
+        },
+        array_chunk_bytes=50,
+    ).write_block(rows)
+
+    root = _open_test_zarr(next(output.glob("*.zarr")), mode="r")
+    assert root["data/rgb"].chunks == (1, 4, 4, 3)
 
 
 def test_write_zarr_streams_encoded_videos(tmp_path: Path) -> None:

@@ -35,10 +35,6 @@ async def _collect_frames(video: mdr.video.VideoSource):
     return [frame async for frame in video.iter_frames()]
 
 
-async def _collect_frame_arrays(video):
-    return [frame async for frame in video.iter_frame_arrays()]
-
-
 async def _collect_windows(
     video: mdr.video.VideoSource,
     *,
@@ -79,7 +75,7 @@ def test_video_frame_array_clip_returns_frame_view() -> None:
 
     assert isinstance(clipped, mdr.video.VideoFrameArray)
     assert len(list(clipped.iter_frame_arrays())) == 3
-    clipped_frames = asyncio.run(_collect_frame_arrays(clipped))
+    clipped_frames = list(clipped.iter_frame_arrays())
     assert len(clipped_frames) == 3
     assert clipped_frames[0].shape == (4, 4, 3)
     assert [int(frame[0, 0, 0]) for frame in clipped_frames] == [2, 3, 4]
@@ -90,7 +86,7 @@ def test_video_frame_array_iter_frames() -> None:
     video = mdr.video.VideoFrameArray(frames, fps=5)
 
     decoded = asyncio.run(_collect_frames(video))
-    arrays = asyncio.run(_collect_frame_arrays(video))
+    arrays = list(video.iter_frame_arrays())
 
     assert [frame.index for frame in decoded] == [0, 1, 2]
     assert [frame.timestamp_s for frame in decoded] == [0.0, 0.2, 0.4]

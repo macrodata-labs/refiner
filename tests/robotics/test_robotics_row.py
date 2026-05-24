@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import asyncio
 from typing import Any, cast
 
 import numpy as np
@@ -122,14 +120,10 @@ def test_to_robot_rows_uses_video_frame_array_asset_schema() -> None:
     video = robotics_row.videos["camera"]
     assert isinstance(video, VideoFrameArray)
     assert len(list(video.iter_frame_arrays())) == 2
-    video_frames = asyncio.run(_collect_frame_arrays(video))
+    video_frames = list(video.iter_frame_arrays())
     assert len(video_frames) == 2
     assert video_frames[0].shape == (4, 5, 3)
     assert video.fps == 12
-
-
-async def _collect_frame_arrays(video):
-    return [frame async for frame in video.iter_frame_arrays()]
 
 
 def test_to_robot_rows_accepts_unmapped_key_iterables() -> None:

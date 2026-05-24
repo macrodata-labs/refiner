@@ -13,7 +13,7 @@ import pyarrow as pa
 
 from refiner.io.datafile import DataFile, DataFileLike
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.io.zarr import iter_zarr_array_paths
+from refiner.io.zarr import iter_zarr_array_paths, zarr_store
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
     dtype_to_plan,
@@ -288,7 +288,7 @@ class ZarrReader(BaseSource):
                     handle.close()
         else:
             assert self.root is not None
-            store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
+            store = zarr_store(self.root, mode="r")
             yield zarr.open_group(store=store, mode="r")
 
     def _reserved_output_names(self, *, split: bool) -> set[str]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from string import Formatter
 from typing import Any, cast
 
 import numpy as np
@@ -16,14 +17,15 @@ from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
-from refiner.video import VideoSource
+from refiner.video import VideoFrameArray, VideoSource
 from refiner.worker.context import (
+    get_active_job_id,
     get_active_stage_index,
     get_active_worker_token,
     get_finalized_workers,
 )
 
-_DEFAULT_ARRAY_CHUNK_LENGTH = 1024
+_DEFAULT_ARRAY_CHUNK_BYTES = 8 * 1024 * 1024
 
 
 @dataclass
@@ -31,7 +33,6 @@ class _ShardStore:
     root: Any
     arrays: dict[str, Any] = field(default_factory=dict)
     row_end: int = 0
-    next_temp_index: int = 0
 
 
 class ZarrSink(BaseSink):
@@ -43,12 +44,16 @@ class ZarrSink(BaseSink):
         episode_ends_path: str | None = "meta/episode_ends",
         store_template: str = "{shard_id}__w{worker_id}.zarr",
         video_frame_batch_size: int = 8,
+        array_chunk_bytes: int = _DEFAULT_ARRAY_CHUNK_BYTES,
         reduce_to_single_store: bool = False,
         overwrite: bool = True,
     ):
         check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
         if video_frame_batch_size <= 0:
             raise ValueError("video_frame_batch_size must be greater than zero")
+        if array_chunk_bytes <= 0:
+            raise ValueError("array_chunk_bytes must be greater than zero")
+        _validate_store_template(store_template)
         self.output = DataFolder.resolve(output)
         self.arrays = dict(arrays) if arrays is not None else None
         self.episode_ends_path = episode_ends_path
@@ -56,6 +61,7 @@ class ZarrSink(BaseSink):
             _validate_array_paths(self.arrays, episode_ends_path)
         self.store_template = store_template
         self.video_frame_batch_size = video_frame_batch_size
+        self.array_chunk_bytes = array_chunk_bytes
         self.reduce_to_single_store = reduce_to_single_store
         self.overwrite = overwrite
         self._stores: dict[str, _ShardStore] = {}
@@ -94,48 +100,61 @@ class ZarrSink(BaseSink):
             expected_length = lengths[0]
             if any(item != expected_length for item in lengths):
                 raise ValueError("Zarr arrays for one row must have matching lengths")
-        temp_videos: list[tuple[str, str, int]] = []
         if store is not None:
+            rollback_lengths: dict[str, int | None] = {}
+            for zarr_path in [*row_arrays, *(path for path, _ in row_videos)]:
+                dataset = store.arrays.get(zarr_path)
+                rollback_lengths[zarr_path] = (
+                    None if dataset is None else int(dataset.shape[0])
+                )
             try:
+                for zarr_path, array in row_arrays.items():
+                    self._validate_array_append(store, zarr_path, array)
+                for zarr_path, array in row_arrays.items():
+                    self._append_array(store, zarr_path, array)
                 for zarr_path, video in row_videos:
-                    temp_path = self._temp_path(store, zarr_path)
-                    temp_videos.append((zarr_path, temp_path, 0))
                     video_length = submit(
                         self._append_video(
                             store,
-                            temp_path,
+                            zarr_path,
                             video,
                             expected_length=expected_length,
                         )
                     ).result()
                     lengths.append(video_length)
-                    temp_videos[-1] = (zarr_path, temp_path, video_length)
                 if lengths:
                     length = lengths[0]
                     if any(item != length for item in lengths):
                         raise ValueError(
                             "Zarr arrays for one row must have matching lengths"
                         )
-                for zarr_path, array in row_arrays.items():
-                    self._validate_array_append(store, zarr_path, array)
-                for zarr_path, temp_path, _ in temp_videos:
-                    self._validate_array_append(
-                        store, zarr_path, store.arrays[temp_path]
-                    )
-                for zarr_path, array in row_arrays.items():
-                    self._append_array(store, zarr_path, array)
-                for zarr_path, temp_path, _ in temp_videos:
-                    self._copy_temp_array(store, temp_path, zarr_path)
                 if lengths and self.episode_ends_path is not None:
+                    dataset = store.arrays.get(self.episode_ends_path)
+                    rollback_lengths[self.episode_ends_path] = (
+                        None if dataset is None else int(dataset.shape[0])
+                    )
                     store.row_end += lengths[0]
                     self._append_array(
                         store,
                         self.episode_ends_path,
                         np.asarray([store.row_end], dtype=np.int64),
                     )
-            finally:
-                for _, temp_path, _ in temp_videos:
-                    self._drop_array(store, temp_path)
+            except Exception:
+                for zarr_path, length in rollback_lengths.items():
+                    if length is None:
+                        self._drop_array(store, zarr_path)
+                        continue
+                    dataset = store.arrays.get(zarr_path)
+                    if dataset is not None:
+                        dataset.resize((length, *dataset.shape[1:]))
+                if self.episode_ends_path is not None:
+                    dataset = store.arrays.get(self.episode_ends_path)
+                    store.row_end = (
+                        0
+                        if dataset is None or dataset.shape[0] == 0
+                        else int(dataset[-1])
+                    )
+                raise
         return
 
     async def _append_video(
@@ -146,19 +165,30 @@ class ZarrSink(BaseSink):
         *,
         expected_length: int | None = None,
     ) -> int:
+        if isinstance(video, VideoFrameArray):
+            frames = video.frame_arrays
+            if expected_length is not None and int(frames.shape[0]) != expected_length:
+                raise ValueError("Zarr arrays for one row must have matching lengths")
+            for start in range(0, int(frames.shape[0]), self.video_frame_batch_size):
+                end = min(int(frames.shape[0]), start + self.video_frame_batch_size)
+                self._append_array(store, path, frames[start:end])
+            return int(frames.shape[0])
+
         batch: list[np.ndarray] = []
         count = 0
-        async for frame in _iter_video_frame_arrays(video):
-            batch.append(np.asarray(frame))
+        async for frame in video.iter_frames():
+            batch.append(frame.frame.to_ndarray(format="rgb24"))
             if len(batch) >= self.video_frame_batch_size:
-                self._append_array(store, path, np.stack(batch, axis=0))
-                count += len(batch)
-                batch.clear()
-                if expected_length is not None and count > expected_length:
+                if expected_length is not None and count + len(batch) > expected_length:
                     raise ValueError(
                         "Zarr arrays for one row must have matching lengths"
                     )
+                self._append_array(store, path, np.stack(batch, axis=0))
+                count += len(batch)
+                batch.clear()
         if batch:
+            if expected_length is not None and count + len(batch) > expected_length:
+                raise ValueError("Zarr arrays for one row must have matching lengths")
             self._append_array(store, path, np.stack(batch, axis=0))
             count += len(batch)
         if expected_length is not None and count != expected_length:
@@ -200,15 +230,12 @@ class ZarrSink(BaseSink):
             shard_id=shard_id,
             worker_id=get_active_worker_token(),
         )
-        return f"_parts/{relpath}" if self.reduce_to_single_store else relpath
+        if self.reduce_to_single_store:
+            return _part_store_relpath(relpath)
+        return relpath
 
     def on_shard_complete(self, shard_id: str) -> None:
         self._stores.pop(self._store_relpath(shard_id), None)
-
-    def _temp_path(self, store: _ShardStore, path: str) -> str:
-        temp_path = f"__tmp/{store.next_temp_index}/{path}"
-        store.next_temp_index += 1
-        return temp_path
 
     def _append_array(
         self,
@@ -218,11 +245,10 @@ class ZarrSink(BaseSink):
     ) -> None:
         dataset = store.arrays.get(path)
         if dataset is None:
-            chunks = (_DEFAULT_ARRAY_CHUNK_LENGTH, *array.shape[1:])
             dataset = store.root.create_dataset(
                 path,
                 shape=(0, *array.shape[1:]),
-                chunks=chunks,
+                chunks=_chunk_shape(array, self.array_chunk_bytes),
                 dtype=array.dtype,
             )
             store.arrays[path] = dataset
@@ -246,28 +272,12 @@ class ZarrSink(BaseSink):
         if dataset.dtype != array.dtype:
             raise ValueError(f"Zarr arrays for {path!r} must have matching dtypes")
 
-    def _copy_temp_array(self, store: _ShardStore, temp_path: str, path: str) -> None:
-        source = store.arrays[temp_path]
-        for start in range(0, int(source.shape[0]), _merge_batch_size(source)):
-            end = min(int(source.shape[0]), start + _merge_batch_size(source))
-            self._append_array(store, path, np.asarray(source[start:end]))
-
     def _drop_array(self, store: _ShardStore, path: str) -> None:
         store.arrays.pop(path, None)
-        if path.startswith("__tmp/"):
-            path = "/".join(path.split("/")[:2])
-            for key in list(store.arrays):
-                if key == path or key.startswith(f"{path}/"):
-                    store.arrays.pop(key, None)
         try:
             del store.root[path]
         except (KeyError, FileNotFoundError):
             pass
-        if path.startswith("__tmp/"):
-            try:
-                del store.root["__tmp"]
-            except (KeyError, FileNotFoundError):
-                pass
 
     def close(self) -> None:
         self._stores.clear()
@@ -282,6 +292,7 @@ class ZarrSink(BaseSink):
                 "episode_ends_path": self.episode_ends_path,
                 "store_template": self.store_template,
                 "video_frame_batch_size": self.video_frame_batch_size,
+                "array_chunk_bytes": self.array_chunk_bytes,
                 "reduce_to_single_store": self.reduce_to_single_store,
                 "overwrite": self.overwrite,
             },
@@ -293,6 +304,7 @@ class ZarrSink(BaseSink):
                 output=self.output,
                 store_template=self.store_template,
                 episode_ends_path=self.episode_ends_path,
+                array_chunk_bytes=self.array_chunk_bytes,
                 overwrite=self.overwrite,
             )
         return FileCleanupReducerSink(
@@ -310,12 +322,14 @@ class ZarrMergeReducerSink(BaseSink):
         *,
         store_template: str,
         episode_ends_path: str | None,
+        array_chunk_bytes: int,
         overwrite: bool,
     ) -> None:
         check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
         self.output = DataFolder.resolve(output)
         self.store_template = store_template
         self.episode_ends_path = episode_ends_path
+        self.array_chunk_bytes = array_chunk_bytes
         self.overwrite = overwrite
         self._merged = False
 
@@ -334,6 +348,7 @@ class ZarrMergeReducerSink(BaseSink):
             {
                 "path": self.output.abs_path(),
                 "store_template": self.store_template,
+                "array_chunk_bytes": self.array_chunk_bytes,
                 "reduce_to_single_store": True,
             },
         )
@@ -369,6 +384,8 @@ class ZarrMergeReducerSink(BaseSink):
         arrays: dict[str, Any] = {}
         for row in stores:
             relpath = self._part_relpath(row.shard_id, row.worker_token)
+            if not self.output.exists(relpath):
+                continue
             source = zarr.open_group(
                 store=zarr_store(self.output, relpath, mode="r"),
                 mode="r",
@@ -378,23 +395,24 @@ class ZarrMergeReducerSink(BaseSink):
                 if path == self.episode_ends_path:
                     if source_array.shape[0] == 0:
                         continue
-                    values = np.asarray(source_array[:], dtype=np.int64)
-                    _append_reduced_array(
-                        final,
-                        arrays,
-                        path,
-                        values + row_offset,
-                        source_array,
-                    )
-                    row_offset += int(values[-1])
+                    part_last = row_offset
+                    batch_size = _batch_length(source_array, self.array_chunk_bytes)
+                    for start in range(0, int(source_array.shape[0]), batch_size):
+                        end = min(int(source_array.shape[0]), start + batch_size)
+                        values = np.asarray(source_array[start:end], dtype=np.int64)
+                        _append_reduced_array(
+                            final,
+                            arrays,
+                            path,
+                            values + row_offset,
+                            source_array,
+                        )
+                        part_last = int(values[-1])
+                    row_offset += part_last
                     continue
-                for start in range(
-                    0, int(source_array.shape[0]), _merge_batch_size(source_array)
-                ):
-                    end = min(
-                        int(source_array.shape[0]),
-                        start + _merge_batch_size(source_array),
-                    )
+                batch_size = _batch_length(source_array, self.array_chunk_bytes)
+                for start in range(0, int(source_array.shape[0]), batch_size):
+                    end = min(int(source_array.shape[0]), start + batch_size)
                     _append_reduced_array(
                         final,
                         arrays,
@@ -404,14 +422,21 @@ class ZarrMergeReducerSink(BaseSink):
                     )
 
         try:
-            self.output.rm("_parts", recursive=True)
+            self.output.rm(f"_parts/{get_active_job_id()}", recursive=True)
         except FileNotFoundError:
+            pass
+        try:
+            if not self.output.ls("_parts"):
+                self.output.rmdir("_parts")
+        except (FileNotFoundError, OSError, ValueError):
             pass
 
     def _part_relpath(self, shard_id: str, worker_token: str) -> str:
-        return "_parts/" + self.store_template.format(
-            shard_id=shard_id,
-            worker_id=worker_token,
+        return _part_store_relpath(
+            self.store_template.format(
+                shard_id=shard_id,
+                worker_id=worker_token,
+            )
         )
 
 
@@ -435,6 +460,22 @@ def _validate_array_paths(
     if episode_ends_path is not None and episode_ends_path in arrays:
         raise ValueError(
             f"Zarr array path collides with episode_ends_path: {episode_ends_path}"
+        )
+
+
+def _validate_store_template(store_template: str) -> None:
+    fields = {
+        field_name
+        for _literal_text, field_name, _format_spec, _conversion in Formatter().parse(
+            store_template
+        )
+        if field_name is not None
+    }
+    missing_fields = {"shard_id", "worker_id"}.difference(fields)
+    if missing_fields:
+        raise ValueError(
+            "store_template requires fields: "
+            + ", ".join(f"{{{field_name}}}" for field_name in sorted(missing_fields))
         )
 
 
@@ -469,19 +510,8 @@ def _as_array(value: Any) -> np.ndarray:
     return np.asarray(value)
 
 
-async def _iter_video_frame_arrays(video: VideoSource):
-    iter_frame_arrays = getattr(video, "iter_frame_arrays", None)
-    if callable(iter_frame_arrays):
-        frames = iter_frame_arrays()
-        if hasattr(frames, "__aiter__"):
-            async for frame in frames:
-                yield frame
-            return
-        for frame in frames:
-            yield frame
-        return
-    async for frame in video.iter_frames():
-        yield frame.frame.to_ndarray(format="rgb24")
+def _part_store_relpath(relpath: str) -> str:
+    return f"_parts/{get_active_job_id()}/{relpath}"
 
 
 def _clear_final_group(group: Any) -> None:
@@ -490,11 +520,15 @@ def _clear_final_group(group: Any) -> None:
             del group[key]
 
 
-def _merge_batch_size(array: Any) -> int:
-    chunks = getattr(array, "chunks", None)
-    if isinstance(chunks, tuple) and chunks and isinstance(chunks[0], int):
-        return max(1, int(chunks[0]))
-    return max(1, min(int(array.shape[0]), 1024))
+def _chunk_shape(array: np.ndarray, target_bytes: int) -> tuple[int, ...]:
+    return (_batch_length(array, target_bytes), *array.shape[1:])
+
+
+def _batch_length(array: Any, target_bytes: int) -> int:
+    dtype = np.dtype(array.dtype)
+    row_values = int(np.prod(tuple(array.shape[1:]), dtype=np.int64))
+    row_bytes = max(1, dtype.itemsize * max(1, row_values))
+    return max(1, target_bytes // row_bytes)
 
 
 def _append_reduced_array(
