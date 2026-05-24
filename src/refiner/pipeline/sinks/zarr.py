@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from string import Formatter
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -74,16 +74,10 @@ class ZarrSink(BaseSink):
                 return
             store = pending_store
             previous_row_end = store.row_end
-            rollback_lengths = {
-                zarr_path: None
-                if (dataset := store.arrays.get(zarr_path)) is None
-                else int(dataset.shape[0])
-                for zarr_path in pending_arrays
-            }
+            rollback_lengths = self._snapshot_array_lengths(store, pending_arrays)
             if self.episode_ends_path is not None:
-                dataset = store.arrays.get(self.episode_ends_path)
-                rollback_lengths[self.episode_ends_path] = (
-                    None if dataset is None else int(dataset.shape[0])
+                rollback_lengths.update(
+                    self._snapshot_array_lengths(store, [self.episode_ends_path])
                 )
             try:
                 combined = {
@@ -102,13 +96,7 @@ class ZarrSink(BaseSink):
                     self._append_array(store, self.episode_ends_path, row_ends)
                     store.row_end = int(row_ends[-1])
             except Exception:
-                for zarr_path, length in rollback_lengths.items():
-                    if length is None:
-                        self._drop_array(store, zarr_path)
-                        continue
-                    dataset = store.arrays.get(zarr_path)
-                    if dataset is not None:
-                        dataset.resize((length, *dataset.shape[1:]))
+                self._restore_array_lengths(store, rollback_lengths)
                 store.row_end = previous_row_end
                 raise
             finally:
@@ -131,13 +119,12 @@ class ZarrSink(BaseSink):
                 count += 1
                 continue
 
-            if lengths:
-                length = lengths[0]
-                if any(item != length for item in lengths):
-                    flush_pending()
-                    raise ValueError(
-                        "Zarr arrays for one row must have matching lengths"
-                    )
+            try:
+                length = _matching_length(lengths)
+            except Exception:
+                flush_pending()
+                raise
+            if length is not None:
                 row_bytes = sum(array.nbytes for array in row_arrays.values())
                 if pending_arrays and (
                     pending_bytes + row_bytes > self.array_chunk_bytes
@@ -169,19 +156,13 @@ class ZarrSink(BaseSink):
         lengths: list[int],
     ) -> None:
         store = self._store(shard_id)
-        expected_length = lengths[0] if lengths else None
-        if expected_length is not None and any(
-            item != expected_length for item in lengths
-        ):
-            raise ValueError("Zarr arrays for one row must have matching lengths")
+        expected_length = _matching_length(lengths)
 
         previous_row_end = store.row_end
-        rollback_lengths = {
-            zarr_path: None
-            if (dataset := store.arrays.get(zarr_path)) is None
-            else int(dataset.shape[0])
-            for zarr_path in [*row_arrays, *(path for path, _ in row_videos)]
-        }
+        rollback_lengths = self._snapshot_array_lengths(
+            store,
+            [*row_arrays, *(path for path, _ in row_videos)],
+        )
         try:
             for zarr_path, array in row_arrays.items():
                 self._append_array(store, zarr_path, array)
@@ -195,18 +176,12 @@ class ZarrSink(BaseSink):
                     )
                 ).result()
                 lengths.append(video_length)
-            if lengths:
-                length = lengths[0]
-                if any(item != length for item in lengths):
-                    raise ValueError(
-                        "Zarr arrays for one row must have matching lengths"
-                    )
-            if lengths and self.episode_ends_path is not None:
-                dataset = store.arrays.get(self.episode_ends_path)
-                rollback_lengths[self.episode_ends_path] = (
-                    None if dataset is None else int(dataset.shape[0])
+            length = _matching_length(lengths)
+            if length is not None and self.episode_ends_path is not None:
+                rollback_lengths.update(
+                    self._snapshot_array_lengths(store, [self.episode_ends_path])
                 )
-                row_end = store.row_end + lengths[0]
+                row_end = store.row_end + length
                 self._append_array(
                     store,
                     self.episode_ends_path,
@@ -214,13 +189,7 @@ class ZarrSink(BaseSink):
                 )
                 store.row_end = row_end
         except Exception:
-            for zarr_path, length in rollback_lengths.items():
-                if length is None:
-                    self._drop_array(store, zarr_path)
-                    continue
-                dataset = store.arrays.get(zarr_path)
-                if dataset is not None:
-                    dataset.resize((length, *dataset.shape[1:]))
+            self._restore_array_lengths(store, rollback_lengths)
             store.row_end = previous_row_end
             raise
 
@@ -262,7 +231,12 @@ class ZarrSink(BaseSink):
             nonlocal batch_limit
             batch.append(frame)
             if batch_limit is None:
-                batch_limit = self._video_batch_limit(frame)
+                batch_limit = min(
+                    self.video_frame_batch_size,
+                    _batch_length_for_shape(
+                        (1, *frame.shape), frame.dtype, self.array_chunk_bytes
+                    ),
+                )
 
         def flush_batch() -> None:
             nonlocal count
@@ -304,14 +278,6 @@ class ZarrSink(BaseSink):
             raise ValueError("Zarr arrays for one row must have matching lengths")
         return count
 
-    def _video_batch_limit(self, frame: np.ndarray) -> int:
-        return min(
-            self.video_frame_batch_size,
-            _batch_length_for_shape(
-                (1, *frame.shape), frame.dtype, self.array_chunk_bytes
-            ),
-        )
-
     def _arrays_for_row(self, row: Row) -> dict[str, str]:
         if self.arrays is not None:
             return self.arrays
@@ -349,9 +315,7 @@ class ZarrSink(BaseSink):
             shard_id=shard_id,
             worker_id=get_active_worker_token(),
         )
-        if self.reduce_to_single_store:
-            return f"_parts/{relpath}"
-        return relpath
+        return f"_parts/{relpath}" if self.reduce_to_single_store else relpath
 
     def on_shard_complete(self, shard_id: str) -> None:
         relpath = self._store_relpath(shard_id)
@@ -377,12 +341,34 @@ class ZarrSink(BaseSink):
             chunks=chunks or _chunk_shape(array, self.array_chunk_bytes),
         )
 
-    def _drop_array(self, store: _ZarrWriteState, path: str) -> None:
-        store.arrays.pop(path, None)
-        try:
-            del store.root[path]
-        except (KeyError, FileNotFoundError):
-            pass
+    def _snapshot_array_lengths(
+        self,
+        store: _ZarrWriteState,
+        paths: Iterable[str],
+    ) -> dict[str, int | None]:
+        return {
+            path: None
+            if (dataset := store.arrays.get(path)) is None
+            else int(dataset.shape[0])
+            for path in paths
+        }
+
+    def _restore_array_lengths(
+        self,
+        store: _ZarrWriteState,
+        lengths: Mapping[str, int | None],
+    ) -> None:
+        for path, length in lengths.items():
+            if length is None:
+                store.arrays.pop(path, None)
+                try:
+                    del store.root[path]
+                except (KeyError, FileNotFoundError):
+                    pass
+                continue
+            dataset = store.arrays.get(path)
+            if dataset is not None:
+                dataset.resize((length, *dataset.shape[1:]))
 
     def close(self) -> None:
         self._stores.clear()
@@ -516,8 +502,17 @@ def _as_array(value: Any) -> np.ndarray:
             return value.to_numpy(zero_copy_only=False)
         return np.asarray(value.to_pylist())
     if isinstance(value, Iterable) and not isinstance(value, str | bytes | np.ndarray):
-        return np.asarray(list(cast(Iterable[Any], value)))
+        return np.asarray(list(value))
     return np.asarray(value)
+
+
+def _matching_length(lengths: list[int]) -> int | None:
+    if not lengths:
+        return None
+    length = lengths[0]
+    if any(item != length for item in lengths):
+        raise ValueError("Zarr arrays for one row must have matching lengths")
+    return length
 
 
 def _zarr_store(output: DataFolder, path: str = "", *, mode: str = "r"):
