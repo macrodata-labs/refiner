@@ -1,0 +1,13 @@
+{"time": "2026-05-23T18:56:43Z", "event": "vggt_world_aoe_fixes_start", "clips": ["clip-001849", "clip-001850", "clip-001851", "clip-001852", "clip-001853", "clip-001854", "clip-001855", "clip-001856", "clip-001857", "clip-001858"]}
+{"time": "2026-05-23T18:56:53Z", "event": "baseline_done"}
+{"time": "2026-05-23T19:00:25Z", "event": "depth_backend_done", "backend": "vggt"}
+{"time": "2026-05-23T19:04:41Z", "event": "depth_backend_done", "backend": "moge"}
+{"time": "2026-05-23T19:09:16Z", "event": "filters_done"}
+{"time": "2026-05-23T19:11:07Z", "event": "window_accel_done", "accel_weight": 0.5}
+{"time": "2026-05-23T19:13:00Z", "event": "window_accel_done", "accel_weight": 1.0}
+{"time": "2026-05-23T19:14:51Z", "event": "window_accel_done", "accel_weight": 2.5}
+{"time": "2026-05-23T19:16:37Z", "event": "window_accel_done", "accel_weight": 5.0}
+{"time": "2026-05-23T19:18:21Z", "event": "window_accel_done", "accel_weight": 10.0}
+{"time": "2026-05-23T19:20:08Z", "event": "window_accel_done", "accel_weight": 20.0}
+{"time": "2026-05-23T19:20:40Z", "event": "combined_done"}
+{"time": "2026-05-23T19:20:40Z", "event": "vggt_world_aoe_fixes_done", "summary": "/cache/hot3d/benchmarks/focal-clean-10-vggt-world-aoe-fixes/summary.json"}
