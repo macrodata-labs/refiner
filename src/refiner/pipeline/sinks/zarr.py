@@ -441,21 +441,14 @@ class ZarrSink(BaseSink):
         )
 
     def build_reducer(self) -> BaseSink | None:
-        from refiner.pipeline.sinks.reducer.zarr import (
-            ZarrCleanupReducerSink,
-            ZarrMergeReducerSink,
-        )
+        from refiner.pipeline.sinks.reducer.zarr import ZarrReducerSink
 
-        if self.reduce_to_single_store:
-            return ZarrMergeReducerSink(
-                output=self.output,
-                store_template=self.store_template,
-                episode_ends_path=self.episode_ends_path,
-                array_chunk_bytes=self.array_chunk_bytes,
-            )
-        return ZarrCleanupReducerSink(
+        return ZarrReducerSink(
             output=self.output,
             store_template=self.store_template,
+            episode_ends_path=self.episode_ends_path,
+            array_chunk_bytes=self.array_chunk_bytes,
+            reduce_to_single_store=self.reduce_to_single_store,
         )
 
 

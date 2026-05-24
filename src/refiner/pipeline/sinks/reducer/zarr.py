@@ -7,7 +7,6 @@ import numpy as np
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
-from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.pipeline.sinks.zarr import (
     _append_zarr_array,
@@ -20,22 +19,36 @@ from refiner.worker.context import get_active_stage_index, get_finalized_workers
 from refiner.worker.lifecycle import sort_finalized_workers
 
 
-class ZarrCleanupReducerSink(BaseSink):
-    def __init__(self, output: DataFolderLike, *, store_template: str) -> None:
-        self.output = DataFolder.resolve(output)
-        self.store_template = store_template
-        self._cleanup = FileCleanupReducerSink(
-            output=self.output,
-            filename_template=store_template,
+class ZarrReducerSink(FileCleanupReducerSink):
+    def __init__(
+        self,
+        output: DataFolderLike,
+        *,
+        store_template: str,
+        episode_ends_path: str | None = None,
+        array_chunk_bytes: int = 8 * 1024 * 1024,
+        reduce_to_single_store: bool = False,
+    ) -> None:
+        check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
+        super().__init__(
+            output=output,
+            filename_template=(
+                f"_parts/{store_template}" if reduce_to_single_store else store_template
+            ),
             reducer_name="write_zarr_reduce",
         )
-
-    @property
-    def counts_output_rows(self) -> bool:
-        return False
+        self.store_template = store_template
+        self.episode_ends_path = episode_ends_path
+        self.array_chunk_bytes = array_chunk_bytes
+        self.reduce_to_single_store = reduce_to_single_store
+        self._merged = False
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
-        self._cleanup.write_shard_block(shard_id, block)
+        super().write_shard_block(shard_id, block)
+        if self.reduce_to_single_store:
+            self._merge()
+            return
+
         stage_index = get_active_stage_index()
         if stage_index is None or stage_index <= 0:
             raise ValueError(
@@ -81,31 +94,6 @@ class ZarrCleanupReducerSink(BaseSink):
 
         clear_group(root)
 
-
-class ZarrMergeReducerSink(BaseSink):
-    def __init__(
-        self,
-        output: DataFolderLike,
-        *,
-        store_template: str,
-        episode_ends_path: str | None,
-        array_chunk_bytes: int,
-    ) -> None:
-        check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
-        self.output = DataFolder.resolve(output)
-        self.store_template = store_template
-        self.episode_ends_path = episode_ends_path
-        self.array_chunk_bytes = array_chunk_bytes
-        self._merged = False
-
-    @property
-    def counts_output_rows(self) -> bool:
-        return False
-
-    def write_shard_block(self, shard_id: str, block: Block) -> None:
-        del shard_id, block
-        self._merge()
-
     def describe(self) -> tuple[str, str, dict[str, object]]:
         return (
             "write_zarr_reduce",
@@ -114,7 +102,7 @@ class ZarrMergeReducerSink(BaseSink):
                 "path": self.output.abs_path(),
                 "store_template": self.store_template,
                 "array_chunk_bytes": self.array_chunk_bytes,
-                "reduce_to_single_store": True,
+                "reduce_to_single_store": self.reduce_to_single_store,
             },
         )
 
@@ -216,7 +204,7 @@ class ZarrMergeReducerSink(BaseSink):
 
     def on_shard_finalized(self, shard_id: str) -> None:
         del shard_id
-        if not self._merged:
+        if not self.reduce_to_single_store or not self._merged:
             return
         _remove_parts(self.output)
         try:
@@ -330,4 +318,4 @@ def _clear_final_group(group: Any) -> None:
     group.attrs.clear()
 
 
-__all__ = ["ZarrCleanupReducerSink", "ZarrMergeReducerSink"]
+__all__ = ["ZarrReducerSink"]
