@@ -6,6 +6,37 @@ description: "Extracting hand actions from egocentric video"
 Refiner can orchestrate egocentric hand-action extraction by treating external
 reconstruction systems, such as HaWoR, as pipeline operators.
 
+For episode-level hand tracking with worker-local batching, use
+`run_hand_tracking(...)` with `flat_map(...)`. The returned function keeps model
+state in your captured closure, buffers episode rows, and calls your batch
+annotation function when the configured batch size is full:
+
+```python
+models = None
+
+def annotate_batch(rows):
+    nonlocal models
+    if models is None:
+        models = MyHandTrackingModels(...)
+    return [
+        row.update(hand_tracking=models.annotate_episode(row))
+        for row in rows
+    ]
+
+pipeline = pipeline.flat_map(
+    mdr.robotics.egocentric.run_hand_tracking(
+        annotate_batch,
+        batch_size=4,
+    )
+)
+```
+
+Append a flush sentinel when the last partial batch must be emitted:
+
+```python
+flush = mdr.robotics.egocentric.hand_tracking_flush_row()
+```
+
 The first supported contract is HaWoR-style world-space hand reconstruction:
 
 ```python
