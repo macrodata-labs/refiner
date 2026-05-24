@@ -20,32 +20,36 @@ _FIELD_PATTERNS = {
 _DEFAULT_FIELD_PATTERN = r"[^/]+"
 
 
-def _compile_output_path_pattern(filename_template: str) -> re.Pattern[str]:
-    parts: list[str] = []
+def _compile_output_path_patterns(filename_template: str) -> list[re.Pattern[str]]:
+    path_parts: list[str] = []
+    patterns: list[re.Pattern[str]] = []
     seen_fields: set[str] = set()
 
-    for literal_text, field_name, format_spec, conversion in Formatter().parse(
-        filename_template
-    ):
-        parts.append(re.escape(literal_text))
-        if field_name is None:
-            continue
-        if conversion is not None or format_spec:
-            raise ValueError(
-                "filename_template reducer matching only supports plain "
-                "named fields without conversion or format specifiers"
-            )
-        if not field_name.isidentifier():
-            raise ValueError(
-                "filename_template reducer matching only supports plain named fields"
-            )
-        if field_name in seen_fields:
-            # Repeated fields in the template must resolve to the same path segment.
-            parts.append(f"(?P={field_name})")
-            continue
-        pattern = _FIELD_PATTERNS.get(field_name, _DEFAULT_FIELD_PATTERN)
-        parts.append(f"(?P<{field_name}>{pattern})")
-        seen_fields.add(field_name)
+    for segment in (part for part in filename_template.split("/") if part):
+        segment_parts: list[str] = []
+        for literal_text, field_name, format_spec, conversion in Formatter().parse(
+            segment
+        ):
+            segment_parts.append(re.escape(literal_text))
+            if field_name is None:
+                continue
+            if conversion is not None or format_spec:
+                raise ValueError(
+                    "filename_template reducer matching only supports plain "
+                    "named fields without conversion or format specifiers"
+                )
+            if not field_name.isidentifier():
+                raise ValueError(
+                    "filename_template reducer matching only supports plain named fields"
+                )
+            if field_name in seen_fields:
+                segment_parts.append(f"(?P={field_name})")
+                continue
+            pattern = _FIELD_PATTERNS.get(field_name, _DEFAULT_FIELD_PATTERN)
+            segment_parts.append(f"(?P<{field_name}>{pattern})")
+            seen_fields.add(field_name)
+        path_parts.append("".join(segment_parts))
+        patterns.append(re.compile("^" + "/".join(path_parts) + "$"))
 
     missing_fields = sorted(_REQUIRED_TEMPLATE_FIELDS.difference(seen_fields))
     if missing_fields:
@@ -54,7 +58,7 @@ def _compile_output_path_pattern(filename_template: str) -> re.Pattern[str]:
             + ", ".join(f"{{{field_name}}}" for field_name in missing_fields)
         )
 
-    return re.compile("^" + "".join(parts) + "$")
+    return patterns
 
 
 class FileCleanupReducerSink(BaseSink):
@@ -72,7 +76,7 @@ class FileCleanupReducerSink(BaseSink):
         self.filename_template = filename_template
         self.reducer_name = reducer_name
         self.assets_subdir = assets_subdir
-        self._output_path_pattern = _compile_output_path_pattern(filename_template)
+        self._output_path_patterns = _compile_output_path_patterns(filename_template)
         self._cleanup_ran = False
 
     def write_shard_block(self, shard_id, block) -> None:
@@ -115,7 +119,6 @@ class FileCleanupReducerSink(BaseSink):
             for row in get_finalized_workers(stage_index=stage_index - 1)
         }
 
-        template_parts = [part for part in self.filename_template.split("/") if part]
         literal_prefix = ""
         for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
             self.filename_template
@@ -128,11 +131,15 @@ class FileCleanupReducerSink(BaseSink):
         )
         paths = [listing_prefix]
         prefix_parts = [part for part in listing_prefix.split("/") if part]
-        for _ in range(max(1, len(template_parts) - len(prefix_parts))):
+        for pattern in self._output_path_patterns[len(prefix_parts) :]:
             next_paths: list[str] = []
             for path in paths:
                 try:
-                    next_paths.extend(self.output.ls(path, detail=False))
+                    next_paths.extend(
+                        item
+                        for item in self.output.ls(path, detail=False)
+                        if isinstance(item, str) and pattern.fullmatch(item)
+                    )
                 except (FileNotFoundError, NotADirectoryError):
                     continue
             paths = next_paths
@@ -145,7 +152,7 @@ class FileCleanupReducerSink(BaseSink):
                 continue
             if rel_path.rstrip("/").endswith("/."):
                 continue
-            match = self._output_path_pattern.fullmatch(rel_path)
+            match = self._output_path_patterns[-1].fullmatch(rel_path)
             if match is None:
                 continue
             if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
