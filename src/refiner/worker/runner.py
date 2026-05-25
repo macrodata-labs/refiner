@@ -243,6 +243,7 @@ class Worker:
             worker_id=self.worker_id,
             worker_name=self.worker_name,
             runtime_lifecycle=self.runtime_lifecycle,
+            active_shards=inflight_by_id,
             service_manager=service_manager,
             user_metrics_emitter=self.user_metrics_emitter,
         ):

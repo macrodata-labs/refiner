@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, Generator
@@ -9,6 +10,7 @@ from loguru import logger as _base_logger
 from refiner.worker.metrics.emitter import NOOP_USER_METRICS_EMITTER, UserMetricsEmitter
 
 if TYPE_CHECKING:
+    from refiner.pipeline.data.shard import Shard
     from refiner.services.manager import ServiceManager
     from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 
@@ -41,6 +43,10 @@ _ACTIVE_WORKER_NAME: ContextVar[str | None] = ContextVar(
 )
 _ACTIVE_RUNTIME_LIFECYCLE: ContextVar[RuntimeLifecycle | None] = ContextVar(
     "refiner_active_runtime_lifecycle",
+    default=None,
+)
+_ACTIVE_SHARDS: ContextVar[Mapping[str, "Shard"] | None] = ContextVar(
+    "refiner_active_shards",
     default=None,
 )
 _ACTIVE_SERVICE_MANAGER: ContextVar["ServiceManager" | None] = ContextVar(
@@ -85,6 +91,14 @@ def get_active_worker_token() -> str:
     return worker_token_for(get_active_worker_id())
 
 
+def get_active_shard_global_ordinal(shard_id: str) -> int | None:
+    shards = _ACTIVE_SHARDS.get()
+    if shards is None:
+        return None
+    shard = shards.get(shard_id)
+    return None if shard is None else shard.global_ordinal
+
+
 def get_finalized_workers(
     *, stage_index: int | None = None
 ) -> list["FinalizedShardWorker"]:
@@ -114,6 +128,7 @@ def set_active_run_context(
     worker_id: str,
     worker_name: str | None,
     runtime_lifecycle: RuntimeLifecycle,
+    active_shards: Mapping[str, "Shard"] | None = None,
     service_manager: ServiceManager | None = None,
     user_metrics_emitter: UserMetricsEmitter = NOOP_USER_METRICS_EMITTER,
 ) -> Generator[None, None, None]:
@@ -123,6 +138,9 @@ def set_active_run_context(
     worker_name_token: Token[str | None] = _ACTIVE_WORKER_NAME.set(worker_name)
     lifecycle_token: Token[RuntimeLifecycle | None] = _ACTIVE_RUNTIME_LIFECYCLE.set(
         runtime_lifecycle
+    )
+    shards_token: Token[Mapping[str, "Shard"] | None] = _ACTIVE_SHARDS.set(
+        active_shards
     )
     service_manager_token: Token[ServiceManager | None] = _ACTIVE_SERVICE_MANAGER.set(
         service_manager
@@ -144,6 +162,7 @@ def set_active_run_context(
         _ACTIVE_SERVICE_MANAGER.reset(service_manager_token)
         _ACTIVE_USER_METRICS_EMITTER.reset(metrics_emitter_token)
         _ACTIVE_LOGGER.reset(logger_token)
+        _ACTIVE_SHARDS.reset(shards_token)
         _ACTIVE_RUNTIME_LIFECYCLE.reset(lifecycle_token)
         _ACTIVE_WORKER_NAME.reset(worker_name_token)
         _ACTIVE_WORKER_ID.reset(worker_id_token)
@@ -163,6 +182,7 @@ def set_active_step_index(step_index: int | None) -> Generator[None, None, None]
 __all__ = [
     "get_active_job_id",
     "get_active_service_manager",
+    "get_active_shard_global_ordinal",
     "get_active_stage_index",
     "get_active_step_index",
     "get_active_user_metrics_emitter",

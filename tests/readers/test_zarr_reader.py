@@ -929,6 +929,7 @@ def test_write_zarr_rejects_rendered_path_traversal(tmp_path: Path) -> None:
             ZarrSink(
                 str(tmp_path / "rendered-escape.zarr"),
                 arrays={"data/action": "action"},
+                store_template="{shard_id}__w{worker_id}.zarr",
             ).write_block([DictRow({"action": [[1.0]]}, shard_id="../escape")])
 
 
@@ -1153,6 +1154,7 @@ def test_write_zarr_empty_shard_completion_replaces_stale_store(
         ZarrSink(
             str(zarr_out),
             arrays={"data/action": "action"},
+            store_template="{shard_id}__w{worker_id}.zarr",
             reduce_to_single_store=False,
         ).on_shard_complete("shard-a")
 
@@ -1215,6 +1217,7 @@ def test_write_zarr_rejects_sharded_schema_drift_after_cleanup(
     reducer = ZarrSink(
         str(zarr_out),
         arrays={"data/action": "action"},
+        store_template="{shard_id}__w{worker_id}.zarr",
         reduce_to_single_store=False,
     ).build_reducer()
     assert reducer is not None

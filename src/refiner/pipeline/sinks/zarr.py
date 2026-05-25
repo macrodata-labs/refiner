@@ -16,7 +16,10 @@ from refiner.pipeline.sinks.base import BaseSink
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoSource
-from refiner.worker.context import get_active_worker_token
+from refiner.worker.context import (
+    get_active_shard_global_ordinal,
+    get_active_worker_token,
+)
 
 _DEFAULT_ARRAY_CHUNK_BYTES = 8 * 1024 * 1024
 _MAX_INITIAL_CHUNK_ROWS = 1024
@@ -37,7 +40,7 @@ class ZarrSink(BaseSink):
         arrays: Mapping[str, str] | None = None,
         attrs: Mapping[str, str] | None = None,
         episode_ends_path: str | None = "meta/episode_ends",
-        store_template: str = "{shard_id}__w{worker_id}.zarr",
+        store_template: str = "{global_ordinal}__{shard_id}__w{worker_id}.zarr",
         video_frame_batch_size: int = 8,
         array_chunk_bytes: int = _DEFAULT_ARRAY_CHUNK_BYTES,
         reduce_to_single_store: bool = True,
@@ -324,6 +327,7 @@ class ZarrSink(BaseSink):
             self.store_template,
             shard_id=shard_id,
             worker_id=get_active_worker_token(),
+            global_ordinal=get_active_shard_global_ordinal(shard_id),
         )
         return f"_parts/{relpath}" if self.reduce_to_single_store else relpath
 
@@ -451,11 +455,13 @@ def _validate_store_template(store_template: str) -> None:
             continue
         if conversion is not None or format_spec:
             raise ValueError(
-                "store_template only supports plain {shard_id} and {worker_id} fields"
+                "store_template only supports plain {global_ordinal}, {shard_id}, "
+                "and {worker_id} fields"
             )
-        if field_name not in {"shard_id", "worker_id"}:
+        if field_name not in {"global_ordinal", "shard_id", "worker_id"}:
             raise ValueError(
-                "store_template only supports plain {shard_id} and {worker_id} fields"
+                "store_template only supports plain {global_ordinal}, {shard_id}, "
+                "and {worker_id} fields"
             )
         fields.add(field_name)
     missing_fields = {"shard_id", "worker_id"}.difference(fields)
@@ -471,8 +477,15 @@ def _render_store_relpath(
     *,
     shard_id: str,
     worker_id: str,
+    global_ordinal: int | None = None,
 ) -> str:
-    relpath = store_template.format(shard_id=shard_id, worker_id=worker_id)
+    relpath = store_template.format(
+        global_ordinal=(
+            f"{global_ordinal:012d}" if global_ordinal is not None else "unknown"
+        ),
+        shard_id=shard_id,
+        worker_id=worker_id,
+    )
     _normalize_public_zarr_path(relpath, "rendered store path")
     return relpath
 

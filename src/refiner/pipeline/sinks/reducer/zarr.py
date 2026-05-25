@@ -207,6 +207,7 @@ class ZarrReducerSink(FileCleanupReducerSink):
                 self.store_template,
                 shard_id=row.shard_id,
                 worker_id=row.worker_token,
+                global_ordinal=row.global_ordinal,
             )
             for row in sort_finalized_workers(
                 get_finalized_workers(stage_index=stage_index - 1)
