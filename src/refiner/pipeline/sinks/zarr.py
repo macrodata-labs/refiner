@@ -15,7 +15,7 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
-from refiner.video import VideoFrameArray, VideoSource
+from refiner.video import VideoSource
 from refiner.worker.context import get_active_worker_token
 
 _DEFAULT_ARRAY_CHUNK_BYTES = 8 * 1024 * 1024
@@ -65,18 +65,20 @@ class ZarrSink(BaseSink):
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
         count = 0
-        pending_store: _ZarrWriteState | None = None
         pending_arrays: dict[str, list[np.ndarray]] = {}
         pending_lengths: list[int] = []
         pending_bytes = 0
 
         def flush_pending() -> None:
-            nonlocal pending_store, pending_arrays, pending_lengths, pending_bytes
-            if pending_store is None or not pending_arrays:
+            nonlocal pending_arrays, pending_lengths, pending_bytes
+            if not pending_arrays:
                 return
-            store = pending_store
+            store = self._store(shard_id)
             previous_row_end = store.row_end
-            rollback_lengths = self._snapshot_array_lengths(store, pending_arrays)
+            rollback_lengths = self._snapshot_array_lengths(
+                store,
+                pending_arrays.keys(),
+            )
             if self.episode_ends_path is not None:
                 rollback_lengths.update(
                     self._snapshot_array_lengths(store, [self.episode_ends_path])
@@ -102,7 +104,6 @@ class ZarrSink(BaseSink):
                 store.row_end = previous_row_end
                 raise
             finally:
-                pending_store = None
                 pending_arrays = {}
                 pending_lengths = []
                 pending_bytes = 0
@@ -110,7 +111,7 @@ class ZarrSink(BaseSink):
         for row in block:
             try:
                 arrays = self._arrays_for_row(row)
-                row_arrays, row_videos, lengths = self._row_values(row, arrays)
+                row_arrays, row_videos, lengths = self._split_row_values(row, arrays)
             except Exception:
                 flush_pending()
                 raise
@@ -141,8 +142,6 @@ class ZarrSink(BaseSink):
                     flush_pending()
                 store = self._store(shard_id)
                 self._write_attrs(store, row)
-                if pending_store is None:
-                    pending_store = store
                 for zarr_path, array in row_arrays.items():
                     pending_arrays.setdefault(zarr_path, []).append(array)
                 pending_lengths.append(length)
@@ -211,7 +210,7 @@ class ZarrSink(BaseSink):
             store.row_end = previous_row_end
             raise
 
-    def _row_values(
+    def _split_row_values(
         self,
         row: Row,
         arrays: Mapping[str, str],
@@ -245,17 +244,6 @@ class ZarrSink(BaseSink):
         batch_limit: int | None = None
         count = 0
 
-        def append_frame(frame: np.ndarray) -> None:
-            nonlocal batch_limit
-            batch.append(frame)
-            if batch_limit is None:
-                batch_limit = min(
-                    self.video_frame_batch_size,
-                    _batch_length_for_shape(
-                        (1, *frame.shape), frame.dtype, self.array_chunk_bytes
-                    ),
-                )
-
         def flush_batch() -> None:
             nonlocal count
             if not batch:
@@ -271,23 +259,18 @@ class ZarrSink(BaseSink):
             count += len(batch)
             batch.clear()
 
-        if isinstance(video, VideoFrameArray):
-            if expected_length is not None and video.frame_count != expected_length:
-                raise ValueError("Zarr arrays for one row must have matching lengths")
-            if video.frame_count == 0:
-                empty = np.asarray(video.frames, dtype=np.uint8)
-                self._append_array(store, path, empty[:0])
-                return 0
-            for frame in video.iter_frame_arrays():
-                append_frame(frame)
-                if batch_limit is not None and len(batch) >= batch_limit:
-                    flush_batch()
-            flush_batch()
-            return count
-
-        async for frame in video.iter_frames():
-            append_frame(frame.frame.to_ndarray(format="rgb24"))
-            if batch_limit is not None and len(batch) >= batch_limit:
+        async for frame in video.iter_numpy_frames():
+            limit = batch_limit
+            if limit is None:
+                limit = min(
+                    self.video_frame_batch_size,
+                    _batch_length_for_shape(
+                        (1, *frame.shape), frame.dtype, self.array_chunk_bytes
+                    ),
+                )
+                batch_limit = limit
+            batch.append(frame)
+            if len(batch) >= limit:
                 flush_batch()
         flush_batch()
         if count == 0:

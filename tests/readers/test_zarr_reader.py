@@ -41,6 +41,10 @@ class _EmptyVideoSource:
         if False:
             yield None
 
+    async def iter_numpy_frames(self):
+        if False:
+            yield None
+
     async def iter_frame_windows(self, **_kwargs):
         if False:
             yield None
@@ -1794,7 +1798,7 @@ def test_write_zarr_materializes_frame_array_videos(tmp_path: Path) -> None:
     np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
 
 
-def test_write_zarr_materializes_empty_frame_array_videos(tmp_path: Path) -> None:
+def test_write_zarr_rejects_empty_frame_array_videos(tmp_path: Path) -> None:
     output = tmp_path / "empty-video.zarr"
     frames = np.empty((0, 4, 5, 3), dtype=np.uint8)
     rows = list(
@@ -1808,15 +1812,12 @@ def test_write_zarr_materializes_empty_frame_array_videos(tmp_path: Path) -> Non
         )
     )
 
-    ZarrSink(
-        str(output),
-        arrays={"data/rgb": "observation.images.front"},
-        reduce_to_single_store=False,
-    ).write_block(rows)
-
-    root = _open_test_zarr(next(output.glob("*.zarr")), mode="r")
-    assert root["data/rgb"].shape == frames.shape
-    assert root["meta/episode_ends"][:].tolist() == [0]
+    with pytest.raises(ValueError, match="produced no frames"):
+        ZarrSink(
+            str(output),
+            arrays={"data/rgb": "observation.images.front"},
+            reduce_to_single_store=False,
+        ).write_block(rows)
 
 
 def test_write_zarr_uses_byte_budgeted_chunks_for_large_rows(tmp_path: Path) -> None:
