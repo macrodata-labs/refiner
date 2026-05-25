@@ -88,9 +88,6 @@ dev = [
     "ty>=0.0.7",
 ]
 
-[tool.uv.sources]
-ego-vision = { git = "ssh://git@github.com/macrodata-labs/ego-vision.git" }
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

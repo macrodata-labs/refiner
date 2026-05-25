@@ -859,10 +859,14 @@ wheels = [
 [[package]]
 name = "ego-vision"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/macrodata-labs/ego-vision.git#2a8a1d4b6fd56c797f97b3cf82e3535ffcbb97ac" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/93/247c7761a7a589653c88f6fb00fe73cb50b4c306d125525d7847ed30d8da/ego_vision-0.1.0.tar.gz", hash = "sha256:d1844ec854e395eac6255aed636f723b76b98b40c5ab7f039023aaaa24995afc", size = 66506, upload-time = "2026-05-25T07:41:21.046Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/1f/1c140eb87b1d957756d30f8582090d8ee35f322b6918ba8a14de5ad79150/ego_vision-0.1.0-py3-none-any.whl", hash = "sha256:de0a159b52c0c0a4728969c9e492397352b443f786d7989c2de78726ba62d5ec", size = 83938, upload-time = "2026-05-25T07:41:19.657Z" },
 ]
 
 [package.optional-dependencies]
@@ -1569,7 +1573,7 @@ requires-dist = [
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "datasets", marker = "extra == 'huggingface'", specifier = ">=3.0.0" },
-    { name = "ego-vision", extras = ["models"], marker = "extra == 'egocentric'", git = "ssh://git@github.com/macrodata-labs/ego-vision.git" },
+    { name = "ego-vision", extras = ["models"], marker = "extra == 'egocentric'", specifier = ">=0.1.0" },
     { name = "fsspec", extras = ["http"] },
     { name = "h5py", marker = "extra == 'hdf5'" },
     { name = "hf", marker = "extra == 'robotics'", specifier = ">=1.7.1" },
