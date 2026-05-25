@@ -436,6 +436,7 @@ class RefinerPipeline:
         output: DataFolderLike,
         *,
         arrays: Mapping[str, str] | None = None,
+        attrs: Mapping[str, str] | None = None,
         episode_ends_path: str | None = "meta/episode_ends",
         store_template: str = "{shard_id}__w{worker_id}.zarr",
         video_frame_batch_size: int = 8,
@@ -449,6 +450,8 @@ class RefinerPipeline:
             arrays: Mapping from output Zarr array path to source row key. If
                 omitted for ``RoboticsRow`` inputs, writes the available default
                 robotics arrays: actions, states, and timestamps.
+            attrs: Mapping from output Zarr root attribute name to source row key.
+                Attribute values must be stable across rows in each output store.
             episode_ends_path: Output Zarr path for cumulative row/episode end
                 offsets. Set to None to omit episode boundaries.
             store_template: Per-shard store path template. Must include
@@ -466,6 +469,7 @@ class RefinerPipeline:
             ZarrSink(
                 output=output,
                 arrays=arrays,
+                attrs=attrs,
                 episode_ends_path=episode_ends_path,
                 store_template=store_template,
                 video_frame_batch_size=video_frame_batch_size,

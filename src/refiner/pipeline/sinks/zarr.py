@@ -35,6 +35,7 @@ class ZarrSink(BaseSink):
         output: DataFolderLike,
         *,
         arrays: Mapping[str, str] | None = None,
+        attrs: Mapping[str, str] | None = None,
         episode_ends_path: str | None = "meta/episode_ends",
         store_template: str = "{shard_id}__w{worker_id}.zarr",
         video_frame_batch_size: int = 8,
@@ -49,6 +50,7 @@ class ZarrSink(BaseSink):
         _validate_store_template(store_template)
         self.output = DataFolder.resolve(output)
         self.arrays = dict(arrays) if arrays is not None else None
+        self.attrs = dict(attrs) if attrs is not None else None
         self.episode_ends_path = episode_ends_path
         if self.arrays is not None:
             if not self.arrays:
@@ -115,7 +117,7 @@ class ZarrSink(BaseSink):
 
             if row_videos:
                 flush_pending()
-                self._write_row_values(shard_id, row_arrays, row_videos, lengths)
+                self._write_row_values(shard_id, row, row_arrays, row_videos, lengths)
                 count += 1
                 continue
 
@@ -138,6 +140,7 @@ class ZarrSink(BaseSink):
                 ):
                     flush_pending()
                 store = self._store(shard_id)
+                self._write_attrs(store, row)
                 if pending_store is None:
                     pending_store = store
                 for zarr_path, array in row_arrays.items():
@@ -148,14 +151,29 @@ class ZarrSink(BaseSink):
         flush_pending()
         return count
 
+    def _write_attrs(self, store: _ZarrWriteState, row: Row) -> None:
+        if self.attrs is None:
+            return
+        for attr_name, source_key in self.attrs.items():
+            value = _row_value(row, source_key)
+            if isinstance(value, np.generic):
+                value = value.item()
+            elif isinstance(value, np.ndarray):
+                value = value.tolist()
+            if attr_name in store.root.attrs and store.root.attrs[attr_name] != value:
+                raise ValueError(f"Zarr attr {attr_name!r} changed across rows")
+            store.root.attrs[attr_name] = value
+
     def _write_row_values(
         self,
         shard_id: str,
+        row: Row,
         row_arrays: dict[str, np.ndarray],
         row_videos: list[tuple[str, VideoSource]],
         lengths: list[int],
     ) -> None:
         store = self._store(shard_id)
+        self._write_attrs(store, row)
         expected_length = _matching_length(lengths)
 
         previous_row_end = store.row_end
@@ -380,6 +398,7 @@ class ZarrSink(BaseSink):
             {
                 "path": self.output.abs_path(),
                 "arrays": dict(self.arrays) if self.arrays is not None else None,
+                "attrs": dict(self.attrs) if self.attrs is not None else None,
                 "episode_ends_path": self.episode_ends_path,
                 "store_template": self.store_template,
                 "video_frame_batch_size": self.video_frame_batch_size,

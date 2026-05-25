@@ -806,8 +806,8 @@ def test_write_zarr_can_reduce_to_single_store(tmp_path: Path) -> None:
     (
         mdr.from_items(
             [
-                {"action": [[0.0], [0.1]], "state": [[1.0], [1.1]]},
-                {"action": [[0.2]], "state": [[1.2]]},
+                {"action": [[0.0], [0.1]], "state": [[1.0], [1.1]], "task": "push"},
+                {"action": [[0.2]], "state": [[1.2]], "task": "push"},
             ],
             items_per_shard=1,
         )
@@ -817,6 +817,7 @@ def test_write_zarr_can_reduce_to_single_store(tmp_path: Path) -> None:
                 "data/action": "action",
                 "data/state": "state",
             },
+            attrs={"task": "task"},
             reduce_to_single_store=True,
         )
         .launch_local(
@@ -831,12 +832,14 @@ def test_write_zarr_can_reduce_to_single_store(tmp_path: Path) -> None:
             "state": "data/state",
             "episode_ends": "meta/episode_ends",
         },
+        attrs={"task": "task"},
         file_path_column=None,
     ).take(1)[0]
 
     np.testing.assert_allclose(row["action"], [[0.0], [0.1], [0.2]])
     np.testing.assert_allclose(row["state"], [[1.0], [1.1], [1.2]])
     assert row["episode_ends"].tolist() == [2, 3]
+    assert row["task"] == "push"
     assert not (zarr_out / "_parts").exists()
 
 

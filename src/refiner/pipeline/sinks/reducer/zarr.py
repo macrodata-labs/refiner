@@ -42,10 +42,9 @@ class ZarrReducerSink(FileCleanupReducerSink):
         self.episode_ends_path = episode_ends_path
         self.array_chunk_bytes = array_chunk_bytes
         self.reduce_to_single_store = reduce_to_single_store
-        self._merged = False
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
-        super().write_shard_block(shard_id, block)
+        self._run_cleanup()
         if self.reduce_to_single_store:
             self._merge()
             return
@@ -98,9 +97,6 @@ class ZarrReducerSink(FileCleanupReducerSink):
         )
 
     def _merge(self) -> None:
-        if self._merged:
-            return
-
         expected_parts = self._finalized_store_paths(prefix="_parts/")
         import zarr
 
@@ -116,11 +112,18 @@ class ZarrReducerSink(FileCleanupReducerSink):
 
         row_offset = 0
         arrays: dict[str, Any] = {}
+        final_attrs: dict[str, Any] | None = None
         for relpath, paths in parts:
             source = zarr.open_group(
                 store=_zarr_store(self.output, relpath, mode="r"),
                 mode="r",
             )
+            source_attrs = dict(source.attrs)
+            if final_attrs is None:
+                final_attrs = source_attrs
+                final.attrs.update(source_attrs)
+            elif source_attrs != final_attrs:
+                raise ValueError("Zarr part store attrs differ")
             for path in sorted(paths):
                 source_array = source[path]
                 chunks = getattr(source_array, "chunks", None)
@@ -157,11 +160,10 @@ class ZarrReducerSink(FileCleanupReducerSink):
                     )
                 if path == self.episode_ends_path:
                     row_offset += part_end
-        self._merged = True
 
     def on_shard_finalized(self, shard_id: str) -> None:
         del shard_id
-        if not self.reduce_to_single_store or not self._merged:
+        if not self.reduce_to_single_store:
             return
         try:
             self.output.rm("_parts", recursive=True)
