@@ -3,8 +3,81 @@ title: "Egocentric Robotics"
 description: "Extracting hand actions from egocentric video"
 ---
 
-Refiner can orchestrate egocentric hand-action extraction by treating external
-reconstruction systems, such as HaWoR, as pipeline operators.
+Refiner can orchestrate egocentric hand-action extraction over episode/video
+rows. The first-class path delegates model execution to `ego-vision`, while
+Refiner owns reading, decoding, batching rows, and writing the resulting
+annotations.
+
+Install the egocentric extra to get the ego-vision model package:
+
+```bash
+pip install "macrodata-refiner[egocentric]"
+```
+
+## Ego-Vision Hand Tracking
+
+Use `track_hands_egovision(...)` with `batch_map(...)` when each row already
+contains decoded video frames. The frame column must be an iterable of
+`av.VideoFrame`-compatible objects.
+
+```python
+import refiner as mdr
+
+pipeline = (
+    pipeline.batch_map(
+        mdr.robotics.egocentric.track_hands_egovision(
+            frames_key="frames",
+            output_key="hand_tracking",
+            metadata_keys=("task",),
+        ),
+        batch_size=4,
+    )
+)
+```
+
+The block lazily constructs `egovision.HandTrackingPipeline` once per worker
+process and reuses it for later batches. Refiner attaches each result back to
+the original row. `batch_size` is the Refiner episode-batch size; ego-vision
+still owns its internal model batching for VGGT, HaWoR, and hand fusion.
+
+The output column contains `HandTrackingResult.to_dict()` from ego-vision:
+
+```json
+{
+  "episode_id": "episode-0",
+  "camera_trajectory": [[[1, 0, 0, 0]]],
+  "intrinsics": null,
+  "hands_camera": [],
+  "hands_world": [],
+  "relative_actions": null,
+  "prediction": {},
+  "diagnostics": {}
+}
+```
+
+Pass an explicit ego-vision config when you need non-default checkpoints,
+batch sizes, or device placement:
+
+```python
+from egovision import (
+    HandTrackingConfig,
+    HaworReconstructionConfig,
+    VggtOmegaConfig,
+)
+
+config = HandTrackingConfig(
+    hand_reconstruction=HaworReconstructionConfig(batch_size=64),
+    camera_pose_estimator=VggtOmegaConfig(batch_size=2),
+    device="cuda",
+)
+
+pipeline = pipeline.batch_map(
+    mdr.robotics.egocentric.track_hands_egovision(config=config),
+    batch_size=4,
+)
+```
+
+## Buffered Custom Hand Tracking
 
 For episode-level hand tracking with worker-local batching, use
 `run_hand_tracking(...)` with `flat_map(...)`. The returned function keeps model
@@ -37,7 +110,9 @@ Append a flush sentinel when the last partial batch must be emitted:
 flush = mdr.robotics.egocentric.hand_tracking_flush_row()
 ```
 
-The first supported contract is HaWoR-style world-space hand reconstruction:
+## External HaWoR Command Adapter
+
+The external-command adapter expects HaWoR-style world-space hand reconstruction:
 
 ```python
 import refiner as mdr

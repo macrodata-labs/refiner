@@ -40,6 +40,7 @@ robotics = [
 ]
 egocentric = [
     "macrodata-refiner[robotics]",
+    "ego-vision[models]>=0.1.0",
     "rerun-sdk",
 ]
 text = [
@@ -86,6 +87,9 @@ dev = [
     "ruff>=0.14.10",
     "ty>=0.0.7",
 ]
+
+[tool.uv.sources]
+ego-vision = { git = "ssh://git@github.com/macrodata-labs/ego-vision.git" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

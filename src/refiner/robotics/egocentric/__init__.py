@@ -21,6 +21,7 @@ from refiner.robotics.egocentric.hand_tracking import (
     hand_tracking_flush_row,
     is_hand_tracking_flush_row,
     run_hand_tracking,
+    track_hands_egovision,
 )
 from refiner.robotics.egocentric.hot3d import load_hot3d_tar_ground_truth
 from refiner.robotics.egocentric.megasam import (
@@ -92,6 +93,7 @@ __all__ = [
     "export_rerun",
     "reconstruct_hands_hawor",
     "run_hand_tracking",
+    "track_hands_egovision",
     "reference_scale_factor",
     "relative_actions_from_hawor",
     "scale_camera_translation",
