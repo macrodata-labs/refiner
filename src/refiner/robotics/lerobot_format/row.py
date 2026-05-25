@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
-from refiner.io import DataFolder
+from refiner.io import DataFile, DataFolder
 from refiner.video import VideoFile, VideoSource
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
@@ -224,14 +224,19 @@ class LeRobotRow(Row, RoboticsRow):
         uri = self._row.get(f"videos/{key}/uri")
         if uri is None:
             uri = self._build_default_video_uri(key)
+        uri = str(uri)
         to_timestamp = self._row.get(f"videos/{key}/to_timestamp")
         if to_timestamp is None:
             raise KeyError(key)
         from_timestamp = self._row.get(f"videos/{key}/from_timestamp")
-        if self.root is None:
+        if "://" in uri or uri.startswith("/"):
+            data_file = DataFile.resolve(uri)
+        elif self.root is not None:
+            data_file = self.root.file(uri)
+        else:
             raise KeyError(key)
         return VideoFile(
-            data_file=self.root.file(str(uri)),
+            data_file=data_file,
             from_timestamp_s=float(from_timestamp)
             if from_timestamp is not None
             else 0.0,
