@@ -4,15 +4,14 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from math import ceil, prod
 from operator import index as integer_index
-from os import PathLike
 from typing import Any
 
-from fsspec import AbstractFileSystem
 from fsspec.implementations.zip import ZipFileSystem
 import pyarrow as pa
 
-from refiner.io.datafile import DataFile, DataFileLike
-from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.io.datafile import DataFile
+from refiner.io.datafolder import DataFolder
+from refiner.io.fileset import DataFileSet, DataFileSetLike
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
     dtype_to_plan,
@@ -37,7 +36,7 @@ class ZarrReader(BaseSource):
 
     def __init__(
         self,
-        input: DataFolderLike,
+        input: DataFileSetLike,
         *,
         arrays: PathSelection | None = None,
         attrs: PathSelection | None = None,
@@ -54,7 +53,7 @@ class ZarrReader(BaseSource):
         """Create a Zarr reader.
 
         Args:
-            input: Zarr group path.
+            input: Zarr group path, glob, or sequence of Zarr group paths.
             arrays: Array selections as output-name to Zarr-path mapping, a
                 single path, a path sequence, or None to discover all arrays.
             attrs: Attribute selections with the same shape as ``arrays``.
@@ -76,33 +75,21 @@ class ZarrReader(BaseSource):
                 or None to omit it.
             dtypes: Optional dtype overrides for output columns.
         """
-        zip_input: DataFileLike | None = None
-        if isinstance(input, DataFolder) and input.path.endswith(".zip"):
-            zip_input = (input.path, input.fs)
-        else:
-            if isinstance(input, PathLike):
-                input = str(input)
-            if isinstance(input, str) and input.endswith(".zip"):
-                zip_input = input
-            elif (
-                isinstance(input, tuple)
-                and len(input) == 2
-                and isinstance(input[1], AbstractFileSystem)
-            ):
-                path = input[0]
-                if isinstance(path, PathLike):
-                    path = str(path)
-                if isinstance(path, str) and path.endswith(".zip"):
-                    zip_input = (path, input[1])
-
-        if zip_input is not None:
-            self.zip_file = DataFile.resolve(zip_input)
-            self.root = None
-            self.source_path = self.zip_file.abs_path()
-        else:
-            self.zip_file = None
-            self.root = DataFolder.resolve(input)
-            self.source_path = self.root.abs_path()
+        resolved_inputs: list[tuple[DataFolder | DataFile, str]] = []
+        for entry in DataFileSet.resolve(input).resolved_entries:
+            if isinstance(entry, DataFile):
+                if not entry.path.endswith(".zip"):
+                    raise TypeError("read_zarr file inputs must be .zip Zarr stores")
+                resolved_inputs.append((entry, entry.abs_path()))
+                continue
+            if entry.path.endswith(".zip"):
+                zip_file = DataFile(fs=entry.fs, path=entry.path)
+                resolved_inputs.append((zip_file, zip_file.abs_path()))
+            else:
+                resolved_inputs.append((entry, entry.abs_path()))
+        if not resolved_inputs:
+            raise ValueError("read_zarr requires at least one input")
+        self.inputs = resolved_inputs
         check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
         if row_ends is not None and split_leading_axis:
             raise ValueError("row_ends and split_leading_axis are mutually exclusive")
@@ -157,7 +144,11 @@ class ZarrReader(BaseSource):
 
     def describe(self) -> dict[str, Any]:
         return {
-            "path": self.source_path,
+            "path": (
+                self.inputs[0][1]
+                if len(self.inputs) == 1
+                else [source_path for _input, source_path in self.inputs]
+            ),
             "arrays": dict(self.arrays) if self.arrays is not None else None,
             "attrs": dict(self.attrs) if self.attrs is not None else None,
             "row_ends": self.row_ends,
@@ -176,22 +167,32 @@ class ZarrReader(BaseSource):
         }
 
     def list_shards(self) -> list[Shard]:
-        with self._open_group() as group:
-            arrays = self._selected_arrays(group)
-            split_ranges = self._shard_ranges(group, arrays)
-            return [
-                Shard.from_row_range(
-                    start=start,
-                    end=end,
-                    global_ordinal=index,
-                    start_key=self.source_path,
-                    end_key=self.source_path,
+        shards: list[Shard] = []
+        for source_index, (input, _source_path) in enumerate(self.inputs):
+            with self._open_group(input) as group:
+                arrays = self._selected_arrays(group)
+                split_ranges = self._shard_ranges(group, arrays)
+            source_key = str(source_index)
+            for start, end in split_ranges:
+                shards.append(
+                    Shard.from_row_range(
+                        start=start,
+                        end=end,
+                        global_ordinal=len(shards),
+                        start_key=source_key,
+                        end_key=source_key,
+                    )
                 )
-                for index, (start, end) in enumerate(split_ranges)
-            ]
+        return shards
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
-        with self._open_group() as group:
+        try:
+            input, source_path = self.inputs[int(str(shard.start_key))]
+        except (ValueError, IndexError):
+            raise ValueError(
+                f"Zarr shard does not match an input: {shard.start_key!r}"
+            ) from None
+        with self._open_group(input) as group:
             arrays = self._selected_arrays(group)
             if self.row_ends is not None:
                 descriptor = shard.descriptor
@@ -212,7 +213,10 @@ class ZarrReader(BaseSource):
                     block_end = batch[-1][1]
                     block = self._read_arrays(arrays, start=block_start, end=block_end)
                     for offset, (start, end) in enumerate(batch, start=batch_offset):
-                        row = self._row_metadata(index=descriptor.start + offset)
+                        row = self._row_metadata(
+                            source_path,
+                            index=descriptor.start + offset,
+                        )
                         row.update(
                             {
                                 name: value[start - block_start : end - block_start]
@@ -239,7 +243,7 @@ class ZarrReader(BaseSource):
                     )
                     for row_index in range(batch_start, batch_end):
                         offset = (row_index - batch_start) * self.leading_axis_row_size
-                        row = self._row_metadata(index=row_index)
+                        row = self._row_metadata(source_path, index=row_index)
                         row.update(
                             {
                                 name: value[
@@ -252,23 +256,23 @@ class ZarrReader(BaseSource):
                         yield DictRow(row)
                 return
 
-            row = self._row_metadata(index=None)
+            row = self._row_metadata(source_path, index=None)
             row.update(self._read_arrays(arrays))
             row.update(self._read_attrs(group))
             yield DictRow(row)
 
     @contextmanager
-    def _open_group(self) -> Any:
+    def _open_group(self, input: DataFolder | DataFile) -> Any:
         import zarr
         import zarr.storage
 
-        if self.zip_file is not None:
+        if isinstance(input, DataFile):
             handle = None
             zip_fs = None
-            if self.zip_file.is_local:
-                store = zarr.ZipStore(self.zip_file.abs_path(), mode="r")
+            if input.is_local:
+                store = zarr.ZipStore(input.abs_path(), mode="r")
             else:
-                handle = self.zip_file.open("rb", cache_type="none")
+                handle = input.open("rb", cache_type="none")
                 zip_fs = ZipFileSystem(fo=handle, mode="r")
                 store = zarr.storage.FSStore(
                     "/",
@@ -286,8 +290,7 @@ class ZarrReader(BaseSource):
                 if handle is not None:
                     handle.close()
         else:
-            assert self.root is not None
-            store = zarr.storage.FSStore(self.root._join(""), fs=self.root.fs, mode="r")
+            store = zarr.storage.FSStore(input._join(""), fs=input.fs, mode="r")
             yield zarr.open_group(store=store, mode="r")
 
     def _reserved_output_names(self, *, split: bool) -> set[str]:
@@ -298,10 +301,10 @@ class ZarrReader(BaseSource):
             names.add(self.index_column)
         return names
 
-    def _row_metadata(self, *, index: int | None) -> dict[str, Any]:
+    def _row_metadata(self, source_path: str, *, index: int | None) -> dict[str, Any]:
         row: dict[str, Any] = {}
         if self.file_path_column is not None:
-            row[self.file_path_column] = self.source_path
+            row[self.file_path_column] = source_path
         if self.index_column is not None and index is not None:
             row[self.index_column] = index
         return row

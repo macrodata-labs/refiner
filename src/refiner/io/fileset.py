@@ -73,6 +73,11 @@ class DataFileSet:
 
         normalized_entries: list[DataFile | DataFolder | _PathSource] = []
 
+        def append_path_source(path: str, path_fs: AbstractFileSystem) -> None:
+            normalized_entries.append(
+                _PathSource(path=path_fs._strip_protocol(path), fs=path_fs)
+            )
+
         for item in inputs:
             if isinstance(item, DataFile):
                 if expect_type == "folder":
@@ -99,13 +104,11 @@ class DataFileSet:
                         "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                     )
                 if expect_type == "folder":
-                    normalized_entries.append(DataFolder(path=path, fs=item_fs))
+                    append_path_source(path, item_fs)
                 elif expect_type == "file":
                     normalized_entries.append(DataFile(path=path, fs=item_fs))
                 else:
-                    normalized_entries.append(
-                        _PathSource(path=item_fs._strip_protocol(path), fs=item_fs)
-                    )
+                    append_path_source(path, item_fs)
                 continue
 
             if isinstance(item, PathLike):
@@ -118,18 +121,18 @@ class DataFileSet:
 
             if fs is not None:
                 if expect_type == "folder":
-                    normalized_entries.append(DataFolder.resolve(item, fs=fs))
+                    append_path_source(item, fs)
                 elif expect_type == "file":
                     normalized_entries.append(DataFile.resolve(item, fs=fs))
                 else:
-                    normalized_entries.append(
-                        _PathSource(path=fs._strip_protocol(item), fs=fs)
-                    )
+                    append_path_source(item, fs)
             else:
                 if expect_type == "folder":
-                    normalized_entries.append(
-                        DataFolder.resolve(item, storage_options=storage_options)
+                    item_fs, path = url_to_fs(
+                        item,
+                        **_storage_options_for_path(item, storage_options),
                     )
+                    append_path_source(path, item_fs)
                 elif expect_type == "file":
                     normalized_entries.append(
                         DataFile.resolve(item, storage_options=storage_options)
@@ -139,7 +142,7 @@ class DataFileSet:
                         item,
                         **_storage_options_for_path(item, storage_options),
                     )
-                    normalized_entries.append(_PathSource(path=path, fs=item_fs))
+                    append_path_source(path, item_fs)
 
         return cls(
             entries=tuple(normalized_entries),
@@ -160,9 +163,58 @@ class DataFileSet:
 
     @property
     def datafolders(self) -> tuple[DataFolder, ...]:
-        if not all(isinstance(entry, DataFolder) for entry in self.entries):
+        entries = self.resolved_entries
+        if not all(isinstance(entry, DataFolder) for entry in entries):
             raise TypeError("DataFileSet entries are not all folders")
-        return cast(tuple[DataFolder, ...], self.entries)
+        return cast(tuple[DataFolder, ...], entries)
+
+    @property
+    def resolved_entries(self) -> tuple[DataFile | DataFolder, ...]:
+        entries: list[DataFile | DataFolder] = []
+        seen: set[tuple[int, str]] = set()
+
+        def append_entry(entry: DataFile | DataFolder) -> None:
+            key = (id(entry.fs), entry.path)
+            if key in seen:
+                return
+            seen.add(key)
+            entries.append(entry)
+
+        for entry in self.entries:
+            if isinstance(entry, DataFile | DataFolder):
+                append_entry(entry)
+                continue
+
+            if glob.has_magic(entry.path):
+                matched = entry.fs.glob(entry.path, detail=True)
+                for expanded_path, info in sorted(matched.items()):
+                    if not isinstance(expanded_path, str) or not isinstance(
+                        info, Mapping
+                    ):
+                        continue
+                    if info.get("type") == "directory":
+                        append_entry(DataFolder(path=expanded_path, fs=entry.fs))
+                    elif info.get("type") == "file":
+                        append_entry(DataFile(path=expanded_path, fs=entry.fs))
+                continue
+
+            try:
+                info = entry.fs.info(entry.path)
+            except FileNotFoundError:
+                raise FileNotFoundError(
+                    f"Could not resolve input: {entry.fs.unstrip_protocol(entry.path)!r}"
+                )
+            if info.get("type") == "directory":
+                append_entry(DataFolder(path=entry.path, fs=entry.fs))
+            elif info.get("type") == "file":
+                append_entry(DataFile(path=entry.path, fs=entry.fs))
+            else:
+                raise TypeError(
+                    f"Unsupported file type {info.get('type')!r} for input: "
+                    f"{entry.fs.unstrip_protocol(entry.path)!r}"
+                )
+
+        return tuple(entries)
 
     def expand_sources(self) -> tuple[tuple[DataFile, ...], ...]:
         """Expand each source entry into its concrete files, preserving source grouping."""
