@@ -904,6 +904,17 @@ def test_write_zarr_rejects_path_traversal(tmp_path: Path) -> None:
             str(tmp_path / "array-escape.zarr"),
             arrays={"../action": "action"},
         )
+    with pytest.raises(ValueError, match="must not be empty"):
+        ZarrSink(
+            str(tmp_path / "empty-array-path.zarr"),
+            arrays={"": "action"},
+        )
+    with pytest.raises(ValueError, match="must not be empty"):
+        ZarrSink(
+            str(tmp_path / "empty-episode-ends.zarr"),
+            arrays={"data/action": "action"},
+            episode_ends_path="",
+        )
 
 
 def test_write_zarr_rejects_rendered_path_traversal(tmp_path: Path) -> None:
@@ -1330,6 +1341,51 @@ def test_write_zarr_single_store_skips_mixed_empty_shards(tmp_path: Path) -> Non
     assert not (zarr_out / "_parts").exists()
 
 
+def test_write_zarr_single_store_offsets_batched_episode_ends(
+    tmp_path: Path,
+) -> None:
+    zarr_out = tmp_path / "single-batched-episode-ends.zarr"
+    workers = ["worker-a", "worker-b"]
+    for shard_id, worker in enumerate(workers):
+        part = (
+            zarr_out / "_parts" / f"shard-{shard_id}__w{worker_token_for(worker)}.zarr"
+        )
+        _write_part_zarr(
+            part,
+            {
+                "data/action": np.arange(2, dtype=np.float32).reshape(2, 1),
+                "meta/episode_ends": np.asarray([1, 2], dtype=np.int64),
+            },
+        )
+    runtime = _FinalizedWorkersRuntime(
+        [
+            FinalizedShardWorker(
+                shard_id=f"shard-{shard_id}",
+                worker_id=worker,
+                global_ordinal=shard_id,
+            )
+            for shard_id, worker in enumerate(workers)
+        ]
+    )
+    with set_active_run_context(
+        job_id="local",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
+    ):
+        ZarrReducerSink(
+            str(zarr_out),
+            store_template="{shard_id}__w{worker_id}.zarr",
+            episode_ends_path="meta/episode_ends",
+            array_chunk_bytes=8,
+            reduce_to_single_store=True,
+        ).write_block([DictRow({}, shard_id="reduce")])
+
+    root = _open_test_zarr(zarr_out, mode="r")
+    assert root["meta/episode_ends"][:].tolist() == [1, 2, 3, 4]
+
+
 def test_write_zarr_single_store_rejects_inconsistent_part_payloads(
     tmp_path: Path,
 ) -> None:
@@ -1418,6 +1474,45 @@ def test_write_zarr_single_store_rejects_part_missing_episode_ends(
         runtime_lifecycle=cast(RuntimeLifecycle, runtime),
     ):
         with pytest.raises(ValueError, match="meta/episode_ends"):
+            ZarrReducerSink(
+                str(zarr_out),
+                store_template="{shard_id}__w{worker_id}.zarr",
+                episode_ends_path="meta/episode_ends",
+                array_chunk_bytes=1024,
+                reduce_to_single_store=True,
+            ).write_block([DictRow({}, shard_id="reduce")])
+
+
+def test_write_zarr_single_store_rejects_part_row_end_mismatch(
+    tmp_path: Path,
+) -> None:
+    zarr_out = tmp_path / "single-row-end-mismatch.zarr"
+    worker = "worker-a"
+    part = zarr_out / "_parts" / f"shard-a__w{worker_token_for(worker)}.zarr"
+    _write_part_zarr(
+        part,
+        {
+            "data/action": np.asarray([[0.0], [1.0]], dtype=np.float32),
+            "meta/episode_ends": np.asarray([1], dtype=np.int64),
+        },
+    )
+    runtime = _FinalizedWorkersRuntime(
+        [
+            FinalizedShardWorker(
+                shard_id="shard-a",
+                worker_id=worker,
+                global_ordinal=0,
+            )
+        ]
+    )
+    with set_active_run_context(
+        job_id="local",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
+    ):
+        with pytest.raises(ValueError, match="episode_ends final value"):
             ZarrReducerSink(
                 str(zarr_out),
                 store_template="{shard_id}__w{worker_id}.zarr",
@@ -1626,6 +1721,77 @@ def test_write_zarr_single_store_replace_clears_root_attrs(
     assert dict(root.attrs) == {}
 
 
+def test_write_zarr_single_store_rejects_part_attr_drift_before_clearing(
+    tmp_path: Path,
+) -> None:
+    zarr_out = tmp_path / "single-attr-drift.zarr"
+    _write_part_zarr(
+        zarr_out,
+        {"data/action": np.asarray([[99.0]], dtype=np.float32)},
+    )
+    root = _open_test_zarr(zarr_out, mode="r+")
+    root.attrs["task"] = "old"
+
+    first_worker = "worker-a"
+    second_worker = "worker-b"
+    first_part = (
+        zarr_out / "_parts" / f"shard-a__w{worker_token_for(first_worker)}.zarr"
+    )
+    second_part = (
+        zarr_out / "_parts" / f"shard-b__w{worker_token_for(second_worker)}.zarr"
+    )
+    _write_part_zarr(
+        first_part,
+        {
+            "data/action": np.asarray([[0.0]], dtype=np.float32),
+            "meta/episode_ends": np.asarray([1], dtype=np.int64),
+        },
+    )
+    _write_part_zarr(
+        second_part,
+        {
+            "data/action": np.asarray([[1.0]], dtype=np.float32),
+            "meta/episode_ends": np.asarray([1], dtype=np.int64),
+        },
+    )
+    _open_test_zarr(first_part, mode="r+").attrs["task"] = "first"
+    _open_test_zarr(second_part, mode="r+").attrs["task"] = "second"
+
+    runtime = _FinalizedWorkersRuntime(
+        [
+            FinalizedShardWorker(
+                shard_id="shard-a",
+                worker_id=first_worker,
+                global_ordinal=0,
+            ),
+            FinalizedShardWorker(
+                shard_id="shard-b",
+                worker_id=second_worker,
+                global_ordinal=1,
+            ),
+        ]
+    )
+    with set_active_run_context(
+        job_id="local",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, runtime),
+    ):
+        with pytest.raises(ValueError, match="attrs differ"):
+            ZarrReducerSink(
+                str(zarr_out),
+                store_template="{shard_id}__w{worker_id}.zarr",
+                episode_ends_path="meta/episode_ends",
+                array_chunk_bytes=1024,
+                reduce_to_single_store=True,
+            ).write_block([DictRow({}, shard_id="reduce")])
+
+    root = _open_test_zarr(zarr_out, mode="r")
+    np.testing.assert_allclose(root["data/action"][:], [[99.0]])
+    assert dict(root.attrs) == {"task": "old"}
+
+
 def test_write_zarr_single_store_rejects_part_dtype_drift(
     tmp_path: Path,
 ) -> None:
@@ -1731,6 +1897,11 @@ def test_write_zarr_rejects_episode_ends_path_collision(tmp_path: Path) -> None:
         ZarrSink(
             str(tmp_path / "collision.zarr"),
             arrays={"meta/episode_ends": "action"},
+        )
+    with pytest.raises(ValueError, match="collides with episode_ends_path"):
+        ZarrSink(
+            str(tmp_path / "normalized-collision.zarr"),
+            arrays={"meta//episode_ends": "action"},
         )
 
 

@@ -49,13 +49,20 @@ class ZarrSink(BaseSink):
             raise ValueError("array_chunk_bytes must be greater than zero")
         _validate_store_template(store_template)
         self.output = DataFolder.resolve(output)
-        self.arrays = dict(arrays) if arrays is not None else None
+        self.episode_ends_path = (
+            _normalize_public_zarr_path(episode_ends_path, "episode_ends_path")
+            if episode_ends_path is not None
+            else None
+        )
+        self.arrays = (
+            _normalize_array_paths(arrays, self.episode_ends_path)
+            if arrays is not None
+            else None
+        )
         self.attrs = dict(attrs) if attrs is not None else None
-        self.episode_ends_path = episode_ends_path
         if self.arrays is not None:
             if not self.arrays:
                 raise ValueError("write_zarr arrays must not be empty")
-            _validate_array_paths(self.arrays, episode_ends_path)
         self.store_template = store_template
         self.video_frame_batch_size = video_frame_batch_size
         self.array_chunk_bytes = array_chunk_bytes
@@ -284,12 +291,14 @@ class ZarrSink(BaseSink):
             return self.arrays
         default_arrays = _default_robotics_arrays(row)
         if self._default_arrays is None:
-            self._default_arrays = default_arrays
+            self._default_arrays = _normalize_array_paths(
+                default_arrays,
+                self.episode_ends_path,
+            )
             if not self._default_arrays:
                 raise ValueError(
                     "write_zarr inferred no default robotics arrays; pass arrays=..."
                 )
-            _validate_array_paths(self._default_arrays, self.episode_ends_path)
         elif default_arrays != self._default_arrays:
             raise ValueError(
                 "Zarr default arrays changed across rows; pass arrays=... "
@@ -415,22 +424,25 @@ def _default_robotics_arrays(row: Row) -> dict[str, str]:
     return arrays
 
 
-def _validate_array_paths(
+def _normalize_array_paths(
     arrays: Mapping[str, str],
     episode_ends_path: str | None,
-) -> None:
-    for path in arrays:
-        _validate_public_zarr_path(path, "Zarr array path")
-    if episode_ends_path is not None:
-        _validate_public_zarr_path(episode_ends_path, "episode_ends_path")
-    if episode_ends_path is not None and episode_ends_path in arrays:
+) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for path, source_key in arrays.items():
+        normalized_path = _normalize_public_zarr_path(path, "Zarr array path")
+        if normalized_path in normalized:
+            raise ValueError(f"Duplicate Zarr array path: {normalized_path}")
+        normalized[normalized_path] = source_key
+    if episode_ends_path is not None and episode_ends_path in normalized:
         raise ValueError(
             f"Zarr array path collides with episode_ends_path: {episode_ends_path}"
         )
+    return normalized
 
 
 def _validate_store_template(store_template: str) -> None:
-    _validate_public_zarr_path(store_template, "store_template")
+    _normalize_public_zarr_path(store_template, "store_template")
     fields: set[str] = set()
     for _literal_text, field_name, format_spec, conversion in Formatter().parse(
         store_template
@@ -461,20 +473,23 @@ def _render_store_relpath(
     worker_id: str,
 ) -> str:
     relpath = store_template.format(shard_id=shard_id, worker_id=worker_id)
-    _validate_public_zarr_path(relpath, "rendered store path")
+    _normalize_public_zarr_path(relpath, "rendered store path")
     return relpath
 
 
-def _validate_public_zarr_path(path: str, label: str) -> None:
+def _normalize_public_zarr_path(path: str, label: str) -> str:
     path = str(path)
     if path.startswith("/"):
         raise ValueError(f"{label} must be relative")
     parts = [part for part in path.split("/") if part]
+    if not parts:
+        raise ValueError(f"{label} must not be empty")
     if any(part in {".", ".."} for part in parts):
         raise ValueError(f"{label} must not contain '.' or '..' segments")
-    root = parts[0] if parts else ""
+    root = parts[0]
     if root in {"_parts", "_refiner"}:
         raise ValueError(f"{label} must not use reserved root: {root}")
+    return "/".join(parts)
 
 
 def _row_value(row: Row, key: str) -> Any:

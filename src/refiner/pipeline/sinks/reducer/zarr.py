@@ -101,6 +101,18 @@ class ZarrReducerSink(FileCleanupReducerSink):
         import zarr
 
         parts = self._collect_stores(expected_parts, for_merge=True)
+        final_attrs: dict[str, Any] | None = None
+        for relpath, _paths in parts:
+            source = zarr.open_group(
+                store=_zarr_store(self.output, relpath, mode="r"),
+                mode="r",
+            )
+            source_attrs = dict(source.attrs)
+            if final_attrs is None:
+                final_attrs = source_attrs
+            elif source_attrs != final_attrs:
+                raise ValueError("Zarr part store attrs differ")
+
         final = zarr.open_group(
             store=_zarr_store(self.output, "", mode="a"),
             mode="a",
@@ -109,26 +121,41 @@ class ZarrReducerSink(FileCleanupReducerSink):
             if key != "_parts":
                 del final[key]
         final.attrs.clear()
+        if final_attrs is not None:
+            final.attrs.update(final_attrs)
 
         row_offset = 0
         arrays: dict[str, Any] = {}
-        final_attrs: dict[str, Any] | None = None
         for relpath, paths in parts:
             source = zarr.open_group(
                 store=_zarr_store(self.output, relpath, mode="r"),
                 mode="r",
             )
-            source_attrs = dict(source.attrs)
-            if final_attrs is None:
-                final_attrs = source_attrs
-                final.attrs.update(source_attrs)
-            elif source_attrs != final_attrs:
-                raise ValueError("Zarr part store attrs differ")
+            episode_path = self.episode_ends_path
+            payload_paths = paths - (
+                {episode_path} if episode_path is not None else set()
+            )
+            payload_lengths = {int(source[path].shape[0]) for path in payload_paths}
+            if len(payload_lengths) > 1:
+                raise ValueError(
+                    "Zarr part store payload arrays must have matching lengths"
+                )
+            payload_rows = next(iter(payload_lengths), None)
+            part_end = 0
+            if episode_path is not None and episode_path in paths:
+                episode_ends = source[episode_path]
+                if episode_ends.shape[0] > 0:
+                    part_end = int(np.asarray(episode_ends[-1]))
+                if payload_rows is not None and part_end != payload_rows:
+                    raise ValueError(
+                        "Zarr part store episode_ends final value does not match "
+                        "payload row count"
+                    )
             for path in sorted(paths):
                 source_array = source[path]
                 chunks = getattr(source_array, "chunks", None)
                 compressor = getattr(source_array, "compressor", None)
-                if source_array.shape[0] == 0 and path == self.episode_ends_path:
+                if source_array.shape[0] == 0 and path == episode_path:
                     continue
                 if source_array.shape[0] == 0:
                     _append_zarr_array(
@@ -141,14 +168,12 @@ class ZarrReducerSink(FileCleanupReducerSink):
                     )
                     continue
 
-                part_end = 0
                 batch_size = _batch_length(source_array, self.array_chunk_bytes)
                 for start in range(0, int(source_array.shape[0]), batch_size):
                     end = min(int(source_array.shape[0]), start + batch_size)
                     values = np.asarray(source_array[start:end])
-                    if path == self.episode_ends_path:
+                    if path == episode_path:
                         values = np.asarray(values, dtype=np.int64)
-                        part_end = int(values[-1])
                         values = values + row_offset
                     _append_zarr_array(
                         final,
@@ -158,7 +183,7 @@ class ZarrReducerSink(FileCleanupReducerSink):
                         chunks=chunks,
                         compressor=compressor,
                     )
-                if path == self.episode_ends_path:
+                if path == episode_path:
                     row_offset += part_end
 
     def on_shard_finalized(self, shard_id: str) -> None:
