@@ -28,6 +28,8 @@ class VideoSource(Protocol):
 
     def iter_frames(self) -> AsyncIterator[DecodedVideoFrame]: ...
 
+    def iter_numpy_frames(self) -> AsyncIterator[np.ndarray]: ...
+
     def iter_frame_windows(
         self,
         *,
@@ -108,6 +110,10 @@ class VideoFile:
 
         return iter_encoded_frames(self)
 
+    async def iter_numpy_frames(self) -> AsyncIterator[np.ndarray]:
+        async for frame in self.iter_frames():
+            yield frame.frame.to_ndarray(format="rgb24")
+
     def iter_frame_windows(
         self,
         *,
@@ -172,6 +178,10 @@ class VideoBytes:
 
         return iter_encoded_frames(self)
 
+    async def iter_numpy_frames(self) -> AsyncIterator[np.ndarray]:
+        async for frame in self.iter_frames():
+            yield frame.frame.to_ndarray(format="rgb24")
+
     def iter_frame_windows(
         self,
         *,
@@ -235,6 +245,10 @@ class VideoFrameArray:
 
     def iter_frame_arrays(self) -> Iterator[np.ndarray]:
         yield from self._array
+
+    async def iter_numpy_frames(self) -> AsyncIterator[np.ndarray]:
+        for frame in self._array:
+            yield frame
 
     def clipped(
         self,

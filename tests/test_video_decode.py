@@ -85,9 +85,11 @@ def test_video_frame_array_iter_frames() -> None:
     video = mdr.video.VideoFrameArray(frames, fps=5)
 
     decoded = asyncio.run(_collect_frames(video))
+    arrays = list(video.iter_frame_arrays())
 
     assert [frame.index for frame in decoded] == [0, 1, 2]
     assert [frame.timestamp_s for frame in decoded] == [0.0, 0.2, 0.4]
+    assert [int(frame[0, 0, 0]) for frame in arrays] == [0, 1, 2]
 
 
 def test_video_stream_writer_accepts_video_frame_array(tmp_path) -> None:

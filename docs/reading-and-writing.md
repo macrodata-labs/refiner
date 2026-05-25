@@ -441,6 +441,7 @@ Built-in sinks:
 | `.write_jsonl(output, ...)` | JSON Lines files | one output file per worker/shard according to the filename template |
 | `.write_parquet(output, ...)` | Parquet files | columnar output with optional compression |
 | `.write_lerobot(output, ...)` | LeRobot-compatible robotics datasets | materializes frame/video assets and dataset metadata |
+| `.write_zarr(output, ...)` | Zarr stores | one store per shard/worker according to the store template |
 
 Example:
 
@@ -487,6 +488,43 @@ pipeline = pipeline.map(
 
 pipeline = pipeline.cast(video=mdr.datatype.video_path())
 ```
+
+Use `write_zarr(...)` when you want chunked array output, usually for robotics
+episode rows or replay-buffer style data:
+
+```python
+import refiner as mdr
+
+(
+    mdr.read_lerobot("hf://datasets/user/robot-data")
+    .write_zarr(
+        "s3://my-bucket/robot-data-zarr/",
+        arrays={
+            "data/action": "action",
+            "data/state": "observation.state",
+        },
+    )
+)
+```
+
+The `arrays` mapping is from output Zarr path to source row key. For
+`RoboticsRow` inputs, omitting `arrays` writes the available default robotics
+arrays: actions, states, and timestamps. The default schema is inferred once and
+later rows must expose the same fields. Video sources selected through `arrays`
+are decoded as RGB frame arrays and appended in bounded batches controlled by
+`video_frame_batch_size`. `array_chunk_bytes` controls the target chunk size for
+new arrays and the reducer read/write batch size when shard-local stores are
+merged into a final store.
+
+By default, `write_zarr(...)` also writes cumulative episode boundaries to
+`meta/episode_ends`. Set `episode_ends_path=None` to omit them.
+
+Launched runs write isolated stores per shard/worker using
+`store_template="{shard_id}__w{worker_id}.zarr"`. This avoids concurrent workers
+mutating the same Zarr group. By default, a reducer stage streams those
+shard-local stores into one final Zarr group at the requested output path. Set
+`reduce_to_single_store=False` to keep the isolated stores and read them
+individually.
 
 When you run a writer through `launch_local(...)` or `launch_cloud(...)`, some
 sinks add a reducer stage after the main writer stage. For `write_jsonl(...)`

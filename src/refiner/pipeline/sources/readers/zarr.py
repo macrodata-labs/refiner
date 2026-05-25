@@ -563,8 +563,7 @@ def _leading_item_bytes(array: Any) -> int:
 
 
 def _iter_array_paths(group: Any, prefix: str = "") -> Iterator[str]:
-    items = group.items() if hasattr(group, "items") else group.members()
-    for name, item in items:
+    for name, item in group.items():
         path = f"{prefix}/{name}" if prefix else name
         if hasattr(item, "shape"):
             yield path

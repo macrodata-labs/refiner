@@ -130,6 +130,16 @@ class Worker:
                 sink.on_shard_complete(shard_id)
             self.user_metrics_emitter.force_flush_user_metrics()
             self.runtime_lifecycle.complete(shard)
+            try:
+                with set_active_step_index(sink_step_index):
+                    sink.on_shard_finalized(shard_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "post-completion sink cleanup failed shard_id={}: {}: {}",
+                    shard.id,
+                    type(e).__name__,
+                    e,
+                )
             with inflight_lock:
                 inflight_by_id.pop(shard_id, None)
                 source_done_shards.discard(shard_id)

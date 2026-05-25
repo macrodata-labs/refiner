@@ -30,7 +30,7 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
-from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
+from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink, ZarrSink
 from refiner.pipeline.sinks.assets import MissingAssetPolicy
 from refiner.pipeline.sources import (
     BaseSource,
@@ -428,6 +428,53 @@ class RefinerPipeline:
                 max_asset_uploads_in_flight=max_asset_uploads_in_flight,
                 missing_asset_policy=missing_asset_policy,
                 dtypes=dtypes,
+            )
+        )
+
+    def write_zarr(
+        self,
+        output: DataFolderLike,
+        *,
+        arrays: Mapping[str, str] | None = None,
+        attrs: Mapping[str, str] | None = None,
+        episode_ends_path: str | None = "meta/episode_ends",
+        store_template: str = "{shard_id}__w{worker_id}.zarr",
+        video_frame_batch_size: int = 8,
+        array_chunk_bytes: int = 8 * 1024 * 1024,
+        reduce_to_single_store: bool = True,
+    ) -> "RefinerPipeline":
+        """Write rows to Zarr array stores.
+
+        Args:
+            output: Output folder or URL prefix for the Zarr store(s).
+            arrays: Mapping from output Zarr array path to source row key. If
+                omitted for ``RoboticsRow`` inputs, writes the available default
+                robotics arrays: actions, states, and timestamps.
+            attrs: Mapping from output Zarr root attribute name to source row key.
+                Attribute values must be stable across rows in each output store.
+            episode_ends_path: Output Zarr path for cumulative row/episode end
+                offsets. Set to None to omit episode boundaries.
+            store_template: Per-shard store path template. Must include
+                ``{shard_id}`` and ``{worker_id}``.
+            video_frame_batch_size: Maximum decoded video frames to append per
+                video write batch.
+            array_chunk_bytes: Target byte size for chunks created for newly
+                written arrays and for read/write batches when reducing shard
+                stores into a single store.
+            reduce_to_single_store: If True, add a reducer stage that merges
+                shard-local stores into one Zarr group at ``output``. Defaults
+                to True.
+        """
+        return self.with_sink(
+            ZarrSink(
+                output=output,
+                arrays=arrays,
+                attrs=attrs,
+                episode_ends_path=episode_ends_path,
+                store_template=store_template,
+                video_frame_batch_size=video_frame_batch_size,
+                array_chunk_bytes=array_chunk_bytes,
+                reduce_to_single_store=reduce_to_single_store,
             )
         )
 
