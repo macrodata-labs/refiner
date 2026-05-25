@@ -257,6 +257,22 @@ def test_datafileset_resolve_does_not_list_folders_eagerly():
     assert fs.ls_calls == 1
 
 
+def test_datafileset_expands_folder_globs(tmp_path):
+    first = tmp_path / "first.zarr"
+    second = tmp_path / "second.zarr"
+    ignored = tmp_path / "ignored.txt"
+    first.mkdir()
+    second.mkdir()
+    ignored.write_text("nope")
+
+    folders = DataFileSet.resolve(
+        str(tmp_path / "*.zarr"),
+        expect_type="folder",
+    ).datafolders
+
+    assert [folder.abs_path() for folder in folders] == [str(first), str(second)]
+
+
 def test_datafolder_find_filters_prefix_leaks():
     fs = _PrefixLeakingMemoryFS()
     fs.pipe("find-root/file.txt", b"ok")

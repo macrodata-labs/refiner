@@ -857,7 +857,7 @@ def read_hdf5(
 
 
 def read_zarr(
-    input: DataFolderLike,
+    input: DataFileSetLike,
     *,
     arrays: PathSelection | None = None,
     attrs: PathSelection | None = None,
@@ -882,6 +882,9 @@ def read_zarr(
     `split_leading_axis` are mutually exclusive. `target_shard_bytes` and
     `num_shards` affect shard planning, not logical row size. `row_batch_size`
     bounds how many logical rows are loaded per array block within each shard.
+
+    Args:
+        input: Zarr group path, glob, or sequence of Zarr group paths.
     """
     return RefinerPipeline(
         source=ZarrReader(

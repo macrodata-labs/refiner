@@ -137,6 +137,62 @@ def test_read_zarr_reads_selected_arrays_and_attrs(tmp_path: Path) -> None:
     np.testing.assert_allclose(row["action"][:2], [[0.0], [0.1]])
 
 
+def test_read_zarr_reads_multiple_inputs(tmp_path: Path) -> None:
+    first = tmp_path / "first.zarr"
+    second = tmp_path / "second.zarr"
+    first_root = _open_test_zarr(first, mode="w")
+    second_root = _open_test_zarr(second, mode="w")
+    _create_array(
+        first_root,
+        "data/action",
+        data=np.asarray([[1.0]], dtype=np.float32),
+    )
+    _create_array(
+        second_root,
+        "data/action",
+        data=np.asarray([[2.0]], dtype=np.float32),
+    )
+
+    rows = mdr.read_zarr(
+        [first, second],
+        arrays={"action": "data/action"},
+        file_path_column=None,
+    ).take(2)
+
+    assert [row["action"].item() for row in rows] == [1.0, 2.0]
+
+    shards = mdr.read_zarr(
+        [first, second],
+        arrays={"action": "data/action"},
+        file_path_column=None,
+    ).source.list_shards()
+    assert [(shard.start_key, shard.end_key) for shard in shards] == [
+        ("0", "0"),
+        ("1", "1"),
+    ]
+
+
+def test_read_zarr_reads_folder_glob(tmp_path: Path) -> None:
+    first = tmp_path / "first.zarr"
+    second = tmp_path / "second.zarr"
+    first_root = _open_test_zarr(first, mode="w")
+    second_root = _open_test_zarr(second, mode="w")
+    _create_array(first_root, "data/action", data=np.asarray([[1.0]], dtype=np.float32))
+    _create_array(
+        second_root,
+        "data/action",
+        data=np.asarray([[2.0]], dtype=np.float32),
+    )
+
+    rows = mdr.read_zarr(
+        str(tmp_path / "*.zarr"),
+        arrays={"action": "data/action"},
+        file_path_column=None,
+    ).take(2)
+
+    assert [row["action"].item() for row in rows] == [1.0, 2.0]
+
+
 def test_read_zarr_reads_scalar_arrays(tmp_path: Path) -> None:
     path = tmp_path / "scalar.zarr"
     root = _open_test_zarr(path, mode="w")
