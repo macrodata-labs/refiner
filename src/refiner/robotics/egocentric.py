@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from refiner.execution.asyncio.runtime import submit
 from refiner.pipeline.data.row import Row
@@ -9,15 +10,12 @@ from refiner.pipeline.planning import describe_builtin
 from refiner.pipeline.steps import BatchFn
 from refiner.robotics.row import RoboticsRow
 
-if TYPE_CHECKING:
-    from egovision import HandTrackingConfig
-
 
 def track_hands(
     *,
     video_key: str = "video",
     output_key: str = "hand_tracking",
-    config: "HandTrackingConfig | None" = None,
+    config: Any | None = None,
 ) -> BatchFn:
     """Return a ``batch_map`` function for ego-vision hand tracking.
 
@@ -64,14 +62,9 @@ def track_hands(
     return _track
 
 
-def _load_egovision(config: "HandTrackingConfig | None") -> tuple[Any, Any]:
+def _load_egovision(config: Any | None) -> tuple[Any, Any]:
     try:
-        from egovision import (
-            EpisodeInput,
-            HandTrackingConfig,
-            HandTrackingPipeline,
-            HaworReconstructionConfig,
-        )
+        egovision = importlib.import_module("egovision")
     except ImportError as exc:
         raise ImportError(
             "track_hands requires ego-vision. Install it with "
@@ -79,10 +72,10 @@ def _load_egovision(config: "HandTrackingConfig | None") -> tuple[Any, Any]:
         ) from exc
 
     if config is None:
-        config = HandTrackingConfig(
-            hand_reconstruction=HaworReconstructionConfig(),
+        config = egovision.HandTrackingConfig(
+            hand_reconstruction=egovision.HaworReconstructionConfig(),
         )
-    return HandTrackingPipeline(config), EpisodeInput
+    return egovision.HandTrackingPipeline(config), egovision.EpisodeInput
 
 
 def _iter_video_frames(video: Any) -> Iterable[Any]:
