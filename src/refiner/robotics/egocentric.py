@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
+from refiner.execution.asyncio.runtime import submit
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.planning import describe_builtin
 from refiner.pipeline.steps import BatchFn
@@ -89,7 +89,7 @@ def _iter_video_frames(video: Any) -> Iterable[Any]:
     async_frames = video.iter_frames()
     while True:
         try:
-            decoded = asyncio.run(anext(async_frames))
+            decoded = submit(anext(async_frames)).result()
         except StopAsyncIteration:
             return
         yield decoded.frame
