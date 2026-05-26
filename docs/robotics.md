@@ -521,15 +521,64 @@ video bytes from the row directly:
 
 If the model performs better with contact sheets than raw video, you can still
 avoid OpenCV. Refiner's video extra already uses PyAV, so contact sheets can be
-built from `VideoFile.iter_frames()` and encoded as JPEG with PyAV. The
-recommended prompt shape is to send the JPEG sheets as image parts and include a
-text manifest that maps tile positions to timestamps, instead of drawing
-timestamps into the pixels.
+built from `VideoFile.iter_frames()` and encoded as JPEG with PyAV. Burn the
+timestamp into each sampled frame before tiling it into a contact sheet, so the
+model can visually bind every tile to its time. A text manifest can still be
+included as extra context, but it should not replace embedded timestamps.
 
 ```python
 import io
 import numpy as np
 import av
+
+
+_FONT = {
+    "0": ("111", "101", "101", "101", "111"),
+    "1": ("010", "110", "010", "010", "111"),
+    "2": ("111", "001", "111", "100", "111"),
+    "3": ("111", "001", "111", "001", "111"),
+    "4": ("101", "101", "111", "001", "001"),
+    "5": ("111", "100", "111", "001", "111"),
+    "6": ("111", "100", "111", "101", "111"),
+    "7": ("111", "001", "001", "001", "001"),
+    "8": ("111", "101", "111", "101", "111"),
+    "9": ("111", "101", "111", "001", "111"),
+    ".": ("000", "000", "000", "000", "010"),
+    "s": ("111", "100", "111", "001", "111"),
+}
+
+
+def draw_timestamp_badge(
+    rgb: np.ndarray,
+    timestamp: float,
+    *,
+    scale: int = 2,
+) -> np.ndarray:
+    image = rgb.copy()
+    label = f"{timestamp:06.2f}s"
+
+    glyph_height = 5 * scale
+    glyph_width = 3 * scale
+    gap = scale
+    padding = 4 * scale
+    badge_height = glyph_height + padding * 2
+    badge_width = padding * 2 + len(label) * glyph_width + (len(label) - 1) * gap
+
+    image[:badge_height, :badge_width] = 0
+
+    x = padding
+    y = padding
+    for character in label:
+        glyph = _FONT[character]
+        for row_index, row_bits in enumerate(glyph):
+            for column_index, bit in enumerate(row_bits):
+                if bit == "1":
+                    y0 = y + row_index * scale
+                    x0 = x + column_index * scale
+                    image[y0 : y0 + scale, x0 : x0 + scale] = 255
+        x += glyph_width + gap
+
+    return image
 
 
 def encode_jpeg(rgb: np.ndarray) -> bytes:
@@ -554,13 +603,15 @@ async def sample_rgb_frames(video, every_sec: float) -> list[tuple[float, np.nda
         timestamp = frame.timestamp_s
         if timestamp is None or timestamp + 1e-6 < next_time:
             continue
-        sampled.append((timestamp, frame.frame.to_ndarray(format="rgb24")))
+        rgb = frame.frame.to_ndarray(format="rgb24")
+        sampled.append((timestamp, draw_timestamp_badge(rgb, timestamp)))
         next_time = timestamp + every_sec
     return sampled
 ```
 
-The contact sheet helper above only needs `macrodata-refiner[video]`; it does
-not require `opencv-python-headless`.
+After sampling, resize and tile the returned RGB arrays with NumPy, then send
+`encode_jpeg(sheet)` outputs as image file parts. The helper above only needs
+`macrodata-refiner[video]`; it does not require `opencv-python-headless`.
 
 ## Merging Datasets
 
