@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 from typing import Any
 
 import msgspec
@@ -140,25 +142,128 @@ class CloudRuntimeConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class CloudPipelinePayload:
-    format: str
-    bytes_b64: str
+class CloudFile:
+    """Reference to a workspace cloud file used in a cloud run payload."""
+
+    file_id: str
+    """Workspace-scoped cloud file UUID."""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"file_id": self.file_id}
+
+
+@dataclass(frozen=True, slots=True)
+class CloudFileUploadRequestItem:
+    """Declared metadata for one file that needs an upload URL."""
+
     sha256: str
+    """Lowercase hex SHA-256 digest of the file bytes."""
+
     size_bytes: int
+    """Exact file size in bytes."""
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "format": self.format,
-            "bytes_b64": self.bytes_b64,
             "sha256": self.sha256,
             "size_bytes": self.size_bytes,
         }
 
 
+class CloudFileUploadStatus(str, Enum):
+    """Cloud file upload URL status returned by the public cloud API."""
+
+    NEW = "new"
+    """The file is not available yet and must be uploaded to the signed URL."""
+
+    EXISTS = "exists"
+    """The workspace already has the file; upload and completion can be skipped."""
+
+
+class CloudFileUploadInstruction(msgspec.Struct, frozen=True):
+    """Upload URL response item for one declared cloud file."""
+
+    file_id: str
+    """Workspace-scoped cloud file UUID assigned by the API."""
+
+    sha256: str
+    """Lowercase hex SHA-256 digest of the expected file bytes."""
+
+    size_bytes: int
+    """Exact expected file size in bytes."""
+
+    status: CloudFileUploadStatus
+    """Whether the file is new or already available in the workspace."""
+
+    url: str | None = None
+    """Opaque signed upload URL for new files."""
+
+    required_headers: dict[str, str] | None = None
+    """HTTP headers that must be sent exactly with the signed upload request."""
+
+    upload_url_expires_at: datetime | None = None
+    """Signed upload URL expiry time, when an upload URL exists."""
+
+    expires_at: datetime | None = None
+    """Cloud file expiry time, or None for non-expiring files."""
+
+    def upload_target(self) -> tuple[str, dict[str, str]] | None:
+        if self.status is CloudFileUploadStatus.EXISTS:
+            return None
+        if not self.url or self.required_headers is None:
+            raise ValueError(
+                "new cloud file upload instruction is missing upload target"
+            )
+        return self.url, self.required_headers
+
+
+class CloudFileUploadUrlsResponse(msgspec.Struct, frozen=True):
+    """Response from the cloud file upload URL endpoint."""
+
+    files: list[CloudFileUploadInstruction]
+    """Upload instructions corresponding to requested files."""
+
+
+@dataclass(frozen=True, slots=True)
+class CloudFileCompleteRequestItem:
+    """Request item for marking one uploaded cloud file complete."""
+
+    file_id: str
+    """Workspace-scoped cloud file UUID to complete."""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"file_id": self.file_id}
+
+
+class CloudFileCompleteResult(msgspec.Struct, frozen=True):
+    """Completion result for one cloud file."""
+
+    file_id: str
+    """Workspace-scoped cloud file UUID."""
+
+    sha256: str
+    """Lowercase hex SHA-256 digest verified by the backend."""
+
+    size_bytes: int
+    """Verified file size in bytes."""
+
+    uploaded_at: datetime
+    """Time when the file was marked uploaded."""
+
+    expires_at: datetime | None = None
+    """Cloud file expiry time, or None for non-expiring files."""
+
+
+class CloudFileCompleteResponse(msgspec.Struct, frozen=True):
+    """Response from the cloud file completion endpoint."""
+
+    files: list[CloudFileCompleteResult]
+    """Completion results corresponding to requested files."""
+
+
 @dataclass(frozen=True, slots=True)
 class StagePayload:
     stage_index: int
-    pipeline_payload: CloudPipelinePayload
+    pipeline_payload: CloudFile
     runtime: CloudRuntimeConfig
     runtime_services: tuple[RuntimeServiceSpec, ...] = ()
 

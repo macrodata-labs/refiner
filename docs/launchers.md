@@ -80,6 +80,8 @@ Returned result includes:
 - `stage_index`
 - `status`
 
+Note: cloud launch setup may fail due to payload uploads before a cloud job is even created.
+
 ### Cloud options
 
 - `num_workers`: requested logical worker count
