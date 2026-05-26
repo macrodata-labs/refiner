@@ -1,24 +1,20 @@
 from __future__ import annotations
 
 import inspect
-import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol, cast
 
 from pydantic import BaseModel
 
+from refiner.inference import _provider_anthropic as anthropic_provider
+from refiner.inference import _provider_google as google_provider
+from refiner.inference import _provider_openai as openai_provider
+from refiner.inference._provider_warnings import provider_option_warnings
 from refiner.inference._runtime import RequestFn, inference_map
 from refiner.inference._schema import (
-    StructuredOutputSchema,
     normalize_schema,
     validate_structured_output,
-)
-from refiner.inference._message_conversion import (
-    convert_to_anthropic_payload,
-    convert_to_google_payload,
-    convert_to_openai_chat_messages,
-    convert_to_openai_responses_input,
 )
 from refiner.inference.client import (
     _AnthropicEndpointClient,
@@ -57,71 +53,6 @@ class GenerateTextFn(Protocol):
 
 
 GenerateTextMapFn = Callable[[Row, GenerateTextFn], Awaitable[MapResult] | MapResult]
-
-_OPENAI_CHAT_PROVIDER_OPTIONS = {
-    "logitBias",
-    "logprobs",
-    "parallelToolCalls",
-    "user",
-    "reasoningEffort",
-    "maxCompletionTokens",
-    "store",
-    "metadata",
-    "prediction",
-    "serviceTier",
-    "reasoningSummary",
-    "textVerbosity",
-    "promptCacheKey",
-    "promptCacheRetention",
-    "safetyIdentifier",
-}
-
-_OPENAI_RESPONSES_PROVIDER_OPTIONS = {
-    *_OPENAI_CHAT_PROVIDER_OPTIONS,
-    "conversation",
-    "include",
-    "instructions",
-    "maxToolCalls",
-    "previousResponseId",
-    "truncation",
-    "contextManagement",
-}
-
-_GOOGLE_PROVIDER_OPTIONS = {
-    "responseModalities",
-    "thinkingConfig",
-    "cachedContent",
-    "structuredOutputs",
-    "safetySettings",
-    "threshold",
-    "audioTimestamp",
-    "labels",
-    "mediaResolution",
-    "imageConfig",
-    "retrievalConfig",
-    "streamFunctionCallArguments",
-    "serviceTier",
-    "sharedRequestType",
-    "requestType",
-}
-
-_ANTHROPIC_PROVIDER_OPTIONS = {
-    "sendReasoning",
-    "structuredOutputMode",
-    "thinking",
-    "disableParallelToolUse",
-    "cacheControl",
-    "metadata",
-    "mcpServers",
-    "container",
-    "toolStreaming",
-    "effort",
-    "taskBudget",
-    "speed",
-    "inferenceGeo",
-    "anthropicBeta",
-    "contextManagement",
-}
 
 
 def generate_text(
@@ -162,67 +93,72 @@ def generate_text(
             )
             payload = {**dict(default_generation_params or {}), **params}
             retry_override = maxRetries if maxRetries is not None else max_retries
-            warnings = _provider_option_warnings(provider, providerOptions)
-            warnings.extend(_schema_warnings(provider, schema_info))
+            warnings = _provider_warnings(provider, providerOptions)
             if messages is not None:
                 if isinstance(provider, GoogleEndpointProvider):
-                    payload = convert_to_google_payload(
-                        messages,
-                        generation_config=_google_generation_config(payload),
+                    payload = google_provider.build_payload(
+                        messages=list(messages),
+                        params=payload,
                         provider_options=providerOptions,
+                        schema=schema_info,
                     )
                 elif isinstance(provider, AnthropicEndpointProvider):
-                    payload = convert_to_anthropic_payload(
-                        messages,
-                        params=_anthropic_params(payload),
+                    warnings.extend(anthropic_provider.schema_warnings(schema_info))
+                    payload = anthropic_provider.build_payload(
+                        messages=list(messages),
+                        params=payload,
                         provider_options=providerOptions,
+                        schema=schema_info,
                     )
                 elif isinstance(provider, OpenAIResponsesProvider):
-                    payload["input"] = convert_to_openai_responses_input(messages)
-                    _apply_openai_responses_options(payload, providerOptions)
-                    _normalize_openai_responses_params(payload)
-                    _normalize_openai_reasoning_options(payload, providerOptions)
-                    _normalize_openai_text_options(payload, providerOptions)
+                    payload = openai_provider.build_responses_payload(
+                        messages=messages,
+                        prompt=None,
+                        params=payload,
+                        provider_options=providerOptions,
+                        schema=schema_info,
+                    )
                 else:
-                    payload["messages"] = convert_to_openai_chat_messages(messages)
-                    _normalize_openai_reasoning_options(payload, providerOptions)
-                    _normalize_openai_text_options(payload, providerOptions)
+                    payload = openai_provider.build_chat_payload(
+                        messages=messages,
+                        prompt=None,
+                        params=payload,
+                        provider_options=providerOptions,
+                        schema=schema_info,
+                    )
             else:
+                user_message: Message = {"role": "user", "content": prompt or ""}
                 if isinstance(provider, GoogleEndpointProvider):
-                    payload = convert_to_google_payload(
-                        [{"role": "user", "content": prompt or ""}],
-                        generation_config=_google_generation_config(payload),
+                    payload = google_provider.build_payload(
+                        messages=[user_message],
+                        params=payload,
                         provider_options=providerOptions,
+                        schema=schema_info,
                     )
                 elif isinstance(provider, AnthropicEndpointProvider):
-                    payload = convert_to_anthropic_payload(
-                        [{"role": "user", "content": prompt or ""}],
-                        params=_anthropic_params(payload),
+                    warnings.extend(anthropic_provider.schema_warnings(schema_info))
+                    payload = anthropic_provider.build_payload(
+                        messages=[user_message],
+                        params=payload,
                         provider_options=providerOptions,
+                        schema=schema_info,
                     )
                 elif isinstance(provider, OpenAIResponsesProvider):
-                    payload["input"] = prompt
-                    _apply_openai_responses_options(payload, providerOptions)
-                    _normalize_openai_responses_params(payload)
-                    _normalize_openai_reasoning_options(payload, providerOptions)
-                    _normalize_openai_text_options(payload, providerOptions)
+                    payload = openai_provider.build_responses_payload(
+                        messages=None,
+                        prompt=prompt,
+                        params=payload,
+                        provider_options=providerOptions,
+                        schema=schema_info,
+                    )
                 else:
-                    if schema_info is None:
-                        payload["prompt"] = prompt
-                    else:
-                        payload["messages"] = [
-                            {"role": "user", "content": prompt or ""}
-                        ]
-                    _normalize_openai_reasoning_options(payload, providerOptions)
-                    _normalize_openai_text_options(payload, providerOptions)
-            _apply_schema(payload, provider, schema_info)
-            if providerOptions is not None and not isinstance(
-                provider,
-                GoogleEndpointProvider
-                | AnthropicEndpointProvider
-                | OpenAIResponsesProvider,
-            ):
-                payload["providerOptions"] = providerOptions
+                    payload = openai_provider.build_chat_payload(
+                        messages=None,
+                        prompt=prompt,
+                        params=payload,
+                        provider_options=providerOptions,
+                        schema=schema_info,
+                    )
             if retry_override is not None:
                 payload["__refiner_max_retries"] = retry_override
             response = cast(InferenceResponse, await request(payload))
@@ -271,111 +207,7 @@ async def _generate(
     return await client.generate(payload)
 
 
-def _google_generation_config(params: Mapping[str, Any]) -> dict[str, Any]:
-    config = dict(params)
-    aliases = {
-        "max_tokens": "maxOutputTokens",
-        "top_p": "topP",
-        "top_k": "topK",
-        "frequency_penalty": "frequencyPenalty",
-        "presence_penalty": "presencePenalty",
-        "stop_sequences": "stopSequences",
-    }
-    for source, target in aliases.items():
-        if source in config and target not in config:
-            config[target] = config.pop(source)
-    return config
-
-
-def _apply_schema(
-    payload: dict[str, Any],
-    provider: (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    ),
-    schema: StructuredOutputSchema | None,
-) -> None:
-    if schema is None:
-        return
-    if isinstance(provider, GoogleEndpointProvider):
-        generation_config = dict(payload.get("generationConfig", {}))
-        generation_config["responseMimeType"] = "application/json"
-        generation_config["responseSchema"] = schema.json_schema
-        payload["generationConfig"] = generation_config
-    elif isinstance(provider, OpenAIResponsesProvider):
-        text = dict(payload.get("text", {}))
-        text["format"] = _openai_response_format(schema)
-        payload["text"] = text
-    elif isinstance(provider, AnthropicEndpointProvider):
-        _apply_anthropic_schema_instruction(payload, schema)
-    else:
-        payload["response_format"] = {
-            "type": "json_schema",
-            "json_schema": _openai_json_schema(schema),
-        }
-
-
-def _schema_warnings(
-    provider: (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    ),
-    schema: StructuredOutputSchema | None,
-) -> list[InferenceWarning]:
-    if schema is None or not isinstance(provider, AnthropicEndpointProvider):
-        return []
-    return [
-        {
-            "type": "unsupported-setting",
-            "setting": "schema",
-            "message": (
-                "AnthropicEndpointProvider does not enforce schema natively; "
-                "Refiner adds a JSON instruction and validates the response locally."
-            ),
-        }
-    ]
-
-
-def _openai_response_format(schema: StructuredOutputSchema) -> dict[str, Any]:
-    return {
-        "type": "json_schema",
-        "name": schema.name,
-        "schema": schema.json_schema,
-        "strict": schema.strict,
-    }
-
-
-def _openai_json_schema(schema: StructuredOutputSchema) -> dict[str, Any]:
-    return {
-        "name": schema.name,
-        "schema": schema.json_schema,
-        "strict": schema.strict,
-    }
-
-
-def _apply_anthropic_schema_instruction(
-    payload: dict[str, Any],
-    schema: StructuredOutputSchema,
-) -> None:
-    instruction = (
-        "Return only valid JSON that matches this JSON Schema. "
-        "Do not include markdown fences or extra prose.\n"
-        f"{json.dumps(schema.json_schema, separators=(',', ':'))}"
-    )
-    existing = payload.get("system")
-    if isinstance(existing, str) and existing:
-        payload["system"] = f"{existing}\n\n{instruction}"
-    else:
-        payload["system"] = instruction
-
-
-def _provider_option_warnings(
+def _provider_warnings(
     provider: (
         AnthropicEndpointProvider
         | GoogleEndpointProvider
@@ -385,152 +217,24 @@ def _provider_option_warnings(
     ),
     provider_options: ProviderOptions | None,
 ) -> list[InferenceWarning]:
-    if not provider_options:
-        return []
-    expected_namespace = _provider_option_namespace(provider)
-    warnings: list[InferenceWarning] = []
-    for namespace in provider_options:
-        if namespace != expected_namespace:
-            warnings.append(
-                {
-                    "type": "unsupported-provider-option",
-                    "setting": f"providerOptions.{namespace}",
-                    "message": (
-                        f"{namespace!r} provider options are not used by "
-                        f"{type(provider).__name__}."
-                    ),
-                }
-            )
-    expected_options = provider_options.get(expected_namespace, {})
     if isinstance(provider, OpenAIResponsesProvider):
-        supported = _OPENAI_RESPONSES_PROVIDER_OPTIONS
+        expected_namespace = "openai"
+        supported = openai_provider.RESPONSES_PROVIDER_OPTIONS
     elif isinstance(provider, OpenAIEndpointProvider | VLLMProvider):
-        supported = _OPENAI_CHAT_PROVIDER_OPTIONS
+        expected_namespace = "openai"
+        supported = openai_provider.CHAT_PROVIDER_OPTIONS
     elif isinstance(provider, GoogleEndpointProvider):
-        supported = _GOOGLE_PROVIDER_OPTIONS
+        expected_namespace = "google"
+        supported = google_provider.PROVIDER_OPTIONS
     else:
-        supported = _ANTHROPIC_PROVIDER_OPTIONS
-    for option in expected_options:
-        if option not in supported:
-            warnings.append(
-                {
-                    "type": "unsupported-setting",
-                    "setting": f"providerOptions.{expected_namespace}.{option}",
-                    "message": (
-                        f"{option!r} is not currently mapped by "
-                        f"{type(provider).__name__}."
-                    ),
-                }
-            )
-    return warnings
-
-
-def _provider_option_namespace(
-    provider: (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    ),
-) -> str:
-    if isinstance(provider, GoogleEndpointProvider):
-        return "google"
-    if isinstance(provider, AnthropicEndpointProvider):
-        return "anthropic"
-    return "openai"
-
-
-def _anthropic_params(params: Mapping[str, Any]) -> dict[str, Any]:
-    payload = dict(params)
-    if "maxOutputTokens" in payload and "max_tokens" not in payload:
-        payload["max_tokens"] = payload.pop("maxOutputTokens")
-    return payload
-
-
-def _apply_openai_responses_options(
-    payload: dict[str, Any],
-    provider_options: ProviderOptions | None,
-) -> None:
-    if not provider_options:
-        return
-    openai_options = provider_options.get("openai", {})
-    passthrough = {
-        "conversation",
-        "include",
-        "instructions",
-        "logprobs",
-        "maxToolCalls",
-        "metadata",
-        "parallelToolCalls",
-        "previousResponseId",
-        "promptCacheKey",
-        "promptCacheRetention",
-        "safetyIdentifier",
-        "serviceTier",
-        "store",
-        "truncation",
-        "user",
-        "contextManagement",
-    }
-    for key in passthrough:
-        if key in openai_options:
-            payload[key] = openai_options[key]
-
-
-def _normalize_openai_responses_params(payload: dict[str, Any]) -> None:
-    aliases = {
-        "max_tokens": "max_output_tokens",
-        "maxCompletionTokens": "max_output_tokens",
-    }
-    for source, target in aliases.items():
-        if source in payload and target not in payload:
-            payload[target] = payload.pop(source)
-
-
-def _normalize_openai_reasoning_options(
-    payload: dict[str, Any],
-    provider_options: ProviderOptions | None,
-) -> None:
-    if not provider_options:
-        return
-    openai_options = provider_options.get("openai", {})
-    for key in (
-        "logitBias",
-        "logprobs",
-        "parallelToolCalls",
-        "user",
-        "maxCompletionTokens",
-        "store",
-        "metadata",
-        "prediction",
-        "serviceTier",
-        "promptCacheKey",
-        "promptCacheRetention",
-        "safetyIdentifier",
-    ):
-        if key in openai_options:
-            payload[key] = openai_options[key]
-    reasoning: dict[str, Any] = {}
-    if "reasoningEffort" in openai_options:
-        reasoning["effort"] = openai_options["reasoningEffort"]
-    if "reasoningSummary" in openai_options:
-        reasoning["summary"] = openai_options["reasoningSummary"]
-    if reasoning:
-        payload["reasoning"] = {**dict(payload.get("reasoning", {})), **reasoning}
-
-
-def _normalize_openai_text_options(
-    payload: dict[str, Any],
-    provider_options: ProviderOptions | None,
-) -> None:
-    if not provider_options:
-        return
-    openai_options = provider_options.get("openai", {})
-    if "textVerbosity" in openai_options:
-        text = dict(payload.get("text", {}))
-        text["verbosity"] = openai_options["textVerbosity"]
-        payload["text"] = text
+        expected_namespace = "anthropic"
+        supported = anthropic_provider.PROVIDER_OPTIONS
+    return provider_option_warnings(
+        provider_name=type(provider).__name__,
+        expected_namespace=expected_namespace,
+        supported_options=supported,
+        provider_options=provider_options,
+    )
 
 
 __all__ = ["GenerateTextFn", "GenerateTextMapFn", "generate_text"]
