@@ -86,11 +86,39 @@ async def summarize(row, generate_text):
 `InferenceResponse.text` contains the concatenated text output. For providers
 that return reasoning, `InferenceResponse.content` includes normalized
 `{"type": "reasoning", "text": ...}` and `{"type": "text", "text": ...}` parts.
+`InferenceResponse.headers` contains normalized response headers from the
+provider, such as request IDs, retry headers, and rate-limit metadata when the
+provider sends them.
 
 Assistant history can be passed as either plain text or typed content parts.
 Google supports assistant text, reasoning, and in-memory file parts. Anthropic
 supports assistant text and reasoning. OpenAI Responses supports assistant text
 and reasoning. OpenAI-compatible chat endpoints support assistant text history.
+
+### Retries and errors
+Provider calls use the same retry shape as the Vercel AI SDK. Refiner retries
+retryable failures up to `maxRetries=2` by default, with exponential backoff
+starting at two seconds. Retryable failures are request timeout (`408`),
+conflict (`409`), rate limiting (`429`), server errors (`>=500`), and network
+connection failures. Refiner respects provider `retry-after-ms` and
+`retry-after` headers when the delay is valid and less than 60 seconds.
+
+Disable retries or override the retry count per call:
+
+```python
+async def summarize(row, generate_text):
+    response = await generate_text(
+        prompt=row["text"],
+        maxRetries=0,
+    )
+    return {"summary": response.text}
+```
+
+Failed provider responses raise `mdr.inference.InferenceAPICallError`. The
+exception includes `status_code`, `response_headers`, `response_body`, parsed
+provider error `data`, the request `url`, and `is_retryable`. If retries are
+exhausted, Refiner raises `mdr.inference.InferenceRetryError` with the collected
+underlying errors and a reason such as `"maxRetriesExceeded"`.
 
 ### GoogleEndpointProvider
 Use `GoogleEndpointProvider` for native Gemini requests, including in-memory
@@ -324,6 +352,13 @@ Only the following models are currently supported. If you are missing one, pleas
 - `Qwen/Qwen3.5-9B`
 - `google/gemma-4-E4B-it`
 
+## Internal Notes
+
+Inference endpoint clients share a transport layer that normalizes provider
+HTTP errors, retry classification, retry-after handling, and response headers.
+The total number of concurrent row-level requests is still controlled by
+Refiner's execution layer through `max_concurrent_requests` and pipeline
+`max_in_flight`, not by the single-call transport helper.
 
 ## Examples
 

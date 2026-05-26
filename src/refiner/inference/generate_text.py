@@ -38,6 +38,8 @@ class GenerateTextFn(Protocol):
         messages: Sequence[Message] | None = None,
         prompt: str | None = None,
         providerOptions: ProviderOptions | None = None,
+        maxRetries: int | None = None,
+        max_retries: int | None = None,
         **params: Any,
     ) -> Awaitable[InferenceResponse]: ...
 
@@ -64,11 +66,16 @@ def generate_text(
             messages: Sequence[Message] | None = None,
             prompt: str | None = None,
             providerOptions: ProviderOptions | None = None,
+            maxRetries: int | None = None,
+            max_retries: int | None = None,
             **params: Any,
         ) -> InferenceResponse:
             if (messages is None) == (prompt is None):
                 raise ValueError("pass exactly one of messages or prompt")
+            if maxRetries is not None and max_retries is not None:
+                raise ValueError("pass only one of maxRetries or max_retries")
             payload = {**dict(default_generation_params or {}), **params}
+            retry_override = maxRetries if maxRetries is not None else max_retries
             if messages is not None:
                 if isinstance(provider, GoogleEndpointProvider):
                     payload = convert_to_google_payload(
@@ -122,6 +129,8 @@ def generate_text(
                 | OpenAIResponsesProvider,
             ):
                 payload["providerOptions"] = providerOptions
+            if retry_override is not None:
+                payload["__refiner_max_retries"] = retry_override
             return cast(InferenceResponse, await request(payload))
 
         result = fn(row, _generate_text)

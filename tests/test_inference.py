@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -26,6 +26,7 @@ from refiner.inference import client as openai_module
 
 generate_module = importlib.import_module("refiner.inference.generate")
 runtime_module = importlib.import_module("refiner.inference._runtime")
+transport_module = importlib.import_module("refiner.inference._transport")
 
 
 class _MetricRecordingEmitter(UserMetricsEmitter):
@@ -573,6 +574,40 @@ def test_inference_generate_text_applies_google_provider_options(monkeypatch) ->
         "cachedContent": "cachedContents/abc",
         "serviceTier": "flex",
     }
+
+
+def test_inference_generate_text_passes_max_retries_as_internal_option(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        del self
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason="STOP",
+            usage={},
+            response={"candidates": []},
+        )
+
+    monkeypatch.setattr(
+        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(prompt="hello", maxRetries=0)
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+    )
+
+    assert asyncio.run(cast(Any, infer(DictRow({})))) == {"output": "ok"}
+    payload = cast(Mapping[str, object], seen["payload"])
+    assert payload["__refiner_max_retries"] == 0
 
 
 def test_inference_generate_text_converts_messages_for_openai_responses(
@@ -1169,11 +1204,10 @@ def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
 
     async def _fake_sleep(delay: float) -> None:
         seen["sleeps"] += 1
-        assert delay in (5.0, 10.0)
+        assert delay in (2.0, 4.0)
 
     monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(openai_module.asyncio, "sleep", _fake_sleep)
-    monkeypatch.setattr(openai_module.random, "random", lambda: 0.5)
+    monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
         openai_module._OpenAIEndpointClient(
@@ -1221,11 +1255,10 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
 
     async def _fake_sleep(delay: float) -> None:
         seen["sleeps"] += 1
-        assert delay == 5.0
+        assert delay == 2.0
 
     monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(openai_module.asyncio, "sleep", _fake_sleep)
-    monkeypatch.setattr(openai_module.random, "random", lambda: 0.5)
+    monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
         openai_module._OpenAIEndpointClient(
@@ -1273,10 +1306,124 @@ def test_openai_endpoint_warns_on_null_chat_content(caplog) -> None:
     )
 
 
-def test_openai_endpoint_does_not_retry_on_http_503(monkeypatch) -> None:
+def test_openai_endpoint_retries_on_http_503(monkeypatch) -> None:
     seen: dict[str, int] = {"calls": 0, "sleeps": 0}
 
     request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+    error_response = httpx.Response(
+        503,
+        request=request,
+        json={"error": {"message": "Service unavailable"}},
+    )
+    success_response = httpx.Response(
+        200,
+        request=request,
+        json={
+            "choices": [
+                {
+                    "message": {"content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {},
+        },
+    )
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            del base_url, headers, timeout
+
+        async def post(self, path, *, json):
+            del path, json
+            seen["calls"] += 1
+            if seen["calls"] == 1:
+                return error_response
+            return success_response
+
+    async def _fake_sleep(delay: float) -> None:
+        assert delay == 2.0
+        seen["sleeps"] += 1
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
+
+    response = asyncio.run(
+        openai_module._OpenAIEndpointClient(
+            base_url="https://api.example.com",
+        ).generate(
+            {
+                "model": "gpt-test",
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        )
+    )
+
+    assert response.text == "ok"
+    assert seen == {"calls": 2, "sleeps": 1}
+
+
+def test_openai_endpoint_respects_retry_after_ms(monkeypatch) -> None:
+    seen: dict[str, object] = {"calls": 0, "sleeps": []}
+
+    request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+    error_response = httpx.Response(
+        429,
+        request=request,
+        json={"error": {"message": "Rate limited"}},
+        headers={"retry-after-ms": "125"},
+    )
+    success_response = httpx.Response(
+        200,
+        request=request,
+        json={
+            "choices": [
+                {
+                    "message": {"content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {},
+        },
+        headers={"x-request-id": "req_123"},
+    )
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            del base_url, headers, timeout
+
+        async def post(self, path, *, json):
+            del path, json
+            seen["calls"] = cast(int, seen["calls"]) + 1
+            if seen["calls"] == 1:
+                return error_response
+            return success_response
+
+    async def _fake_sleep(delay: float) -> None:
+        cast(list[float], seen["sleeps"]).append(delay)
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
+
+    response = asyncio.run(
+        openai_module._OpenAIEndpointClient(
+            base_url="https://api.example.com",
+        ).generate(
+            {
+                "model": "gpt-test",
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        )
+    )
+
+    assert response.text == "ok"
+    assert response.headers["x-request-id"] == "req_123"
+    assert seen == {"calls": 2, "sleeps": [0.125]}
+
+
+def test_openai_endpoint_can_disable_retries(monkeypatch) -> None:
+    seen: dict[str, int] = {"calls": 0, "sleeps": 0}
+
+    request = httpx.Request("POST", "https://api.example.com/v1/completions")
     response = httpx.Response(
         503,
         request=request,
@@ -1288,7 +1435,8 @@ def test_openai_endpoint_does_not_retry_on_http_503(monkeypatch) -> None:
             del base_url, headers, timeout
 
         async def post(self, path, *, json):
-            del path, json
+            del path
+            assert "__refiner_max_retries" not in dict(json)
             seen["calls"] += 1
             return response
 
@@ -1297,20 +1445,26 @@ def test_openai_endpoint_does_not_retry_on_http_503(monkeypatch) -> None:
         seen["sleeps"] += 1
 
     monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(openai_module.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
-    with pytest.raises(RuntimeError, match="generation request failed with HTTP 503"):
+    with pytest.raises(
+        mdr.inference.InferenceAPICallError,
+        match="generation request failed with HTTP 503: Service unavailable",
+    ) as err:
         asyncio.run(
             openai_module._OpenAIEndpointClient(
                 base_url="https://api.example.com",
             ).generate(
                 {
                     "model": "gpt-test",
-                    "messages": [{"role": "user", "content": "hello"}],
+                    "prompt": "hello",
+                    "__refiner_max_retries": 0,
                 }
             )
         )
 
+    assert err.value.status_code == 503
+    assert err.value.is_retryable is True
     assert seen == {"calls": 1, "sleeps": 0}
 
 

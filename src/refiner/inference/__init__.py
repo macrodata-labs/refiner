@@ -1,6 +1,7 @@
 from refiner.inference.generate import generate
 from refiner.inference.generate_text import generate_text
 from refiner.inference.client import InferenceResponse
+from refiner.inference._transport import InferenceAPICallError, InferenceRetryError
 from refiner.inference.providers import (
     AnthropicEndpointProvider,
     GoogleEndpointProvider,
@@ -29,6 +30,8 @@ __all__ = [
     "generate",
     "generate_text",
     "InferenceResponse",
+    "InferenceAPICallError",
+    "InferenceRetryError",
     "AnthropicEndpointProvider",
     "GoogleEndpointProvider",
     "OpenAIEndpointProvider",

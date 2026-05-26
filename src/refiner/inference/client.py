@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
+from refiner.inference._transport import post_json_to_api
 from refiner.inference.types import ResponseContentPart
 
 _OPENAI_ENDPOINT_TIMEOUT_SECONDS = 600.0
-_OPENAI_ENDPOINT_MAX_RETRIES = 6
-_OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS = 5.0
-_OPENAI_ENDPOINT_RETRY_JITTER_FRACTION = 0.1
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +22,7 @@ class InferenceResponse:
     usage: Mapping[str, Any]
     response: Mapping[str, Any]
     content: Sequence[ResponseContentPart] = ()
+    headers: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def raw(self) -> Mapping[str, Any]:
@@ -65,70 +62,34 @@ class _OpenAIEndpointClient:
     async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
         use_chat = "messages" in payload
         endpoint_path = "v1/chat/completions" if use_chat else "v1/completions"
-        response_json = await self._post_json(
+        api_response = await post_json_to_api(
+            self._ensure_client(),
             endpoint_path,
-            payload,
+            _request_payload(payload),
             operation="generation",
+            max_retries=_max_retries(payload),
         )
+        response_json = api_response.value
         if not isinstance(response_json, Mapping):
             raise RuntimeError("generation response must be a JSON object")
         return _parse_inference_response(
             response_json,
             use_chat=use_chat,
+            response_headers=api_response.response_headers,
         )
 
     async def pooling(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        response_json = await self._post_json(
+        api_response = await post_json_to_api(
+            self._ensure_client(),
             "pooling",
-            payload,
+            _request_payload(payload),
             operation="pooling",
+            max_retries=_max_retries(payload),
         )
+        response_json = api_response.value
         if not isinstance(response_json, Mapping):
             raise RuntimeError("pooling response must be a JSON object")
         return response_json
-
-    async def _post_json(
-        self,
-        endpoint_path: str,
-        payload: Mapping[str, Any],
-        *,
-        operation: str,
-    ) -> Any:
-        client = self._ensure_client()
-        for attempt in range(_OPENAI_ENDPOINT_MAX_RETRIES):
-            try:
-                response = await client.post(endpoint_path, json=dict(payload))
-                break
-            except (
-                ConnectionError,
-                OSError,
-                asyncio.TimeoutError,
-                httpx.NetworkError,
-                httpx.TimeoutException,
-            ) as err:
-                if attempt + 1 >= _OPENAI_ENDPOINT_MAX_RETRIES:
-                    message = (
-                        f"{operation} request failed after "
-                        f"{_OPENAI_ENDPOINT_MAX_RETRIES} attempts: "
-                        f"{type(err).__name__}: {err}"
-                    )
-                    raise RuntimeError(message) from err
-                await asyncio.sleep(_retry_delay_seconds(attempt))
-        else:
-            raise RuntimeError(f"{operation} request failed without a response")
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            detail = ""
-            try:
-                detail = str(err.response.json())
-            except ValueError:
-                detail = err.response.text.strip()
-            message = f"{operation} request failed with HTTP {err.response.status_code}"
-            if detail:
-                message = f"{message}: {detail}"
-            raise RuntimeError(message) from err
-        return response.json()
 
 
 @dataclass(slots=True)
@@ -163,57 +124,20 @@ class _GoogleEndpointClient:
         return client
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
-        response_json = await self._post_json(
+        api_response = await post_json_to_api(
+            self._ensure_client(),
             f"{_google_model_path(self.model)}:generateContent",
-            payload,
+            _request_payload(payload),
             operation="google generation",
+            max_retries=_max_retries(payload),
         )
+        response_json = api_response.value
         if not isinstance(response_json, Mapping):
             raise RuntimeError("google generation response must be a JSON object")
-        return _parse_google_inference_response(response_json)
-
-    async def _post_json(
-        self,
-        endpoint_path: str,
-        payload: Mapping[str, Any],
-        *,
-        operation: str,
-    ) -> Any:
-        client = self._ensure_client()
-        for attempt in range(_OPENAI_ENDPOINT_MAX_RETRIES):
-            try:
-                response = await client.post(endpoint_path, json=dict(payload))
-                break
-            except (
-                ConnectionError,
-                OSError,
-                asyncio.TimeoutError,
-                httpx.NetworkError,
-                httpx.TimeoutException,
-            ) as err:
-                if attempt + 1 >= _OPENAI_ENDPOINT_MAX_RETRIES:
-                    message = (
-                        f"{operation} request failed after "
-                        f"{_OPENAI_ENDPOINT_MAX_RETRIES} attempts: "
-                        f"{type(err).__name__}: {err}"
-                    )
-                    raise RuntimeError(message) from err
-                await asyncio.sleep(_retry_delay_seconds(attempt))
-        else:
-            raise RuntimeError(f"{operation} request failed without a response")
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            detail = ""
-            try:
-                detail = str(err.response.json())
-            except ValueError:
-                detail = err.response.text.strip()
-            message = f"{operation} request failed with HTTP {err.response.status_code}"
-            if detail:
-                message = f"{message}: {detail}"
-            raise RuntimeError(message) from err
-        return response.json()
+        return _parse_google_inference_response(
+            response_json,
+            response_headers=api_response.response_headers,
+        )
 
 
 @dataclass(slots=True)
@@ -247,15 +171,20 @@ class _OpenAIResponsesClient:
         return client
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
-        response_json = await _post_json_with_retries(
+        api_response = await post_json_to_api(
             self._ensure_client(),
             "v1/responses",
-            payload,
+            _request_payload(payload),
             operation="openai responses generation",
+            max_retries=_max_retries(payload),
         )
+        response_json = api_response.value
         if not isinstance(response_json, Mapping):
             raise RuntimeError("openai responses response must be a JSON object")
-        return _parse_openai_responses_response(response_json)
+        return _parse_openai_responses_response(
+            response_json,
+            response_headers=api_response.response_headers,
+        )
 
 
 @dataclass(slots=True)
@@ -291,19 +220,27 @@ class _AnthropicEndpointClient:
         return client
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
-        response_json = await _post_json_with_retries(
+        api_response = await post_json_to_api(
             self._ensure_client(),
             "v1/messages",
-            payload,
+            _request_payload(payload),
             operation="anthropic generation",
+            max_retries=_max_retries(payload),
         )
+        response_json = api_response.value
         if not isinstance(response_json, Mapping):
             raise RuntimeError("anthropic generation response must be a JSON object")
-        return _parse_anthropic_inference_response(response_json)
+        return _parse_anthropic_inference_response(
+            response_json,
+            response_headers=api_response.response_headers,
+        )
 
 
 def _parse_inference_response(
-    response_json: Mapping[str, Any], *, use_chat: bool
+    response_json: Mapping[str, Any],
+    *,
+    use_chat: bool,
+    response_headers: Mapping[str, str] | None = None,
 ) -> InferenceResponse:
     choices = response_json.get("choices")
     if not isinstance(choices, Sequence) or not choices:
@@ -367,11 +304,14 @@ def _parse_inference_response(
         usage=usage,
         response=response_json,
         content=content_parts,
+        headers=dict(response_headers or {}),
     )
 
 
 def _parse_openai_responses_response(
     response_json: Mapping[str, Any],
+    *,
+    response_headers: Mapping[str, str] | None = None,
 ) -> InferenceResponse:
     content_parts: list[ResponseContentPart] = []
     output = response_json.get("output")
@@ -420,11 +360,14 @@ def _parse_openai_responses_response(
         usage=mapped_usage,
         response=response_json,
         content=content_parts,
+        headers=dict(response_headers or {}),
     )
 
 
 def _parse_anthropic_inference_response(
     response_json: Mapping[str, Any],
+    *,
+    response_headers: Mapping[str, str] | None = None,
 ) -> InferenceResponse:
     content = response_json.get("content")
     if not isinstance(content, Sequence):
@@ -457,11 +400,14 @@ def _parse_anthropic_inference_response(
         usage=mapped_usage,
         response=response_json,
         content=content_parts,
+        headers=dict(response_headers or {}),
     )
 
 
 def _parse_google_inference_response(
     response_json: Mapping[str, Any],
+    *,
+    response_headers: Mapping[str, str] | None = None,
 ) -> InferenceResponse:
     candidates = response_json.get("candidates")
     if not isinstance(candidates, Sequence) or not candidates:
@@ -497,6 +443,7 @@ def _parse_google_inference_response(
         usage=usage,
         response=response_json,
         content=content_parts,
+        headers=dict(response_headers or {}),
     )
 
 
@@ -526,53 +473,19 @@ def _google_model_path(model: str) -> str:
     return model if "/" in model else f"models/{model}"
 
 
-def _retry_delay_seconds(attempt: int) -> float:
-    base_delay = _OPENAI_ENDPOINT_RETRY_BASE_DELAY_SECONDS * (2**attempt)
-    jitter = (random.random() * 2.0 - 1.0) * _OPENAI_ENDPOINT_RETRY_JITTER_FRACTION
-    return base_delay * (1.0 + jitter)
+def _max_retries(payload: Mapping[str, Any]) -> int | None:
+    raw = payload.get("__refiner_max_retries")
+    if raw is None:
+        return None
+    if not isinstance(raw, int):
+        raise ValueError("maxRetries must be an integer")
+    return raw
 
 
-async def _post_json_with_retries(
-    client: httpx.AsyncClient,
-    endpoint_path: str,
-    payload: Mapping[str, Any],
-    *,
-    operation: str,
-) -> Any:
-    for attempt in range(_OPENAI_ENDPOINT_MAX_RETRIES):
-        try:
-            response = await client.post(endpoint_path, json=dict(payload))
-            break
-        except (
-            ConnectionError,
-            OSError,
-            asyncio.TimeoutError,
-            httpx.NetworkError,
-            httpx.TimeoutException,
-        ) as err:
-            if attempt + 1 >= _OPENAI_ENDPOINT_MAX_RETRIES:
-                message = (
-                    f"{operation} request failed after "
-                    f"{_OPENAI_ENDPOINT_MAX_RETRIES} attempts: "
-                    f"{type(err).__name__}: {err}"
-                )
-                raise RuntimeError(message) from err
-            await asyncio.sleep(_retry_delay_seconds(attempt))
-    else:
-        raise RuntimeError(f"{operation} request failed without a response")
-    try:
-        response.raise_for_status()
-    except httpx.HTTPStatusError as err:
-        detail = ""
-        try:
-            detail = str(err.response.json())
-        except ValueError:
-            detail = err.response.text.strip()
-        message = f"{operation} request failed with HTTP {err.response.status_code}"
-        if detail:
-            message = f"{message}: {detail}"
-        raise RuntimeError(message) from err
-    return response.json()
+def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    request = dict(payload)
+    request.pop("__refiner_max_retries", None)
+    return request
 
 
 __all__ = ["InferenceResponse"]
