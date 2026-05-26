@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from pydantic import BaseModel
 
 import refiner as mdr
 from refiner.inference import (
@@ -27,6 +28,11 @@ from refiner.inference import client as openai_module
 generate_module = importlib.import_module("refiner.inference.generate")
 runtime_module = importlib.import_module("refiner.inference._runtime")
 transport_module = importlib.import_module("refiner.inference._transport")
+
+
+class _Caption(BaseModel):
+    title: str
+    objects: list[str]
 
 
 class _MetricRecordingEmitter(UserMetricsEmitter):
@@ -290,6 +296,210 @@ def test_inference_generate_text_returns_provider_option_warnings(
             },
         ]
     }
+
+
+def test_inference_generate_text_parses_pydantic_schema_for_openai(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate(self, payload):
+        del self
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text='{"title":"Desk","objects":["lamp","book"]}',
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(prompt="caption", schema=_Caption)
+        assert isinstance(response.object, _Caption)
+        return {
+            "title": response.object.title,
+            "objects": response.object.objects,
+        }
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
+    )
+
+    assert asyncio.run(cast(Any, infer(DictRow({})))) == {
+        "title": "Desk",
+        "objects": ["lamp", "book"],
+    }
+    payload = cast(Mapping[str, object], seen["payload"])
+    assert payload["messages"] == [{"role": "user", "content": "caption"}]
+    assert "prompt" not in payload
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "_Caption",
+            "schema": _Caption.model_json_schema(),
+            "strict": True,
+        },
+    }
+
+
+def test_inference_generate_text_applies_schema_for_google(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        del self
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text='{"title":"Video","objects":["car"]}',
+            finish_reason="STOP",
+            usage={},
+            response={"candidates": []},
+        )
+
+    monkeypatch.setattr(
+        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(prompt="caption", schema=_Caption)
+        assert isinstance(response.object, _Caption)
+        return {"title": response.object.title}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+    )
+
+    assert asyncio.run(cast(Any, infer(DictRow({})))) == {"title": "Video"}
+    payload = cast(Mapping[str, object], seen["payload"])
+    generation_config = cast(Mapping[str, object], payload["generationConfig"])
+    assert generation_config["responseMimeType"] == "application/json"
+    assert generation_config["responseSchema"] == _Caption.model_json_schema()
+
+
+def test_inference_generate_text_applies_schema_for_openai_responses(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        del self
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text='{"title":"Answer","objects":[]}',
+            finish_reason=None,
+            usage={},
+            response={"output": []},
+        )
+
+    monkeypatch.setattr(
+        openai_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(prompt="caption", schema=_Caption)
+        assert isinstance(response.object, _Caption)
+        return {"title": response.object.title}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIResponsesProvider(model="gpt-test", api_key="secret"),
+    )
+
+    assert asyncio.run(cast(Any, infer(DictRow({})))) == {"title": "Answer"}
+    payload = cast(Mapping[str, object], seen["payload"])
+    text = cast(Mapping[str, object], payload["text"])
+    assert text["format"] == {
+        "type": "json_schema",
+        "name": "_Caption",
+        "schema": _Caption.model_json_schema(),
+        "strict": True,
+    }
+
+
+def test_inference_generate_text_warns_for_anthropic_schema_fallback(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        del self
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text='{"title":"Doc","objects":["chart"]}',
+            finish_reason="end_turn",
+            usage={},
+            response={"content": []},
+        )
+
+    monkeypatch.setattr(
+        openai_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(prompt="caption", schema=_Caption)
+        assert isinstance(response.object, _Caption)
+        return {"warnings": list(response.warnings)}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=AnthropicEndpointProvider(model="claude-test", api_key="secret"),
+    )
+
+    result = asyncio.run(cast(Any, infer(DictRow({}))))
+    assert result == {
+        "warnings": [
+            {
+                "type": "unsupported-setting",
+                "setting": "schema",
+                "message": (
+                    "AnthropicEndpointProvider does not enforce schema natively; "
+                    "Refiner adds a JSON instruction and validates the response "
+                    "locally."
+                ),
+            }
+        ]
+    }
+    payload = cast(Mapping[str, object], seen["payload"])
+    assert "Return only valid JSON" in cast(str, payload["system"])
+
+
+def test_inference_generate_text_raises_on_schema_validation_error(
+    monkeypatch,
+) -> None:
+    async def _fake_generate(self, payload):
+        del self, payload
+        return InferenceResponse(
+            text='{"title":"Desk"}',
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate_text):
+        del row
+        await generate_text(prompt="caption", schema=_Caption)
+        return {}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
+    )
+
+    with pytest.raises(mdr.inference.InferenceSchemaValidationError):
+        asyncio.run(cast(Any, infer(DictRow({}))))
 
 
 def test_google_endpoint_provider_builtin_args_do_not_include_api_key() -> None:

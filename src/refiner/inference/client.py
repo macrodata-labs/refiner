@@ -24,6 +24,7 @@ class InferenceResponse:
     content: Sequence[ResponseContentPart] = ()
     headers: Mapping[str, str] = field(default_factory=dict)
     warnings: Sequence[InferenceWarning] = ()
+    object: Any | None = None
 
     @property
     def raw(self) -> Mapping[str, Any]:

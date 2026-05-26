@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import inspect
+import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol, cast
 
+from pydantic import BaseModel
+
 from refiner.inference._runtime import RequestFn, inference_map
+from refiner.inference._schema import (
+    StructuredOutputSchema,
+    normalize_schema,
+    validate_structured_output,
+)
 from refiner.inference._message_conversion import (
     convert_to_anthropic_payload,
     convert_to_google_payload,
@@ -41,6 +49,9 @@ class GenerateTextFn(Protocol):
         providerOptions: ProviderOptions | None = None,
         maxRetries: int | None = None,
         max_retries: int | None = None,
+        schema: type[BaseModel] | None = None,
+        schemaStrict: bool = True,
+        schema_strict: bool | None = None,
         **params: Any,
     ) -> Awaitable[InferenceResponse]: ...
 
@@ -134,15 +145,25 @@ def generate_text(
             providerOptions: ProviderOptions | None = None,
             maxRetries: int | None = None,
             max_retries: int | None = None,
+            schema: type[BaseModel] | None = None,
+            schemaStrict: bool = True,
+            schema_strict: bool | None = None,
             **params: Any,
         ) -> InferenceResponse:
             if (messages is None) == (prompt is None):
                 raise ValueError("pass exactly one of messages or prompt")
             if maxRetries is not None and max_retries is not None:
                 raise ValueError("pass only one of maxRetries or max_retries")
+            if schemaStrict is not True and schema_strict is not None:
+                raise ValueError("pass only one of schemaStrict or schema_strict")
+            schema_info = normalize_schema(
+                schema,
+                strict=schemaStrict if schema_strict is None else schema_strict,
+            )
             payload = {**dict(default_generation_params or {}), **params}
             retry_override = maxRetries if maxRetries is not None else max_retries
             warnings = _provider_option_warnings(provider, providerOptions)
+            warnings.extend(_schema_warnings(provider, schema_info))
             if messages is not None:
                 if isinstance(provider, GoogleEndpointProvider):
                     payload = convert_to_google_payload(
@@ -186,9 +207,15 @@ def generate_text(
                     _normalize_openai_reasoning_options(payload, providerOptions)
                     _normalize_openai_text_options(payload, providerOptions)
                 else:
-                    payload["prompt"] = prompt
+                    if schema_info is None:
+                        payload["prompt"] = prompt
+                    else:
+                        payload["messages"] = [
+                            {"role": "user", "content": prompt or ""}
+                        ]
                     _normalize_openai_reasoning_options(payload, providerOptions)
                     _normalize_openai_text_options(payload, providerOptions)
+            _apply_schema(payload, provider, schema_info)
             if providerOptions is not None and not isinstance(
                 provider,
                 GoogleEndpointProvider
@@ -199,6 +226,9 @@ def generate_text(
             if retry_override is not None:
                 payload["__refiner_max_retries"] = retry_override
             response = cast(InferenceResponse, await request(payload))
+            parsed_object = validate_structured_output(response.text, schema_info)
+            if parsed_object is not None:
+                response = replace(response, object=parsed_object)
             if warnings:
                 return replace(
                     response,
@@ -255,6 +285,94 @@ def _google_generation_config(params: Mapping[str, Any]) -> dict[str, Any]:
         if source in config and target not in config:
             config[target] = config.pop(source)
     return config
+
+
+def _apply_schema(
+    payload: dict[str, Any],
+    provider: (
+        AnthropicEndpointProvider
+        | GoogleEndpointProvider
+        | OpenAIEndpointProvider
+        | OpenAIResponsesProvider
+        | VLLMProvider
+    ),
+    schema: StructuredOutputSchema | None,
+) -> None:
+    if schema is None:
+        return
+    if isinstance(provider, GoogleEndpointProvider):
+        generation_config = dict(payload.get("generationConfig", {}))
+        generation_config["responseMimeType"] = "application/json"
+        generation_config["responseSchema"] = schema.json_schema
+        payload["generationConfig"] = generation_config
+    elif isinstance(provider, OpenAIResponsesProvider):
+        text = dict(payload.get("text", {}))
+        text["format"] = _openai_response_format(schema)
+        payload["text"] = text
+    elif isinstance(provider, AnthropicEndpointProvider):
+        _apply_anthropic_schema_instruction(payload, schema)
+    else:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": _openai_json_schema(schema),
+        }
+
+
+def _schema_warnings(
+    provider: (
+        AnthropicEndpointProvider
+        | GoogleEndpointProvider
+        | OpenAIEndpointProvider
+        | OpenAIResponsesProvider
+        | VLLMProvider
+    ),
+    schema: StructuredOutputSchema | None,
+) -> list[InferenceWarning]:
+    if schema is None or not isinstance(provider, AnthropicEndpointProvider):
+        return []
+    return [
+        {
+            "type": "unsupported-setting",
+            "setting": "schema",
+            "message": (
+                "AnthropicEndpointProvider does not enforce schema natively; "
+                "Refiner adds a JSON instruction and validates the response locally."
+            ),
+        }
+    ]
+
+
+def _openai_response_format(schema: StructuredOutputSchema) -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "name": schema.name,
+        "schema": schema.json_schema,
+        "strict": schema.strict,
+    }
+
+
+def _openai_json_schema(schema: StructuredOutputSchema) -> dict[str, Any]:
+    return {
+        "name": schema.name,
+        "schema": schema.json_schema,
+        "strict": schema.strict,
+    }
+
+
+def _apply_anthropic_schema_instruction(
+    payload: dict[str, Any],
+    schema: StructuredOutputSchema,
+) -> None:
+    instruction = (
+        "Return only valid JSON that matches this JSON Schema. "
+        "Do not include markdown fences or extra prose.\n"
+        f"{json.dumps(schema.json_schema, separators=(',', ':'))}"
+    )
+    existing = payload.get("system")
+    if isinstance(existing, str) and existing:
+        payload["system"] = f"{existing}\n\n{instruction}"
+    else:
+        payload["system"] = instruction
 
 
 def _provider_option_warnings(

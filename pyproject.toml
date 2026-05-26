@@ -24,6 +24,7 @@ dependencies = [
     "orjson",
     "pyarrow",
     "msgspec>=0.20.0",
+    "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]

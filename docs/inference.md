@@ -133,6 +133,37 @@ provider error `data`, the request `url`, and `is_retryable`. If retries are
 exhausted, Refiner raises `mdr.inference.InferenceRetryError` with the collected
 underlying errors and a reason such as `"maxRetriesExceeded"`.
 
+### Structured output
+Pass a Pydantic `BaseModel` class with `schema=` to request and validate
+structured JSON output. Refiner sends provider-native schema hints for
+OpenAI-compatible chat endpoints, OpenAI Responses, and Google Gemini. Anthropic
+requests include an explicit JSON instruction and are validated locally, with a
+warning because schema enforcement is not native.
+
+```python
+from pydantic import BaseModel
+
+
+class Caption(BaseModel):
+    title: str
+    objects: list[str]
+
+
+async def caption(row, generate_text):
+    response = await generate_text(
+        prompt="Describe this image as structured JSON.",
+        schema=Caption,
+    )
+    caption = response.object
+    return {
+        "title": caption.title,
+        "objects": caption.objects,
+    }
+```
+
+If the response cannot be parsed as the requested Pydantic model, Refiner raises
+`mdr.inference.InferenceSchemaValidationError`.
+
 ### GoogleEndpointProvider
 Use `GoogleEndpointProvider` for native Gemini requests, including in-memory
 video inputs. Set `GOOGLE_GENERATIVE_AI_API_KEY` in the worker environment, or
