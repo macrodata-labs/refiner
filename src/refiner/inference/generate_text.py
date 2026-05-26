@@ -48,7 +48,6 @@ class GenerateTextFn(Protocol):
         max_retries: int | None = None,
         schema: type[BaseModel] | None = None,
         schemaStrict: bool = True,
-        schema_strict: bool | None = None,
         **params: Any,
     ) -> Awaitable[InferenceResponse]: ...
 
@@ -79,18 +78,15 @@ def generate_text(
             max_retries: int | None = None,
             schema: type[BaseModel] | None = None,
             schemaStrict: bool = True,
-            schema_strict: bool | None = None,
             **params: Any,
         ) -> InferenceResponse:
             if (messages is None) == (prompt is None):
                 raise ValueError("pass exactly one of messages or prompt")
             if maxRetries is not None and max_retries is not None:
                 raise ValueError("pass only one of maxRetries or max_retries")
-            if schemaStrict is not True and schema_strict is not None:
-                raise ValueError("pass only one of schemaStrict or schema_strict")
             schema_info = normalize_schema(
                 schema,
-                strict=schemaStrict if schema_strict is None else schema_strict,
+                strict=schemaStrict,
             )
             payload = {**dict(default_generation_params or {}), **params}
             retry_override = maxRetries if maxRetries is not None else max_retries
