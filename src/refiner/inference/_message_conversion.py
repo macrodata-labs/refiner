@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-import base64
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from refiner.inference._media import (
+    base64_data,
+    data_or_url,
+    is_url,
+    parse_data_url,
+    resolve_media_type,
+    top_level_media_type,
+)
 from refiner.inference.types import Message
-
-_DATA_URL_PATTERN = re.compile(r"^data:([^;,]+);base64,(.+)$", re.DOTALL)
-_WILDCARD_MEDIA_SUFFIX = "/*"
 
 
 def convert_to_openai_chat_messages(
@@ -182,7 +185,7 @@ def _convert_openai_user_part(part: Mapping[str, Any], index: int) -> dict[str, 
         image_data = part.get("image")
         return _openai_image_url_part(
             image_data,
-            media_type=_resolve_media_type(
+            media_type=resolve_media_type(
                 image_data,
                 declared_media_type=part.get("mediaType"),
                 default_top_level="image",
@@ -193,11 +196,11 @@ def _convert_openai_user_part(part: Mapping[str, Any], index: int) -> dict[str, 
         raise ValueError(f"unsupported content part type {part_type!r}")
 
     data = part.get("data")
-    media_type = _resolve_media_type(
+    media_type = resolve_media_type(
         data,
         declared_media_type=part.get("mediaType"),
     )
-    top_level = _top_level_media_type(media_type)
+    top_level = top_level_media_type(media_type)
     if top_level == "image":
         return _openai_image_url_part(
             data,
@@ -205,9 +208,9 @@ def _convert_openai_user_part(part: Mapping[str, Any], index: int) -> dict[str, 
             detail=_provider_option(part, "openai", "imageDetail"),
         )
     if top_level == "audio":
-        if _is_url(data):
+        if is_url(data):
             raise ValueError("openai audio file parts with URLs are not supported")
-        full_media_type = _resolve_media_type(
+        full_media_type = resolve_media_type(
             data,
             declared_media_type=media_type,
             default_top_level="audio",
@@ -224,22 +227,22 @@ def _convert_openai_user_part(part: Mapping[str, Any], index: int) -> dict[str, 
         return {
             "type": "input_audio",
             "input_audio": {
-                "data": _base64_data(data),
+                "data": base64_data(data),
                 "format": audio_format,
             },
         }
-    full_media_type = _resolve_media_type(data, declared_media_type=media_type)
+    full_media_type = resolve_media_type(data, declared_media_type=media_type)
     if full_media_type != "application/pdf":
         raise ValueError(
             f"openai file part media type {full_media_type} is unsupported"
         )
-    if _is_url(data):
+    if is_url(data):
         raise ValueError("openai PDF file parts with URLs are not supported")
     return {
         "type": "file",
         "file": {
             "filename": part.get("filename", f"part-{index}.pdf"),
-            "file_data": f"data:application/pdf;base64,{_base64_data(data)}",
+            "file_data": f"data:application/pdf;base64,{base64_data(data)}",
         },
     }
 
@@ -256,9 +259,9 @@ def _convert_openai_responses_part(
         image_data = part.get("image")
         image_part: dict[str, Any] = {
             "type": "input_image",
-            "image_url": _data_or_url(
+            "image_url": data_or_url(
                 image_data,
-                _resolve_media_type(
+                resolve_media_type(
                     image_data,
                     declared_media_type=part.get("mediaType"),
                     default_top_level="image",
@@ -273,19 +276,19 @@ def _convert_openai_responses_part(
         raise ValueError(f"unsupported content part type {part_type!r}")
 
     data = part.get("data")
-    media_type = _resolve_media_type(data, declared_media_type=part.get("mediaType"))
-    if _top_level_media_type(media_type) == "image":
+    media_type = resolve_media_type(data, declared_media_type=part.get("mediaType"))
+    if top_level_media_type(media_type) == "image":
         image_part: dict[str, Any] = {
             "type": "input_image",
-            "image_url": _data_or_url(data, media_type),
+            "image_url": data_or_url(data, media_type),
         }
         detail = _provider_option(part, "openai", "imageDetail")
         if detail is not None:
             image_part["detail"] = detail
         return image_part
-    if _is_url(data):
+    if is_url(data):
         return {"type": "input_file", "file_url": str(data)}
-    full_media_type = _resolve_media_type(data, declared_media_type=media_type)
+    full_media_type = resolve_media_type(data, declared_media_type=media_type)
     return {
         "type": "input_file",
         "filename": part.get(
@@ -294,7 +297,7 @@ def _convert_openai_responses_part(
             if full_media_type == "application/pdf"
             else f"part-{index}",
         ),
-        "file_data": f"data:{full_media_type};base64,{_base64_data(data)}",
+        "file_data": f"data:{full_media_type};base64,{base64_data(data)}",
     }
 
 
@@ -304,7 +307,7 @@ def _openai_image_url_part(
     media_type: object,
     detail: object,
 ) -> dict[str, Any]:
-    image_url: dict[str, Any] = {"url": _data_or_url(data, str(media_type))}
+    image_url: dict[str, Any] = {"url": data_or_url(data, str(media_type))}
     if detail is not None:
         image_url["detail"] = detail
     return {"type": "image_url", "image_url": image_url}
@@ -320,7 +323,7 @@ def _convert_google_user_part(part: Mapping[str, Any]) -> dict[str, Any]:
         image_data = part.get("image")
         return _google_file_part(
             image_data,
-            _resolve_media_type(
+            resolve_media_type(
                 image_data,
                 declared_media_type=part.get("mediaType"),
                 default_top_level="image",
@@ -330,7 +333,7 @@ def _convert_google_user_part(part: Mapping[str, Any]) -> dict[str, Any]:
         file_data = part.get("data")
         return _google_file_part(
             file_data,
-            _resolve_media_type(file_data, declared_media_type=part.get("mediaType")),
+            resolve_media_type(file_data, declared_media_type=part.get("mediaType")),
         )
     raise ValueError(f"unsupported content part type {part_type!r}")
 
@@ -354,7 +357,7 @@ def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[st
             "type": "image",
             "source": _anthropic_image_source(
                 image_data,
-                _resolve_media_type(
+                resolve_media_type(
                     image_data,
                     declared_media_type=part.get("mediaType"),
                     default_top_level="image",
@@ -368,8 +371,8 @@ def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[st
         raise ValueError(f"unsupported content part type {part_type!r}")
 
     data = part.get("data")
-    media_type = _resolve_media_type(data, declared_media_type=part.get("mediaType"))
-    top_level = _top_level_media_type(media_type)
+    media_type = resolve_media_type(data, declared_media_type=part.get("mediaType"))
+    top_level = top_level_media_type(media_type)
     payload: dict[str, Any]
     if top_level == "image":
         payload = {
@@ -492,9 +495,9 @@ def _convert_google_assistant_content(content: object) -> list[dict[str, Any]]:
                 parts.append({"text": part_text, "thought": True})
         elif part_type == "file":
             data = part.get("data")
-            if _is_url(data):
+            if is_url(data):
                 raise ValueError("google assistant file URLs are not supported")
-            media_type = _resolve_media_type(
+            media_type = resolve_media_type(
                 data,
                 declared_media_type=part.get("mediaType"),
             )
@@ -502,7 +505,7 @@ def _convert_google_assistant_content(content: object) -> list[dict[str, Any]]:
                 {
                     "inlineData": {
                         "mimeType": media_type,
-                        "data": _base64_data(data),
+                        "data": base64_data(data),
                     }
                 }
             )
@@ -550,29 +553,29 @@ def _custom_provider_data(
 
 
 def _google_file_part(data: object, media_type: str) -> dict[str, Any]:
-    parsed = _parse_data_url(data)
+    parsed = parse_data_url(data)
     if parsed is not None:
         parsed_media_type, parsed_data = parsed
         return {"inlineData": {"mimeType": parsed_media_type, "data": parsed_data}}
-    if _is_url(data):
+    if is_url(data):
         return {"fileData": {"mimeType": media_type, "fileUri": str(data)}}
-    return {"inlineData": {"mimeType": media_type, "data": _base64_data(data)}}
+    return {"inlineData": {"mimeType": media_type, "data": base64_data(data)}}
 
 
 def _anthropic_image_source(data: object, media_type: str) -> dict[str, Any]:
-    if _is_url(data):
+    if is_url(data):
         return {"type": "url", "url": str(data)}
-    return {"type": "base64", "media_type": media_type, "data": _base64_data(data)}
+    return {"type": "base64", "media_type": media_type, "data": base64_data(data)}
 
 
 def _anthropic_document_source(data: object, media_type: str) -> dict[str, Any]:
-    if _is_url(data):
+    if is_url(data):
         return {"type": "url", "url": str(data)}
-    return {"type": "base64", "media_type": media_type, "data": _base64_data(data)}
+    return {"type": "base64", "media_type": media_type, "data": base64_data(data)}
 
 
 def _anthropic_text_source(data: object) -> dict[str, Any]:
-    if _is_url(data):
+    if is_url(data):
         return {"type": "url", "url": str(data)}
     if isinstance(data, str):
         text = data
@@ -666,121 +669,6 @@ def _provider_options(provider_options: object, provider: str) -> Mapping[str, A
     if not isinstance(options, Mapping):
         return {}
     return options
-
-
-def _top_level_media_type(media_type: str) -> str:
-    return media_type.split("/", 1)[0]
-
-
-def _resolve_media_type(
-    data: object,
-    *,
-    declared_media_type: object,
-    default_top_level: str | None = None,
-) -> str:
-    parsed = _parse_data_url(data)
-    if parsed is not None:
-        return parsed[0]
-    media_type = _declared_media_type(declared_media_type)
-    if media_type is not None and _is_full_media_type(media_type):
-        return media_type
-    detected = _detect_media_type(data)
-    if detected is not None:
-        if media_type is None:
-            return detected
-        if _top_level_media_type(detected) == _top_level_media_type(media_type):
-            return detected
-    if media_type is not None:
-        if media_type.endswith(_WILDCARD_MEDIA_SUFFIX):
-            return media_type.removesuffix(_WILDCARD_MEDIA_SUFFIX)
-        return media_type
-    if default_top_level == "image":
-        return "image/png"
-    return "application/octet-stream"
-
-
-def _declared_media_type(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    media_type = value.strip()
-    if not media_type:
-        return None
-    return media_type
-
-
-def _is_full_media_type(media_type: str | None) -> bool:
-    if media_type is None:
-        return False
-    if media_type.endswith(_WILDCARD_MEDIA_SUFFIX):
-        return False
-    top_level, separator, subtype = media_type.partition("/")
-    return bool(top_level and separator and subtype)
-
-
-def _detect_media_type(data: object) -> str | None:
-    if not isinstance(data, bytes | bytearray | memoryview):
-        return None
-    raw = bytes(data)
-    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if raw.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if raw.startswith(b"GIF87a") or raw.startswith(b"GIF89a"):
-        return "image/gif"
-    if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
-        return "image/webp"
-    if raw.startswith(b"%PDF-"):
-        return "application/pdf"
-    if raw.startswith(b"RIFF") and raw[8:12] == b"WAVE":
-        return "audio/wav"
-    if raw.startswith(b"ID3") or _looks_like_mp3_frame(raw):
-        return "audio/mpeg"
-    if len(raw) >= 12 and raw[4:8] == b"ftyp":
-        brand = raw[8:12]
-        if brand in {b"M4A ", b"M4B ", b"mp42", b"isom", b"iso2"}:
-            return "video/mp4"
-    if raw.startswith(b"OggS"):
-        return "audio/ogg"
-    return None
-
-
-def _looks_like_mp3_frame(raw: bytes) -> bool:
-    return len(raw) >= 2 and raw[0] == 0xFF and (raw[1] & 0xE0) == 0xE0
-
-
-def _data_or_url(data: object, media_type: str) -> str:
-    parsed = _parse_data_url(data)
-    if parsed is not None:
-        return str(data)
-    if _is_url(data):
-        return str(data)
-    return f"data:{media_type};base64,{_base64_data(data)}"
-
-
-def _base64_data(data: object) -> str:
-    if isinstance(data, str):
-        parsed = _parse_data_url(data)
-        if parsed is not None:
-            return parsed[1]
-        return data
-    if isinstance(data, bytes | bytearray | memoryview):
-        return base64.b64encode(bytes(data)).decode("ascii")
-    raise TypeError(f"file data must be str or bytes-like, got {type(data).__name__}")
-
-
-def _parse_data_url(data: object) -> tuple[str, str] | None:
-    if not isinstance(data, str):
-        return None
-    match = _DATA_URL_PATTERN.match(data)
-    if match is None:
-        return None
-    return match.group(1), match.group(2)
-
-
-def _is_url(data: object) -> bool:
-    return isinstance(data, str) and (
-        data.startswith("http://") or data.startswith("https://")
-    )
 
 
 __all__ = [

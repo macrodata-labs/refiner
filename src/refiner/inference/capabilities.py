@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from refiner.inference._message_conversion import _resolve_media_type
+from refiner.inference._media import resolve_media_type
 from refiner.inference.providers import (
     AnthropicEndpointProvider,
     GoogleEndpointProvider,
@@ -210,14 +210,14 @@ def _message_media(
             part_type = part.get("type")
             if part_type == "image":
                 data = part.get("image")
-                media_type = _resolve_media_type(
+                media_type = resolve_media_type(
                     data,
                     declared_media_type=part.get("mediaType"),
                     default_top_level="image",
                 )
             elif part_type == "file":
                 data = part.get("data")
-                media_type = _resolve_media_type(
+                media_type = resolve_media_type(
                     data,
                     declared_media_type=part.get("mediaType"),
                 )

@@ -17,9 +17,9 @@ from refiner.inference._schema import (
     normalize_schema,
     validate_structured_output,
 )
+from refiner.inference._response import InferenceResponse
 from refiner.inference.client import (
     _AnthropicEndpointClient,
-    InferenceResponse,
     _GoogleEndpointClient,
     _OpenAIEndpointClient,
     _OpenAIResponsesClient,
@@ -45,7 +45,6 @@ class GenerateTextFn(Protocol):
         prompt: str | None = None,
         providerOptions: ProviderOptions | None = None,
         maxRetries: int | None = None,
-        max_retries: int | None = None,
         schema: type[BaseModel] | None = None,
         schemaStrict: bool = True,
         **params: Any,
@@ -75,21 +74,17 @@ def generate_text(
             prompt: str | None = None,
             providerOptions: ProviderOptions | None = None,
             maxRetries: int | None = None,
-            max_retries: int | None = None,
             schema: type[BaseModel] | None = None,
             schemaStrict: bool = True,
             **params: Any,
         ) -> InferenceResponse:
             if (messages is None) == (prompt is None):
                 raise ValueError("pass exactly one of messages or prompt")
-            if maxRetries is not None and max_retries is not None:
-                raise ValueError("pass only one of maxRetries or max_retries")
             schema_info = normalize_schema(
                 schema,
                 strict=schemaStrict,
             )
             payload = {**dict(default_generation_params or {}), **params}
-            retry_override = maxRetries if maxRetries is not None else max_retries
             warnings = _provider_warnings(provider, providerOptions)
             request_messages: Sequence[Message]
             if messages is not None:
@@ -170,8 +165,8 @@ def generate_text(
                         provider_options=providerOptions,
                         schema=schema_info,
                     )
-            if retry_override is not None:
-                payload["__refiner_max_retries"] = retry_override
+            if maxRetries is not None:
+                payload["__refiner_max_retries"] = maxRetries
             response = cast(InferenceResponse, await request(payload))
             parsed_object = validate_structured_output(response.text, schema_info)
             if parsed_object is not None:
