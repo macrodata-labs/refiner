@@ -1287,6 +1287,50 @@ def test_parse_openai_responses_response_includes_reasoning_content() -> None:
     ]
 
 
+def test_parse_openai_responses_response_includes_rich_parts() -> None:
+    response = openai_module._parse_openai_responses_response(
+        {
+            "id": "resp_123",
+            "model": "gpt-5-mini",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "answer",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "url": "https://example.com/a",
+                                    "title": "Example",
+                                }
+                            ],
+                            "logprobs": [{"token": "answer"}],
+                        },
+                        {
+                            "type": "output_image",
+                            "media_type": "image/png",
+                            "b64_json": "iVBORw0KGgo=",
+                        },
+                    ],
+                },
+            ],
+            "usage": {},
+        }
+    )
+
+    assert response.text == "answer"
+    assert response.logprobs == [[{"token": "answer"}]]
+    assert response.provider_metadata == {
+        "openai": {"id": "resp_123", "model": "gpt-5-mini"}
+    }
+    assert response.content[1]["type"] == "source"
+    assert response.content[1]["url"] == "https://example.com/a"
+    assert response.content[2]["type"] == "image"
+    assert response.content[2]["mediaType"] == "image/png"
+
+
 def test_parse_google_response_includes_reasoning_content() -> None:
     response = openai_module._parse_google_inference_response(
         {
@@ -1312,6 +1356,46 @@ def test_parse_google_response_includes_reasoning_content() -> None:
     ]
 
 
+def test_parse_google_response_includes_sources_and_files() -> None:
+    response = openai_module._parse_google_inference_response(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": "answer"},
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "iVBORw0KGgo=",
+                                }
+                            },
+                        ]
+                    },
+                    "finishReason": "STOP",
+                    "groundingMetadata": {
+                        "groundingChunks": [
+                            {
+                                "web": {
+                                    "uri": "https://example.com/source",
+                                    "title": "Source",
+                                }
+                            }
+                        ]
+                    },
+                }
+            ],
+            "usageMetadata": {},
+        }
+    )
+
+    assert response.text == "answer"
+    assert response.content[1]["type"] == "image"
+    assert response.content[1]["mediaType"] == "image/png"
+    assert response.content[2]["type"] == "source"
+    assert response.content[2]["url"] == "https://example.com/source"
+
+
 def test_parse_anthropic_response_includes_reasoning_content() -> None:
     response = openai_module._parse_anthropic_inference_response(
         {
@@ -1329,6 +1413,150 @@ def test_parse_anthropic_response_includes_reasoning_content() -> None:
         {"type": "reasoning", "text": "think"},
         {"type": "text", "text": "answer"},
     ]
+
+
+def test_parse_anthropic_response_includes_citation_sources() -> None:
+    response = openai_module._parse_anthropic_inference_response(
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "answer",
+                    "citations": [
+                        {
+                            "type": "web_search_result_location",
+                            "url": "https://example.com/source",
+                            "title": "Source",
+                        }
+                    ],
+                }
+            ],
+            "usage": {},
+            "stop_reason": "end_turn",
+        }
+    )
+
+    assert response.text == "answer"
+    assert response.content[1]["type"] == "source"
+    assert response.content[1]["url"] == "https://example.com/source"
+
+
+def test_inference_generate_text_passes_custom_openai_content(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason=None,
+            usage={},
+            response={"output_text": "ok"},
+        )
+
+    monkeypatch.setattr(
+        openai_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this."},
+                        {
+                            "type": "custom",
+                            "provider": "openai-responses",
+                            "data": {"type": "input_image", "image_url": "file_123"},
+                        },
+                    ],
+                }
+            ],
+        )
+        return {"output": response.text}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIResponsesProvider(model="gpt-5-mini", api_key="secret"),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({}))
+
+    asyncio.run(_invoke())
+
+    assert seen["payload"] == {
+        "model": "gpt-5-mini",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Describe this."},
+                    {"type": "input_image", "image_url": "file_123"},
+                ],
+            }
+        ],
+    }
+
+
+def test_inference_generate_text_warns_for_unsupported_image_model(
+    monkeypatch,
+) -> None:
+    async def _fake_generate(self, payload):
+        del payload
+        return InferenceResponse(
+            text="ok",
+            finish_reason="stop",
+            usage={},
+            response={"choices": [{"message": {"content": "ok"}}]},
+        )
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image."},
+                        {
+                            "type": "image",
+                            "mediaType": "image/png",
+                            "image": row["image"],
+                        },
+                    ],
+                }
+            ],
+        )
+        return {"warnings": list(response.warnings)}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-3.5-turbo", api_key="secret"
+        ),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({"image": b"\x89PNG\r\n\x1a\n"}))
+
+    result = asyncio.run(_invoke())
+
+    assert result == {
+        "warnings": [
+            {
+                "type": "unsupported-content",
+                "setting": "messages[0].content[1]",
+                "message": (
+                    "OpenAIEndpointProvider model 'gpt-3.5-turbo' is not known "
+                    "to support image input."
+                ),
+                "details": "image/png",
+            }
+        ]
+    }
 
 
 def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:

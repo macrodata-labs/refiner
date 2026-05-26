@@ -8,7 +8,10 @@ from refiner.inference._schema import StructuredOutputSchema
 from refiner.inference.types import Message, ProviderOptions
 
 PROVIDER_OPTIONS = {
+    "apiClient",
     "responseModalities",
+    "responseMimeType",
+    "responseSchema",
     "thinkingConfig",
     "cachedContent",
     "structuredOutputs",
@@ -19,6 +22,8 @@ PROVIDER_OPTIONS = {
     "mediaResolution",
     "imageConfig",
     "retrievalConfig",
+    "speechConfig",
+    "systemInstruction",
     "streamFunctionCallArguments",
     "serviceTier",
     "sharedRequestType",

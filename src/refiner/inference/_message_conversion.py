@@ -23,7 +23,10 @@ def convert_to_openai_chat_messages(
             continue
         if role == "assistant":
             converted.append(
-                {"role": "assistant", "content": _openai_assistant_text(content)}
+                {
+                    "role": "assistant",
+                    "content": _convert_openai_chat_assistant_content(content),
+                }
             )
             continue
         if isinstance(content, str):
@@ -171,6 +174,8 @@ def convert_to_anthropic_payload(
 
 def _convert_openai_user_part(part: Mapping[str, Any], index: int) -> dict[str, Any]:
     part_type = part.get("type")
+    if part_type == "custom":
+        return _custom_provider_data(part, {"openai", "openai-chat"})
     if part_type == "text":
         return {"type": "text", "text": part["text"]}
     if part_type == "image":
@@ -243,6 +248,8 @@ def _convert_openai_responses_part(
     part: Mapping[str, Any], index: int
 ) -> dict[str, Any]:
     part_type = part.get("type")
+    if part_type == "custom":
+        return _custom_provider_data(part, {"openai", "openai-responses"})
     if part_type == "text":
         return {"type": "input_text", "text": part["text"]}
     if part_type == "image":
@@ -305,6 +312,8 @@ def _openai_image_url_part(
 
 def _convert_google_user_part(part: Mapping[str, Any]) -> dict[str, Any]:
     part_type = part.get("type")
+    if part_type == "custom":
+        return _custom_provider_data(part, {"google"})
     if part_type == "text":
         return {"text": part["text"]}
     if part_type == "image":
@@ -329,6 +338,11 @@ def _convert_google_user_part(part: Mapping[str, Any]) -> dict[str, Any]:
 def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[str, Any]:
     part_type = part.get("type")
     cache_control = _anthropic_cache_control(part)
+    if part_type == "custom":
+        payload = _custom_provider_data(part, {"anthropic"})
+        if cache_control is not None:
+            payload = {**payload, "cache_control": cache_control}
+        return payload
     if part_type == "text":
         payload: dict[str, Any] = {"type": "text", "text": part["text"]}
         if cache_control is not None:
@@ -387,12 +401,15 @@ def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[st
     return payload
 
 
-def _openai_assistant_text(content: object) -> str:
+def _convert_openai_chat_assistant_content(
+    content: object,
+) -> str | list[dict[str, Any]]:
     if isinstance(content, str):
         return content
     if not isinstance(content, Sequence):
         raise ValueError("assistant message content must be a string or content parts")
     text_parts: list[str] = []
+    converted_parts: list[dict[str, Any]] = []
     for part in content:
         if not isinstance(part, Mapping):
             continue
@@ -401,10 +418,17 @@ def _openai_assistant_text(content: object) -> str:
         part_text = part.get("text")
         if part_type == "text" and isinstance(part_text, str):
             text_parts.append(part_text)
+            converted_parts.append({"type": "text", "text": part_text})
+        elif part_type == "custom":
+            converted_parts.append(
+                _custom_provider_data(part, {"openai", "openai-chat"})
+            )
         elif part_type in {"file", "reasoning"}:
             raise ValueError(
                 f"openai chat assistant {part_type} parts are not supported"
             )
+    if any(part.get("type") != "text" for part in converted_parts):
+        return converted_parts
     return "".join(text_parts)
 
 
@@ -434,6 +458,10 @@ def _convert_openai_responses_assistant_content(
             )
         elif part_type == "file":
             raise ValueError("openai responses assistant file parts are not supported")
+        elif part_type == "custom":
+            input_items.append(
+                _custom_provider_data(part, {"openai", "openai-responses"})
+            )
     if text_parts:
         input_items.append(
             {
@@ -478,6 +506,8 @@ def _convert_google_assistant_content(content: object) -> list[dict[str, Any]]:
                     }
                 }
             )
+        elif part_type == "custom":
+            parts.append(_custom_provider_data(part, {"google"}))
     return parts
 
 
@@ -499,7 +529,24 @@ def _convert_anthropic_assistant_content(content: object) -> list[dict[str, Any]
             parts.append({"type": "thinking", "thinking": part_text})
         elif part_type == "file":
             raise ValueError("anthropic assistant file parts are not supported")
+        elif part_type == "custom":
+            parts.append(_custom_provider_data(part, {"anthropic"}))
     return parts
+
+
+def _custom_provider_data(
+    part: Mapping[str, Any], provider_aliases: set[str]
+) -> dict[str, Any]:
+    provider = part.get("provider")
+    if not isinstance(provider, str) or provider not in provider_aliases:
+        aliases = ", ".join(sorted(provider_aliases))
+        raise ValueError(
+            f"custom content part provider must be one of {aliases}; got {provider!r}"
+        )
+    data = part.get("data")
+    if not isinstance(data, Mapping):
+        raise ValueError("custom content part data must be an object")
+    return dict(data)
 
 
 def _google_file_part(data: object, media_type: str) -> dict[str, Any]:
@@ -559,7 +606,10 @@ def _apply_google_options(payload: dict[str, Any], options: Mapping[str, Any]) -
         "audioTimestamp",
         "imageConfig",
         "mediaResolution",
+        "responseMimeType",
         "responseModalities",
+        "responseSchema",
+        "speechConfig",
         "thinkingConfig",
     }
     generation_config = payload.setdefault("generationConfig", {})
@@ -567,7 +617,14 @@ def _apply_google_options(payload: dict[str, Any], options: Mapping[str, Any]) -
         for key in generation_keys:
             if key in options:
                 generation_config[key] = options[key]
-    for key in ("cachedContent", "labels", "safetySettings", "serviceTier"):
+    for key in (
+        "cachedContent",
+        "labels",
+        "retrievalConfig",
+        "safetySettings",
+        "serviceTier",
+        "systemInstruction",
+    ):
         if key in options:
             payload[key] = options[key]
 
@@ -580,7 +637,7 @@ def _apply_anthropic_options(
         "contextManagement",
         "metadata",
         "mcpServers",
-        "service_tier",
+        "serviceTier",
         "taskBudget",
         "thinking",
     ):

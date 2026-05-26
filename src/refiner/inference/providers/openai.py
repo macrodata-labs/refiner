@@ -11,10 +11,14 @@ from refiner.inference._schema import StructuredOutputSchema
 from refiner.inference.types import Message, ProviderOptions
 
 CHAT_PROVIDER_OPTIONS = {
+    "audio",
+    "background",
     "logitBias",
     "logprobs",
+    "modalities",
     "parallelToolCalls",
     "user",
+    "responseFormat",
     "reasoningEffort",
     "maxCompletionTokens",
     "store",
@@ -26,6 +30,9 @@ CHAT_PROVIDER_OPTIONS = {
     "promptCacheKey",
     "promptCacheRetention",
     "safetyIdentifier",
+    "text",
+    "topLogprobs",
+    "webSearchOptions",
 }
 
 RESPONSES_PROVIDER_OPTIONS = {
@@ -100,6 +107,7 @@ def _apply_responses_options(
     openai_options = provider_options.get("openai", {})
     passthrough = {
         "conversation",
+        "background",
         "include",
         "instructions",
         "logprobs",
@@ -115,6 +123,9 @@ def _apply_responses_options(
         "truncation",
         "user",
         "contextManagement",
+        "text",
+        "topLogprobs",
+        "webSearchOptions",
     }
     for key in passthrough:
         if key in openai_options:
@@ -141,9 +152,12 @@ def _normalize_reasoning_options(
     for key in (
         "logitBias",
         "logprobs",
+        "topLogprobs",
         "parallelToolCalls",
         "user",
         "maxCompletionTokens",
+        "modalities",
+        "audio",
         "store",
         "metadata",
         "prediction",
@@ -151,6 +165,8 @@ def _normalize_reasoning_options(
         "promptCacheKey",
         "promptCacheRetention",
         "safetyIdentifier",
+        "webSearchOptions",
+        "responseFormat",
     ):
         if key in openai_options:
             payload[key] = openai_options[key]

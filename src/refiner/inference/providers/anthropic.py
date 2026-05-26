@@ -17,6 +17,7 @@ PROVIDER_OPTIONS = {
     "metadata",
     "mcpServers",
     "container",
+    "serviceTier",
     "toolStreaming",
     "effort",
     "taskBudget",

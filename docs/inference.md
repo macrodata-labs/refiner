@@ -85,16 +85,23 @@ async def summarize(row, generate_text):
     return {"summary": response.text}
 ```
 
-`InferenceResponse.text` contains the concatenated text output. For providers
-that return reasoning, `InferenceResponse.content` includes normalized
-`{"type": "reasoning", "text": ...}` and `{"type": "text", "text": ...}` parts.
-`InferenceResponse.headers` contains normalized response headers from the
-provider, such as request IDs, retry headers, and rate-limit metadata when the
-provider sends them.
+`InferenceResponse.text` contains the concatenated text output.
+`InferenceResponse.content` contains normalized rich parts:
+`{"type": "text", "text": ...}`, `{"type": "reasoning", "text": ...}`,
+`{"type": "source", ...}`, `{"type": "image", ...}`, and
+`{"type": "file", ...}` when the provider returns citations, generated media, or
+files. `InferenceResponse.logprobs` contains provider logprob payloads when
+requested and returned. `InferenceResponse.provider_metadata` contains stable
+provider metadata such as response IDs, model IDs, selected candidate metadata,
+and safety/finish details. `InferenceResponse.headers` contains normalized
+response headers from the provider, such as request IDs, retry headers, and
+rate-limit metadata when the provider sends them.
 `InferenceResponse.warnings` contains structured warnings for requests that can
 still be sent but include options Refiner does not map for the selected
-provider, such as unrelated provider option namespaces or unsupported
-provider-specific settings.
+provider, such as unrelated provider option namespaces, unsupported
+provider-specific settings, content that the selected model is not known to
+support, large inline media, or tool options passed to `generate_text` before
+tool calling is implemented.
 
 ```python
 async def summarize(row, generate_text):
@@ -238,6 +245,32 @@ async def analyze(row, generate_text):
                 ],
             }
         },
+    )
+    return {"summary": response.text}
+```
+
+Use a `custom` part as a provider-specific escape hatch when a provider exposes
+a content block that Refiner does not normalize yet. The `provider` value must
+match the selected adapter (`"openai"`, `"openai-responses"`, `"openai-chat"`,
+`"google"`, or `"anthropic"`), and `data` is inserted into that provider's
+request content as-is.
+
+```python
+async def analyze(row, generate_text):
+    response = await generate_text(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Use this provider-native input."},
+                    {
+                        "type": "custom",
+                        "provider": "openai-responses",
+                        "data": {"type": "input_image", "image_url": "file_abc"},
+                    },
+                ],
+            }
+        ]
     )
     return {"summary": response.text}
 ```

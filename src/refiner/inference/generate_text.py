@@ -7,6 +7,7 @@ from typing import Any, Protocol, cast
 
 from pydantic import BaseModel
 
+from refiner.inference.capabilities import capability_warnings
 from refiner.inference.providers import anthropic as anthropic_provider
 from refiner.inference.providers import google as google_provider
 from refiner.inference.providers import openai as openai_provider
@@ -94,6 +95,20 @@ def generate_text(
             payload = {**dict(default_generation_params or {}), **params}
             retry_override = maxRetries if maxRetries is not None else max_retries
             warnings = _provider_warnings(provider, providerOptions)
+            request_messages: Sequence[Message]
+            if messages is not None:
+                request_messages = list(messages)
+            else:
+                request_messages = [{"role": "user", "content": prompt or ""}]
+            warnings.extend(
+                capability_warnings(
+                    provider=provider,
+                    messages=request_messages,
+                    params=payload,
+                    provider_options=providerOptions,
+                    has_schema=schema_info is not None,
+                )
+            )
             if messages is not None:
                 if isinstance(provider, GoogleEndpointProvider):
                     payload = google_provider.build_payload(

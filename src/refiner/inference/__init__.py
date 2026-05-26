@@ -1,6 +1,7 @@
 from refiner.inference.generate import generate
 from refiner.inference.generate_text import generate_text
 from refiner.inference.client import InferenceResponse
+from refiner.inference.capabilities import ModelCapabilities, model_capabilities
 from refiner.inference._schema import InferenceSchemaValidationError
 from refiner.inference._transport import InferenceAPICallError, InferenceRetryError
 from refiner.inference.providers import (
@@ -12,11 +13,16 @@ from refiner.inference.providers import (
 )
 from refiner.inference.types import (
     AssistantMessage,
+    CustomPart,
     DataContent,
     FilePart,
+    GeneratedFileContentPart,
+    GeneratedImageContentPart,
     ImagePart,
     Message,
     ProviderOptions,
+    ResponseContentPart,
+    SourceContentPart,
     SystemMessage,
     TextPart,
     UserContent,
@@ -35,18 +41,25 @@ __all__ = [
     "InferenceAPICallError",
     "InferenceRetryError",
     "InferenceSchemaValidationError",
+    "ModelCapabilities",
+    "model_capabilities",
     "AnthropicEndpointProvider",
     "GoogleEndpointProvider",
     "OpenAIEndpointProvider",
     "OpenAIResponsesProvider",
     "VLLMProvider",
     "AssistantMessage",
+    "CustomPart",
     "DataContent",
     "FilePart",
+    "GeneratedFileContentPart",
+    "GeneratedImageContentPart",
     "ImagePart",
     "InferenceWarning",
     "Message",
     "ProviderOptions",
+    "ResponseContentPart",
+    "SourceContentPart",
     "SystemMessage",
     "TextPart",
     "UserContent",

@@ -32,6 +32,12 @@ class FilePart(_ProviderOptionsPart):
     mediaType: str
 
 
+class CustomPart(_ProviderOptionsPart):
+    type: Literal["custom"]
+    provider: str
+    data: Mapping[str, Any]
+
+
 class TextContentPart(TypedDict):
     type: Literal["text"]
     text: str
@@ -40,6 +46,32 @@ class TextContentPart(TypedDict):
 class ReasoningContentPart(TypedDict):
     type: Literal["reasoning"]
     text: str
+
+
+class SourceContentPart(TypedDict, total=False):
+    type: Literal["source"]
+    sourceType: Literal["url", "file", "document", "unknown"]
+    id: str
+    url: str
+    title: str
+    providerMetadata: Mapping[str, Any]
+
+
+class GeneratedFileContentPart(TypedDict, total=False):
+    type: Literal["file"]
+    mediaType: str
+    data: str
+    url: str
+    filename: str
+    providerMetadata: Mapping[str, Any]
+
+
+class GeneratedImageContentPart(TypedDict, total=False):
+    type: Literal["image"]
+    mediaType: str
+    data: str
+    url: str
+    providerMetadata: Mapping[str, Any]
 
 
 class InferenceWarning(TypedDict, total=False):
@@ -54,10 +86,19 @@ class InferenceWarning(TypedDict, total=False):
     details: str
 
 
-ResponseContentPart: TypeAlias = TextContentPart | ReasoningContentPart
-UserContent: TypeAlias = str | Sequence[TextPart | ImagePart | FilePart]
+ProviderMetadata: TypeAlias = Mapping[str, Mapping[str, Any]]
+ResponseContentPart: TypeAlias = (
+    TextContentPart
+    | ReasoningContentPart
+    | SourceContentPart
+    | GeneratedFileContentPart
+    | GeneratedImageContentPart
+)
+UserContent: TypeAlias = str | Sequence[TextPart | ImagePart | FilePart | CustomPart]
 ReasoningPart = ReasoningContentPart
-AssistantContent: TypeAlias = str | Sequence[TextPart | FilePart | ReasoningPart]
+AssistantContent: TypeAlias = (
+    str | Sequence[TextPart | FilePart | ReasoningPart | CustomPart]
+)
 
 
 class SystemMessage(TypedDict):
@@ -79,11 +120,32 @@ Message: TypeAlias = SystemMessage | UserMessage | AssistantMessage
 
 
 class OpenAIProviderOptions(TypedDict, total=False):
+    audio: Mapping[str, Any]
+    background: bool
+    conversation: str | None
+    include: (
+        Sequence[
+            Literal[
+                "reasoning.encrypted_content",
+                "file_search_call.results",
+                "message.output_text.logprobs",
+            ]
+        ]
+        | None
+    )
     imageDetail: Literal["auto", "low", "high"]
+    instructions: str | None
     logitBias: Mapping[int | str, int | float]
     logprobs: bool | int
+    maxToolCalls: int | None
+    modalities: Sequence[Literal["text", "audio"]]
     parallelToolCalls: bool
+    previousResponseId: str | None
+    responseFormat: Mapping[str, Any]
+    text: Mapping[str, Any]
+    topLogprobs: int
     user: str
+    webSearchOptions: Mapping[str, Any]
     reasoningEffort: Literal["none", "minimal", "low", "medium", "high", "xhigh"]
     maxCompletionTokens: int | float
     store: bool
@@ -98,20 +160,6 @@ class OpenAIProviderOptions(TypedDict, total=False):
     safetyIdentifier: str
     systemMessageMode: Literal["system", "developer", "remove"]
     forceReasoning: bool
-    conversation: str | None
-    include: (
-        Sequence[
-            Literal[
-                "reasoning.encrypted_content",
-                "file_search_call.results",
-                "message.output_text.logprobs",
-            ]
-        ]
-        | None
-    )
-    instructions: str | None
-    maxToolCalls: int | None
-    previousResponseId: str | None
     passThroughUnsupportedFiles: bool
     truncation: Literal["auto", "disabled"] | None
     contextManagement: Sequence[Mapping[str, Any]] | None
@@ -149,7 +197,10 @@ class GoogleImageConfig(TypedDict, total=False):
 
 
 class GoogleProviderOptions(TypedDict, total=False):
+    apiClient: str
     responseModalities: Sequence[Literal["TEXT", "IMAGE"]]
+    responseMimeType: str
+    responseSchema: Mapping[str, Any]
     thinkingConfig: GoogleThinkingConfig
     cachedContent: str
     structuredOutputs: bool
@@ -172,6 +223,8 @@ class GoogleProviderOptions(TypedDict, total=False):
     ]
     imageConfig: GoogleImageConfig
     retrievalConfig: Mapping[str, Any]
+    speechConfig: Mapping[str, Any]
+    systemInstruction: Mapping[str, Any]
     streamFunctionCallArguments: bool
     serviceTier: Literal["standard", "flex", "priority"]
     sharedRequestType: Literal["priority", "flex", "standard"]
@@ -198,6 +251,7 @@ class AnthropicProviderOptions(TypedDict, total=False):
     metadata: Mapping[str, Any]
     mcpServers: Sequence[Mapping[str, Any]]
     container: Mapping[str, Any]
+    serviceTier: Literal["auto", "standard_only"]
     toolStreaming: bool
     effort: Literal["low", "medium", "high", "xhigh", "max"]
     taskBudget: Mapping[str, Any]
@@ -226,7 +280,10 @@ __all__ = [
     "AssistantMessage",
     "AssistantContent",
     "DataContent",
+    "CustomPart",
     "FilePart",
+    "GeneratedFileContentPart",
+    "GeneratedImageContentPart",
     "GoogleImageConfig",
     "GoogleProviderOptions",
     "GoogleSafetySetting",
@@ -235,9 +292,11 @@ __all__ = [
     "InferenceWarning",
     "Message",
     "OpenAIProviderOptions",
+    "ProviderMetadata",
     "ProviderOptions",
     "ReasoningContentPart",
     "ResponseContentPart",
+    "SourceContentPart",
     "SystemMessage",
     "TextPart",
     "TextContentPart",
