@@ -7,10 +7,10 @@ from typing import Any, Protocol, cast
 
 from pydantic import BaseModel
 
-from refiner.inference import _provider_anthropic as anthropic_provider
-from refiner.inference import _provider_google as google_provider
-from refiner.inference import _provider_openai as openai_provider
-from refiner.inference._provider_warnings import provider_option_warnings
+from refiner.inference.providers import anthropic as anthropic_provider
+from refiner.inference.providers import google as google_provider
+from refiner.inference.providers import openai as openai_provider
+from refiner.inference.providers.warnings import provider_option_warnings
 from refiner.inference._runtime import RequestFn, inference_map
 from refiner.inference._schema import (
     normalize_schema,
