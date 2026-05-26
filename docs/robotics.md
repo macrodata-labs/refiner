@@ -29,6 +29,7 @@ writer, and robotics transforms.
   - [performance notes](#lerobot-performance-notes)
 - [motion trimming](#motion-trimming)
 - [reward scoring](#reward-scoring)
+- [task segmentation](#task-segmentation)
 - [merging datasets](#merging-datasets)
 
 ## Reading Datasets
@@ -400,6 +401,166 @@ pipeline = (
 The transform writes `reward_score` and `robometer_success` columns. Each value
 is a list aligned to the sampled frames, so `max_frames=8` produces up to eight
 scores per episode.
+
+## Task Segmentation
+
+Task segmentation turns one robot episode into a list of timestamped subtasks.
+For multimodal models that can read video directly, use
+`mdr.inference.generate_text(...)` with a video content part and a Pydantic
+schema. Refiner handles the provider request shape, retries, response parsing,
+and local schema validation.
+
+```python
+from pydantic import BaseModel
+import refiner as mdr
+
+
+class Segment(BaseModel):
+    start_sec: float
+    end_sec: float
+    subtask: str
+
+
+class Segmentation(BaseModel):
+    segments: list[Segment]
+
+
+PROMPT = """Reconstruct the sequence of manipulation events in this robot video.
+
+Return only JSON with this shape:
+{"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
+
+Rules:
+- Treat each segment as one event that changes what is true about the world.
+- Use boundaries where an object is held, released, moved, opened, closed, or
+  contents move.
+- Avoid idle time, camera motion, hesitation, and tiny hand adjustments.
+"""
+
+
+async def segment_episode(row, generate_text):
+    video = next(iter(row.videos.values())).video
+    video_bytes = await video.export_clip()
+    instruction = " ".join(row.tasks)
+
+    response = await generate_text(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"{PROMPT}\nEpisode instruction: {instruction}\n",
+                    },
+                    {
+                        "type": "file",
+                        "mediaType": "video/mp4",
+                        "data": video_bytes,
+                    },
+                ],
+            }
+        ],
+        schema=Segmentation,
+        temperature=0.1,
+        providerOptions={
+            "google": {
+                "safetySettings": [
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "threshold": "BLOCK_NONE",
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "threshold": "BLOCK_NONE",
+                    },
+                ]
+            }
+        },
+    )
+
+    segments = [
+        segment.model_dump()
+        for segment in response.object.segments
+        if segment.end_sec > segment.start_sec
+    ]
+    return row.update(
+        predicted_subtasks=segments,
+        raw_annotation_output=response.text,
+        annotation_model="gemini-flash-latest",
+    )
+
+
+pipeline = (
+    mdr.read_lerobot("hf://datasets/acme/robot_episodes")
+    .map_async(
+        mdr.inference.generate_text(
+            fn=segment_episode,
+            provider=mdr.inference.GoogleEndpointProvider(
+                model="gemini-flash-latest",
+            ),
+        ),
+        max_in_flight=16,
+        preserve_order=False,
+    )
+    .write_lerobot("hf://buckets/acme/robot_task_segments")
+)
+```
+
+For path-only or embedded-video datasets that are not LeRobot rows, pass the
+video bytes from the row directly:
+
+```python
+{
+    "type": "file",
+    "mediaType": "video/mp4",
+    "data": row["video"],
+}
+```
+
+If the model performs better with contact sheets than raw video, you can still
+avoid OpenCV. Refiner's video extra already uses PyAV, so contact sheets can be
+built from `VideoFile.iter_frames()` and encoded as JPEG with PyAV. The
+recommended prompt shape is to send the JPEG sheets as image parts and include a
+text manifest that maps tile positions to timestamps, instead of drawing
+timestamps into the pixels.
+
+```python
+import io
+import numpy as np
+import av
+
+
+def encode_jpeg(rgb: np.ndarray) -> bytes:
+    output = io.BytesIO()
+    frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+    with av.open(output, mode="w", format="mjpeg") as container:
+        stream = container.add_stream("mjpeg", rate=1)
+        stream.width = frame.width
+        stream.height = frame.height
+        stream.pix_fmt = "yuvj420p"
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        for packet in stream.encode(None):
+            container.mux(packet)
+    return output.getvalue()
+
+
+async def sample_rgb_frames(video, every_sec: float) -> list[tuple[float, np.ndarray]]:
+    sampled = []
+    next_time = 0.0
+    async for frame in video.iter_frames():
+        timestamp = frame.timestamp_s
+        if timestamp is None or timestamp + 1e-6 < next_time:
+            continue
+        sampled.append((timestamp, frame.frame.to_ndarray(format="rgb24")))
+        next_time = timestamp + every_sec
+    return sampled
+```
+
+The contact sheet helper above only needs `macrodata-refiner[video]`; it does
+not require `opencv-python-headless`.
 
 ## Merging Datasets
 
