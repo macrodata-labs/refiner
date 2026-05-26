@@ -28,6 +28,7 @@ writer, and robotics transforms.
   - [stage-1 writes and stage-2 reduction](#stage-1-writes-and-stage-2-reduction)
   - [performance notes](#lerobot-performance-notes)
 - [motion trimming](#motion-trimming)
+- [egocentric hand tracking](#egocentric-hand-tracking)
 - [reward scoring](#reward-scoring)
 - [merging datasets](#merging-datasets)
 
@@ -414,6 +415,38 @@ import refiner as mdr
 - it trims the episode frame table directly
 - it updates video timestamps on the row itself
 - when a video span changes, the corresponding `stats/<video_key>/...` fields are dropped so the writer recomputes them later
+
+## Egocentric Hand Tracking
+
+Use `track_hands(...)` inside `batch_map(...)` if you want to enhance
+your video with vision-based hand tracking. This is especially useful when you
+want to derive actions from egocentric videos.
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.from_items(rows)
+    .to_robot_rows(video_keys={"video": "video"})
+    .batch_map(
+        mdr.robotics.track_hands(
+            video_key="video",
+            output_key="hand_tracking",
+        ),
+        batch_size=4,
+    )
+)
+```
+
+The output column contains one hand-tracking result per input row with:
+
+- `camera_trajectory` (estimated camera pose per frame)
+- `intrinsics` (camera projection parameters)
+- `hands_camera` (reconstructed hands in the camera frame)
+- `hands_world` (hands transformed with the estimated camera trajectory)
+- `relative_actions` (frame-to-frame wrist/hand motion deltas)
+- `prediction` (lower-level model output)
+- `diagnostics` (debugging metadata)
 
 ## Reward Scoring
 

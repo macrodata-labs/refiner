@@ -38,6 +38,10 @@ robotics = [
     "huggingface-hub>=1.4.1",
     "hf>=1.7.1",
 ]
+egocentric = [
+    "macrodata-refiner[robotics]",
+    "ego-vision[models]>=0.1.0",
+]
 text = [
     "warcio",
 ]
