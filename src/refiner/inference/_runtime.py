@@ -86,7 +86,10 @@ def inference_map(
             if client is not None:
                 return client
             if isinstance(provider, OpenAIEndpointProvider):
-                client = _OpenAIEndpointClient(base_url=provider.base_url)
+                client = _OpenAIEndpointClient(
+                    base_url=provider.base_url,
+                    api_key=provider.api_key,
+                )
             elif isinstance(provider, OpenAIResponsesProvider):
                 client = _OpenAIResponsesClient(
                     base_url=provider.base_url,

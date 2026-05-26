@@ -28,6 +28,8 @@ import refiner as mdr
 endpoint = mdr.inference.OpenAIEndpointProvider(
     base_url="https://api.openai.com",
     model="gpt-5-mini",
+    # Optional. If omitted, Refiner reads OPENAI_API_KEY in the worker process.
+    api_key=None,
 )
 
 async def caption(row, generate_text):
@@ -349,7 +351,10 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 )
 ```
 
-Set `OPENAI_API_KEY` in the worker environment before execution. For cloud jobs, pass it through `secrets={"OPENAI_API_KEY": None}`.
+Set `OPENAI_API_KEY` in the worker environment before execution, or pass
+`api_key` directly for local use. For cloud jobs, prefer passing the key through
+`secrets={"OPENAI_API_KEY": None}` so it is available in the worker environment
+without serializing the secret into the provider config.
 
 ### Refiner managed VLLM runtime
 

@@ -1384,6 +1384,46 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
     assert seen["headers"] == {"Authorization": "Bearer secret"}
 
 
+def test_openai_endpoint_provider_api_key_overrides_env(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    class _FakeResponse:
+        def json(self) -> Mapping[str, object]:
+            return {
+                "choices": [{"text": "ok", "finish_reason": "stop"}],
+                "usage": {},
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            del base_url, timeout
+            seen["headers"] = dict(headers)
+
+        async def post(self, path, *, json):
+            del path, json
+            return _FakeResponse()
+
+    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
+
+    async def _inference_fn(row, generate):
+        del row
+        response = await generate({"prompt": "hi"})
+        return {"output": response.text}
+
+    infer = mdr.inference.generate(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com",
+            model="gpt-test",
+            api_key="provider-secret",
+        ),
+    )
+
+    assert asyncio.run(cast(Any, infer(DictRow({})))) == {"output": "ok"}
+    assert seen["headers"] == {"Authorization": "Bearer provider-secret"}
+
+
 def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
@@ -1735,6 +1775,7 @@ def test_openai_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
     provider = OpenAIEndpointProvider(
         base_url="https://api.example.com",
         model="gpt-test",
+        api_key="secret",
     )
 
     assert provider.to_builtin_args() == {

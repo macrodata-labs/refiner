@@ -8,6 +8,7 @@ from refiner.services import VLLMServiceDefinition
 class OpenAIEndpointProvider:
     base_url: str
     model: str
+    api_key: str | None = None
 
     def __post_init__(self) -> None:
         if not self.base_url.strip():
