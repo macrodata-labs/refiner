@@ -239,6 +239,59 @@ def test_inference_generate_text_accepts_prompt(monkeypatch) -> None:
     }
 
 
+def test_inference_generate_text_returns_provider_option_warnings(
+    monkeypatch,
+) -> None:
+    async def _fake_generate(self, payload):
+        del self, payload
+        return InferenceResponse(
+            text="ok",
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(
+            prompt="hello",
+            providerOptions={
+                "google": {"thinkingConfig": {"thinkingBudget": 128}},
+                "openai": {"strictJsonSchema": True},
+            },
+        )
+        return {"warnings": list(response.warnings)}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
+    )
+
+    assert asyncio.run(cast(Any, infer(DictRow({})))) == {
+        "warnings": [
+            {
+                "type": "unsupported-provider-option",
+                "setting": "providerOptions.google",
+                "message": (
+                    "'google' provider options are not used by OpenAIEndpointProvider."
+                ),
+            },
+            {
+                "type": "unsupported-setting",
+                "setting": "providerOptions.openai.strictJsonSchema",
+                "message": (
+                    "'strictJsonSchema' is not currently mapped by "
+                    "OpenAIEndpointProvider."
+                ),
+            },
+        ]
+    }
+
+
 def test_google_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
     provider = GoogleEndpointProvider(
         model="gemini-2.5-flash",

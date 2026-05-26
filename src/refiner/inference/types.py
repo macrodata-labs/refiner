@@ -42,6 +42,18 @@ class ReasoningContentPart(TypedDict):
     text: str
 
 
+class InferenceWarning(TypedDict, total=False):
+    type: Literal[
+        "unsupported-setting",
+        "unsupported-provider-option",
+        "unsupported-content",
+        "other",
+    ]
+    message: str
+    setting: str
+    details: str
+
+
 ResponseContentPart: TypeAlias = TextContentPart | ReasoningContentPart
 UserContent: TypeAlias = str | Sequence[TextPart | ImagePart | FilePart]
 ReasoningPart = ReasoningContentPart
@@ -220,6 +232,7 @@ __all__ = [
     "GoogleSafetySetting",
     "GoogleThinkingConfig",
     "ImagePart",
+    "InferenceWarning",
     "Message",
     "OpenAIProviderOptions",
     "ProviderOptions",

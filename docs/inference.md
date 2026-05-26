@@ -89,6 +89,19 @@ that return reasoning, `InferenceResponse.content` includes normalized
 `InferenceResponse.headers` contains normalized response headers from the
 provider, such as request IDs, retry headers, and rate-limit metadata when the
 provider sends them.
+`InferenceResponse.warnings` contains structured warnings for requests that can
+still be sent but include options Refiner does not map for the selected
+provider, such as unrelated provider option namespaces or unsupported
+provider-specific settings.
+
+```python
+async def summarize(row, generate_text):
+    response = await generate_text(
+        prompt=row["text"],
+        providerOptions={"google": {"thinkingConfig": {"thinkingBudget": 128}}},
+    )
+    return {"summary": response.text, "warnings": list(response.warnings)}
+```
 
 Assistant history can be passed as either plain text or typed content parts.
 Google supports assistant text, reasoning, and in-memory file parts. Anthropic

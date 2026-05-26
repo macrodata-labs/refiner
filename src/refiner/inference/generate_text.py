@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any, Protocol, cast
 
 from refiner.inference._runtime import RequestFn, inference_map
@@ -26,7 +27,7 @@ from refiner.inference.providers import (
     OpenAIResponsesProvider,
     VLLMProvider,
 )
-from refiner.inference.types import Message, ProviderOptions
+from refiner.inference.types import InferenceWarning, Message, ProviderOptions
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 
@@ -45,6 +46,71 @@ class GenerateTextFn(Protocol):
 
 
 GenerateTextMapFn = Callable[[Row, GenerateTextFn], Awaitable[MapResult] | MapResult]
+
+_OPENAI_CHAT_PROVIDER_OPTIONS = {
+    "logitBias",
+    "logprobs",
+    "parallelToolCalls",
+    "user",
+    "reasoningEffort",
+    "maxCompletionTokens",
+    "store",
+    "metadata",
+    "prediction",
+    "serviceTier",
+    "reasoningSummary",
+    "textVerbosity",
+    "promptCacheKey",
+    "promptCacheRetention",
+    "safetyIdentifier",
+}
+
+_OPENAI_RESPONSES_PROVIDER_OPTIONS = {
+    *_OPENAI_CHAT_PROVIDER_OPTIONS,
+    "conversation",
+    "include",
+    "instructions",
+    "maxToolCalls",
+    "previousResponseId",
+    "truncation",
+    "contextManagement",
+}
+
+_GOOGLE_PROVIDER_OPTIONS = {
+    "responseModalities",
+    "thinkingConfig",
+    "cachedContent",
+    "structuredOutputs",
+    "safetySettings",
+    "threshold",
+    "audioTimestamp",
+    "labels",
+    "mediaResolution",
+    "imageConfig",
+    "retrievalConfig",
+    "streamFunctionCallArguments",
+    "serviceTier",
+    "sharedRequestType",
+    "requestType",
+}
+
+_ANTHROPIC_PROVIDER_OPTIONS = {
+    "sendReasoning",
+    "structuredOutputMode",
+    "thinking",
+    "disableParallelToolUse",
+    "cacheControl",
+    "metadata",
+    "mcpServers",
+    "container",
+    "toolStreaming",
+    "effort",
+    "taskBudget",
+    "speed",
+    "inferenceGeo",
+    "anthropicBeta",
+    "contextManagement",
+}
 
 
 def generate_text(
@@ -76,6 +142,7 @@ def generate_text(
                 raise ValueError("pass only one of maxRetries or max_retries")
             payload = {**dict(default_generation_params or {}), **params}
             retry_override = maxRetries if maxRetries is not None else max_retries
+            warnings = _provider_option_warnings(provider, providerOptions)
             if messages is not None:
                 if isinstance(provider, GoogleEndpointProvider):
                     payload = convert_to_google_payload(
@@ -131,7 +198,13 @@ def generate_text(
                 payload["providerOptions"] = providerOptions
             if retry_override is not None:
                 payload["__refiner_max_retries"] = retry_override
-            return cast(InferenceResponse, await request(payload))
+            response = cast(InferenceResponse, await request(payload))
+            if warnings:
+                return replace(
+                    response,
+                    warnings=(*response.warnings, *warnings),
+                )
+            return response
 
         result = fn(row, _generate_text)
         if inspect.isawaitable(result):
@@ -182,6 +255,72 @@ def _google_generation_config(params: Mapping[str, Any]) -> dict[str, Any]:
         if source in config and target not in config:
             config[target] = config.pop(source)
     return config
+
+
+def _provider_option_warnings(
+    provider: (
+        AnthropicEndpointProvider
+        | GoogleEndpointProvider
+        | OpenAIEndpointProvider
+        | OpenAIResponsesProvider
+        | VLLMProvider
+    ),
+    provider_options: ProviderOptions | None,
+) -> list[InferenceWarning]:
+    if not provider_options:
+        return []
+    expected_namespace = _provider_option_namespace(provider)
+    warnings: list[InferenceWarning] = []
+    for namespace in provider_options:
+        if namespace != expected_namespace:
+            warnings.append(
+                {
+                    "type": "unsupported-provider-option",
+                    "setting": f"providerOptions.{namespace}",
+                    "message": (
+                        f"{namespace!r} provider options are not used by "
+                        f"{type(provider).__name__}."
+                    ),
+                }
+            )
+    expected_options = provider_options.get(expected_namespace, {})
+    if isinstance(provider, OpenAIResponsesProvider):
+        supported = _OPENAI_RESPONSES_PROVIDER_OPTIONS
+    elif isinstance(provider, OpenAIEndpointProvider | VLLMProvider):
+        supported = _OPENAI_CHAT_PROVIDER_OPTIONS
+    elif isinstance(provider, GoogleEndpointProvider):
+        supported = _GOOGLE_PROVIDER_OPTIONS
+    else:
+        supported = _ANTHROPIC_PROVIDER_OPTIONS
+    for option in expected_options:
+        if option not in supported:
+            warnings.append(
+                {
+                    "type": "unsupported-setting",
+                    "setting": f"providerOptions.{expected_namespace}.{option}",
+                    "message": (
+                        f"{option!r} is not currently mapped by "
+                        f"{type(provider).__name__}."
+                    ),
+                }
+            )
+    return warnings
+
+
+def _provider_option_namespace(
+    provider: (
+        AnthropicEndpointProvider
+        | GoogleEndpointProvider
+        | OpenAIEndpointProvider
+        | OpenAIResponsesProvider
+        | VLLMProvider
+    ),
+) -> str:
+    if isinstance(provider, GoogleEndpointProvider):
+        return "google"
+    if isinstance(provider, AnthropicEndpointProvider):
+        return "anthropic"
+    return "openai"
 
 
 def _anthropic_params(params: Mapping[str, Any]) -> dict[str, Any]:

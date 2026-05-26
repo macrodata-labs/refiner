@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from refiner.inference._transport import post_json_to_api
-from refiner.inference.types import ResponseContentPart
+from refiner.inference.types import InferenceWarning, ResponseContentPart
 
 _OPENAI_ENDPOINT_TIMEOUT_SECONDS = 600.0
 logger = logging.getLogger(__name__)
@@ -23,6 +23,7 @@ class InferenceResponse:
     response: Mapping[str, Any]
     content: Sequence[ResponseContentPart] = ()
     headers: Mapping[str, str] = field(default_factory=dict)
+    warnings: Sequence[InferenceWarning] = ()
 
     @property
     def raw(self) -> Mapping[str, Any]:

@@ -23,6 +23,7 @@ from refiner.inference.types import (
     AnthropicFilePartProviderOptions,
     AnthropicProviderOptions,
     GoogleProviderOptions,
+    InferenceWarning,
     OpenAIProviderOptions,
 )
 
@@ -41,6 +42,7 @@ __all__ = [
     "DataContent",
     "FilePart",
     "ImagePart",
+    "InferenceWarning",
     "Message",
     "ProviderOptions",
     "SystemMessage",
