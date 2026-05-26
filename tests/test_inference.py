@@ -23,7 +23,8 @@ from refiner.pipeline.data.row import DictRow
 from refiner.worker.context import set_active_run_context
 from refiner.worker.metrics.emitter import UserMetricsEmitter
 
-from refiner.inference import client as openai_module
+from refiner.inference import client as client_module
+from refiner.inference import _response as response_module
 
 generate_module = importlib.import_module("refiner.inference.generate")
 runtime_module = importlib.import_module("refiner.inference._runtime")
@@ -90,7 +91,7 @@ def test_inference_generate_invokes_user_fn_and_merges_default_params(
             response={"choices": []},
         )
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate):
         response = await generate({"prompt": row["prompt"]})
@@ -134,7 +135,7 @@ def test_inference_generate_text_accepts_vercel_style_multimodal_messages(
             response={"choices": []},
         )
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate_text):
         response = await generate_text(
@@ -220,7 +221,7 @@ def test_inference_generate_text_accepts_prompt(monkeypatch) -> None:
             response={"choices": []},
         )
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate_text):
         response = await generate_text(prompt=f"Summarize {row['topic']}.")
@@ -257,7 +258,7 @@ def test_inference_generate_text_returns_provider_option_warnings(
             response={"choices": []},
         )
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate_text):
         del row
@@ -313,7 +314,7 @@ def test_inference_generate_text_parses_pydantic_schema_for_openai(
             response={"choices": []},
         )
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate_text):
         del row
@@ -362,7 +363,7 @@ def test_inference_generate_text_applies_schema_for_google(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(
-        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+        client_module._GoogleEndpointClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -399,7 +400,7 @@ def test_inference_generate_text_applies_schema_for_openai_responses(
         )
 
     monkeypatch.setattr(
-        openai_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
+        client_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -440,7 +441,7 @@ def test_inference_generate_text_warns_for_anthropic_schema_fallback(
         )
 
     monkeypatch.setattr(
-        openai_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
+        client_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -484,7 +485,7 @@ def test_inference_generate_text_raises_on_schema_validation_error(
             response={"choices": []},
         )
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate_text):
         del row
@@ -529,7 +530,7 @@ def test_inference_generate_text_converts_messages_for_google(monkeypatch) -> No
         )
 
     monkeypatch.setattr(
-        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+        client_module._GoogleEndpointClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -597,7 +598,7 @@ def test_inference_generate_text_detects_google_video_media_type(monkeypatch) ->
         )
 
     monkeypatch.setattr(
-        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+        client_module._GoogleEndpointClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -663,7 +664,7 @@ def test_inference_generate_text_converts_google_assistant_multimodal_history(
         )
 
     monkeypatch.setattr(
-        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+        client_module._GoogleEndpointClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -749,10 +750,10 @@ def test_google_endpoint_client_posts_generate_content(monkeypatch) -> None:
             seen["payload"] = dict(json)
             return _FakeResponse()
 
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
 
     response = asyncio.run(
-        openai_module._GoogleEndpointClient(
+        client_module._GoogleEndpointClient(
             base_url="https://generativelanguage.googleapis.com/v1beta",
             model="gemini-2.5-flash",
             api_key="secret",
@@ -783,7 +784,7 @@ def test_inference_generate_text_applies_google_provider_options(monkeypatch) ->
         )
 
     monkeypatch.setattr(
-        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+        client_module._GoogleEndpointClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -855,7 +856,7 @@ def test_inference_generate_text_passes_max_retries_as_internal_option(
         )
 
     monkeypatch.setattr(
-        openai_module._GoogleEndpointClient, "generate_text", _fake_generate_text
+        client_module._GoogleEndpointClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -888,7 +889,7 @@ def test_inference_generate_text_converts_messages_for_openai_responses(
         )
 
     monkeypatch.setattr(
-        openai_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
+        client_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -964,7 +965,7 @@ def test_inference_generate_text_converts_openai_responses_assistant_reasoning(
         )
 
     monkeypatch.setattr(
-        openai_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
+        client_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -1021,7 +1022,7 @@ def test_inference_generate_text_detects_openai_image_media_type(monkeypatch) ->
             response={"choices": []},
         )
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate_text):
         response = await generate_text(
@@ -1085,7 +1086,7 @@ def test_inference_generate_text_converts_messages_for_anthropic(monkeypatch) ->
         )
 
     monkeypatch.setattr(
-        openai_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
+        client_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -1175,7 +1176,7 @@ def test_inference_generate_text_converts_anthropic_assistant_reasoning(
         )
 
     monkeypatch.setattr(
-        openai_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
+        client_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -1240,7 +1241,7 @@ def test_inference_generate_text_requires_prompt_or_messages() -> None:
 
 
 def test_parse_openai_chat_response_includes_reasoning_content() -> None:
-    response = openai_module._parse_inference_response(
+    response = response_module._parse_inference_response(
         {
             "choices": [
                 {
@@ -1264,7 +1265,7 @@ def test_parse_openai_chat_response_includes_reasoning_content() -> None:
 
 
 def test_parse_openai_responses_response_includes_reasoning_content() -> None:
-    response = openai_module._parse_openai_responses_response(
+    response = response_module._parse_openai_responses_response(
         {
             "output": [
                 {
@@ -1288,7 +1289,7 @@ def test_parse_openai_responses_response_includes_reasoning_content() -> None:
 
 
 def test_parse_openai_responses_response_includes_rich_parts() -> None:
-    response = openai_module._parse_openai_responses_response(
+    response = response_module._parse_openai_responses_response(
         {
             "id": "resp_123",
             "model": "gpt-5-mini",
@@ -1332,7 +1333,7 @@ def test_parse_openai_responses_response_includes_rich_parts() -> None:
 
 
 def test_parse_google_response_includes_reasoning_content() -> None:
-    response = openai_module._parse_google_inference_response(
+    response = response_module._parse_google_inference_response(
         {
             "candidates": [
                 {
@@ -1357,7 +1358,7 @@ def test_parse_google_response_includes_reasoning_content() -> None:
 
 
 def test_parse_google_response_includes_sources_and_files() -> None:
-    response = openai_module._parse_google_inference_response(
+    response = response_module._parse_google_inference_response(
         {
             "candidates": [
                 {
@@ -1397,7 +1398,7 @@ def test_parse_google_response_includes_sources_and_files() -> None:
 
 
 def test_parse_anthropic_response_includes_reasoning_content() -> None:
-    response = openai_module._parse_anthropic_inference_response(
+    response = response_module._parse_anthropic_inference_response(
         {
             "content": [
                 {"type": "thinking", "text": "think"},
@@ -1416,7 +1417,7 @@ def test_parse_anthropic_response_includes_reasoning_content() -> None:
 
 
 def test_parse_anthropic_response_includes_citation_sources() -> None:
-    response = openai_module._parse_anthropic_inference_response(
+    response = response_module._parse_anthropic_inference_response(
         {
             "content": [
                 {
@@ -1454,7 +1455,7 @@ def test_inference_generate_text_passes_custom_openai_content(monkeypatch) -> No
         )
 
     monkeypatch.setattr(
-        openai_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
+        client_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
     )
 
     async def _inference_fn(row, generate_text):
@@ -1512,7 +1513,7 @@ def test_inference_generate_text_warns_for_unsupported_image_model(
             response={"choices": [{"message": {"content": "ok"}}]},
         )
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate_text):
         response = await generate_text(
@@ -1588,7 +1589,7 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
             seen["payload"] = dict(json)
             return _FakeResponse()
 
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
 
     async def _inference_fn(row, generate):
         response = await generate({"prompt": row["prompt"]})
@@ -1631,7 +1632,7 @@ def test_openai_endpoint_provider_api_key_overrides_env(monkeypatch) -> None:
             del path, json
             return _FakeResponse()
 
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
 
     async def _inference_fn(row, generate):
@@ -1681,10 +1682,10 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
             seen["payload"] = dict(json)
             return _FakeResponse()
 
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
 
     response = asyncio.run(
-        openai_module._OpenAIEndpointClient(
+        client_module._OpenAIEndpointClient(
             base_url="https://openrouter.ai/api/v1",
         ).generate(
             {
@@ -1737,11 +1738,11 @@ def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
         seen["sleeps"] += 1
         assert delay in (2.0, 4.0)
 
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
-        openai_module._OpenAIEndpointClient(
+        client_module._OpenAIEndpointClient(
             base_url="https://api.example.com",
         ).generate(
             {
@@ -1788,11 +1789,11 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
         seen["sleeps"] += 1
         assert delay == 2.0
 
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
-        openai_module._OpenAIEndpointClient(
+        client_module._OpenAIEndpointClient(
             base_url="https://api.example.com",
         ).generate(
             {
@@ -1820,7 +1821,7 @@ def test_openai_endpoint_warns_on_null_chat_content(caplog) -> None:
         ],
         "usage": {"completion_tokens": 64},
     }
-    response = openai_module._parse_inference_response(
+    response = response_module._parse_inference_response(
         raw_response,
         use_chat=True,
     )
@@ -1875,11 +1876,11 @@ def test_openai_endpoint_retries_on_http_503(monkeypatch) -> None:
         assert delay == 2.0
         seen["sleeps"] += 1
 
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
-        openai_module._OpenAIEndpointClient(
+        client_module._OpenAIEndpointClient(
             base_url="https://api.example.com",
         ).generate(
             {
@@ -1932,11 +1933,11 @@ def test_openai_endpoint_respects_retry_after_ms(monkeypatch) -> None:
     async def _fake_sleep(delay: float) -> None:
         cast(list[float], seen["sleeps"]).append(delay)
 
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
-        openai_module._OpenAIEndpointClient(
+        client_module._OpenAIEndpointClient(
             base_url="https://api.example.com",
         ).generate(
             {
@@ -1975,7 +1976,7 @@ def test_openai_endpoint_can_disable_retries(monkeypatch) -> None:
         del delay
         seen["sleeps"] += 1
 
-    monkeypatch.setattr(openai_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     with pytest.raises(
@@ -1983,7 +1984,7 @@ def test_openai_endpoint_can_disable_retries(monkeypatch) -> None:
         match="generation request failed with HTTP 503: Service unavailable",
     ) as err:
         asyncio.run(
-            openai_module._OpenAIEndpointClient(
+            client_module._OpenAIEndpointClient(
                 base_url="https://api.example.com",
             ).generate(
                 {
@@ -2034,7 +2035,7 @@ def test_vllm_provider_includes_model_in_requests(monkeypatch) -> None:
                 api_key="service-secret",
             )
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
     monkeypatch.setattr(
         runtime_module, "get_active_service_manager", lambda: _FakeServiceManager()
     )
@@ -2108,7 +2109,7 @@ def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
             del stage_index
             return []
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate):
         response = await generate({"prompt": row["prompt"]})
@@ -2181,7 +2182,7 @@ def test_inference_generate_reports_failed_requests(monkeypatch) -> None:
             del stage_index
             return []
 
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate):
         response = await generate({"prompt": row["prompt"]})

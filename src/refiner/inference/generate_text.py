@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypeAlias, cast
 
 from pydantic import BaseModel
 
@@ -14,6 +14,7 @@ from refiner.inference.providers import openai as openai_provider
 from refiner.inference.providers.warnings import provider_option_warnings
 from refiner.inference._runtime import RequestFn, inference_map
 from refiner.inference._schema import (
+    StructuredOutputSchema,
     normalize_schema,
     validate_structured_output,
 )
@@ -36,6 +37,14 @@ from refiner.inference.types import InferenceWarning, Message, ProviderOptions
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 
+_InferenceProvider: TypeAlias = (
+    AnthropicEndpointProvider
+    | GoogleEndpointProvider
+    | OpenAIEndpointProvider
+    | OpenAIResponsesProvider
+    | VLLMProvider
+)
+
 
 class GenerateTextFn(Protocol):
     def __call__(
@@ -57,13 +66,7 @@ GenerateTextMapFn = Callable[[Row, GenerateTextFn], Awaitable[MapResult] | MapRe
 def generate_text(
     *,
     fn: GenerateTextMapFn,
-    provider: (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    ),
+    provider: _InferenceProvider,
     default_generation_params: Mapping[str, Any] | None = None,
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Awaitable[MapResult]]:
@@ -80,93 +83,36 @@ def generate_text(
         ) -> InferenceResponse:
             if (messages is None) == (prompt is None):
                 raise ValueError("pass exactly one of messages or prompt")
+            provider_options = providerOptions
+            max_retries = maxRetries
+            schema_strict = schemaStrict
             schema_info = normalize_schema(
                 schema,
-                strict=schemaStrict,
+                strict=schema_strict,
             )
             payload = {**dict(default_generation_params or {}), **params}
-            warnings = _provider_warnings(provider, providerOptions)
-            request_messages: Sequence[Message]
-            if messages is not None:
-                request_messages = list(messages)
-            else:
-                request_messages = [{"role": "user", "content": prompt or ""}]
+            warnings = _provider_warnings(provider, provider_options)
             warnings.extend(
                 capability_warnings(
                     provider=provider,
-                    messages=request_messages,
+                    messages=_messages_or_prompt(messages, prompt),
                     params=payload,
-                    provider_options=providerOptions,
+                    provider_options=provider_options,
                     has_schema=schema_info is not None,
                 )
             )
-            if messages is not None:
-                if isinstance(provider, GoogleEndpointProvider):
-                    payload = google_provider.build_payload(
-                        messages=list(messages),
-                        params=payload,
-                        provider_options=providerOptions,
-                        schema=schema_info,
-                    )
-                elif isinstance(provider, AnthropicEndpointProvider):
-                    warnings.extend(anthropic_provider.schema_warnings(schema_info))
-                    payload = anthropic_provider.build_payload(
-                        messages=list(messages),
-                        params=payload,
-                        provider_options=providerOptions,
-                        schema=schema_info,
-                    )
-                elif isinstance(provider, OpenAIResponsesProvider):
-                    payload = openai_provider.build_responses_payload(
-                        messages=messages,
-                        prompt=None,
-                        params=payload,
-                        provider_options=providerOptions,
-                        schema=schema_info,
-                    )
-                else:
-                    payload = openai_provider.build_chat_payload(
-                        messages=messages,
-                        prompt=None,
-                        params=payload,
-                        provider_options=providerOptions,
-                        schema=schema_info,
-                    )
-            else:
-                user_message: Message = {"role": "user", "content": prompt or ""}
-                if isinstance(provider, GoogleEndpointProvider):
-                    payload = google_provider.build_payload(
-                        messages=[user_message],
-                        params=payload,
-                        provider_options=providerOptions,
-                        schema=schema_info,
-                    )
-                elif isinstance(provider, AnthropicEndpointProvider):
-                    warnings.extend(anthropic_provider.schema_warnings(schema_info))
-                    payload = anthropic_provider.build_payload(
-                        messages=[user_message],
-                        params=payload,
-                        provider_options=providerOptions,
-                        schema=schema_info,
-                    )
-                elif isinstance(provider, OpenAIResponsesProvider):
-                    payload = openai_provider.build_responses_payload(
-                        messages=None,
-                        prompt=prompt,
-                        params=payload,
-                        provider_options=providerOptions,
-                        schema=schema_info,
-                    )
-                else:
-                    payload = openai_provider.build_chat_payload(
-                        messages=None,
-                        prompt=prompt,
-                        params=payload,
-                        provider_options=providerOptions,
-                        schema=schema_info,
-                    )
-            if maxRetries is not None:
-                payload["__refiner_max_retries"] = maxRetries
+            if isinstance(provider, AnthropicEndpointProvider):
+                warnings.extend(anthropic_provider.schema_warnings(schema_info))
+            payload = _build_payload(
+                provider=provider,
+                messages=messages,
+                prompt=prompt,
+                params=payload,
+                provider_options=provider_options,
+                schema=schema_info,
+            )
+            if max_retries is not None:
+                payload["__refiner_max_retries"] = max_retries
             response = cast(InferenceResponse, await request(payload))
             parsed_object = validate_structured_output(response.text, schema_info)
             if parsed_object is not None:
@@ -213,14 +159,57 @@ async def _generate(
     return await client.generate(payload)
 
 
+def _build_payload(
+    *,
+    provider: _InferenceProvider,
+    messages: Sequence[Message] | None,
+    prompt: str | None,
+    params: Mapping[str, Any],
+    provider_options: ProviderOptions | None,
+    schema: StructuredOutputSchema | None,
+) -> dict[str, Any]:
+    if isinstance(provider, GoogleEndpointProvider):
+        return google_provider.build_payload(
+            messages=_messages_or_prompt(messages, prompt),
+            params=params,
+            provider_options=provider_options,
+            schema=schema,
+        )
+    if isinstance(provider, AnthropicEndpointProvider):
+        return anthropic_provider.build_payload(
+            messages=_messages_or_prompt(messages, prompt),
+            params=params,
+            provider_options=provider_options,
+            schema=schema,
+        )
+    if isinstance(provider, OpenAIResponsesProvider):
+        return openai_provider.build_responses_payload(
+            messages=messages,
+            prompt=prompt,
+            params=params,
+            provider_options=provider_options,
+            schema=schema,
+        )
+    return openai_provider.build_chat_payload(
+        messages=messages,
+        prompt=prompt,
+        params=params,
+        provider_options=provider_options,
+        schema=schema,
+    )
+
+
+def _messages_or_prompt(
+    messages: Sequence[Message] | None,
+    prompt: str | None,
+) -> list[Message]:
+    if messages is not None:
+        return list(messages)
+    return [{"role": "user", "content": prompt or ""}]
+
+
 def _provider_warnings(
-    provider: (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    ),
+    provider: _InferenceProvider,
     provider_options: ProviderOptions | None,
 ) -> list[InferenceWarning]:
     if isinstance(provider, OpenAIResponsesProvider):
