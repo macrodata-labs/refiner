@@ -5,8 +5,11 @@ from types import ModuleType
 from typing import Any
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 import refiner as mdr
+from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow
 from refiner.robotics.egocentric import track_hands
 from refiner.robotics.row import _robot_row_converter
@@ -17,9 +20,8 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
     class EpisodeInput:
-        def __init__(self, *, frames, metadata):
+        def __init__(self, *, frames):
             self.frames = list(frames)
-            self.metadata = metadata
 
     class HandTrackingConfig:
         def __init__(self, *, hand_reconstruction=None):
@@ -48,7 +50,6 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
             seen["config_type"] = type(config).__name__
 
         def predict_episodes(self, episodes):
-            seen["metadata"] = [episode.metadata for episode in episodes]
             seen["frame_counts"] = [len(episode.frames) for episode in episodes]
             seen["frame_shapes"] = [
                 episode.frames[0].to_ndarray(format="rgb24").shape
@@ -77,7 +78,6 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
 
     assert seen == {
         "config_type": "HandTrackingConfig",
-        "metadata": [{}, {}],
         "frame_counts": [2, 2],
         "frame_shapes": [(4, 5, 3), (4, 5, 3)],
     }
@@ -94,3 +94,97 @@ def test_track_hands_is_available_from_robotics_namespace() -> None:
     )
 
     assert pipeline.pipeline_steps[-1].op_name == "batch_map"
+
+
+def test_track_hands_runs_from_parquet_robotics_rows(tmp_path, monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    class EpisodeInput:
+        def __init__(self, *, frames):
+            self.frames = list(frames)
+
+    class HandTrackingConfig:
+        def __init__(self, *, hand_reconstruction=None):
+            self.hand_reconstruction = hand_reconstruction
+
+    class HaworReconstructionConfig:
+        pass
+
+    class Result:
+        def __init__(self, frame_count: int):
+            self.frame_count = frame_count
+
+        def to_dict(self) -> dict[str, Any]:
+            return {
+                "hands_world": {
+                    "right": {
+                        "confidence": [1.0] * self.frame_count,
+                        "joints_world": [
+                            [[float(index), 0.0, 0.0]]
+                            for index in range(self.frame_count)
+                        ],
+                    },
+                },
+            }
+
+    class HandTrackingPipeline:
+        def __init__(self, config):
+            seen["config_type"] = type(config).__name__
+
+        def predict_episodes(self, episodes):
+            seen["episode_count"] = len(episodes)
+            seen["frame_counts"] = [len(episode.frames) for episode in episodes]
+            seen["frame_shapes"] = [
+                episode.frames[0].to_ndarray(format="rgb24").shape
+                for episode in episodes
+            ]
+            return [Result(len(episode.frames)) for episode in episodes]
+
+    fake_egovision = ModuleType("egovision")
+    setattr(fake_egovision, "EpisodeInput", EpisodeInput)
+    setattr(fake_egovision, "HandTrackingConfig", HandTrackingConfig)
+    setattr(fake_egovision, "HandTrackingPipeline", HandTrackingPipeline)
+    setattr(fake_egovision, "HaworReconstructionConfig", HaworReconstructionConfig)
+    monkeypatch.setitem(sys.modules, "egovision", fake_egovision)
+
+    frames = np.arange(3 * 4 * 5 * 3, dtype=np.uint8).reshape(3, 4, 5, 3)
+    table = pa.Table.from_pylist(
+        [
+            {
+                "episode_id": "episode-1",
+                "camera": frames.tolist(),
+            }
+        ],
+    )
+    parquet_path = tmp_path / "episodes.parquet"
+    pq.write_table(table, parquet_path)
+
+    rows = (
+        mdr.read_parquet(
+            str(parquet_path),
+            dtypes={"camera": datatype.video_frame_array()},
+        )
+        .to_robot_rows(
+            episode_id_key="episode_id",
+            fps=12,
+            video_keys={"video": "camera"},
+        )
+        .batch_map(
+            mdr.robotics.track_hands(video_key="video"),
+            batch_size=2,
+        )
+        .materialize()
+    )
+
+    assert seen == {
+        "config_type": "HandTrackingConfig",
+        "episode_count": 1,
+        "frame_counts": [3],
+        "frame_shapes": [(4, 5, 3)],
+    }
+    assert len(rows) == 1
+    assert rows[0]["hand_tracking"]["hands_world"]["right"]["confidence"] == [
+        1.0,
+        1.0,
+        1.0,
+    ]
