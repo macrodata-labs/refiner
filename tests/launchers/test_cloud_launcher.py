@@ -267,7 +267,7 @@ def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:
     )
 
     pipeline = read_jsonl("input.jsonl").map_async(
-        mdr.inference.generate(
+        mdr.inference.generate_text(
             fn=_noop_inference,
             provider=mdr.inference.VLLMProvider(model="Qwen/Qwen3.5-9B"),
         )

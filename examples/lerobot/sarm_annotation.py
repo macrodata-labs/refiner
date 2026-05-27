@@ -78,14 +78,15 @@ def _video_data_url(video_bytes: bytes) -> str:
     return f"data:video/mp4;base64,{encoded}"
 
 
-async def annotate_dense_subtasks(row, generate):
+async def annotate_dense_subtasks(row, generate_text):
     if VIDEO_KEY not in row.videos:
         raise ValueError(
             f"episode {row.episode_index} is missing required video key {VIDEO_KEY!r}"
         )
 
     video = row.videos[VIDEO_KEY].video
-    clip_bytes = await video.export_clip(
+    clip_bytes = await mdr.video.export_clip(
+        video,
         force_transcode=True,
         transcode_config=VLM_TRANSCODE_CONFIG,
     )
@@ -102,8 +103,8 @@ async def annotate_dense_subtasks(row, generate):
         },
     ]
 
-    response = await generate(
-        {
+    response = await generate_text(
+        raw_payload={
             "messages": [
                 {
                     "role": "user",
@@ -183,7 +184,7 @@ if __name__ == "__main__":
     pipeline = (
         mdr.read_lerobot(INPUT_DATASET)
         .map_async(
-            mdr.inference.generate(
+            mdr.inference.generate_text(
                 fn=annotate_dense_subtasks,
                 provider=PROVIDER,
                 default_generation_params={"temperature": 0.1},

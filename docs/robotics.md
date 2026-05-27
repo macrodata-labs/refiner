@@ -30,6 +30,7 @@ writer, and robotics transforms.
 - [motion trimming](#motion-trimming)
 - [egocentric hand tracking](#egocentric-hand-tracking)
 - [reward scoring](#reward-scoring)
+- [subtask annotation](#subtask-annotation)
 - [merging datasets](#merging-datasets)
 
 ## Reading Datasets
@@ -473,6 +474,48 @@ pipeline = (
 The transform writes `reward_score` and `robometer_success` columns. Each value
 is a list aligned to the sampled frames, so `max_frames=8` produces up to eight
 scores per episode.
+
+## Subtask Annotation
+
+Subtask annotation predicts timestamped subtasks for each robot episode.
+
+```python
+import refiner as mdr
+
+annotate_subtasks = mdr.robotics.subtask_annotation(
+    provider=mdr.inference.GoogleEndpointProvider(
+        model="gemini-flash-latest",
+    ),
+    sample_sec=0.5,
+    frame_width=224,
+    frames_per_sheet=20,
+    columns=5,
+    min_segment_duration_sec=0.0,
+    include_contact_sheet_manifest=False,
+)
+
+pipeline = (
+    mdr.read_lerobot("hf://datasets/acme/robot_episodes")
+    .map_async(
+        annotate_subtasks,
+        max_in_flight=16,
+        preserve_order=False,
+    )
+    .write_lerobot("hf://buckets/acme/robot_subtask_annotations")
+)
+
+stats = pipeline.launch_local(
+    name="robot-subtask-annotation",
+    num_workers=8,
+)
+```
+
+Output columns:
+
+- `predicted_subtasks`: list of `{start_sec, end_sec, subtask}` objects
+
+Install `macrodata-refiner[robotics]` and set the provider API key:
+`GOOGLE_API_KEY`.
 
 ## Merging Datasets
 

@@ -8,9 +8,9 @@ PROVIDER = mdr.inference.VLLMProvider(
 )
 
 
-async def summarize(row, generate):
-    response = await generate(
-        {
+async def summarize(row, generate_text):
+    response = await generate_text(
+        raw_payload={
             "messages": [
                 {"role": "system", "content": "Summarize the input briefly."},
                 {"role": "user", "content": row["text"]},
@@ -24,7 +24,7 @@ if __name__ == "__main__":
     (
         mdr.from_items([{"text": "Hello, world!"}] * 10000)
         .map_async(
-            mdr.inference.generate(
+            mdr.inference.generate_text(
                 fn=summarize,
                 provider=PROVIDER,
                 default_generation_params={"temperature": 0.1, "max_tokens": 256},

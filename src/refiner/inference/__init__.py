@@ -1,10 +1,82 @@
-from refiner.inference.generate import generate
-from refiner.inference.client import InferenceResponse
-from refiner.inference.providers import OpenAIEndpointProvider, VLLMProvider
+from refiner.inference.generate_pooling import (
+    GeneratePoolingFn,
+    GeneratePoolingMapFn,
+    GeneratePoolingPayload,
+    generate_pooling,
+)
+from refiner.inference.generate_text import generate_text
+from refiner.inference.internal.response import InferenceResponse
+from refiner.inference.capabilities import ModelCapabilities, model_capabilities
+from refiner.inference.internal.schema import InferenceSchemaValidationError
+from refiner.inference.internal.transport import (
+    InferenceAPICallError,
+    InferenceRetryError,
+)
+from refiner.inference.providers import (
+    AnthropicEndpointProvider,
+    GoogleEndpointProvider,
+    OpenAIEndpointProvider,
+    OpenAIResponsesProvider,
+    VLLMProvider,
+)
+from refiner.inference.types import (
+    AssistantMessage,
+    CustomPart,
+    DataContent,
+    FilePart,
+    GeneratedFileContentPart,
+    GeneratedImageContentPart,
+    ImagePart,
+    Message,
+    ProviderOptions,
+    ResponseContentPart,
+    SourceContentPart,
+    SystemMessage,
+    TextPart,
+    UserContent,
+    UserMessage,
+    AnthropicFilePartProviderOptions,
+    AnthropicProviderOptions,
+    GoogleProviderOptions,
+    InferenceWarning,
+    OpenAIProviderOptions,
+)
 
 __all__ = [
-    "generate",
+    "generate_text",
+    "generate_pooling",
+    "GeneratePoolingFn",
+    "GeneratePoolingMapFn",
+    "GeneratePoolingPayload",
     "InferenceResponse",
+    "InferenceAPICallError",
+    "InferenceRetryError",
+    "InferenceSchemaValidationError",
+    "ModelCapabilities",
+    "model_capabilities",
+    "AnthropicEndpointProvider",
+    "GoogleEndpointProvider",
     "OpenAIEndpointProvider",
+    "OpenAIResponsesProvider",
     "VLLMProvider",
+    "AssistantMessage",
+    "CustomPart",
+    "DataContent",
+    "FilePart",
+    "GeneratedFileContentPart",
+    "GeneratedImageContentPart",
+    "ImagePart",
+    "InferenceWarning",
+    "Message",
+    "ProviderOptions",
+    "ResponseContentPart",
+    "SourceContentPart",
+    "SystemMessage",
+    "TextPart",
+    "UserContent",
+    "UserMessage",
+    "AnthropicFilePartProviderOptions",
+    "AnthropicProviderOptions",
+    "GoogleProviderOptions",
+    "OpenAIProviderOptions",
 ]

@@ -197,7 +197,7 @@ endpoint = mdr.inference.OpenAIEndpointProvider(
 )
 
 pipeline = pipeline.map_async(
-    mdr.inference.generate(
+    mdr.inference.generate_text(
         fn=my_inference_fn,
         provider=endpoint,
     ),

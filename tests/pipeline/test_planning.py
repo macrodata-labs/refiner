@@ -177,7 +177,7 @@ async def _noop_inference(row, generate):
 
 def test_compile_pipeline_plan_includes_runtime_services_for_builtin_steps() -> None:
     pipeline = RefinerPipeline(FakeReader()).map_async(
-        rf.inference.generate(
+        rf.inference.generate_text(
             fn=_noop_inference,
             provider=rf.inference.VLLMProvider(model="Qwen/Qwen3.5-9B"),
         )
