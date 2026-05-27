@@ -96,9 +96,6 @@ def task_segmentation(
     video_key: str | None = None,
     prompt: str = _DEFAULT_TASK_SEGMENTATION_PROMPT,
     output_column: str = "predicted_subtasks",
-    output_json_column: str = "predicted_subtasks_json",
-    raw_output_column: str = "raw_annotation_output",
-    model_column: str = "annotation_model",
     sample_sec: float = 0.5,
     frame_width: int = 224,
     frames_per_sheet: int = 20,
@@ -117,12 +114,6 @@ def task_segmentation(
 
     if not output_column.strip():
         raise ValueError("output_column must be non-empty")
-    if not output_json_column.strip():
-        raise ValueError("output_json_column must be non-empty")
-    if not raw_output_column.strip():
-        raise ValueError("raw_output_column must be non-empty")
-    if not model_column.strip():
-        raise ValueError("model_column must be non-empty")
     if min_segment_duration_sec is not None and min_segment_duration_sec < 0:
         raise ValueError("min_segment_duration_sec must be >= 0")
 
@@ -168,9 +159,6 @@ def task_segmentation(
         return row.update(
             {
                 output_column: segments,
-                output_json_column: json.dumps(segments, sort_keys=True),
-                raw_output_column: response.text,
-                model_column: getattr(provider, "model", type(provider).__name__),
             }
         )
 

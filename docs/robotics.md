@@ -513,11 +513,8 @@ stats = pipeline.launch_local(
 Output columns:
 
 - `predicted_subtasks`: list of `{start_sec, end_sec, subtask}` objects
-- `predicted_subtasks_json`: JSON string of the same subtasks
-- `annotation_model`: model name used for the run
-- `raw_annotation_output`: raw model output
 
-Install `macrodata-refiner[robotics]` and set the provider API key, for example
+Install `macrodata-refiner[robotics]` and set the provider API key:
 `GOOGLE_API_KEY`.
 
 ## Merging Datasets

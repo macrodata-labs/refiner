@@ -207,11 +207,9 @@ def test_task_segmentation_block_updates_row(tmp_path, monkeypatch) -> None:
     assert result["predicted_subtasks"] == [
         {"start_sec": 0.0, "end_sec": 4.0, "subtask": "open drawer"}
     ]
-    assert result["predicted_subtasks_json"] == (
-        '[{"end_sec": 4.0, "start_sec": 0.0, "subtask": "open drawer"}]'
-    )
-    assert result["annotation_model"] == "gemini-flash-latest"
-    assert '"subtask":"open drawer"' in result["raw_annotation_output"]
+    assert "predicted_subtasks_json" not in result
+    assert "annotation_model" not in result
+    assert "raw_annotation_output" not in result
 
 
 def test_task_segmentation_can_include_contact_sheet_manifest(
