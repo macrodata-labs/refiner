@@ -21,7 +21,7 @@ from refiner.video.transcode import (
     TranscodeWriter,
     VideoTranscodeConfig,
 )
-from refiner.video.types import VideoFile
+from refiner.video.types import VideoBytes, VideoFile, VideoFrameArray
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,9 +57,9 @@ class VideoStreamWriter:
     _next_file_index: int = field(default=0, init=False)
     _commit_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
-    async def write_video(
+    async def write_encoded_video(
         self,
-        video: VideoFile,
+        video: VideoFile | VideoBytes,
         *,
         frame_observer: FrameObserver | None = None,
         force_transcode: bool = False,
@@ -73,6 +73,17 @@ class VideoStreamWriter:
             )
         finally:
             prepared.close()
+
+    async def write_frame_array_video(
+        self,
+        video: VideoFrameArray,
+        *,
+        frame_observer: FrameObserver | None = None,
+    ) -> WrittenVideo:
+        return await self._commit_frame_arrays(
+            video,
+            frame_observer=frame_observer,
+        )
 
     def close(self) -> None:
         if self._writer is None:
@@ -104,6 +115,53 @@ class VideoStreamWriter:
                 ),
             )
 
+    async def _commit_frame_arrays(
+        self,
+        video: VideoFrameArray,
+        *,
+        frame_observer: FrameObserver | None,
+    ) -> WrittenVideo:
+        async with self._commit_lock:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                io_executor(),
+                partial(
+                    self._commit_frame_arrays_sync,
+                    video,
+                    frame_observer=frame_observer,
+                ),
+            )
+
+    def _commit_frame_arrays_sync(
+        self,
+        video: VideoFrameArray,
+        *,
+        frame_observer: FrameObserver | None,
+    ) -> WrittenVideo:
+        writer = self._ensure_transcode_writer(video.fps)
+        file_index = self._next_file_index
+        from_timestamp, to_timestamp = writer.append_frame_arrays(
+            video.iter_frame_arrays(),
+            frame_observer=frame_observer,
+        )
+        if writer.stream is None:
+            raise RuntimeError("Transcode writer did not initialize an output stream")
+        segment = WrittenVideoSegment(
+            stream_key=self.stream_key,
+            file_index=file_index,
+            output_rel=self._current_output_rel,
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+            fps=int(writer.fps),
+            width=int(writer.stream.width),
+            height=int(writer.stream.height),
+            codec=self.transcode_config.codec,
+            pix_fmt=self.transcode_config.pix_fmt,
+        )
+        if writer.size_bytes >= self.video_bytes_limit:
+            self._rotate_writer()
+        return WrittenVideo(segment=segment, mode="transcode")
+
     def _commit_sync(
         self,
         prepared: PreparedVideoSource,
@@ -111,11 +169,7 @@ class VideoStreamWriter:
         frame_observer: FrameObserver | None,
         force_transcode: bool,
     ) -> WrittenVideo:
-        if not self._should_transcode(
-            prepared,
-            frame_observer=frame_observer,
-            force_transcode=force_transcode,
-        ):
+        if not force_transcode and prepared_source_is_remuxable(prepared):
             probe = prepared.probe
             if probe is None:
                 raise RuntimeError("Remux path selected without a source probe")
@@ -140,7 +194,13 @@ class VideoStreamWriter:
                 self._rotate_writer()
             return WrittenVideo(segment=segment, mode="remux")
 
-        fps = self._transcode_fps(prepared)
+        fps = (
+            int(prepared.probe.fps)
+            if prepared.probe is not None and prepared.probe.fps is not None
+            else int(self._writer.fps)
+            if isinstance(self._writer, TranscodeWriter)
+            else None
+        )
         if fps is None:
             raise ValueError("Prepared transcode item is missing FPS")
         writer = self._ensure_transcode_writer(fps)
@@ -166,23 +226,6 @@ class VideoStreamWriter:
         if writer.size_bytes >= self.video_bytes_limit:
             self._rotate_writer()
         return WrittenVideo(segment=segment, mode="transcode")
-
-    def _should_transcode(
-        self,
-        prepared: PreparedVideoSource,
-        *,
-        frame_observer: FrameObserver | None,
-        force_transcode: bool,
-    ) -> bool:
-        _ = frame_observer
-        return force_transcode or not prepared_source_is_remuxable(prepared)
-
-    def _transcode_fps(self, prepared: PreparedVideoSource) -> int | None:
-        if prepared.probe is not None and prepared.probe.fps is not None:
-            return int(prepared.probe.fps)
-        if isinstance(self._writer, TranscodeWriter):
-            return int(self._writer.fps)
-        return None
 
     def _ensure_transcode_writer(self, fps: int) -> TranscodeWriter:
         writer = self._writer

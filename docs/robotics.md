@@ -28,6 +28,7 @@ writer, and robotics transforms.
   - [stage-1 writes and stage-2 reduction](#stage-1-writes-and-stage-2-reduction)
   - [performance notes](#lerobot-performance-notes)
 - [motion trimming](#motion-trimming)
+- [egocentric hand tracking](#egocentric-hand-tracking)
 - [reward scoring](#reward-scoring)
 - [task segmentation](#task-segmentation)
 - [merging datasets](#merging-datasets)
@@ -141,21 +142,19 @@ def keep_first_ten_frames(row):
 
 ### Videos
 
-`row.videos` is a mapping from video feature key to `LeRobotVideoRef`.
+`row.videos` is a mapping from video feature key to `VideoSource`.
 
-For each video ref, you can access:
+For LeRobot rows, each source is a clipped `VideoFile`, so you can access:
 
 - `video.uri`
 - `video.from_timestamp_s`
 - `video.to_timestamp_s`
-- `video.video`
-  - the underlying `VideoFile`
 
-You can also decode a `VideoFile` lazily through methods on the handle itself:
+All video sources expose:
 
 - `video.iter_frames()`
 - `video.iter_frame_windows(offsets=[...], stride=...)`
-- `await video.export_clip()`
+- `video.clipped(from_timestamp_s=..., to_timestamp_s=...)`
 
 Example:
 
@@ -164,8 +163,7 @@ def shift_videos_by_half_second(row):
     for key, video in row.videos.items():
         row = row.with_video(
             key,
-            from_timestamp_s=(video.from_timestamp_s or 0.0) + 0.5,
-            to_timestamp_s=(video.to_timestamp_s or 0.0) + 0.5,
+            video.clipped(from_timestamp_s=0.5),
         )
     return row
 ```
@@ -261,6 +259,45 @@ pipeline = (
 For list-valued columns like `tasks`, `col("tasks").is_in(["pick"])` means
 "does this episode contain any task in that set?"
 
+### Adapting Generic Robotics Rows
+
+Use `to_robot_rows(...)` when your data is already organized as generic
+robotics episodes or frame rows and you want the common `RoboticsRow` view:
+
+```python
+pipeline = pipeline.to_robot_rows(
+    episode_id_key="episode_id",
+    fps=30.0,
+    robot_type="aloha",
+    nested_frames_key="frames",
+    timestamp_key="time_s",
+    action_key="actions",
+    state_key="qpos",
+    extra_observation_keys={"images.main": "camera"},
+    video_keys={"images.front": "front_video"},
+)
+```
+
+By default `episode_id_key`, `fps`, and `robot_type` are unset. Pass
+`episode_id_key=` when source rows carry a stable episode id. Pass literal
+`fps=` and `robot_type=` values when they are dataset constants, or pass
+`fps_key=` and `robot_type_key=` when each source row carries those values in
+columns.
+
+For `layout="episode_rows"`, `nested_frames_key=` names the source column that
+contains nested per-frame rows. For `layout="frame_rows"`, it names the grouped
+per-episode frame table written by the adapter. When omitted in `frame_rows`
+mode, Refiner uses an internal hidden key, so unclaimed source columns stay in
+the nested frame table and do not appear as episode metadata unless listed in
+`episode_metadata_keys=`.
+
+Video fields are detected from schema asset metadata, such as
+`dtypes={"front_video": mdr.datatype.video_path()}` on readers that accept
+`dtypes`. For raw rows without asset metadata, pass `video_keys=` to declare
+which source keys are video streams. `extra_observation_keys=` and `video_keys=`
+both accept either a mapping for renames or an iterable of source keys when no
+rename is needed.
+
 ## Writing Datasets
 
 Use `write_lerobot(...)` to write a LeRobot-compatible output dataset:
@@ -268,6 +305,10 @@ Use `write_lerobot(...)` to write a LeRobot-compatible output dataset:
 ```python
 pipeline = pipeline.write_lerobot("hf://buckets/macrodata/my_robotics_output")
 ```
+
+Inputs must be `LeRobotRow` values, such as rows from `read_lerobot(...)`, or
+generic `RoboticsRow` values. For raw robotics rows, call `to_robot_rows(...)`
+before `write_lerobot(...)`.
 
 This is more than a generic file writer. The LeRobot writer handles:
 
@@ -375,6 +416,38 @@ import refiner as mdr
 - it trims the episode frame table directly
 - it updates video timestamps on the row itself
 - when a video span changes, the corresponding `stats/<video_key>/...` fields are dropped so the writer recomputes them later
+
+## Egocentric Hand Tracking
+
+Use `track_hands(...)` inside `batch_map(...)` if you want to enhance
+your video with vision-based hand tracking. This is especially useful when you
+want to derive actions from egocentric videos.
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.from_items(rows)
+    .to_robot_rows(video_keys={"video": "video"})
+    .batch_map(
+        mdr.robotics.track_hands(
+            video_key="video",
+            output_key="hand_tracking",
+        ),
+        batch_size=4,
+    )
+)
+```
+
+The output column contains one hand-tracking result per input row with:
+
+- `camera_trajectory` (estimated camera pose per frame)
+- `intrinsics` (camera projection parameters)
+- `hands_camera` (reconstructed hands in the camera frame)
+- `hands_world` (hands transformed with the estimated camera trajectory)
+- `relative_actions` (frame-to-frame wrist/hand motion deltas)
+- `prediction` (lower-level model output)
+- `diagnostics` (debugging metadata)
 
 ## Reward Scoring
 

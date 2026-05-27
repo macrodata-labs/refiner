@@ -82,6 +82,10 @@ class BaseSink(ABC):
         """
         del shard_id
 
+    def on_shard_finalized(self, shard_id: str) -> None:
+        """Run cleanup after the shard has been marked complete."""
+        del shard_id
+
     def close(self) -> None:
         """Finalize sink resources after all shard work is complete.
 

@@ -10,12 +10,17 @@ import pytest
 from typing import cast
 
 import refiner as mdr
+from refiner.io import DataFolder
+from refiner.pipeline.data.row import DictRow
 from refiner.video import VideoFile
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.robotics.lerobot_format import (
+    LeRobotInfo,
     LeRobotMetadata,
     LeRobotRow,
+    LeRobotStatsFile,
+    LeRobotTasks,
     remap_task_index_table,
 )
 
@@ -174,11 +179,40 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert int(frame_rows[0]["frame_index"]) == 0
     assert int(frame_rows[1]["frame_index"]) == 1
 
-    video = first.videos["observation.images.main"].video
+    video = first.videos["observation.images.main"]
     assert isinstance(video, VideoFile)
     assert video.uri.endswith("/videos/observation.images.main/chunk-000/file-000.mp4")
     assert video.from_timestamp_s == 0.0
     assert video.to_timestamp_s == 1.0
+
+
+def test_lerobot_row_uses_absolute_video_uri_directly() -> None:
+    uri = "hf://datasets/org/repo/videos/chunk-000/file-000.mp4"
+    row = LeRobotRow(
+        DictRow(
+            {
+                "episode_index": 0,
+                "length": 1,
+                "videos/observation.images.main/uri": uri,
+                "videos/observation.images.main/from_timestamp": 0.0,
+                "videos/observation.images.main/to_timestamp": 1.0,
+            }
+        ),
+        metadata=LeRobotMetadata(
+            info=LeRobotInfo(fps=10),
+            stats=LeRobotStatsFile({}),
+            tasks=LeRobotTasks({0: "pick"}),
+        ),
+        frames=[],
+        root=DataFolder.resolve("hf://datasets/org/repo"),
+    )
+
+    video = row.videos["observation.images.main"]
+
+    assert isinstance(video, VideoFile)
+    assert video.uri == uri
+
+    assert row.update(root=None).videos["observation.images.main"].uri == uri
 
 
 def test_lerobot_reader_exposes_episode_shard_planning_knobs(tmp_path: Path) -> None:

@@ -164,6 +164,7 @@ def test_compile_pipeline_plan_uses_builtin_calls_for_builtin_steps() -> None:
     assert steps[1]["args"] == {
         "action_key": "action",
         "state_key": "observation.state",
+        "timestamp_key": "timestamp",
         "threshold": 0.25,
         "pad_frames": 2,
     }

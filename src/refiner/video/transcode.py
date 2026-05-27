@@ -181,6 +181,28 @@ class TranscodeWriter:
 
         return from_timestamp, self.duration_s
 
+    def append_frame_arrays(
+        self,
+        frames: Any,
+        *,
+        frame_observer: FrameObserver | None = None,
+    ) -> tuple[float, float]:
+        import av
+
+        from_timestamp = self.duration_s
+        for frame_index, frame_array in enumerate(frames):
+            array = np.asarray(frame_array, dtype=np.uint8)
+            frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+            self.ensure_stream(width=frame.width, height=frame.height)
+            if frame_observer is not None:
+                frame_observer(frame_index, array)
+            self.write_frame(frame)
+
+        if self.frames_written <= 0 or self.duration_s <= from_timestamp:
+            raise ValueError("Video segment contains no frames")
+
+        return from_timestamp, self.duration_s
+
     def close(self) -> None:
         container = self.container
         if container is None:

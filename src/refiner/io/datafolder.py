@@ -40,10 +40,14 @@ class DataFolder(DirFileSystem):
             auto_mkdir: if True, when opening a file in write mode its parent directories will be automatically created
             **storage_options: will be passed to a new fsspec filesystem object, when it is created. Ignored if fs is given
         """
-        super().__init__(
-            path=path,
-            fs=fs if fs is not None else url_to_fs(path, **storage_options)[0],
-        )
+        if fs is None:
+            fs, path = url_to_fs(path, **storage_options)
+            path = "/" if path is None else path
+        else:
+            path = fs._strip_protocol(path)
+        if path == "":
+            path = "/"
+        super().__init__(path=path, fs=fs)
         self.auto_mkdir = auto_mkdir
 
     @classmethod

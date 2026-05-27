@@ -28,6 +28,7 @@ def test_datatype_constructors_produce_arrow_types_and_metadata() -> None:
     assert datatype.asset_storage(datatype.video_path()) == "path"
     assert datatype.asset_storage(datatype.video_bytes()) == "bytes"
     assert datatype.asset_storage(datatype.video_bytes_with_path()) == "bytes_with_path"
+    assert datatype.asset_storage(datatype.video_frame_array()) == "frame_array"
     assert datatype.list(datatype.uint8()) == pa.list_(pa.uint8())
     assert datatype.list(datatype.uint8(), size=3) == pa.list_(pa.uint8(), list_size=3)
     assert datatype.struct({"x": datatype.float32()}) == pa.struct(

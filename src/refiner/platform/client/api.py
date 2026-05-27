@@ -11,6 +11,11 @@ import msgspec
 
 from refiner.platform.auth import MacrodataCredentialsError, current_api_key
 from refiner.platform.client.models import (
+    CloudFileCompleteRequestItem,
+    CloudFileCompleteResponse,
+    CloudFileUploadInstruction,
+    CloudFileUploadRequestItem,
+    CloudFileUploadUrlsResponse,
     CloudRunCreateRequest,
     CloudRunCreateResponse,
     CreateJobEnvelope,
@@ -302,6 +307,70 @@ class MacrodataClient:
             path="/api/cloud/runs",
             response_type=CloudRunCreateResponse,
             json_payload=request.to_dict(),
+            timeout_s=30.0,
+        )
+
+    def cloud_create_file_upload_urls(
+        self,
+        *,
+        files: list[CloudFileUploadRequestItem],
+        object_ttl_secs: int | None = None,
+    ) -> CloudFileUploadUrlsResponse:
+        return self._request(
+            method="POST",
+            path="/api/cloud/files/upload-urls",
+            response_type=CloudFileUploadUrlsResponse,
+            json_payload={
+                "files": [file.to_dict() for file in files],
+                "object_ttl_secs": object_ttl_secs,
+            },
+            timeout_s=30.0,
+        )
+
+    def cloud_upload_file(
+        self,
+        *,
+        instruction: CloudFileUploadInstruction,
+        payload_bytes: bytes,
+        timeout_s: float = 300.0,
+    ) -> None:
+        try:
+            upload_target = instruction.upload_target()
+        except ValueError as err:
+            raise MacrodataApiError(status=0, message=str(err)) from err
+        if upload_target is None:
+            return
+        url, required_headers = upload_target
+        try:
+            response = httpx.request(
+                method="PUT",
+                url=url,
+                headers=required_headers,
+                content=payload_bytes,
+                timeout=timeout_s,
+            )
+        except httpx.RequestError as err:
+            raise MacrodataApiError(status=0, message=str(err)) from err
+        if response.status_code < 200 or response.status_code >= 300:
+            raise MacrodataApiError(
+                status=response.status_code,
+                message=f"Failed to upload cloud file: {_http_error_message(response)}",
+            )
+
+    def cloud_complete_files(
+        self,
+        *,
+        files: list[CloudFileCompleteRequestItem],
+        object_ttl_secs: int | None = None,
+    ) -> CloudFileCompleteResponse:
+        return self._request(
+            method="POST",
+            path="/api/cloud/files/complete",
+            response_type=CloudFileCompleteResponse,
+            json_payload={
+                "files": [file.to_dict() for file in files],
+                "object_ttl_secs": object_ttl_secs,
+            },
             timeout_s=30.0,
         )
 

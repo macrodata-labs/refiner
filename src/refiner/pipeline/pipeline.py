@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from fsspec import AbstractFileSystem
 
@@ -30,7 +30,7 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
-from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink
+from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink, ZarrSink
 from refiner.pipeline.sinks.assets import MissingAssetPolicy
 from refiner.pipeline.sources import (
     BaseSource,
@@ -40,9 +40,10 @@ from refiner.pipeline.sources import (
     Hdf5Reader,
     JsonReader,
     ParquetReader,
+    ZarrReader,
 )
+from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
-from refiner.pipeline.sources.readers.hdf5 import MissingPolicy, PathSelection
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
@@ -59,7 +60,10 @@ from refiner.execution.engine import (
 )
 from refiner.execution.operators.row import ShardDeltaFn
 from refiner.pipeline.sources.base import SourceUnit
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    PathSelection,
+)
 import pyarrow as pa
 
 if TYPE_CHECKING:
@@ -158,6 +162,56 @@ class RefinerPipeline:
                 dtypes=dtypes,
             )
         )
+
+    def to_robot_rows(
+        self,
+        *,
+        episode_id_key: str | None = None,
+        task_key: str | None = None,
+        fps: float | None = None,
+        fps_key: str | None = None,
+        robot_type: str | None = None,
+        robot_type_key: str | None = None,
+        nested_frames_key: str | None = None,
+        timestamp_key: str | None = "timestamp",
+        action_key: str | None = "action",
+        state_key: str | Sequence[str] | None = "observation.state",
+        extra_observation_keys: Mapping[str, str] | Iterable[str] | None = None,
+        video_keys: Mapping[str, str] | Iterable[str] | None = None,
+        stats_key: str | None = "stats",
+        stats_prefix: str = "stats/",
+    ) -> "RefinerPipeline":
+        """Expose rows through the RoboticsRow semantic view.
+
+        This does not materialize semantic properties such as ``episode_id`` or
+        ``num_frames`` as physical table columns. Vectorized operations after this
+        step still address the underlying source columns, so use the original key
+        names in expressions unless you have explicitly created new columns. Row-level
+        operations and iteration can still access the semantic properties directly:
+        ``.filter(lambda row: row.episode_id == "ep-1")`` uses the view property,
+        while ``.filter(col("episode_id") == "ep-1")`` requires a physical
+        ``episode_id`` column.
+        """
+        from refiner.robotics.row import _robot_row_converter
+
+        converter = _robot_row_converter(
+            episode_id_key=episode_id_key,
+            task_key=task_key,
+            fps=fps,
+            fps_key=fps_key,
+            robot_type=robot_type,
+            robot_type_key=robot_type_key,
+            nested_frames_key=nested_frames_key,
+            timestamp_key=timestamp_key,
+            action_key=action_key,
+            state_key=state_key,
+            extra_observation_keys=extra_observation_keys,
+            video_keys=video_keys,
+            schema=self.output_schema(),
+            stats_key=stats_key,
+            stats_prefix=stats_prefix,
+        )
+        return self.map(cast(MapFn, converter))
 
     def map_async(
         self,
@@ -374,6 +428,53 @@ class RefinerPipeline:
                 max_asset_uploads_in_flight=max_asset_uploads_in_flight,
                 missing_asset_policy=missing_asset_policy,
                 dtypes=dtypes,
+            )
+        )
+
+    def write_zarr(
+        self,
+        output: DataFolderLike,
+        *,
+        arrays: Mapping[str, str] | None = None,
+        attrs: Mapping[str, str] | None = None,
+        episode_ends_path: str | None = "meta/episode_ends",
+        store_template: str = "{shard_id}__w{worker_id}.zarr",
+        video_frame_batch_size: int = 8,
+        array_chunk_bytes: int = 8 * 1024 * 1024,
+        reduce_to_single_store: bool = True,
+    ) -> "RefinerPipeline":
+        """Write rows to Zarr array stores.
+
+        Args:
+            output: Output folder or URL prefix for the Zarr store(s).
+            arrays: Mapping from output Zarr array path to source row key. If
+                omitted for ``RoboticsRow`` inputs, writes the available default
+                robotics arrays: actions, states, and timestamps.
+            attrs: Mapping from output Zarr root attribute name to source row key.
+                Attribute values must be stable across rows in each output store.
+            episode_ends_path: Output Zarr path for cumulative row/episode end
+                offsets. Set to None to omit episode boundaries.
+            store_template: Per-shard store path template. Must include
+                ``{shard_id}`` and ``{worker_id}``.
+            video_frame_batch_size: Maximum decoded video frames to append per
+                video write batch.
+            array_chunk_bytes: Target byte size for chunks created for newly
+                written arrays and for read/write batches when reducing shard
+                stores into a single store.
+            reduce_to_single_store: If True, add a reducer stage that merges
+                shard-local stores into one Zarr group at ``output``. Defaults
+                to True.
+        """
+        return self.with_sink(
+            ZarrSink(
+                output=output,
+                arrays=arrays,
+                attrs=attrs,
+                episode_ends_path=episode_ends_path,
+                store_template=store_template,
+                video_frame_batch_size=video_frame_batch_size,
+                array_chunk_bytes=array_chunk_bytes,
+                reduce_to_single_store=reduce_to_single_store,
             )
         )
 
@@ -750,6 +851,54 @@ def read_hdf5(
             file_path_column=file_path_column,
             group_path_column=group_path_column,
             missing_policy=missing_policy,
+            dtypes=dtypes,
+        )
+    )
+
+
+def read_zarr(
+    input: DataFileSetLike,
+    *,
+    arrays: PathSelection | None = None,
+    attrs: PathSelection | None = None,
+    row_ends: str | None = None,
+    split_leading_axis: bool = False,
+    leading_axis_row_size: int = 1,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    row_batch_size: int | None = None,
+    index_column: str | None = "index",
+    file_path_column: str | None = "file_path",
+    dtypes: DTypeMapping | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline with a Zarr reader source.
+
+    The reader has three modes:
+    - group mode: one Zarr group becomes one row
+    - row_ends mode: cumulative offsets define whole-row source slices
+    - split_leading_axis mode: fixed-size leading-axis slices define output rows
+
+    Missing selected arrays or attributes raise immediately. `row_ends` and
+    `split_leading_axis` are mutually exclusive. `target_shard_bytes` and
+    `num_shards` affect shard planning, not logical row size. `row_batch_size`
+    bounds how many logical rows are loaded per array block within each shard.
+
+    Args:
+        input: Zarr group path, glob, or sequence of Zarr group paths.
+    """
+    return RefinerPipeline(
+        source=ZarrReader(
+            input,
+            arrays=arrays,
+            attrs=attrs,
+            row_ends=row_ends,
+            split_leading_axis=split_leading_axis,
+            leading_axis_row_size=leading_axis_row_size,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            row_batch_size=row_batch_size,
+            index_column=index_column,
+            file_path_column=file_path_column,
             dtypes=dtypes,
         )
     )

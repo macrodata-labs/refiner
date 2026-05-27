@@ -3,7 +3,6 @@ from refiner.video.decode import (
     DecodedVideoFrame,
     export_clip,
     iter_frame_windows,
-    iter_frames,
 )
 from refiner.video.remux import (
     PreparedVideoSource,
@@ -22,7 +21,13 @@ from refiner.video.transcode import (
     TranscodeWriter,
     VideoTranscodeConfig,
 )
-from refiner.video.types import VideoFile
+from refiner.video.types import (
+    VideoBytes,
+    VideoFile,
+    VideoFrameArray,
+    VideoSource,
+    video_from_storage_value,
+)
 from refiner.video.writer import (
     VideoStreamWriter,
     WrittenVideo,
@@ -37,6 +42,10 @@ __all__ = [
     "RemuxWriter",
     "TranscodeWriter",
     "VideoFile",
+    "VideoBytes",
+    "VideoFrameArray",
+    "VideoSource",
+    "video_from_storage_value",
     "VideoPtsAlignment",
     "VideoStreamWriter",
     "VideoTranscodeConfig",
@@ -44,7 +53,6 @@ __all__ = [
     "WrittenVideoSegment",
     "export_clip",
     "iter_frame_windows",
-    "iter_frames",
     "prepared_source_is_remuxable",
     "prepare_video_source",
     "probe_for_remux",

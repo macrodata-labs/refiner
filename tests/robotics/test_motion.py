@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from typing import cast
 
 from refiner.io import DataFolder
 from refiner.pipeline.data.row import DictRow
+from refiner.pipeline.data.tabular import Tabular
 from refiner.robotics import motion_trim
 from refiner.robotics.lerobot_format import (
     LeRobotInfo,
@@ -99,7 +101,40 @@ def test_motion_trim_returns_empty_frames_when_no_motion() -> None:
     trimmed = motion_trim(threshold=0.25, pad_frames=0)(row)
     assert isinstance(trimmed, LeRobotRow)
 
-    assert trimmed["frames"] == []
+    assert trimmed.num_frames == 0
     video = trimmed.videos["observation.images.main"]
     assert video.from_timestamp_s == pytest.approx(5.0)
     assert video.to_timestamp_s == pytest.approx(5.3)
+
+
+def test_motion_trim_accepts_custom_timestamp_key() -> None:
+    frames = [
+        _frame(frame_index=0, timestamp=0.0, action=0.0, state=0.0),
+        _frame(frame_index=1, timestamp=0.1, action=1.0, state=0.0),
+        _frame(frame_index=2, timestamp=0.2, action=1.0, state=0.0),
+    ]
+    row = _row(
+        frames=frames,
+        from_ts=2.0,
+        to_ts=2.3,
+    ).update(
+        frames=Tabular.from_rows(
+            [
+                frame.drop("timestamp").update({"time_s": frame["timestamp"]})
+                for frame in frames
+            ]
+        ),
+    )
+
+    trimmed = cast(
+        LeRobotRow,
+        motion_trim(threshold=0.25, timestamp_key="time_s")(row),
+    )
+
+    trimmed_frames = trimmed.to_frame_table()
+    assert "time_s" in trimmed_frames.table.column_names
+    assert "timestamp" not in trimmed_frames.table.column_names
+    np.testing.assert_allclose(
+        [float(frame["time_s"]) for frame in trimmed_frames],
+        [0.0, 0.1],
+    )

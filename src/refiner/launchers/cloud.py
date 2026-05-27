@@ -15,13 +15,18 @@ from refiner.cli.run.modes import (
 from refiner.cli.ui import stdin_is_interactive, stdout_is_interactive
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
+    CloudFile,
+    CloudFileCompleteRequestItem,
+    CloudFileUploadInstruction,
+    CloudFileUploadRequestItem,
+    CloudFileUploadStatus,
     CloudRunCreateRequest,
     CloudRuntimeConfig,
     MacrodataApiError,
     MacrodataClient,
     StagePayload,
-    serialize_pipeline_inline,
 )
+from refiner.platform.client.serialize import PreparedPipelinePayload
 from refiner.platform.manifest import refiner_ref_exists_on_remote
 from refiner.launchers.secrets import SecretInput, resolve_env_mapping
 from refiner.launchers.secrets import normalize_secret_sources, resolve_secret_sources
@@ -33,9 +38,11 @@ from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+    from refiner.pipeline.planning import PlannedStage
 
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
+_CLOUD_FILE_BATCH_SIZE = 100
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -173,6 +180,90 @@ class CloudLauncher(BaseLauncher):
             f"Set {_FALLBACK_ENV_VAR}=1 to allow fallback to the latest PyPI version."
         )
 
+    @staticmethod
+    def _upload_instructions_by_file(
+        instructions: list[CloudFileUploadInstruction],
+        *,
+        expected_files: set[tuple[str, int]],
+    ) -> dict[tuple[str, int], CloudFileUploadInstruction]:
+        instructions_by_file: dict[tuple[str, int], CloudFileUploadInstruction] = {}
+        for instruction in instructions:
+            file_key = (instruction.sha256, instruction.size_bytes)
+            if file_key in expected_files:
+                instructions_by_file[file_key] = instruction
+
+        missing_files = sorted(expected_files - instructions_by_file.keys())
+        if missing_files:
+            sha256, size_bytes = missing_files[0]
+            raise ValueError(
+                "Cloud file upload URL response did not return instructions "
+                f"for sha256/size_bytes: {sha256}/{size_bytes}"
+            )
+        return instructions_by_file
+
+    @staticmethod
+    def _upload_stage_payloads(
+        *,
+        client: MacrodataClient,
+        stages: list[PlannedStage],
+    ) -> dict[int, CloudFile]:
+        serialized_payloads = [
+            PreparedPipelinePayload.from_pipeline(stage.pipeline) for stage in stages
+        ]
+        serialized_by_file = {}
+        for serialized in serialized_payloads:
+            file_key = (serialized.sha256, serialized.size_bytes)
+            serialized_by_file.setdefault(file_key, serialized)
+
+        instructions_by_file: dict[tuple[str, int], CloudFileUploadInstruction] = {}
+        serialized_items = list(serialized_by_file.items())
+        for index in range(0, len(serialized_items), _CLOUD_FILE_BATCH_SIZE):
+            batch = serialized_items[index : index + _CLOUD_FILE_BATCH_SIZE]
+            upload_response = client.cloud_create_file_upload_urls(
+                files=[
+                    CloudFileUploadRequestItem(
+                        sha256=serialized.sha256,
+                        size_bytes=serialized.size_bytes,
+                    )
+                    for _, serialized in batch
+                ],
+                object_ttl_secs=None,
+            )
+            instructions_by_file.update(
+                CloudLauncher._upload_instructions_by_file(
+                    upload_response.files,
+                    expected_files={file_key for file_key, _ in batch},
+                )
+            )
+
+        completed_files: list[CloudFileCompleteRequestItem] = []
+        for file_key, instruction in instructions_by_file.items():
+            if instruction.status is CloudFileUploadStatus.EXISTS:
+                continue
+            serialized = serialized_by_file[file_key]
+            client.cloud_upload_file(
+                instruction=instruction,
+                payload_bytes=serialized.payload_bytes,
+            )
+            completed_files.append(
+                CloudFileCompleteRequestItem(file_id=instruction.file_id)
+            )
+
+        for index in range(0, len(completed_files), _CLOUD_FILE_BATCH_SIZE):
+            client.cloud_complete_files(
+                files=completed_files[index : index + _CLOUD_FILE_BATCH_SIZE],
+                object_ttl_secs=None,
+            )
+
+        return {
+            stage.index: CloudFile(
+                file_id=instructions_by_file[
+                    (serialized.sha256, serialized.size_bytes)
+                ].file_id
+            )
+            for stage, serialized in zip(stages, serialized_payloads, strict=True)
+        }
+
     def launch(self) -> CloudLaunchResult:
         try:
             client = MacrodataClient()
@@ -186,37 +277,42 @@ class CloudLauncher(BaseLauncher):
         stages = self._resolved_stages()
         manifest = self._resolve_cloud_manifest(secret_values=secret_values)
         plan = self._compiled_plan(stages, secret_values=secret_values)
-        request = CloudRunCreateRequest(
-            name=self.name,
-            plan=plan,
-            stage_payloads=[
-                StagePayload(
-                    stage_index=stage.index,
-                    pipeline_payload=serialize_pipeline_inline(stage.pipeline),
-                    runtime=CloudRuntimeConfig(
-                        num_workers=stage.compute.num_workers,
-                        cpus_per_worker=stage.compute.cpus_per_worker,
-                        mem_mb_per_worker=stage.compute.memory_mb_per_worker,
-                        gpu=stage.compute.gpu,
-                    ),
-                    runtime_services=collect_pipeline_services(stage.pipeline),
-                )
-                for stage in stages
-            ],
-            manifest=manifest,
-            sync_local_dependencies=self.sync_local_dependencies,
-            secrets=resolved_secret_sources,
-            env=resolved_env,
-            continue_from_job=self.continue_from_job,
-            unsafe_continue=self.unsafe_continue,
-        )
         try:
+            pipeline_payloads = self._upload_stage_payloads(
+                client=client, stages=stages
+            )
+            request = CloudRunCreateRequest(
+                name=self.name,
+                plan=plan,
+                stage_payloads=[
+                    StagePayload(
+                        stage_index=stage.index,
+                        pipeline_payload=pipeline_payloads[stage.index],
+                        runtime=CloudRuntimeConfig(
+                            num_workers=stage.compute.num_workers,
+                            cpus_per_worker=stage.compute.cpus_per_worker,
+                            mem_mb_per_worker=stage.compute.memory_mb_per_worker,
+                            gpu=stage.compute.gpu,
+                        ),
+                        runtime_services=collect_pipeline_services(stage.pipeline),
+                    )
+                    for stage in stages
+                ],
+                manifest=manifest,
+                sync_local_dependencies=self.sync_local_dependencies,
+                secrets=resolved_secret_sources,
+                env=resolved_env,
+                continue_from_job=self.continue_from_job,
+                unsafe_continue=self.unsafe_continue,
+            )
             resp = client.cloud_submit_job(request=request)
         except MacrodataCredentialsError as err:
             raise SystemExit(
                 "Your Macrodata API key is invalid. Run `macrodata login` "
                 "or set MACRODATA_API_KEY with a valid key."
             ) from err
+        except ValueError as err:
+            raise SystemExit(str(err)) from err
         except MacrodataApiError as err:
             raise SystemExit(err.message) from err
         tracking_url = build_job_tracking_url(

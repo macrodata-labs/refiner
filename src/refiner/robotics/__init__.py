@@ -7,6 +7,11 @@ from refiner.robotics.task_segmentation import (
     task_segmentation,
     timestamped_contact_sheets,
 )
+from refiner.robotics.egocentric import track_hands
+from refiner.robotics.row import (
+    RoboticsRow,
+)
+from refiner.robotics.tabular import RoboticsTabular
 from refiner.robotics.lerobot_format import (
     LeRobotFeatureInfo,
     LeRobotFeatureStats,
@@ -27,6 +32,9 @@ __all__ = [
     "contact_sheet_prompt_manifest",
     "task_segmentation",
     "timestamped_contact_sheets",
+    "track_hands",
+    "RoboticsRow",
+    "RoboticsTabular",
     "LeRobotRow",
     "LeRobotTabular",
     "LeRobotFeatureInfo",

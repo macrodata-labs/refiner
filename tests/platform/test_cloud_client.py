@@ -1,17 +1,27 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import cast
 
-from refiner.platform.client import MacrodataClient
+import httpx
+import msgspec
+
+from refiner.pipeline.resources import GPU
 from refiner.platform.client import (
-    CloudPipelinePayload,
+    CloudFile,
+    CloudFileCompleteRequestItem,
+    CloudFileUploadInstruction,
+    CloudFileUploadRequestItem,
+    CloudFileUploadStatus,
     CloudRunCreateRequest,
     CloudRuntimeConfig,
+    MacrodataApiError,
+    MacrodataClient,
     StagePayload,
 )
-from refiner.platform.client import MacrodataApiError
-from refiner.pipeline.resources import GPU
 from refiner.services import RuntimeServiceSpec
+
+_TEST_TIMESTAMP = datetime(2026, 5, 20, 12, 0, tzinfo=timezone.utc)
 
 
 def _request() -> CloudRunCreateRequest:
@@ -21,11 +31,8 @@ def _request() -> CloudRunCreateRequest:
         stage_payloads=[
             StagePayload(
                 stage_index=0,
-                pipeline_payload=CloudPipelinePayload(
-                    format="cloudpickle",
-                    bytes_b64="AQID",
-                    sha256="abc123",
-                    size_bytes=3,
+                pipeline_payload=CloudFile(
+                    file_id="00000000-0000-7000-8000-000000000123",
                 ),
                 runtime=CloudRuntimeConfig(
                     num_workers=2,
@@ -85,10 +92,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
         {
             "stage_index": 0,
             "pipeline_payload": {
-                "format": "cloudpickle",
-                "bytes_b64": "AQID",
-                "sha256": "abc123",
-                "size_bytes": 3,
+                "file_id": "00000000-0000-7000-8000-000000000123",
             },
             "runtime": {
                 "num_workers": 2,
@@ -155,11 +159,8 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
             stage_payloads=[
                 StagePayload(
                     stage_index=0,
-                    pipeline_payload=CloudPipelinePayload(
-                        format="cloudpickle",
-                        bytes_b64="AQID",
-                        sha256="abc123",
-                        size_bytes=3,
+                    pipeline_payload=CloudFile(
+                        file_id="00000000-0000-7000-8000-000000000123",
                     ),
                     runtime=CloudRuntimeConfig(num_workers=1),
                 )
@@ -191,11 +192,195 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
         {
             "stage_index": 0,
             "pipeline_payload": {
-                "format": "cloudpickle",
-                "bytes_b64": "AQID",
-                "sha256": "abc123",
-                "size_bytes": 3,
+                "file_id": "00000000-0000-7000-8000-000000000123",
             },
             "runtime": {"num_workers": 1},
         }
     ]
+
+
+def test_cloud_client_creates_file_upload_urls(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "files": [
+                {
+                    "file_id": "00000000-0000-7000-8000-000000000123",
+                    "sha256": "a" * 64,
+                    "size_bytes": 3,
+                    "status": "new",
+                    "url": "https://payloads.example/upload",
+                    "required_headers": {
+                        "content-length": "3",
+                        "x-amz-checksum-sha256": "checksum",
+                    },
+                    "upload_url_expires_at": "2026-05-20T12:00:00Z",
+                    "expires_at": None,
+                }
+            ]
+        }
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    response = client.cloud_create_file_upload_urls(
+        files=[
+            CloudFileUploadRequestItem(
+                sha256="a" * 64,
+                size_bytes=3,
+            )
+        ],
+        object_ttl_secs=None,
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/cloud/files/upload-urls"
+    assert captured["base_url"] == "https://example.com"
+    assert captured["timeout_s"] == 30.0
+    assert captured["json_payload"] == {
+        "files": [{"sha256": "a" * 64, "size_bytes": 3}],
+        "object_ttl_secs": None,
+    }
+    assert response.files[0].file_id == "00000000-0000-7000-8000-000000000123"
+    assert response.files[0].status is CloudFileUploadStatus.NEW
+    assert response.files[0].upload_url_expires_at == _TEST_TIMESTAMP
+    assert response.files[0].expires_at is None
+    assert response.files[0].required_headers is not None
+    assert response.files[0].required_headers["x-amz-checksum-sha256"] == "checksum"
+
+
+def test_cloud_file_upload_status_serializes_as_wire_literal() -> None:
+    assert msgspec.json.encode(CloudFileUploadStatus.NEW) == b'"new"'
+    assert msgspec.json.encode(CloudFileUploadStatus.EXISTS) == b'"exists"'
+
+
+def test_cloud_client_uploads_cloud_file_without_macrodata_auth(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        status_code = 204
+
+    def fake_httpx_request(**kwargs: object) -> FakeResponse:
+        captured.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr("refiner.platform.client.api.httpx.request", fake_httpx_request)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    client.cloud_upload_file(
+        instruction=CloudFileUploadInstruction(
+            file_id="00000000-0000-7000-8000-000000000123",
+            sha256="a" * 64,
+            size_bytes=7,
+            status=CloudFileUploadStatus.NEW,
+            url="https://payloads.example/upload",
+            required_headers={
+                "content-length": "7",
+                "x-amz-checksum-sha256": "checksum",
+            },
+            upload_url_expires_at=_TEST_TIMESTAMP,
+            expires_at=None,
+        ),
+        payload_bytes=b"payload",
+    )
+
+    assert captured["method"] == "PUT"
+    assert captured["url"] == "https://payloads.example/upload"
+    assert captured["content"] == b"payload"
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["content-length"] == "7"
+    assert headers["x-amz-checksum-sha256"] == "checksum"
+    assert "Authorization" not in headers
+    assert "User-Agent" not in headers
+
+
+def test_cloud_client_cloud_upload_file_noops_when_file_exists(monkeypatch) -> None:
+    def fake_httpx_request(**kwargs: object) -> None:
+        del kwargs
+        raise AssertionError("existing cloud files should not be uploaded")
+
+    monkeypatch.setattr("refiner.platform.client.api.httpx.request", fake_httpx_request)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    client.cloud_upload_file(
+        instruction=CloudFileUploadInstruction(
+            file_id="00000000-0000-7000-8000-000000000123",
+            sha256="a" * 64,
+            size_bytes=7,
+            status=CloudFileUploadStatus.EXISTS,
+            expires_at=None,
+        ),
+        payload_bytes=b"payload",
+    )
+
+
+def test_cloud_client_cloud_file_upload_failure_includes_provider_message(
+    monkeypatch,
+) -> None:
+    def fake_httpx_request(**kwargs: object) -> httpx.Response:
+        del kwargs
+        return httpx.Response(
+            403,
+            json={"message": "SignatureDoesNotMatch"},
+        )
+
+    monkeypatch.setattr("refiner.platform.client.api.httpx.request", fake_httpx_request)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    try:
+        client.cloud_upload_file(
+            instruction=CloudFileUploadInstruction(
+                file_id="00000000-0000-7000-8000-000000000123",
+                sha256="a" * 64,
+                size_bytes=7,
+                status=CloudFileUploadStatus.NEW,
+                url="https://payloads.example/upload",
+                required_headers={"content-length": "7"},
+            ),
+            payload_bytes=b"payload",
+        )
+    except MacrodataApiError as err:
+        assert err.status == 403
+        assert err.message == "Failed to upload cloud file: SignatureDoesNotMatch"
+    else:  # pragma: no cover
+        raise AssertionError("expected upload failure")
+
+
+def test_cloud_client_completes_cloud_files(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "files": [
+                {
+                    "file_id": "00000000-0000-7000-8000-000000000123",
+                    "sha256": "a" * 64,
+                    "size_bytes": 3,
+                    "uploaded_at": "2026-05-20T12:00:00Z",
+                    "expires_at": None,
+                }
+            ]
+        }
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    response = client.cloud_complete_files(
+        files=[
+            CloudFileCompleteRequestItem(file_id="00000000-0000-7000-8000-000000000123")
+        ],
+        object_ttl_secs=None,
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/cloud/files/complete"
+    assert captured["json_payload"] == {
+        "files": [{"file_id": "00000000-0000-7000-8000-000000000123"}],
+        "object_ttl_secs": None,
+    }
+    assert response.files[0].file_id == "00000000-0000-7000-8000-000000000123"
+    assert response.files[0].uploaded_at == _TEST_TIMESTAMP
+    assert response.files[0].expires_at is None

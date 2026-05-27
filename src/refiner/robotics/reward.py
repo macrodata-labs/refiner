@@ -191,7 +191,7 @@ async def _sample_video_frames(
 ) -> list[DecodedVideoFrame]:
     target_indexes = set(_sample_indexes(row.length, max_frames=max_frames))
     frames: list[DecodedVideoFrame] = []
-    async for frame in row.videos[video_key].video.iter_frames():
+    async for frame in row.videos[video_key].iter_frames():
         if frame.index in target_indexes:
             frames.append(frame)
         if len(frames) == len(target_indexes):

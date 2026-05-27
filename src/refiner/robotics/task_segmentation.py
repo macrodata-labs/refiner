@@ -126,7 +126,7 @@ def task_segmentation(
             raise TypeError("task_segmentation expects rows from read_lerobot(...)")
 
         selected_video_key = _resolve_video_key(row, video_key)
-        video = row.videos[selected_video_key].video
+        video = row.videos[selected_video_key]
         content = await _task_segmentation_content(
             video=video,
             prompt=_prompt_with_instruction(prompt, row.tasks),

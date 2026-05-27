@@ -4,7 +4,7 @@ import io
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from refiner.video.remux import (
     RemuxWriter,
@@ -17,10 +17,15 @@ from refiner.video.remux import (
 if TYPE_CHECKING:
     import av
 
-    from refiner.video.types import VideoFile
+    from refiner.video.types import VideoBytes, VideoFile, VideoSource
     from refiner.video.transcode import VideoTranscodeConfig
 
 _FRAME_TIMESTAMP_EPSILON_S = 1e-6
+
+
+class _NonClosingBytesIO(io.BytesIO):
+    def close(self) -> None:
+        pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,22 +45,29 @@ class DecodedFrameWindow:
     frames: tuple[DecodedVideoFrame | None, ...]
 
 
-class _NonClosingBytesIO(io.BytesIO):
-    def close(self) -> None:
-        pass
-
-
 async def export_clip(
-    video: VideoFile,
+    video: VideoSource,
     *,
     force_transcode: bool = False,
     transcode_config: VideoTranscodeConfig | None = None,
 ) -> bytes:
     from refiner.video.transcode import TranscodeWriter, VideoTranscodeConfig
+    from refiner.video.types import VideoFrameArray
 
-    config = transcode_config or VideoTranscodeConfig()
-    prepared = await prepare_video_source(video=video)
     output_file = _NonClosingBytesIO()
+    config = transcode_config or VideoTranscodeConfig()
+    if isinstance(video, VideoFrameArray):
+        writer = TranscodeWriter.open_file(
+            output_file=output_file,
+            config=config,
+            fps=video.fps,
+            movflags=None,
+        )
+        writer.append_frame_arrays(video.iter_frame_arrays())
+        writer.close()
+        return output_file.getvalue()
+    encoded_video = cast("VideoFile | VideoBytes", video)
+    prepared = await prepare_video_source(video=encoded_video)
     try:
         if not force_transcode and prepared_source_is_remuxable(prepared):
             probe = prepared.probe
@@ -90,8 +102,8 @@ async def export_clip(
         prepared.close()
 
 
-async def iter_frames(
-    video: VideoFile,
+async def iter_encoded_frames(
+    video: VideoFile | VideoBytes,
 ) -> AsyncIterator[DecodedVideoFrame]:
     prepared = await prepare_video_source(video=video)
     try:
@@ -116,7 +128,7 @@ async def iter_frames(
 
 
 async def iter_frame_windows(
-    video: VideoFile,
+    video: VideoSource,
     *,
     offsets: Sequence[int],
     stride: int = 1,
@@ -134,7 +146,7 @@ async def iter_frame_windows(
     frames_by_index: dict[int, DecodedVideoFrame] = {}
     pending_anchor_indexes: deque[int] = deque()
 
-    async for frame in iter_frames(video):
+    async for frame in video.iter_frames():
         buffer.append(frame)
         frames_by_index[frame.index] = frame
         if frame.index % stride == 0:
@@ -244,5 +256,4 @@ __all__ = [
     "DecodedVideoFrame",
     "export_clip",
     "iter_frame_windows",
-    "iter_frames",
 ]

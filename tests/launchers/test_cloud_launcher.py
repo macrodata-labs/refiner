@@ -1,21 +1,31 @@
 from __future__ import annotations
 
+import hashlib
 import pytest
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import cast
 
 import refiner as mdr
 from refiner.pipeline import read_jsonl
 from refiner.pipeline.resources import GPU
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
+from refiner.launchers.cloud import CloudLauncher
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import (
-    CloudPipelinePayload,
+    CloudFileCompleteRequestItem,
+    CloudFileUploadInstruction,
+    CloudFileUploadRequestItem,
+    CloudFileUploadStatus,
     CloudRunCreateRequest,
     MacrodataApiError,
+    MacrodataClient,
 )
+from refiner.platform.client.serialize import PreparedPipelinePayload
 from refiner.platform.manifest import _redact_captured_text
 from refiner.launchers.secrets import Secrets
+
+_TEST_TIMESTAMP = datetime(2026, 5, 20, 12, 0, tzinfo=timezone.utc)
 
 
 async def _noop_inference(row, generate):
@@ -23,21 +33,122 @@ async def _noop_inference(row, generate):
     return row
 
 
+def _prepared_payload(payload_bytes: bytes) -> PreparedPipelinePayload:
+    return PreparedPipelinePayload(
+        payload_bytes=payload_bytes,
+        sha256=hashlib.sha256(payload_bytes).hexdigest(),
+        size_bytes=len(payload_bytes),
+    )
+
+
+def _cloud_file_upload_instruction(
+    file: CloudFileUploadRequestItem,
+    *,
+    file_id: str = "00000000-0000-7000-8000-000000000001",
+    status: CloudFileUploadStatus = CloudFileUploadStatus.NEW,
+) -> CloudFileUploadInstruction:
+    if status is CloudFileUploadStatus.EXISTS:
+        return CloudFileUploadInstruction(
+            file_id=file_id,
+            sha256=file.sha256,
+            size_bytes=file.size_bytes,
+            status=status,
+            expires_at=None,
+        )
+    return CloudFileUploadInstruction(
+        file_id=file_id,
+        sha256=file.sha256,
+        size_bytes=file.size_bytes,
+        status=status,
+        url=f"https://payloads.example/{file_id}",
+        required_headers={
+            "content-length": str(file.size_bytes),
+            "x-amz-checksum-sha256": "checksum",
+        },
+        upload_url_expires_at=_TEST_TIMESTAMP,
+        expires_at=None,
+    )
+
+
 def _stub_cloud_submit(
     monkeypatch,
     *,
     manifest: dict[str, object] | Callable[..., dict[str, object]] | None = None,
     fail_on_submit: bool = False,
+    fail_on_upload_urls: bool = False,
+    fail_on_upload: bool = False,
+    fail_on_complete: bool = False,
 ) -> dict[str, object]:
-    captured: dict[str, object] = {}
+    captured: dict[str, object] = {
+        "events": [],
+        "uploads": [],
+        "upload_url_batches": [],
+        "complete_batches": [],
+    }
 
     class FakeMacrodataClient:
         def __init__(self):
             self.base_url = "https://example.com"
 
+        def cloud_create_file_upload_urls(self, *, files, object_ttl_secs=None):
+            if fail_on_upload_urls:
+                raise MacrodataApiError(
+                    status=400, message="failed to create upload URLs"
+                )
+            assert object_ttl_secs is None
+            cast(list[str], captured["events"]).append("upload-urls")
+            captured["upload_url_files"] = files
+            cast(
+                list[list[CloudFileUploadRequestItem]], captured["upload_url_batches"]
+            ).append(files)
+            offset = sum(
+                len(batch)
+                for batch in cast(
+                    list[list[CloudFileUploadRequestItem]],
+                    captured["upload_url_batches"],
+                )[:-1]
+            )
+            instructions = []
+            for index, file in enumerate(files, start=1):
+                instructions.append(
+                    _cloud_file_upload_instruction(
+                        file,
+                        file_id=f"00000000-0000-7000-8000-{offset + index:012d}",
+                    )
+                )
+
+            class _Resp:
+                files = instructions
+
+            return _Resp()
+
+        def cloud_upload_file(self, *, instruction, payload_bytes):
+            if fail_on_upload:
+                raise MacrodataApiError(status=502, message="failed to upload payload")
+            cast(list[str], captured["events"]).append("upload")
+            cast(list[object], captured["uploads"]).append((instruction, payload_bytes))
+
+        def cloud_complete_files(self, *, files, object_ttl_secs=None):
+            if fail_on_complete:
+                raise MacrodataApiError(
+                    status=502, message="failed to complete payload"
+                )
+            assert object_ttl_secs is None
+            cast(list[str], captured["events"]).append("complete")
+            captured["complete_files"] = files
+            cast(
+                list[list[CloudFileCompleteRequestItem]], captured["complete_batches"]
+            ).append(files)
+
+            class _Resp:
+                files = []
+
+            return _Resp()
+
         def cloud_submit_job(self, *, request):
             if fail_on_submit:
                 raise AssertionError("should not submit")
+            cast(list[str], captured["events"]).append("submit")
             captured["submit_request"] = request
 
             class _Resp:
@@ -51,13 +162,8 @@ def _stub_cloud_submit(
 
     monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
-        "refiner.launchers.cloud.serialize_pipeline_inline",
-        lambda pipeline: CloudPipelinePayload(
-            format="cloudpickle",
-            bytes_b64="AQID",
-            sha256="abc123",
-            size_bytes=3,
-        ),
+        "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
+        lambda pipeline: _prepared_payload(b"AQID"),
     )
     monkeypatch.setattr(
         "refiner.launchers.base.plan_pipeline_stages",
@@ -120,7 +226,9 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert "cuda_version" not in request.plan["stages"][0]
     assert len(request.stage_payloads) == 1
     assert request.stage_payloads[0].stage_index == 0
-    assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
+    assert request.stage_payloads[0].pipeline_payload.file_id == (
+        "00000000-0000-7000-8000-000000000001"
+    )
     assert request.stage_payloads[0].runtime is not None
     assert request.stage_payloads[0].runtime.num_workers == 3
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
@@ -135,6 +243,20 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         "environment": {"refiner_version": "0.2.0", "refiner_ref": "abc123def456"},
         "script": {"text": "print('hi')"},
     }
+    upload_url_files = cast(
+        list[CloudFileUploadRequestItem], captured["upload_url_files"]
+    )
+    assert len(upload_url_files) == 1
+    assert upload_url_files[0].sha256 == _prepared_payload(b"AQID").sha256
+    uploaded_payloads = cast(
+        list[tuple[CloudFileUploadInstruction, bytes]], captured["uploads"]
+    )
+    assert uploaded_payloads[0][1] == b"AQID"
+    complete_files = cast(
+        list[CloudFileCompleteRequestItem], captured["complete_files"]
+    )
+    assert complete_files[0].file_id == "00000000-0000-7000-8000-000000000001"
+    assert captured["events"] == ["upload-urls", "upload", "complete", "submit"]
 
 
 def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:
@@ -473,9 +595,13 @@ def test_pipeline_launch_cloud_requires_valid_api_key(monkeypatch) -> None:
         def __init__(self):
             self.base_url = "https://example.com"
 
+        def cloud_create_file_upload_urls(self, *, files, object_ttl_secs=None):  # noqa: ANN001
+            del files, object_ttl_secs
+            raise MacrodataCredentialsError("Invalid API key", missing=False)
+
         def cloud_submit_job(self, *, request):  # noqa: ANN001
             del request
-            raise MacrodataCredentialsError("Invalid API key", missing=False)
+            raise AssertionError("cloud_submit_job should not be called")
 
     monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
@@ -490,14 +616,289 @@ def test_pipeline_launch_cloud_requires_valid_api_key(monkeypatch) -> None:
         read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
 
 
+def test_pipeline_launch_cloud_upload_url_failure_prevents_submit(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, fail_on_upload_urls=True)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    with pytest.raises(SystemExit, match="failed to create upload URLs"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert captured["uploads"] == []
+    assert "submit_request" not in captured
+
+
+def test_pipeline_launch_cloud_payload_upload_failure_prevents_submit(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, fail_on_upload=True)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    with pytest.raises(SystemExit, match="failed to upload payload"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert "upload_url_files" in captured
+    assert "complete_files" not in captured
+    assert "submit_request" not in captured
+
+
+def test_pipeline_launch_cloud_complete_failure_prevents_submit(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, fail_on_complete=True)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    with pytest.raises(SystemExit, match="failed to complete payload"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    assert captured["uploads"]
+    assert "submit_request" not in captured
+
+
+def test_pipeline_launch_cloud_missing_upload_url_response_prevents_submit(
+    monkeypatch,
+) -> None:
+    class FakeMacrodataClient:
+        def __init__(self):
+            self.base_url = "https://example.com"
+
+        def cloud_create_file_upload_urls(self, *, files, object_ttl_secs=None):
+            del files, object_ttl_secs
+
+            class _Resp:
+                files = []
+
+            return _Resp()
+
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
+        lambda pipeline: _prepared_payload(b"payload"),
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    with pytest.raises(SystemExit, match="did not return instructions"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+
+def test_pipeline_launch_cloud_existing_cloud_file_skips_upload_and_complete(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {"uploads": []}
+
+    class FakeMacrodataClient:
+        def cloud_create_file_upload_urls(self, *, files, object_ttl_secs=None):
+            assert object_ttl_secs is None
+            captured["upload_url_files"] = files
+            instructions = [
+                _cloud_file_upload_instruction(
+                    files[0],
+                    file_id="00000000-0000-7000-8000-000000000123",
+                    status=CloudFileUploadStatus.EXISTS,
+                )
+            ]
+
+            class _Resp:
+                files = instructions
+
+            return _Resp()
+
+        def cloud_upload_file(self, *, instruction, payload_bytes):
+            del instruction, payload_bytes
+            raise AssertionError("existing cloud files should not be uploaded")
+
+        def cloud_complete_files(self, *, files, object_ttl_secs=None):
+            del files, object_ttl_secs
+            raise AssertionError("existing cloud files should not be completed")
+
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
+        lambda pipeline: _prepared_payload(b"payload"),
+    )
+
+    payloads = CloudLauncher._upload_stage_payloads(
+        client=cast(MacrodataClient, FakeMacrodataClient()),
+        stages=[
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=read_jsonl("input.jsonl"),
+                compute=StageComputeRequirements(num_workers=1),
+            )
+        ],
+    )
+
+    assert (
+        len(cast(list[CloudFileUploadRequestItem], captured["upload_url_files"])) == 1
+    )
+    assert captured["uploads"] == []
+    assert payloads[0].file_id == "00000000-0000-7000-8000-000000000123"
+
+
+def test_pipeline_launch_cloud_deduplicates_identical_stage_payloads(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {"uploads": []}
+
+    class FakeMacrodataClient:
+        def cloud_create_file_upload_urls(self, *, files, object_ttl_secs=None):
+            assert object_ttl_secs is None
+            captured["upload_url_files"] = files
+            instructions = [
+                _cloud_file_upload_instruction(
+                    files[0],
+                    file_id="00000000-0000-7000-8000-000000000123",
+                )
+            ]
+
+            class _Resp:
+                files = instructions
+
+            return _Resp()
+
+        def cloud_upload_file(self, *, instruction, payload_bytes):
+            cast(list[object], captured["uploads"]).append((instruction, payload_bytes))
+
+        def cloud_complete_files(self, *, files, object_ttl_secs=None):
+            assert object_ttl_secs is None
+            captured["complete_files"] = files
+
+            class _Resp:
+                files = []
+
+            return _Resp()
+
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
+        lambda pipeline: _prepared_payload(b"same-payload"),
+    )
+
+    payloads = CloudLauncher._upload_stage_payloads(
+        client=cast(MacrodataClient, FakeMacrodataClient()),
+        stages=[
+            PlannedStage(
+                index=0,
+                name="stage_0",
+                pipeline=read_jsonl("input-a.jsonl"),
+                compute=StageComputeRequirements(num_workers=1),
+            ),
+            PlannedStage(
+                index=1,
+                name="stage_1",
+                pipeline=read_jsonl("input-b.jsonl"),
+                compute=StageComputeRequirements(num_workers=1),
+            ),
+        ],
+    )
+
+    assert (
+        len(cast(list[CloudFileUploadRequestItem], captured["upload_url_files"])) == 1
+    )
+    assert len(cast(list[object], captured["uploads"])) == 1
+    assert (
+        len(cast(list[CloudFileCompleteRequestItem], captured["complete_files"])) == 1
+    )
+    assert payloads[0].file_id == "00000000-0000-7000-8000-000000000123"
+    assert payloads[1].file_id == "00000000-0000-7000-8000-000000000123"
+
+
+def test_pipeline_launch_cloud_batches_more_than_100_unique_payload_files(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
+        lambda pipeline: _prepared_payload(f"payload-{id(pipeline)}".encode()),
+    )
+    stage_pipelines = [read_jsonl(f"input-{index}.jsonl") for index in range(101)]
+    monkeypatch.setattr(
+        "refiner.launchers.base.plan_pipeline_stages",
+        lambda pipeline, default_num_workers: [
+            PlannedStage(
+                index=index,
+                name=f"stage_{index}",
+                pipeline=stage_pipeline,
+                compute=StageComputeRequirements(num_workers=default_num_workers),
+            )
+            for index, stage_pipeline in enumerate(stage_pipelines)
+        ],
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+
+    upload_url_batches = cast(
+        list[list[CloudFileUploadRequestItem]], captured["upload_url_batches"]
+    )
+    complete_batches = cast(
+        list[list[CloudFileCompleteRequestItem]], captured["complete_batches"]
+    )
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert [len(batch) for batch in upload_url_batches] == [100, 1]
+    assert [len(batch) for batch in complete_batches] == [100, 1]
+    assert len(cast(list[object], captured["uploads"])) == 101
+    assert len(request.stage_payloads) == 101
+    assert request.stage_payloads[0].pipeline_payload.file_id == (
+        "00000000-0000-7000-8000-000000000001"
+    )
+    assert request.stage_payloads[-1].pipeline_payload.file_id == (
+        "00000000-0000-7000-8000-000000000101"
+    )
+
+
 def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
     monkeypatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, object] = {"uploads": []}
 
     class FakeMacrodataClient:
         def __init__(self):
             self.base_url = "https://example.com"
+
+        def cloud_create_file_upload_urls(self, *, files, object_ttl_secs=None):
+            assert object_ttl_secs is None
+            captured["upload_url_files"] = files
+            instructions = []
+            for index, file in enumerate(files, start=1):
+                instructions.append(
+                    _cloud_file_upload_instruction(
+                        file,
+                        file_id=f"00000000-0000-7000-8000-{index:012d}",
+                    )
+                )
+
+            class _Resp:
+                files = instructions
+
+            return _Resp()
+
+        def cloud_upload_file(self, *, instruction, payload_bytes):
+            cast(list[object], captured["uploads"]).append((instruction, payload_bytes))
+
+        def cloud_complete_files(self, *, files, object_ttl_secs=None):
+            assert object_ttl_secs is None
+            captured["complete_files"] = files
+
+            class _Resp:
+                files = []
+
+            return _Resp()
 
         def cloud_submit_job(self, *, request):
             captured["request"] = request
@@ -512,13 +913,8 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
 
     monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
-        "refiner.launchers.cloud.serialize_pipeline_inline",
-        lambda pipeline: CloudPipelinePayload(
-            format="cloudpickle",
-            bytes_b64=f"payload-{id(pipeline)}",
-            sha256=f"sha-{id(pipeline)}",
-            size_bytes=3,
-        ),
+        "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
+        lambda pipeline: _prepared_payload(f"payload-{id(pipeline)}".encode()),
     )
     first_stage_pipeline = read_jsonl("input-a.jsonl")
     second_stage_pipeline = read_jsonl("input-b.jsonl")
@@ -560,8 +956,8 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
         5,
     ]
     assert (
-        request.stage_payloads[0].pipeline_payload.sha256
-        != request.stage_payloads[1].pipeline_payload.sha256
+        request.stage_payloads[0].pipeline_payload.file_id
+        != request.stage_payloads[1].pipeline_payload.file_id
     )
 
 
@@ -944,7 +1340,9 @@ def test_pipeline_launch_cloud_continue_from_job_posts_submit_request(
     assert request.plan["stages"][0]["cpus_per_worker"] == 2
     assert request.stage_payloads is not None
     assert request.stage_payloads[0].stage_index == 0
-    assert request.stage_payloads[0].pipeline_payload.sha256 == "abc123"
+    assert request.stage_payloads[0].pipeline_payload.file_id == (
+        "00000000-0000-7000-8000-000000000001"
+    )
     assert request.stage_payloads[0].runtime.num_workers == 3
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.sync_local_dependencies is True
@@ -1132,6 +1530,33 @@ def test_pipeline_launch_cloud_surfaces_submit_warnings(monkeypatch) -> None:
     class WarningClient:
         def __init__(self):
             self.base_url = "https://example.com"
+
+        def cloud_create_file_upload_urls(self, *, files, object_ttl_secs=None):
+            del object_ttl_secs
+            instructions = []
+            for index, file in enumerate(files, start=1):
+                instructions.append(
+                    _cloud_file_upload_instruction(
+                        file,
+                        file_id=f"00000000-0000-7000-8000-{index:012d}",
+                    )
+                )
+
+            class _Resp:
+                files = instructions
+
+            return _Resp()
+
+        def cloud_upload_file(self, *, instruction, payload_bytes):
+            del instruction, payload_bytes
+
+        def cloud_complete_files(self, *, files, object_ttl_secs=None):
+            del files, object_ttl_secs
+
+            class _Resp:
+                files = []
+
+            return _Resp()
 
         def cloud_submit_job(self, *, request):
             captured["submit_request"] = request
