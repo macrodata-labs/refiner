@@ -17,9 +17,48 @@ if TYPE_CHECKING:
 class TimestampedContactSheet:
     data: bytes
     media_type: str
+    index: int
     timestamps: tuple[float, ...]
     width: int
     height: int
+    rows: int
+    columns: int
+
+    @property
+    def start_sec(self) -> float:
+        return self.timestamps[0]
+
+    @property
+    def end_sec(self) -> float:
+        return self.timestamps[-1]
+
+    @property
+    def frame_count(self) -> int:
+        return len(self.timestamps)
+
+
+def contact_sheet_prompt_manifest(
+    sheets: list[TimestampedContactSheet],
+) -> str:
+    """Describe ordered contact sheets for a multimodal task prompt."""
+
+    if not sheets:
+        raise ValueError("sheets must be non-empty")
+
+    lines = [
+        "The following contact sheets are ordered chronologically.",
+        "Each tile is a sampled video frame with its timestamp burned into the "
+        "top-left corner.",
+        "Actions may continue across contact sheet boundaries; do not create a "
+        "segment boundary just because the next image is a new sheet.",
+    ]
+    for sheet in sheets:
+        lines.append(
+            f"Sheet {sheet.index}: {sheet.frame_count} frames, "
+            f"{sheet.rows}x{sheet.columns} grid, "
+            f"{sheet.start_sec:.2f}s through {sheet.end_sec:.2f}s."
+        )
+    return "\n".join(lines)
 
 
 async def timestamped_contact_sheets(
@@ -137,7 +176,7 @@ def _build_contact_sheets(
     sheet_height = frame_height * rows
 
     sheets: list[TimestampedContactSheet] = []
-    for start in range(0, len(samples), frames_per_sheet):
+    for sheet_index, start in enumerate(range(0, len(samples), frames_per_sheet), 1):
         chunk = samples[start : start + frames_per_sheet]
         sheet = Image.new("RGB", (sheet_width, sheet_height), color=(0, 0, 0))
 
@@ -150,9 +189,12 @@ def _build_contact_sheets(
             TimestampedContactSheet(
                 data=_encode_jpeg(sheet, quality=quality),
                 media_type="image/jpeg",
+                index=sheet_index,
                 timestamps=tuple(timestamp for timestamp, _ in chunk),
                 width=sheet_width,
                 height=sheet_height,
+                rows=rows,
+                columns=columns,
             )
         )
 
@@ -167,5 +209,6 @@ def _encode_jpeg(image: Image.Image, *, quality: int) -> bytes:
 
 __all__ = [
     "TimestampedContactSheet",
+    "contact_sheet_prompt_manifest",
     "timestamped_contact_sheets",
 ]

@@ -51,10 +51,16 @@ def test_timestamped_contact_sheets_sample_and_tile_video(tmp_path) -> None:
 
     assert len(sheets) == 2
     assert sheets[0].media_type == "image/jpeg"
+    assert sheets[0].index == 1
     assert sheets[0].timestamps == (0.0, 0.4)
+    assert sheets[0].start_sec == 0.0
+    assert sheets[0].end_sec == 0.4
+    assert sheets[0].frame_count == 2
     assert sheets[1].timestamps == (0.8,)
     assert sheets[0].width == 128
     assert sheets[0].height == 48
+    assert sheets[0].rows == 1
+    assert sheets[0].columns == 2
     assert sheets[0].data.startswith(b"\xff\xd8")
 
 
@@ -84,3 +90,22 @@ def test_timestamped_contact_sheets_reject_invalid_options(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="sample_sec must be > 0"):
         asyncio.run(mdr.robotics.timestamped_contact_sheets(video, sample_sec=0))
+
+
+def test_contact_sheet_prompt_manifest_describes_continuity(tmp_path) -> None:
+    path = tmp_path / "video.mp4"
+    _write_video(path, num_frames=6, fps=5)
+    video = mdr.video.VideoFile(DataFile.resolve(path))
+
+    sheets = asyncio.run(_build_sheets(video))
+    manifest = mdr.robotics.contact_sheet_prompt_manifest(sheets)
+
+    assert "ordered chronologically" in manifest
+    assert "Actions may continue across contact sheet boundaries" in manifest
+    assert "Sheet 1: 2 frames, 1x2 grid, 0.00s through 0.40s." in manifest
+    assert "Sheet 2: 1 frames, 1x2 grid, 0.80s through 0.80s." in manifest
+
+
+def test_contact_sheet_prompt_manifest_rejects_empty_sheets() -> None:
+    with pytest.raises(ValueError, match="sheets must be non-empty"):
+        mdr.robotics.contact_sheet_prompt_manifest([])

@@ -525,7 +525,9 @@ Refiner's PyAV-backed `VideoFile.iter_frames()` path, burns a timestamp badge
 into each sampled frame with Pillow, tiles the frames, and returns JPEG sheets
 that can be sent as image file parts. The timestamps are embedded in the pixels
 so the model can visually bind every tile to its time. A text manifest can still
-be included as extra context, but it should not replace embedded timestamps.
+be included as extra context, but it should not replace embedded timestamps. The
+manifest is important when an action continues from the end of one sheet into
+the next sheet.
 
 ```python
 sheets = await mdr.robotics.timestamped_contact_sheets(
@@ -537,7 +539,13 @@ sheets = await mdr.robotics.timestamped_contact_sheets(
 )
 
 content = [
-    {"type": "text", "text": PROMPT},
+    {
+        "type": "text",
+        "text": (
+            f"{PROMPT}\n\n"
+            f"{mdr.robotics.contact_sheet_prompt_manifest(sheets)}"
+        ),
+    },
     *[
         {"type": "file", "mediaType": sheet.media_type, "data": sheet.data}
         for sheet in sheets
