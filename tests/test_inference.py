@@ -206,9 +206,68 @@ def test_inference_generate_text_accepts_vercel_style_multimodal_messages(
             },
         ],
         "temperature": 0,
-        "providerOptions": {"openai": {"reasoningEffort": "low"}},
-        "reasoning": {"effort": "low"},
+        "reasoning_effort": "low",
     }
+
+
+def test_inference_generate_text_maps_openai_options_to_wire_names(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate_text):
+        del row
+        await generate_text(
+            prompt="hello",
+            providerOptions={
+                "openai": {
+                    "logitBias": {"42": -1},
+                    "logprobs": 3,
+                    "parallelToolCalls": False,
+                    "maxCompletionTokens": 64,
+                    "serviceTier": "flex",
+                    "promptCacheKey": "cache-key",
+                    "promptCacheRetention": "24h",
+                    "safetyIdentifier": "safe-id",
+                    "textVerbosity": "low",
+                }
+            },
+        )
+        return {}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
+    )
+
+    asyncio.run(cast(Any, infer(DictRow({}))))
+
+    payload = cast(Mapping[str, object], seen["payload"])
+    assert payload["logit_bias"] == {"42": -1}
+    assert payload["logprobs"] is True
+    assert payload["top_logprobs"] == 3
+    assert payload["parallel_tool_calls"] is False
+    assert payload["max_completion_tokens"] == 64
+    assert payload["service_tier"] == "flex"
+    assert payload["prompt_cache_key"] == "cache-key"
+    assert payload["prompt_cache_retention"] == "24h"
+    assert payload["safety_identifier"] == "safe-id"
+    assert payload["verbosity"] == "low"
+    assert "providerOptions" not in payload
+    assert "logitBias" not in payload
 
 
 def test_inference_generate_text_accepts_prompt(monkeypatch) -> None:
@@ -472,7 +531,51 @@ def test_inference_generate_text_warns_for_anthropic_schema_fallback(
         ]
     }
     payload = cast(Mapping[str, object], seen["payload"])
-    assert "Return only valid JSON" in cast(str, payload["system"])
+    system = cast(list[Mapping[str, object]], payload["system"])
+    assert "Return only valid JSON" in cast(str, system[0]["text"])
+
+
+def test_inference_generate_text_preserves_anthropic_system_with_schema(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        del self
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text='{"title":"Doc","objects":["chart"]}',
+            finish_reason="end_turn",
+            usage={},
+            response={"content": []},
+        )
+
+    monkeypatch.setattr(
+        client_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        await generate_text(
+            messages=[
+                {"role": "system", "content": "Use short labels."},
+                {"role": "user", "content": "caption"},
+            ],
+            schema=_Caption,
+        )
+        return {}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=AnthropicEndpointProvider(model="claude-test", api_key="secret"),
+    )
+
+    asyncio.run(cast(Any, infer(DictRow({}))))
+
+    payload = cast(Mapping[str, object], seen["payload"])
+    system = cast(list[Mapping[str, object]], payload["system"])
+    assert system[0] == {"type": "text", "text": "Use short labels."}
+    assert "Return only valid JSON" in cast(str, system[1]["text"])
 
 
 def test_inference_generate_text_raises_on_schema_validation_error(
@@ -950,6 +1053,63 @@ def test_inference_generate_text_converts_messages_for_openai_responses(
         "reasoning": {"effort": "low"},
         "text": {"verbosity": "low"},
     }
+
+
+def test_inference_generate_text_maps_openai_responses_options_to_wire_names(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def _fake_generate_text(self, payload):
+        seen["payload"] = dict(payload)
+        return InferenceResponse(
+            text="ok",
+            finish_reason=None,
+            usage={},
+            response={"output_text": "ok"},
+        )
+
+    monkeypatch.setattr(
+        client_module._OpenAIResponsesClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        await generate_text(
+            prompt="hello",
+            providerOptions={
+                "openai": {
+                    "logprobs": True,
+                    "maxToolCalls": 4,
+                    "parallelToolCalls": False,
+                    "previousResponseId": "resp_prev",
+                    "promptCacheKey": "cache-key",
+                    "promptCacheRetention": "24h",
+                    "safetyIdentifier": "safe-id",
+                    "serviceTier": "priority",
+                }
+            },
+        )
+        return {}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIResponsesProvider(model="gpt-5-mini", api_key="secret"),
+    )
+
+    asyncio.run(cast(Any, infer(DictRow({}))))
+
+    payload = cast(Mapping[str, object], seen["payload"])
+    assert payload["top_logprobs"] == 20
+    assert payload["include"] == ["message.output_text.logprobs"]
+    assert payload["max_tool_calls"] == 4
+    assert payload["parallel_tool_calls"] is False
+    assert payload["previous_response_id"] == "resp_prev"
+    assert payload["prompt_cache_key"] == "cache-key"
+    assert payload["prompt_cache_retention"] == "24h"
+    assert payload["safety_identifier"] == "safe-id"
+    assert payload["service_tier"] == "priority"
+    assert "maxToolCalls" not in payload
 
 
 def test_inference_generate_text_converts_openai_responses_assistant_reasoning(

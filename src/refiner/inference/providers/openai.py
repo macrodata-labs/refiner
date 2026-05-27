@@ -247,8 +247,6 @@ def build_chat_payload(
             "type": "json_schema",
             "json_schema": _json_schema(schema),
         }
-    if provider_options is not None:
-        payload["providerOptions"] = provider_options
     return payload
 
 
@@ -267,8 +265,6 @@ def build_responses_payload(
         payload["input"] = prompt
     _apply_responses_options(payload, provider_options)
     _normalize_responses_params(payload)
-    _normalize_reasoning_options(payload, provider_options)
-    _normalize_text_options(payload, provider_options)
     if schema is not None:
         text = dict(payload.get("text", {}))
         text["format"] = _response_format(schema)
@@ -288,26 +284,56 @@ def _apply_responses_options(
         "background",
         "include",
         "instructions",
-        "logprobs",
-        "maxToolCalls",
         "metadata",
-        "parallelToolCalls",
-        "previousResponseId",
-        "promptCacheKey",
-        "promptCacheRetention",
-        "safetyIdentifier",
-        "serviceTier",
         "store",
         "truncation",
         "user",
-        "contextManagement",
         "text",
-        "topLogprobs",
-        "webSearchOptions",
     }
     for key in passthrough:
         if key in openai_options:
             payload[key] = openai_options[key]
+    _apply_aliases(
+        payload,
+        openai_options,
+        {
+            "maxToolCalls": "max_tool_calls",
+            "parallelToolCalls": "parallel_tool_calls",
+            "previousResponseId": "previous_response_id",
+            "promptCacheKey": "prompt_cache_key",
+            "promptCacheRetention": "prompt_cache_retention",
+            "safetyIdentifier": "safety_identifier",
+            "serviceTier": "service_tier",
+            "topLogprobs": "top_logprobs",
+            "contextManagement": "context_management",
+        },
+    )
+    reasoning: dict[str, Any] = {}
+    if "reasoningEffort" in openai_options:
+        reasoning["effort"] = openai_options["reasoningEffort"]
+    if "reasoningSummary" in openai_options:
+        reasoning["summary"] = openai_options["reasoningSummary"]
+    if reasoning:
+        payload["reasoning"] = {**dict(payload.get("reasoning", {})), **reasoning}
+    if "textVerbosity" in openai_options:
+        text = dict(payload.get("text", {}))
+        text["verbosity"] = openai_options["textVerbosity"]
+        payload["text"] = text
+    if "logprobs" in openai_options and "top_logprobs" not in payload:
+        logprobs = openai_options["logprobs"]
+        if isinstance(logprobs, bool):
+            payload["top_logprobs"] = 20 if logprobs else None
+        else:
+            payload["top_logprobs"] = logprobs
+        include = payload.get("include")
+        include_values = (
+            list(include)
+            if isinstance(include, Sequence) and not isinstance(include, str)
+            else []
+        )
+        if "message.output_text.logprobs" not in include_values:
+            include_values.append("message.output_text.logprobs")
+        payload["include"] = include_values
 
 
 def _normalize_responses_params(payload: dict[str, Any]) -> None:
@@ -327,30 +353,37 @@ def _normalize_reasoning_options(
     if not provider_options:
         return
     openai_options = provider_options.get("openai", {})
-    for key in (
-        "logitBias",
-        "logprobs",
-        "topLogprobs",
-        "parallelToolCalls",
-        "user",
-        "maxCompletionTokens",
-        "modalities",
-        "audio",
-        "store",
-        "metadata",
-        "prediction",
-        "serviceTier",
-        "promptCacheKey",
-        "promptCacheRetention",
-        "safetyIdentifier",
-        "webSearchOptions",
-        "responseFormat",
-    ):
+    for key in ("user", "modalities", "audio", "store", "metadata", "prediction"):
         if key in openai_options:
             payload[key] = openai_options[key]
+    _apply_aliases(
+        payload,
+        openai_options,
+        {
+            "logitBias": "logit_bias",
+            "parallelToolCalls": "parallel_tool_calls",
+            "maxCompletionTokens": "max_completion_tokens",
+            "serviceTier": "service_tier",
+            "promptCacheKey": "prompt_cache_key",
+            "promptCacheRetention": "prompt_cache_retention",
+            "safetyIdentifier": "safety_identifier",
+            "webSearchOptions": "web_search_options",
+            "responseFormat": "response_format",
+        },
+    )
+    if "logprobs" in openai_options:
+        logprobs = openai_options["logprobs"]
+        if isinstance(logprobs, bool):
+            payload["logprobs"] = True if logprobs else None
+            payload["top_logprobs"] = 0 if logprobs else None
+        else:
+            payload["logprobs"] = True
+            payload["top_logprobs"] = logprobs
+    if "topLogprobs" in openai_options:
+        payload["top_logprobs"] = openai_options["topLogprobs"]
     reasoning: dict[str, Any] = {}
     if "reasoningEffort" in openai_options:
-        reasoning["effort"] = openai_options["reasoningEffort"]
+        payload["reasoning_effort"] = openai_options["reasoningEffort"]
     if "reasoningSummary" in openai_options:
         reasoning["summary"] = openai_options["reasoningSummary"]
     if reasoning:
@@ -365,9 +398,17 @@ def _normalize_text_options(
         return
     openai_options = provider_options.get("openai", {})
     if "textVerbosity" in openai_options:
-        text = dict(payload.get("text", {}))
-        text["verbosity"] = openai_options["textVerbosity"]
-        payload["text"] = text
+        payload["verbosity"] = openai_options["textVerbosity"]
+
+
+def _apply_aliases(
+    payload: dict[str, Any],
+    options: Mapping[str, Any],
+    aliases: Mapping[str, str],
+) -> None:
+    for source, target in aliases.items():
+        if source in options:
+            payload[target] = options[source]
 
 
 def _response_format(schema: StructuredOutputSchema) -> dict[str, Any]:

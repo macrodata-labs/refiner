@@ -185,8 +185,10 @@ def _apply_schema_instruction(
     existing = payload.get("system")
     if isinstance(existing, str) and existing:
         payload["system"] = f"{existing}\n\n{instruction}"
+    elif isinstance(existing, list):
+        payload["system"] = [*existing, {"type": "text", "text": instruction}]
     else:
-        payload["system"] = instruction
+        payload["system"] = [{"type": "text", "text": instruction}]
 
 
 def convert_to_anthropic_payload(
