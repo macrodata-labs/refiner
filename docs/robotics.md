@@ -477,10 +477,7 @@ scores per episode.
 
 ## Task Segmentation
 
-Task segmentation turns one robot episode into a list of timestamped subtasks.
-Use it as an episode-level async map block over a LeRobot dataset. The block
-reads each episode's video, sends timestamped contact sheets to a multimodal
-model, and writes segmentation columns back onto the row.
+Task segmentation predicts timestamped subtasks for each robot episode.
 
 ```python
 import refiner as mdr
@@ -513,42 +510,15 @@ stats = pipeline.launch_local(
 )
 ```
 
-The `segment_episode` function is the task-specific block. It should return the
-input row with these columns added:
+Output columns:
 
 - `predicted_subtasks`: list of `{start_sec, end_sec, subtask}` objects
-- `predicted_subtasks_json`: serialized copy of the same subtasks
+- `predicted_subtasks_json`: JSON string of the same subtasks
 - `annotation_model`: model name used for the run
-- `raw_annotation_output`: raw model text for debugging
+- `raw_annotation_output`: raw model output
 
-Runtime requirements:
-
-- install `macrodata-refiner[robotics]`
-- set the provider API key in the worker environment, for example
-  `GOOGLE_API_KEY=...`
-- choose a multimodal model that supports image inputs
-
-Contact sheets are generated without OpenCV; they use Refiner's PyAV-backed
-video decoding plus Pillow, and timestamps are burned
-into the image pixels so segment boundaries can be grounded to visible times.
-
-Important run knobs:
-
-- `max_in_flight`: controls concurrent model calls
-- `preserve_order=False`: lets faster episodes finish without waiting for
-  earlier episodes
-- `sample_sec`: lower values give finer temporal resolution for contact sheets
-- `frames_per_sheet` and `columns`: control request compactness and readability
-- `min_segment_duration_sec`: drops predicted segments shorter than this many
-  seconds after normalization; pass `None` to keep raw model output
-- `include_contact_sheet_manifest`: adds a text manifest describing sheet order
-  and sheet time ranges when you want that extra prompt context
-
-The default prompt and rendering parameters match the current benchmark setup:
-timestamped contact sheets at 0.5 second sampling, 224 pixel frame width, 20
-frames per sheet, a 5-column grid, JPEG quality 84, temperature 0.1, small
-white-on-black timestamp badges in the top-left corner, and 3.5 second minimum
-segment filtering.
+Install `macrodata-refiner[robotics]` and set the provider API key, for example
+`GOOGLE_API_KEY`.
 
 ## Merging Datasets
 

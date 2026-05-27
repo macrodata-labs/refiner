@@ -24,7 +24,10 @@ from refiner.inference.internal.response import (
     _provider_metadata,
     _text_from_content,
 )
-from refiner.inference.internal.transport import post_json_to_api
+from refiner.inference.internal.transport import (
+    post_json_to_api,
+    provider_request_options,
+)
 from refiner.inference.types import (
     InferenceWarning,
     Message,
@@ -88,12 +91,13 @@ class _AnthropicEndpointClient:
         return client
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        request_payload, max_retries = provider_request_options(payload)
         api_response = await post_json_to_api(
             self._ensure_client(),
             "v1/messages",
-            _request_payload(payload),
+            request_payload,
             operation="anthropic generation",
-            max_retries=_max_retries(payload),
+            max_retries=max_retries,
         )
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
@@ -102,21 +106,6 @@ class _AnthropicEndpointClient:
             response_json,
             response_headers=api_response.response_headers,
         )
-
-
-def _max_retries(payload: Mapping[str, Any]) -> int | None:
-    raw = payload.get("__refiner_max_retries")
-    if raw is None:
-        return None
-    if not isinstance(raw, int):
-        raise ValueError("maxRetries must be an integer")
-    return raw
-
-
-def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    request = dict(payload)
-    request.pop("__refiner_max_retries", None)
-    return request
 
 
 def model_capabilities(model: str) -> ModelCapabilities:

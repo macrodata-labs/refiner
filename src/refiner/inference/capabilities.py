@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -18,6 +17,9 @@ from refiner.inference.providers import openai as openai_provider
 from refiner.inference.types import InferenceWarning, Message, ModelCapabilities
 
 _MEDIA_WARNING_BYTES = 20 * 1024 * 1024
+_BASE64_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+)
 _TOOL_SETTINGS = {
     "tools",
     "tool_choice",
@@ -219,13 +221,26 @@ def _data_size(data: object) -> int | None:
     if not isinstance(data, str):
         return None
     marker = ";base64,"
-    if marker not in data:
+    marker_index = data.find(marker)
+    if marker_index == -1:
         return None
-    encoded = data.split(marker, 1)[1]
-    try:
-        return len(base64.b64decode(encoded, validate=True))
-    except ValueError:
+    encoded_start = marker_index + len(marker)
+    encoded_length = len(data) - encoded_start
+    padding = 0
+    if encoded_length >= 1 and data[-1] == "=":
+        padding += 1
+    if encoded_length >= 2 and data[-2] == "=":
+        padding += 1
+    if (
+        encoded_length % 4 != 0
+        or padding > 2
+        or any(
+            data[index] not in _BASE64_CHARS
+            for index in range(encoded_start, len(data))
+        )
+    ):
         return None
+    return (encoded_length // 4) * 3 - padding
 
 
 __all__ = ["ModelCapabilities", "capability_warnings", "model_capabilities"]

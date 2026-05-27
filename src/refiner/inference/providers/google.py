@@ -23,7 +23,10 @@ from refiner.inference.internal.response import (
     _provider_metadata,
     _text_from_content,
 )
-from refiner.inference.internal.transport import post_json_to_api
+from refiner.inference.internal.transport import (
+    post_json_to_api,
+    provider_request_options,
+)
 from refiner.inference.types import (
     Message,
     ModelCapabilities,
@@ -89,12 +92,13 @@ class _GoogleEndpointClient:
         return client
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        request_payload, max_retries = provider_request_options(payload)
         api_response = await post_json_to_api(
             self._ensure_client(),
             f"{_model_path(self.model)}:generateContent",
-            _request_payload(payload),
+            request_payload,
             operation="google generation",
-            max_retries=_max_retries(payload),
+            max_retries=max_retries,
         )
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
@@ -107,21 +111,6 @@ class _GoogleEndpointClient:
 
 def _model_path(model: str) -> str:
     return model if "/" in model else f"models/{model}"
-
-
-def _max_retries(payload: Mapping[str, Any]) -> int | None:
-    raw = payload.get("__refiner_max_retries")
-    if raw is None:
-        return None
-    if not isinstance(raw, int):
-        raise ValueError("maxRetries must be an integer")
-    return raw
-
-
-def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    request = dict(payload)
-    request.pop("__refiner_max_retries", None)
-    return request
 
 
 def model_capabilities(model: str) -> ModelCapabilities:
@@ -155,9 +144,18 @@ def build_payload(
         provider_options=provider_options,
     )
     if schema is not None:
+        google_options = _provider_options(provider_options, "google")
+        structured_outputs = (
+            google_options.get("structuredOutputs") if google_options else None
+        )
         generation_config = dict(payload.get("generationConfig", {}))
         generation_config["responseMimeType"] = "application/json"
-        generation_config["responseSchema"] = schema.json_schema
+        if structured_outputs is not False:
+            converted_schema = _convert_json_schema_to_openapi_schema(
+                _inline_json_schema_refs(schema.json_schema)
+            )
+            if converted_schema is not None:
+                generation_config["responseSchema"] = converted_schema
         payload["generationConfig"] = generation_config
     return payload
 
@@ -328,6 +326,185 @@ def _apply_google_options(payload: dict[str, Any], options: Mapping[str, Any]) -
             payload[key] = options[key]
 
 
+def _inline_json_schema_refs(json_schema: Mapping[str, Any]) -> dict[str, Any]:
+    definitions = {
+        **_mapping_at(json_schema, "$defs"),
+        **_mapping_at(json_schema, "definitions"),
+    }
+
+    def _visit(value: Any, resolving: frozenset[str]) -> Any:
+        if isinstance(value, Mapping):
+            ref = value.get("$ref")
+            if isinstance(ref, str):
+                if ref in resolving:
+                    raise ValueError(
+                        "cyclic structured output schema refs are not supported"
+                    )
+                target = _resolve_local_ref(ref, definitions)
+                if target is not None:
+                    merged = {key: item for key, item in value.items() if key != "$ref"}
+                    resolved = _visit(target, resolving | {ref})
+                    if isinstance(resolved, dict):
+                        return {**resolved, **_visit(merged, resolving)}
+                    return resolved
+            return {key: _visit(item, resolving) for key, item in value.items()}
+        if isinstance(value, Sequence) and not isinstance(
+            value, str | bytes | bytearray
+        ):
+            return [_visit(item, resolving) for item in value]
+        return value
+
+    inlined = _visit(json_schema, frozenset())
+    if not isinstance(inlined, dict):
+        raise ValueError("structured output schema must be a JSON object")
+    inlined.pop("$defs", None)
+    inlined.pop("definitions", None)
+    return inlined
+
+
+def _mapping_at(source: Mapping[str, Any], key: str) -> dict[str, Any]:
+    value = source.get(key)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _resolve_local_ref(
+    ref: str,
+    definitions: Mapping[str, Any],
+) -> Any | None:
+    if ref.startswith("#/$defs/"):
+        return definitions.get(ref.removeprefix("#/$defs/"))
+    if ref.startswith("#/definitions/"):
+        return definitions.get(ref.removeprefix("#/definitions/"))
+    return None
+
+
+def _convert_json_schema_to_openapi_schema(
+    json_schema: Any,
+    *,
+    is_root: bool = True,
+) -> dict[str, Any] | None:
+    if json_schema is None:
+        return None
+    if _is_empty_object_schema(json_schema):
+        if is_root:
+            return None
+        result = {"type": "object"}
+        description = json_schema.get("description")
+        if isinstance(description, str):
+            result["description"] = description
+        return result
+    if isinstance(json_schema, bool):
+        return {"type": "boolean", "properties": {}}
+    if not isinstance(json_schema, Mapping):
+        return None
+
+    result: dict[str, Any] = {}
+    for key in (
+        "description",
+        "required",
+        "format",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "minItems",
+        "maxItems",
+        "propertyOrdering",
+        "additionalProperties",
+    ):
+        if key in json_schema:
+            result[key] = json_schema[key]
+
+    const_value = json_schema.get("const")
+    if const_value is not None:
+        result["enum"] = [const_value]
+
+    schema_type = json_schema.get("type")
+    if isinstance(schema_type, Sequence) and not isinstance(schema_type, str):
+        has_null = "null" in schema_type
+        non_null_types = [item for item in schema_type if item != "null"]
+        if not non_null_types:
+            result["type"] = "null"
+        else:
+            result["anyOf"] = [{"type": item} for item in non_null_types]
+            if has_null:
+                result["nullable"] = True
+    elif schema_type is not None:
+        result["type"] = schema_type
+
+    if "enum" in json_schema:
+        result["enum"] = json_schema["enum"]
+
+    properties = json_schema.get("properties")
+    if isinstance(properties, Mapping):
+        result["properties"] = {
+            key: _convert_json_schema_to_openapi_schema(value, is_root=False)
+            for key, value in properties.items()
+        }
+
+    items = json_schema.get("items")
+    if isinstance(items, Sequence) and not isinstance(items, Mapping | str | bytes):
+        result["items"] = [
+            _convert_json_schema_to_openapi_schema(item, is_root=False)
+            for item in items
+        ]
+    elif items is not None:
+        result["items"] = _convert_json_schema_to_openapi_schema(
+            items,
+            is_root=False,
+        )
+
+    prefix_items = json_schema.get("prefixItems")
+    if isinstance(prefix_items, Sequence) and not isinstance(prefix_items, str | bytes):
+        result["prefixItems"] = [
+            _convert_json_schema_to_openapi_schema(item, is_root=False)
+            for item in prefix_items
+        ]
+
+    for key in ("allOf", "oneOf"):
+        value = json_schema.get(key)
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+            result[key] = [
+                _convert_json_schema_to_openapi_schema(item, is_root=False)
+                for item in value
+            ]
+
+    any_of = json_schema.get("anyOf")
+    if isinstance(any_of, Sequence) and not isinstance(any_of, str | bytes):
+        null_schemas = [
+            schema
+            for schema in any_of
+            if isinstance(schema, Mapping) and schema.get("type") == "null"
+        ]
+        non_null_schemas = [schema for schema in any_of if schema not in null_schemas]
+        if null_schemas and len(non_null_schemas) == 1:
+            converted = _convert_json_schema_to_openapi_schema(
+                non_null_schemas[0],
+                is_root=False,
+            )
+            if converted is not None:
+                result.update(converted)
+                result["nullable"] = True
+        else:
+            result["anyOf"] = [
+                _convert_json_schema_to_openapi_schema(item, is_root=False)
+                for item in non_null_schemas
+            ]
+            if null_schemas:
+                result["nullable"] = True
+
+    return result
+
+
+def _is_empty_object_schema(json_schema: Any) -> bool:
+    return (
+        isinstance(json_schema, Mapping)
+        and json_schema.get("type") == "object"
+        and not json_schema.get("properties")
+        and not json_schema.get("additionalProperties")
+    )
+
+
 def parse_response(
     response_json: Mapping[str, Any],
     *,
@@ -335,6 +512,14 @@ def parse_response(
 ) -> InferenceResponse:
     candidates = response_json.get("candidates")
     if not isinstance(candidates, Sequence) or not candidates:
+        prompt_feedback = response_json.get("promptFeedback")
+        if isinstance(prompt_feedback, Mapping):
+            block_reason = prompt_feedback.get("blockReason")
+            if block_reason is not None:
+                raise RuntimeError(
+                    "google generation response is missing candidates[0]: "
+                    f"promptFeedback.blockReason={block_reason}"
+                )
         raise RuntimeError("google generation response is missing candidates[0]")
     candidate = candidates[0]
     if not isinstance(candidate, Mapping):

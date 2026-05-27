@@ -195,6 +195,7 @@ def test_task_segmentation_block_updates_row(tmp_path, monkeypatch) -> None:
 
     assert seen["provider"].model == "gemini-flash-latest"
     assert request["temperature"] == 0.1
+    assert request["schema"] is task_segmentation_module._TaskSegmentationResult
     message = request["messages"][0]
     assert message["role"] == "user"
     assert "Episode instruction: open the drawer" in message["content"][0]["text"]

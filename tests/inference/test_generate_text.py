@@ -7,7 +7,7 @@ import pytest
 
 import refiner as mdr
 from refiner.inference import InferenceResponse, OpenAIEndpointProvider
-from refiner.inference import client as client_module
+from refiner.inference.providers import openai as openai_provider
 from refiner.pipeline.data.row import DictRow
 
 
@@ -24,7 +24,9 @@ def test_generate_text_converts_typed_messages(monkeypatch: pytest.MonkeyPatch) 
             response={"choices": []},
         )
 
-    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(
+        openai_provider._OpenAIEndpointClient, "generate", _fake_generate
+    )
 
     async def _map(row, generate_text):
         response = await generate_text(
@@ -66,7 +68,9 @@ def test_generate_text_forwards_raw_payload_without_conversion(
             response={"choices": []},
         )
 
-    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
+    monkeypatch.setattr(
+        openai_provider._OpenAIEndpointClient, "generate", _fake_generate
+    )
 
     async def _map(row, generate_text):
         response = await generate_text(

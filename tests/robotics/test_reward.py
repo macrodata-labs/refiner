@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 import refiner as mdr
-from refiner.inference import client as openai_module
+from refiner.inference.providers import openai as openai_provider
 from refiner.pipeline.data.row import DictRow
 from refiner.robotics import reward as reward_module
 from refiner.robotics.lerobot_format import LeRobotMetadata, LeRobotRow
@@ -55,7 +55,7 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
         reward_module, "_sample_video_frames", _fake_sample_video_frames
     )
     monkeypatch.setattr(reward_module, "_frame_data_url", _fake_frame_data_url)
-    monkeypatch.setattr(openai_module._OpenAIEndpointClient, "pooling", _fake_pooling)
+    monkeypatch.setattr(openai_provider._OpenAIEndpointClient, "pooling", _fake_pooling)
     monkeypatch.setattr(
         runtime_module, "get_active_service_manager", lambda: _FakeServiceManager()
     )

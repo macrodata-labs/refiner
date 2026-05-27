@@ -153,9 +153,14 @@ def task_segmentation(
         response = await generate_text(
             messages=messages,
             providerOptions=providerOptions,
+            schema=_TaskSegmentationResult,
             **params,
         )
-        parsed = _parse_task_segmentation_result(response.text)
+        parsed = (
+            response.object
+            if isinstance(response.object, _TaskSegmentationResult)
+            else _parse_task_segmentation_result(response.text)
+        )
         segments = _filter_segments(
             _normalize_segments(parsed.segments),
             min_duration_sec=min_segment_duration_sec,

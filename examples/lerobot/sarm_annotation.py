@@ -85,7 +85,8 @@ async def annotate_dense_subtasks(row, generate_text):
         )
 
     video = row.videos[VIDEO_KEY].video
-    clip_bytes = await video.export_clip(
+    clip_bytes = await mdr.video.export_clip(
+        video,
         force_transcode=True,
         transcode_config=VLM_TRANSCODE_CONFIG,
     )

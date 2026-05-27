@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import email.utils
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
@@ -15,6 +15,9 @@ _DEFAULT_MAX_RETRIES = 2
 _INITIAL_RETRY_DELAY_SECONDS = 2.0
 _BACKOFF_FACTOR = 2.0
 _MAX_REASONABLE_RETRY_DELAY_SECONDS = 60.0
+_MAX_ERROR_BODY_CHARS = 4096
+_MAX_ERROR_STRING_CHARS = 256
+_MAX_ERROR_SEQUENCE_ITEMS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,11 +42,11 @@ class InferenceAPICallError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.url = url
-        self.request_body = request_body
+        self.request_body = _summarize_error_value(request_body)
         self.status_code = status_code
         self.response_headers = dict(response_headers or {})
-        self.response_body = response_body
-        self.data = data
+        self.response_body = _truncate_error_text(response_body)
+        self.data = _summarize_error_value(data)
         self.is_retryable = (
             _is_retryable_status(status_code) if is_retryable is None else is_retryable
         )
@@ -60,6 +63,18 @@ class InferenceRetryError(RuntimeError):
         super().__init__(message)
         self.reason = reason
         self.errors = errors
+
+
+def provider_request_options(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], int | None]:
+    request = dict(payload)
+    raw_max_retries = request.pop("__refiner_max_retries", None)
+    if raw_max_retries is None:
+        return request, None
+    if not isinstance(raw_max_retries, int):
+        raise ValueError("maxRetries must be an integer")
+    return request, raw_max_retries
 
 
 async def post_json_to_api(
@@ -295,6 +310,7 @@ def _error_message(
     response_body: str,
 ) -> str:
     detail = _extract_error_message(data) or response_body.strip() or status_text
+    detail = _truncate_error_text(detail)
     message = f"{operation} request failed with HTTP {status_code}"
     return f"{message}: {detail}" if detail else message
 
@@ -313,9 +329,40 @@ def _extract_error_message(data: Any | None) -> str | None:
     return None
 
 
+def _summarize_error_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _summarize_error_value(item)
+            for key, item in list(value.items())[:_MAX_ERROR_SEQUENCE_ITEMS]
+        }
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        items = [
+            _summarize_error_value(item) for item in value[:_MAX_ERROR_SEQUENCE_ITEMS]
+        ]
+        if len(value) > _MAX_ERROR_SEQUENCE_ITEMS:
+            items.append(f"<{len(value) - _MAX_ERROR_SEQUENCE_ITEMS} more items>")
+        return items
+    if isinstance(value, bytes | bytearray):
+        return f"<{type(value).__name__} {len(value)} bytes>"
+    if isinstance(value, str):
+        return _truncate_error_text(value, limit=_MAX_ERROR_STRING_CHARS)
+    return value
+
+
+def _truncate_error_text(
+    text: str | None,
+    *,
+    limit: int = _MAX_ERROR_BODY_CHARS,
+) -> str | None:
+    if text is None or len(text) <= limit:
+        return text
+    return f"{text[:limit]}... <truncated {len(text) - limit} chars>"
+
+
 __all__ = [
     "APIResponse",
     "InferenceAPICallError",
     "InferenceRetryError",
+    "provider_request_options",
     "post_json_to_api",
 ]

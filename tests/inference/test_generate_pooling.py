@@ -5,7 +5,7 @@ import importlib
 from typing import Any, cast
 
 import refiner as mdr
-from refiner.inference import client as client_module
+from refiner.inference.providers import openai as openai_provider
 from refiner.pipeline.data.row import DictRow
 from refiner.services import VLLMRuntimeServiceBinding
 
@@ -27,7 +27,7 @@ def test_generate_pooling_calls_vllm_pooling_endpoint(monkeypatch) -> None:
             )
 
     runtime_module = importlib.import_module("refiner.inference.internal.runtime")
-    monkeypatch.setattr(client_module._OpenAIEndpointClient, "pooling", _fake_pooling)
+    monkeypatch.setattr(openai_provider._OpenAIEndpointClient, "pooling", _fake_pooling)
     monkeypatch.setattr(
         runtime_module, "get_active_service_manager", lambda: _FakeServiceManager()
     )
