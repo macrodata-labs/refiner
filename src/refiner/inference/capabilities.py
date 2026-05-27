@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
+from refiner.inference import _capabilities
 from refiner.inference._media import resolve_media_type
 from refiner.inference.providers import (
     AnthropicEndpointProvider,
@@ -13,6 +13,9 @@ from refiner.inference.providers import (
     OpenAIResponsesProvider,
     VLLMProvider,
 )
+from refiner.inference.providers import anthropic as anthropic_provider
+from refiner.inference.providers import google as google_provider
+from refiner.inference.providers import openai as openai_provider
 from refiner.inference.types import InferenceWarning, Message
 
 _MEDIA_WARNING_BYTES = 20 * 1024 * 1024
@@ -25,17 +28,7 @@ _TOOL_SETTINGS = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class ModelCapabilities:
-    images: bool | None = None
-    audio: bool | None = None
-    video: bool | None = None
-    files: bool | None = None
-    tools: bool | None = None
-    structured_output: bool | None = None
-    reasoning: bool | None = None
-    generated_media: bool | None = None
-    citations: bool | None = None
+ModelCapabilities = _capabilities.ModelCapabilities
 
 
 def model_capabilities(
@@ -49,35 +42,13 @@ def model_capabilities(
 ) -> ModelCapabilities:
     model = provider.model.lower()
     if isinstance(provider, GoogleEndpointProvider):
-        is_gemini = "gemini" in model
-        return ModelCapabilities(
-            images=is_gemini,
-            audio=is_gemini,
-            video=is_gemini,
-            files=is_gemini,
-            tools=True,
-            structured_output=is_gemini,
-            reasoning="2.5" in model or "3" in model,
-            generated_media="image" in model or "flash-image" in model,
-            citations=is_gemini,
-        )
+        return google_provider.model_capabilities(model)
     if isinstance(provider, AnthropicEndpointProvider):
-        is_claude = "claude" in model
-        return ModelCapabilities(
-            images=is_claude,
-            audio=False,
-            video=False,
-            files=is_claude,
-            tools=True,
-            structured_output=False,
-            reasoning="3-7" in model or "4" in model or "sonnet-4" in model,
-            generated_media=False,
-            citations=is_claude,
-        )
+        return anthropic_provider.model_capabilities(model)
     if isinstance(provider, OpenAIResponsesProvider):
-        return _openai_capabilities(model, responses_api=True)
+        return openai_provider.model_capabilities(model, responses_api=True)
     if isinstance(provider, OpenAIEndpointProvider):
-        return _openai_capabilities(model, responses_api=False)
+        return openai_provider.model_capabilities(model, responses_api=False)
     return ModelCapabilities()
 
 
@@ -156,24 +127,6 @@ def capability_warnings(
                 }
             )
     return warnings
-
-
-def _openai_capabilities(model: str, *, responses_api: bool) -> ModelCapabilities:
-    vision = any(
-        marker in model for marker in ("gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "omni")
-    )
-    reasoning = model.startswith(("o1", "o3", "o4")) or "gpt-5" in model
-    return ModelCapabilities(
-        images=vision,
-        audio="audio" in model or "realtime" in model,
-        video=False,
-        files=responses_api,
-        tools=True,
-        structured_output=True,
-        reasoning=reasoning,
-        generated_media="image" in model,
-        citations=responses_api,
-    )
 
 
 def _has_provider_option(

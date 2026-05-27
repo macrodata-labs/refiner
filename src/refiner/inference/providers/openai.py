@@ -11,6 +11,7 @@ from refiner.inference._media import (
     resolve_media_type,
     top_level_media_type,
 )
+from refiner.inference._capabilities import ModelCapabilities
 from refiner.inference._message_conversion import (
     _custom_provider_data,
     _provider_option,
@@ -61,6 +62,24 @@ RESPONSES_PROVIDER_OPTIONS = {
     "truncation",
     "contextManagement",
 }
+
+
+def model_capabilities(model: str, *, responses_api: bool) -> ModelCapabilities:
+    vision = any(
+        marker in model for marker in ("gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "omni")
+    )
+    reasoning = model.startswith(("o1", "o3", "o4")) or "gpt-5" in model
+    return ModelCapabilities(
+        images=vision,
+        audio="audio" in model or "realtime" in model,
+        video=False,
+        files=responses_api,
+        tools=True,
+        structured_output=True,
+        reasoning=reasoning,
+        generated_media="image" in model,
+        citations=responses_api,
+    )
 
 
 def build_chat_payload(
@@ -720,6 +739,7 @@ __all__ = [
     "RESPONSES_PROVIDER_OPTIONS",
     "build_chat_payload",
     "build_responses_payload",
+    "model_capabilities",
     "parse_chat_response",
     "parse_responses_response",
 ]

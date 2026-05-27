@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from refiner.inference._capabilities import ModelCapabilities
 from refiner.inference._media import (
     base64_data,
     is_url,
@@ -43,6 +44,21 @@ PROVIDER_OPTIONS = {
     "sharedRequestType",
     "requestType",
 }
+
+
+def model_capabilities(model: str) -> ModelCapabilities:
+    is_gemini = "gemini" in model
+    return ModelCapabilities(
+        images=is_gemini,
+        audio=is_gemini,
+        video=is_gemini,
+        files=is_gemini,
+        tools=True,
+        structured_output=is_gemini,
+        reasoning="2.5" in model or "3" in model,
+        generated_media="image" in model or "flash-image" in model,
+        citations=is_gemini,
+    )
 
 
 def build_payload(
@@ -353,4 +369,4 @@ def _google_usage(usage_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
     return usage
 
 
-__all__ = ["PROVIDER_OPTIONS", "build_payload", "parse_response"]
+__all__ = ["PROVIDER_OPTIONS", "build_payload", "model_capabilities", "parse_response"]

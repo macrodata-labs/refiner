@@ -4,6 +4,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from refiner.inference._capabilities import ModelCapabilities
 from refiner.inference._media import (
     base64_data,
     is_url,
@@ -45,6 +46,21 @@ PROVIDER_OPTIONS = {
     "anthropicBeta",
     "contextManagement",
 }
+
+
+def model_capabilities(model: str) -> ModelCapabilities:
+    is_claude = "claude" in model
+    return ModelCapabilities(
+        images=is_claude,
+        audio=False,
+        video=False,
+        files=is_claude,
+        tools=True,
+        structured_output=False,
+        reasoning="3-7" in model or "4" in model or "sonnet-4" in model,
+        generated_media=False,
+        citations=is_claude,
+    )
 
 
 def build_payload(
@@ -367,4 +383,10 @@ def _anthropic_sources(citations: object) -> list[ResponseContentPart]:
     return sources
 
 
-__all__ = ["PROVIDER_OPTIONS", "build_payload", "parse_response", "schema_warnings"]
+__all__ = [
+    "PROVIDER_OPTIONS",
+    "build_payload",
+    "model_capabilities",
+    "parse_response",
+    "schema_warnings",
+]
