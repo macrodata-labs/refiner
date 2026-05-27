@@ -4,6 +4,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import httpx
 
@@ -347,8 +348,17 @@ def _with_google_thought_signature(
 
 
 def is_vertex_base_url(base_url: str) -> bool:
-    normalized = base_url.lower()
-    return "aiplatform.googleapis.com" in normalized or "vertex" in normalized
+    hostname = urlparse(base_url).hostname
+    if hostname is None:
+        hostname = urlparse(f"https://{base_url}").hostname
+    if hostname is None:
+        return False
+    hostname = hostname.lower()
+    return (
+        hostname == "aiplatform.googleapis.com"
+        or hostname.endswith("-aiplatform.googleapis.com")
+        or hostname.endswith(".aiplatform.googleapis.com")
+    )
 
 
 def _google_options(
@@ -630,7 +640,7 @@ def parse_response(
         content_parts.extend(_google_generated_parts(part, provider_metadata_name))
     content_parts.extend(_google_grounding_sources(candidate, provider_metadata_name))
     text = _text_from_content(content_parts)
-    if not text:
+    if not text and not content_parts:
         raise RuntimeError("google generation response is missing textual content")
     usage_metadata = response_json.get("usageMetadata")
     usage = _google_usage(usage_metadata if isinstance(usage_metadata, Mapping) else {})

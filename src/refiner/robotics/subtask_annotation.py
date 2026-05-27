@@ -102,7 +102,7 @@ def subtask_annotation(
     columns: int = 5,
     quality: int = 84,
     temperature: float = 0.1,
-    min_segment_duration_sec: float | None = 3.5,
+    min_segment_duration_sec: float | None = 0.0,
     include_contact_sheet_manifest: bool = False,
     providerOptions: ProviderOptions | None = None,
     generation_params: Mapping[str, Any] | None = None,

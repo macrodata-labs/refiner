@@ -490,7 +490,7 @@ annotate_subtasks = mdr.robotics.subtask_annotation(
     frame_width=224,
     frames_per_sheet=20,
     columns=5,
-    min_segment_duration_sec=3.5,
+    min_segment_duration_sec=0.0,
     include_contact_sheet_manifest=False,
 )
 

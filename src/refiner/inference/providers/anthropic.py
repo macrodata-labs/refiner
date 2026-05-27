@@ -528,17 +528,25 @@ def _anthropic_cache_control(part: Mapping[str, Any]) -> object:
 def _apply_anthropic_options(
     payload: dict[str, Any], options: Mapping[str, Any]
 ) -> None:
-    for key in (
-        "container",
-        "contextManagement",
-        "metadata",
-        "mcpServers",
-        "serviceTier",
-        "taskBudget",
-        "thinking",
-    ):
+    for key in ("container", "metadata", "taskBudget"):
         if key in options:
             payload[key] = options[key]
+    _apply_anthropic_aliases(
+        payload,
+        options,
+        {
+            "contextManagement": "context_management",
+            "mcpServers": "mcp_servers",
+            "serviceTier": "service_tier",
+        },
+    )
+    if "thinking" in options:
+        thinking = options["thinking"]
+        if isinstance(thinking, Mapping):
+            thinking = dict(thinking)
+            if "budgetTokens" in thinking and "budget_tokens" not in thinking:
+                thinking["budget_tokens"] = thinking.pop("budgetTokens")
+        payload["thinking"] = thinking
     if "effort" in options:
         payload["effort"] = options["effort"]
     if "speed" in options:
@@ -553,6 +561,16 @@ def _apply_anthropic_options(
         headers["anthropic-beta"] = ",".join(str(item) for item in beta)
     if headers:
         payload["__refiner_headers"] = headers
+
+
+def _apply_anthropic_aliases(
+    payload: dict[str, Any],
+    source: Mapping[str, Any],
+    aliases: Mapping[str, str],
+) -> None:
+    for source_key, target_key in aliases.items():
+        if source_key in source and target_key not in payload:
+            payload[target_key] = source[source_key]
 
 
 def parse_response(

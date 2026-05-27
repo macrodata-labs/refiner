@@ -492,6 +492,7 @@ def _apply_responses_options(
         openai_options,
         {
             "maxToolCalls": "max_tool_calls",
+            "maxCompletionTokens": "max_output_tokens",
             "parallelToolCalls": "parallel_tool_calls",
             "previousResponseId": "previous_response_id",
             "promptCacheKey": "prompt_cache_key",
@@ -1004,6 +1005,9 @@ def parse_responses_response(
                                 }
                             )
                 continue
+            if item_type == "image_generation_call":
+                content_parts.append(_openai_image_generation_part(item))
+                continue
             content = item.get("content")
             if not isinstance(content, Sequence):
                 continue
@@ -1027,7 +1031,7 @@ def parse_responses_response(
     ):
         content_parts.append({"type": "text", "text": response_json["output_text"]})
     text = _text_from_content(content_parts)
-    if not text:
+    if not text and not content_parts:
         raise RuntimeError("openai responses response is missing textual content")
     usage = response_json.get("usage")
     if not isinstance(usage, Mapping):
@@ -1074,6 +1078,25 @@ def _openai_response_item_metadata(item: Mapping[str, Any]) -> dict[str, Any]:
         )
         if key in item
     }
+
+
+def _openai_image_generation_part(item: Mapping[str, Any]) -> ResponseContentPart:
+    result: dict[str, Any] = {
+        "type": "image",
+        "mediaType": _openai_image_generation_media_type(item),
+        "providerMetadata": {"openai": _openai_response_item_metadata(item)},
+    }
+    image_data = item.get("result")
+    if isinstance(image_data, str):
+        result["data"] = image_data
+    return cast(ResponseContentPart, result)
+
+
+def _openai_image_generation_media_type(item: Mapping[str, Any]) -> str:
+    output_format = item.get("output_format")
+    if isinstance(output_format, str) and output_format:
+        return f"image/{output_format.lower()}"
+    return "image/png"
 
 
 def _openai_chat_metadata(

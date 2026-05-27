@@ -67,7 +67,7 @@ def test_inference_generate_text_accepts_raw_payload_and_merges_default_params(
     }
 
 
-def test_inference_generate_text_accepts_vercel_style_multimodal_messages(
+def test_inference_generate_text_accepts_typed_multimodal_messages(
     monkeypatch,
 ) -> None:
     seen: dict[str, object] = {}

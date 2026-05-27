@@ -548,6 +548,57 @@ def test_parse_google_response_includes_sources_and_files() -> None:
     assert response.content[2]["url"] == "https://example.com/source"
 
 
+def test_parse_google_response_accepts_image_only_output() -> None:
+    response = google_provider.parse_response(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "iVBORw0KGgo=",
+                                }
+                            }
+                        ]
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {},
+        }
+    )
+
+    assert response.text == ""
+    assert response.content == [
+        {
+            "type": "image",
+            "mediaType": "image/png",
+            "data": "iVBORw0KGgo=",
+            "providerMetadata": {
+                "google": {
+                    "inlineData": {
+                        "mimeType": "image/png",
+                        "data": "iVBORw0KGgo=",
+                    }
+                }
+            },
+        }
+    ]
+
+
+def test_google_vertex_detection_uses_hostname() -> None:
+    assert google_provider.is_vertex_base_url(
+        "https://us-central1-aiplatform.googleapis.com/v1"
+    )
+    assert google_provider.is_vertex_base_url("https://aiplatform.googleapis.com/v1")
+    assert not google_provider.is_vertex_base_url(
+        "https://example.com/proxy/aiplatform.googleapis.com/v1"
+    )
+    assert not google_provider.is_vertex_base_url("https://vertex.example.com/v1")
+
+
 def test_parse_google_response_reports_prompt_block_reason() -> None:
     with pytest.raises(
         RuntimeError,

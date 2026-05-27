@@ -249,7 +249,7 @@ def test_subtask_annotation_can_include_contact_sheet_manifest(
     )
 
 
-def test_subtask_annotation_filters_short_segments_by_default(
+def test_subtask_annotation_keeps_short_segments_by_default(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -282,5 +282,6 @@ def test_subtask_annotation_filters_short_segments_by_default(
     result = asyncio.run(cast(Any, block)(row, _fake_request))
 
     assert result["predicted_subtasks"] == [
-        {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"}
+        {"start_sec": 0.0, "end_sec": 3.49, "subtask": "short action"},
+        {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"},
     ]

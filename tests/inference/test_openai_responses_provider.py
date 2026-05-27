@@ -160,6 +160,7 @@ def test_inference_generate_text_maps_openai_responses_options_to_wire_names(
                     "maxToolCalls": 4,
                     "parallelToolCalls": False,
                     "previousResponseId": "resp_prev",
+                    "maxCompletionTokens": 128,
                     "promptCacheKey": "cache-key",
                     "promptCacheRetention": "24h",
                     "safetyIdentifier": "safe-id",
@@ -182,11 +183,45 @@ def test_inference_generate_text_maps_openai_responses_options_to_wire_names(
     assert payload["max_tool_calls"] == 4
     assert payload["parallel_tool_calls"] is False
     assert payload["previous_response_id"] == "resp_prev"
+    assert payload["max_output_tokens"] == 128
     assert payload["prompt_cache_key"] == "cache-key"
     assert payload["prompt_cache_retention"] == "24h"
     assert payload["safety_identifier"] == "safe-id"
     assert payload["service_tier"] == "priority"
     assert "maxToolCalls" not in payload
+
+
+def test_parse_openai_responses_image_generation_call_without_text() -> None:
+    response = openai_provider.parse_responses_response(
+        {
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "id": "ig_123",
+                    "status": "completed",
+                    "result": "iVBORw0KGgo=",
+                    "output_format": "png",
+                }
+            ],
+            "usage": {},
+        }
+    )
+
+    assert response.text == ""
+    assert response.content == [
+        {
+            "type": "image",
+            "mediaType": "image/png",
+            "data": "iVBORw0KGgo=",
+            "providerMetadata": {
+                "openai": {
+                    "id": "ig_123",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                }
+            },
+        }
+    ]
 
 
 def test_inference_generate_text_converts_openai_responses_assistant_reasoning(

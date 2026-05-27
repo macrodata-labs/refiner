@@ -61,6 +61,15 @@ def test_inference_generate_text_converts_messages_for_anthropic(monkeypatch) ->
                 "anthropic": {
                     "thinking": {"type": "enabled", "budgetTokens": 1024},
                     "metadata": {"user_id": "user-1"},
+                    "serviceTier": "auto",
+                    "mcpServers": [
+                        {
+                            "type": "url",
+                            "url": "https://example.com/sse",
+                            "name": "example-mcp",
+                        }
+                    ],
+                    "contextManagement": {"edits": []},
                 }
             },
             max_tokens=256,
@@ -100,8 +109,17 @@ def test_inference_generate_text_converts_messages_for_anthropic(monkeypatch) ->
             }
         ],
         "system": [{"type": "text", "text": "Use citations."}],
-        "thinking": {"type": "enabled", "budgetTokens": 1024},
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
         "metadata": {"user_id": "user-1"},
+        "service_tier": "auto",
+        "mcp_servers": [
+            {
+                "type": "url",
+                "url": "https://example.com/sse",
+                "name": "example-mcp",
+            }
+        ],
+        "context_management": {"edits": []},
     }
 
 
