@@ -33,6 +33,7 @@ huggingface = [
 ]
 video = [
     "av",
+    "pillow",
 ]
 robotics = [
     "macrodata-refiner[video]",
