@@ -6,7 +6,7 @@ import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, TypeAlias, cast
 
 from pydantic import BaseModel
 
@@ -40,7 +40,6 @@ Rules:
 - Avoid idle time, camera motion, hesitation, and tiny hand adjustments.
 """
 
-TaskSegmentationInput = Literal["raw_video", "contact_sheets"]
 if TYPE_CHECKING:
     TaskSegmentationProvider: TypeAlias = (
         AnthropicEndpointProvider
@@ -90,7 +89,6 @@ class TimestampedContactSheet:
 def task_segmentation(
     *,
     provider: TaskSegmentationProvider,
-    input: TaskSegmentationInput = "contact_sheets",
     video_key: str | None = None,
     prompt: str = _DEFAULT_TASK_SEGMENTATION_PROMPT,
     output_column: str = "predicted_subtasks",
@@ -111,8 +109,6 @@ def task_segmentation(
 
     from refiner.inference import generate_text
 
-    if input not in ("raw_video", "contact_sheets"):
-        raise ValueError("input must be 'raw_video' or 'contact_sheets'")
     if not output_column.strip():
         raise ValueError("output_column must be non-empty")
     if not output_json_column.strip():
@@ -134,7 +130,6 @@ def task_segmentation(
         content = await _task_segmentation_content(
             video=video,
             prompt=_prompt_with_instruction(prompt, row.tasks),
-            input=input,
             sample_sec=sample_sec,
             frame_width=frame_width,
             frames_per_sheet=frames_per_sheet,
@@ -220,23 +215,12 @@ async def _task_segmentation_content(
     *,
     video: VideoFile,
     prompt: str,
-    input: TaskSegmentationInput,
     sample_sec: float,
     frame_width: int,
     frames_per_sheet: int,
     columns: int,
     quality: int,
 ) -> list[dict[str, Any]]:
-    if input == "raw_video":
-        return [
-            {"type": "text", "text": prompt},
-            {
-                "type": "file",
-                "mediaType": "video/mp4",
-                "data": await video.export_clip(),
-            },
-        ]
-
     sheets = await timestamped_contact_sheets(
         video,
         sample_sec=sample_sec,
@@ -423,7 +407,6 @@ def _encode_jpeg(image: Image.Image, *, quality: int) -> bytes:
 
 
 __all__ = [
-    "TaskSegmentationInput",
     "TaskSegmentationProvider",
     "TimestampedContactSheet",
     "contact_sheet_prompt_manifest",

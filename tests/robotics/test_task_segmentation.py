@@ -141,7 +141,7 @@ def test_task_segmentation_builds_generate_text_block(monkeypatch) -> None:
     assert callable(seen["fn"])
 
 
-def test_task_segmentation_raw_video_block_updates_row(tmp_path, monkeypatch) -> None:
+def test_task_segmentation_block_updates_row(tmp_path, monkeypatch) -> None:
     seen = {}
 
     def _fake_generate_text(**kwargs):
@@ -169,7 +169,6 @@ def test_task_segmentation_raw_video_block_updates_row(tmp_path, monkeypatch) ->
     )
     block = mdr.robotics.task_segmentation(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
-        input="raw_video",
         video_key="observation.images.main",
     )
     request = {}
@@ -205,7 +204,11 @@ def test_task_segmentation_raw_video_block_updates_row(tmp_path, monkeypatch) ->
     message = request["messages"][0]
     assert message["role"] == "user"
     assert "Episode instruction: open the drawer" in message["content"][0]["text"]
-    assert message["content"][1]["mediaType"] == "video/mp4"
+    assert (
+        "Actions may continue across contact sheet boundaries"
+        in message["content"][0]["text"]
+    )
+    assert message["content"][1]["mediaType"] == "image/jpeg"
     assert result["predicted_subtasks"] == [
         {"start_sec": 0.0, "end_sec": 0.5, "subtask": "open drawer"}
     ]

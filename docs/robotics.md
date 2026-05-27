@@ -406,8 +406,8 @@ scores per episode.
 
 Task segmentation turns one robot episode into a list of timestamped subtasks.
 Use it as an episode-level async map block over a LeRobot dataset. The block
-reads each episode's video, sends either raw video or timestamped contact sheets
-to a multimodal model, and writes segmentation columns back onto the row.
+reads each episode's video, sends timestamped contact sheets to a multimodal
+model, and writes segmentation columns back onto the row.
 
 ```python
 import refiner as mdr
@@ -416,7 +416,6 @@ segment_episode = mdr.robotics.task_segmentation(
     provider=mdr.inference.GoogleEndpointProvider(
         model="gemini-flash-latest",
     ),
-    input="contact_sheets",
     sample_sec=0.5,
     frame_width=224,
     frames_per_sheet=20,
@@ -452,12 +451,10 @@ Runtime requirements:
 - install `macrodata-refiner[robotics]`
 - set the provider API key in the worker environment, for example
   `GOOGLE_API_KEY=...`
-- choose a multimodal model that supports the input format you send
+- choose a multimodal model that supports image inputs
 
-Use raw video when the provider has strong native video support. Use
-timestamped contact sheets when you want smaller requests or when the model
-works better on image inputs. Contact sheets are generated without OpenCV; they
-use Refiner's PyAV-backed video decoding plus Pillow, and timestamps are burned
+Contact sheets are generated without OpenCV; they use Refiner's PyAV-backed
+video decoding plus Pillow, and timestamps are burned
 into the image pixels so segment boundaries can be grounded to visible times.
 
 Important run knobs:
