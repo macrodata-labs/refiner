@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any, cast
+
+import httpx
 
 from refiner.inference._capabilities import ModelCapabilities
 from refiner.inference._media import (
@@ -20,6 +24,7 @@ from refiner.inference._response import (
     _provider_metadata,
     _text_from_content,
 )
+from refiner.inference._transport import post_json_to_api
 from refiner.inference.types import Message, ProviderOptions, ResponseContentPart
 
 PROVIDER_OPTIONS = {
@@ -44,6 +49,75 @@ PROVIDER_OPTIONS = {
     "sharedRequestType",
     "requestType",
 }
+
+_ENDPOINT_TIMEOUT_SECONDS = 600.0
+
+
+@dataclass(slots=True)
+class _GoogleEndpointClient:
+    base_url: str
+    model: str
+    api_key: str | None = None
+    headers: Mapping[str, str] | None = None
+    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _resolved_headers: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        headers = dict(self.headers or {})
+        resolved_api_key = self.api_key
+        if resolved_api_key is None:
+            resolved_api_key = os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
+        if resolved_api_key is not None:
+            headers["x-goog-api-key"] = resolved_api_key
+        self._resolved_headers = headers
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        client = self._client
+        if client is None:
+            client = httpx.AsyncClient(
+                base_url=self.base_url.rstrip("/"),
+                headers=self._resolved_headers,
+                timeout=_ENDPOINT_TIMEOUT_SECONDS,
+            )
+            self._client = client
+        return client
+
+    async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        api_response = await post_json_to_api(
+            self._ensure_client(),
+            f"{_model_path(self.model)}:generateContent",
+            _request_payload(payload),
+            operation="google generation",
+            max_retries=_max_retries(payload),
+        )
+        response_json = api_response.value
+        if not isinstance(response_json, Mapping):
+            raise RuntimeError("google generation response must be a JSON object")
+        return parse_response(
+            response_json,
+            response_headers=api_response.response_headers,
+        )
+
+
+def _model_path(model: str) -> str:
+    return model if "/" in model else f"models/{model}"
+
+
+def _max_retries(payload: Mapping[str, Any]) -> int | None:
+    raw = payload.get("__refiner_max_retries")
+    if raw is None:
+        return None
+    if not isinstance(raw, int):
+        raise ValueError("maxRetries must be an integer")
+    return raw
+
+
+def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    request = dict(payload)
+    request.pop("__refiner_max_retries", None)
+    return request
 
 
 def model_capabilities(model: str) -> ModelCapabilities:
@@ -369,4 +443,10 @@ def _google_usage(usage_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
     return usage
 
 
-__all__ = ["PROVIDER_OPTIONS", "build_payload", "model_capabilities", "parse_response"]
+__all__ = [
+    "PROVIDER_OPTIONS",
+    "_GoogleEndpointClient",
+    "build_payload",
+    "model_capabilities",
+    "parse_response",
+]

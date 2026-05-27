@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any, cast
+
+import httpx
 
 from refiner.inference._media import (
     base64_data,
@@ -23,6 +27,7 @@ from refiner.inference._response import (
     _provider_metadata,
     _text_from_content,
 )
+from refiner.inference._transport import post_json_to_api
 from refiner.inference.types import Message, ProviderOptions, ResponseContentPart
 
 logger = logging.getLogger(__name__)
@@ -62,6 +67,140 @@ RESPONSES_PROVIDER_OPTIONS = {
     "truncation",
     "contextManagement",
 }
+
+_ENDPOINT_TIMEOUT_SECONDS = 600.0
+
+
+@dataclass(slots=True)
+class _OpenAIEndpointClient:
+    base_url: str
+    api_key: str | None = None
+    headers: Mapping[str, str] | None = None
+    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _resolved_headers: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        headers = dict(self.headers or {})
+        resolved_api_key = self.api_key
+        if resolved_api_key is None:
+            resolved_api_key = os.environ.get("OPENAI_API_KEY")
+        if resolved_api_key is not None:
+            headers["Authorization"] = f"Bearer {resolved_api_key}"
+        self._resolved_headers = headers
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        client = self._client
+        if client is None:
+            client = httpx.AsyncClient(
+                base_url=_normalize_base_url(self.base_url),
+                headers=self._resolved_headers,
+                timeout=_ENDPOINT_TIMEOUT_SECONDS,
+            )
+            self._client = client
+        return client
+
+    async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        use_chat = "messages" in payload
+        endpoint_path = "v1/chat/completions" if use_chat else "v1/completions"
+        api_response = await post_json_to_api(
+            self._ensure_client(),
+            endpoint_path,
+            _request_payload(payload),
+            operation="generation",
+            max_retries=_max_retries(payload),
+        )
+        response_json = api_response.value
+        if not isinstance(response_json, Mapping):
+            raise RuntimeError("generation response must be a JSON object")
+        return parse_chat_response(
+            response_json,
+            use_chat=use_chat,
+            response_headers=api_response.response_headers,
+        )
+
+    async def pooling(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        api_response = await post_json_to_api(
+            self._ensure_client(),
+            "pooling",
+            _request_payload(payload),
+            operation="pooling",
+            max_retries=_max_retries(payload),
+        )
+        response_json = api_response.value
+        if not isinstance(response_json, Mapping):
+            raise RuntimeError("pooling response must be a JSON object")
+        return response_json
+
+
+@dataclass(slots=True)
+class _OpenAIResponsesClient:
+    base_url: str
+    api_key: str | None = None
+    headers: Mapping[str, str] | None = None
+    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _resolved_headers: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        headers = dict(self.headers or {})
+        resolved_api_key = self.api_key
+        if resolved_api_key is None:
+            resolved_api_key = os.environ.get("OPENAI_API_KEY")
+        if resolved_api_key is not None:
+            headers["Authorization"] = f"Bearer {resolved_api_key}"
+        self._resolved_headers = headers
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        client = self._client
+        if client is None:
+            client = httpx.AsyncClient(
+                base_url=_normalize_base_url(self.base_url),
+                headers=self._resolved_headers,
+                timeout=_ENDPOINT_TIMEOUT_SECONDS,
+            )
+            self._client = client
+        return client
+
+    async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
+        api_response = await post_json_to_api(
+            self._ensure_client(),
+            "v1/responses",
+            _request_payload(payload),
+            operation="openai responses generation",
+            max_retries=_max_retries(payload),
+        )
+        response_json = api_response.value
+        if not isinstance(response_json, Mapping):
+            raise RuntimeError("openai responses response must be a JSON object")
+        return parse_responses_response(
+            response_json,
+            response_headers=api_response.response_headers,
+        )
+
+
+def _normalize_base_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        normalized = normalized[:-3]
+    return normalized
+
+
+def _max_retries(payload: Mapping[str, Any]) -> int | None:
+    raw = payload.get("__refiner_max_retries")
+    if raw is None:
+        return None
+    if not isinstance(raw, int):
+        raise ValueError("maxRetries must be an integer")
+    return raw
+
+
+def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    request = dict(payload)
+    request.pop("__refiner_max_retries", None)
+    return request
 
 
 def model_capabilities(model: str, *, responses_api: bool) -> ModelCapabilities:
@@ -737,6 +876,8 @@ def _sequence_or_empty(value: object) -> Sequence[Any]:
 __all__ = [
     "CHAT_PROVIDER_OPTIONS",
     "RESPONSES_PROVIDER_OPTIONS",
+    "_OpenAIEndpointClient",
+    "_OpenAIResponsesClient",
     "build_chat_payload",
     "build_responses_payload",
     "model_capabilities",

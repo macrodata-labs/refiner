@@ -19,12 +19,6 @@ from refiner.inference._schema import (
     validate_structured_output,
 )
 from refiner.inference._response import InferenceResponse
-from refiner.inference.client import (
-    _AnthropicEndpointClient,
-    _GoogleEndpointClient,
-    _OpenAIEndpointClient,
-    _OpenAIResponsesClient,
-)
 from refiner.inference.generate import _record_usage
 from refiner.inference.providers import (
     AnthropicEndpointProvider,
@@ -32,6 +26,12 @@ from refiner.inference.providers import (
     OpenAIEndpointProvider,
     OpenAIResponsesProvider,
     VLLMProvider,
+)
+from refiner.inference.providers.anthropic import _AnthropicEndpointClient
+from refiner.inference.providers.google import _GoogleEndpointClient
+from refiner.inference.providers.openai import (
+    _OpenAIEndpointClient,
+    _OpenAIResponsesClient,
 )
 from refiner.inference.types import InferenceWarning, Message, ProviderOptions
 from refiner.pipeline.data.row import Row

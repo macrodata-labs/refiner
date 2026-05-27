@@ -5,18 +5,18 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeAlias, cast
 
-from refiner.inference.client import (
-    _AnthropicEndpointClient,
-    _GoogleEndpointClient,
-    _OpenAIEndpointClient,
-    _OpenAIResponsesClient,
-)
 from refiner.inference.providers import (
     AnthropicEndpointProvider,
     GoogleEndpointProvider,
     OpenAIEndpointProvider,
     OpenAIResponsesProvider,
     VLLMProvider,
+)
+from refiner.inference.providers.anthropic import _AnthropicEndpointClient
+from refiner.inference.providers.google import _GoogleEndpointClient
+from refiner.inference.providers.openai import (
+    _OpenAIEndpointClient,
+    _OpenAIResponsesClient,
 )
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult

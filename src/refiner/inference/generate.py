@@ -5,8 +5,8 @@ from typing import Any, TypeAlias
 
 from refiner.inference._runtime import inference_map
 from refiner.inference._response import InferenceResponse
-from refiner.inference.client import _OpenAIEndpointClient
 from refiner.inference.providers import OpenAIEndpointProvider, VLLMProvider
+from refiner.inference.providers.openai import _OpenAIEndpointClient
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 

@@ -4,8 +4,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeAlias
 
 from refiner.inference._runtime import inference_map
-from refiner.inference.client import _OpenAIEndpointClient
 from refiner.inference.providers import VLLMProvider
+from refiner.inference.providers.openai import _OpenAIEndpointClient
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 
