@@ -405,156 +405,61 @@ scores per episode.
 ## Task Segmentation
 
 Task segmentation turns one robot episode into a list of timestamped subtasks.
-For multimodal models that can read video directly, use
-`mdr.inference.generate_text(...)` with a video content part and a Pydantic
-schema. Refiner handles the provider request shape, retries, response parsing,
-and local schema validation.
+Use it as an episode-level async map block over a LeRobot dataset. The block
+reads each episode's video, sends either raw video or timestamped contact sheets
+to a multimodal model, and writes segmentation columns back onto the row.
 
 ```python
-from pydantic import BaseModel
 import refiner as mdr
 
-
-class Segment(BaseModel):
-    start_sec: float
-    end_sec: float
-    subtask: str
-
-
-class Segmentation(BaseModel):
-    segments: list[Segment]
-
-
-PROMPT = """Reconstruct the sequence of manipulation events in this robot video.
-
-Return only JSON with this shape:
-{"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
-
-Rules:
-- Treat each segment as one event that changes what is true about the world.
-- Use boundaries where an object is held, released, moved, opened, closed, or
-  contents move.
-- Avoid idle time, camera motion, hesitation, and tiny hand adjustments.
-"""
-
-
-async def segment_episode(row, generate_text):
-    video = next(iter(row.videos.values())).video
-    video_bytes = await video.export_clip()
-    instruction = " ".join(row.tasks)
-
-    response = await generate_text(
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"{PROMPT}\nEpisode instruction: {instruction}\n",
-                    },
-                    {
-                        "type": "file",
-                        "mediaType": "video/mp4",
-                        "data": video_bytes,
-                    },
-                ],
-            }
-        ],
-        schema=Segmentation,
-        temperature=0.1,
-        providerOptions={
-            "google": {
-                "safetySettings": [
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                    {
-                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        "threshold": "BLOCK_NONE",
-                    },
-                    {
-                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                        "threshold": "BLOCK_NONE",
-                    },
-                ]
-            }
-        },
-    )
-
-    segments = [
-        segment.model_dump()
-        for segment in response.object.segments
-        if segment.end_sec > segment.start_sec
-    ]
-    return row.update(
-        predicted_subtasks=segments,
-        raw_annotation_output=response.text,
-        annotation_model="gemini-flash-latest",
-    )
-
+# Define or import your task segmentation block in the job file.
+# It receives one LeRobot episode row and returns the row with prediction columns.
+segment_episode = ...
 
 pipeline = (
     mdr.read_lerobot("hf://datasets/acme/robot_episodes")
     .map_async(
-        mdr.inference.generate_text(
-            fn=segment_episode,
-            provider=mdr.inference.GoogleEndpointProvider(
-                model="gemini-flash-latest",
-            ),
-        ),
+        segment_episode,
         max_in_flight=16,
         preserve_order=False,
     )
     .write_lerobot("hf://buckets/acme/robot_task_segments")
 )
-```
 
-For path-only or embedded-video datasets that are not LeRobot rows, pass the
-video bytes from the row directly:
-
-```python
-{
-    "type": "file",
-    "mediaType": "video/mp4",
-    "data": row["video"],
-}
-```
-
-If the model performs better with contact sheets than raw video, use
-`mdr.robotics.timestamped_contact_sheets(...)`. It decodes frames through
-Refiner's PyAV-backed `VideoFile.iter_frames()` path, burns a timestamp badge
-into each sampled frame with Pillow, tiles the frames, and returns JPEG sheets
-that can be sent as image file parts. The timestamps are embedded in the pixels
-so the model can visually bind every tile to its time. A text manifest can still
-be included as extra context, but it should not replace embedded timestamps. The
-manifest is important when an action continues from the end of one sheet into
-the next sheet.
-
-```python
-sheets = await mdr.robotics.timestamped_contact_sheets(
-    video,
-    sample_sec=0.5,
-    frame_width=224,
-    frames_per_sheet=20,
-    columns=5,
+stats = pipeline.launch_local(
+    name="robot-task-segmentation",
+    num_workers=8,
 )
-
-content = [
-    {
-        "type": "text",
-        "text": (
-            f"{PROMPT}\n\n"
-            f"{mdr.robotics.contact_sheet_prompt_manifest(sheets)}"
-        ),
-    },
-    *[
-        {"type": "file", "mediaType": sheet.media_type, "data": sheet.data}
-        for sheet in sheets
-    ],
-]
 ```
 
-The helper uses `macrodata-refiner[video]` dependencies (`av` and `pillow`); it
-does not require `opencv-python-headless`.
+The `segment_episode` function is the task-specific block. It should return the
+input row with these columns added:
+
+- `predicted_subtasks`: list of `{start_sec, end_sec, subtask}` objects
+- `predicted_subtasks_json`: serialized copy of the same subtasks
+- `annotation_model`: model name used for the run
+- `raw_annotation_output`: raw model text for debugging
+
+Runtime requirements:
+
+- install `macrodata-refiner[robotics]`
+- set the provider API key in the worker environment, for example
+  `GOOGLE_API_KEY=...`
+- choose a multimodal model that supports the input format you send
+
+Use raw video when the provider has strong native video support. Use
+timestamped contact sheets when you want smaller requests or when the model
+works better on image inputs. Contact sheets are generated without OpenCV; they
+use Refiner's PyAV-backed video decoding plus Pillow, and timestamps are burned
+into the image pixels so segment boundaries can be grounded to visible times.
+
+Important run knobs:
+
+- `max_in_flight`: controls concurrent model calls
+- `preserve_order=False`: lets faster episodes finish without waiting for
+  earlier episodes
+- `sample_sec`: lower values give finer temporal resolution for contact sheets
+- `frames_per_sheet` and `columns`: control request compactness and readability
 
 ## Merging Datasets
 
