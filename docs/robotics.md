@@ -493,6 +493,8 @@ segment_episode = mdr.robotics.task_segmentation(
     frame_width=224,
     frames_per_sheet=20,
     columns=5,
+    min_segment_duration_sec=3.5,
+    include_contact_sheet_manifest=False,
 )
 
 pipeline = (
@@ -537,6 +539,16 @@ Important run knobs:
   earlier episodes
 - `sample_sec`: lower values give finer temporal resolution for contact sheets
 - `frames_per_sheet` and `columns`: control request compactness and readability
+- `min_segment_duration_sec`: drops predicted segments shorter than this many
+  seconds after normalization; pass `None` to keep raw model output
+- `include_contact_sheet_manifest`: adds a text manifest describing sheet order
+  and sheet time ranges when you want that extra prompt context
+
+The default prompt and rendering parameters match the current benchmark setup:
+timestamped contact sheets at 0.5 second sampling, 224 pixel frame width, 20
+frames per sheet, a 5-column grid, JPEG quality 84, temperature 0.1, small
+white-on-black timestamp badges in the top-left corner, and 3.5 second minimum
+segment filtering.
 
 ## Merging Datasets
 

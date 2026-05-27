@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -29,14 +30,17 @@ if TYPE_CHECKING:
     )
     from refiner.video import VideoFile
 
-_DEFAULT_TASK_SEGMENTATION_PROMPT = """Reconstruct the sequence of manipulation events in this robot video.
+_DEFAULT_TASK_SEGMENTATION_PROMPT = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
 
 Return only JSON with this shape:
 {"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
 
 Rules:
 - Treat each segment as one event that changes what is true about the world.
-- Choose boundaries where an object is held, released, moved, opened, closed, or contents move.
+- Good event boundaries happen when an object becomes held, is released, reaches a new location, a lid/door changes open/closed state, a tool starts/stops affecting a surface, or contents visibly move.
+- For each event, choose start_sec at the first timestamp where the causal motion for that event is underway, and end_sec at the first timestamp where the resulting world state is achieved.
+- If an action is continuous and changes the same state gradually, keep it as one event.
+- If the same action repeats on different objects or target locations, output separate repeated events.
 - Avoid idle time, camera motion, hesitation, and tiny hand adjustments.
 """
 
@@ -101,6 +105,8 @@ def task_segmentation(
     columns: int = 5,
     quality: int = 84,
     temperature: float = 0.1,
+    min_segment_duration_sec: float | None = 3.5,
+    include_contact_sheet_manifest: bool = False,
     providerOptions: ProviderOptions | None = None,
     generation_params: Mapping[str, Any] | None = None,
     max_concurrent_requests: int = 256,
@@ -117,6 +123,8 @@ def task_segmentation(
         raise ValueError("raw_output_column must be non-empty")
     if not model_column.strip():
         raise ValueError("model_column must be non-empty")
+    if min_segment_duration_sec is not None and min_segment_duration_sec < 0:
+        raise ValueError("min_segment_duration_sec must be >= 0")
 
     async def _segment_episode(
         row: Row,
@@ -135,6 +143,7 @@ def task_segmentation(
             frames_per_sheet=frames_per_sheet,
             columns=columns,
             quality=quality,
+            include_contact_sheet_manifest=include_contact_sheet_manifest,
         )
         params: dict[str, Any] = {
             "temperature": temperature,
@@ -143,14 +152,14 @@ def task_segmentation(
         messages = cast(list[Message], [{"role": "user", "content": content}])
         response = await generate_text(
             messages=messages,
-            schema=_TaskSegmentationResult,
             providerOptions=providerOptions,
             **params,
         )
-        if not isinstance(response.object, _TaskSegmentationResult):
-            raise ValueError("task segmentation response did not match schema")
-        parsed = response.object
-        segments = _normalize_segments(parsed.segments)
+        parsed = _parse_task_segmentation_result(response.text)
+        segments = _filter_segments(
+            _normalize_segments(parsed.segments),
+            min_duration_sec=min_segment_duration_sec,
+        )
         return row.update(
             {
                 output_column: segments,
@@ -211,6 +220,24 @@ def _prompt_with_instruction(prompt: str, tasks: list[str]) -> str:
     return f"{prompt}\nEpisode instruction: {instruction}\n"
 
 
+def _parse_task_segmentation_result(text: str) -> _TaskSegmentationResult:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?", "", stripped, flags=re.IGNORECASE).strip()
+        stripped = re.sub(r"```$", "", stripped).strip()
+
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        value = json.loads(stripped[start : end + 1])
+
+    return _TaskSegmentationResult.model_validate(value)
+
+
 async def _task_segmentation_content(
     *,
     video: VideoFile,
@@ -220,6 +247,7 @@ async def _task_segmentation_content(
     frames_per_sheet: int,
     columns: int,
     quality: int,
+    include_contact_sheet_manifest: bool,
 ) -> list[dict[str, Any]]:
     sheets = await timestamped_contact_sheets(
         video,
@@ -229,10 +257,13 @@ async def _task_segmentation_content(
         columns=columns,
         quality=quality,
     )
+    text = prompt
+    if include_contact_sheet_manifest:
+        text = f"{text}\n\n{contact_sheet_prompt_manifest(sheets)}"
     return [
         {
             "type": "text",
-            "text": f"{prompt}\n\n{contact_sheet_prompt_manifest(sheets)}",
+            "text": text,
         },
         *[
             {"type": "file", "mediaType": sheet.media_type, "data": sheet.data}
@@ -258,6 +289,20 @@ def _normalize_segments(segments: list[_TaskSegment]) -> list[dict[str, Any]]:
         normalized,
         key=lambda segment: (segment["start_sec"], segment["end_sec"]),
     )
+
+
+def _filter_segments(
+    segments: list[dict[str, Any]],
+    *,
+    min_duration_sec: float | None,
+) -> list[dict[str, Any]]:
+    if min_duration_sec is None:
+        return segments
+    return [
+        segment
+        for segment in segments
+        if float(segment["end_sec"]) - float(segment["start_sec"]) >= min_duration_sec
+    ]
 
 
 async def timestamped_contact_sheets(

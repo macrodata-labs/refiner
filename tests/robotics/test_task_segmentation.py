@@ -51,6 +51,26 @@ async def _build_sheets(video: mdr.video.VideoFile):
     )
 
 
+def _lerobot_row(tmp_path, *, tasks: list[str] | None = None) -> LeRobotRow:
+    path = tmp_path / "video.mp4"
+    _write_video(path, num_frames=3, fps=5)
+    return LeRobotRow(
+        DictRow(
+            {
+                "episode_index": 3,
+                "length": 3,
+                "tasks": tasks or [],
+                "videos/observation.images.main/uri": "video.mp4",
+                "videos/observation.images.main/from_timestamp": 0.0,
+                "videos/observation.images.main/to_timestamp": 0.6,
+            }
+        ),
+        metadata=cast(LeRobotMetadata, None),
+        frames=[],
+        root=DataFolder.resolve(tmp_path),
+    )
+
+
 def test_timestamped_contact_sheets_sample_and_tile_video(tmp_path) -> None:
     path = tmp_path / "video.mp4"
     _write_video(path, num_frames=6, fps=5)
@@ -150,26 +170,63 @@ def test_task_segmentation_block_updates_row(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
 
-    path = tmp_path / "video.mp4"
-    _write_video(path, num_frames=3, fps=5)
-    row = LeRobotRow(
-        DictRow(
-            {
-                "episode_index": 3,
-                "length": 3,
-                "tasks": ["open the drawer"],
-                "videos/observation.images.main/uri": "video.mp4",
-                "videos/observation.images.main/from_timestamp": 0.0,
-                "videos/observation.images.main/to_timestamp": 0.6,
-            }
-        ),
-        metadata=cast(LeRobotMetadata, None),
-        frames=[],
-        root=DataFolder.resolve(tmp_path),
-    )
+    row = _lerobot_row(tmp_path, tasks=["open the drawer"])
     block = mdr.robotics.task_segmentation(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
+    )
+    request = {}
+
+    async def _fake_request(**kwargs):
+        request.update(kwargs)
+        return InferenceResponse(
+            text=(
+                '{"segments":['
+                '{"start_sec":0.4,"end_sec":0.2,"subtask":"ignored"},'
+                '{"start_sec":0.0,"end_sec":4.0,"subtask":"open drawer"}'
+                "]}"
+            ),
+            finish_reason="stop",
+            usage={},
+            response={},
+        )
+
+    result = asyncio.run(cast(Any, block)(row, _fake_request))
+
+    assert seen["provider"].model == "gemini-flash-latest"
+    assert request["temperature"] == 0.1
+    message = request["messages"][0]
+    assert message["role"] == "user"
+    assert "Episode instruction: open the drawer" in message["content"][0]["text"]
+    assert (
+        "Actions may continue across contact sheet boundaries"
+        not in message["content"][0]["text"]
+    )
+    assert message["content"][1]["mediaType"] == "image/jpeg"
+    assert result["predicted_subtasks"] == [
+        {"start_sec": 0.0, "end_sec": 4.0, "subtask": "open drawer"}
+    ]
+    assert result["predicted_subtasks_json"] == (
+        '[{"end_sec": 4.0, "start_sec": 0.0, "subtask": "open drawer"}]'
+    )
+    assert result["annotation_model"] == "gemini-flash-latest"
+    assert '"subtask":"open drawer"' in result["raw_annotation_output"]
+
+
+def test_task_segmentation_can_include_contact_sheet_manifest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _lerobot_row(tmp_path, tasks=["open the drawer"])
+    block = mdr.robotics.task_segmentation(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+        include_contact_sheet_manifest=True,
     )
     request = {}
 
@@ -180,40 +237,49 @@ def test_task_segmentation_block_updates_row(tmp_path, monkeypatch) -> None:
             finish_reason="stop",
             usage={},
             response={},
-            object=task_segmentation_module._TaskSegmentationResult(
-                segments=[
-                    task_segmentation_module._TaskSegment(
-                        start_sec=0.4,
-                        end_sec=0.2,
-                        subtask="ignored",
-                    ),
-                    task_segmentation_module._TaskSegment(
-                        start_sec=0.0,
-                        end_sec=0.5,
-                        subtask="open drawer",
-                    ),
-                ]
+            object=task_segmentation_module._TaskSegmentationResult(segments=[]),
+        )
+
+    asyncio.run(cast(Any, block)(row, _fake_request))
+
+    assert (
+        "Actions may continue across contact sheet boundaries"
+        in request["messages"][0]["content"][0]["text"]
+    )
+
+
+def test_task_segmentation_filters_short_segments_by_default(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _lerobot_row(tmp_path)
+    block = mdr.robotics.task_segmentation(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+    )
+
+    async def _fake_request(**kwargs):
+        return InferenceResponse(
+            text=(
+                "```json\n"
+                '{"segments":['
+                '{"start_sec":0.0,"end_sec":3.49,"subtask":"short action"},'
+                '{"start_sec":3.5,"end_sec":7.0,"subtask":"long action"}'
+                "]}\n"
+                "```"
             ),
+            finish_reason="stop",
+            usage={},
+            response={},
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
 
-    assert seen["provider"].model == "gemini-flash-latest"
-    assert request["schema"] is task_segmentation_module._TaskSegmentationResult
-    assert request["temperature"] == 0.1
-    message = request["messages"][0]
-    assert message["role"] == "user"
-    assert "Episode instruction: open the drawer" in message["content"][0]["text"]
-    assert (
-        "Actions may continue across contact sheet boundaries"
-        in message["content"][0]["text"]
-    )
-    assert message["content"][1]["mediaType"] == "image/jpeg"
     assert result["predicted_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.5, "subtask": "open drawer"}
+        {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"}
     ]
-    assert result["predicted_subtasks_json"] == (
-        '[{"end_sec": 0.5, "start_sec": 0.0, "subtask": "open drawer"}]'
-    )
-    assert result["annotation_model"] == "gemini-flash-latest"
-    assert result["raw_annotation_output"] == '{"segments":[]}'
