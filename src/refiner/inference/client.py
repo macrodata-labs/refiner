@@ -7,14 +7,11 @@ from typing import Any
 
 import httpx
 
-from refiner.inference._response import (
-    InferenceResponse,
-    _parse_anthropic_inference_response,
-    _parse_google_inference_response,
-    _parse_inference_response,
-    _parse_openai_responses_response,
-)
+from refiner.inference._response import InferenceResponse
 from refiner.inference._transport import post_json_to_api
+from refiner.inference.providers import anthropic as anthropic_provider
+from refiner.inference.providers import google as google_provider
+from refiner.inference.providers import openai as openai_provider
 
 _OPENAI_ENDPOINT_TIMEOUT_SECONDS = 600.0
 
@@ -62,7 +59,7 @@ class _OpenAIEndpointClient:
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
             raise RuntimeError("generation response must be a JSON object")
-        return _parse_inference_response(
+        return openai_provider.parse_chat_response(
             response_json,
             use_chat=use_chat,
             response_headers=api_response.response_headers,
@@ -124,7 +121,7 @@ class _GoogleEndpointClient:
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
             raise RuntimeError("google generation response must be a JSON object")
-        return _parse_google_inference_response(
+        return google_provider.parse_response(
             response_json,
             response_headers=api_response.response_headers,
         )
@@ -171,7 +168,7 @@ class _OpenAIResponsesClient:
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
             raise RuntimeError("openai responses response must be a JSON object")
-        return _parse_openai_responses_response(
+        return openai_provider.parse_responses_response(
             response_json,
             response_headers=api_response.response_headers,
         )
@@ -220,7 +217,7 @@ class _AnthropicEndpointClient:
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
             raise RuntimeError("anthropic generation response must be a JSON object")
-        return _parse_anthropic_inference_response(
+        return anthropic_provider.parse_response(
             response_json,
             response_headers=api_response.response_headers,
         )

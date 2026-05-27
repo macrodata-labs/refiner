@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from refiner.inference._media import (
     base64_data,
@@ -15,7 +15,17 @@ from refiner.inference._message_conversion import (
     _provider_options,
 )
 from refiner.inference._schema import StructuredOutputSchema
-from refiner.inference.types import InferenceWarning, Message, ProviderOptions
+from refiner.inference._response import (
+    InferenceResponse,
+    _provider_metadata,
+    _text_from_content,
+)
+from refiner.inference.types import (
+    InferenceWarning,
+    Message,
+    ProviderOptions,
+    ResponseContentPart,
+)
 
 PROVIDER_OPTIONS = {
     "sendReasoning",
@@ -292,4 +302,69 @@ def _apply_anthropic_options(
         payload["speed"] = options["speed"]
 
 
-__all__ = ["PROVIDER_OPTIONS", "build_payload", "schema_warnings"]
+def parse_response(
+    response_json: Mapping[str, Any],
+    *,
+    response_headers: Mapping[str, str] | None = None,
+) -> InferenceResponse:
+    content = response_json.get("content")
+    if not isinstance(content, Sequence):
+        raise RuntimeError("anthropic response is missing content")
+    content_parts: list[ResponseContentPart] = []
+    for part in content:
+        if not isinstance(part, Mapping) or not isinstance(part.get("text"), str):
+            continue
+        part_type = part.get("type")
+        if part_type == "text":
+            content_parts.append({"type": "text", "text": part["text"]})
+            content_parts.extend(_anthropic_sources(part.get("citations")))
+        elif part_type in {"thinking", "reasoning"}:
+            content_parts.append({"type": "reasoning", "text": part["text"]})
+    text = _text_from_content(content_parts)
+    if not text:
+        raise RuntimeError("anthropic response is missing textual content")
+    usage = response_json.get("usage")
+    if not isinstance(usage, Mapping):
+        usage = {}
+    mapped_usage = {
+        "prompt_tokens": usage.get("input_tokens", 0),
+        "completion_tokens": usage.get("output_tokens", 0),
+    }
+    finish_reason = response_json.get("stop_reason")
+    if finish_reason is not None and not isinstance(finish_reason, str):
+        finish_reason = str(finish_reason)
+    return InferenceResponse(
+        text=text,
+        finish_reason=finish_reason,
+        usage=mapped_usage,
+        response=response_json,
+        content=content_parts,
+        headers=dict(response_headers or {}),
+        provider_metadata=_provider_metadata("anthropic", response_json),
+    )
+
+
+def _anthropic_sources(citations: object) -> list[ResponseContentPart]:
+    if not isinstance(citations, Sequence) or isinstance(citations, str):
+        return []
+    sources: list[ResponseContentPart] = []
+    for citation in citations:
+        if not isinstance(citation, Mapping):
+            continue
+        citation = cast(Mapping[str, Any], citation)
+        url = citation.get("url")
+        title = citation.get("title") or citation.get("document_title")
+        source: dict[str, Any] = {
+            "type": "source",
+            "sourceType": "url" if isinstance(url, str) else "document",
+            "providerMetadata": {"anthropic": dict(citation)},
+        }
+        if isinstance(url, str):
+            source["url"] = url
+        if isinstance(title, str):
+            source["title"] = title
+        sources.append(cast(ResponseContentPart, source))
+    return sources
+
+
+__all__ = ["PROVIDER_OPTIONS", "build_payload", "parse_response", "schema_warnings"]

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from refiner.inference._media import (
     base64_data,
@@ -15,7 +16,15 @@ from refiner.inference._message_conversion import (
     _provider_option,
 )
 from refiner.inference._schema import StructuredOutputSchema
-from refiner.inference.types import Message, ProviderOptions
+from refiner.inference._response import (
+    InferenceResponse,
+    _copy_if_str,
+    _provider_metadata,
+    _text_from_content,
+)
+from refiner.inference.types import Message, ProviderOptions, ResponseContentPart
+
+logger = logging.getLogger(__name__)
 
 CHAT_PROVIDER_OPTIONS = {
     "audio",
@@ -489,9 +498,228 @@ def _convert_openai_responses_assistant_content(
     return input_items
 
 
+def parse_chat_response(
+    response_json: Mapping[str, Any],
+    *,
+    use_chat: bool,
+    response_headers: Mapping[str, str] | None = None,
+) -> InferenceResponse:
+    choices = response_json.get("choices")
+    if not isinstance(choices, Sequence) or not choices:
+        raise RuntimeError("generation response is missing choices[0]")
+    choice = choices[0]
+    if not isinstance(choice, Mapping):
+        raise RuntimeError("generation response choices[0] must be an object")
+    content_parts: list[ResponseContentPart] = []
+    if use_chat:
+        message = choice.get("message")
+        if not isinstance(message, Mapping):
+            raise RuntimeError("chat completion response is missing message")
+        reasoning = message.get("reasoning")
+        if isinstance(reasoning, str) and reasoning:
+            content_parts.append({"type": "reasoning", "text": reasoning})
+        content_parts.extend(_openai_sources(message.get("annotations")))
+        content = message.get("content")
+        if isinstance(content, str):
+            text = content
+            if text:
+                content_parts.append({"type": "text", "text": text})
+        elif content is None:
+            logger.warning(
+                "chat completion response had null message.content; returning empty text",
+                extra={
+                    "finish_reason": choice.get("finish_reason"),
+                    "has_reasoning": isinstance(message.get("reasoning"), str),
+                },
+            )
+            text = ""
+        elif isinstance(content, Sequence):
+            parts: list[str] = []
+            for item in content:
+                if not isinstance(item, Mapping):
+                    continue
+                if item.get("type") == "text" and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                    content_parts.extend(_openai_sources(item.get("annotations")))
+            if not parts:
+                raise RuntimeError(
+                    "chat completion response is missing textual content"
+                )
+            text = "".join(parts)
+            for part in parts:
+                content_parts.append({"type": "text", "text": part})
+        else:
+            raise RuntimeError("chat completion response is missing textual content")
+    else:
+        text = choice.get("text")
+        if not isinstance(text, str):
+            raise RuntimeError("completion response is missing text")
+        if text:
+            content_parts.append({"type": "text", "text": text})
+    usage = response_json.get("usage")
+    if not isinstance(usage, Mapping):
+        usage = {}
+    finish_reason = choice.get("finish_reason")
+    if finish_reason is not None and not isinstance(finish_reason, str):
+        finish_reason = str(finish_reason)
+    return InferenceResponse(
+        text=text,
+        finish_reason=finish_reason,
+        usage=usage,
+        response=response_json,
+        content=content_parts,
+        headers=dict(response_headers or {}),
+        logprobs=_sequence_or_empty(choice.get("logprobs")),
+        provider_metadata=_provider_metadata("openai", response_json, choice),
+    )
+
+
+def parse_responses_response(
+    response_json: Mapping[str, Any],
+    *,
+    response_headers: Mapping[str, str] | None = None,
+) -> InferenceResponse:
+    content_parts: list[ResponseContentPart] = []
+    output = response_json.get("output")
+    if isinstance(output, Sequence):
+        for item in output:
+            if not isinstance(item, Mapping):
+                continue
+            item_type = item.get("type")
+            if item_type == "reasoning":
+                summary = item.get("summary")
+                if isinstance(summary, Sequence):
+                    for summary_part in summary:
+                        if isinstance(summary_part, Mapping) and isinstance(
+                            summary_part.get("text"), str
+                        ):
+                            content_parts.append(
+                                {"type": "reasoning", "text": summary_part["text"]}
+                            )
+                continue
+            content = item.get("content")
+            if not isinstance(content, Sequence):
+                continue
+            for part in content:
+                if not isinstance(part, Mapping):
+                    continue
+                if isinstance(part.get("text"), str):
+                    content_parts.append({"type": "text", "text": part["text"]})
+                    content_parts.extend(_openai_sources(part.get("annotations")))
+                content_parts.extend(_openai_generated_parts(part))
+    if not _text_from_content(content_parts) and isinstance(
+        response_json.get("output_text"), str
+    ):
+        content_parts.append({"type": "text", "text": response_json["output_text"]})
+    text = _text_from_content(content_parts)
+    if not text:
+        raise RuntimeError("openai responses response is missing textual content")
+    usage = response_json.get("usage")
+    if not isinstance(usage, Mapping):
+        usage = {}
+    mapped_usage = {
+        "prompt_tokens": usage.get("input_tokens", usage.get("prompt_tokens", 0)),
+        "completion_tokens": usage.get(
+            "output_tokens", usage.get("completion_tokens", 0)
+        ),
+        "total_tokens": usage.get("total_tokens", 0),
+    }
+    return InferenceResponse(
+        text=text,
+        finish_reason=None,
+        usage=mapped_usage,
+        response=response_json,
+        content=content_parts,
+        headers=dict(response_headers or {}),
+        logprobs=_collect_openai_responses_logprobs(response_json),
+        provider_metadata=_provider_metadata("openai", response_json),
+    )
+
+
+def _openai_sources(annotations: object) -> list[ResponseContentPart]:
+    if not isinstance(annotations, Sequence) or isinstance(annotations, str):
+        return []
+    sources: list[ResponseContentPart] = []
+    for annotation in annotations:
+        if not isinstance(annotation, Mapping):
+            continue
+        annotation = cast(Mapping[str, Any], annotation)
+        url = annotation.get("url")
+        title = annotation.get("title")
+        if not isinstance(url, str):
+            url_citation = annotation.get("url_citation")
+            if isinstance(url_citation, Mapping):
+                url = url_citation.get("url")
+                title = url_citation.get("title", title)
+        if isinstance(url, str):
+            source: dict[str, Any] = {
+                "type": "source",
+                "sourceType": "url",
+                "url": url,
+                "providerMetadata": {"openai": dict(annotation)},
+            }
+            if isinstance(title, str):
+                source["title"] = title
+            sources.append(cast(ResponseContentPart, source))
+    return sources
+
+
+def _openai_generated_parts(part: Mapping[str, Any]) -> list[ResponseContentPart]:
+    part_type = part.get("type")
+    if part_type in {"output_image", "image"}:
+        image: dict[str, Any] = {
+            "type": "image",
+            "providerMetadata": {"openai": dict(part)},
+        }
+        _copy_if_str(part, image, "mediaType", "media_type")
+        _copy_if_str(part, image, "data", "b64_json")
+        _copy_if_str(part, image, "url", "url")
+        return [cast(ResponseContentPart, image)]
+    if part_type in {"output_file", "file"}:
+        file_part: dict[str, Any] = {
+            "type": "file",
+            "providerMetadata": {"openai": dict(part)},
+        }
+        _copy_if_str(part, file_part, "mediaType", "media_type")
+        _copy_if_str(part, file_part, "data", "file_data")
+        _copy_if_str(part, file_part, "url", "file_url")
+        _copy_if_str(part, file_part, "filename", "filename")
+        return [cast(ResponseContentPart, file_part)]
+    return []
+
+
+def _collect_openai_responses_logprobs(
+    response_json: Mapping[str, Any],
+) -> Sequence[Any]:
+    output = response_json.get("output")
+    if not isinstance(output, Sequence):
+        return ()
+    logprobs: list[Any] = []
+    for item in output:
+        if not isinstance(item, Mapping):
+            continue
+        content = item.get("content")
+        if not isinstance(content, Sequence):
+            continue
+        for part in content:
+            if isinstance(part, Mapping) and "logprobs" in part:
+                logprobs.append(part["logprobs"])
+    return logprobs
+
+
+def _sequence_or_empty(value: object) -> Sequence[Any]:
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return (value,)
+    return ()
+
+
 __all__ = [
     "CHAT_PROVIDER_OPTIONS",
     "RESPONSES_PROVIDER_OPTIONS",
     "build_chat_payload",
     "build_responses_payload",
+    "parse_chat_response",
+    "parse_responses_response",
 ]

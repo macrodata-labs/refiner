@@ -24,7 +24,9 @@ from refiner.worker.context import set_active_run_context
 from refiner.worker.metrics.emitter import UserMetricsEmitter
 
 from refiner.inference import client as client_module
-from refiner.inference import _response as response_module
+from refiner.inference.providers import anthropic as anthropic_provider
+from refiner.inference.providers import google as google_provider
+from refiner.inference.providers import openai as openai_provider
 
 generate_module = importlib.import_module("refiner.inference.generate")
 runtime_module = importlib.import_module("refiner.inference._runtime")
@@ -1241,7 +1243,7 @@ def test_inference_generate_text_requires_prompt_or_messages() -> None:
 
 
 def test_parse_openai_chat_response_includes_reasoning_content() -> None:
-    response = response_module._parse_inference_response(
+    response = openai_provider.parse_chat_response(
         {
             "choices": [
                 {
@@ -1265,7 +1267,7 @@ def test_parse_openai_chat_response_includes_reasoning_content() -> None:
 
 
 def test_parse_openai_responses_response_includes_reasoning_content() -> None:
-    response = response_module._parse_openai_responses_response(
+    response = openai_provider.parse_responses_response(
         {
             "output": [
                 {
@@ -1289,7 +1291,7 @@ def test_parse_openai_responses_response_includes_reasoning_content() -> None:
 
 
 def test_parse_openai_responses_response_includes_rich_parts() -> None:
-    response = response_module._parse_openai_responses_response(
+    response = openai_provider.parse_responses_response(
         {
             "id": "resp_123",
             "model": "gpt-5-mini",
@@ -1333,7 +1335,7 @@ def test_parse_openai_responses_response_includes_rich_parts() -> None:
 
 
 def test_parse_google_response_includes_reasoning_content() -> None:
-    response = response_module._parse_google_inference_response(
+    response = google_provider.parse_response(
         {
             "candidates": [
                 {
@@ -1358,7 +1360,7 @@ def test_parse_google_response_includes_reasoning_content() -> None:
 
 
 def test_parse_google_response_includes_sources_and_files() -> None:
-    response = response_module._parse_google_inference_response(
+    response = google_provider.parse_response(
         {
             "candidates": [
                 {
@@ -1398,7 +1400,7 @@ def test_parse_google_response_includes_sources_and_files() -> None:
 
 
 def test_parse_anthropic_response_includes_reasoning_content() -> None:
-    response = response_module._parse_anthropic_inference_response(
+    response = anthropic_provider.parse_response(
         {
             "content": [
                 {"type": "thinking", "text": "think"},
@@ -1417,7 +1419,7 @@ def test_parse_anthropic_response_includes_reasoning_content() -> None:
 
 
 def test_parse_anthropic_response_includes_citation_sources() -> None:
-    response = response_module._parse_anthropic_inference_response(
+    response = anthropic_provider.parse_response(
         {
             "content": [
                 {
@@ -1821,7 +1823,7 @@ def test_openai_endpoint_warns_on_null_chat_content(caplog) -> None:
         ],
         "usage": {"completion_tokens": 64},
     }
-    response = response_module._parse_inference_response(
+    response = openai_provider.parse_chat_response(
         raw_response,
         use_chat=True,
     )
