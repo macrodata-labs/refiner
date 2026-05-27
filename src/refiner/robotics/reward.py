@@ -12,9 +12,9 @@ from refiner.robotics.lerobot_format import LeRobotRow
 from refiner.video.decode import DecodedVideoFrame
 
 if TYPE_CHECKING:
-    from refiner.inference.pooling import PoolingFn
+    from refiner.inference.generate_pooling import GeneratePoolingFn
 else:
-    PoolingFn = Callable[[Mapping[str, Any]], Any]
+    GeneratePoolingFn = Callable[[Mapping[str, Any]], Any]
 
 _DEFAULT_ROBOMETER_MODEL = "aliangdw/Robometer-4B"
 _PROGRESS_TOKEN = "<|prog_token|>"
@@ -44,12 +44,15 @@ def reward_score(
     if not success_column.strip():
         raise ValueError("success_column must be non-empty")
 
-    from refiner.inference.pooling import pooling
+    from refiner.inference import generate_pooling
     from refiner.inference.providers import VLLMProvider
 
     provider = VLLMProvider(model=model, config="correctness")
 
-    async def _score_episode(row: Row, pooling: PoolingFn) -> MapResult:
+    async def _score_episode(
+        row: Row,
+        generate_pooling_request: GeneratePoolingFn,
+    ) -> MapResult:
         if not isinstance(row, LeRobotRow):
             raise TypeError("reward_score expects rows from read_lerobot(...)")
 
@@ -70,7 +73,7 @@ def reward_score(
             )
             content.append({"type": "text", "text": _PROGRESS_TOKEN})
 
-        response = await pooling(
+        response = await generate_pooling_request(
             {
                 "task": "token_classify",
                 "use_activation": False,
@@ -87,7 +90,7 @@ def reward_score(
             }
         )
 
-    return pooling(
+    return generate_pooling(
         fn=_score_episode,
         provider=provider,
         max_concurrent_requests=max_concurrent_requests,

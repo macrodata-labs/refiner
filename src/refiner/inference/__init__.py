@@ -1,3 +1,9 @@
+from refiner.inference.generate_pooling import (
+    GeneratePoolingFn,
+    GeneratePoolingMapFn,
+    GeneratePoolingPayload,
+    generate_pooling,
+)
 from refiner.inference.generate_text import generate_text
 from refiner.inference.internal.response import InferenceResponse
 from refiner.inference.capabilities import ModelCapabilities, model_capabilities
@@ -38,6 +44,10 @@ from refiner.inference.types import (
 
 __all__ = [
     "generate_text",
+    "generate_pooling",
+    "GeneratePoolingFn",
+    "GeneratePoolingMapFn",
+    "GeneratePoolingPayload",
     "InferenceResponse",
     "InferenceAPICallError",
     "InferenceRetryError",

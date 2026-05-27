@@ -15,6 +15,9 @@ It supports these modes:
   same typed `generate_text` message format.
 - `VLLMProvider`: ask Refiner Cloud to start and manage a dedicated VLLM server for your job. This avoids external rate limits and is only supported when running on Refiner Cloud.
 
+Refiner also exposes `generate_pooling` for VLLM pooling endpoints used by
+model-specific scoring workflows such as Robometer reward scoring.
+
 ## Usage
 
 ### Typed text generation

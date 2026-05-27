@@ -9,32 +9,41 @@ from refiner.inference.providers.openai import _OpenAIEndpointClient
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 
-PoolingPayload: TypeAlias = Mapping[str, Any]
-PoolingFn: TypeAlias = Callable[[PoolingPayload], Awaitable[Mapping[str, Any]]]
-PoolingMapFn: TypeAlias = Callable[[Row, PoolingFn], Awaitable[MapResult] | MapResult]
+GeneratePoolingPayload: TypeAlias = Mapping[str, Any]
+GeneratePoolingFn: TypeAlias = Callable[
+    [GeneratePoolingPayload], Awaitable[Mapping[str, Any]]
+]
+GeneratePoolingMapFn: TypeAlias = Callable[
+    [Row, GeneratePoolingFn], Awaitable[MapResult] | MapResult
+]
 
 
-def pooling(
+def generate_pooling(
     *,
-    fn: PoolingMapFn,
+    fn: GeneratePoolingMapFn,
     provider: VLLMProvider,
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Awaitable[MapResult]]:
     return inference_map(
-        name="inference.pooling",
+        name="inference.generate_pooling",
         fn=fn,
         provider=provider,
         defaults=None,
         max_concurrent_requests=max_concurrent_requests,
-        call=_pooling,
+        call=_generate_pooling,
     )
 
 
-async def _pooling(
+async def _generate_pooling(
     client: _OpenAIEndpointClient,
     payload: Mapping[str, Any],
 ) -> Mapping[str, Any]:
     return await client.pooling(payload)
 
 
-__all__ = ["pooling", "PoolingFn", "PoolingMapFn", "PoolingPayload"]
+__all__ = [
+    "GeneratePoolingFn",
+    "GeneratePoolingMapFn",
+    "GeneratePoolingPayload",
+    "generate_pooling",
+]
