@@ -399,19 +399,13 @@ def _unsupported_setting(
 
 def build_chat_payload(
     *,
-    messages: Sequence[Message] | None,
-    prompt: str | None,
+    messages: Sequence[Message],
     params: Mapping[str, Any],
     provider_options: ProviderOptions | None,
     schema: StructuredOutputSchema | None,
 ) -> dict[str, Any]:
     payload = dict(params)
-    if messages is not None:
-        payload["messages"] = convert_to_openai_chat_messages(messages)
-    elif schema is None:
-        payload["prompt"] = prompt
-    else:
-        payload["messages"] = [{"role": "user", "content": prompt or ""}]
+    payload["messages"] = convert_to_openai_chat_messages(messages)
     _normalize_reasoning_options(payload, provider_options)
     _normalize_text_options(payload, provider_options)
     if schema is not None:
@@ -424,17 +418,13 @@ def build_chat_payload(
 
 def build_responses_payload(
     *,
-    messages: Sequence[Message] | None,
-    prompt: str | None,
+    messages: Sequence[Message],
     params: Mapping[str, Any],
     provider_options: ProviderOptions | None,
     schema: StructuredOutputSchema | None,
 ) -> dict[str, Any]:
     payload = dict(params)
-    if messages is not None:
-        payload["input"] = convert_to_openai_responses_input(messages)
-    else:
-        payload["input"] = prompt
+    payload["input"] = convert_to_openai_responses_input(messages)
     _apply_responses_options(payload, provider_options)
     _normalize_responses_params(payload)
     if schema is not None:

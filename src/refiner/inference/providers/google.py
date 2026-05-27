@@ -144,7 +144,7 @@ def model_capabilities(model: str) -> ModelCapabilities:
 
 def build_payload(
     *,
-    messages: list[Message],
+    messages: Sequence[Message],
     params: Mapping[str, Any],
     provider_options: ProviderOptions | None,
     schema: StructuredOutputSchema | None,

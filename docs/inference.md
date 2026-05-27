@@ -75,11 +75,15 @@ For byte-like media, `mediaType` may be either a full MIME type
 such as PNG, JPEG, PDF, MP4, WAV, MP3, GIF, and WebP before sending the
 provider request.
 
-For single-turn text-only calls, pass `prompt` instead of `messages`:
+For single-turn text-only calls, pass one user message:
 
 ```python
 async def summarize(row, generate_text):
-    response = await generate_text(prompt=f"Summarize this: {row['text']}")
+    response = await generate_text(
+        messages=[
+            {"role": "user", "content": f"Summarize this: {row['text']}"}
+        ]
+    )
     return {"summary": response.text}
 ```
 
@@ -107,7 +111,7 @@ support, Anthropic `xhigh` effort support, and Anthropic output-token limits.
 ```python
 async def summarize(row, generate_text):
     response = await generate_text(
-        prompt=row["text"],
+        messages=[{"role": "user", "content": row["text"]}],
         providerOptions={"google": {"thinkingConfig": {"thinkingBudget": 128}}},
     )
     return {"summary": response.text, "warnings": list(response.warnings)}
@@ -131,7 +135,7 @@ Disable retries or override the retry count per call:
 ```python
 async def summarize(row, generate_text):
     response = await generate_text(
-        prompt=row["text"],
+        messages=[{"role": "user", "content": row["text"]}],
         maxRetries=0,
     )
     return {"summary": response.text}
@@ -161,7 +165,9 @@ class Caption(BaseModel):
 
 async def caption(row, generate_text):
     response = await generate_text(
-        prompt="Describe this image as structured JSON.",
+        messages=[
+            {"role": "user", "content": "Describe this image as structured JSON."}
+        ],
         schema=Caption,
     )
     caption = response.object

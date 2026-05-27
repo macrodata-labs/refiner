@@ -229,7 +229,7 @@ def test_inference_generate_text_maps_openai_options_to_wire_names(
     async def _inference_fn(row, generate_text):
         del row
         await generate_text(
-            prompt="hello",
+            messages=[{"role": "user", "content": "hello"}],
             providerOptions={
                 "openai": {
                     "logitBias": {"42": -1},
@@ -270,7 +270,7 @@ def test_inference_generate_text_maps_openai_options_to_wire_names(
     assert "logitBias" not in payload
 
 
-def test_inference_generate_text_accepts_prompt(monkeypatch) -> None:
+def test_inference_generate_text_accepts_text_message(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
     async def _fake_generate(self, payload):
@@ -285,7 +285,9 @@ def test_inference_generate_text_accepts_prompt(monkeypatch) -> None:
     monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
     async def _inference_fn(row, generate_text):
-        response = await generate_text(prompt=f"Summarize {row['topic']}.")
+        response = await generate_text(
+            messages=[{"role": "user", "content": f"Summarize {row['topic']}."}]
+        )
         return {"output": response.text}
 
     infer = mdr.inference.generate_text(
@@ -303,7 +305,7 @@ def test_inference_generate_text_accepts_prompt(monkeypatch) -> None:
     assert result == {"output": "hello"}
     assert seen["payload"] == {
         "model": "gpt-test",
-        "prompt": "Summarize logs.",
+        "messages": [{"role": "user", "content": "Summarize logs."}],
     }
 
 
@@ -324,7 +326,7 @@ def test_inference_generate_text_returns_provider_option_warnings(
     async def _inference_fn(row, generate_text):
         del row
         response = await generate_text(
-            prompt="hello",
+            messages=[{"role": "user", "content": "hello"}],
             providerOptions={
                 "google": {"thinkingConfig": {"thinkingBudget": 128}},
                 "openai": {"strictJsonSchema": True},
@@ -377,7 +379,7 @@ def test_inference_generate_text_warns_for_openai_model_capabilities(
     async def _inference_fn(row, generate_text):
         del row
         response = await generate_text(
-            prompt="hello",
+            messages=[{"role": "user", "content": "hello"}],
             providerOptions={
                 "openai": {
                     "reasoningEffort": "high",
@@ -445,7 +447,7 @@ def test_inference_generate_text_warns_for_anthropic_model_capabilities(
     async def _inference_fn(row, generate_text):
         del row
         response = await generate_text(
-            prompt="hello",
+            messages=[{"role": "user", "content": "hello"}],
             max_tokens=8192,
             providerOptions={
                 "anthropic": {
@@ -520,7 +522,9 @@ def test_inference_generate_text_parses_pydantic_schema_for_openai(
 
     async def _inference_fn(row, generate_text):
         del row
-        response = await generate_text(prompt="caption", schema=_Caption)
+        response = await generate_text(
+            messages=[{"role": "user", "content": "caption"}], schema=_Caption
+        )
         assert isinstance(response.object, _Caption)
         return {
             "title": response.object.title,
@@ -570,7 +574,9 @@ def test_inference_generate_text_applies_schema_for_google(monkeypatch) -> None:
 
     async def _inference_fn(row, generate_text):
         del row
-        response = await generate_text(prompt="caption", schema=_Caption)
+        response = await generate_text(
+            messages=[{"role": "user", "content": "caption"}], schema=_Caption
+        )
         assert isinstance(response.object, _Caption)
         return {"title": response.object.title}
 
@@ -607,7 +613,9 @@ def test_inference_generate_text_applies_schema_for_openai_responses(
 
     async def _inference_fn(row, generate_text):
         del row
-        response = await generate_text(prompt="caption", schema=_Caption)
+        response = await generate_text(
+            messages=[{"role": "user", "content": "caption"}], schema=_Caption
+        )
         assert isinstance(response.object, _Caption)
         return {"title": response.object.title}
 
@@ -648,7 +656,9 @@ def test_inference_generate_text_warns_for_anthropic_schema_fallback(
 
     async def _inference_fn(row, generate_text):
         del row
-        response = await generate_text(prompt="caption", schema=_Caption)
+        response = await generate_text(
+            messages=[{"role": "user", "content": "caption"}], schema=_Caption
+        )
         assert isinstance(response.object, _Caption)
         return {"warnings": list(response.warnings)}
 
@@ -735,7 +745,9 @@ def test_inference_generate_text_raises_on_schema_validation_error(
 
     async def _inference_fn(row, generate_text):
         del row
-        await generate_text(prompt="caption", schema=_Caption)
+        await generate_text(
+            messages=[{"role": "user", "content": "caption"}], schema=_Caption
+        )
         return {}
 
     infer = mdr.inference.generate_text(
@@ -1037,7 +1049,9 @@ def test_inference_generate_text_applies_google_provider_options(monkeypatch) ->
         return {
             "output": (
                 await generate_text(
-                    prompt="Generate an image caption.",
+                    messages=[
+                        {"role": "user", "content": "Generate an image caption."}
+                    ],
                     providerOptions={
                         "google": {
                             "thinkingConfig": {"thinkingBudget": 128},
@@ -1106,7 +1120,9 @@ def test_inference_generate_text_passes_max_retries_as_internal_option(
 
     async def _inference_fn(row, generate_text):
         del row
-        response = await generate_text(prompt="hello", maxRetries=0)
+        response = await generate_text(
+            messages=[{"role": "user", "content": "hello"}], maxRetries=0
+        )
         return {"output": response.text}
 
     infer = mdr.inference.generate_text(
@@ -1216,7 +1232,7 @@ def test_inference_generate_text_maps_openai_responses_options_to_wire_names(
     async def _inference_fn(row, generate_text):
         del row
         await generate_text(
-            prompt="hello",
+            messages=[{"role": "user", "content": "hello"}],
             providerOptions={
                 "openai": {
                     "logprobs": True,
@@ -1522,7 +1538,7 @@ def test_inference_generate_text_converts_anthropic_assistant_reasoning(
     }
 
 
-def test_inference_generate_text_requires_prompt_or_messages() -> None:
+def test_inference_generate_text_requires_messages() -> None:
     async def _inference_fn(row, generate_text):
         del row
         await generate_text()
@@ -1538,7 +1554,7 @@ def test_inference_generate_text_requires_prompt_or_messages() -> None:
     async def _invoke() -> object:
         return await infer(DictRow({}))
 
-    with pytest.raises(ValueError, match="pass exactly one of messages or prompt"):
+    with pytest.raises(TypeError, match="required keyword-only argument: 'messages'"):
         asyncio.run(_invoke())
 
 

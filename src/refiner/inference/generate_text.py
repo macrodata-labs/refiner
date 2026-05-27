@@ -50,8 +50,7 @@ class GenerateTextFn(Protocol):
     def __call__(
         self,
         *,
-        messages: Sequence[Message] | None = None,
-        prompt: str | None = None,
+        messages: Sequence[Message],
         providerOptions: ProviderOptions | None = None,
         maxRetries: int | None = None,
         schema: type[BaseModel] | None = None,
@@ -73,16 +72,13 @@ def generate_text(
     async def _map(row: Row, request: RequestFn) -> MapResult:
         async def _generate_text(
             *,
-            messages: Sequence[Message] | None = None,
-            prompt: str | None = None,
+            messages: Sequence[Message],
             providerOptions: ProviderOptions | None = None,
             maxRetries: int | None = None,
             schema: type[BaseModel] | None = None,
             schemaStrict: bool = True,
             **params: Any,
         ) -> InferenceResponse:
-            if (messages is None) == (prompt is None):
-                raise ValueError("pass exactly one of messages or prompt")
             provider_options = providerOptions
             max_retries = maxRetries
             schema_strict = schemaStrict
@@ -95,7 +91,7 @@ def generate_text(
             warnings.extend(
                 capability_warnings(
                     provider=provider,
-                    messages=_messages_or_prompt(messages, prompt),
+                    messages=messages,
                     params=payload,
                     provider_options=provider_options,
                     has_schema=schema_info is not None,
@@ -106,7 +102,6 @@ def generate_text(
             payload = _build_payload(
                 provider=provider,
                 messages=messages,
-                prompt=prompt,
                 params=payload,
                 provider_options=provider_options,
                 schema=schema_info,
@@ -162,22 +157,21 @@ async def _generate(
 def _build_payload(
     *,
     provider: _InferenceProvider,
-    messages: Sequence[Message] | None,
-    prompt: str | None,
+    messages: Sequence[Message],
     params: Mapping[str, Any],
     provider_options: ProviderOptions | None,
     schema: StructuredOutputSchema | None,
 ) -> dict[str, Any]:
     if isinstance(provider, GoogleEndpointProvider):
         return google_provider.build_payload(
-            messages=_messages_or_prompt(messages, prompt),
+            messages=messages,
             params=params,
             provider_options=provider_options,
             schema=schema,
         )
     if isinstance(provider, AnthropicEndpointProvider):
         return anthropic_provider.build_payload(
-            messages=_messages_or_prompt(messages, prompt),
+            messages=messages,
             params=params,
             provider_options=provider_options,
             schema=schema,
@@ -185,27 +179,16 @@ def _build_payload(
     if isinstance(provider, OpenAIResponsesProvider):
         return openai_provider.build_responses_payload(
             messages=messages,
-            prompt=prompt,
             params=params,
             provider_options=provider_options,
             schema=schema,
         )
     return openai_provider.build_chat_payload(
         messages=messages,
-        prompt=prompt,
         params=params,
         provider_options=provider_options,
         schema=schema,
     )
-
-
-def _messages_or_prompt(
-    messages: Sequence[Message] | None,
-    prompt: str | None,
-) -> list[Message]:
-    if messages is not None:
-        return list(messages)
-    return [{"role": "user", "content": prompt or ""}]
 
 
 def _provider_warnings(
