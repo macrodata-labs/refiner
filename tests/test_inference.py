@@ -29,8 +29,8 @@ from refiner.inference.providers import google as google_provider
 from refiner.inference.providers import openai as openai_provider
 
 generate_module = importlib.import_module("refiner.inference.generate")
-runtime_module = importlib.import_module("refiner.inference._runtime")
-transport_module = importlib.import_module("refiner.inference._transport")
+runtime_module = importlib.import_module("refiner.inference.internal.runtime")
+transport_module = importlib.import_module("refiner.inference.internal.transport")
 
 
 class _Caption(BaseModel):

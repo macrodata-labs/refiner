@@ -49,7 +49,7 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
                 endpoint="http://127.0.0.1:8000",
             )
 
-    runtime_module = importlib.import_module("refiner.inference._runtime")
+    runtime_module = importlib.import_module("refiner.inference.internal.runtime")
 
     monkeypatch.setattr(
         reward_module, "_sample_video_frames", _fake_sample_video_frames

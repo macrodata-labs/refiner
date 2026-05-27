@@ -12,13 +12,13 @@ from refiner.inference.providers import anthropic as anthropic_provider
 from refiner.inference.providers import google as google_provider
 from refiner.inference.providers import openai as openai_provider
 from refiner.inference.providers.warnings import provider_option_warnings
-from refiner.inference._runtime import RequestFn, inference_map
-from refiner.inference._schema import (
+from refiner.inference.internal.runtime import RequestFn, inference_map
+from refiner.inference.internal.schema import (
     StructuredOutputSchema,
     normalize_schema,
     validate_structured_output,
 )
-from refiner.inference._response import InferenceResponse
+from refiner.inference.internal.response import InferenceResponse
 from refiner.inference.generate import _record_usage
 from refiner.inference.providers import (
     AnthropicEndpointProvider,

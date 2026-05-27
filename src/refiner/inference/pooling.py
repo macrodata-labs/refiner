@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeAlias
 
-from refiner.inference._runtime import inference_map
+from refiner.inference.internal.runtime import inference_map
 from refiner.inference.providers import VLLMProvider
 from refiner.inference.providers.openai import _OpenAIEndpointClient
 from refiner.pipeline.data.row import Row

@@ -8,25 +8,25 @@ from typing import Any, cast
 
 import httpx
 
-from refiner.inference._media import (
+from refiner.inference.internal.media import (
     base64_data,
     data_or_url,
     is_url,
     resolve_media_type,
     top_level_media_type,
 )
-from refiner.inference._message_conversion import (
+from refiner.inference.internal.message_conversion import (
     _custom_provider_data,
     _provider_option,
 )
-from refiner.inference._schema import StructuredOutputSchema
-from refiner.inference._response import (
+from refiner.inference.internal.schema import StructuredOutputSchema
+from refiner.inference.internal.response import (
     InferenceResponse,
     _copy_if_str,
     _provider_metadata,
     _text_from_content,
 )
-from refiner.inference._transport import post_json_to_api
+from refiner.inference.internal.transport import post_json_to_api
 from refiner.inference.types import (
     InferenceWarning,
     Message,

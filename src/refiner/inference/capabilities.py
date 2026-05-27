@@ -4,7 +4,7 @@ import base64
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from refiner.inference._media import resolve_media_type
+from refiner.inference.internal.media import resolve_media_type
 from refiner.inference.providers import (
     AnthropicEndpointProvider,
     GoogleEndpointProvider,

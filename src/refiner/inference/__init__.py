@@ -1,9 +1,12 @@
 from refiner.inference.generate import generate
 from refiner.inference.generate_text import generate_text
-from refiner.inference._response import InferenceResponse
+from refiner.inference.internal.response import InferenceResponse
 from refiner.inference.capabilities import ModelCapabilities, model_capabilities
-from refiner.inference._schema import InferenceSchemaValidationError
-from refiner.inference._transport import InferenceAPICallError, InferenceRetryError
+from refiner.inference.internal.schema import InferenceSchemaValidationError
+from refiner.inference.internal.transport import (
+    InferenceAPICallError,
+    InferenceRetryError,
+)
 from refiner.inference.providers import (
     AnthropicEndpointProvider,
     GoogleEndpointProvider,
