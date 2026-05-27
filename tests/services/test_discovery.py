@@ -11,7 +11,7 @@ async def _noop_inference(row, generate):
 
 def test_collect_pipeline_services_supports_nested_service_config() -> None:
     pipeline = mdr.from_items([{"text": "hello"}]).map_async(
-        mdr.inference.generate(
+        mdr.inference.generate_text(
             fn=_noop_inference,
             provider=mdr.inference.VLLMProvider(
                 model="Qwen/Qwen2.5-VL-7B-Instruct",

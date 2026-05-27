@@ -108,6 +108,24 @@ based on AI SDK behavior for known model families, including OpenAI reasoning
 model parameter limits, OpenAI service-tier support, Anthropic adaptive thinking
 support, Anthropic `xhigh` effort support, and Anthropic output-token limits.
 
+Use `raw_payload` when you need to send the provider's native request body
+directly. Raw payloads are not converted or checked against Refiner's typed
+message model, but still use Refiner's provider client, retry handling,
+concurrency limits, metrics, and response parsing.
+
+```python
+async def summarize(row, generate_text):
+    response = await generate_text(
+        raw_payload={
+            "messages": [
+                {"role": "system", "content": "Summarize briefly."},
+                {"role": "user", "content": row["text"]},
+            ]
+        }
+    )
+    return {"summary": response.text}
+```
+
 ```python
 async def summarize(row, generate_text):
     response = await generate_text(
@@ -368,9 +386,9 @@ endpoint = mdr.inference.OpenAIEndpointProvider(
     model="gpt-5-mini",
 )
 
-async def summarize(row, generate):
-    response = await generate(
-        {
+async def summarize(row, generate_text):
+    response = await generate_text(
+        raw_payload={
             "messages": [
                 {"role": "system", "content": "Summarize the input briefly."},
                 {"role": "user", "content": row["text"]},
@@ -381,7 +399,7 @@ async def summarize(row, generate):
 
 
 pipeline = mdr.read_jsonl("input.jsonl").map_async(
-    mdr.inference.generate(
+    mdr.inference.generate_text(
         fn=summarize,
         provider=endpoint,
         default_generation_params={"temperature": 0.1, "max_tokens": 256},
@@ -409,9 +427,9 @@ provider = mdr.inference.VLLMProvider(
     config="correctness",
 )
 
-async def summarize(row, generate):
-    response = await generate(
-        {
+async def summarize(row, generate_text):
+    response = await generate_text(
+        raw_payload={
             "messages": [
                 {"role": "system", "content": "Summarize the input briefly."},
                 {"role": "user", "content": row["text"]},
@@ -422,7 +440,7 @@ async def summarize(row, generate):
 
 
 pipeline = mdr.read_jsonl("input.jsonl").map_async(
-    mdr.inference.generate(
+    mdr.inference.generate_text(
         fn=summarize,
         provider=provider,
         default_generation_params={"temperature": 0.1, "max_tokens": 256},

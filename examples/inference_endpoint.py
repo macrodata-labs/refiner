@@ -10,9 +10,9 @@ ENDPOINT = mdr.inference.OpenAIEndpointProvider(
 )
 
 
-async def summarize(row, generate):
-    response = await generate(
-        {
+async def summarize(row, generate_text):
+    response = await generate_text(
+        raw_payload={
             "messages": [
                 {"role": "system", "content": "Summarize the input briefly."},
                 {"role": "user", "content": row["text"]},
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     (
         mdr.from_items([{"text": "Hello, world!"}])
         .map_async(
-            mdr.inference.generate(
+            mdr.inference.generate_text(
                 fn=summarize,
                 provider=ENDPOINT,
                 default_generation_params={

@@ -1,4 +1,3 @@
-from refiner.inference.generate import generate
 from refiner.inference.generate_text import generate_text
 from refiner.inference.internal.response import InferenceResponse
 from refiner.inference.capabilities import ModelCapabilities, model_capabilities
@@ -38,7 +37,6 @@ from refiner.inference.types import (
 )
 
 __all__ = [
-    "generate",
     "generate_text",
     "InferenceResponse",
     "InferenceAPICallError",

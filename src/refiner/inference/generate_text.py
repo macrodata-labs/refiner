@@ -19,7 +19,7 @@ from refiner.inference.internal.schema import (
     validate_structured_output,
 )
 from refiner.inference.internal.response import InferenceResponse
-from refiner.inference.generate import _record_usage
+from refiner.inference.internal.usage import record_usage
 from refiner.inference.providers import (
     AnthropicEndpointProvider,
     GoogleEndpointProvider,
@@ -50,7 +50,8 @@ class GenerateTextFn(Protocol):
     def __call__(
         self,
         *,
-        messages: Sequence[Message],
+        messages: Sequence[Message] | None = None,
+        raw_payload: Mapping[str, Any] | None = None,
         providerOptions: ProviderOptions | None = None,
         maxRetries: int | None = None,
         schema: type[BaseModel] | None = None,
@@ -72,13 +73,16 @@ def generate_text(
     async def _map(row: Row, request: RequestFn) -> MapResult:
         async def _generate_text(
             *,
-            messages: Sequence[Message],
+            messages: Sequence[Message] | None = None,
+            raw_payload: Mapping[str, Any] | None = None,
             providerOptions: ProviderOptions | None = None,
             maxRetries: int | None = None,
             schema: type[BaseModel] | None = None,
             schemaStrict: bool = True,
             **params: Any,
         ) -> InferenceResponse:
+            if (messages is None) == (raw_payload is None):
+                raise ValueError("pass exactly one of messages or raw_payload")
             provider_options = providerOptions
             max_retries = maxRetries
             schema_strict = schemaStrict
@@ -86,12 +90,26 @@ def generate_text(
                 schema,
                 strict=schema_strict,
             )
-            payload = {**dict(default_generation_params or {}), **params}
+            default_params = dict(default_generation_params or {})
+            payload = {**default_params, **params}
+            if raw_payload is not None:
+                if provider_options is not None:
+                    raise ValueError(
+                        "providerOptions are not supported with raw_payload"
+                    )
+                if schema is not None:
+                    raise ValueError("schema is not supported with raw_payload")
+                payload = {**default_params, **dict(raw_payload), **params}
+                if max_retries is not None:
+                    payload["__refiner_max_retries"] = max_retries
+                return cast(InferenceResponse, await request(payload))
+
+            typed_messages = cast(Sequence[Message], messages)
             warnings = _provider_warnings(provider, provider_options)
             warnings.extend(
                 capability_warnings(
                     provider=provider,
-                    messages=messages,
+                    messages=typed_messages,
                     params=payload,
                     provider_options=provider_options,
                     has_schema=schema_info is not None,
@@ -101,7 +119,7 @@ def generate_text(
                 warnings.extend(anthropic_provider.schema_warnings(schema_info))
             payload = _build_payload(
                 provider=provider,
-                messages=messages,
+                messages=typed_messages,
                 params=payload,
                 provider_options=provider_options,
                 schema=schema_info,
@@ -133,7 +151,7 @@ def generate_text(
         merge_defaults=False,
         max_concurrent_requests=max_concurrent_requests,
         call=_generate,
-        record=_record_usage,
+        record=record_usage,
     )
 
 

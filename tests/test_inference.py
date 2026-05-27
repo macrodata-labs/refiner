@@ -28,7 +28,6 @@ from refiner.inference.providers import anthropic as anthropic_provider
 from refiner.inference.providers import google as google_provider
 from refiner.inference.providers import openai as openai_provider
 
-generate_module = importlib.import_module("refiner.inference.generate")
 runtime_module = importlib.import_module("refiner.inference.internal.runtime")
 transport_module = importlib.import_module("refiner.inference.internal.transport")
 
@@ -79,7 +78,7 @@ def test_openai_endpoint_requires_non_empty_model() -> None:
         OpenAIEndpointProvider(base_url="https://api.example.com", model=" ")
 
 
-def test_inference_generate_invokes_user_fn_and_merges_default_params(
+def test_inference_generate_text_accepts_raw_payload_and_merges_default_params(
     monkeypatch,
 ) -> None:
     seen: dict[str, object] = {}
@@ -95,14 +94,14 @@ def test_inference_generate_invokes_user_fn_and_merges_default_params(
 
     monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
-    async def _inference_fn(row, generate):
-        response = await generate({"prompt": row["prompt"]})
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(raw_payload={"prompt": row["prompt"]})
         return {
             "output": response.text,
             "finish_reason": response.finish_reason,
         }
 
-    infer = mdr.inference.generate(
+    infer = mdr.inference.generate_text(
         fn=_inference_fn,
         provider=OpenAIEndpointProvider(
             base_url="https://api.example.com", model="gpt-test"
@@ -1538,7 +1537,7 @@ def test_inference_generate_text_converts_anthropic_assistant_reasoning(
     }
 
 
-def test_inference_generate_text_requires_messages() -> None:
+def test_inference_generate_text_requires_messages_or_raw_payload() -> None:
     async def _inference_fn(row, generate_text):
         del row
         await generate_text()
@@ -1554,7 +1553,32 @@ def test_inference_generate_text_requires_messages() -> None:
     async def _invoke() -> object:
         return await infer(DictRow({}))
 
-    with pytest.raises(TypeError, match="required keyword-only argument: 'messages'"):
+    with pytest.raises(ValueError, match="pass exactly one of messages or raw_payload"):
+        asyncio.run(_invoke())
+
+
+def test_inference_generate_text_rejects_raw_payload_with_typed_options() -> None:
+    async def _inference_fn(row, generate_text):
+        del row
+        await generate_text(
+            raw_payload={"messages": [{"role": "user", "content": "hello"}]},
+            providerOptions={"openai": {"serviceTier": "flex"}},
+        )
+        return {}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com", model="gpt-test"
+        ),
+    )
+
+    async def _invoke() -> object:
+        return await infer(DictRow({}))
+
+    with pytest.raises(
+        ValueError, match="providerOptions are not supported with raw_payload"
+    ):
         asyncio.run(_invoke())
 
 
@@ -1909,11 +1933,11 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
 
     monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
 
-    async def _inference_fn(row, generate):
-        response = await generate({"prompt": row["prompt"]})
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(raw_payload={"prompt": row["prompt"]})
         return {"output": response.text}
 
-    infer = mdr.inference.generate(
+    infer = mdr.inference.generate_text(
         fn=_inference_fn,
         provider=OpenAIEndpointProvider(
             base_url="https://api.example.com",
@@ -2319,11 +2343,11 @@ def test_vllm_provider_includes_model_in_requests(monkeypatch) -> None:
 
     provider = VLLMProvider(model="meta-llama/Llama-3.1-8B-Instruct")
 
-    async def _inference_fn(row, generate):
-        response = await generate({"prompt": row["prompt"]})
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(raw_payload={"prompt": row["prompt"]})
         return {"output": response.text}
 
-    infer = mdr.inference.generate(
+    infer = mdr.inference.generate_text(
         fn=_inference_fn,
         provider=provider,
     )
@@ -2356,7 +2380,7 @@ def test_vllm_provider_includes_supported_service_config() -> None:
     }
 
 
-def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
+def test_inference_generate_text_reports_success_metrics(monkeypatch) -> None:
     emitter = _MetricRecordingEmitter()
 
     async def _fake_generate(self, payload):
@@ -2388,11 +2412,11 @@ def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
 
     monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
-    async def _inference_fn(row, generate):
-        response = await generate({"prompt": row["prompt"]})
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(raw_payload={"prompt": row["prompt"]})
         return {"output": response.text}
 
-    infer = mdr.inference.generate(
+    infer = mdr.inference.generate_text(
         fn=_inference_fn,
         provider=OpenAIEndpointProvider(
             base_url="https://api.example.com", model="gpt-test"
@@ -2434,7 +2458,7 @@ def test_inference_generate_reports_success_metrics(monkeypatch) -> None:
     }
 
 
-def test_inference_generate_reports_failed_requests(monkeypatch) -> None:
+def test_inference_generate_text_reports_failed_requests(monkeypatch) -> None:
     emitter = _MetricRecordingEmitter()
 
     async def _fake_generate(self, payload):
@@ -2461,11 +2485,11 @@ def test_inference_generate_reports_failed_requests(monkeypatch) -> None:
 
     monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
 
-    async def _inference_fn(row, generate):
-        response = await generate({"prompt": row["prompt"]})
+    async def _inference_fn(row, generate_text):
+        response = await generate_text(raw_payload={"prompt": row["prompt"]})
         return {"output": response.text}
 
-    infer = mdr.inference.generate(
+    infer = mdr.inference.generate_text(
         fn=_inference_fn,
         provider=OpenAIEndpointProvider(
             base_url="https://api.example.com", model="gpt-test"
