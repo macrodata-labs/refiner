@@ -412,9 +412,16 @@ to a multimodal model, and writes segmentation columns back onto the row.
 ```python
 import refiner as mdr
 
-# Define or import your task segmentation block in the job file.
-# It receives one LeRobot episode row and returns the row with prediction columns.
-segment_episode = ...
+segment_episode = mdr.robotics.task_segmentation(
+    provider=mdr.inference.GoogleEndpointProvider(
+        model="gemini-flash-latest",
+    ),
+    input="contact_sheets",
+    sample_sec=0.5,
+    frame_width=224,
+    frames_per_sheet=20,
+    columns=5,
+)
 
 pipeline = (
     mdr.read_lerobot("hf://datasets/acme/robot_episodes")

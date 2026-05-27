@@ -1,16 +1,66 @@
 from __future__ import annotations
 
 import io
+import json
 import math
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import Any, Literal, TypeAlias, cast
 
+from pydantic import BaseModel
+
+from refiner.inference.types import Message, ProviderOptions
+from refiner.pipeline.data.row import Row
+from refiner.pipeline.steps import MapResult
+from refiner.robotics.lerobot_format import LeRobotRow
 from refiner.utils import check_required_dependencies
 
 if TYPE_CHECKING:
     from PIL import Image
 
+    from refiner.inference.generate_text import GenerateTextFn
+    from refiner.inference.providers import (
+        AnthropicEndpointProvider,
+        GoogleEndpointProvider,
+        OpenAIEndpointProvider,
+        OpenAIResponsesProvider,
+        VLLMProvider,
+    )
     from refiner.video import VideoFile
+
+_DEFAULT_TASK_SEGMENTATION_PROMPT = """Reconstruct the sequence of manipulation events in this robot video.
+
+Return only JSON with this shape:
+{"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
+
+Rules:
+- Treat each segment as one event that changes what is true about the world.
+- Choose boundaries where an object is held, released, moved, opened, closed, or contents move.
+- Avoid idle time, camera motion, hesitation, and tiny hand adjustments.
+"""
+
+TaskSegmentationInput = Literal["raw_video", "contact_sheets"]
+if TYPE_CHECKING:
+    TaskSegmentationProvider: TypeAlias = (
+        AnthropicEndpointProvider
+        | GoogleEndpointProvider
+        | OpenAIEndpointProvider
+        | OpenAIResponsesProvider
+        | VLLMProvider
+    )
+else:
+    TaskSegmentationProvider: TypeAlias = Any
+
+
+class _TaskSegment(BaseModel):
+    start_sec: float
+    end_sec: float
+    subtask: str
+
+
+class _TaskSegmentationResult(BaseModel):
+    segments: list[_TaskSegment]
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +87,91 @@ class TimestampedContactSheet:
         return len(self.timestamps)
 
 
+def task_segmentation(
+    *,
+    provider: TaskSegmentationProvider,
+    input: TaskSegmentationInput = "contact_sheets",
+    video_key: str | None = None,
+    prompt: str = _DEFAULT_TASK_SEGMENTATION_PROMPT,
+    output_column: str = "predicted_subtasks",
+    output_json_column: str = "predicted_subtasks_json",
+    raw_output_column: str = "raw_annotation_output",
+    model_column: str = "annotation_model",
+    sample_sec: float = 0.5,
+    frame_width: int = 224,
+    frames_per_sheet: int = 20,
+    columns: int = 5,
+    quality: int = 84,
+    temperature: float = 0.1,
+    providerOptions: ProviderOptions | None = None,
+    generation_params: Mapping[str, Any] | None = None,
+    max_concurrent_requests: int = 256,
+) -> Callable[[Row], Any]:
+    """Return an async map block that segments LeRobot episodes."""
+
+    from refiner.inference import generate_text
+
+    if input not in ("raw_video", "contact_sheets"):
+        raise ValueError("input must be 'raw_video' or 'contact_sheets'")
+    if not output_column.strip():
+        raise ValueError("output_column must be non-empty")
+    if not output_json_column.strip():
+        raise ValueError("output_json_column must be non-empty")
+    if not raw_output_column.strip():
+        raise ValueError("raw_output_column must be non-empty")
+    if not model_column.strip():
+        raise ValueError("model_column must be non-empty")
+
+    async def _segment_episode(
+        row: Row,
+        generate_text: "GenerateTextFn",
+    ) -> MapResult:
+        if not isinstance(row, LeRobotRow):
+            raise TypeError("task_segmentation expects rows from read_lerobot(...)")
+
+        selected_video_key = _resolve_video_key(row, video_key)
+        video = row.videos[selected_video_key].video
+        content = await _task_segmentation_content(
+            video=video,
+            prompt=_prompt_with_instruction(prompt, row.tasks),
+            input=input,
+            sample_sec=sample_sec,
+            frame_width=frame_width,
+            frames_per_sheet=frames_per_sheet,
+            columns=columns,
+            quality=quality,
+        )
+        params: dict[str, Any] = {
+            "temperature": temperature,
+            **dict(generation_params or {}),
+        }
+        messages = cast(list[Message], [{"role": "user", "content": content}])
+        response = await generate_text(
+            messages=messages,
+            schema=_TaskSegmentationResult,
+            providerOptions=providerOptions,
+            **params,
+        )
+        if not isinstance(response.object, _TaskSegmentationResult):
+            raise ValueError("task segmentation response did not match schema")
+        parsed = response.object
+        segments = _normalize_segments(parsed.segments)
+        return row.update(
+            {
+                output_column: segments,
+                output_json_column: json.dumps(segments, sort_keys=True),
+                raw_output_column: response.text,
+                model_column: getattr(provider, "model", type(provider).__name__),
+            }
+        )
+
+    return generate_text(
+        fn=_segment_episode,
+        provider=provider,
+        max_concurrent_requests=max_concurrent_requests,
+    )
+
+
 def contact_sheet_prompt_manifest(
     sheets: list[TimestampedContactSheet],
 ) -> str:
@@ -59,6 +194,86 @@ def contact_sheet_prompt_manifest(
             f"{sheet.start_sec:.2f}s through {sheet.end_sec:.2f}s."
         )
     return "\n".join(lines)
+
+
+def _resolve_video_key(row: LeRobotRow, video_key: str | None) -> str:
+    video_keys = list(row.videos)
+    if video_key is not None:
+        if video_key not in video_keys:
+            raise ValueError(
+                f"episode {row.episode_index} is missing video key {video_key!r}"
+            )
+        return video_key
+    if not video_keys:
+        raise ValueError(f"episode {row.episode_index} has no videos")
+    return video_keys[0]
+
+
+def _prompt_with_instruction(prompt: str, tasks: list[str]) -> str:
+    instruction = "; ".join(task for task in tasks if task.strip())
+    if not instruction:
+        return prompt
+    return f"{prompt}\nEpisode instruction: {instruction}\n"
+
+
+async def _task_segmentation_content(
+    *,
+    video: VideoFile,
+    prompt: str,
+    input: TaskSegmentationInput,
+    sample_sec: float,
+    frame_width: int,
+    frames_per_sheet: int,
+    columns: int,
+    quality: int,
+) -> list[dict[str, Any]]:
+    if input == "raw_video":
+        return [
+            {"type": "text", "text": prompt},
+            {
+                "type": "file",
+                "mediaType": "video/mp4",
+                "data": await video.export_clip(),
+            },
+        ]
+
+    sheets = await timestamped_contact_sheets(
+        video,
+        sample_sec=sample_sec,
+        frame_width=frame_width,
+        frames_per_sheet=frames_per_sheet,
+        columns=columns,
+        quality=quality,
+    )
+    return [
+        {
+            "type": "text",
+            "text": f"{prompt}\n\n{contact_sheet_prompt_manifest(sheets)}",
+        },
+        *[
+            {"type": "file", "mediaType": sheet.media_type, "data": sheet.data}
+            for sheet in sheets
+        ],
+    ]
+
+
+def _normalize_segments(segments: list[_TaskSegment]) -> list[dict[str, Any]]:
+    normalized = []
+    for index, segment in enumerate(segments):
+        if segment.end_sec <= segment.start_sec:
+            continue
+        label = segment.subtask.strip() or f"segment {index}"
+        normalized.append(
+            {
+                "start_sec": round(max(0.0, float(segment.start_sec)), 3),
+                "end_sec": round(max(0.0, float(segment.end_sec)), 3),
+                "subtask": label,
+            }
+        )
+    return sorted(
+        normalized,
+        key=lambda segment: (segment["start_sec"], segment["end_sec"]),
+    )
 
 
 async def timestamped_contact_sheets(
@@ -208,7 +423,10 @@ def _encode_jpeg(image: Image.Image, *, quality: int) -> bytes:
 
 
 __all__ = [
+    "TaskSegmentationInput",
+    "TaskSegmentationProvider",
     "TimestampedContactSheet",
     "contact_sheet_prompt_manifest",
+    "task_segmentation",
     "timestamped_contact_sheets",
 ]

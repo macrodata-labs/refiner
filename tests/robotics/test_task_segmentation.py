@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import io
+from typing import Any, cast
 
 import numpy as np
 import pytest
 
 import refiner as mdr
+import refiner.inference as inference_module
 from refiner.io import DataFile
+from refiner.io import DataFolder
+from refiner.inference import InferenceResponse
+from refiner.pipeline.data.row import DictRow
+from refiner.robotics.lerobot_format import LeRobotMetadata, LeRobotRow
+
+task_segmentation_module = importlib.import_module("refiner.robotics.task_segmentation")
 
 
 def _write_video(path, *, num_frames: int = 6, fps: int = 5) -> None:
@@ -109,3 +118,99 @@ def test_contact_sheet_prompt_manifest_describes_continuity(tmp_path) -> None:
 def test_contact_sheet_prompt_manifest_rejects_empty_sheets() -> None:
     with pytest.raises(ValueError, match="sheets must be non-empty"):
         mdr.robotics.contact_sheet_prompt_manifest([])
+
+
+def test_task_segmentation_builds_generate_text_block(monkeypatch) -> None:
+    seen = {}
+
+    def _fake_generate_text(**kwargs):
+        seen.update(kwargs)
+        return "segmentation-block"
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+    provider = mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest")
+
+    block = mdr.robotics.task_segmentation(
+        provider=provider,
+        max_concurrent_requests=17,
+    )
+
+    assert block == "segmentation-block"
+    assert seen["provider"] is provider
+    assert seen["max_concurrent_requests"] == 17
+    assert callable(seen["fn"])
+
+
+def test_task_segmentation_raw_video_block_updates_row(tmp_path, monkeypatch) -> None:
+    seen = {}
+
+    def _fake_generate_text(**kwargs):
+        seen.update(kwargs)
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    path = tmp_path / "video.mp4"
+    _write_video(path, num_frames=3, fps=5)
+    row = LeRobotRow(
+        DictRow(
+            {
+                "episode_index": 3,
+                "length": 3,
+                "tasks": ["open the drawer"],
+                "videos/observation.images.main/uri": "video.mp4",
+                "videos/observation.images.main/from_timestamp": 0.0,
+                "videos/observation.images.main/to_timestamp": 0.6,
+            }
+        ),
+        metadata=cast(LeRobotMetadata, None),
+        frames=[],
+        root=DataFolder.resolve(tmp_path),
+    )
+    block = mdr.robotics.task_segmentation(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        input="raw_video",
+        video_key="observation.images.main",
+    )
+    request = {}
+
+    async def _fake_request(**kwargs):
+        request.update(kwargs)
+        return InferenceResponse(
+            text='{"segments":[]}',
+            finish_reason="stop",
+            usage={},
+            response={},
+            object=task_segmentation_module._TaskSegmentationResult(
+                segments=[
+                    task_segmentation_module._TaskSegment(
+                        start_sec=0.4,
+                        end_sec=0.2,
+                        subtask="ignored",
+                    ),
+                    task_segmentation_module._TaskSegment(
+                        start_sec=0.0,
+                        end_sec=0.5,
+                        subtask="open drawer",
+                    ),
+                ]
+            ),
+        )
+
+    result = asyncio.run(cast(Any, block)(row, _fake_request))
+
+    assert seen["provider"].model == "gemini-flash-latest"
+    assert request["schema"] is task_segmentation_module._TaskSegmentationResult
+    assert request["temperature"] == 0.1
+    message = request["messages"][0]
+    assert message["role"] == "user"
+    assert "Episode instruction: open the drawer" in message["content"][0]["text"]
+    assert message["content"][1]["mediaType"] == "video/mp4"
+    assert result["predicted_subtasks"] == [
+        {"start_sec": 0.0, "end_sec": 0.5, "subtask": "open drawer"}
+    ]
+    assert result["predicted_subtasks_json"] == (
+        '[{"end_sec": 0.5, "start_sec": 0.0, "subtask": "open drawer"}]'
+    )
+    assert result["annotation_model"] == "gemini-flash-latest"
+    assert result["raw_annotation_output"] == '{"segments":[]}'
