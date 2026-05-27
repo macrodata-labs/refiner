@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -59,6 +60,7 @@ PROVIDER_OPTIONS = {
 }
 
 _ENDPOINT_TIMEOUT_SECONDS = 600.0
+_VERTEX_HOST_RE = re.compile(r"^(?:[a-z][a-z0-9-]*-)?aiplatform\.googleapis\.com$")
 
 
 @dataclass(slots=True)
@@ -353,12 +355,7 @@ def is_vertex_base_url(base_url: str) -> bool:
         hostname = urlparse(f"https://{base_url}").hostname
     if hostname is None:
         return False
-    hostname = hostname.lower()
-    return (
-        hostname == "aiplatform.googleapis.com"
-        or hostname.endswith("-aiplatform.googleapis.com")
-        or hostname.endswith(".aiplatform.googleapis.com")
-    )
+    return _VERTEX_HOST_RE.fullmatch(hostname.lower()) is not None
 
 
 def _google_options(
