@@ -91,13 +91,14 @@ class _AnthropicEndpointClient:
         return client
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
-        request_payload, max_retries = provider_request_options(payload)
+        request_payload, max_retries, extra_headers = provider_request_options(payload)
         api_response = await post_json_to_api(
             self._ensure_client(),
             "v1/messages",
             request_payload,
             operation="anthropic generation",
             max_retries=max_retries,
+            extra_headers=extra_headers,
         )
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
@@ -463,7 +464,18 @@ def _convert_anthropic_assistant_content(content: object) -> list[dict[str, Any]
         if part_type == "text" and isinstance(part_text, str):
             parts.append({"type": "text", "text": part_text.strip()})
         elif part_type == "reasoning" and isinstance(part_text, str):
-            parts.append({"type": "thinking", "thinking": part_text})
+            thinking_part = {"type": "thinking", "thinking": part_text}
+            anthropic_options = _provider_options(
+                part.get("providerOptions"),
+                "anthropic",
+            )
+            signature = anthropic_options.get("signature")
+            if isinstance(signature, str):
+                thinking_part["signature"] = signature
+            redacted_data = anthropic_options.get("redactedData")
+            if isinstance(redacted_data, str):
+                thinking_part = {"type": "redacted_thinking", "data": redacted_data}
+            parts.append(thinking_part)
         elif part_type == "file":
             raise ValueError("anthropic assistant file parts are not supported")
         elif part_type == "custom":
@@ -531,6 +543,16 @@ def _apply_anthropic_options(
         payload["effort"] = options["effort"]
     if "speed" in options:
         payload["speed"] = options["speed"]
+    if "inferenceGeo" in options:
+        payload["inference_geo"] = options["inferenceGeo"]
+    headers = dict(payload.get("__refiner_headers", {}))
+    beta = options.get("anthropicBeta")
+    if isinstance(beta, str):
+        headers["anthropic-beta"] = beta
+    elif isinstance(beta, Sequence) and not isinstance(beta, str | bytes | bytearray):
+        headers["anthropic-beta"] = ",".join(str(item) for item in beta)
+    if headers:
+        payload["__refiner_headers"] = headers
 
 
 def parse_response(
@@ -543,14 +565,38 @@ def parse_response(
         raise RuntimeError("anthropic response is missing content")
     content_parts: list[ResponseContentPart] = []
     for part in content:
-        if not isinstance(part, Mapping) or not isinstance(part.get("text"), str):
+        if not isinstance(part, Mapping):
             continue
         part_type = part.get("type")
         if part_type == "text":
-            content_parts.append({"type": "text", "text": part["text"]})
+            text = part.get("text")
+            if not isinstance(text, str):
+                continue
+            content_parts.append({"type": "text", "text": text})
             content_parts.extend(_anthropic_sources(part.get("citations")))
         elif part_type in {"thinking", "reasoning"}:
-            content_parts.append({"type": "reasoning", "text": part["text"]})
+            text = part.get("thinking", part.get("text"))
+            if not isinstance(text, str):
+                continue
+            content_parts.append(
+                {
+                    "type": "reasoning",
+                    "text": text,
+                    "providerMetadata": {
+                        "anthropic": _anthropic_part_metadata(part),
+                    },
+                }
+            )
+        elif part_type == "redacted_thinking":
+            content_parts.append(
+                {
+                    "type": "reasoning",
+                    "text": "",
+                    "providerMetadata": {
+                        "anthropic": _anthropic_part_metadata(part),
+                    },
+                }
+            )
     text = _text_from_content(content_parts)
     if not text:
         raise RuntimeError("anthropic response is missing textual content")
@@ -571,8 +617,29 @@ def parse_response(
         response=response_json,
         content=content_parts,
         headers=dict(response_headers or {}),
-        provider_metadata=_provider_metadata("anthropic", response_json),
+        provider_metadata=_anthropic_provider_metadata(response_json),
     )
+
+
+def _anthropic_part_metadata(part: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: part[key] for key in ("signature", "data", "type") if key in part}
+
+
+def _anthropic_provider_metadata(
+    response_json: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    metadata = dict(_provider_metadata("anthropic", response_json).get("anthropic", {}))
+    for key in (
+        "type",
+        "role",
+        "stop_reason",
+        "stop_sequence",
+        "container",
+        "usage",
+    ):
+        if key in response_json:
+            metadata[key] = response_json[key]
+    return {"anthropic": metadata} if metadata else {}
 
 
 def _anthropic_sources(citations: object) -> list[ResponseContentPart]:

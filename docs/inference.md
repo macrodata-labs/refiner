@@ -6,7 +6,7 @@ description: "(V)LLM inference workflow in Refiner"
 Model calls are now part of many data curation workflows, so Refiner includes built-in support for endpoint-based and managed inference.
 
 It supports these modes:
-- `OpenAIEndpointProvider`: call any OpenAI-compatible HTTP endpoint such as OpenAI or OpenRouter.
+- `OpenAIEndpointProvider`: call any OpenAI-compatible HTTP endpoint such as OpenRouter.
 - `OpenAIResponsesProvider`: call OpenAI's native Responses API with the same
   `generate_text` message format.
 - `GoogleEndpointProvider`: call the native Google Gemini API with Refiner's
@@ -459,14 +459,6 @@ serving throughput over the default correctness-oriented profile.
 Only the following models are currently supported. If you are missing one, please create an issue:
 - `Qwen/Qwen3.5-9B`
 - `google/gemma-4-E4B-it`
-
-## Internal Notes
-
-Inference endpoint clients share a transport layer that normalizes provider
-HTTP errors, retry classification, retry-after handling, and response headers.
-The total number of concurrent row-level requests is still controlled by
-Refiner's execution layer through `max_concurrent_requests` and pipeline
-`max_in_flight`, not by the single-call transport helper.
 
 ## Examples
 

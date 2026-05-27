@@ -61,12 +61,21 @@ class CustomPart(_ProviderOptionsPart):
     data: Mapping[str, Any]
 
 
-class TextContentPart(TypedDict):
+class ReasoningPart(_ProviderOptionsPart):
+    type: Literal["reasoning"]
+    text: str
+
+
+class _ProviderMetadataContentPart(TypedDict, total=False):
+    providerMetadata: Mapping[str, Any]
+
+
+class TextContentPart(_ProviderMetadataContentPart):
     type: Literal["text"]
     text: str
 
 
-class ReasoningContentPart(TypedDict):
+class ReasoningContentPart(_ProviderMetadataContentPart):
     type: Literal["reasoning"]
     text: str
 
@@ -118,7 +127,6 @@ ResponseContentPart: TypeAlias = (
     | GeneratedImageContentPart
 )
 UserContent: TypeAlias = str | Sequence[TextPart | ImagePart | FilePart | CustomPart]
-ReasoningPart = ReasoningContentPart
 AssistantContent: TypeAlias = (
     str | Sequence[TextPart | FilePart | ReasoningPart | CustomPart]
 )
@@ -252,6 +260,7 @@ class GoogleProviderOptions(TypedDict, total=False):
     serviceTier: Literal["standard", "flex", "priority"]
     sharedRequestType: Literal["priority", "flex", "standard"]
     requestType: Literal["shared"]
+    thoughtSignature: str
 
 
 class AnthropicCacheControl(TypedDict, total=False):
@@ -282,6 +291,8 @@ class AnthropicProviderOptions(TypedDict, total=False):
     inferenceGeo: Literal["us", "global"]
     anthropicBeta: Sequence[str]
     contextManagement: Mapping[str, Any]
+    signature: str
+    redactedData: str
 
 
 class AnthropicCitations(TypedDict):
@@ -292,6 +303,7 @@ class AnthropicFilePartProviderOptions(TypedDict, total=False):
     citations: AnthropicCitations
     title: str
     context: str
+    cacheControl: AnthropicCacheControl
 
 
 __all__ = [
@@ -319,6 +331,7 @@ __all__ = [
     "ProviderMetadata",
     "ProviderOptions",
     "ReasoningContentPart",
+    "ReasoningPart",
     "ResponseContentPart",
     "SourceContentPart",
     "SystemMessage",

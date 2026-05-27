@@ -30,7 +30,7 @@ writer, and robotics transforms.
 - [motion trimming](#motion-trimming)
 - [egocentric hand tracking](#egocentric-hand-tracking)
 - [reward scoring](#reward-scoring)
-- [task segmentation](#task-segmentation)
+- [subtask annotation](#subtask-annotation)
 - [merging datasets](#merging-datasets)
 
 ## Reading Datasets
@@ -475,14 +475,14 @@ The transform writes `reward_score` and `robometer_success` columns. Each value
 is a list aligned to the sampled frames, so `max_frames=8` produces up to eight
 scores per episode.
 
-## Task Segmentation
+## Subtask Annotation
 
-Task segmentation predicts timestamped subtasks for each robot episode.
+Subtask annotation predicts timestamped subtasks for each robot episode.
 
 ```python
 import refiner as mdr
 
-segment_episode = mdr.robotics.task_segmentation(
+annotate_subtasks = mdr.robotics.subtask_annotation(
     provider=mdr.inference.GoogleEndpointProvider(
         model="gemini-flash-latest",
     ),
@@ -497,15 +497,15 @@ segment_episode = mdr.robotics.task_segmentation(
 pipeline = (
     mdr.read_lerobot("hf://datasets/acme/robot_episodes")
     .map_async(
-        segment_episode,
+        annotate_subtasks,
         max_in_flight=16,
         preserve_order=False,
     )
-    .write_lerobot("hf://buckets/acme/robot_task_segments")
+    .write_lerobot("hf://buckets/acme/robot_subtask_annotations")
 )
 
 stats = pipeline.launch_local(
-    name="robot-task-segmentation",
+    name="robot-subtask-annotation",
     num_workers=8,
 )
 ```

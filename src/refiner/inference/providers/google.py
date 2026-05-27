@@ -15,7 +15,6 @@ from refiner.inference.internal.media import (
 )
 from refiner.inference.internal.message_conversion import (
     _custom_provider_data,
-    _provider_options,
 )
 from refiner.inference.internal.schema import StructuredOutputSchema
 from refiner.inference.internal.response import (
@@ -55,6 +54,7 @@ PROVIDER_OPTIONS = {
     "serviceTier",
     "sharedRequestType",
     "requestType",
+    "thoughtSignature",
 }
 
 _ENDPOINT_TIMEOUT_SECONDS = 600.0
@@ -92,13 +92,14 @@ class _GoogleEndpointClient:
         return client
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
-        request_payload, max_retries = provider_request_options(payload)
+        request_payload, max_retries, extra_headers = provider_request_options(payload)
         api_response = await post_json_to_api(
             self._ensure_client(),
             f"{_model_path(self.model)}:generateContent",
             request_payload,
             operation="google generation",
             max_retries=max_retries,
+            extra_headers=extra_headers,
         )
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
@@ -106,6 +107,9 @@ class _GoogleEndpointClient:
         return parse_response(
             response_json,
             response_headers=api_response.response_headers,
+            provider_metadata_name=(
+                "googleVertex" if is_vertex_base_url(self.base_url) else "google"
+            ),
         )
 
 
@@ -137,14 +141,17 @@ def build_payload(
     params: Mapping[str, Any],
     provider_options: ProviderOptions | None,
     schema: StructuredOutputSchema | None,
+    base_url: str = "",
 ) -> dict[str, Any]:
+    is_vertex_provider = is_vertex_base_url(base_url)
     payload = convert_to_google_payload(
         messages,
         generation_config=_generation_config(params),
         provider_options=provider_options,
+        is_vertex_provider=is_vertex_provider,
     )
     if schema is not None:
-        google_options = _provider_options(provider_options, "google")
+        google_options = _google_options(provider_options, is_vertex_provider)
         structured_outputs = (
             google_options.get("structuredOutputs") if google_options else None
         )
@@ -181,6 +188,7 @@ def convert_to_google_payload(
     *,
     generation_config: Mapping[str, Any],
     provider_options: Mapping[str, Mapping[str, Any]] | None = None,
+    is_vertex_provider: bool = False,
 ) -> dict[str, Any]:
     system_parts: list[dict[str, str]] = []
     contents: list[dict[str, Any]] = []
@@ -203,7 +211,10 @@ def convert_to_google_payload(
             contents.append(
                 {
                     "role": "model",
-                    "parts": _convert_google_assistant_content(content),
+                    "parts": _convert_google_assistant_content(
+                        content,
+                        is_vertex_provider=is_vertex_provider,
+                    ),
                 }
             )
             continue
@@ -218,9 +229,13 @@ def convert_to_google_payload(
         payload["systemInstruction"] = {"parts": system_parts}
     if generation_config:
         payload["generationConfig"] = dict(generation_config)
-    google_options = _provider_options(provider_options, "google")
+    google_options = _google_options(provider_options, is_vertex_provider)
     if google_options:
-        _apply_google_options(payload, google_options)
+        _apply_google_options(
+            payload,
+            google_options,
+            is_vertex_provider=is_vertex_provider,
+        )
     return payload
 
 
@@ -249,7 +264,11 @@ def _convert_google_user_part(part: Mapping[str, Any]) -> dict[str, Any]:
     raise ValueError(f"unsupported content part type {part_type!r}")
 
 
-def _convert_google_assistant_content(content: object) -> list[dict[str, Any]]:
+def _convert_google_assistant_content(
+    content: object,
+    *,
+    is_vertex_provider: bool,
+) -> list[dict[str, Any]]:
     if isinstance(content, str):
         return [{"text": content}] if content else []
     if not isinstance(content, Sequence):
@@ -263,10 +282,22 @@ def _convert_google_assistant_content(content: object) -> list[dict[str, Any]]:
         part_text = part.get("text")
         if part_type == "text" and isinstance(part_text, str):
             if part_text:
-                parts.append({"text": part_text})
+                parts.append(
+                    _with_google_thought_signature(
+                        {"text": part_text},
+                        part,
+                        is_vertex_provider=is_vertex_provider,
+                    )
+                )
         elif part_type == "reasoning" and isinstance(part_text, str):
             if part_text:
-                parts.append({"text": part_text, "thought": True})
+                parts.append(
+                    _with_google_thought_signature(
+                        {"text": part_text, "thought": True},
+                        part,
+                        is_vertex_provider=is_vertex_provider,
+                    )
+                )
         elif part_type == "file":
             data = part.get("data")
             if is_url(data):
@@ -276,12 +307,16 @@ def _convert_google_assistant_content(content: object) -> list[dict[str, Any]]:
                 declared_media_type=part.get("mediaType"),
             )
             parts.append(
-                {
-                    "inlineData": {
-                        "mimeType": media_type,
-                        "data": base64_data(data),
-                    }
-                }
+                _with_google_thought_signature(
+                    {
+                        "inlineData": {
+                            "mimeType": media_type,
+                            "data": base64_data(data),
+                        }
+                    },
+                    part,
+                    is_vertex_provider=is_vertex_provider,
+                )
             )
         elif part_type == "custom":
             parts.append(_custom_provider_data(part, {"google"}))
@@ -298,7 +333,45 @@ def _google_file_part(data: object, media_type: str) -> dict[str, Any]:
     return {"inlineData": {"mimeType": media_type, "data": base64_data(data)}}
 
 
-def _apply_google_options(payload: dict[str, Any], options: Mapping[str, Any]) -> None:
+def _with_google_thought_signature(
+    payload: dict[str, Any],
+    part: Mapping[str, Any],
+    *,
+    is_vertex_provider: bool,
+) -> dict[str, Any]:
+    google_options = _google_options(part.get("providerOptions"), is_vertex_provider)
+    thought_signature = google_options.get("thoughtSignature")
+    if isinstance(thought_signature, str):
+        payload["thoughtSignature"] = thought_signature
+    return payload
+
+
+def is_vertex_base_url(base_url: str) -> bool:
+    normalized = base_url.lower()
+    return "aiplatform.googleapis.com" in normalized or "vertex" in normalized
+
+
+def _google_options(
+    provider_options: object,
+    is_vertex_provider: bool,
+) -> Mapping[str, Any]:
+    if not isinstance(provider_options, Mapping):
+        return {}
+    options_by_namespace = cast(Mapping[str, Any], provider_options)
+    names = ("googleVertex", "vertex", "google") if is_vertex_provider else ("google",)
+    for name in names:
+        options = options_by_namespace.get(name)
+        if isinstance(options, Mapping):
+            return options
+    return {}
+
+
+def _apply_google_options(
+    payload: dict[str, Any],
+    options: Mapping[str, Any],
+    *,
+    is_vertex_provider: bool,
+) -> None:
     generation_keys = {
         "audioTimestamp",
         "imageConfig",
@@ -319,11 +392,22 @@ def _apply_google_options(payload: dict[str, Any], options: Mapping[str, Any]) -
         "labels",
         "retrievalConfig",
         "safetySettings",
-        "serviceTier",
         "systemInstruction",
     ):
         if key in options:
             payload[key] = options[key]
+    if is_vertex_provider:
+        headers = dict(payload.get("__refiner_headers", {}))
+        if "sharedRequestType" in options:
+            headers["X-Vertex-AI-LLM-Shared-Request-Type"] = str(
+                options["sharedRequestType"]
+            )
+        if "requestType" in options:
+            headers["X-Vertex-AI-LLM-Request-Type"] = str(options["requestType"])
+        if headers:
+            payload["__refiner_headers"] = headers
+    elif "serviceTier" in options:
+        payload["serviceTier"] = options["serviceTier"]
 
 
 def _inline_json_schema_refs(json_schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -509,6 +593,7 @@ def parse_response(
     response_json: Mapping[str, Any],
     *,
     response_headers: Mapping[str, str] | None = None,
+    provider_metadata_name: str = "google",
 ) -> InferenceResponse:
     candidates = response_json.get("candidates")
     if not isinstance(candidates, Sequence) or not candidates:
@@ -535,12 +620,15 @@ def parse_response(
         if not isinstance(part, Mapping):
             continue
         if isinstance(part.get("text"), str):
+            metadata = _google_part_metadata(part, provider_metadata_name)
             if part.get("thought") is True:
-                content_parts.append({"type": "reasoning", "text": part["text"]})
+                content_parts.append(
+                    {"type": "reasoning", "text": part["text"], **metadata}
+                )
             else:
-                content_parts.append({"type": "text", "text": part["text"]})
-        content_parts.extend(_google_generated_parts(part))
-    content_parts.extend(_google_grounding_sources(candidate))
+                content_parts.append({"type": "text", "text": part["text"], **metadata})
+        content_parts.extend(_google_generated_parts(part, provider_metadata_name))
+    content_parts.extend(_google_grounding_sources(candidate, provider_metadata_name))
     text = _text_from_content(content_parts)
     if not text:
         raise RuntimeError("google generation response is missing textual content")
@@ -556,11 +644,57 @@ def parse_response(
         response=response_json,
         content=content_parts,
         headers=dict(response_headers or {}),
-        provider_metadata=_provider_metadata("google", response_json, candidate),
+        provider_metadata=_google_provider_metadata(
+            response_json,
+            candidate,
+            provider_metadata_name,
+        ),
     )
 
 
-def _google_generated_parts(part: Mapping[str, Any]) -> list[ResponseContentPart]:
+def _google_part_metadata(part: Mapping[str, Any], provider: str) -> dict[str, Any]:
+    metadata = {}
+    for key in ("thoughtSignature", "thought", "executableCode", "codeExecutionResult"):
+        if key in part:
+            metadata[key] = part[key]
+    return {"providerMetadata": {provider: metadata}} if metadata else {}
+
+
+def _google_provider_metadata(
+    response_json: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    provider: str,
+) -> dict[str, Mapping[str, Any]]:
+    metadata = dict(
+        _provider_metadata(provider, response_json, candidate).get(provider, {})
+    )
+    for key in (
+        "promptFeedback",
+        "usageMetadata",
+        "modelVersion",
+        "responseId",
+    ):
+        if key in response_json:
+            metadata[key] = response_json[key]
+    for key in (
+        "groundingMetadata",
+        "urlContextMetadata",
+        "safetyRatings",
+        "finishMessage",
+        "citationMetadata",
+    ):
+        if key in candidate:
+            metadata[key] = candidate[key]
+    usage = response_json.get("usageMetadata")
+    if isinstance(usage, Mapping) and "serviceTier" in usage:
+        metadata["serviceTier"] = usage["serviceTier"]
+    return {provider: metadata} if metadata else {}
+
+
+def _google_generated_parts(
+    part: Mapping[str, Any],
+    provider: str,
+) -> list[ResponseContentPart]:
     inline_data = part.get("inlineData") or part.get("inline_data")
     if isinstance(inline_data, Mapping):
         media_type = inline_data.get("mimeType") or inline_data.get("mime_type")
@@ -568,7 +702,7 @@ def _google_generated_parts(part: Mapping[str, Any]) -> list[ResponseContentPart
         top_level = media_type.split("/", 1)[0] if isinstance(media_type, str) else ""
         result: dict[str, Any] = {
             "type": "image" if top_level == "image" else "file",
-            "providerMetadata": {"google": dict(part)},
+            "providerMetadata": {provider: dict(part)},
         }
         if isinstance(media_type, str):
             result["mediaType"] = media_type
@@ -582,7 +716,7 @@ def _google_generated_parts(part: Mapping[str, Any]) -> list[ResponseContentPart
         top_level = media_type.split("/", 1)[0] if isinstance(media_type, str) else ""
         result = {
             "type": "image" if top_level == "image" else "file",
-            "providerMetadata": {"google": dict(part)},
+            "providerMetadata": {provider: dict(part)},
         }
         if isinstance(media_type, str):
             result["mediaType"] = media_type
@@ -594,6 +728,7 @@ def _google_generated_parts(part: Mapping[str, Any]) -> list[ResponseContentPart
 
 def _google_grounding_sources(
     candidate: Mapping[str, Any],
+    provider: str,
 ) -> list[ResponseContentPart]:
     grounding = candidate.get("groundingMetadata")
     if not isinstance(grounding, Mapping):
@@ -615,7 +750,7 @@ def _google_grounding_sources(
             "type": "source",
             "sourceType": "url",
             "url": url,
-            "providerMetadata": {"google": dict(chunk)},
+            "providerMetadata": {provider: dict(chunk)},
         }
         title = web.get("title")
         if isinstance(title, str):
@@ -639,6 +774,7 @@ __all__ = [
     "PROVIDER_OPTIONS",
     "_GoogleEndpointClient",
     "build_payload",
+    "is_vertex_base_url",
     "model_capabilities",
     "parse_response",
 ]

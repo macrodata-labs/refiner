@@ -1,10 +1,10 @@
 from refiner.robotics.motion import motion_trim
 from refiner.robotics.reward import reward_score
-from refiner.robotics.task_segmentation import (
-    TaskSegmentationProvider,
+from refiner.robotics.subtask_annotation import (
+    SubtaskAnnotationProvider,
     TimestampedContactSheet,
     contact_sheet_prompt_manifest,
-    task_segmentation,
+    subtask_annotation,
     timestamped_contact_sheets,
 )
 from refiner.robotics.egocentric import track_hands
@@ -27,10 +27,10 @@ from refiner.robotics.lerobot_format import (
 __all__ = [
     "motion_trim",
     "reward_score",
-    "TaskSegmentationProvider",
+    "SubtaskAnnotationProvider",
     "TimestampedContactSheet",
     "contact_sheet_prompt_manifest",
-    "task_segmentation",
+    "subtask_annotation",
     "timestamped_contact_sheets",
     "track_hands",
     "RoboticsRow",

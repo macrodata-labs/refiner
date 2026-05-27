@@ -16,7 +16,9 @@ from refiner.inference import InferenceResponse
 from refiner.pipeline.data.row import DictRow
 from refiner.robotics.lerobot_format import LeRobotMetadata, LeRobotRow
 
-task_segmentation_module = importlib.import_module("refiner.robotics.task_segmentation")
+subtask_annotation_module = importlib.import_module(
+    "refiner.robotics.subtask_annotation"
+)
 
 
 def _write_video(path, *, num_frames: int = 6, fps: int = 5) -> None:
@@ -140,28 +142,28 @@ def test_contact_sheet_prompt_manifest_rejects_empty_sheets() -> None:
         mdr.robotics.contact_sheet_prompt_manifest([])
 
 
-def test_task_segmentation_builds_generate_text_block(monkeypatch) -> None:
+def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
     seen = {}
 
     def _fake_generate_text(**kwargs):
         seen.update(kwargs)
-        return "segmentation-block"
+        return "annotation-block"
 
     monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
     provider = mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest")
 
-    block = mdr.robotics.task_segmentation(
+    block = mdr.robotics.subtask_annotation(
         provider=provider,
         max_concurrent_requests=17,
     )
 
-    assert block == "segmentation-block"
+    assert block == "annotation-block"
     assert seen["provider"] is provider
     assert seen["max_concurrent_requests"] == 17
     assert callable(seen["fn"])
 
 
-def test_task_segmentation_block_updates_row(tmp_path, monkeypatch) -> None:
+def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
     seen = {}
 
     def _fake_generate_text(**kwargs):
@@ -171,7 +173,7 @@ def test_task_segmentation_block_updates_row(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
 
     row = _lerobot_row(tmp_path, tasks=["open the drawer"])
-    block = mdr.robotics.task_segmentation(
+    block = mdr.robotics.subtask_annotation(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
     )
@@ -195,7 +197,7 @@ def test_task_segmentation_block_updates_row(tmp_path, monkeypatch) -> None:
 
     assert seen["provider"].model == "gemini-flash-latest"
     assert request["temperature"] == 0.1
-    assert request["schema"] is task_segmentation_module._TaskSegmentationResult
+    assert request["schema"] is subtask_annotation_module._SubtaskAnnotationResult
     message = request["messages"][0]
     assert message["role"] == "user"
     assert "Episode instruction: open the drawer" in message["content"][0]["text"]
@@ -212,7 +214,7 @@ def test_task_segmentation_block_updates_row(tmp_path, monkeypatch) -> None:
     assert "raw_annotation_output" not in result
 
 
-def test_task_segmentation_can_include_contact_sheet_manifest(
+def test_subtask_annotation_can_include_contact_sheet_manifest(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -222,7 +224,7 @@ def test_task_segmentation_can_include_contact_sheet_manifest(
     monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
 
     row = _lerobot_row(tmp_path, tasks=["open the drawer"])
-    block = mdr.robotics.task_segmentation(
+    block = mdr.robotics.subtask_annotation(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
         include_contact_sheet_manifest=True,
@@ -236,7 +238,7 @@ def test_task_segmentation_can_include_contact_sheet_manifest(
             finish_reason="stop",
             usage={},
             response={},
-            object=task_segmentation_module._TaskSegmentationResult(segments=[]),
+            object=subtask_annotation_module._SubtaskAnnotationResult(segments=[]),
         )
 
     asyncio.run(cast(Any, block)(row, _fake_request))
@@ -247,7 +249,7 @@ def test_task_segmentation_can_include_contact_sheet_manifest(
     )
 
 
-def test_task_segmentation_filters_short_segments_by_default(
+def test_subtask_annotation_filters_short_segments_by_default(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -257,7 +259,7 @@ def test_task_segmentation_filters_short_segments_by_default(
     monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
 
     row = _lerobot_row(tmp_path)
-    block = mdr.robotics.task_segmentation(
+    block = mdr.robotics.subtask_annotation(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
     )

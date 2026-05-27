@@ -112,13 +112,16 @@ class _OpenAIEndpointClient:
     async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
         use_chat = "messages" in payload
         endpoint_path = "v1/chat/completions" if use_chat else "v1/completions"
-        request_payload, max_retries = provider_request_options(payload)
+        request_payload, max_retries, extra_headers = provider_request_options(payload)
+        if use_chat:
+            _strip_unsupported_reasoning_settings(request_payload)
         api_response = await post_json_to_api(
             self._ensure_client(),
             endpoint_path,
             request_payload,
             operation="generation",
             max_retries=max_retries,
+            extra_headers=extra_headers,
         )
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
@@ -130,13 +133,14 @@ class _OpenAIEndpointClient:
         )
 
     async def pooling(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        request_payload, max_retries = provider_request_options(payload)
+        request_payload, max_retries, extra_headers = provider_request_options(payload)
         api_response = await post_json_to_api(
             self._ensure_client(),
             "pooling",
             request_payload,
             operation="pooling",
             max_retries=max_retries,
+            extra_headers=extra_headers,
         )
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
@@ -175,13 +179,15 @@ class _OpenAIResponsesClient:
         return client
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
-        request_payload, max_retries = provider_request_options(payload)
+        request_payload, max_retries, extra_headers = provider_request_options(payload)
+        _strip_unsupported_reasoning_settings(request_payload)
         api_response = await post_json_to_api(
             self._ensure_client(),
             "v1/responses",
             request_payload,
             operation="openai responses generation",
             max_retries=max_retries,
+            extra_headers=extra_headers,
         )
         response_json = api_response.value
         if not isinstance(response_json, Mapping):
@@ -318,6 +324,10 @@ def model_setting_warnings(
             ("top_p", "topP"),
             ("topP", "topP"),
             ("logprobs", "logprobs"),
+            ("top_logprobs", "topLogprobs"),
+            ("frequency_penalty", "frequencyPenalty"),
+            ("presence_penalty", "presencePenalty"),
+            ("logit_bias", "logitBias"),
         ):
             if setting in params or setting in options:
                 warnings.append(
@@ -331,6 +341,37 @@ def model_setting_warnings(
                     )
                 )
     return warnings
+
+
+def _strip_unsupported_reasoning_settings(payload: dict[str, Any]) -> None:
+    model = str(payload.get("model", "")).lower()
+    responses_api = "input" in payload
+    capabilities = model_capabilities(model, responses_api=responses_api)
+    if capabilities.reasoning is not True:
+        return
+    reasoning_effort = payload.get("reasoning_effort")
+    reasoning = payload.get("reasoning")
+    if isinstance(reasoning, Mapping) and reasoning_effort is None:
+        reasoning_effort = reasoning.get("effort")
+    supports_non_reasoning_parameters = (
+        reasoning_effort == "none" and capabilities.non_reasoning_parameters is True
+    )
+    if not supports_non_reasoning_parameters:
+        for key in ("temperature", "top_p", "logprobs"):
+            payload.pop(key, None)
+    for key in (
+        "frequency_penalty",
+        "presence_penalty",
+        "top_logprobs",
+        "logit_bias",
+    ):
+        payload.pop(key, None)
+    if (
+        not responses_api
+        and "max_tokens" in payload
+        and "max_completion_tokens" not in payload
+    ):
+        payload["max_completion_tokens"] = payload.pop("max_tokens")
 
 
 def _openai_known_model(model: str) -> bool:
@@ -873,7 +914,11 @@ def parse_chat_response(
             raise RuntimeError("chat completion response is missing message")
         reasoning = message.get("reasoning")
         if isinstance(reasoning, str) and reasoning:
-            content_parts.append({"type": "reasoning", "text": reasoning})
+            reasoning_part: dict[str, Any] = {"type": "reasoning", "text": reasoning}
+            message_metadata = _openai_message_metadata(message)
+            if message_metadata:
+                reasoning_part["providerMetadata"] = {"openai": message_metadata}
+            content_parts.append(cast(ResponseContentPart, reasoning_part))
         content_parts.extend(_openai_sources(message.get("annotations")))
         content = message.get("content")
         if isinstance(content, str):
@@ -926,7 +971,7 @@ def parse_chat_response(
         content=content_parts,
         headers=dict(response_headers or {}),
         logprobs=_sequence_or_empty(choice.get("logprobs")),
-        provider_metadata=_provider_metadata("openai", response_json, choice),
+        provider_metadata=_openai_chat_metadata(response_json, choice),
     )
 
 
@@ -950,7 +995,13 @@ def parse_responses_response(
                             summary_part.get("text"), str
                         ):
                             content_parts.append(
-                                {"type": "reasoning", "text": summary_part["text"]}
+                                {
+                                    "type": "reasoning",
+                                    "text": summary_part["text"],
+                                    "providerMetadata": {
+                                        "openai": _openai_response_item_metadata(item),
+                                    },
+                                }
                             )
                 continue
             content = item.get("content")
@@ -960,7 +1011,15 @@ def parse_responses_response(
                 if not isinstance(part, Mapping):
                     continue
                 if isinstance(part.get("text"), str):
-                    content_parts.append({"type": "text", "text": part["text"]})
+                    content_parts.append(
+                        {
+                            "type": "text",
+                            "text": part["text"],
+                            "providerMetadata": {
+                                "openai": _openai_response_item_metadata(part),
+                            },
+                        }
+                    )
                     content_parts.extend(_openai_sources(part.get("annotations")))
                 content_parts.extend(_openai_generated_parts(part))
     if not _text_from_content(content_parts) and isinstance(
@@ -988,8 +1047,83 @@ def parse_responses_response(
         content=content_parts,
         headers=dict(response_headers or {}),
         logprobs=_collect_openai_responses_logprobs(response_json),
-        provider_metadata=_provider_metadata("openai", response_json),
+        provider_metadata=_openai_responses_metadata(response_json),
     )
+
+
+def _openai_message_metadata(message: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: message[key]
+        for key in ("refusal", "audio", "annotations")
+        if key in message
+    }
+
+
+def _openai_response_item_metadata(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: item[key]
+        for key in (
+            "id",
+            "type",
+            "status",
+            "role",
+            "encrypted_content",
+            "summary",
+            "logprobs",
+            "annotations",
+        )
+        if key in item
+    }
+
+
+def _openai_chat_metadata(
+    response_json: Mapping[str, Any],
+    choice: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    metadata = dict(
+        _provider_metadata("openai", response_json, choice).get("openai", {})
+    )
+    message = choice.get("message")
+    if isinstance(message, Mapping):
+        message_metadata = _openai_message_metadata(message)
+        if message_metadata:
+            metadata["message"] = message_metadata
+    return {"openai": metadata} if metadata else {}
+
+
+def _openai_responses_metadata(
+    response_json: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    metadata = dict(_provider_metadata("openai", response_json).get("openai", {}))
+    for key in (
+        "object",
+        "created_at",
+        "status",
+        "background",
+        "error",
+        "incomplete_details",
+        "instructions",
+        "max_output_tokens",
+        "max_tool_calls",
+        "parallel_tool_calls",
+        "previous_response_id",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "reasoning",
+        "safety_identifier",
+        "store",
+        "temperature",
+        "text",
+        "tool_choice",
+        "top_logprobs",
+        "top_p",
+        "truncation",
+        "usage",
+        "user",
+    ):
+        if key in response_json:
+            metadata[key] = response_json[key]
+    return {"openai": metadata} if metadata else {}
 
 
 def _openai_sources(annotations: object) -> list[ResponseContentPart]:

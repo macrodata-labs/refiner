@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     )
     from refiner.video import VideoFile
 
-_DEFAULT_TASK_SEGMENTATION_PROMPT = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
+_DEFAULT_SUBTASK_ANNOTATION_PROMPT = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
 
 Return only JSON with this shape:
 {"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
@@ -45,7 +45,7 @@ Rules:
 """
 
 if TYPE_CHECKING:
-    TaskSegmentationProvider: TypeAlias = (
+    SubtaskAnnotationProvider: TypeAlias = (
         AnthropicEndpointProvider
         | GoogleEndpointProvider
         | OpenAIEndpointProvider
@@ -53,17 +53,17 @@ if TYPE_CHECKING:
         | VLLMProvider
     )
 else:
-    TaskSegmentationProvider: TypeAlias = Any
+    SubtaskAnnotationProvider: TypeAlias = Any
 
 
-class _TaskSegment(BaseModel):
+class _SubtaskSegment(BaseModel):
     start_sec: float
     end_sec: float
     subtask: str
 
 
-class _TaskSegmentationResult(BaseModel):
-    segments: list[_TaskSegment]
+class _SubtaskAnnotationResult(BaseModel):
+    segments: list[_SubtaskSegment]
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,11 +90,11 @@ class TimestampedContactSheet:
         return len(self.timestamps)
 
 
-def task_segmentation(
+def subtask_annotation(
     *,
-    provider: TaskSegmentationProvider,
+    provider: SubtaskAnnotationProvider,
     video_key: str | None = None,
-    prompt: str = _DEFAULT_TASK_SEGMENTATION_PROMPT,
+    prompt: str = _DEFAULT_SUBTASK_ANNOTATION_PROMPT,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
     frame_width: int = 224,
@@ -108,7 +108,7 @@ def task_segmentation(
     generation_params: Mapping[str, Any] | None = None,
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
-    """Return an async map block that segments LeRobot episodes."""
+    """Return an async map block that annotates LeRobot episode subtasks."""
 
     from refiner.inference import generate_text
 
@@ -117,16 +117,16 @@ def task_segmentation(
     if min_segment_duration_sec is not None and min_segment_duration_sec < 0:
         raise ValueError("min_segment_duration_sec must be >= 0")
 
-    async def _segment_episode(
+    async def _annotate_subtasks(
         row: Row,
         generate_text: "GenerateTextFn",
     ) -> MapResult:
         if not isinstance(row, LeRobotRow):
-            raise TypeError("task_segmentation expects rows from read_lerobot(...)")
+            raise TypeError("subtask_annotation expects rows from read_lerobot(...)")
 
         selected_video_key = _resolve_video_key(row, video_key)
         video = row.videos[selected_video_key]
-        content = await _task_segmentation_content(
+        content = await _subtask_annotation_content(
             video=video,
             prompt=_prompt_with_instruction(prompt, row.tasks),
             sample_sec=sample_sec,
@@ -144,13 +144,13 @@ def task_segmentation(
         response = await generate_text(
             messages=messages,
             providerOptions=providerOptions,
-            schema=_TaskSegmentationResult,
+            schema=_SubtaskAnnotationResult,
             **params,
         )
         parsed = (
             response.object
-            if isinstance(response.object, _TaskSegmentationResult)
-            else _parse_task_segmentation_result(response.text)
+            if isinstance(response.object, _SubtaskAnnotationResult)
+            else _parse_subtask_annotation_result(response.text)
         )
         segments = _filter_segments(
             _normalize_segments(parsed.segments),
@@ -163,7 +163,7 @@ def task_segmentation(
         )
 
     return generate_text(
-        fn=_segment_episode,
+        fn=_annotate_subtasks,
         provider=provider,
         max_concurrent_requests=max_concurrent_requests,
     )
@@ -213,7 +213,7 @@ def _prompt_with_instruction(prompt: str, tasks: list[str]) -> str:
     return f"{prompt}\nEpisode instruction: {instruction}\n"
 
 
-def _parse_task_segmentation_result(text: str) -> _TaskSegmentationResult:
+def _parse_subtask_annotation_result(text: str) -> _SubtaskAnnotationResult:
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?", "", stripped, flags=re.IGNORECASE).strip()
@@ -228,10 +228,10 @@ def _parse_task_segmentation_result(text: str) -> _TaskSegmentationResult:
             raise
         value = json.loads(stripped[start : end + 1])
 
-    return _TaskSegmentationResult.model_validate(value)
+    return _SubtaskAnnotationResult.model_validate(value)
 
 
-async def _task_segmentation_content(
+async def _subtask_annotation_content(
     *,
     video: VideoFile,
     prompt: str,
@@ -265,7 +265,7 @@ async def _task_segmentation_content(
     ]
 
 
-def _normalize_segments(segments: list[_TaskSegment]) -> list[dict[str, Any]]:
+def _normalize_segments(segments: list[_SubtaskSegment]) -> list[dict[str, Any]]:
     normalized = []
     for index, segment in enumerate(segments):
         if segment.end_sec <= segment.start_sec:
@@ -445,9 +445,9 @@ def _encode_jpeg(image: Image.Image, *, quality: int) -> bytes:
 
 
 __all__ = [
-    "TaskSegmentationProvider",
+    "SubtaskAnnotationProvider",
     "TimestampedContactSheet",
     "contact_sheet_prompt_manifest",
-    "task_segmentation",
+    "subtask_annotation",
     "timestamped_contact_sheets",
 ]

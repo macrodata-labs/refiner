@@ -186,6 +186,7 @@ def _build_payload(
             params=params,
             provider_options=provider_options,
             schema=schema,
+            base_url=provider.base_url,
         )
     if isinstance(provider, AnthropicEndpointProvider):
         return anthropic_provider.build_payload(
@@ -220,7 +221,11 @@ def _provider_warnings(
         expected_namespace = "openai"
         supported = openai_provider.CHAT_PROVIDER_OPTIONS
     elif isinstance(provider, GoogleEndpointProvider):
-        expected_namespace = "google"
+        expected_namespace = (
+            ("googleVertex", "vertex", "google")
+            if google_provider.is_vertex_base_url(provider.base_url)
+            else "google"
+        )
         supported = google_provider.PROVIDER_OPTIONS
     else:
         expected_namespace = "anthropic"

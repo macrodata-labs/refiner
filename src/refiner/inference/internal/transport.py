@@ -67,14 +67,22 @@ class InferenceRetryError(RuntimeError):
 
 def provider_request_options(
     payload: Mapping[str, Any],
-) -> tuple[dict[str, Any], int | None]:
+) -> tuple[dict[str, Any], int | None, dict[str, str] | None]:
     request = dict(payload)
     raw_max_retries = request.pop("__refiner_max_retries", None)
+    raw_headers = request.pop("__refiner_headers", None)
+    headers = None
+    if isinstance(raw_headers, Mapping):
+        headers = {
+            str(key): str(value)
+            for key, value in raw_headers.items()
+            if value is not None
+        }
     if raw_max_retries is None:
-        return request, None
+        return request, None, headers
     if not isinstance(raw_max_retries, int):
         raise ValueError("maxRetries must be an integer")
-    return request, raw_max_retries
+    return request, raw_max_retries, headers
 
 
 async def post_json_to_api(
@@ -84,12 +92,16 @@ async def post_json_to_api(
     *,
     operation: str,
     max_retries: int | None = None,
+    extra_headers: Mapping[str, str] | None = None,
 ) -> APIResponse:
     retry = _prepare_retries(max_retries)
 
     async def _post() -> APIResponse:
         try:
-            response = await client.post(endpoint_path, json=dict(payload))
+            kwargs: dict[str, Any] = {"json": dict(payload)}
+            if extra_headers:
+                kwargs["headers"] = dict(extra_headers)
+            response = await client.post(endpoint_path, **kwargs)
         except (
             ConnectionError,
             OSError,
