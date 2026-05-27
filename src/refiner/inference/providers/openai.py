@@ -15,7 +15,6 @@ from refiner.inference._media import (
     resolve_media_type,
     top_level_media_type,
 )
-from refiner.inference._capabilities import ModelCapabilities
 from refiner.inference._message_conversion import (
     _custom_provider_data,
     _provider_option,
@@ -28,7 +27,12 @@ from refiner.inference._response import (
     _text_from_content,
 )
 from refiner.inference._transport import post_json_to_api
-from refiner.inference.types import Message, ProviderOptions, ResponseContentPart
+from refiner.inference.types import (
+    Message,
+    ModelCapabilities,
+    ProviderOptions,
+    ResponseContentPart,
+)
 
 logger = logging.getLogger(__name__)
 

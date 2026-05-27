@@ -8,7 +8,6 @@ from typing import Any, cast
 
 import httpx
 
-from refiner.inference._capabilities import ModelCapabilities
 from refiner.inference._media import (
     base64_data,
     is_url,
@@ -29,6 +28,7 @@ from refiner.inference._transport import post_json_to_api
 from refiner.inference.types import (
     InferenceWarning,
     Message,
+    ModelCapabilities,
     ProviderOptions,
     ResponseContentPart,
 )

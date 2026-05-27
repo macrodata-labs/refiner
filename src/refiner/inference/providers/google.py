@@ -7,7 +7,6 @@ from typing import Any, cast
 
 import httpx
 
-from refiner.inference._capabilities import ModelCapabilities
 from refiner.inference._media import (
     base64_data,
     is_url,
@@ -25,7 +24,12 @@ from refiner.inference._response import (
     _text_from_content,
 )
 from refiner.inference._transport import post_json_to_api
-from refiner.inference.types import Message, ProviderOptions, ResponseContentPart
+from refiner.inference.types import (
+    Message,
+    ModelCapabilities,
+    ProviderOptions,
+    ResponseContentPart,
+)
 
 PROVIDER_OPTIONS = {
     "apiClient",

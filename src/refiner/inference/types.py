@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, TypedDict
 
 JSONValue: TypeAlias = Any
 ProviderOptions: TypeAlias = Mapping[str, Mapping[str, JSONValue]]
 DataContent: TypeAlias = str | bytes | bytearray | memoryview
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCapabilities:
+    images: bool | None = None
+    audio: bool | None = None
+    video: bool | None = None
+    files: bool | None = None
+    tools: bool | None = None
+    structured_output: bool | None = None
+    reasoning: bool | None = None
+    generated_media: bool | None = None
+    citations: bool | None = None
 
 
 class _ProviderOptionsPart(TypedDict, total=False):
@@ -291,6 +305,7 @@ __all__ = [
     "ImagePart",
     "InferenceWarning",
     "Message",
+    "ModelCapabilities",
     "OpenAIProviderOptions",
     "ProviderMetadata",
     "ProviderOptions",

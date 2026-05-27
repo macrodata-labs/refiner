@@ -4,7 +4,6 @@ import base64
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from refiner.inference import _capabilities
 from refiner.inference._media import resolve_media_type
 from refiner.inference.providers import (
     AnthropicEndpointProvider,
@@ -16,7 +15,7 @@ from refiner.inference.providers import (
 from refiner.inference.providers import anthropic as anthropic_provider
 from refiner.inference.providers import google as google_provider
 from refiner.inference.providers import openai as openai_provider
-from refiner.inference.types import InferenceWarning, Message
+from refiner.inference.types import InferenceWarning, Message, ModelCapabilities
 
 _MEDIA_WARNING_BYTES = 20 * 1024 * 1024
 _TOOL_SETTINGS = {
@@ -26,9 +25,6 @@ _TOOL_SETTINGS = {
     "parallelToolCalls",
     "maxToolCalls",
 }
-
-
-ModelCapabilities = _capabilities.ModelCapabilities
 
 
 def model_capabilities(
