@@ -10,7 +10,6 @@ from refiner.services import VLLMServiceDefinition
 class OpenAIEndpointProvider:
     base_url: str
     model: str
-    api_key: str | None = None
 
     def __post_init__(self) -> None:
         if not self.base_url.strip():
@@ -34,7 +33,6 @@ class OpenAIEndpointProvider:
 class GoogleEndpointProvider:
     model: str
     base_url: str = "https://generativelanguage.googleapis.com/v1beta"
-    api_key: str | None = None
 
     def __post_init__(self) -> None:
         if not self.model.strip():
@@ -58,7 +56,6 @@ class GoogleEndpointProvider:
 class OpenAIResponsesProvider:
     model: str
     base_url: str = "https://api.openai.com"
-    api_key: str | None = None
 
     def __post_init__(self) -> None:
         if not self.model.strip():
@@ -81,7 +78,6 @@ class OpenAIResponsesProvider:
 class AnthropicEndpointProvider:
     model: str
     base_url: str = "https://api.anthropic.com"
-    api_key: str | None = None
     anthropic_version: str = "2023-06-01"
 
     def __post_init__(self) -> None:

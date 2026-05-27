@@ -28,8 +28,6 @@ import refiner as mdr
 endpoint = mdr.inference.OpenAIEndpointProvider(
     base_url="https://api.openai.com",
     model="gpt-5-mini",
-    # Optional. If omitted, Refiner reads OPENAI_API_KEY in the worker process.
-    api_key=None,
 )
 
 async def caption(row, generate_text):
@@ -178,8 +176,7 @@ If the response cannot be parsed as the requested Pydantic model, Refiner raises
 
 ### GoogleEndpointProvider
 Use `GoogleEndpointProvider` for native Gemini requests, including in-memory
-video inputs. Set `GOOGLE_GENERATIVE_AI_API_KEY` in the worker environment, or
-pass `api_key` directly for local use.
+video inputs. Set `GOOGLE_GENERATIVE_AI_API_KEY` in the worker environment.
 
 ```python
 import refiner as mdr
@@ -280,8 +277,8 @@ async def analyze(row, generate_text):
 
 ### OpenAIResponsesProvider
 Use `OpenAIResponsesProvider` when you want OpenAI's native Responses API
-instead of the chat-completions-compatible endpoint. Set `OPENAI_API_KEY` or
-pass `api_key` directly.
+instead of the chat-completions-compatible endpoint. Set `OPENAI_API_KEY` in the
+worker environment.
 
 ```python
 provider = mdr.inference.OpenAIResponsesProvider(model="gpt-5-mini")
@@ -314,7 +311,7 @@ async def summarize_pdf(row, generate_text):
 
 ### AnthropicEndpointProvider
 Use `AnthropicEndpointProvider` for Anthropic's native Messages API. Set
-`ANTHROPIC_API_KEY` or pass `api_key` directly.
+`ANTHROPIC_API_KEY` in the worker environment.
 
 ```python
 provider = mdr.inference.AnthropicEndpointProvider(
@@ -387,10 +384,9 @@ pipeline = mdr.read_jsonl("input.jsonl").map_async(
 )
 ```
 
-Set `OPENAI_API_KEY` in the worker environment before execution, or pass
-`api_key` directly for local use. For cloud jobs, prefer passing the key through
-`secrets={"OPENAI_API_KEY": None}` so it is available in the worker environment
-without serializing the secret into the provider config.
+Set `OPENAI_API_KEY` in the worker environment before execution. For cloud jobs,
+pass the key through `secrets={"OPENAI_API_KEY": None}` so it is available in
+the worker environment without serializing the secret into the provider config.
 
 ### Refiner managed VLLM runtime
 

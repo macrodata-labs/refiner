@@ -392,7 +392,6 @@ def test_inference_generate_text_warns_for_openai_model_capabilities(
         provider=OpenAIEndpointProvider(
             base_url="https://api.example.com",
             model="gpt-3.5-turbo",
-            api_key="secret",
         ),
     )
 
@@ -461,7 +460,6 @@ def test_inference_generate_text_warns_for_anthropic_model_capabilities(
         fn=_inference_fn,
         provider=AnthropicEndpointProvider(
             model="claude-3-haiku-20240307",
-            api_key="secret",
         ),
     )
 
@@ -578,7 +576,7 @@ def test_inference_generate_text_applies_schema_for_google(monkeypatch) -> None:
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash"),
     )
 
     assert asyncio.run(cast(Any, infer(DictRow({})))) == {"title": "Video"}
@@ -615,7 +613,7 @@ def test_inference_generate_text_applies_schema_for_openai_responses(
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=OpenAIResponsesProvider(model="gpt-test", api_key="secret"),
+        provider=OpenAIResponsesProvider(model="gpt-test"),
     )
 
     assert asyncio.run(cast(Any, infer(DictRow({})))) == {"title": "Answer"}
@@ -656,7 +654,7 @@ def test_inference_generate_text_warns_for_anthropic_schema_fallback(
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=AnthropicEndpointProvider(model="claude-test", api_key="secret"),
+        provider=AnthropicEndpointProvider(model="claude-test"),
     )
 
     result = asyncio.run(cast(Any, infer(DictRow({}))))
@@ -710,7 +708,7 @@ def test_inference_generate_text_preserves_anthropic_system_with_schema(
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=AnthropicEndpointProvider(model="claude-test", api_key="secret"),
+        provider=AnthropicEndpointProvider(model="claude-test"),
     )
 
     asyncio.run(cast(Any, infer(DictRow({}))))
@@ -751,11 +749,10 @@ def test_inference_generate_text_raises_on_schema_validation_error(
         asyncio.run(cast(Any, infer(DictRow({}))))
 
 
-def test_google_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
+def test_google_endpoint_provider_builtin_args_are_serializable() -> None:
     provider = GoogleEndpointProvider(
         model="gemini-2.5-flash",
         base_url="https://generativelanguage.googleapis.com/v1beta",
-        api_key="secret",
     )
 
     assert provider.to_builtin_args() == {
@@ -803,7 +800,7 @@ def test_inference_generate_text_converts_messages_for_google(monkeypatch) -> No
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash"),
         default_generation_params={"max_tokens": 128},
     )
 
@@ -869,7 +866,7 @@ def test_inference_generate_text_detects_google_video_media_type(monkeypatch) ->
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash"),
     )
 
     mp4_bytes = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00"
@@ -937,7 +934,7 @@ def test_inference_generate_text_converts_google_assistant_multimodal_history(
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash"),
     )
 
     async def _invoke() -> object:
@@ -999,12 +996,12 @@ def test_google_endpoint_client_posts_generate_content(monkeypatch) -> None:
             return _FakeResponse()
 
     monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setenv("GOOGLE_GENERATIVE_AI_API_KEY", "secret")
 
     response = asyncio.run(
         client_module._GoogleEndpointClient(
             base_url="https://generativelanguage.googleapis.com/v1beta",
             model="gemini-2.5-flash",
-            api_key="secret",
         ).generate_text({"contents": [{"role": "user", "parts": [{"text": "hi"}]}]})
     )
 
@@ -1061,7 +1058,7 @@ def test_inference_generate_text_applies_google_provider_options(monkeypatch) ->
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash"),
     )
 
     async def _invoke() -> object:
@@ -1114,7 +1111,7 @@ def test_inference_generate_text_passes_max_retries_as_internal_option(
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=GoogleEndpointProvider(model="gemini-2.5-flash", api_key="secret"),
+        provider=GoogleEndpointProvider(model="gemini-2.5-flash"),
     )
 
     assert asyncio.run(cast(Any, infer(DictRow({})))) == {"output": "ok"}
@@ -1168,7 +1165,7 @@ def test_inference_generate_text_converts_messages_for_openai_responses(
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=OpenAIResponsesProvider(model="gpt-5-mini", api_key="secret"),
+        provider=OpenAIResponsesProvider(model="gpt-5-mini"),
     )
 
     async def _invoke() -> object:
@@ -1237,7 +1234,7 @@ def test_inference_generate_text_maps_openai_responses_options_to_wire_names(
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=OpenAIResponsesProvider(model="gpt-5-mini", api_key="secret"),
+        provider=OpenAIResponsesProvider(model="gpt-5-mini"),
     )
 
     asyncio.run(cast(Any, infer(DictRow({}))))
@@ -1291,7 +1288,7 @@ def test_inference_generate_text_converts_openai_responses_assistant_reasoning(
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=OpenAIResponsesProvider(model="gpt-5-mini", api_key="secret"),
+        provider=OpenAIResponsesProvider(model="gpt-5-mini"),
     )
 
     async def _invoke() -> object:
@@ -1430,7 +1427,7 @@ def test_inference_generate_text_converts_messages_for_anthropic(monkeypatch) ->
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=AnthropicEndpointProvider(model="claude-sonnet-4-5", api_key="secret"),
+        provider=AnthropicEndpointProvider(model="claude-sonnet-4-5"),
     )
 
     async def _invoke() -> object:
@@ -1502,7 +1499,7 @@ def test_inference_generate_text_converts_anthropic_assistant_reasoning(
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=AnthropicEndpointProvider(model="claude-sonnet-4-5", api_key="secret"),
+        provider=AnthropicEndpointProvider(model="claude-sonnet-4-5"),
     )
 
     async def _invoke() -> object:
@@ -1784,7 +1781,7 @@ def test_inference_generate_text_passes_custom_openai_content(monkeypatch) -> No
 
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
-        provider=OpenAIResponsesProvider(model="gpt-5-mini", api_key="secret"),
+        provider=OpenAIResponsesProvider(model="gpt-5-mini"),
     )
 
     async def _invoke() -> object:
@@ -1841,7 +1838,7 @@ def test_inference_generate_text_warns_for_unsupported_image_model(
     infer = mdr.inference.generate_text(
         fn=_inference_fn,
         provider=OpenAIEndpointProvider(
-            base_url="https://api.example.com", model="gpt-3.5-turbo", api_key="secret"
+            base_url="https://api.example.com", model="gpt-3.5-turbo"
         ),
     )
 
@@ -1916,46 +1913,6 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["headers"] == {"Authorization": "Bearer secret"}
-
-
-def test_openai_endpoint_provider_api_key_overrides_env(monkeypatch) -> None:
-    seen: dict[str, object] = {}
-
-    class _FakeResponse:
-        def json(self) -> Mapping[str, object]:
-            return {
-                "choices": [{"text": "ok", "finish_reason": "stop"}],
-                "usage": {},
-            }
-
-    class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, timeout
-            seen["headers"] = dict(headers)
-
-        async def post(self, path, *, json):
-            del path, json
-            return _FakeResponse()
-
-    monkeypatch.setattr(client_module.httpx, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
-
-    async def _inference_fn(row, generate):
-        del row
-        response = await generate({"prompt": "hi"})
-        return {"output": response.text}
-
-    infer = mdr.inference.generate(
-        fn=_inference_fn,
-        provider=OpenAIEndpointProvider(
-            base_url="https://api.example.com",
-            model="gpt-test",
-            api_key="provider-secret",
-        ),
-    )
-
-    assert asyncio.run(cast(Any, infer(DictRow({})))) == {"output": "ok"}
-    assert seen["headers"] == {"Authorization": "Bearer provider-secret"}
 
 
 def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
@@ -2305,11 +2262,10 @@ def test_openai_endpoint_can_disable_retries(monkeypatch) -> None:
     assert seen == {"calls": 1, "sleeps": 0}
 
 
-def test_openai_endpoint_provider_builtin_args_do_not_include_api_key() -> None:
+def test_openai_endpoint_provider_builtin_args_are_serializable() -> None:
     provider = OpenAIEndpointProvider(
         base_url="https://api.example.com",
         model="gpt-test",
-        api_key="secret",
     )
 
     assert provider.to_builtin_args() == {

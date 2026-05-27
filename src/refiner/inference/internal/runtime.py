@@ -88,23 +88,19 @@ def inference_map(
             if isinstance(provider, OpenAIEndpointProvider):
                 client = _OpenAIEndpointClient(
                     base_url=provider.base_url,
-                    api_key=provider.api_key,
                 )
             elif isinstance(provider, OpenAIResponsesProvider):
                 client = _OpenAIResponsesClient(
                     base_url=provider.base_url,
-                    api_key=provider.api_key,
                 )
             elif isinstance(provider, GoogleEndpointProvider):
                 client = _GoogleEndpointClient(
                     base_url=provider.base_url,
                     model=provider.model,
-                    api_key=provider.api_key,
                 )
             elif isinstance(provider, AnthropicEndpointProvider):
                 client = _AnthropicEndpointClient(
                     base_url=provider.base_url,
-                    api_key=provider.api_key,
                     anthropic_version=provider.anthropic_version,
                 )
             else:
