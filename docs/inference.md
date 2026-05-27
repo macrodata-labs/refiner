@@ -101,7 +101,10 @@ still be sent but include options Refiner does not map for the selected
 provider, such as unrelated provider option namespaces, unsupported
 provider-specific settings, content that the selected model is not known to
 support, large inline media, or tool options passed to `generate_text` before
-tool calling is implemented.
+tool calling is implemented. Refiner also uses provider/model capability tables
+based on AI SDK behavior for known model families, including OpenAI reasoning
+model parameter limits, OpenAI service-tier support, Anthropic adaptive thinking
+support, Anthropic `xhigh` effort support, and Anthropic output-token limits.
 
 ```python
 async def summarize(row, generate_text):

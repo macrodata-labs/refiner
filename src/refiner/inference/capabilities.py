@@ -82,6 +82,15 @@ def capability_warnings(
             }
         )
 
+    warnings.extend(
+        _model_setting_warnings(
+            provider=provider,
+            capabilities=capabilities,
+            params=params,
+            provider_options=provider_options,
+        )
+    )
+
     for setting in sorted(_TOOL_SETTINGS):
         if setting in params or _has_provider_option(provider_options, setting):
             warnings.append(
@@ -123,6 +132,215 @@ def capability_warnings(
                 }
             )
     return warnings
+
+
+def _model_setting_warnings(
+    *,
+    provider: (
+        AnthropicEndpointProvider
+        | GoogleEndpointProvider
+        | OpenAIEndpointProvider
+        | OpenAIResponsesProvider
+        | VLLMProvider
+    ),
+    capabilities: ModelCapabilities,
+    params: Mapping[str, Any],
+    provider_options: Mapping[str, Mapping[str, Any]] | None,
+) -> list[InferenceWarning]:
+    if isinstance(provider, OpenAIEndpointProvider | OpenAIResponsesProvider):
+        return _openai_setting_warnings(
+            provider=provider,
+            capabilities=capabilities,
+            params=params,
+            provider_options=provider_options,
+        )
+    if isinstance(provider, AnthropicEndpointProvider):
+        return _anthropic_setting_warnings(
+            provider=provider,
+            capabilities=capabilities,
+            params=params,
+            provider_options=provider_options,
+        )
+    return []
+
+
+def _openai_setting_warnings(
+    *,
+    provider: OpenAIEndpointProvider | OpenAIResponsesProvider,
+    capabilities: ModelCapabilities,
+    params: Mapping[str, Any],
+    provider_options: Mapping[str, Mapping[str, Any]] | None,
+) -> list[InferenceWarning]:
+    options = _provider_options(provider_options, "openai")
+    warnings: list[InferenceWarning] = []
+    provider_name = type(provider).__name__
+
+    if options.get("reasoningEffort") is not None and capabilities.reasoning is False:
+        warnings.append(
+            _unsupported_setting(
+                f"{provider_name} model {provider.model!r} is not known to support "
+                "reasoningEffort.",
+                setting="providerOptions.openai.reasoningEffort",
+                details="AI SDK only enables reasoning effort for known reasoning models.",
+            )
+        )
+    if (
+        isinstance(provider, OpenAIResponsesProvider)
+        and options.get("reasoningSummary") is not None
+        and capabilities.reasoning is False
+    ):
+        warnings.append(
+            _unsupported_setting(
+                f"{provider_name} model {provider.model!r} is not known to support "
+                "reasoningSummary.",
+                setting="providerOptions.openai.reasoningSummary",
+                details="AI SDK only enables reasoning summaries for known reasoning models.",
+            )
+        )
+    if (
+        isinstance(provider, OpenAIEndpointProvider)
+        and options.get("reasoningSummary") is not None
+    ):
+        warnings.append(
+            _unsupported_setting(
+                "OpenAI chat-completions provider options do not support "
+                "reasoningSummary; use OpenAIResponsesProvider for reasoning summaries.",
+                setting="providerOptions.openai.reasoningSummary",
+            )
+        )
+
+    service_tier = options.get("serviceTier")
+    if service_tier == "flex" and capabilities.flex_processing is False:
+        warnings.append(
+            _unsupported_setting(
+                f"{provider_name} model {provider.model!r} is not known to support "
+                "flex service tier.",
+                setting="providerOptions.openai.serviceTier",
+                details="AI SDK enables flex processing for o3, o4-mini, and GPT-5 non-chat models.",
+            )
+        )
+    if service_tier == "priority" and capabilities.priority_processing is False:
+        warnings.append(
+            _unsupported_setting(
+                f"{provider_name} model {provider.model!r} is not known to support "
+                "priority service tier.",
+                setting="providerOptions.openai.serviceTier",
+                details=(
+                    "AI SDK enables priority processing for GPT-4, selected GPT-5, "
+                    "o3, and o4-mini models."
+                ),
+            )
+        )
+
+    reasoning_effort = options.get("reasoningEffort")
+    allows_non_reasoning_params = (
+        reasoning_effort == "none" and capabilities.non_reasoning_parameters is True
+    )
+    if capabilities.reasoning is True and not allows_non_reasoning_params:
+        for setting, label in (
+            ("temperature", "temperature"),
+            ("top_p", "topP"),
+            ("topP", "topP"),
+            ("logprobs", "logprobs"),
+        ):
+            if setting in params or setting in options:
+                warnings.append(
+                    _unsupported_setting(
+                        f"{provider_name} model {provider.model!r} is a reasoning "
+                        f"model; {label} may be rejected unless reasoningEffort is "
+                        "'none' on GPT-5.1+ models.",
+                        setting=setting
+                        if setting in params
+                        else f"providerOptions.openai.{setting}",
+                    )
+                )
+    return warnings
+
+
+def _anthropic_setting_warnings(
+    *,
+    provider: AnthropicEndpointProvider,
+    capabilities: ModelCapabilities,
+    params: Mapping[str, Any],
+    provider_options: Mapping[str, Mapping[str, Any]] | None,
+) -> list[InferenceWarning]:
+    options = _provider_options(provider_options, "anthropic")
+    warnings: list[InferenceWarning] = []
+    thinking = options.get("thinking")
+    if (
+        isinstance(thinking, Mapping)
+        and thinking.get("type") == "adaptive"
+        and capabilities.adaptive_thinking is False
+    ):
+        warnings.append(
+            _unsupported_setting(
+                f"AnthropicEndpointProvider model {provider.model!r} is not known "
+                "to support adaptive thinking.",
+                setting="providerOptions.anthropic.thinking",
+                details="AI SDK only enables adaptive thinking for Claude 4.6+ model families.",
+            )
+        )
+    effort = options.get("effort")
+    if effort == "xhigh" and capabilities.xhigh_reasoning_effort is False:
+        warnings.append(
+            _unsupported_setting(
+                f"AnthropicEndpointProvider model {provider.model!r} is not known "
+                "to support xhigh effort.",
+                setting="providerOptions.anthropic.effort",
+                details="AI SDK only enables xhigh effort for Claude Opus 4.7+.",
+            )
+        )
+    max_tokens = _max_output_tokens(params)
+    if (
+        max_tokens is not None
+        and capabilities.max_output_tokens is not None
+        and max_tokens > capabilities.max_output_tokens
+    ):
+        warnings.append(
+            _unsupported_setting(
+                f"AnthropicEndpointProvider model {provider.model!r} is known to "
+                f"support at most {capabilities.max_output_tokens} output tokens.",
+                setting="max_tokens",
+                details=f"requested {max_tokens}",
+            )
+        )
+    return warnings
+
+
+def _provider_options(
+    provider_options: Mapping[str, Mapping[str, Any]] | None,
+    namespace: str,
+) -> Mapping[str, Any]:
+    if provider_options is None:
+        return {}
+    options = provider_options.get(namespace)
+    return options if isinstance(options, Mapping) else {}
+
+
+def _max_output_tokens(params: Mapping[str, Any]) -> int | None:
+    raw = params.get("max_tokens", params.get("maxOutputTokens"))
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _unsupported_setting(
+    message: str,
+    *,
+    setting: str,
+    details: str | None = None,
+) -> InferenceWarning:
+    warning: InferenceWarning = {
+        "type": "unsupported-setting",
+        "setting": setting,
+        "message": message,
+    }
+    if details is not None:
+        warning["details"] = details
+    return warning
 
 
 def _has_provider_option(

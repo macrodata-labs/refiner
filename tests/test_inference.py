@@ -360,6 +360,149 @@ def test_inference_generate_text_returns_provider_option_warnings(
     }
 
 
+def test_inference_generate_text_warns_for_openai_model_capabilities(
+    monkeypatch,
+) -> None:
+    async def _fake_generate(self, payload):
+        del self, payload
+        return InferenceResponse(
+            text="ok",
+            finish_reason="stop",
+            usage={},
+            response={"choices": []},
+        )
+
+    monkeypatch.setattr(client_module._OpenAIEndpointClient, "generate", _fake_generate)
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(
+            prompt="hello",
+            providerOptions={
+                "openai": {
+                    "reasoningEffort": "high",
+                    "serviceTier": "flex",
+                }
+            },
+        )
+        return {"warnings": list(response.warnings)}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=OpenAIEndpointProvider(
+            base_url="https://api.example.com",
+            model="gpt-3.5-turbo",
+            api_key="secret",
+        ),
+    )
+
+    result = asyncio.run(cast(Any, infer(DictRow({}))))
+
+    assert result == {
+        "warnings": [
+            {
+                "type": "unsupported-setting",
+                "setting": "providerOptions.openai.reasoningEffort",
+                "message": (
+                    "OpenAIEndpointProvider model 'gpt-3.5-turbo' is not known "
+                    "to support reasoningEffort."
+                ),
+                "details": (
+                    "AI SDK only enables reasoning effort for known reasoning models."
+                ),
+            },
+            {
+                "type": "unsupported-setting",
+                "setting": "providerOptions.openai.serviceTier",
+                "message": (
+                    "OpenAIEndpointProvider model 'gpt-3.5-turbo' is not known "
+                    "to support flex service tier."
+                ),
+                "details": (
+                    "AI SDK enables flex processing for o3, o4-mini, and GPT-5 "
+                    "non-chat models."
+                ),
+            },
+        ]
+    }
+
+
+def test_inference_generate_text_warns_for_anthropic_model_capabilities(
+    monkeypatch,
+) -> None:
+    async def _fake_generate_text(self, payload):
+        del self, payload
+        return InferenceResponse(
+            text="ok",
+            finish_reason="end_turn",
+            usage={},
+            response={"content": [{"type": "text", "text": "ok"}]},
+        )
+
+    monkeypatch.setattr(
+        client_module._AnthropicEndpointClient, "generate_text", _fake_generate_text
+    )
+
+    async def _inference_fn(row, generate_text):
+        del row
+        response = await generate_text(
+            prompt="hello",
+            max_tokens=8192,
+            providerOptions={
+                "anthropic": {
+                    "thinking": {"type": "adaptive"},
+                    "effort": "xhigh",
+                }
+            },
+        )
+        return {"warnings": list(response.warnings)}
+
+    infer = mdr.inference.generate_text(
+        fn=_inference_fn,
+        provider=AnthropicEndpointProvider(
+            model="claude-3-haiku-20240307",
+            api_key="secret",
+        ),
+    )
+
+    result = asyncio.run(cast(Any, infer(DictRow({}))))
+
+    assert result == {
+        "warnings": [
+            {
+                "type": "unsupported-setting",
+                "setting": "providerOptions.anthropic.thinking",
+                "message": (
+                    "AnthropicEndpointProvider model 'claude-3-haiku-20240307' "
+                    "is not known to support adaptive thinking."
+                ),
+                "details": (
+                    "AI SDK only enables adaptive thinking for Claude 4.6+ "
+                    "model families."
+                ),
+            },
+            {
+                "type": "unsupported-setting",
+                "setting": "providerOptions.anthropic.effort",
+                "message": (
+                    "AnthropicEndpointProvider model 'claude-3-haiku-20240307' "
+                    "is not known to support xhigh effort."
+                ),
+                "details": "AI SDK only enables xhigh effort for Claude Opus 4.7+.",
+            },
+            {
+                "type": "unsupported-setting",
+                "setting": "max_tokens",
+                "message": (
+                    "AnthropicEndpointProvider model 'claude-3-haiku-20240307' "
+                    "is known to support at most 4096 output tokens."
+                ),
+                "details": "requested 8192",
+            },
+        ]
+    }
+
+
 def test_inference_generate_text_parses_pydantic_schema_for_openai(
     monkeypatch,
 ) -> None:

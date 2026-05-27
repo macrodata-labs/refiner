@@ -126,16 +126,19 @@ def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def model_capabilities(model: str) -> ModelCapabilities:
     is_gemini = "gemini" in model
+    reasoning = model.startswith("gemini-3") or "2.5" in model
     return ModelCapabilities(
+        model_family="google",
         images=is_gemini,
         audio=is_gemini,
         video=is_gemini,
         files=is_gemini,
         tools=True,
         structured_output=is_gemini,
-        reasoning="2.5" in model or "3" in model,
+        reasoning=reasoning,
         generated_media="image" in model or "flash-image" in model,
         citations=is_gemini,
+        known_model=is_gemini,
     )
 
 

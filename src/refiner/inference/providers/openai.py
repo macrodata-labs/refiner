@@ -208,11 +208,30 @@ def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def model_capabilities(model: str, *, responses_api: bool) -> ModelCapabilities:
-    vision = any(
-        marker in model for marker in ("gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "omni")
+    reasoning = (
+        model.startswith(("o1", "o3", "o4-mini"))
+        or model.startswith("gpt-5")
+        and not model.startswith("gpt-5-chat")
     )
-    reasoning = model.startswith(("o1", "o3", "o4")) or "gpt-5" in model
+    flex_processing = (
+        model.startswith(("o3", "o4-mini"))
+        or model.startswith("gpt-5")
+        and not model.startswith("gpt-5-chat")
+    )
+    priority_processing = (
+        model.startswith("gpt-4")
+        or model.startswith(("o3", "o4-mini"))
+        or (
+            model.startswith("gpt-5")
+            and not model.startswith(("gpt-5-nano", "gpt-5-chat", "gpt-5.4-nano"))
+        )
+    )
+    non_reasoning_parameters = model.startswith(
+        ("gpt-5.1", "gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5")
+    )
+    vision = _openai_vision_model(model)
     return ModelCapabilities(
+        model_family="openai",
         images=vision,
         audio="audio" in model or "realtime" in model,
         video=False,
@@ -222,6 +241,40 @@ def model_capabilities(model: str, *, responses_api: bool) -> ModelCapabilities:
         reasoning=reasoning,
         generated_media="image" in model,
         citations=responses_api,
+        system_message_mode="developer" if reasoning else "system",
+        flex_processing=flex_processing,
+        priority_processing=priority_processing,
+        non_reasoning_parameters=non_reasoning_parameters,
+        known_model=_openai_known_model(model),
+    )
+
+
+def _openai_known_model(model: str) -> bool:
+    return model.startswith(
+        (
+            "gpt-3.5",
+            "gpt-4",
+            "gpt-4o",
+            "gpt-4.1",
+            "gpt-4.5",
+            "gpt-5",
+            "o1",
+            "o3",
+            "o4",
+        )
+    )
+
+
+def _openai_vision_model(model: str) -> bool:
+    return model.startswith(
+        (
+            "gpt-4o",
+            "gpt-4.1",
+            "gpt-4.5",
+            "gpt-5",
+            "o3",
+            "o4",
+        )
     )
 
 

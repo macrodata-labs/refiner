@@ -121,17 +121,93 @@ def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def model_capabilities(model: str) -> ModelCapabilities:
     is_claude = "claude" in model
+    model_info = _anthropic_model_info(model)
     return ModelCapabilities(
+        model_family="anthropic",
         images=is_claude,
         audio=False,
         video=False,
         files=is_claude,
         tools=True,
-        structured_output=False,
-        reasoning="3-7" in model or "4" in model or "sonnet-4" in model,
+        structured_output=model_info["structured_output"],
+        reasoning=is_claude,
         generated_media=False,
         citations=is_claude,
+        max_output_tokens=model_info["max_output_tokens"],
+        adaptive_thinking=model_info["adaptive_thinking"],
+        xhigh_reasoning_effort=model_info["xhigh_reasoning_effort"],
+        known_model=model_info["known_model"],
     )
+
+
+def _anthropic_model_info(model: str) -> dict[str, Any]:
+    if "claude-opus-4-7" in model:
+        return {
+            "max_output_tokens": 128000,
+            "structured_output": True,
+            "adaptive_thinking": True,
+            "xhigh_reasoning_effort": True,
+            "known_model": True,
+        }
+    if "claude-sonnet-4-6" in model or "claude-opus-4-6" in model:
+        return {
+            "max_output_tokens": 128000,
+            "structured_output": True,
+            "adaptive_thinking": True,
+            "xhigh_reasoning_effort": False,
+            "known_model": True,
+        }
+    if (
+        "claude-sonnet-4-5" in model
+        or "claude-opus-4-5" in model
+        or "claude-haiku-4-5" in model
+    ):
+        return {
+            "max_output_tokens": 64000,
+            "structured_output": True,
+            "adaptive_thinking": False,
+            "xhigh_reasoning_effort": False,
+            "known_model": True,
+        }
+    if "claude-opus-4-1" in model:
+        return {
+            "max_output_tokens": 32000,
+            "structured_output": True,
+            "adaptive_thinking": False,
+            "xhigh_reasoning_effort": False,
+            "known_model": True,
+        }
+    if "claude-sonnet-4-" in model:
+        return {
+            "max_output_tokens": 64000,
+            "structured_output": False,
+            "adaptive_thinking": False,
+            "xhigh_reasoning_effort": False,
+            "known_model": True,
+        }
+    if "claude-opus-4-" in model:
+        return {
+            "max_output_tokens": 32000,
+            "structured_output": False,
+            "adaptive_thinking": False,
+            "xhigh_reasoning_effort": False,
+            "known_model": True,
+        }
+    if "claude-3-haiku" in model:
+        return {
+            "max_output_tokens": 4096,
+            "structured_output": False,
+            "adaptive_thinking": False,
+            "xhigh_reasoning_effort": False,
+            "known_model": True,
+        }
+    return {
+        "max_output_tokens": 4096,
+        "structured_output": False,
+        "adaptive_thinking": False,
+        "xhigh_reasoning_effort": False,
+        "known_model": False,
+    }
 
 
 def build_payload(

@@ -11,6 +11,7 @@ DataContent: TypeAlias = str | bytes | bytearray | memoryview
 
 @dataclass(frozen=True, slots=True)
 class ModelCapabilities:
+    model_family: str | None = None
     images: bool | None = None
     audio: bool | None = None
     video: bool | None = None
@@ -20,6 +21,14 @@ class ModelCapabilities:
     reasoning: bool | None = None
     generated_media: bool | None = None
     citations: bool | None = None
+    max_output_tokens: int | None = None
+    system_message_mode: Literal["system", "developer", "remove"] | None = None
+    flex_processing: bool | None = None
+    priority_processing: bool | None = None
+    non_reasoning_parameters: bool | None = None
+    adaptive_thinking: bool | None = None
+    xhigh_reasoning_effort: bool | None = None
+    known_model: bool | None = None
 
 
 class _ProviderOptionsPart(TypedDict, total=False):
