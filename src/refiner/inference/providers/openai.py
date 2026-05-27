@@ -28,6 +28,7 @@ from refiner.inference._response import (
 )
 from refiner.inference._transport import post_json_to_api
 from refiner.inference.types import (
+    InferenceWarning,
     Message,
     ModelCapabilities,
     ProviderOptions,
@@ -249,6 +250,98 @@ def model_capabilities(model: str, *, responses_api: bool) -> ModelCapabilities:
     )
 
 
+def model_setting_warnings(
+    *,
+    model: str,
+    provider_name: str,
+    responses_api: bool,
+    params: Mapping[str, Any],
+    provider_options: Mapping[str, Mapping[str, Any]] | None,
+) -> list[InferenceWarning]:
+    model = model.lower()
+    capabilities = model_capabilities(model, responses_api=responses_api)
+    options = _provider_options(provider_options, "openai")
+    warnings: list[InferenceWarning] = []
+
+    if options.get("reasoningEffort") is not None and capabilities.reasoning is False:
+        warnings.append(
+            _unsupported_setting(
+                f"{provider_name} model {model!r} is not known to support "
+                "reasoningEffort.",
+                setting="providerOptions.openai.reasoningEffort",
+                details="AI SDK only enables reasoning effort for known reasoning models.",
+            )
+        )
+    if (
+        responses_api
+        and options.get("reasoningSummary") is not None
+        and capabilities.reasoning is False
+    ):
+        warnings.append(
+            _unsupported_setting(
+                f"{provider_name} model {model!r} is not known to support "
+                "reasoningSummary.",
+                setting="providerOptions.openai.reasoningSummary",
+                details="AI SDK only enables reasoning summaries for known reasoning models.",
+            )
+        )
+    if not responses_api and options.get("reasoningSummary") is not None:
+        warnings.append(
+            _unsupported_setting(
+                "OpenAI chat-completions provider options do not support "
+                "reasoningSummary; use OpenAIResponsesProvider for reasoning summaries.",
+                setting="providerOptions.openai.reasoningSummary",
+            )
+        )
+
+    service_tier = options.get("serviceTier")
+    if service_tier == "flex" and capabilities.flex_processing is False:
+        warnings.append(
+            _unsupported_setting(
+                f"{provider_name} model {model!r} is not known to support "
+                "flex service tier.",
+                setting="providerOptions.openai.serviceTier",
+                details="AI SDK enables flex processing for o3, o4-mini, and GPT-5 non-chat models.",
+            )
+        )
+    if service_tier == "priority" and capabilities.priority_processing is False:
+        warnings.append(
+            _unsupported_setting(
+                f"{provider_name} model {model!r} is not known to support "
+                "priority service tier.",
+                setting="providerOptions.openai.serviceTier",
+                details=(
+                    "AI SDK enables priority processing for GPT-4, selected GPT-5, "
+                    "o3, and o4-mini models."
+                ),
+            )
+        )
+
+    reasoning_effort = options.get("reasoningEffort")
+    allows_non_reasoning_params = (
+        reasoning_effort == "none" and capabilities.non_reasoning_parameters is True
+    )
+    if capabilities.reasoning is True and not allows_non_reasoning_params:
+        for setting, label in (
+            ("temperature", "temperature"),
+            ("top_p", "topP"),
+            ("topP", "topP"),
+            ("logprobs", "logprobs"),
+        ):
+            if setting in params or setting in options:
+                warnings.append(
+                    _unsupported_setting(
+                        f"{provider_name} model {model!r} is a reasoning model; "
+                        f"{label} may be rejected unless reasoningEffort is 'none' "
+                        "on GPT-5.1+ models.",
+                        setting=setting
+                        if setting in params
+                        else f"providerOptions.openai.{setting}",
+                    )
+                )
+    return warnings
+
+
 def _openai_known_model(model: str) -> bool:
     return model.startswith(
         (
@@ -276,6 +369,32 @@ def _openai_vision_model(model: str) -> bool:
             "o4",
         )
     )
+
+
+def _provider_options(
+    provider_options: Mapping[str, Mapping[str, Any]] | None,
+    namespace: str,
+) -> Mapping[str, Any]:
+    if provider_options is None:
+        return {}
+    options = provider_options.get(namespace)
+    return options if isinstance(options, Mapping) else {}
+
+
+def _unsupported_setting(
+    message: str,
+    *,
+    setting: str,
+    details: str | None = None,
+) -> InferenceWarning:
+    warning: InferenceWarning = {
+        "type": "unsupported-setting",
+        "setting": setting,
+        "message": message,
+    }
+    if details is not None:
+        warning["details"] = details
+    return warning
 
 
 def build_chat_payload(
@@ -979,6 +1098,7 @@ __all__ = [
     "build_chat_payload",
     "build_responses_payload",
     "model_capabilities",
+    "model_setting_warnings",
     "parse_chat_response",
     "parse_responses_response",
 ]

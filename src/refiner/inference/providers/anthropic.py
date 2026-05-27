@@ -140,6 +140,57 @@ def model_capabilities(model: str) -> ModelCapabilities:
     )
 
 
+def model_setting_warnings(
+    *,
+    model: str,
+    params: Mapping[str, Any],
+    provider_options: Mapping[str, Mapping[str, Any]] | None,
+) -> list[InferenceWarning]:
+    model = model.lower()
+    capabilities = model_capabilities(model)
+    options = _provider_options(provider_options, "anthropic")
+    warnings: list[InferenceWarning] = []
+    thinking = options.get("thinking")
+    if (
+        isinstance(thinking, Mapping)
+        and thinking.get("type") == "adaptive"
+        and capabilities.adaptive_thinking is False
+    ):
+        warnings.append(
+            _unsupported_setting(
+                f"AnthropicEndpointProvider model {model!r} is not known to support "
+                "adaptive thinking.",
+                setting="providerOptions.anthropic.thinking",
+                details="AI SDK only enables adaptive thinking for Claude 4.6+ model families.",
+            )
+        )
+    effort = options.get("effort")
+    if effort == "xhigh" and capabilities.xhigh_reasoning_effort is False:
+        warnings.append(
+            _unsupported_setting(
+                f"AnthropicEndpointProvider model {model!r} is not known to support "
+                "xhigh effort.",
+                setting="providerOptions.anthropic.effort",
+                details="AI SDK only enables xhigh effort for Claude Opus 4.7+.",
+            )
+        )
+    max_tokens = _max_output_tokens(params)
+    if (
+        max_tokens is not None
+        and capabilities.max_output_tokens is not None
+        and max_tokens > capabilities.max_output_tokens
+    ):
+        warnings.append(
+            _unsupported_setting(
+                f"AnthropicEndpointProvider model {model!r} is known to support "
+                f"at most {capabilities.max_output_tokens} output tokens.",
+                setting="max_tokens",
+                details=f"requested {max_tokens}",
+            )
+        )
+    return warnings
+
+
 def _anthropic_model_info(model: str) -> dict[str, Any]:
     if "claude-opus-4-7" in model:
         return {
@@ -208,6 +259,32 @@ def _anthropic_model_info(model: str) -> dict[str, Any]:
         "xhigh_reasoning_effort": False,
         "known_model": False,
     }
+
+
+def _max_output_tokens(params: Mapping[str, Any]) -> int | None:
+    raw = params.get("max_tokens", params.get("maxOutputTokens"))
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _unsupported_setting(
+    message: str,
+    *,
+    setting: str,
+    details: str | None = None,
+) -> InferenceWarning:
+    warning: InferenceWarning = {
+        "type": "unsupported-setting",
+        "setting": setting,
+        "message": message,
+    }
+    if details is not None:
+        warning["details"] = details
+    return warning
 
 
 def build_payload(
@@ -537,6 +614,7 @@ __all__ = [
     "_AnthropicEndpointClient",
     "build_payload",
     "model_capabilities",
+    "model_setting_warnings",
     "parse_response",
     "schema_warnings",
 ]
