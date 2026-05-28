@@ -502,14 +502,11 @@ def _row_value(row: Row, key: str) -> Any:
             return row.states
         if key == "timestamp":
             return row.timestamps
+        video = row.videos.get(key)
+        if video is not None:
+            return video
         if key.startswith("observation."):
-            try:
-                return row.observations(key)
-            except KeyError:
-                video = row.videos.get(key)
-                if video is None:
-                    raise
-                return video
+            return row.observations(key)
     return row[key]
 
 

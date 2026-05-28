@@ -8,7 +8,7 @@ from fsspec.implementations.local import LocalFileSystem
 import pytest
 
 from refiner.pipeline import read_mcap
-from refiner.pipeline.sources.readers.mcap import _ros_image_frame
+from refiner.pipeline.sources.readers.mcap import _frame_from_value, _ros_image_frame
 from refiner.pipeline.sources.readers import McapReader
 from refiner.robotics.row import RoboticsRow
 from refiner.video import VideoFrameArray
@@ -125,6 +125,77 @@ def _write_marker_mcap(path: Path) -> None:
             (state_channel, 20, b'{"q":[2]}', 20, 3),
             (marker_channel, 100, b'{"episode":1}', 100, 4),
             (state_channel, 110, b'{"q":[3]}', 110, 5),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
+def _write_marker_mcap_with_sparse_action(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        action_channel = writer.register_channel(
+            topic="/action",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        marker_channel = writer.register_channel(
+            topic="/episode_start",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (marker_channel, 0, b'{"episode":0}', 0, 1),
+            (state_channel, 10, b'{"q":[1]}', 10, 2),
+            (action_channel, 20, b'{"u":[10]}', 20, 3),
+            (marker_channel, 100, b'{"episode":1}', 100, 4),
+            (state_channel, 110, b'{"q":[2]}', 110, 5),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
+def _write_out_of_order_video_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        image_channel = writer.register_channel(
+            topic="/image",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (image_channel, 1_000_000_000, b'{"frame":[[[4,5,6]]]}', 1_000_000_000, 1),
+            (image_channel, 0, b'{"frame":[[[1,2,3]]]}', 0, 2),
         ]
         for channel_id, log_time, data, publish_time, sequence in messages:
             writer.add_message(
@@ -330,6 +401,21 @@ def test_mcap_reader_holds_previous_field_value(tmp_path: Path) -> None:
     assert row["frames"].column("state").to_pylist() == [[1, 2], [1, 2]]
 
 
+def test_mcap_reader_hold_does_not_use_future_values(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/joint_states.q", "target": "/cmd.target"},
+        primary="state",
+        sync_method="hold",
+        include_skew=False,
+    ).materialize()[0]
+
+    assert row["frames"].column("target").to_pylist() == [None, [20], [20]]
+
+
 def test_mcap_reader_can_align_to_unselected_primary_source(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -495,6 +581,24 @@ def test_mcap_reader_splits_on_marker_topic(tmp_path: Path) -> None:
     ]
 
 
+def test_mcap_reader_preserves_selected_empty_episode_fields(tmp_path: Path) -> None:
+    path = tmp_path / "markers-sparse-action.mcap"
+    _write_marker_mcap_with_sparse_action(path)
+
+    rows = read_mcap(
+        str(path),
+        fields={"state": "/state.q", "action": "/action.u"},
+        primary="state",
+        episode_splitting={"marker_topic": "/episode_start"},
+        include_skew=False,
+    ).materialize()
+
+    assert [row["frames"].column("action").to_pylist() for row in rows] == [
+        [[10]],
+        [None],
+    ]
+
+
 def test_mcap_reader_sorts_marker_events_before_splitting(tmp_path: Path) -> None:
     path = tmp_path / "out-of-order-markers.mcap"
     _write_out_of_order_marker_mcap(path)
@@ -569,6 +673,62 @@ def test_mcap_reader_sparse_mode_preserves_duplicate_timestamps(
     frames = row["frames"]
     assert frames.column("timestamp").to_pylist() == [1e-08, 1e-08]
     assert frames.column("/state.q").to_pylist() == [[1], [2]]
+
+
+def test_mcap_reader_aligned_mode_preserves_duplicate_primary_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sparse-edge.mcap"
+    _write_sparse_edge_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/state.q"},
+        primary="state",
+        include_skew=False,
+    ).materialize()[0]
+
+    frames = row["frames"]
+    assert frames.column("timestamp").to_pylist() == [1e-08, 1e-08]
+    assert frames.column("state").to_pylist() == [[1], [2]]
+
+
+def test_mcap_reader_sorts_unaligned_video_frames(tmp_path: Path) -> None:
+    path = tmp_path / "out-of-order-video.mcap"
+    _write_out_of_order_video_mcap(path)
+
+    row = read_mcap(str(path), videos={"front": "/image.frame"}).materialize()[0]
+
+    assert [
+        frame[0, 0].tolist() for frame in row["videos"]["front"].iter_frame_arrays()
+    ] == [
+        [1, 2, 3],
+        [4, 5, 6],
+    ]
+
+
+def test_mcap_reader_rejects_fractional_video_fps(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    with pytest.raises(ValueError, match="integer fps"):
+        read_mcap(
+            str(path),
+            videos={"front": "/image.frame"},
+            fps=29.97,
+        ).materialize()
+
+
+def test_mcap_reader_decodes_compressed_image_byte_lists(tmp_path: Path) -> None:
+    from PIL import Image
+
+    image = Image.new("RGB", (1, 1), (1, 2, 3))
+    out = tmp_path / "frame.jpg"
+    image.save(out)
+
+    frame = _frame_from_value({"format": "jpeg", "data": list(out.read_bytes())})
+
+    assert frame.shape == (1, 1, 3)
 
 
 def test_mcap_reader_decodes_ros_image_stride_and_four_channels() -> None:

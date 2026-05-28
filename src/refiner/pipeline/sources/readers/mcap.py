@@ -181,6 +181,7 @@ class McapReader(BaseReader):
                 windows = _marker_windows(topic_events.get(self._marker_topic, ()))
             else:
                 windows = [_EpisodeWindow()]
+            file_topics = set(topic_events)
             for episode_index, window in enumerate(windows):
                 window_events = _slice_events(topic_events, window)
                 fields = (
@@ -192,7 +193,9 @@ class McapReader(BaseReader):
                     if self._read_default_fields
                     else self.fields
                 )
-                available_topics = set(window_events)
+                available_topics = (
+                    set(window_events) if self._read_default_fields else file_topics
+                )
                 resolved_fields = {
                     output: _resolve_source(source, available_topics)
                     for output, source in fields.items()
@@ -223,17 +226,21 @@ class McapReader(BaseReader):
                         resolved_fields,
                         window_events,
                         primary_events=primary_events or (),
+                        primary=primary,
                         sync_method=self.sync_method,
                         include_skew=self.include_skew,
                     )
                 )
                 inferred_fps = self.fps or _infer_fps(primary_events)
+                video_fps = inferred_fps or 30
+                if self.videos and video_fps != int(video_fps):
+                    raise ValueError("MCAP videos require integer fps")
                 videos = _video_map(
                     resolved_videos,
                     window_events,
                     primary_events=primary_events,
                     sync_method=self.sync_method,
-                    fps=int(round(inferred_fps or 30)),
+                    fps=int(video_fps),
                 )
                 row: dict[str, Any] = {
                     "frames": Tabular(frame_table),
@@ -468,6 +475,8 @@ def _sparse_frame_table(
                 timestamp_values = values.get(timestamp_ns, ())
                 if duplicate_index < len(timestamp_values):
                     row[name] = timestamp_values[duplicate_index]
+                else:
+                    row[name] = None
             rows.append(row)
     return Tabular.from_rows([DictRow(row) for row in rows]).table
 
@@ -477,6 +486,7 @@ def _aligned_frame_table(
     topic_events: Mapping[str, Sequence[_McapEvent]],
     *,
     primary_events: Sequence[_McapEvent],
+    primary: tuple[str, str | None],
     sync_method: SyncMethod,
     include_skew: bool,
 ) -> pa.Table:
@@ -498,7 +508,16 @@ def _aligned_frame_table(
             "timestamp": timestamp_ns / 1e9,
         }
         for name in fields:
-            aligned = aligned_values[name][index]
+            source = fields[name]
+            aligned = (
+                _AlignedValue(
+                    timestamp_ns=timestamp_ns,
+                    value=_source_value(primary_event.value, source[1], default=None),
+                    skew_ns=0,
+                )
+                if source == primary
+                else aligned_values[name][index]
+            )
             if aligned is None:
                 row[name] = None
                 continue
@@ -582,13 +601,14 @@ def _hold_value(
     timestamp_ns: int,
     source_timestamps: Sequence[int],
     source_values: Sequence[Any],
-) -> _AlignedValue:
+) -> _AlignedValue | None:
     index = bisect_right(source_timestamps, timestamp_ns) - 1
-    source_index = max(0, index)
-    source_timestamp = int(source_timestamps[source_index])
+    if index < 0:
+        return None
+    source_timestamp = int(source_timestamps[index])
     return _AlignedValue(
         timestamp_ns=source_timestamp,
-        value=source_values[source_index],
+        value=source_values[index],
         skew_ns=source_timestamp - timestamp_ns,
     )
 
@@ -679,7 +699,7 @@ def _video_map(
         else:
             frames = [
                 _frame_from_value(_source_value(event.value, source[1]))
-                for event in events
+                for event in sorted(events, key=lambda event: event.timestamp_ns)
             ]
         if frames:
             out[name] = VideoFrameArray(np.stack(frames), fps=fps)
@@ -702,7 +722,10 @@ def _frame_from_value(value: Any) -> np.ndarray:
         if {"height", "width", "data"}.issubset(value):
             return _ros_image_frame(value)
         if {"data", "format"}.issubset(value):
-            return _frame_from_value(value["data"])
+            data = value["data"]
+            if not isinstance(data, str | bytes):
+                data = bytes(data)
+            return _frame_from_value(data)
         for key in ("image", "frame", "data"):
             if key in value:
                 return _frame_from_value(value[key])
