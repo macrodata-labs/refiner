@@ -45,6 +45,7 @@ from refiner.pipeline.sources import (
 )
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
@@ -927,6 +928,7 @@ def read_mcap(
     videos: PathSelection | None = None,
     primary: str | None = None,
     fps: float | None = None,
+    sync_method: SyncMethod = "nearest",
     include_skew: bool = True,
     episode_splitting: str | Mapping[str, Any] = "single",
 ) -> RefinerPipeline:
@@ -944,6 +946,7 @@ def read_mcap(
             videos=videos,
             primary=primary,
             fps=fps,
+            sync_method=sync_method,
             include_skew=include_skew,
             episode_splitting=episode_splitting,
         )

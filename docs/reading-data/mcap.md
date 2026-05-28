@@ -135,8 +135,8 @@ the same timestamps. `read_mcap` supports these synchronization choices:
 | Mode | How to select it | Output rows | Best for |
 | --- | --- | --- | --- |
 | Unsynchronized | Leave `primary=None` | One frame-table row for each selected field message timestamp. Missing fields are null. Selected videos stay separate in `videos`. | Event logs, debugging, preserving each topic's original timing. |
-| Field-primary aligned | Set `primary` to a selected field name, topic, or dotted source path. | One frame-table row for each primary field timestamp. Other fields and videos are nearest-neighbor aligned to those timestamps. | Robot state or action streams that define the trajectory clock. |
-| Video-primary aligned | Set `primary` to a selected video name, video topic, or dotted video source path. | One frame-table row for each primary video frame timestamp. Fields and other videos are nearest-neighbor aligned to those timestamps. | Camera-driven datasets where image frames define the training samples. |
+| Field-primary aligned | Set `primary` to a selected field name, topic, or dotted source path. | One frame-table row for each primary field timestamp. Other fields and videos are aligned with `sync_method`. | Robot state or action streams that define the trajectory clock. |
+| Video-primary aligned | Set `primary` to a selected video name, video topic, or dotted video source path. | One frame-table row for each primary video frame timestamp. Fields and other videos are aligned with `sync_method`. | Camera-driven datasets where image frames define the training samples. |
 
 ### Unsynchronized Mode
 
@@ -188,9 +188,16 @@ mdr.read_mcap(
 
 `primary` can be an output field name (`"state"`), a video name, a topic, or a
 dotted source path. Its timestamps define the output rows. In field-primary and
-video-primary mode, every non-primary field and selected video is
-nearest-neighbor aligned to those rows. In unsynchronized mode, no
-nearest-neighbor alignment is applied.
+video-primary mode, every non-primary field and selected video is aligned to
+those rows with `sync_method`. In unsynchronized mode, no alignment is applied.
+
+`sync_method` applies globally to all non-primary fields and videos:
+
+| Method | Behavior |
+| --- | --- |
+| `"nearest"` | Use the closest source timestamp before or after the primary timestamp. |
+| `"hold"` | Use the most recent source value at or before the primary timestamp. |
+| `"interpolate"` | Linearly interpolate numeric scalar/list/array values. Non-numeric values and videos fall back to nearest. |
 
 For example, if state is the primary source and command messages arrive slightly
 after each state sample:
@@ -265,9 +272,10 @@ The reader does not decode encoded video packet streams such as H.264 byte
 streams. For those logs, read the packet metadata as fields, or decode the video
 stream before converting it to robotics rows.
 
-When `primary` is set, videos are nearest-aligned to the primary timestamps just
-like regular fields. When `primary` is omitted, each video keeps the frames from
-its own topic timestamps.
+When `primary` is set, videos are aligned to the primary timestamps with
+`sync_method`, except `"interpolate"` falls back to nearest because video frames
+are not numeric arrays. When `primary` is omitted, each video keeps the frames
+from its own topic timestamps.
 
 Using a video as `primary` is useful when camera frames should define the output
 rows:
@@ -362,8 +370,6 @@ For non-robotics event logs, write the frame table fields directly:
 
 ## Limitations
 
-- Primary synchronization uses nearest-neighbor matching only. It does not
-  interpolate values.
 - There is no max-skew cutoff or automatic row dropping. Use the generated
   `mcap.<field>.skew_ms` columns to filter after reading.
 - Encoded video packet streams, such as H.264 payloads, are not decoded into
@@ -385,6 +391,7 @@ For non-robotics event logs, write the frame table fields directly:
 | `videos` | `None` | Mapping, sequence, or string selecting image-like video frame sources. |
 | `primary` | `None` | Source used for primary-aligned synchronization. |
 | `fps` | `None` | Explicit frame rate. Overrides inferred fps. |
+| `sync_method` | `"nearest"` | Alignment method for primary-aligned mode: `"nearest"`, `"hold"`, or `"interpolate"`. |
 | `include_skew` | `True` | Add alignment timestamp/skew columns in primary-aligned mode. |
 | `episode_splitting` | `"single"` | One file per episode, `{"time_gap_s": seconds}`, or `{"marker_topic": topic}`. |
 | `file_path_column` | `"file_path"` | Source file column name. Set to `None` to omit it. |

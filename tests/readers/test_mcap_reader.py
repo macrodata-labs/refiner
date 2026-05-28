@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from io import BufferedReader
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from fsspec.implementations.local import LocalFileSystem
 import pytest
@@ -295,6 +295,41 @@ def test_mcap_reader_maps_fields_and_aligns_to_primary(tmp_path: Path) -> None:
     assert row["fps"] == 1.0
 
 
+def test_mcap_reader_interpolates_numeric_fields(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/joint_states.q", "target": "/cmd.target"},
+        primary="target",
+        sync_method="interpolate",
+        include_skew=False,
+    ).materialize()[0]
+
+    assert row["frames"].column("timestamp").to_pylist() == [0.1, 0.9]
+    assert row["frames"].column("state").to_pylist() == [
+        pytest.approx([1.2, 2.2]),
+        pytest.approx([2.8, 3.8]),
+    ]
+
+
+def test_mcap_reader_holds_previous_field_value(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/joint_states.q", "target": "/cmd.target"},
+        primary="target",
+        sync_method="hold",
+        include_skew=False,
+    ).materialize()[0]
+
+    assert row["frames"].column("timestamp").to_pylist() == [0.1, 0.9]
+    assert row["frames"].column("state").to_pylist() == [[1, 2], [1, 2]]
+
+
 def test_mcap_reader_can_align_to_unselected_primary_source(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -566,6 +601,14 @@ def test_mcap_reader_rejects_unknown_episode_splitting(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="episode_splitting must be"):
         read_mcap(str(path), episode_splitting="marker")
+
+
+def test_mcap_reader_rejects_unknown_sync_method(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    with pytest.raises(ValueError, match="sync_method must be"):
+        read_mcap(str(path), sync_method=cast(Any, "linear")).materialize()
 
 
 def test_mcap_reader_plans_files_atomically(tmp_path: Path) -> None:

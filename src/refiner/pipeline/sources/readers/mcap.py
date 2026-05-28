@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any
+from typing import Any, Literal
 
 from fsspec import AbstractFileSystem
 import numpy as np
@@ -25,6 +26,7 @@ from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameArray
 
 _MISSING = object()
+SyncMethod = Literal["nearest", "interpolate", "hold"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +39,13 @@ class _McapEvent:
 class _EpisodeWindow:
     start_ns: int | None = None
     end_ns: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _AlignedValue:
+    timestamp_ns: int
+    value: Any
+    skew_ns: int
 
 
 class McapReader(BaseReader):
@@ -58,10 +67,13 @@ class McapReader(BaseReader):
         videos: PathSelection | None = None,
         primary: str | None = None,
         fps: float | None = None,
+        sync_method: SyncMethod = "nearest",
         include_skew: bool = True,
         episode_splitting: str | Mapping[str, Any] = "single",
     ):
         time_gap_s, marker_topic = _parse_episode_splitting(episode_splitting)
+        if sync_method not in ("nearest", "interpolate", "hold"):
+            raise ValueError("sync_method must be 'nearest', 'interpolate', or 'hold'")
         super().__init__(
             inputs,
             fs=fs,
@@ -82,6 +94,7 @@ class McapReader(BaseReader):
         )
         self.primary = primary
         self.fps = fps
+        self.sync_method = sync_method
         self.include_skew = include_skew
         self.episode_splitting = episode_splitting
         self._time_gap_s = time_gap_s
@@ -95,6 +108,7 @@ class McapReader(BaseReader):
                 "videos": self.videos,
                 "primary": self.primary,
                 "fps": self.fps,
+                "sync_method": self.sync_method,
                 "include_skew": self.include_skew,
                 "episode_splitting": self.episode_splitting,
             }
@@ -209,6 +223,7 @@ class McapReader(BaseReader):
                         resolved_fields,
                         window_events,
                         primary_events=primary_events or (),
+                        sync_method=self.sync_method,
                         include_skew=self.include_skew,
                     )
                 )
@@ -217,6 +232,7 @@ class McapReader(BaseReader):
                     resolved_videos,
                     window_events,
                     primary_events=primary_events,
+                    sync_method=self.sync_method,
                     fps=int(round(inferred_fps or 30)),
                 )
                 row: dict[str, Any] = {
@@ -461,11 +477,17 @@ def _aligned_frame_table(
     topic_events: Mapping[str, Sequence[_McapEvent]],
     *,
     primary_events: Sequence[_McapEvent],
+    sync_method: SyncMethod,
     include_skew: bool,
 ) -> pa.Table:
     primary_timestamps = [event.timestamp_ns for event in primary_events]
-    aligned_events = {
-        name: _nearest_events(topic_events.get(source[0], ()), primary_timestamps)
+    aligned_values = {
+        name: _align_values(
+            topic_events.get(source[0], ()),
+            primary_timestamps,
+            source[1],
+            method=sync_method,
+        )
         for name, source in fields.items()
     }
     rows: list[dict[str, Any]] = []
@@ -475,15 +497,15 @@ def _aligned_frame_table(
             "frame_index": index,
             "timestamp": timestamp_ns / 1e9,
         }
-        for name, source in fields.items():
-            event = aligned_events[name][index]
-            if event is None:
+        for name in fields:
+            aligned = aligned_values[name][index]
+            if aligned is None:
                 row[name] = None
                 continue
-            row[name] = _source_value(event.value, source[1], default=None)
+            row[name] = aligned.value
             if include_skew:
-                row[f"mcap.{name}.timestamp"] = event.timestamp_ns / 1e9
-                row[f"mcap.{name}.skew_ms"] = (event.timestamp_ns - timestamp_ns) / 1e6
+                row[f"mcap.{name}.timestamp"] = aligned.timestamp_ns / 1e9
+                row[f"mcap.{name}.skew_ms"] = aligned.skew_ns / 1e6
         rows.append(row)
     return Tabular.from_rows([DictRow(row) for row in rows]).table
 
@@ -507,30 +529,113 @@ def _source_value(
     return current
 
 
-def _nearest_events(
+def _align_values(
     events: Sequence[_McapEvent],
     timestamps_ns: Sequence[int],
-) -> list[_McapEvent | None]:
+    field_path: str | None,
+    *,
+    method: SyncMethod,
+) -> list[_AlignedValue | None]:
     if not events:
         return [None] * len(timestamps_ns)
     sorted_events = sorted(events, key=lambda event: event.timestamp_ns)
-    out: list[_McapEvent | None] = []
-    cursor = 0
-    for timestamp_ns in timestamps_ns:
-        while (
-            cursor + 1 < len(sorted_events)
-            and sorted_events[cursor + 1].timestamp_ns <= timestamp_ns
-        ):
-            cursor += 1
-        best = sorted_events[cursor]
-        if cursor + 1 < len(sorted_events):
-            right = sorted_events[cursor + 1]
-            if abs(right.timestamp_ns - timestamp_ns) < abs(
-                best.timestamp_ns - timestamp_ns
-            ):
-                best = right
-        out.append(best)
-    return out
+    source_timestamps = [event.timestamp_ns for event in sorted_events]
+    source_values = [
+        _source_value(event.value, field_path, default=None) for event in sorted_events
+    ]
+    align = _nearest_value
+    if method == "hold":
+        align = _hold_value
+    elif method == "interpolate":
+        align = _interpolate_value
+    return [
+        align(timestamp_ns, source_timestamps, source_values)
+        for timestamp_ns in timestamps_ns
+    ]
+
+
+def _nearest_value(
+    timestamp_ns: int,
+    source_timestamps: Sequence[int],
+    source_values: Sequence[Any],
+) -> _AlignedValue:
+    index = bisect_left(source_timestamps, timestamp_ns)
+    if index == 0:
+        source_index = 0
+    elif index == len(source_timestamps):
+        source_index = len(source_timestamps) - 1
+    else:
+        left = source_timestamps[index - 1]
+        right = source_timestamps[index]
+        source_index = (
+            index - 1 if timestamp_ns - left <= right - timestamp_ns else index
+        )
+    source_timestamp = int(source_timestamps[source_index])
+    return _AlignedValue(
+        timestamp_ns=source_timestamp,
+        value=source_values[source_index],
+        skew_ns=source_timestamp - timestamp_ns,
+    )
+
+
+def _hold_value(
+    timestamp_ns: int,
+    source_timestamps: Sequence[int],
+    source_values: Sequence[Any],
+) -> _AlignedValue:
+    index = bisect_right(source_timestamps, timestamp_ns) - 1
+    source_index = max(0, index)
+    source_timestamp = int(source_timestamps[source_index])
+    return _AlignedValue(
+        timestamp_ns=source_timestamp,
+        value=source_values[source_index],
+        skew_ns=source_timestamp - timestamp_ns,
+    )
+
+
+def _interpolate_value(
+    timestamp_ns: int,
+    source_timestamps: Sequence[int],
+    source_values: Sequence[Any],
+) -> _AlignedValue:
+    index = bisect_left(source_timestamps, timestamp_ns)
+    if index == 0 or index == len(source_timestamps):
+        return _nearest_value(timestamp_ns, source_timestamps, source_values)
+
+    left_value = source_values[index - 1]
+    right_value = source_values[index]
+    left_array = np.asarray(left_value)
+    right_array = np.asarray(right_value)
+    if (
+        left_array.dtype.kind not in "biufc"
+        or right_array.dtype.kind not in "biufc"
+        or left_array.shape != right_array.shape
+    ):
+        return _nearest_value(timestamp_ns, source_timestamps, source_values)
+
+    left_timestamp = int(source_timestamps[index - 1])
+    right_timestamp = int(source_timestamps[index])
+    span = right_timestamp - left_timestamp
+    if span <= 0:
+        return _nearest_value(timestamp_ns, source_timestamps, source_values)
+
+    alpha = (timestamp_ns - left_timestamp) / span
+    value = (1.0 - alpha) * left_array + alpha * right_array
+    if value.shape == ():
+        value = value.item()
+    else:
+        value = value.tolist()
+
+    nearest_timestamp = (
+        left_timestamp
+        if timestamp_ns - left_timestamp <= right_timestamp - timestamp_ns
+        else right_timestamp
+    )
+    return _AlignedValue(
+        timestamp_ns=nearest_timestamp,
+        value=value,
+        skew_ns=nearest_timestamp - timestamp_ns,
+    )
 
 
 def _infer_fps(events: Sequence[_McapEvent] | None) -> float | None:
@@ -551,6 +656,7 @@ def _video_map(
     topic_events: Mapping[str, Sequence[_McapEvent]],
     *,
     primary_events: Sequence[_McapEvent] | None,
+    sync_method: SyncMethod,
     fps: int,
 ) -> dict[str, VideoFrameArray]:
     out: dict[str, VideoFrameArray] = {}
@@ -560,12 +666,16 @@ def _video_map(
     for name, source in videos.items():
         events = topic_events.get(source[0], ())
         if primary_timestamps is not None:
-            frames = []
-            for event in _nearest_events(events, primary_timestamps):
-                if event is not None:
-                    frames.append(
-                        _frame_from_value(_source_value(event.value, source[1]))
-                    )
+            video_sync_method: SyncMethod = (
+                "nearest" if sync_method == "interpolate" else sync_method
+            )
+            frames = [
+                _frame_from_value(aligned.value)
+                for aligned in _align_values(
+                    events, primary_timestamps, source[1], method=video_sync_method
+                )
+                if aligned is not None
+            ]
         else:
             frames = [
                 _frame_from_value(_source_value(event.value, source[1]))
@@ -640,4 +750,4 @@ def _ros_image_frame(value: Mapping[str, Any]) -> np.ndarray:
     return array
 
 
-__all__ = ["McapReader"]
+__all__ = ["McapReader", "SyncMethod"]
