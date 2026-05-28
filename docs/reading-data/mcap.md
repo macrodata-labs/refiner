@@ -48,8 +48,6 @@ Each row includes:
 | `frames` | `Tabular` frame table. |
 | `videos` | Mapping of selected video names to `VideoFrameArray` values, when `videos` is set. |
 | `fps` | Explicit fps, or inferred fps when possible. |
-| `message_count` | Number of selected messages in the episode. |
-| `topics` | Sorted selected topic names present in the episode. |
 
 ## Episode Splitting
 
@@ -92,13 +90,7 @@ splitting and are not included as default frame columns.
 If there are no messages, no time gaps, or no marker messages, the reader falls
 back to one episode for the file.
 
-## Selecting Topics And Fields
-
-`topics` limits which MCAP topics are read. If omitted, the reader scans all
-topics needed by `fields` and `videos`. If `topics` is set, include the data
-topics used by `fields` and `videos`; the reader may still include control
-topics internally when an unselected `primary` source or marker-based splitting
-needs them.
+## Selecting Fields
 
 `fields` maps output frame-table columns to MCAP sources:
 
@@ -120,6 +112,10 @@ the topic and the remainder as a dotted field path.
 If `fields` is omitted, decoded object messages are expanded into default
 columns like `"/joint_states.position"`. Selected video topics and marker topics
 are excluded from those default frame columns.
+
+When `fields` is set, the reader loads the topics needed by `fields`, `videos`,
+`primary`, and marker-based episode splitting. When `fields` is omitted, it reads
+all topics and builds default frame columns from decoded non-video messages.
 
 ## Decoding
 
@@ -384,7 +380,6 @@ For non-robotics event logs, write the frame table fields directly:
 | `recursive` | `False` | Recursively list folder inputs. |
 | `target_shard_bytes` | `128 MiB` | Target file-shard planning size. MCAP files remain atomic. |
 | `num_shards` | `None` | Optional target number of planned shards. |
-| `topics` | `None` | Optional topic filter. Pass a string or sequence of topic names. |
 | `fields` | `None` | Mapping, sequence, or string selecting frame-table fields. |
 | `videos` | `None` | Mapping, sequence, or string selecting image-like video frame sources. |
 | `primary` | `None` | Source used for primary-aligned synchronization. |

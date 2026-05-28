@@ -255,8 +255,6 @@ def test_mcap_reader_defaults_to_sparse_frame_table(tmp_path: Path) -> None:
     row = read_mcap(str(path)).materialize()[0]
 
     assert row["file_path"] == str(path)
-    assert row["message_count"] == 7
-    assert row["topics"] == ["/cmd", "/image", "/joint_states"]
     frames = row["frames"]
     assert set(frames.table.column_names) == {
         "frame_index",
@@ -381,21 +379,6 @@ def test_mcap_reader_omits_video_topics_from_default_fields(tmp_path: Path) -> N
     assert row["videos"]["front"].frame_count == 2
 
 
-def test_mcap_reader_filters_topics(tmp_path: Path) -> None:
-    path = tmp_path / "demo.mcap"
-    _write_mcap(path)
-
-    row = read_mcap(str(path), topics=["/cmd"]).materialize()[0]
-
-    assert row["message_count"] == 2
-    assert row["topics"] == ["/cmd"]
-    assert row["frames"].table.column_names == [
-        "frame_index",
-        "timestamp",
-        "/cmd.target",
-    ]
-
-
 def test_mcap_reader_reads_non_seekable_streams(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -406,16 +389,6 @@ def test_mcap_reader_reads_non_seekable_streams(tmp_path: Path) -> None:
     ).materialize()[0]
 
     assert row["frames"].column("state").to_pylist() == [[1, 2], [3, 4], [5, 6]]
-
-
-def test_mcap_reader_treats_string_topics_as_one_topic(tmp_path: Path) -> None:
-    path = tmp_path / "demo.mcap"
-    _write_mcap(path)
-
-    row = read_mcap(str(path), topics="/cmd").materialize()[0]
-
-    assert row["message_count"] == 2
-    assert row["topics"] == ["/cmd"]
 
 
 def test_mcap_reader_treats_string_fields_as_one_source(tmp_path: Path) -> None:
@@ -495,15 +468,12 @@ def test_mcap_reader_sorts_marker_events_before_splitting(tmp_path: Path) -> Non
     ]
 
 
-def test_mcap_reader_reads_marker_topic_with_explicit_topic_filter(
-    tmp_path: Path,
-) -> None:
+def test_mcap_reader_reads_marker_topic_with_selected_fields(tmp_path: Path) -> None:
     path = tmp_path / "markers.mcap"
     _write_marker_mcap(path)
 
     rows = read_mcap(
         str(path),
-        topics="/state",
         fields={"state": "/state.q"},
         primary="state",
         episode_splitting={"marker_topic": "/episode_start"},
@@ -535,17 +505,13 @@ def test_mcap_reader_default_fields_union_optional_keys(tmp_path: Path) -> None:
     path = tmp_path / "sparse-edge.mcap"
     _write_sparse_edge_mcap(path)
 
-    row = read_mcap(str(path), topics="/event").materialize()[0]
+    row = read_mcap(str(path)).materialize()[0]
 
     frames = row["frames"]
-    assert set(frames.table.column_names) == {
-        "frame_index",
-        "timestamp",
-        "/event.a",
-        "/event.b",
-    }
-    assert frames.column("/event.a").to_pylist() == [1, None]
-    assert frames.column("/event.b").to_pylist() == [None, 2]
+    assert "/event.a" in frames.table.column_names
+    assert "/event.b" in frames.table.column_names
+    assert frames.column("/event.a").to_pylist() == [1, None, None, None]
+    assert frames.column("/event.b").to_pylist() == [None, 2, None, None]
 
 
 def test_mcap_reader_sparse_mode_preserves_duplicate_timestamps(
@@ -554,7 +520,7 @@ def test_mcap_reader_sparse_mode_preserves_duplicate_timestamps(
     path = tmp_path / "sparse-edge.mcap"
     _write_sparse_edge_mcap(path)
 
-    row = read_mcap(str(path), topics="/state").materialize()[0]
+    row = read_mcap(str(path), fields="/state.q").materialize()[0]
 
     frames = row["frames"]
     assert frames.column("timestamp").to_pylist() == [1e-08, 1e-08]

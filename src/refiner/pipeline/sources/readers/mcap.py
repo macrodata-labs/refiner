@@ -53,7 +53,6 @@ class McapReader(BaseReader):
         recursive: bool = False,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
-        topics: str | Sequence[str] | None = None,
         file_path_column: str | None = "file_path",
         frames_column: str = "frames",
         videos_column: str = "videos",
@@ -77,17 +76,12 @@ class McapReader(BaseReader):
             file_path_column=file_path_column,
             split_by_bytes=False,
         )
-        if topics is None:
-            self.topics = None
-        elif isinstance(topics, str):
-            self.topics = (topics,)
-        else:
-            self.topics = tuple(topics)
         self.frames_column = frames_column
         self.videos_column = videos_column
         self.fields = path_selection_map(
             fields, format_name="MCAP", derive_names_from_paths=False
         )
+        self._read_default_fields = fields is None
         self.videos = path_selection_map(
             videos, format_name="MCAP", derive_names_from_paths=False
         )
@@ -103,7 +97,6 @@ class McapReader(BaseReader):
         description = super().describe()
         description.update(
             {
-                "topics": list(self.topics) if self.topics is not None else None,
                 "frames_column": self.frames_column,
                 "videos_column": self.videos_column,
                 "fields": self.fields,
@@ -143,20 +136,17 @@ class McapReader(BaseReader):
                     and self.primary not in self.videos
                     else None
                 )
-                read_topics = self.topics
+                read_topics: tuple[str, ...] | None = None
                 if summary_topics:
-                    control_sources = [
-                        source
-                        for source in (primary_source, self._marker_topic)
-                        if source is not None
-                    ]
-                    selected = (
-                        [*read_topics]
-                        if read_topics is not None
-                        else [*self.fields.values(), *self.videos.values()]
-                    )
+                    selected = []
+                    if not self._read_default_fields:
+                        selected.extend([*self.fields.values(), *self.videos.values()])
+                        selected.extend(
+                            source
+                            for source in (primary_source, self._marker_topic)
+                            if source is not None
+                        )
                     if selected:
-                        selected.extend(control_sources)
                         read_topics = tuple(
                             sorted(
                                 {
@@ -165,8 +155,6 @@ class McapReader(BaseReader):
                                 }
                             )
                         )
-                elif read_topics is not None and self._marker_topic is not None:
-                    read_topics = tuple(sorted({*read_topics, self._marker_topic}))
                 for schema, channel, message in reader.iter_messages(
                     topics=read_topics,
                     log_time_order=False,
@@ -237,10 +225,6 @@ class McapReader(BaseReader):
                 row: dict[str, Any] = {
                     self.frames_column: Tabular(frame_table),
                     "episode_index": episode_index,
-                    "message_count": sum(
-                        len(events) for events in window_events.values()
-                    ),
-                    "topics": sorted(window_events),
                 }
                 if videos:
                     row[self.videos_column] = videos
