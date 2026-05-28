@@ -132,13 +132,9 @@ def subtask_annotation(
 
         selected_video_key = _resolve_video_key(row, video_key)
         video = row.videos[selected_video_key]
-        prompt = _default_prompt(
-            frames_per_sheet=frames_per_sheet,
-            columns=columns,
-        )
         content = await _subtask_annotation_content(
             video=video,
-            prompt=_prompt_with_instruction(prompt, row.tasks),
+            tasks=row.tasks,
             sample_sec=sample_sec,
             frame_width=frame_width,
             frames_per_sheet=frames_per_sheet,
@@ -177,22 +173,6 @@ def subtask_annotation(
         provider=provider,
         max_concurrent_requests=max_concurrent_requests,
     )
-
-
-def _default_prompt(
-    *,
-    frames_per_sheet: int,
-    columns: int,
-) -> str:
-    if frames_per_sheet <= 0:
-        raise ValueError("frames_per_sheet must be > 0")
-    if columns <= 0:
-        raise ValueError("columns must be > 0")
-    rows = math.ceil(frames_per_sheet / columns)
-    return _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE.replace(
-        "{columns_count}",
-        str(columns),
-    ).replace("{rows_count}", str(rows))
 
 
 def contact_sheet_prompt_manifest(
@@ -260,7 +240,7 @@ def _parse_subtask_annotation_result(text: str) -> _SubtaskAnnotationResult:
 async def _subtask_annotation_content(
     *,
     video: VideoFile,
-    prompt: str,
+    tasks: list[str],
     sample_sec: float,
     frame_width: int,
     frames_per_sheet: int,
@@ -276,7 +256,12 @@ async def _subtask_annotation_content(
         columns=columns,
         quality=quality,
     )
-    text = prompt
+    first_sheet = sheets[0]
+    text = _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE.replace(
+        "{columns_count}",
+        str(first_sheet.columns),
+    ).replace("{rows_count}", str(first_sheet.rows))
+    text = _prompt_with_instruction(text, tasks)
     if include_contact_sheet_manifest:
         text = f"{text}\n\n{contact_sheet_prompt_manifest(sheets)}"
     return [
