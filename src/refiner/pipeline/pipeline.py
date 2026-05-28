@@ -924,9 +924,10 @@ def read_mcap(
     num_shards: int | None = None,
     topics: Sequence[str] | None = None,
     file_path_column: str | None = "file_path",
+    messages_column: str = "messages",
     data_column: str = "data",
 ) -> RefinerPipeline:
-    """Create a pipeline with an MCAP raw-message reader source."""
+    """Create a pipeline with an MCAP file reader source."""
     return RefinerPipeline(
         source=McapReader(
             inputs,
@@ -937,6 +938,7 @@ def read_mcap(
             num_shards=num_shards,
             topics=topics,
             file_path_column=file_path_column,
+            messages_column=messages_column,
             data_column=data_column,
         )
     )

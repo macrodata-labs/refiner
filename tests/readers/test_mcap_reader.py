@@ -46,30 +46,57 @@ def _write_mcap(path: Path) -> None:
         writer.finish()
 
 
-def test_mcap_reader_reads_raw_message_rows(tmp_path: Path) -> None:
+def test_mcap_reader_reads_one_row_per_file_with_message_table(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
 
     rows = read_mcap(str(path)).materialize()
 
-    assert [row["topic"] for row in rows] == ["/joint_states", "/image"]
-    assert rows[0]["log_time"] == 100
-    assert rows[0]["publish_time"] == 90
-    assert rows[0]["message_encoding"] == "json"
-    assert rows[0]["schema_name"] == "demo.Json"
-    assert rows[0]["data"] == b'{"q":[1,2]}'
+    assert len(rows) == 1
     assert rows[0]["file_path"] == str(path)
+    assert rows[0]["message_count"] == 2
+    assert rows[0]["topics"] == ["/image", "/joint_states"]
+
+    messages = rows[0]["messages"]
+    assert messages.table.column_names == [
+        "topic",
+        "log_time",
+        "publish_time",
+        "sequence",
+        "message_encoding",
+        "schema_id",
+        "schema_name",
+        "schema_encoding",
+        "schema_data",
+        "data",
+    ]
+    assert messages.table.column("topic").to_pylist() == ["/joint_states", "/image"]
+    first = messages.to_rows()[0]
+    assert first["log_time"] == 100
+    assert first["publish_time"] == 90
+    assert first["message_encoding"] == "json"
+    assert first["schema_name"] == "demo.Json"
+    assert first["data"] == b'{"q":[1,2]}'
 
 
 def test_mcap_reader_filters_topics(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
 
-    rows = read_mcap(str(path), topics=["/image"], data_column="payload").materialize()
+    rows = read_mcap(
+        str(path),
+        topics=["/image"],
+        messages_column="mcap_messages",
+        data_column="payload",
+    ).materialize()
 
     assert len(rows) == 1
-    assert rows[0]["topic"] == "/image"
-    assert rows[0]["payload"] == b'{"frame":0}'
+    assert rows[0]["message_count"] == 1
+    assert rows[0]["topics"] == ["/image"]
+    messages = rows[0]["mcap_messages"]
+    assert messages.table.column_names[-1] == "payload"
+    assert messages.to_rows()[0]["topic"] == "/image"
+    assert messages.to_rows()[0]["payload"] == b'{"frame":0}'
 
 
 def test_mcap_reader_plans_files_atomically(tmp_path: Path) -> None:
