@@ -55,6 +55,8 @@ zarr = [
 ]
 mcap = [
     "mcap",
+    "mcap-protobuf-support",
+    "mcap-ros2-support",
 ]
 s3 = [
     "s3fs",

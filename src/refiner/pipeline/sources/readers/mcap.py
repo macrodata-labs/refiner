@@ -23,6 +23,33 @@ class McapReader(BaseReader):
     choose a topic alignment policy.
     """
 
+    # Planned frame-table mode:
+    # - Output should always be one top-level row per episode/file with a nested
+    #   `frames` table, so `to_robot_rows(nested_frames_key="frames", ...)` can
+    #   consume it directly.
+    # - `fields` should only select/rename frame columns by mapping output names
+    #   to "topic" or "topic.field" sources. If omitted, include every topic as
+    #   a frame column.
+    # - Type/shape coercion belongs in the normal reader `dtypes`/schema path,
+    #   not in `fields`.
+    # - When `fields` is omitted, preserve MCAP topic names. If a decoded
+    #   message has named fields, auto-expand them into "topic.field" columns;
+    #   if the message is already an array/scalar payload, keep the topic as the
+    #   column.
+    # - `primary` controls synchronization: when set, primary timestamps define
+    #   dense frame rows and other fields are aligned to them; when unset, emit a
+    #   sparse event table over the union of selected message timestamps.
+    # - `include_skew=True` should keep source timestamp/skew columns for aligned
+    #   fields. Users can filter rows later instead of the reader dropping data.
+    # - `videos` should be separate from `fields`: map video names to image
+    #   topics, build VideoFrameArray values one episode at a time, and pass them
+    #   through `to_robot_rows(video_keys={"observation.images.front":
+    #   "videos/front"})`.
+    # - `fps`, when provided, is used for video arrays; otherwise infer it from
+    #   timestamps.
+    # - Episode splitting should use `episode_splitting="single"` by default,
+    #   plus compact marker/time-gap forms when needed.
+
     name = "read_mcap"
 
     def __init__(
