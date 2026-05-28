@@ -59,7 +59,7 @@ class McapReader(BaseReader):
         include_skew: bool = True,
         episode_splitting: str | Mapping[str, Any] = "single",
     ):
-        _validate_episode_splitting(episode_splitting)
+        time_gap_s, marker_topic = _parse_episode_splitting(episode_splitting)
         super().__init__(
             inputs,
             fs=fs,
@@ -81,6 +81,8 @@ class McapReader(BaseReader):
         self.fps_column = fps_column
         self.include_skew = include_skew
         self.episode_splitting = episode_splitting
+        self._time_gap_s = time_gap_s
+        self._marker_topic = marker_topic
 
     def describe(self) -> dict[str, Any]:
         description = super().describe()
@@ -118,7 +120,20 @@ class McapReader(BaseReader):
                     if summary is not None
                     else set()
                 )
-                read_topics = self._read_topics(summary_topics)
+                read_topics = self.topics
+                if read_topics is None and summary_topics:
+                    selected = [*self.fields.values(), *self.videos.values()]
+                    if self._marker_topic is not None:
+                        selected.append(self._marker_topic)
+                    if selected:
+                        read_topics = tuple(
+                            sorted(
+                                {
+                                    _resolve_source(source, summary_topics)[0]
+                                    for source in selected
+                                }
+                            )
+                        )
                 for schema, channel, message in reader.iter_messages(
                     topics=read_topics
                 ):
@@ -131,22 +146,47 @@ class McapReader(BaseReader):
                     topic_events[channel.topic].append(
                         _McapEvent(timestamp_ns=int(message.log_time), value=decoded)
                     )
-            windows = _episode_windows(topic_events, self.episode_splitting)
+            if self._time_gap_s is not None:
+                windows = _time_gap_windows(topic_events, self._time_gap_s)
+            elif self._marker_topic is not None:
+                windows = _marker_windows(topic_events.get(self._marker_topic, ()))
+            else:
+                windows = [_EpisodeWindow()]
             for episode_index, window in enumerate(windows):
                 window_events = _slice_events(topic_events, window)
                 fields = self.fields or _default_fields(window_events, self.videos)
-                resolved_fields = _resolve_sources(fields, window_events)
-                resolved_videos = _resolve_sources(self.videos, window_events)
-                primary = _resolve_primary(
-                    self.primary,
-                    resolved_fields,
-                    resolved_videos,
-                )
-                frame_table = _frame_table(
-                    resolved_fields,
-                    window_events,
-                    primary=primary,
-                    include_skew=self.include_skew,
+                topics = set(window_events)
+                resolved_fields = {
+                    output: _resolve_source(source, topics)
+                    for output, source in fields.items()
+                }
+                resolved_videos = {
+                    output: _resolve_source(source, topics)
+                    for output, source in self.videos.items()
+                }
+                primary = None
+                if self.primary is not None:
+                    primary = resolved_fields.get(self.primary) or resolved_videos.get(
+                        self.primary
+                    )
+                    if primary is None:
+                        resolved_sources = [
+                            *resolved_fields.values(),
+                            *resolved_videos.values(),
+                        ]
+                        primary = _resolve_source(
+                            self.primary,
+                            {topic for topic, _ in resolved_sources},
+                        )
+                frame_table = (
+                    _sparse_frame_table(resolved_fields, window_events)
+                    if primary is None
+                    else _aligned_frame_table(
+                        resolved_fields,
+                        window_events,
+                        primary=primary,
+                        include_skew=self.include_skew,
+                    )
                 )
                 primary_events = (
                     window_events.get(primary[0], ()) if primary is not None else None
@@ -172,68 +212,31 @@ class McapReader(BaseReader):
                     row[self.fps_column] = float(inferred_fps)
                 yield DictRow(self._with_file_path(row, source))
 
-    def _read_topics(self, summary_topics: set[str]) -> tuple[str, ...] | None:
-        if self.topics is not None:
-            return self.topics
-        selected = [*self.fields.values(), *self.videos.values()]
-        marker_topic = _episode_marker_topic(self.episode_splitting)
-        if marker_topic is not None:
-            selected.append(marker_topic)
-        if not selected:
-            return None
-        if not summary_topics:
-            return None
-        return tuple(
-            sorted({_resolve_source(source, summary_topics)[0] for source in selected})
-        )
 
-
-def _validate_episode_splitting(splitting: str | Mapping[str, Any]) -> None:
+def _parse_episode_splitting(
+    splitting: str | Mapping[str, Any],
+) -> tuple[float | None, str | None]:
     if splitting == "single":
-        return
+        return None, None
     if isinstance(splitting, str) or not isinstance(splitting, Mapping):
         raise ValueError(
             "episode_splitting must be 'single', {'time_gap_s': seconds}, "
             "or {'marker_topic': topic}"
         )
-    if "time_gap_s" in splitting:
-        if float(splitting["time_gap_s"]) <= 0:
+    keys = set(splitting)
+    if keys == {"time_gap_s"}:
+        time_gap_s = float(splitting["time_gap_s"])
+        if time_gap_s <= 0:
             raise ValueError("episode_splitting time_gap_s must be > 0")
-        return
-    if "marker_topic" in splitting:
-        if not isinstance(splitting["marker_topic"], str):
-            raise TypeError("episode_splitting marker_topic must be a string")
-        return
-    raise ValueError(
-        "episode_splitting must be 'single', {'time_gap_s': seconds}, "
-        "or {'marker_topic': topic}"
-    )
-
-
-def _episode_marker_topic(splitting: str | Mapping[str, Any]) -> str | None:
-    if (
-        not isinstance(splitting, str)
-        and isinstance(splitting, Mapping)
-        and "marker_topic" in splitting
-    ):
-        return str(splitting["marker_topic"])
-    return None
-
-
-def _episode_windows(
-    topic_events: Mapping[str, Sequence[_McapEvent]],
-    splitting: str | Mapping[str, Any],
-) -> list[_EpisodeWindow]:
-    if splitting == "single":
-        return [_EpisodeWindow()]
-    if isinstance(splitting, str) or not isinstance(splitting, Mapping):
-        return [_EpisodeWindow()]
-    if "time_gap_s" in splitting:
-        return _time_gap_windows(topic_events, float(splitting["time_gap_s"]))
-    marker_topic = _episode_marker_topic(splitting)
-    if marker_topic is not None:
-        return _marker_windows(topic_events.get(marker_topic, ()))
-    return [_EpisodeWindow()]
+        return time_gap_s, None
+    if keys != {"marker_topic"}:
+        raise ValueError(
+            "episode_splitting must be 'single', {'time_gap_s': seconds}, "
+            "or {'marker_topic': topic}"
+        )
+    if not isinstance(splitting["marker_topic"], str):
+        raise TypeError("episode_splitting marker_topic must be a string")
+    return None, splitting["marker_topic"]
 
 
 def _time_gap_windows(
@@ -246,17 +249,14 @@ def _time_gap_windows(
     if not timestamps:
         return [_EpisodeWindow()]
     gap_ns = int(time_gap_s * 1e9)
-    starts = [timestamps[0]]
-    ends: list[int] = []
+    windows: list[_EpisodeWindow] = []
+    start = timestamps[0]
     for left, right in zip(timestamps, timestamps[1:], strict=False):
         if right - left > gap_ns:
-            ends.append(right)
-            starts.append(right)
-    ends.append(timestamps[-1] + 1)
-    return [
-        _EpisodeWindow(start_ns=start, end_ns=end)
-        for start, end in zip(starts, ends, strict=False)
-    ]
+            windows.append(_EpisodeWindow(start_ns=start, end_ns=right))
+            start = right
+    windows.append(_EpisodeWindow(start_ns=start, end_ns=timestamps[-1] + 1))
+    return windows
 
 
 def _marker_windows(marker_events: Sequence[_McapEvent]) -> list[_EpisodeWindow]:
@@ -294,6 +294,8 @@ def _normalize_selection(
         return {}
     if isinstance(selection, Mapping):
         return {str(key): str(value) for key, value in selection.items()}
+    if isinstance(selection, str):
+        return {selection: selection}
     return {key: key for key in selection}
 
 
@@ -361,10 +363,13 @@ def _default_fields(
     topic_events: Mapping[str, Sequence[_McapEvent]],
     videos: Mapping[str, str],
 ) -> dict[str, str]:
-    video_topics = set(videos.values())
+    video_sources = set(videos.values())
     fields: dict[str, str] = {}
     for topic, events in topic_events.items():
-        if topic in video_topics or not events:
+        if not events or any(
+            source == topic or source.startswith(f"{topic}.")
+            for source in video_sources
+        ):
             continue
         names = _flatten_names(events[0].value)
         if names:
@@ -388,16 +393,6 @@ def _flatten_names(value: Any, *, prefix: str = "") -> list[str]:
     return names
 
 
-def _resolve_sources(
-    selection: Mapping[str, str],
-    topic_events: Mapping[str, Sequence[_McapEvent]],
-) -> dict[str, tuple[str, str | None]]:
-    topics = set(topic_events)
-    return {
-        output: _resolve_source(source, topics) for output, source in selection.items()
-    }
-
-
 def _resolve_source(source: str, topics: set[str]) -> tuple[str, str | None]:
     if source in topics:
         return source, None
@@ -405,40 +400,9 @@ def _resolve_source(source: str, topics: set[str]) -> tuple[str, str | None]:
         prefix = f"{topic}."
         if source.startswith(prefix):
             return str(topic), source[len(prefix) :]
+    if topics:
+        raise KeyError(f"MCAP source not found: {source}")
     return source, None
-
-
-def _resolve_primary(
-    primary: str | None,
-    fields: Mapping[str, tuple[str, str | None]],
-    videos: Mapping[str, tuple[str, str | None]],
-) -> tuple[str, str | None] | None:
-    if primary is None:
-        return None
-    if primary in fields:
-        return fields[primary]
-    if primary in videos:
-        return videos[primary]
-    all_sources = {**fields, **videos}
-    topics = {topic for topic, _ in all_sources.values()}
-    return _resolve_source(primary, topics)
-
-
-def _frame_table(
-    fields: Mapping[str, tuple[str, str | None]],
-    topic_events: Mapping[str, Sequence[_McapEvent]],
-    *,
-    primary: tuple[str, str | None] | None,
-    include_skew: bool,
-) -> pa.Table:
-    if primary is None:
-        return _sparse_frame_table(fields, topic_events)
-    return _aligned_frame_table(
-        fields,
-        topic_events,
-        primary=primary,
-        include_skew=include_skew,
-    )
 
 
 def _sparse_frame_table(

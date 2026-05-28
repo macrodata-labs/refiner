@@ -181,6 +181,16 @@ def test_mcap_reader_builds_video_frame_arrays_for_robot_rows(tmp_path: Path) ->
     ]
 
 
+def test_mcap_reader_omits_video_topics_from_default_fields(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    row = read_mcap(str(path), videos={"front": "/image.frame"}).materialize()[0]
+
+    assert "/image.frame" not in row["frames"].table.column_names
+    assert row["videos"]["front"].frame_count == 2
+
+
 def test_mcap_reader_filters_topics(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -194,6 +204,14 @@ def test_mcap_reader_filters_topics(tmp_path: Path) -> None:
         "timestamp",
         "/cmd.target",
     ]
+
+
+def test_mcap_reader_rejects_unknown_field_source(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    with pytest.raises(KeyError, match="/missing.value"):
+        read_mcap(str(path), fields={"bad": "/missing.value"}).materialize()
 
 
 def test_mcap_reader_splits_on_time_gaps(tmp_path: Path) -> None:
