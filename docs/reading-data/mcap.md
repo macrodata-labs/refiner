@@ -139,9 +139,23 @@ mdr.read_mcap(
 )
 ```
 
-Sparse mode creates rows over the union of selected message timestamps. A column
-is null when that field has no message at that timestamp. If multiple messages
-share the same timestamp, duplicate rows are preserved.
+Sparse mode creates one frame table over the union of selected message
+timestamps. For example, if state arrives at `0.0` and `1.0` seconds, while
+commands arrive at `0.5` seconds, the output is:
+
+| timestamp | state | command |
+| --- | --- | --- |
+| `0.0` | `[1, 2]` | null |
+| `0.5` | null | `[10]` |
+| `1.0` | `[3, 4]` | null |
+
+If two selected messages have the exact same timestamp, they become separate
+rows so no message is dropped:
+
+| timestamp | state |
+| --- | --- |
+| `1.0` | `[1, 2]` |
+| `1.0` | `[3, 4]` |
 
 With `primary`, the frame table is dense on the primary source:
 
