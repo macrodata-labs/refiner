@@ -130,12 +130,13 @@ raw bytes; select the whole topic or decode the payload before using subfields.
 
 MCAP logs usually contain multiple topics with different rates: robot state,
 actions, camera frames, commands, diagnostics, and events may not share exactly
-the same timestamps. `read_mcap` supports two synchronization modes:
+the same timestamps. `read_mcap` supports these synchronization choices:
 
 | Mode | How to select it | Output rows | Best for |
 | --- | --- | --- | --- |
-| Unsynchronized | Leave `primary=None` | One row for each selected message timestamp. Missing fields are null. | Event logs, debugging, preserving each topic's original timing. |
-| Primary-aligned | Set `primary=...` | One row for each primary timestamp. Other fields and videos are nearest-aligned. | Robotics episodes, model training tables, fixed-rate trajectories. |
+| Unsynchronized | Leave `primary=None` | One frame-table row for each selected field message timestamp. Missing fields are null. Selected videos stay separate in `videos`. | Event logs, debugging, preserving each topic's original timing. |
+| Field-primary aligned | Set `primary` to a selected field name, topic, or dotted source path. | One frame-table row for each primary field timestamp. Other fields and videos are nearest-neighbor aligned to those timestamps. | Robot state or action streams that define the trajectory clock. |
+| Video-primary aligned | Set `primary` to a selected video name, video topic, or dotted video source path. | One frame-table row for each primary video frame timestamp. Fields and other videos are nearest-neighbor aligned to those timestamps. | Camera-driven datasets where image frames define the training samples. |
 
 ### Unsynchronized Mode
 
@@ -186,8 +187,10 @@ mdr.read_mcap(
 ```
 
 `primary` can be an output field name (`"state"`), a video name, a topic, or a
-dotted source path. Its timestamps define the output rows. Every other field and
-video is nearest-neighbor aligned to those rows.
+dotted source path. Its timestamps define the output rows. In field-primary and
+video-primary mode, every non-primary field and selected video is
+nearest-neighbor aligned to those rows. In unsynchronized mode, no
+nearest-neighbor alignment is applied.
 
 For example, if state is the primary source and command messages arrive slightly
 after each state sample:
