@@ -262,6 +262,7 @@ class McapReader(BaseReader):
                     resolved_videos,
                     window_events,
                     primary_events=primary_events,
+                    primary=primary,
                     sync_method=self.sync_method,
                     fps=int(video_fps),
                 )
@@ -692,6 +693,7 @@ def _video_map(
     topic_events: Mapping[str, Sequence[_McapEvent]],
     *,
     primary_events: Sequence[_McapEvent] | None,
+    primary: tuple[str, str | None] | None,
     sync_method: SyncMethod,
     fps: int,
 ) -> dict[str, VideoFrameArray]:
@@ -703,7 +705,12 @@ def _video_map(
     )
     for name, source in videos.items():
         events = topic_events.get(source[0], ())
-        if primary_timestamps is not None:
+        if source == primary:
+            frames = [
+                _frame_from_value(_source_value(event.value, source[1]))
+                for event in primary_events or ()
+            ]
+        elif primary_timestamps is not None:
             video_sync_method: SyncMethod = (
                 "nearest" if sync_method == "interpolate" else sync_method
             )

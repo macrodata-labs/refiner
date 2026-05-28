@@ -208,6 +208,35 @@ def _write_out_of_order_video_mcap(path: Path) -> None:
         writer.finish()
 
 
+def _write_duplicate_video_timestamp_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        image_channel = writer.register_channel(
+            topic="/image",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (image_channel, 0, b'{"frame":[[[1,2,3]]]}', 0, 1),
+            (image_channel, 0, b'{"frame":[[[4,5,6]]]}', 0, 2),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
 def _write_late_video_mcap(path: Path) -> None:
     with path.open("wb") as stream:
         writer = mcap_writer.Writer(stream)
@@ -791,6 +820,28 @@ def test_mcap_reader_sorts_unaligned_video_frames(tmp_path: Path) -> None:
 
     row = read_mcap(str(path), videos={"front": "/image.frame"}).materialize()[0]
 
+    assert [
+        frame[0, 0].tolist() for frame in row["videos"]["front"].iter_frame_arrays()
+    ] == [
+        [1, 2, 3],
+        [4, 5, 6],
+    ]
+
+
+def test_mcap_reader_preserves_duplicate_primary_video_frames(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "duplicate-video-primary.mcap"
+    _write_duplicate_video_timestamp_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        videos={"front": "/image.frame"},
+        primary="front",
+        fps=1,
+    ).materialize()[0]
+
+    assert row["frames"].table.num_rows == 2
     assert [
         frame[0, 0].tolist() for frame in row["videos"]["front"].iter_frame_arrays()
     ] == [
