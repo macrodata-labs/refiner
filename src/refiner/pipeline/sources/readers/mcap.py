@@ -127,22 +127,24 @@ class McapReader(BaseReader):
                     and self.primary not in self.videos
                     else None
                 )
+                selected_sources: list[str] | None = None
+                if not self._read_default_fields:
+                    selected_sources = [*self.fields.values(), *self.videos.values()]
+                    selected_sources.extend(
+                        source
+                        for source in (primary_source, self._marker_topic)
+                        if source is not None
+                    )
                 read_topics: tuple[str, ...] | None = None
-                if summary_topics:
-                    selected = []
-                    if not self._read_default_fields:
-                        selected.extend([*self.fields.values(), *self.videos.values()])
-                        selected.extend(
-                            source
-                            for source in (primary_source, self._marker_topic)
-                            if source is not None
-                        )
-                    if selected:
+                if selected_sources is not None:
+                    if not selected_sources:
+                        read_topics = ()
+                    elif summary_topics:
                         read_topics = tuple(
                             sorted(
                                 {
                                     _resolve_source(source, summary_topics)[0]
-                                    for source in selected
+                                    for source in selected_sources
                                 }
                             )
                         )
@@ -167,18 +169,22 @@ class McapReader(BaseReader):
                 windows = [_EpisodeWindow()]
             for episode_index, window in enumerate(windows):
                 window_events = _slice_events(topic_events, window)
-                fields = self.fields or _default_fields(
-                    window_events,
-                    self.videos,
-                    excluded_topic=self._marker_topic,
+                fields = (
+                    _default_fields(
+                        window_events,
+                        self.videos,
+                        excluded_topic=self._marker_topic,
+                    )
+                    if self._read_default_fields
+                    else self.fields
                 )
-                topics = set(window_events)
+                available_topics = set(window_events)
                 resolved_fields = {
-                    output: _resolve_source(source, topics)
+                    output: _resolve_source(source, available_topics)
                     for output, source in fields.items()
                 }
                 resolved_videos = {
-                    output: _resolve_source(source, topics)
+                    output: _resolve_source(source, available_topics)
                     for output, source in self.videos.items()
                 }
                 primary = None
@@ -187,7 +193,7 @@ class McapReader(BaseReader):
                         self.primary
                     )
                     if primary is None:
-                        primary = _resolve_source(self.primary, topics)
+                        primary = _resolve_source(self.primary, available_topics)
                 primary_events = (
                     sorted(
                         window_events.get(primary[0], ()),

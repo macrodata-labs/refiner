@@ -405,6 +405,15 @@ def test_mcap_reader_treats_string_fields_as_one_source(tmp_path: Path) -> None:
     assert row["frames"].column("/cmd.target").to_pylist() == [[10], [20]]
 
 
+def test_mcap_reader_preserves_explicit_empty_fields(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    row = read_mcap(str(path), fields={}).materialize()[0]
+
+    assert row["frames"].table.column_names == []
+
+
 def test_mcap_reader_rejects_unknown_field_source(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
