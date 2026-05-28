@@ -1552,18 +1552,15 @@ egocentric = [
     { name = "ego-vision", extra = ["models"] },
     { name = "hf" },
     { name = "huggingface-hub" },
+    { name = "pillow" },
 ]
 hdf5 = [
     { name = "h5py" },
 ]
-huggingface = [
+hf = [
     { name = "datasets" },
-]
-robotics = [
-    { name = "av" },
     { name = "hf" },
     { name = "huggingface-hub" },
-    { name = "pillow" },
 ]
 s3 = [
     { name = "s3fs" },
@@ -1606,22 +1603,22 @@ dev = [
 requires-dist = [
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
-    { name = "datasets", marker = "extra == 'huggingface'", specifier = ">=3.0.0" },
+    { name = "datasets", marker = "extra == 'hf'", specifier = ">=3.0.0" },
     { name = "ego-vision", extras = ["models"], marker = "extra == 'egocentric'", specifier = ">=0.1.0" },
     { name = "fsspec", extras = ["http"] },
     { name = "h5py", marker = "extra == 'hdf5'" },
-    { name = "hf", marker = "extra == 'robotics'", specifier = ">=1.7.1" },
+    { name = "hf", marker = "extra == 'hf'", specifier = ">=1.7.1" },
     { name = "httpx" },
-    { name = "huggingface-hub", marker = "extra == 'robotics'", specifier = ">=1.4.1" },
+    { name = "huggingface-hub", marker = "extra == 'hf'", specifier = ">=1.4.1" },
     { name = "loguru" },
     { name = "macrodata-refiner", extras = ["hdf5"], marker = "extra == 'testing'" },
-    { name = "macrodata-refiner", extras = ["huggingface"], marker = "extra == 'testing'" },
-    { name = "macrodata-refiner", extras = ["robotics"], marker = "extra == 'egocentric'" },
-    { name = "macrodata-refiner", extras = ["robotics"], marker = "extra == 'testing'" },
+    { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'egocentric'" },
+    { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'testing'" },
     { name = "macrodata-refiner", extras = ["s3"], marker = "extra == 'testing'" },
     { name = "macrodata-refiner", extras = ["testing"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["text"], marker = "extra == 'testing'" },
-    { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'robotics'" },
+    { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'egocentric'" },
+    { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'testing'" },
     { name = "macrodata-refiner", extras = ["zarr"], marker = "extra == 'testing'" },
     { name = "msgspec", specifier = ">=0.20.0" },
     { name = "numcodecs", marker = "extra == 'zarr'", specifier = "<0.16" },
@@ -1636,7 +1633,7 @@ requires-dist = [
     { name = "warcio", marker = "extra == 'text'" },
     { name = "zarr", marker = "extra == 'zarr'", specifier = ">=2.18,<3" },
 ]
-provides-extras = ["huggingface", "video", "robotics", "egocentric", "text", "hdf5", "zarr", "s3", "testing", "all"]
+provides-extras = ["video", "hf", "egocentric", "text", "hdf5", "zarr", "s3", "testing", "all"]
 
 [package.metadata.requires-dev]
 dev = [
