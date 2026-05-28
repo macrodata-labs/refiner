@@ -124,7 +124,7 @@ class McapReader(BaseReader):
                 reader = make_reader(stream)
                 summary = reader.get_summary()
                 summary_topics = (
-                    {str(channel.topic) for channel in summary.channels.values()}
+                    {channel.topic for channel in summary.channels.values()}
                     if summary is not None
                     else set()
                 )
@@ -154,11 +154,11 @@ class McapReader(BaseReader):
                     decoded = _decode_message(
                         schema,
                         channel.message_encoding,
-                        bytes(message.data),
+                        message.data,
                         decoder_factories,
                     )
                     topic_events[channel.topic].append(
-                        _McapEvent(timestamp_ns=int(message.log_time), value=decoded)
+                        _McapEvent(timestamp_ns=message.log_time, value=decoded)
                     )
             if self._time_gap_s is not None:
                 windows = _time_gap_windows(topic_events, self._time_gap_s)
