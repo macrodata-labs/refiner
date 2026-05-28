@@ -36,8 +36,8 @@ Install `macrodata-refiner[mcap]` to use this reader.
 ## Output Rows
 
 `read_mcap` emits one row per episode. By default, each input file is one
-episode. `episode_splitting={"time_gap_s": seconds}` splits on timestamp gaps,
-and `episode_splitting={"marker_topic": topic}` splits at marker messages.
+episode. Use `episode_splitting` to split a file into multiple episodes; the
+next section describes the supported splitting modes.
 
 Each row includes:
 
@@ -50,44 +50,6 @@ Each row includes:
 | `fps` | Explicit fps, or inferred fps when possible. |
 | `message_count` | Number of selected messages in the episode. |
 | `topics` | Sorted selected topic names present in the episode. |
-
-## Selecting Topics And Fields
-
-`topics` limits which MCAP topics are read. If omitted, the reader scans all
-topics needed by `fields` and `videos`. If `topics` is set, include the data
-topics used by `fields` and `videos`; the reader may still include control
-topics internally when an unselected `primary` source or marker-based splitting
-needs them.
-
-`fields` maps output frame-table columns to MCAP sources:
-
-```python
-mdr.read_mcap(
-    "run.mcap",
-    fields={
-        "state": "/joint_states.position",
-        "target": "/cmd.target",
-    },
-)
-```
-
-A source can be a whole topic, such as `"/joint_states"`, or a decoded subfield,
-such as `"/joint_states.position"`. The reader first checks whether the exact
-source string is a topic. If not, it treats the longest matching topic prefix as
-the topic and the remainder as a dotted field path.
-
-If `fields` is omitted, decoded object messages are expanded into default
-columns like `"/joint_states.position"`. Selected video topics and marker topics
-are excluded from those default frame columns.
-
-## Decoding
-
-`read_mcap` decodes JSON messages, ROS2 messages, and protobuf messages when the
-matching optional decoder is available. Decoded object messages can be selected
-with dotted field paths like `"/joint_states.position"`.
-
-Unknown encodings are preserved as raw bytes. Field paths cannot be applied to
-raw bytes; select the whole topic or decode the payload before using subfields.
 
 ## Episode Splitting
 
@@ -129,6 +91,44 @@ splitting and are not included as default frame columns.
 
 If there are no messages, no time gaps, or no marker messages, the reader falls
 back to one episode for the file.
+
+## Selecting Topics And Fields
+
+`topics` limits which MCAP topics are read. If omitted, the reader scans all
+topics needed by `fields` and `videos`. If `topics` is set, include the data
+topics used by `fields` and `videos`; the reader may still include control
+topics internally when an unselected `primary` source or marker-based splitting
+needs them.
+
+`fields` maps output frame-table columns to MCAP sources:
+
+```python
+mdr.read_mcap(
+    "run.mcap",
+    fields={
+        "state": "/joint_states.position",
+        "target": "/cmd.target",
+    },
+)
+```
+
+A source can be a whole topic, such as `"/joint_states"`, or a decoded subfield,
+such as `"/joint_states.position"`. The reader first checks whether the exact
+source string is a topic. If not, it treats the longest matching topic prefix as
+the topic and the remainder as a dotted field path.
+
+If `fields` is omitted, decoded object messages are expanded into default
+columns like `"/joint_states.position"`. Selected video topics and marker topics
+are excluded from those default frame columns.
+
+## Decoding
+
+`read_mcap` decodes JSON messages, ROS2 messages, and protobuf messages when the
+matching optional decoder is available. Decoded object messages can be selected
+with dotted field paths like `"/joint_states.position"`.
+
+Unknown encodings are preserved as raw bytes. Field paths cannot be applied to
+raw bytes; select the whole topic or decode the payload before using subfields.
 
 ## Synchronization
 
