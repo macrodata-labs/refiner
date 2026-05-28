@@ -48,21 +48,7 @@ and easier for VLMs than sending the full video.
 | `frames_per_sheet` | Number of frames per sheet image. |
 | `columns` | Contact sheet grid columns. |
 | `include_contact_sheet_manifest` | Add textual sheet descriptions to the prompt. |
-
-## Prompting
-
-Pass a custom prompt when you have a fixed subtask vocabulary:
-
-```python
-pipeline = pipeline.map_async(
-    mdr.robotics.subtask_annotation(
-        provider=provider,
-        prompt="Label each episode with reach, grasp, move, and place segments.",
-    ),
-    max_in_flight=32,
-)
-```
+| `min_segment_duration_sec` | Minimum returned segment duration. Defaults to `0.0`, so valid short segments are kept. |
 
 For lower-level inference controls, see [Generate Text](../inference/generate-text.md)
 and [Multimodal and Structured Output](../inference/multimodal-and-structured-output.md).
-

@@ -30,10 +30,17 @@ if TYPE_CHECKING:
     )
     from refiner.video import VideoFile
 
-_DEFAULT_SUBTASK_ANNOTATION_PROMPT = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
+_DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from timestamped contact sheets.
 
 Return only JSON with this shape:
 {"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
+
+How to read the images:
+- Each image is a contact sheet with {columns_count} columns and {rows_count} rows.
+- Time runs left-to-right within each row, then continues on the next row.
+- Each tile has a visible timestamp in its top-left corner, such as 012.50s.
+- Use the visible timestamp printed inside the tile, not the tile index, when choosing start_sec and end_sec.
+- Boundaries should normally land on or near one of the visible timestamps.
 
 Rules:
 - Treat each segment as one event that changes what is true about the world.
@@ -41,7 +48,7 @@ Rules:
 - For each event, choose start_sec at the first timestamp where the causal motion for that event is underway, and end_sec at the first timestamp where the resulting world state is achieved.
 - If an action is continuous and changes the same state gradually, keep it as one event.
 - If the same action repeats on different objects or target locations, output separate repeated events.
-- Avoid idle time, camera motion, hesitation, and tiny hand adjustments.
+- Avoid segments for idle time, camera motion, hesitation, or tiny hand adjustments.
 """
 
 if TYPE_CHECKING:
@@ -94,7 +101,6 @@ def subtask_annotation(
     *,
     provider: SubtaskAnnotationProvider,
     video_key: str | None = None,
-    prompt: str = _DEFAULT_SUBTASK_ANNOTATION_PROMPT,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
     frame_width: int = 224,
@@ -128,7 +134,7 @@ def subtask_annotation(
         video = row.videos[selected_video_key]
         content = await _subtask_annotation_content(
             video=video,
-            prompt=_prompt_with_instruction(prompt, row.tasks),
+            tasks=row.tasks,
             sample_sec=sample_sec,
             frame_width=frame_width,
             frames_per_sheet=frames_per_sheet,
@@ -234,7 +240,7 @@ def _parse_subtask_annotation_result(text: str) -> _SubtaskAnnotationResult:
 async def _subtask_annotation_content(
     *,
     video: VideoFile,
-    prompt: str,
+    tasks: list[str],
     sample_sec: float,
     frame_width: int,
     frames_per_sheet: int,
@@ -250,7 +256,12 @@ async def _subtask_annotation_content(
         columns=columns,
         quality=quality,
     )
-    text = prompt
+    first_sheet = sheets[0]
+    text = _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE.replace(
+        "{columns_count}",
+        str(first_sheet.columns),
+    ).replace("{rows_count}", str(first_sheet.rows))
+    text = _prompt_with_instruction(text, tasks)
     if include_contact_sheet_manifest:
         text = f"{text}\n\n{contact_sheet_prompt_manifest(sheets)}"
     return [
