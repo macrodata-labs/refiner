@@ -129,12 +129,12 @@ the same timestamps. `read_mcap` supports two synchronization modes:
 
 | Mode | How to select it | Output rows | Best for |
 | --- | --- | --- | --- |
-| Sparse union | Leave `primary=None` | One row for each selected message timestamp. Missing fields are null. | Event logs, debugging, preserving each topic's original timing. |
+| Unsynchronized | Leave `primary=None` | One row for each selected message timestamp. Missing fields are null. | Event logs, debugging, preserving each topic's original timing. |
 | Primary-aligned | Set `primary=...` | One row for each primary timestamp. Other fields and videos are nearest-aligned. | Robotics episodes, model training tables, fixed-rate trajectories. |
 
-### Sparse Union Mode
+### Unsynchronized Mode
 
-Use sparse union mode by leaving `primary` unset:
+Use unsynchronized mode by leaving `primary` unset:
 
 ```python
 mdr.read_mcap(
@@ -200,7 +200,7 @@ omit those diagnostic columns.
 
 The reader uses streaming MCAP reads, so raw events are not assumed to arrive in
 timestamp order. It sorts timestamps where ordering affects semantics: splitting,
-sparse frame rows, primary alignment, and fps inference.
+unsynchronized frame rows, primary alignment, and fps inference.
 
 ## Videos
 
