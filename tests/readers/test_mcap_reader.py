@@ -6,6 +6,7 @@ from typing import cast
 import pytest
 
 from refiner.pipeline import read_mcap
+from refiner.pipeline.sources.readers.mcap import _ros_image_frame
 from refiner.pipeline.sources.readers import McapReader
 from refiner.robotics.row import RoboticsRow
 from refiner.video import VideoFrameArray
@@ -82,6 +83,42 @@ def _write_marker_mcap(path: Path) -> None:
             (state_channel, 20, b'{"q":[2]}', 20, 3),
             (marker_channel, 100, b'{"episode":1}', 100, 4),
             (state_channel, 110, b'{"q":[3]}', 110, 5),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
+def _write_sparse_edge_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        event_channel = writer.register_channel(
+            topic="/event",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (event_channel, 0, b'{"a":1}', 0, 1),
+            (event_channel, 1, b'{"b":2}', 1, 2),
+            (state_channel, 10, b'{"q":[1]}', 10, 3),
+            (state_channel, 10, b'{"q":[2]}', 10, 4),
         ]
         for channel_id, log_time, data, publish_time, sequence in messages:
             writer.add_message(
@@ -224,6 +261,30 @@ def test_mcap_reader_filters_topics(tmp_path: Path) -> None:
     ]
 
 
+def test_mcap_reader_treats_string_topics_as_one_topic(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    row = read_mcap(str(path), topics="/cmd").materialize()[0]
+
+    assert row["message_count"] == 2
+    assert row["topics"] == ["/cmd"]
+
+
+def test_mcap_reader_treats_string_fields_as_one_source(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    row = read_mcap(str(path), fields="/cmd.target").materialize()[0]
+
+    assert row["frames"].table.column_names == [
+        "frame_index",
+        "timestamp",
+        "/cmd.target",
+    ]
+    assert row["frames"].column("/cmd.target").to_pylist() == [[10], [20]]
+
+
 def test_mcap_reader_rejects_unknown_field_source(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -270,6 +331,26 @@ def test_mcap_reader_splits_on_marker_topic(tmp_path: Path) -> None:
     ]
 
 
+def test_mcap_reader_reads_marker_topic_with_explicit_topic_filter(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "markers.mcap"
+    _write_marker_mcap(path)
+
+    rows = read_mcap(
+        str(path),
+        topics="/state",
+        fields={"state": "/state.q"},
+        primary="state",
+        episode_splitting={"marker_topic": "/episode_start"},
+    ).materialize()
+
+    assert [row["frames"].column("state").to_pylist() for row in rows] == [
+        [[1], [2]],
+        [[3]],
+    ]
+
+
 def test_mcap_reader_marker_topic_is_not_a_default_field(tmp_path: Path) -> None:
     path = tmp_path / "markers.mcap"
     _write_marker_mcap(path)
@@ -284,6 +365,60 @@ def test_mcap_reader_marker_topic_is_not_a_default_field(tmp_path: Path) -> None
         "timestamp",
         "/state.q",
     ]
+
+
+def test_mcap_reader_default_fields_union_optional_keys(tmp_path: Path) -> None:
+    path = tmp_path / "sparse-edge.mcap"
+    _write_sparse_edge_mcap(path)
+
+    row = read_mcap(str(path), topics="/event").materialize()[0]
+
+    frames = row["frames"]
+    assert set(frames.table.column_names) == {
+        "frame_index",
+        "timestamp",
+        "/event.a",
+        "/event.b",
+    }
+    assert frames.column("/event.a").to_pylist() == [1, None]
+    assert frames.column("/event.b").to_pylist() == [None, 2]
+
+
+def test_mcap_reader_sparse_mode_preserves_duplicate_timestamps(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sparse-edge.mcap"
+    _write_sparse_edge_mcap(path)
+
+    row = read_mcap(str(path), topics="/state").materialize()[0]
+
+    frames = row["frames"]
+    assert frames.column("timestamp").to_pylist() == [1e-08, 1e-08]
+    assert frames.column("/state.q").to_pylist() == [[1], [2]]
+
+
+def test_mcap_reader_decodes_ros_image_stride_and_four_channels() -> None:
+    rgba = _ros_image_frame(
+        {
+            "height": 2,
+            "width": 1,
+            "encoding": "rgba8",
+            "step": 6,
+            "data": bytes([1, 2, 3, 4, 99, 99, 5, 6, 7, 8, 99, 99]),
+        }
+    )
+    bgra = _ros_image_frame(
+        {
+            "height": 1,
+            "width": 1,
+            "encoding": "bgra8",
+            "step": 4,
+            "data": bytes([1, 2, 3, 4]),
+        }
+    )
+
+    assert rgba.tolist() == [[[1, 2, 3]], [[5, 6, 7]]]
+    assert bgra.tolist() == [[[3, 2, 1]]]
 
 
 def test_mcap_reader_rejects_unknown_episode_splitting(tmp_path: Path) -> None:

@@ -922,7 +922,7 @@ def read_mcap(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
-    topics: Sequence[str] | None = None,
+    topics: str | Sequence[str] | None = None,
     file_path_column: str | None = "file_path",
     frames_column: str = "frames",
     videos_column: str = "videos",

@@ -1325,6 +1325,7 @@ mcap = [
     { name = "mcap" },
     { name = "mcap-protobuf-support" },
     { name = "mcap-ros2-support" },
+    { name = "pillow" },
 ]
 s3 = [
     { name = "s3fs" },
@@ -1396,6 +1397,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "orjson" },
     { name = "packaging" },
+    { name = "pillow", marker = "extra == 'mcap'" },
     { name = "pillow", marker = "extra == 'video'" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.0.0" },

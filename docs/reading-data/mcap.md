@@ -60,6 +60,11 @@ expanded into `topic.field` columns.
 rows and other fields/videos are nearest-aligned to those rows. When omitted,
 the frame table is sparse over the union of selected message timestamps.
 
+`videos` expects image-like frame payloads, such as ROS compressed image
+messages, raw ROS image messages, or decoded image arrays. Encoded video streams
+stored as codec packets, such as H.264 byte streams, are not decoded as frame
+arrays by this reader.
+
 ## Related Pages
 
 - [Reader Model](reader-model.md)

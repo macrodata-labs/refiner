@@ -24,6 +24,8 @@ from refiner.pipeline.sources.readers.utils import (
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameArray
 
+_MISSING = object()
+
 
 @dataclass(frozen=True, slots=True)
 class _McapEvent:
@@ -51,7 +53,7 @@ class McapReader(BaseReader):
         recursive: bool = False,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
-        topics: Sequence[str] | None = None,
+        topics: str | Sequence[str] | None = None,
         file_path_column: str | None = "file_path",
         frames_column: str = "frames",
         videos_column: str = "videos",
@@ -75,7 +77,12 @@ class McapReader(BaseReader):
             file_path_column=file_path_column,
             split_by_bytes=False,
         )
-        self.topics = tuple(topics) if topics is not None else None
+        if topics is None:
+            self.topics = None
+        elif isinstance(topics, str):
+            self.topics = (topics,)
+        else:
+            self.topics = tuple(topics)
         self.frames_column = frames_column
         self.videos_column = videos_column
         self.fields = path_selection_map(
@@ -128,18 +135,27 @@ class McapReader(BaseReader):
                     if summary is not None
                     else set()
                 )
+                primary_source = (
+                    self.primary
+                    if self.primary is not None
+                    and self.primary not in self.fields
+                    and self.primary not in self.videos
+                    else None
+                )
                 read_topics = self.topics
-                if read_topics is None and summary_topics:
-                    selected = [*self.fields.values(), *self.videos.values()]
-                    if (
-                        self.primary is not None
-                        and self.primary not in self.fields
-                        and self.primary not in self.videos
-                    ):
-                        selected.append(self.primary)
+                if summary_topics:
+                    control_sources = [
+                        source
+                        for source in (primary_source, self._marker_topic)
+                        if source is not None
+                    ]
+                    selected = (
+                        [*read_topics]
+                        if read_topics is not None
+                        else [*self.fields.values(), *self.videos.values()]
+                    )
                     if selected:
-                        if self._marker_topic is not None:
-                            selected.append(self._marker_topic)
+                        selected.extend(control_sources)
                         read_topics = tuple(
                             sorted(
                                 {
@@ -148,8 +164,11 @@ class McapReader(BaseReader):
                                 }
                             )
                         )
+                elif read_topics is not None and self._marker_topic is not None:
+                    read_topics = tuple(sorted({*read_topics, self._marker_topic}))
                 for schema, channel, message in reader.iter_messages(
-                    topics=read_topics
+                    topics=read_topics,
+                    log_time_order=False,
                 ):
                     decoded = _decode_message(
                         schema,
@@ -376,7 +395,9 @@ def _default_fields(
             )
         ):
             continue
-        names = _flatten_names(events[0].value)
+        names = sorted(
+            {name for event in events for name in _flatten_names(event.value)}
+        )
         if names:
             fields.update({f"{topic}.{name}": f"{topic}.{name}" for name in names})
         else:
@@ -414,13 +435,14 @@ def _sparse_frame_table(
     fields: Mapping[str, tuple[str, str | None]],
     topic_events: Mapping[str, Sequence[_McapEvent]],
 ) -> pa.Table:
-    values_by_field = {
-        name: {
-            event.timestamp_ns: _source_value(event.value, source[1])
-            for event in topic_events.get(source[0], ())
-        }
-        for name, source in fields.items()
-    }
+    values_by_field: dict[str, dict[int, list[Any]]] = {}
+    for name, source in fields.items():
+        values: dict[int, list[Any]] = defaultdict(list)
+        for event in topic_events.get(source[0], ()):
+            values[event.timestamp_ns].append(
+                _source_value(event.value, source[1], default=None)
+            )
+        values_by_field[name] = values
     timestamps = sorted(
         {
             event.timestamp_ns
@@ -429,15 +451,21 @@ def _sparse_frame_table(
         }
     )
     rows: list[dict[str, Any]] = []
-    for index, timestamp_ns in enumerate(timestamps):
-        row: dict[str, Any] = {
-            "frame_index": index,
-            "timestamp": timestamp_ns / 1e9,
-        }
-        for name, values in values_by_field.items():
-            if timestamp_ns in values:
-                row[name] = values[timestamp_ns]
-        rows.append(row)
+    for timestamp_ns in timestamps:
+        repeats = max(
+            (len(values.get(timestamp_ns, ())) for values in values_by_field.values()),
+            default=1,
+        )
+        for duplicate_index in range(repeats):
+            row: dict[str, Any] = {
+                "frame_index": len(rows),
+                "timestamp": timestamp_ns / 1e9,
+            }
+            for name, values in values_by_field.items():
+                timestamp_values = values.get(timestamp_ns, ())
+                if duplicate_index < len(timestamp_values):
+                    row[name] = timestamp_values[duplicate_index]
+            rows.append(row)
     return Tabular.from_rows([DictRow(row) for row in rows]).table
 
 
@@ -466,7 +494,7 @@ def _aligned_frame_table(
             if event is None:
                 row[name] = None
                 continue
-            row[name] = _source_value(event.value, source[1])
+            row[name] = _source_value(event.value, source[1], default=None)
             if include_skew:
                 row[f"mcap.{name}.timestamp"] = event.timestamp_ns / 1e9
                 row[f"mcap.{name}.skew_ms"] = (event.timestamp_ns - timestamp_ns) / 1e6
@@ -474,15 +502,22 @@ def _aligned_frame_table(
     return Tabular.from_rows([DictRow(row) for row in rows]).table
 
 
-def _source_value(value: Any, field_path: str | None) -> Any:
+def _source_value(
+    value: Any, field_path: str | None, *, default: Any = _MISSING
+) -> Any:
     if field_path is None:
         return value
     current = value
-    for part in field_path.split("."):
-        if isinstance(current, Mapping):
-            current = current[part]
-        else:
-            current = getattr(current, part)
+    try:
+        for part in field_path.split("."):
+            if isinstance(current, Mapping):
+                current = current[part]
+            else:
+                current = getattr(current, part)
+    except (KeyError, AttributeError):
+        if default is not _MISSING:
+            return default
+        raise
     return current
 
 
@@ -596,11 +631,24 @@ def _ros_image_frame(value: Mapping[str, Any]) -> np.ndarray:
         raw = data
     else:
         raw = bytes(data)
-    channels = 1 if encoding in {"mono8", "8uc1"} else 3
-    array = np.frombuffer(raw, dtype=np.uint8)[: height * width * channels]
-    array = array.reshape((height, width, channels))
+    if encoding in {"mono8", "8uc1"}:
+        channels = 1
+    elif encoding in {"rgba8", "bgra8", "8uc4"}:
+        channels = 4
+    else:
+        channels = 3
+    step = int(value.get("step") or width * channels)
+    expected_bytes = height * step
+    array = np.frombuffer(raw, dtype=np.uint8)
+    if array.size < expected_bytes:
+        raise ValueError("MCAP ROS image payload is smaller than height * step")
+    array = array[:expected_bytes].reshape((height, step))
+    array = array[:, : width * channels].reshape((height, width, channels))
     if channels == 1:
         return np.repeat(array, 3, axis=2)
+    if channels == 4:
+        array = array[:, :, [2, 1, 0]] if encoding == "bgra8" else array[:, :, :3]
+        return array
     if encoding in {"bgr8", "bgr"}:
         array = array[:, :, ::-1]
     return array

@@ -57,6 +57,7 @@ mcap = [
     "mcap",
     "mcap-protobuf-support",
     "mcap-ros2-support",
+    "pillow",
 ]
 s3 = [
     "s3fs",
