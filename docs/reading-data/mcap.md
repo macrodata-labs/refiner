@@ -80,6 +80,15 @@ If `fields` is omitted, decoded object messages are expanded into default
 columns like `"/joint_states.position"`. Selected video topics and marker topics
 are excluded from those default frame columns.
 
+## Decoding
+
+`read_mcap` decodes JSON messages, ROS2 messages, and protobuf messages when the
+matching optional decoder is available. Decoded object messages can be selected
+with dotted field paths like `"/joint_states.position"`.
+
+Unknown encodings are preserved as raw bytes. Field paths cannot be applied to
+raw bytes; select the whole topic or decode the payload before using subfields.
+
 ## Episode Splitting
 
 `read_mcap` always emits episode rows. By default, each input MCAP file becomes
@@ -202,6 +211,21 @@ The reader uses streaming MCAP reads, so raw events are not assumed to arrive in
 timestamp order. It sorts timestamps where ordering affects semantics: splitting,
 unsynchronized frame rows, primary alignment, and fps inference.
 
+## FPS
+
+Pass `fps=...` when you already know the intended episode frame rate:
+
+```python
+mdr.read_mcap("run.mcap", primary="state", fps=30)
+```
+
+If `fps` is omitted and `primary` is set, the reader infers fps from the median
+gap between primary timestamps. If neither explicit fps nor inferred fps is
+available, the row has no `fps` column. Selected videos still need an fps value,
+so video frame arrays fall back to `30` when no better value is available.
+
+Set `fps_column=None` to omit the row-level fps column.
+
 ## Videos
 
 `videos` maps video names to MCAP sources:
@@ -247,6 +271,130 @@ stream before converting it to robotics rows.
 When `primary` is set, videos are nearest-aligned to the primary timestamps just
 like regular fields. When `primary` is omitted, each video keeps the frames from
 its own topic timestamps.
+
+Using a video as `primary` is useful when camera frames should define the output
+rows:
+
+```python
+mdr.read_mcap(
+    "run.mcap",
+    fields={"state": "/joint_states.position"},
+    videos={"front": "/camera/image/compressed"},
+    primary="front",
+    fps=30,
+)
+```
+
+## Conversion Examples
+
+Convert MCAP robot logs to LeRobot:
+
+```python
+(
+    mdr.read_mcap(
+        "run.mcap",
+        fields={
+            "state": "/joint_states.position",
+            "action": "/joint_states.velocity",
+        },
+        videos={"front": "/camera/image/compressed"},
+        primary="state",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="frames",
+        state_key="state",
+        action_key="action",
+        timestamp_key="timestamp",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+        robot_type="franka",
+    )
+    .write_lerobot("s3://bucket/robot-dataset")
+)
+```
+
+Convert MCAP robot logs to Zarr:
+
+```python
+(
+    mdr.read_mcap(
+        "run.mcap",
+        fields={"state": "/joint_states.position"},
+        videos={"front": "/camera/image/compressed"},
+        primary="state",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="frames",
+        state_key="state",
+        action_key=None,
+        timestamp_key="timestamp",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+    )
+    .write_zarr("s3://bucket/robot-dataset.zarr")
+)
+```
+
+For non-robotics event logs, write the frame table fields directly:
+
+```python
+(
+    mdr.read_mcap(
+        "events.mcap",
+        fields={
+            "mouse_x": "mouse/state.x",
+            "key": "keyboard.vk",
+        },
+    )
+    .flat_map(
+        lambda row: [
+            frame.update(
+                {
+                    "file_path": row["file_path"],
+                    "episode_index": row["episode_index"],
+                }
+            )
+            for frame in row["frames"]
+        ]
+    )
+    .write_parquet("s3://bucket/mcap-events")
+)
+```
+
+## Limitations
+
+- Primary synchronization uses nearest-neighbor matching only. It does not
+  interpolate values.
+- There is no max-skew cutoff or automatic row dropping. Use the generated
+  `mcap.<field>.skew_ms` columns to filter after reading.
+- Encoded video packet streams, such as H.264 payloads, are not decoded into
+  frames.
+- MCAP files are read as atomic files. They are not split by byte range across
+  workers.
+
+## Options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `inputs` | required | MCAP file, glob, folder, or list of inputs. |
+| `fs` | `None` | Optional fsspec filesystem for string inputs. |
+| `storage_options` | `None` | Optional fsspec options when constructing a filesystem. |
+| `recursive` | `False` | Recursively list folder inputs. |
+| `target_shard_bytes` | `128 MiB` | Target file-shard planning size. MCAP files remain atomic. |
+| `num_shards` | `None` | Optional target number of planned shards. |
+| `topics` | `None` | Optional topic filter. Pass a string or sequence of topic names. |
+| `fields` | `None` | Mapping, sequence, or string selecting frame-table fields. |
+| `videos` | `None` | Mapping, sequence, or string selecting image-like video frame sources. |
+| `primary` | `None` | Source used for primary-aligned synchronization. |
+| `fps` | `None` | Explicit frame rate. Overrides inferred fps. |
+| `include_skew` | `True` | Add alignment timestamp/skew columns in primary-aligned mode. |
+| `episode_splitting` | `"single"` | One file per episode, `{"time_gap_s": seconds}`, or `{"marker_topic": topic}`. |
+| `file_path_column` | `"file_path"` | Source file column name. Set to `None` to omit it. |
+| `frames_column` | `"frames"` | Output column containing the frame `Tabular`. |
+| `videos_column` | `"videos"` | Output column containing selected videos. |
+| `fps_column` | `"fps"` | Output fps column name. Set to `None` to omit it. |
 
 ## Related Pages
 
