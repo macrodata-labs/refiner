@@ -12,7 +12,7 @@ pipeline = mdr.from_items(
 pipeline = pipeline.filter(mdr.col("lang") == "en")
 pipeline = pipeline.write_jsonl("s3://my-bucket/example-output/")
 
-pipeline.launch_local()
+pipeline.launch_local(name="hello-world-local")
 ```
 
 See [Quickstart](quickstart.md) for the full walkthrough.

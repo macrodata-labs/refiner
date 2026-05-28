@@ -114,17 +114,17 @@ macrodata run train_data_pipeline.py --dataset aloha --limit 10
 Cloud launches can run attached or detached:
 
 ```bash
-macrodata run train_data_pipeline.py --attach
-macrodata run train_data_pipeline.py --detach
+macrodata run --attach train_data_pipeline.py
+macrodata run --detach train_data_pipeline.py
 ```
 
 Attached mode can tune log display:
 
 ```bash
-macrodata run train_data_pipeline.py --logs all
-macrodata run train_data_pipeline.py --logs one
-macrodata run train_data_pipeline.py --logs errors
-macrodata run train_data_pipeline.py --logs none
+macrodata run --logs all train_data_pipeline.py
+macrodata run --logs one train_data_pipeline.py
+macrodata run --logs errors train_data_pipeline.py
+macrodata run --logs none train_data_pipeline.py
 ```
 
 | Option | Use |

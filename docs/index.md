@@ -33,7 +33,7 @@ For quick API lookup, see [Reference](reference/index.md).
 If you are new to Refiner, read:
 
 1. [Quickstart](quickstart.md)
-2. [Local Debugging](running-pipelines/in-process-debugging.md)
+2. [In-Process Debugging](running-pipelines/in-process-debugging.md)
 3. [LeRobot Reader](reading-data/lerobot.md)
 4. [Episode Rows](episode-data/episode-rows.md)
 5. [Row Transforms](transforms/row-transforms.md)
@@ -42,4 +42,3 @@ If you are new to Refiner, read:
 If you already have a custom source dataset, start with
 [HDF5](reading-data/hdf5.md), [Zarr](reading-data/zarr.md), or
 [Converting to Robot Rows](episode-data/converting-to-robot-rows.md).
-
