@@ -13,7 +13,7 @@ Install extras based on the data and operations you use.
 | `egocentric` | Egocentric hand tracking. |
 | `hdf5` | HDF5 reader support. |
 | `zarr` | Zarr reader and writer support. |
-| `mcap` | MCAP robotics log reader support. |
+| `mcap` | MCAP robotics log reader support, including ROS2 and protobuf decoders. |
 | `video` | Video decode/write support. |
 | `text` | Common Crawl text readers. |
 | `s3` | S3 filesystem support. |
