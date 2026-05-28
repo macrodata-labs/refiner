@@ -28,20 +28,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-huggingface = [
-    "datasets>=3.0.0",
-]
 video = [
     "av",
     "pillow",
 ]
-robotics = [
-    "macrodata-refiner[video]",
+hf = [
+    "datasets>=3.0.0",
     "huggingface-hub>=1.4.1",
     "hf>=1.7.1",
 ]
 egocentric = [
-    "macrodata-refiner[robotics]",
+    "macrodata-refiner[hf]",
+    "macrodata-refiner[video]",
     "ego-vision[models]>=0.1.0",
 ]
 text = [
@@ -58,9 +56,9 @@ s3 = [
     "s3fs",
 ]
 testing = [
-    "macrodata-refiner[huggingface]",
     "macrodata-refiner[hdf5]",
-    "macrodata-refiner[robotics]",
+    "macrodata-refiner[hf]",
+    "macrodata-refiner[video]",
     "macrodata-refiner[zarr]",
     "macrodata-refiner[text]",
     "macrodata-refiner[s3]",

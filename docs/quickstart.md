@@ -12,7 +12,7 @@ Cloud.
 ## Install
 
 ```bash
-pip install macrodata-refiner[robotics]
+pip install macrodata-refiner[hf,video]
 ```
 
 For cloud runs, authenticate once:
@@ -96,4 +96,3 @@ If you store secrets in the platform, use `mdr.Secrets.env(...)`; see
 - Learn the episode model in [Episode Data](episode-data/index.md).
 - Learn common row operations in [Transforms](transforms/index.md).
 - Learn LeRobot output details in [Writing LeRobot](writing-data/lerobot.md).
-

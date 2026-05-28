@@ -9,7 +9,7 @@ Install extras based on the data and operations you use.
 
 | Extra | Enables |
 | --- | --- |
-| `robotics` | LeRobot workflows, video dependencies, Hugging Face Hub helpers. |
+| `hf` | Hugging Face datasets, Hub APIs, and HF filesystem helpers. |
 | `egocentric` | Egocentric hand tracking. |
 | `hdf5` | HDF5 reader support. |
 | `zarr` | Zarr reader and writer support. |
@@ -21,8 +21,8 @@ Install extras based on the data and operations you use.
 Examples:
 
 ```bash
-pip install macrodata-refiner[robotics]
+pip install macrodata-refiner[hf,video]
+pip install macrodata-refiner[hf]
 pip install macrodata-refiner[hdf5,zarr]
 pip install macrodata-refiner[egocentric]
 ```
-
