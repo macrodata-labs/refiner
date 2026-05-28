@@ -208,6 +208,40 @@ def _write_out_of_order_video_mcap(path: Path) -> None:
         writer.finish()
 
 
+def _write_late_video_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        image_channel = writer.register_channel(
+            topic="/image",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (state_channel, 0, b'{"q":[1]}', 0, 1),
+            (image_channel, 1_000_000_000, b'{"frame":[[[4,5,6]]]}', 1_000_000_000, 2),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
 def _write_out_of_order_marker_mcap(path: Path) -> None:
     with path.open("wb") as stream:
         writer = mcap_writer.Writer(stream)
@@ -713,6 +747,23 @@ def test_mcap_reader_sorts_unaligned_video_frames(tmp_path: Path) -> None:
         [1, 2, 3],
         [4, 5, 6],
     ]
+
+
+def test_mcap_reader_rejects_missing_hold_aligned_video_frame(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "late-video.mcap"
+    _write_late_video_mcap(path)
+
+    with pytest.raises(ValueError, match="no aligned frame"):
+        read_mcap(
+            str(path),
+            fields={"state": "/state.q"},
+            videos={"front": "/image.frame"},
+            primary="state",
+            sync_method="hold",
+            fps=1,
+        ).materialize()
 
 
 def test_mcap_reader_rejects_fractional_video_fps(tmp_path: Path) -> None:

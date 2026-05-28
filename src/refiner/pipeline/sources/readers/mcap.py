@@ -700,13 +700,15 @@ def _video_map(
             video_sync_method: SyncMethod = (
                 "nearest" if sync_method == "interpolate" else sync_method
             )
-            frames = [
-                _frame_from_value(aligned.value)
-                for aligned in _align_values(
-                    events, primary_timestamps, source[1], method=video_sync_method
-                )
-                if aligned is not None
-            ]
+            frames = []
+            for aligned in _align_values(
+                events, primary_timestamps, source[1], method=video_sync_method
+            ):
+                if aligned is None:
+                    raise ValueError(
+                        f"MCAP video {name!r} has no aligned frame for a primary row"
+                    )
+                frames.append(_frame_from_value(aligned.value))
         else:
             frames = [
                 _frame_from_value(_source_value(event.value, source[1]))
