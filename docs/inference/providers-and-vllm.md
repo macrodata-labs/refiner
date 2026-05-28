@@ -53,9 +53,6 @@ When used with cloud launch, VLLM providers can be represented as runtime
 services so workers call a model server instead of loading the model directly
 inside every worker.
 
-Refiner Cloud currently supports only `config="throughput"` for VLLM runtime
-services.
-
 ## Provider Options
 
 Provider-specific options are passed through `providerOptions`:
