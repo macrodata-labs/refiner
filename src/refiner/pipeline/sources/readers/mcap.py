@@ -128,8 +128,9 @@ class McapReader(BaseReader):
             source = self.fileset.resolve_file(part.source_index, part.path)
             topic_events: dict[str, list[_McapEvent]] = defaultdict(list)
             with source.open(mode="rb") as stream:
+                stream_is_seekable = stream.seekable()
                 reader = make_reader(stream)
-                summary = reader.get_summary()
+                summary = reader.get_summary() if stream_is_seekable else None
                 summary_topics = (
                     {channel.topic for channel in summary.channels.values()}
                     if summary is not None

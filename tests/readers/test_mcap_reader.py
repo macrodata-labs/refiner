@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from io import BufferedReader
 from pathlib import Path
 from typing import cast
 
+from fsspec.implementations.local import LocalFileSystem
 import pytest
 
 from refiner.pipeline import read_mcap
@@ -12,6 +14,46 @@ from refiner.robotics.row import RoboticsRow
 from refiner.video import VideoFrameArray
 
 mcap_writer = pytest.importorskip("mcap.writer")
+
+
+class _NonSeekableReader:
+    def __init__(self, stream: BufferedReader):
+        self._stream = stream
+
+    def __enter__(self):
+        self._stream.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self._stream.__exit__(*args)
+
+    def seekable(self) -> bool:
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        return self._stream.read(size)
+
+
+class _NonSeekableLocalFileSystem(LocalFileSystem):
+    def open(
+        self,
+        path,
+        mode="rb",
+        block_size=None,
+        cache_options=None,
+        compression=None,
+        **kwargs,
+    ):
+        return _NonSeekableReader(
+            super().open(
+                path,
+                mode=mode,
+                block_size=block_size,
+                cache_options=cache_options,
+                compression=compression,
+                **kwargs,
+            )
+        )
 
 
 def _write_mcap(path: Path) -> None:
@@ -352,6 +394,18 @@ def test_mcap_reader_filters_topics(tmp_path: Path) -> None:
         "timestamp",
         "/cmd.target",
     ]
+
+
+def test_mcap_reader_reads_non_seekable_streams(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    row = read_mcap(
+        (str(path), _NonSeekableLocalFileSystem()),
+        fields={"state": "/joint_states.q"},
+    ).materialize()[0]
+
+    assert row["frames"].column("state").to_pylist() == [[1, 2], [3, 4], [5, 6]]
 
 
 def test_mcap_reader_treats_string_topics_as_one_topic(tmp_path: Path) -> None:
