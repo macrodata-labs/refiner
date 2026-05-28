@@ -297,7 +297,7 @@ def _time_gap_windows(
 def _marker_windows(marker_events: Sequence[_McapEvent]) -> list[_EpisodeWindow]:
     if not marker_events:
         return [_EpisodeWindow()]
-    starts = [event.timestamp_ns for event in marker_events]
+    starts = sorted(event.timestamp_ns for event in marker_events)
     ends: list[int | None] = [*starts[1:], None]
     return [
         _EpisodeWindow(start_ns=start, end_ns=end)

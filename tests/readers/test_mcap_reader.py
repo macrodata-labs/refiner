@@ -95,6 +95,43 @@ def _write_marker_mcap(path: Path) -> None:
         writer.finish()
 
 
+def _write_out_of_order_marker_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        marker_channel = writer.register_channel(
+            topic="/episode_start",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (marker_channel, 100, b'{"episode":1}', 100, 1),
+            (state_channel, 110, b'{"q":[3]}', 110, 2),
+            (marker_channel, 0, b'{"episode":0}', 0, 3),
+            (state_channel, 10, b'{"q":[1]}', 10, 4),
+            (state_channel, 20, b'{"q":[2]}', 20, 5),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
 def _write_sparse_edge_mcap(path: Path) -> None:
     with path.open("wb") as stream:
         writer = mcap_writer.Writer(stream)
@@ -381,6 +418,23 @@ def test_mcap_reader_splits_on_marker_topic(tmp_path: Path) -> None:
     ).materialize()
 
     assert [row["episode_index"] for row in rows] == [0, 1]
+    assert [row["frames"].column("state").to_pylist() for row in rows] == [
+        [[1], [2]],
+        [[3]],
+    ]
+
+
+def test_mcap_reader_sorts_marker_events_before_splitting(tmp_path: Path) -> None:
+    path = tmp_path / "out-of-order-markers.mcap"
+    _write_out_of_order_marker_mcap(path)
+
+    rows = read_mcap(
+        str(path),
+        fields={"state": "/state.q"},
+        primary="state",
+        episode_splitting={"marker_topic": "/episode_start"},
+    ).materialize()
+
     assert [row["frames"].column("state").to_pylist() for row in rows] == [
         [[1], [2]],
         [[3]],
