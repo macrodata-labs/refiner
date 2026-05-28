@@ -543,6 +543,14 @@ def test_mcap_reader_rejects_unknown_field_source(tmp_path: Path) -> None:
         read_mcap(str(path), fields={"bad": "/missing.value"}).materialize()
 
 
+def test_mcap_reader_rejects_reserved_frame_field_names(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    with pytest.raises(ValueError, match="reserved frame columns"):
+        read_mcap(str(path), fields={"timestamp": "/cmd.target"}).materialize()
+
+
 def test_mcap_reader_splits_on_time_gaps(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)

@@ -26,6 +26,7 @@ from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameArray
 
 _MISSING = object()
+_RESERVED_FRAME_COLUMNS = frozenset({"frame_index", "timestamp"})
 SyncMethod = Literal["nearest", "interpolate", "hold"]
 
 
@@ -88,6 +89,12 @@ class McapReader(BaseReader):
         self.fields = path_selection_map(
             fields, format_name="MCAP", derive_names_from_paths=False
         )
+        reserved_fields = sorted(set(self.fields) & _RESERVED_FRAME_COLUMNS)
+        if reserved_fields:
+            raise ValueError(
+                "MCAP fields cannot use reserved frame columns: "
+                + ", ".join(reserved_fields)
+            )
         self._read_default_fields = fields is None
         self.videos = path_selection_map(
             videos, format_name="MCAP", derive_names_from_paths=False
