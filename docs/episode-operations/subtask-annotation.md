@@ -39,13 +39,7 @@ The output column contains a list of segments:
 ## Contact Sheets
 
 Contact sheets reduce video into timestamped image grids. This is often cheaper
-and easier for VLMs than sending the full video. By default, the annotator
-samples every `0.5` seconds, resizes each sampled frame to `224px` wide, and
-packs frames chronologically into `5` columns by `4` rows. The default prompt
-instructs the model to read time left-to-right, then top-to-bottom, and to use
-the visible timestamp printed inside each tile when choosing segment boundaries.
-If you override `columns` or `frames_per_sheet`, the default prompt uses the
-resulting contact sheet layout.
+and easier for VLMs than sending the full video.
 
 | Parameter | Meaning |
 | --- | --- |
