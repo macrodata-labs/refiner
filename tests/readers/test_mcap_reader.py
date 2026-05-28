@@ -242,6 +242,48 @@ def _write_late_video_mcap(path: Path) -> None:
         writer.finish()
 
 
+def _write_marker_mcap_with_video_only_episode(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        image_channel = writer.register_channel(
+            topic="/image",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        marker_channel = writer.register_channel(
+            topic="/episode_start",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (marker_channel, 0, b'{"episode":0}', 0, 1),
+            (state_channel, 10, b'{"q":[1]}', 10, 2),
+            (image_channel, 10, b'{"frame":[[[1,2,3]]]}', 10, 3),
+            (marker_channel, 100, b'{"episode":1}', 100, 4),
+            (image_channel, 110, b'{"frame":[[[4,5,6]]]}', 110, 5),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
 def _write_out_of_order_marker_mcap(path: Path) -> None:
     with path.open("wb") as stream:
         writer = mcap_writer.Writer(stream)
@@ -577,6 +619,14 @@ def test_mcap_reader_rejects_unknown_field_source(tmp_path: Path) -> None:
         read_mcap(str(path), fields={"bad": "/missing.value"}).materialize()
 
 
+def test_mcap_reader_rejects_file_path_column_collisions(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    with pytest.raises(ValueError, match="file_path_column"):
+        read_mcap(str(path), file_path_column="frames").materialize()
+
+
 def test_mcap_reader_rejects_reserved_frame_field_names(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -764,6 +814,27 @@ def test_mcap_reader_rejects_missing_hold_aligned_video_frame(
             sync_method="hold",
             fps=1,
         ).materialize()
+
+
+def test_mcap_reader_keeps_videos_aligned_to_empty_primary_episode(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "video-only-episode.mcap"
+    _write_marker_mcap_with_video_only_episode(path)
+
+    rows = read_mcap(
+        str(path),
+        fields={"state": "/state.q"},
+        videos={"front": "/image.frame"},
+        primary="state",
+        episode_splitting={"marker_topic": "/episode_start"},
+        fps=1,
+    ).materialize()
+
+    assert rows[0]["frames"].table.num_rows == 1
+    assert rows[0]["videos"]["front"].frame_count == 1
+    assert rows[1]["frames"].table.num_rows == 0
+    assert "videos" not in rows[1]
 
 
 def test_mcap_reader_rejects_fractional_video_fps(tmp_path: Path) -> None:

@@ -27,6 +27,7 @@ from refiner.video import VideoFrameArray
 
 _MISSING = object()
 _RESERVED_FRAME_COLUMNS = frozenset({"frame_index", "timestamp"})
+_ROW_COLUMNS = frozenset({"frames", "episode_index", "videos", "fps"})
 _EPISODE_SPLITTING_ERROR = (
     "episode_splitting must be 'single', {'time_gap_s': seconds}, "
     "or {'marker_topic': topic}"
@@ -79,6 +80,10 @@ class McapReader(BaseReader):
         time_gap_s, marker_topic = _parse_episode_splitting(episode_splitting)
         if sync_method not in ("nearest", "interpolate", "hold"):
             raise ValueError("sync_method must be 'nearest', 'interpolate', or 'hold'")
+        if file_path_column in _ROW_COLUMNS:
+            raise ValueError(
+                f"file_path_column cannot use reserved MCAP row column {file_path_column!r}"
+            )
         super().__init__(
             inputs,
             fs=fs,
@@ -692,7 +697,9 @@ def _video_map(
 ) -> dict[str, VideoFrameArray]:
     out: dict[str, VideoFrameArray] = {}
     primary_timestamps = (
-        [event.timestamp_ns for event in primary_events] if primary_events else None
+        [event.timestamp_ns for event in primary_events]
+        if primary_events is not None
+        else None
     )
     for name, source in videos.items():
         events = topic_events.get(source[0], ())
