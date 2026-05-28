@@ -27,6 +27,10 @@ from refiner.video import VideoFrameArray
 
 _MISSING = object()
 _RESERVED_FRAME_COLUMNS = frozenset({"frame_index", "timestamp"})
+_EPISODE_SPLITTING_ERROR = (
+    "episode_splitting must be 'single', {'time_gap_s': seconds}, "
+    "or {'marker_topic': topic}"
+)
 SyncMethod = Literal["nearest", "interpolate", "hold"]
 
 
@@ -189,35 +193,42 @@ class McapReader(BaseReader):
             else:
                 windows = [_EpisodeWindow()]
             file_topics = set(topic_events)
+            file_fields = (
+                None
+                if self._read_default_fields
+                else {
+                    output: _resolve_source(source, file_topics)
+                    for output, source in self.fields.items()
+                }
+            )
+            file_videos = {
+                output: _resolve_source(source, file_topics)
+                for output, source in self.videos.items()
+            }
             for episode_index, window in enumerate(windows):
                 window_events = _slice_events(topic_events, window)
-                fields = (
-                    _default_fields(
+                if self._read_default_fields:
+                    fields = _default_fields(
                         window_events,
                         self.videos,
                         excluded_topic=self._marker_topic,
                     )
-                    if self._read_default_fields
-                    else self.fields
-                )
-                available_topics = (
-                    set(window_events) if self._read_default_fields else file_topics
-                )
-                resolved_fields = {
-                    output: _resolve_source(source, available_topics)
-                    for output, source in fields.items()
-                }
-                resolved_videos = {
-                    output: _resolve_source(source, available_topics)
-                    for output, source in self.videos.items()
-                }
+                    source_topics = set(window_events)
+                    resolved_fields = {
+                        output: _resolve_source(source, source_topics)
+                        for output, source in fields.items()
+                    }
+                else:
+                    source_topics = file_topics
+                    resolved_fields = file_fields or {}
+                resolved_videos = file_videos
                 primary = None
                 if self.primary is not None:
                     primary = resolved_fields.get(self.primary) or resolved_videos.get(
                         self.primary
                     )
                     if primary is None:
-                        primary = _resolve_source(self.primary, available_topics)
+                        primary = _resolve_source(self.primary, source_topics)
                 primary_events = (
                     sorted(
                         window_events.get(primary[0], ()),
@@ -266,10 +277,7 @@ def _parse_episode_splitting(
     if splitting == "single":
         return None, None
     if isinstance(splitting, str) or not isinstance(splitting, Mapping):
-        raise ValueError(
-            "episode_splitting must be 'single', {'time_gap_s': seconds}, "
-            "or {'marker_topic': topic}"
-        )
+        raise ValueError(_EPISODE_SPLITTING_ERROR)
     keys = set(splitting)
     if keys == {"time_gap_s"}:
         time_gap_s = float(splitting["time_gap_s"])
@@ -277,10 +285,7 @@ def _parse_episode_splitting(
             raise ValueError("episode_splitting time_gap_s must be > 0")
         return time_gap_s, None
     if keys != {"marker_topic"}:
-        raise ValueError(
-            "episode_splitting must be 'single', {'time_gap_s': seconds}, "
-            "or {'marker_topic': topic}"
-        )
+        raise ValueError(_EPISODE_SPLITTING_ERROR)
     if not isinstance(splitting["marker_topic"], str):
         raise TypeError("episode_splitting marker_topic must be a string")
     return None, splitting["marker_topic"]
@@ -506,6 +511,7 @@ def _aligned_frame_table(
             method=sync_method,
         )
         for name, source in fields.items()
+        if source != primary
     }
     rows: list[dict[str, Any]] = []
     for index, primary_event in enumerate(primary_events):
@@ -516,15 +522,13 @@ def _aligned_frame_table(
         }
         for name in fields:
             source = fields[name]
-            aligned = (
-                _AlignedValue(
-                    timestamp_ns=timestamp_ns,
-                    value=_source_value(primary_event.value, source[1], default=None),
-                    skew_ns=0,
-                )
-                if source == primary
-                else aligned_values[name][index]
-            )
+            if source == primary:
+                row[name] = _source_value(primary_event.value, source[1], default=None)
+                if include_skew:
+                    row[f"mcap.{name}.timestamp"] = timestamp_ns / 1e9
+                    row[f"mcap.{name}.skew_ms"] = 0.0
+                continue
+            aligned = aligned_values[name][index]
             if aligned is None:
                 row[name] = None
                 continue
@@ -634,8 +638,8 @@ def _interpolate_value(
     left_array = np.asarray(left_value)
     right_array = np.asarray(right_value)
     if (
-        left_array.dtype.kind not in "biufc"
-        or right_array.dtype.kind not in "biufc"
+        left_array.dtype.kind not in "iufc"
+        or right_array.dtype.kind not in "iufc"
         or left_array.shape != right_array.shape
     ):
         return _nearest_value(timestamp_ns, source_timestamps, source_values)
