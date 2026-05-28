@@ -47,7 +47,7 @@ def reward_score(
     from refiner.inference import generate_pooling
     from refiner.inference.providers import VLLMProvider
 
-    provider = VLLMProvider(model=model, config="correctness")
+    provider = VLLMProvider(model=model, config="throughput")
 
     async def _score_episode(
         row: Row,

@@ -272,7 +272,7 @@ def test_worker_uses_explicit_runtime_services(monkeypatch: pytest.MonkeyPatch) 
     service = RuntimeServiceSpec(
         name="vllm-demo",
         kind="llm",
-        config={"model_name_or_path": "Qwen/Qwen3.5-9B", "config": "correctness"},
+        config={"model_name_or_path": "Qwen/Qwen3.5-9B", "config": "throughput"},
     )
     started_services: list[tuple[RuntimeServiceSpec, ...]] = []
 

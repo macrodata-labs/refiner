@@ -24,5 +24,5 @@ def test_collect_pipeline_services_supports_nested_service_config() -> None:
     assert len(services) == 1
     assert services[0].config == {
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "config": "correctness",
+        "config": "throughput",
     }
