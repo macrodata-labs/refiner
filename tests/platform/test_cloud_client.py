@@ -46,7 +46,7 @@ def _request() -> CloudRunCreateRequest:
                         kind="llm",
                         config={
                             "model_name_or_path": "Qwen/Qwen3.5-9B",
-                            "config": "correctness",
+                            "config": "throughput",
                         },
                     ),
                 ),
@@ -110,7 +110,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
                     "kind": "llm",
                     "config": {
                         "model_name_or_path": "Qwen/Qwen3.5-9B",
-                        "config": "correctness",
+                        "config": "throughput",
                     },
                 }
             ],

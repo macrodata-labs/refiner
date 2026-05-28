@@ -103,13 +103,13 @@ class AnthropicEndpointProvider:
 @dataclass(frozen=True, slots=True)
 class VLLMProvider:
     model: str
-    config: Literal["correctness", "throughput"] = "correctness"
+    config: Literal["throughput"] = "throughput"
 
     def __post_init__(self) -> None:
         if not self.model.strip():
             raise ValueError("model_name_or_path must be non-empty")
-        if self.config not in {"correctness", "throughput"}:
-            raise ValueError("config must be 'correctness' or 'throughput'")
+        if self.config != "throughput":
+            raise ValueError("config must be 'throughput'")
 
     def service_definition(self) -> VLLMServiceDefinition:
         return VLLMServiceDefinition(

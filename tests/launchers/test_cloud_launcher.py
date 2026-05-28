@@ -280,7 +280,7 @@ def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:
         "kind": "llm",
         "config": {
             "model_name_or_path": "Qwen/Qwen3.5-9B",
-            "config": "correctness",
+            "config": "throughput",
         },
     }
     assert request.plan["stages"][0]["runtime_services"] == [expected_service]

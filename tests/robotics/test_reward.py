@@ -84,7 +84,7 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
 
     assert services[0].config == {
         "model_name_or_path": "aliangdw/Robometer-4B",
-        "config": "correctness",
+        "config": "throughput",
     }
     assert "robometer_progress" not in result
     assert result["reward_score"] == pytest.approx([3.0 / 9.0, 8.997 / 9.0], abs=0.001)

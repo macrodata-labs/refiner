@@ -45,12 +45,16 @@ provider = mdr.inference.AnthropicEndpointProvider(
 ```python
 provider = mdr.inference.VLLMProvider(
     model="Qwen/Qwen2.5-VL-7B-Instruct",
+    config="throughput",
 )
 ```
 
 When used with cloud launch, VLLM providers can be represented as runtime
 services so workers call a model server instead of loading the model directly
 inside every worker.
+
+Refiner Cloud currently supports only `config="throughput"` for VLLM runtime
+services.
 
 ## Provider Options
 

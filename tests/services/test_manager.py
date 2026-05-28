@@ -247,7 +247,7 @@ def test_vllm_service_definition_uses_supported_service_config() -> None:
 
     assert spec.config == {
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "config": "correctness",
+        "config": "throughput",
     }
     expected_suffix = hashlib.sha256(
         json.dumps(spec.config, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -255,14 +255,18 @@ def test_vllm_service_definition_uses_supported_service_config() -> None:
     assert service.name == f"vllm-{expected_suffix}"
 
 
-def test_vllm_service_definition_name_tracks_service_config_profile() -> None:
-    correctness_service = VLLMServiceDefinition(
-        model_name_or_path="Qwen/Qwen2.5-VL-7B-Instruct",
-        config="correctness",
-    )
-    throughput_service = VLLMServiceDefinition(
+def test_vllm_service_definition_rejects_unsupported_config_profile() -> None:
+    with pytest.raises(ValueError, match="config must be 'throughput'"):
+        VLLMServiceDefinition(
+            model_name_or_path="Qwen/Qwen2.5-VL-7B-Instruct",
+            config="correctness",  # type: ignore[arg-type]
+        )
+
+
+def test_vllm_service_definition_allows_throughput_config_profile() -> None:
+    service = VLLMServiceDefinition(
         model_name_or_path="Qwen/Qwen2.5-VL-7B-Instruct",
         config="throughput",
     )
 
-    assert correctness_service.name != throughput_service.name
+    assert service.to_spec().config["config"] == "throughput"

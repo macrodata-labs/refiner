@@ -191,7 +191,7 @@ def test_compile_pipeline_plan_includes_runtime_services_for_builtin_steps() -> 
             "kind": "llm",
             "config": {
                 "model_name_or_path": "Qwen/Qwen3.5-9B",
-                "config": "correctness",
+                "config": "throughput",
             },
         }
     ]

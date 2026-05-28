@@ -115,9 +115,17 @@ def test_vllm_provider_includes_supported_service_config() -> None:
     assert provider.to_builtin_args() == {
         "type": "vllm",
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "config": "correctness",
+        "config": "throughput",
     }
     assert provider.service_definition().to_spec().config == {
         "model_name_or_path": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "config": "correctness",
+        "config": "throughput",
     }
+
+
+def test_vllm_provider_rejects_unsupported_config() -> None:
+    with pytest.raises(ValueError, match="config must be 'throughput'"):
+        VLLMProvider(
+            model="Qwen/Qwen2.5-VL-7B-Instruct",
+            config="correctness",  # type: ignore[arg-type]
+        )
