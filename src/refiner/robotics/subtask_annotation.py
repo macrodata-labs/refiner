@@ -101,7 +101,6 @@ def subtask_annotation(
     *,
     provider: SubtaskAnnotationProvider,
     video_key: str | None = None,
-    prompt: str | None = None,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
     frame_width: int = 224,
@@ -133,14 +132,13 @@ def subtask_annotation(
 
         selected_video_key = _resolve_video_key(row, video_key)
         video = row.videos[selected_video_key]
-        resolved_prompt = _resolve_prompt(
-            prompt,
+        prompt = _default_prompt(
             frames_per_sheet=frames_per_sheet,
             columns=columns,
         )
         content = await _subtask_annotation_content(
             video=video,
-            prompt=_prompt_with_instruction(resolved_prompt, row.tasks),
+            prompt=_prompt_with_instruction(prompt, row.tasks),
             sample_sec=sample_sec,
             frame_width=frame_width,
             frames_per_sheet=frames_per_sheet,
@@ -181,14 +179,11 @@ def subtask_annotation(
     )
 
 
-def _resolve_prompt(
-    prompt: str | None,
+def _default_prompt(
     *,
     frames_per_sheet: int,
     columns: int,
 ) -> str:
-    if prompt is not None:
-        return prompt
     if frames_per_sheet <= 0:
         raise ValueError("frames_per_sheet must be > 0")
     if columns <= 0:
