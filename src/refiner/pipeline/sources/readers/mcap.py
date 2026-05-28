@@ -54,13 +54,10 @@ class McapReader(BaseReader):
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
         file_path_column: str | None = "file_path",
-        frames_column: str = "frames",
-        videos_column: str = "videos",
         fields: PathSelection | None = None,
         videos: PathSelection | None = None,
         primary: str | None = None,
         fps: float | None = None,
-        fps_column: str | None = "fps",
         include_skew: bool = True,
         episode_splitting: str | Mapping[str, Any] = "single",
     ):
@@ -76,8 +73,6 @@ class McapReader(BaseReader):
             file_path_column=file_path_column,
             split_by_bytes=False,
         )
-        self.frames_column = frames_column
-        self.videos_column = videos_column
         self.fields = path_selection_map(
             fields, format_name="MCAP", derive_names_from_paths=False
         )
@@ -87,7 +82,6 @@ class McapReader(BaseReader):
         )
         self.primary = primary
         self.fps = fps
-        self.fps_column = fps_column
         self.include_skew = include_skew
         self.episode_splitting = episode_splitting
         self._time_gap_s = time_gap_s
@@ -97,13 +91,10 @@ class McapReader(BaseReader):
         description = super().describe()
         description.update(
             {
-                "frames_column": self.frames_column,
-                "videos_column": self.videos_column,
                 "fields": self.fields,
                 "videos": self.videos,
                 "primary": self.primary,
                 "fps": self.fps,
-                "fps_column": self.fps_column,
                 "include_skew": self.include_skew,
                 "episode_splitting": self.episode_splitting,
             }
@@ -223,13 +214,13 @@ class McapReader(BaseReader):
                     fps=int(round(inferred_fps or 30)),
                 )
                 row: dict[str, Any] = {
-                    self.frames_column: Tabular(frame_table),
+                    "frames": Tabular(frame_table),
                     "episode_index": episode_index,
                 }
                 if videos:
-                    row[self.videos_column] = videos
-                if self.fps_column is not None and inferred_fps is not None:
-                    row[self.fps_column] = float(inferred_fps)
+                    row["videos"] = videos
+                if inferred_fps is not None:
+                    row["fps"] = float(inferred_fps)
                 yield DictRow(self._with_file_path(row, source))
 
 

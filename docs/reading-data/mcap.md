@@ -220,8 +220,6 @@ gap between primary timestamps. If neither explicit fps nor inferred fps is
 available, the row has no `fps` column. Selected videos still need an fps value,
 so video frame arrays fall back to `30` when no better value is available.
 
-Set `fps_column=None` to omit the row-level fps column.
-
 ## Videos
 
 `videos` maps video names to MCAP sources:
@@ -387,9 +385,6 @@ For non-robotics event logs, write the frame table fields directly:
 | `include_skew` | `True` | Add alignment timestamp/skew columns in primary-aligned mode. |
 | `episode_splitting` | `"single"` | One file per episode, `{"time_gap_s": seconds}`, or `{"marker_topic": topic}`. |
 | `file_path_column` | `"file_path"` | Source file column name. Set to `None` to omit it. |
-| `frames_column` | `"frames"` | Output column containing the frame `Tabular`. |
-| `videos_column` | `"videos"` | Output column containing selected videos. |
-| `fps_column` | `"fps"` | Output fps column name. Set to `None` to omit it. |
 
 ## Related Pages
 
