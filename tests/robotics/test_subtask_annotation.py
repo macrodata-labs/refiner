@@ -257,6 +257,41 @@ def test_subtask_annotation_can_include_contact_sheet_manifest(
     )
 
 
+def test_subtask_annotation_prompt_uses_configured_contact_sheet_layout(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _lerobot_row(tmp_path)
+    block = mdr.robotics.subtask_annotation(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+        frames_per_sheet=6,
+        columns=4,
+    )
+    request = {}
+
+    async def _fake_request(**kwargs):
+        request.update(kwargs)
+        return InferenceResponse(
+            text='{"segments":[]}',
+            finish_reason="stop",
+            usage={},
+            response={},
+            object=subtask_annotation_module._SubtaskAnnotationResult(segments=[]),
+        )
+
+    asyncio.run(cast(Any, block)(row, _fake_request))
+
+    prompt = request["messages"][0]["content"][0]["text"]
+    assert "Each image is a contact sheet with 4 columns and 2 rows." in prompt
+    assert "5 columns and 4 rows" not in prompt
+
+
 def test_subtask_annotation_keeps_short_segments_by_default(
     tmp_path,
     monkeypatch,

@@ -30,13 +30,13 @@ if TYPE_CHECKING:
     )
     from refiner.video import VideoFile
 
-_DEFAULT_SUBTASK_ANNOTATION_PROMPT = """Reconstruct the sequence of manipulation events in this robot video from timestamped contact sheets.
+_DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from timestamped contact sheets.
 
 Return only JSON with this shape:
 {"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
 
 How to read the images:
-- Each image is a contact sheet with 5 columns and 4 rows.
+- Each image is a contact sheet with {columns_count} columns and {rows_count} rows.
 - Time runs left-to-right within each row, then continues on the next row.
 - Each tile has a visible timestamp in its top-left corner, such as 012.50s.
 - Use the visible timestamp printed inside the tile, not the tile index, when choosing start_sec and end_sec.
@@ -101,7 +101,7 @@ def subtask_annotation(
     *,
     provider: SubtaskAnnotationProvider,
     video_key: str | None = None,
-    prompt: str = _DEFAULT_SUBTASK_ANNOTATION_PROMPT,
+    prompt: str | None = None,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
     frame_width: int = 224,
@@ -133,9 +133,14 @@ def subtask_annotation(
 
         selected_video_key = _resolve_video_key(row, video_key)
         video = row.videos[selected_video_key]
+        resolved_prompt = _resolve_prompt(
+            prompt,
+            frames_per_sheet=frames_per_sheet,
+            columns=columns,
+        )
         content = await _subtask_annotation_content(
             video=video,
-            prompt=_prompt_with_instruction(prompt, row.tasks),
+            prompt=_prompt_with_instruction(resolved_prompt, row.tasks),
             sample_sec=sample_sec,
             frame_width=frame_width,
             frames_per_sheet=frames_per_sheet,
@@ -174,6 +179,25 @@ def subtask_annotation(
         provider=provider,
         max_concurrent_requests=max_concurrent_requests,
     )
+
+
+def _resolve_prompt(
+    prompt: str | None,
+    *,
+    frames_per_sheet: int,
+    columns: int,
+) -> str:
+    if prompt is not None:
+        return prompt
+    if frames_per_sheet <= 0:
+        raise ValueError("frames_per_sheet must be > 0")
+    if columns <= 0:
+        raise ValueError("columns must be > 0")
+    rows = math.ceil(frames_per_sheet / columns)
+    return _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE.replace(
+        "{columns_count}",
+        str(columns),
+    ).replace("{rows_count}", str(rows))
 
 
 def contact_sheet_prompt_manifest(
