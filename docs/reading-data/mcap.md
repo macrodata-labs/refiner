@@ -125,9 +125,16 @@ back to one episode for the file.
 
 MCAP logs usually contain multiple topics with different rates: robot state,
 actions, camera frames, commands, diagnostics, and events may not share exactly
-the same timestamps. `read_mcap` supports two frame-table modes.
+the same timestamps. `read_mcap` supports two synchronization modes:
 
-Without `primary`, the frame table is sparse:
+| Mode | How to select it | Output rows | Best for |
+| --- | --- | --- | --- |
+| Sparse union | Leave `primary=None` | One row for each selected message timestamp. Missing fields are null. | Event logs, debugging, preserving each topic's original timing. |
+| Primary-aligned | Set `primary=...` | One row for each primary timestamp. Other fields and videos are nearest-aligned. | Robotics episodes, model training tables, fixed-rate trajectories. |
+
+### Sparse Union Mode
+
+Use sparse union mode by leaving `primary` unset:
 
 ```python
 mdr.read_mcap(
@@ -139,7 +146,7 @@ mdr.read_mcap(
 )
 ```
 
-Sparse mode creates one frame table over the union of selected message
+This creates one frame table over the union of selected message
 timestamps. For example, if state arrives at `0.0` and `1.0` seconds, while
 commands arrive at `0.5` seconds, the output is:
 
@@ -157,7 +164,10 @@ rows so no message is dropped:
 | `1.0` | `[1, 2]` |
 | `1.0` | `[3, 4]` |
 
-With `primary`, the frame table is dense on the primary source:
+### Primary-Aligned Mode
+
+Use primary-aligned mode by setting `primary` to the source that should define
+the output frame rate:
 
 ```python
 mdr.read_mcap(
@@ -170,12 +180,23 @@ mdr.read_mcap(
 )
 ```
 
-The primary source can be an output field name (`"state"`), a video name, a topic,
-or a dotted source path. Its timestamps define the output rows. Every other
-field is nearest-neighbor aligned to those timestamps. If `include_skew=True`
-`read_mcap` adds columns such as `mcap.command.timestamp` and
-`mcap.command.skew_ms` so you can inspect how far each aligned sample was from
-the primary timestamp.
+`primary` can be an output field name (`"state"`), a video name, a topic, or a
+dotted source path. Its timestamps define the output rows. Every other field and
+video is nearest-neighbor aligned to those rows.
+
+For example, if state is the primary source and command messages arrive slightly
+after each state sample:
+
+| state timestamp | nearest command timestamp | state | command |
+| --- | --- | --- | --- |
+| `0.0` | `0.1` | `[1, 2]` | `[10]` |
+| `1.0` | `0.9` | `[3, 4]` | `[20]` |
+| `2.0` | `0.9` | `[5, 6]` | `[20]` |
+
+If `include_skew=True`, `read_mcap` also adds columns such as
+`mcap.command.timestamp` and `mcap.command.skew_ms` so you can inspect how far
+each aligned sample was from the primary timestamp. Set `include_skew=False` to
+omit those diagnostic columns.
 
 The reader uses streaming MCAP reads, so raw events are not assumed to arrive in
 timestamp order. It sorts timestamps where ordering affects semantics: splitting,
