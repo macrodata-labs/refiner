@@ -202,6 +202,14 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
     assert message["role"] == "user"
     assert "Episode instruction: open the drawer" in message["content"][0]["text"]
     assert (
+        "Each image is a contact sheet with 5 columns and 4 rows."
+        in (message["content"][0]["text"])
+    )
+    assert (
+        "Use the visible timestamp printed inside the tile"
+        in (message["content"][0]["text"])
+    )
+    assert (
         "Actions may continue across contact sheet boundaries"
         not in message["content"][0]["text"]
     )

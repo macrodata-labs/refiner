@@ -39,7 +39,11 @@ The output column contains a list of segments:
 ## Contact Sheets
 
 Contact sheets reduce video into timestamped image grids. This is often cheaper
-and easier for VLMs than sending the full video.
+and easier for VLMs than sending the full video. By default, the annotator
+samples every `0.5` seconds, resizes each sampled frame to `224px` wide, and
+packs frames chronologically into `5` columns by `4` rows. The default prompt
+instructs the model to read time left-to-right, then top-to-bottom, and to use
+the visible timestamp printed inside each tile when choosing segment boundaries.
 
 | Parameter | Meaning |
 | --- | --- |
@@ -48,6 +52,7 @@ and easier for VLMs than sending the full video.
 | `frames_per_sheet` | Number of frames per sheet image. |
 | `columns` | Contact sheet grid columns. |
 | `include_contact_sheet_manifest` | Add textual sheet descriptions to the prompt. |
+| `min_segment_duration_sec` | Minimum returned segment duration. Defaults to `0.0`, so valid short segments are kept. |
 
 ## Prompting
 
@@ -65,4 +70,3 @@ pipeline = pipeline.map_async(
 
 For lower-level inference controls, see [Generate Text](../inference/generate-text.md)
 and [Multimodal and Structured Output](../inference/multimodal-and-structured-output.md).
-

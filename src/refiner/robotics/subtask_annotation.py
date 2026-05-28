@@ -30,10 +30,17 @@ if TYPE_CHECKING:
     )
     from refiner.video import VideoFile
 
-_DEFAULT_SUBTASK_ANNOTATION_PROMPT = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
+_DEFAULT_SUBTASK_ANNOTATION_PROMPT = """Reconstruct the sequence of manipulation events in this robot video from timestamped contact sheets.
 
 Return only JSON with this shape:
 {"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
+
+How to read the images:
+- Each image is a contact sheet with 5 columns and 4 rows.
+- Time runs left-to-right within each row, then continues on the next row.
+- Each tile has a visible timestamp in its top-left corner, such as 012.50s.
+- Use the visible timestamp printed inside the tile, not the tile index, when choosing start_sec and end_sec.
+- Boundaries should normally land on or near one of the visible timestamps.
 
 Rules:
 - Treat each segment as one event that changes what is true about the world.
@@ -41,7 +48,7 @@ Rules:
 - For each event, choose start_sec at the first timestamp where the causal motion for that event is underway, and end_sec at the first timestamp where the resulting world state is achieved.
 - If an action is continuous and changes the same state gradually, keep it as one event.
 - If the same action repeats on different objects or target locations, output separate repeated events.
-- Avoid idle time, camera motion, hesitation, and tiny hand adjustments.
+- Avoid segments for idle time, camera motion, hesitation, or tiny hand adjustments.
 """
 
 if TYPE_CHECKING:
