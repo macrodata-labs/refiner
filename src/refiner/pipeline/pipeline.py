@@ -66,6 +66,8 @@ from refiner.pipeline.sources.readers.utils import (
 )
 import pyarrow as pa
 
+_DEFAULT_LEROBOT_ENCODER_OPTIONS: Mapping[str, str] = {"g": "2"}
+
 if TYPE_CHECKING:
     from refiner.launchers.cloud import CloudLaunchResult
     from refiner.launchers.local import LaunchStats
@@ -570,7 +572,7 @@ class RefinerPipeline:
         codec: str = "mpeg4",
         pix_fmt: str = "yuv420p",
         transencoding_threads: int | None = None,
-        encoder_options: Mapping[str, str] | None = None,
+        encoder_options: Mapping[str, str] | None = _DEFAULT_LEROBOT_ENCODER_OPTIONS,
         quantile_bins: int = 5000,
         force_recompute_video_stats: bool = False,
     ) -> "RefinerPipeline":

@@ -220,6 +220,42 @@ def _reset_opened_source_cache() -> Iterator[None]:
     reset_opened_video_source_cache()
 
 
+def test_lerobot_sink_defaults_encoder_options_to_none(tmp_path: Path) -> None:
+    writer = LeRobotWriterSink(str(tmp_path / "out"))
+
+    assert writer.video_transcode_config.encoder_options is None
+
+
+def test_write_lerobot_defaults_gop_to_two(tmp_path: Path) -> None:
+    pipeline = mdr.from_items([]).write_lerobot(str(tmp_path / "out"))
+    writer = cast(LeRobotWriterSink, pipeline.sink)
+
+    assert writer.video_transcode_config.encoder_options == {"g": "2"}
+
+
+def test_write_lerobot_allows_gop_override(tmp_path: Path) -> None:
+    pipeline = mdr.from_items([]).write_lerobot(
+        str(tmp_path / "out"),
+        encoder_options={"g": "12", "preset": "veryfast"},
+    )
+    writer = cast(LeRobotWriterSink, pipeline.sink)
+
+    assert writer.video_transcode_config.encoder_options == {
+        "g": "12",
+        "preset": "veryfast",
+    }
+
+
+def test_write_lerobot_allows_encoder_options_opt_out(tmp_path: Path) -> None:
+    pipeline = mdr.from_items([]).write_lerobot(
+        str(tmp_path / "out"),
+        encoder_options=None,
+    )
+    writer = cast(LeRobotWriterSink, pipeline.sink)
+
+    assert writer.video_transcode_config.encoder_options is None
+
+
 def _write_video(path: Path, *, fps: int = 10, frames: int = 6) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with av.open(str(path), mode="w") as container:
