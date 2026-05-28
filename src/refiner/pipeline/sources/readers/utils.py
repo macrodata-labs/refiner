@@ -65,16 +65,18 @@ def path_selection_map(
     value: PathSelection | None,
     *,
     format_name: str,
+    derive_names_from_paths: bool = True,
 ) -> dict[str, str]:
     if value is None:
         return {}
     if isinstance(value, str):
-        return {value.rsplit("/", 1)[-1]: value}
+        name = value.rsplit("/", 1)[-1] if derive_names_from_paths else value
+        return {name: value}
     if isinstance(value, Mapping):
         return dict(cast(Mapping[str, str], value))
     out: dict[str, str] = {}
     for path in value:
-        name = path.rsplit("/", 1)[-1]
+        name = path.rsplit("/", 1)[-1] if derive_names_from_paths else path
         if name in out:
             raise ValueError(
                 f"{format_name} path selections must have unique derived column names; "

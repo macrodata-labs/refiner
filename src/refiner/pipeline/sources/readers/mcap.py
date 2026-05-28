@@ -16,7 +16,11 @@ from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    PathSelection,
+    path_selection_map,
+)
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameArray
 
@@ -51,8 +55,8 @@ class McapReader(BaseReader):
         file_path_column: str | None = "file_path",
         frames_column: str = "frames",
         videos_column: str = "videos",
-        fields: Mapping[str, str] | Sequence[str] | None = None,
-        videos: Mapping[str, str] | Sequence[str] | None = None,
+        fields: PathSelection | None = None,
+        videos: PathSelection | None = None,
         primary: str | None = None,
         fps: float | None = None,
         fps_column: str | None = "fps",
@@ -74,8 +78,12 @@ class McapReader(BaseReader):
         self.topics = tuple(topics) if topics is not None else None
         self.frames_column = frames_column
         self.videos_column = videos_column
-        self.fields = _normalize_selection(fields)
-        self.videos = _normalize_selection(videos)
+        self.fields = path_selection_map(
+            fields, format_name="MCAP", derive_names_from_paths=False
+        )
+        self.videos = path_selection_map(
+            videos, format_name="MCAP", derive_names_from_paths=False
+        )
         self.primary = primary
         self.fps = fps
         self.fps_column = fps_column
@@ -285,18 +293,6 @@ def _slice_events(
         if selected:
             out[topic] = selected
     return out
-
-
-def _normalize_selection(
-    selection: Mapping[str, str] | Sequence[str] | None,
-) -> dict[str, str]:
-    if selection is None:
-        return {}
-    if isinstance(selection, Mapping):
-        return {str(key): str(value) for key, value in selection.items()}
-    if isinstance(selection, str):
-        return {selection: selection}
-    return {key: key for key in selection}
 
 
 def _decoder_factories() -> list[Any]:
