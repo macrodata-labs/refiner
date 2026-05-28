@@ -181,29 +181,6 @@ def test_mcap_reader_builds_video_frame_arrays_for_robot_rows(tmp_path: Path) ->
     ]
 
 
-def test_mcap_reader_can_include_raw_message_table_for_debug(tmp_path: Path) -> None:
-    path = tmp_path / "demo.mcap"
-    _write_mcap(path)
-
-    row = read_mcap(str(path), messages_column="messages").materialize()[0]
-
-    messages = row["messages"]
-    assert messages.table.column_names == [
-        "topic",
-        "log_time",
-        "publish_time",
-        "sequence",
-        "message_encoding",
-        "schema_id",
-        "schema_name",
-        "schema_encoding",
-        "schema_data",
-        "data",
-    ]
-    assert messages.table.num_rows == 7
-    assert messages.to_rows()[0]["data"] == b'{"q":[1,2]}'
-
-
 def test_mcap_reader_filters_topics(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)

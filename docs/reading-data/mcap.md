@@ -60,9 +60,6 @@ expanded into `topic.field` columns.
 rows and other fields/videos are nearest-aligned to those rows. When omitted,
 the frame table is sparse over the union of selected message timestamps.
 
-Set `messages_column="messages"` to also include the raw message table for
-debugging.
-
 ## Related Pages
 
 - [Reader Model](reader-model.md)

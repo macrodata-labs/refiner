@@ -20,18 +20,6 @@ from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameArray
 
-_MCAP_METADATA_COLUMNS = {
-    "topic",
-    "log_time",
-    "publish_time",
-    "sequence",
-    "message_encoding",
-    "schema_id",
-    "schema_name",
-    "schema_encoding",
-    "schema_data",
-}
-
 
 @dataclass(frozen=True, slots=True)
 class _McapEvent:
@@ -70,8 +58,6 @@ class McapReader(BaseReader):
         fps_column: str | None = "fps",
         include_skew: bool = True,
         episode_splitting: str | Mapping[str, Any] = "single",
-        messages_column: str | None = None,
-        data_column: str = "data",
     ):
         _validate_episode_splitting(episode_splitting)
         super().__init__(
@@ -95,12 +81,6 @@ class McapReader(BaseReader):
         self.fps_column = fps_column
         self.include_skew = include_skew
         self.episode_splitting = episode_splitting
-        self.messages_column = messages_column
-        if data_column in _MCAP_METADATA_COLUMNS:
-            raise ValueError(
-                f"data_column conflicts with MCAP metadata column: {data_column!r}"
-            )
-        self.data_column = data_column
 
     def describe(self) -> dict[str, Any]:
         description = super().describe()
@@ -116,8 +96,6 @@ class McapReader(BaseReader):
                 "fps_column": self.fps_column,
                 "include_skew": self.include_skew,
                 "episode_splitting": self.episode_splitting,
-                "messages_column": self.messages_column,
-                "data_column": self.data_column,
             }
         )
         return description
@@ -132,11 +110,6 @@ class McapReader(BaseReader):
         for part in descriptor.parts:
             source = self.fileset.resolve_file(part.source_index, part.path)
             topic_events: dict[str, list[_McapEvent]] = defaultdict(list)
-            message_columns: dict[str, list[Any]] | None = (
-                _empty_message_columns(self.data_column)
-                if self.messages_column is not None
-                else None
-            )
             with source.open(mode="rb") as stream:
                 reader = make_reader(stream)
                 summary = reader.get_summary()
@@ -158,14 +131,6 @@ class McapReader(BaseReader):
                     topic_events[channel.topic].append(
                         _McapEvent(timestamp_ns=int(message.log_time), value=decoded)
                     )
-                    if message_columns is not None:
-                        _append_message(
-                            message_columns,
-                            data_column=self.data_column,
-                            schema=schema,
-                            channel=channel,
-                            message=message,
-                        )
             windows = _episode_windows(topic_events, self.episode_splitting)
             for episode_index, window in enumerate(windows):
                 window_events = _slice_events(topic_events, window)
@@ -205,14 +170,6 @@ class McapReader(BaseReader):
                     row[self.videos_column] = videos
                 if self.fps_column is not None and inferred_fps is not None:
                     row[self.fps_column] = float(inferred_fps)
-                if (
-                    len(windows) == 1
-                    and message_columns is not None
-                    and self.messages_column is not None
-                ):
-                    row[self.messages_column] = Tabular(
-                        _messages_table(message_columns, self.data_column)
-                    )
                 yield DictRow(self._with_file_path(row, source))
 
     def _read_topics(self, summary_topics: set[str]) -> tuple[str, ...] | None:
@@ -229,23 +186,6 @@ class McapReader(BaseReader):
         return tuple(
             sorted({_resolve_source(source, summary_topics)[0] for source in selected})
         )
-
-
-def _messages_table(columns: dict[str, list[Any]], data_column: str) -> pa.Table:
-    return pa.table(
-        {
-            "topic": pa.array(columns["topic"], type=pa.string()),
-            "log_time": pa.array(columns["log_time"], type=pa.int64()),
-            "publish_time": pa.array(columns["publish_time"], type=pa.int64()),
-            "sequence": pa.array(columns["sequence"], type=pa.int64()),
-            "message_encoding": pa.array(columns["message_encoding"], type=pa.string()),
-            "schema_id": pa.array(columns["schema_id"], type=pa.int64()),
-            "schema_name": pa.array(columns["schema_name"], type=pa.string()),
-            "schema_encoding": pa.array(columns["schema_encoding"], type=pa.string()),
-            "schema_data": pa.array(columns["schema_data"], type=pa.binary()),
-            data_column: pa.array(columns[data_column], type=pa.binary()),
-        }
-    )
 
 
 def _validate_episode_splitting(splitting: str | Mapping[str, Any]) -> None:
@@ -355,32 +295,6 @@ def _normalize_selection(
     if isinstance(selection, Mapping):
         return {str(key): str(value) for key, value in selection.items()}
     return {key: key for key in selection}
-
-
-def _empty_message_columns(data_column: str) -> dict[str, list[Any]]:
-    columns = {key: [] for key in _MCAP_METADATA_COLUMNS}
-    columns[data_column] = []
-    return columns
-
-
-def _append_message(
-    columns: dict[str, list[Any]],
-    *,
-    data_column: str,
-    schema: Any,
-    channel: Any,
-    message: Any,
-) -> None:
-    columns["topic"].append(channel.topic)
-    columns["log_time"].append(int(message.log_time))
-    columns["publish_time"].append(int(message.publish_time))
-    columns["sequence"].append(int(message.sequence))
-    columns["message_encoding"].append(channel.message_encoding)
-    columns["schema_id"].append(int(channel.schema_id))
-    columns["schema_name"].append(schema.name if schema is not None else None)
-    columns["schema_encoding"].append(schema.encoding if schema is not None else None)
-    columns["schema_data"].append(bytes(schema.data) if schema is not None else None)
-    columns[data_column].append(bytes(message.data))
 
 
 def _decoder_factories() -> list[Any]:

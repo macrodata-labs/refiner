@@ -933,8 +933,6 @@ def read_mcap(
     fps_column: str | None = "fps",
     include_skew: bool = True,
     episode_splitting: str | Mapping[str, Any] = "single",
-    messages_column: str | None = None,
-    data_column: str = "data",
 ) -> RefinerPipeline:
     """Create a pipeline with an MCAP file reader source."""
     return RefinerPipeline(
@@ -956,8 +954,6 @@ def read_mcap(
             fps_column=fps_column,
             include_skew=include_skew,
             episode_splitting=episode_splitting,
-            messages_column=messages_column,
-            data_column=data_column,
         )
     )
 
