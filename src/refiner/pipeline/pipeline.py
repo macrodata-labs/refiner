@@ -452,7 +452,7 @@ class RefinerPipeline:
             output: Output folder or URL prefix for the Zarr store(s).
             arrays: Mapping from output Zarr array path to source row key. If
                 omitted for ``RoboticsRow`` inputs, writes the available default
-                robotics arrays: actions, states, and timestamps.
+                robotics arrays: actions, states, timestamps, and videos.
             attrs: Mapping from output Zarr root attribute name to source row key.
                 Attribute values must be stable across rows in each output store.
             episode_ends_path: Output Zarr path for cumulative row/episode end
@@ -926,8 +926,8 @@ def read_mcap(
     file_path_column: str | None = "file_path",
     frames_column: str = "frames",
     videos_column: str = "videos",
-    fields: Mapping[str, str] | Sequence[str] | None = None,
-    videos: Mapping[str, str] | Sequence[str] | None = None,
+    fields: PathSelection | None = None,
+    videos: PathSelection | None = None,
     primary: str | None = None,
     fps: float | None = None,
     fps_column: str | None = "fps",

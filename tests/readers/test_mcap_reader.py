@@ -143,6 +143,24 @@ def test_mcap_reader_maps_fields_and_aligns_to_primary(tmp_path: Path) -> None:
     assert row["fps"] == 1.0
 
 
+def test_mcap_reader_can_align_to_unselected_primary_source(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"target": "/cmd.target"},
+        primary="/joint_states.q",
+        include_skew=False,
+    ).materialize()[0]
+
+    frames = row["frames"]
+    assert frames.table.column_names == ["frame_index", "timestamp", "target"]
+    assert frames.table.num_rows == 3
+    assert frames.column("timestamp").to_pylist() == [0.0, 1.0, 2.0]
+    assert frames.column("target").to_pylist() == [[10], [20], [20]]
+
+
 def test_mcap_reader_builds_video_frame_arrays_for_robot_rows(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -249,6 +267,22 @@ def test_mcap_reader_splits_on_marker_topic(tmp_path: Path) -> None:
     assert [row["frames"].column("state").to_pylist() for row in rows] == [
         [[1], [2]],
         [[3]],
+    ]
+
+
+def test_mcap_reader_marker_topic_is_not_a_default_field(tmp_path: Path) -> None:
+    path = tmp_path / "markers.mcap"
+    _write_marker_mcap(path)
+
+    rows = read_mcap(
+        str(path),
+        episode_splitting={"marker_topic": "/episode_start"},
+    ).materialize()
+
+    assert rows[0]["frames"].table.column_names == [
+        "frame_index",
+        "timestamp",
+        "/state.q",
     ]
 
 

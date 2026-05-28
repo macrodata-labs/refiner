@@ -421,6 +421,8 @@ def _default_robotics_arrays(row: Row) -> dict[str, str]:
         arrays["data/observation.state"] = "observation.state"
     if row.timestamps is not None:
         arrays["data/timestamp"] = "timestamp"
+    for key in row.videos:
+        arrays[f"data/{key}"] = key
     return arrays
 
 

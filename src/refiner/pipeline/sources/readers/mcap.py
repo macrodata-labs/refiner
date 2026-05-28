@@ -131,9 +131,15 @@ class McapReader(BaseReader):
                 read_topics = self.topics
                 if read_topics is None and summary_topics:
                     selected = [*self.fields.values(), *self.videos.values()]
-                    if self._marker_topic is not None:
-                        selected.append(self._marker_topic)
+                    if (
+                        self.primary is not None
+                        and self.primary not in self.fields
+                        and self.primary not in self.videos
+                    ):
+                        selected.append(self.primary)
                     if selected:
+                        if self._marker_topic is not None:
+                            selected.append(self._marker_topic)
                         read_topics = tuple(
                             sorted(
                                 {
@@ -162,7 +168,11 @@ class McapReader(BaseReader):
                 windows = [_EpisodeWindow()]
             for episode_index, window in enumerate(windows):
                 window_events = _slice_events(topic_events, window)
-                fields = self.fields or _default_fields(window_events, self.videos)
+                fields = self.fields or _default_fields(
+                    window_events,
+                    self.videos,
+                    excluded_topic=self._marker_topic,
+                )
                 topics = set(window_events)
                 resolved_fields = {
                     output: _resolve_source(source, topics)
@@ -178,14 +188,7 @@ class McapReader(BaseReader):
                         self.primary
                     )
                     if primary is None:
-                        resolved_sources = [
-                            *resolved_fields.values(),
-                            *resolved_videos.values(),
-                        ]
-                        primary = _resolve_source(
-                            self.primary,
-                            {topic for topic, _ in resolved_sources},
-                        )
+                        primary = _resolve_source(self.primary, topics)
                 frame_table = (
                     _sparse_frame_table(resolved_fields, window_events)
                     if primary is None
@@ -358,13 +361,19 @@ def _plain_value(value: Any) -> Any:
 def _default_fields(
     topic_events: Mapping[str, Sequence[_McapEvent]],
     videos: Mapping[str, str],
+    *,
+    excluded_topic: str | None,
 ) -> dict[str, str]:
     video_sources = set(videos.values())
     fields: dict[str, str] = {}
     for topic, events in topic_events.items():
-        if not events or any(
-            source == topic or source.startswith(f"{topic}.")
-            for source in video_sources
+        if (
+            topic == excluded_topic
+            or not events
+            or any(
+                source == topic or source.startswith(f"{topic}.")
+                for source in video_sources
+            )
         ):
             continue
         names = _flatten_names(events[0].value)
