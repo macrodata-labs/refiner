@@ -208,18 +208,23 @@ class McapReader(BaseReader):
                     )
                     if primary is None:
                         primary = _resolve_source(self.primary, topics)
+                primary_events = (
+                    sorted(
+                        window_events.get(primary[0], ()),
+                        key=lambda event: event.timestamp_ns,
+                    )
+                    if primary is not None
+                    else None
+                )
                 frame_table = (
                     _sparse_frame_table(resolved_fields, window_events)
                     if primary is None
                     else _aligned_frame_table(
                         resolved_fields,
                         window_events,
-                        primary=primary,
+                        primary_events=primary_events or (),
                         include_skew=self.include_skew,
                     )
-                )
-                primary_events = (
-                    window_events.get(primary[0], ()) if primary is not None else None
                 )
                 inferred_fps = self.fps or _infer_fps(primary_events)
                 videos = _video_map(
@@ -473,10 +478,9 @@ def _aligned_frame_table(
     fields: Mapping[str, tuple[str, str | None]],
     topic_events: Mapping[str, Sequence[_McapEvent]],
     *,
-    primary: tuple[str, str | None],
+    primary_events: Sequence[_McapEvent],
     include_skew: bool,
 ) -> pa.Table:
-    primary_events = list(topic_events.get(primary[0], ()))
     primary_timestamps = [event.timestamp_ns for event in primary_events]
     aligned_events = {
         name: _nearest_events(topic_events.get(source[0], ()), primary_timestamps)

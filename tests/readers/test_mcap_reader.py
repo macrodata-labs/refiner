@@ -131,6 +131,44 @@ def _write_sparse_edge_mcap(path: Path) -> None:
         writer.finish()
 
 
+def _write_out_of_order_primary_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        target_channel = writer.register_channel(
+            topic="/target",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (state_channel, 2_000_000_000, b'{"q":[2]}', 2_000_000_000, 1),
+            (target_channel, 100_000_000, b'{"u":[0]}', 100_000_000, 2),
+            (state_channel, 0, b'{"q":[0]}', 0, 3),
+            (target_channel, 1_900_000_000, b'{"u":[2]}', 1_900_000_000, 4),
+            (state_channel, 1_000_000_000, b'{"q":[1]}', 1_000_000_000, 5),
+            (target_channel, 1_100_000_000, b'{"u":[1]}', 1_100_000_000, 6),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
 def test_mcap_reader_defaults_to_sparse_frame_table(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -196,6 +234,24 @@ def test_mcap_reader_can_align_to_unselected_primary_source(tmp_path: Path) -> N
     assert frames.table.num_rows == 3
     assert frames.column("timestamp").to_pylist() == [0.0, 1.0, 2.0]
     assert frames.column("target").to_pylist() == [[10], [20], [20]]
+
+
+def test_mcap_reader_sorts_primary_events_before_alignment(tmp_path: Path) -> None:
+    path = tmp_path / "out-of-order.mcap"
+    _write_out_of_order_primary_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/state.q", "target": "/target.u"},
+        primary="state",
+        include_skew=False,
+    ).materialize()[0]
+
+    frames = row["frames"]
+    assert frames.column("timestamp").to_pylist() == [0.0, 1.0, 2.0]
+    assert frames.column("state").to_pylist() == [[0], [1], [2]]
+    assert frames.column("target").to_pylist() == [[0], [1], [2]]
+    assert row["fps"] == 1.0
 
 
 def test_mcap_reader_builds_video_frame_arrays_for_robot_rows(tmp_path: Path) -> None:
