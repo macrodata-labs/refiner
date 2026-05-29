@@ -7,7 +7,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from typing import Any, TypeAlias, cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -21,13 +21,6 @@ if TYPE_CHECKING:
     from PIL import Image
 
     from refiner.inference.generate_text import GenerateTextFn
-    from refiner.inference.providers import (
-        AnthropicEndpointProvider,
-        GoogleEndpointProvider,
-        OpenAIEndpointProvider,
-        OpenAIResponsesProvider,
-        VLLMProvider,
-    )
     from refiner.video import VideoFile
 
 _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from timestamped contact sheets.
@@ -50,17 +43,6 @@ Rules:
 - If the same action repeats on different objects or target locations, output separate repeated events.
 - Avoid segments for idle time, camera motion, hesitation, or tiny hand adjustments.
 """
-
-if TYPE_CHECKING:
-    SubtaskAnnotationProvider: TypeAlias = (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    )
-else:
-    SubtaskAnnotationProvider: TypeAlias = Any
 
 
 class _SubtaskSegment(BaseModel):
@@ -99,7 +81,6 @@ class TimestampedContactSheet:
 
 def subtask_annotation(
     *,
-    provider: SubtaskAnnotationProvider | None = None,
     video_key: str | None = None,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
@@ -123,7 +104,6 @@ def subtask_annotation(
         raise ValueError("output_column must be non-empty")
     if min_segment_duration_sec is not None and min_segment_duration_sec < 0:
         raise ValueError("min_segment_duration_sec must be >= 0")
-    selected_provider = provider or GoogleEndpointProvider(model="gemini-3.5-flash")
 
     async def _annotate_subtasks(
         row: Row,
@@ -172,7 +152,7 @@ def subtask_annotation(
 
     return generate_text(
         fn=_annotate_subtasks,
-        provider=selected_provider,
+        provider=GoogleEndpointProvider(model="gemini-3.5-flash"),
         max_concurrent_requests=max_concurrent_requests,
     )
 
@@ -458,7 +438,6 @@ def _encode_jpeg(image: Image.Image, *, quality: int) -> bytes:
 
 
 __all__ = [
-    "SubtaskAnnotationProvider",
     "TimestampedContactSheet",
     "contact_sheet_prompt_manifest",
     "subtask_annotation",

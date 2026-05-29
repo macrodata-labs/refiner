@@ -150,33 +150,16 @@ def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
         return "annotation-block"
 
     monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
-    provider = mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest")
 
     block = mdr.robotics.subtask_annotation(
-        provider=provider,
         max_concurrent_requests=17,
     )
 
     assert block == "annotation-block"
-    assert seen["provider"] is provider
-    assert seen["max_concurrent_requests"] == 17
-    assert callable(seen["fn"])
-
-
-def test_subtask_annotation_defaults_to_gemini_flash(monkeypatch) -> None:
-    seen = {}
-
-    def _fake_generate_text(**kwargs):
-        seen.update(kwargs)
-        return "annotation-block"
-
-    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
-
-    block = mdr.robotics.subtask_annotation()
-
-    assert block == "annotation-block"
     assert isinstance(seen["provider"], mdr.inference.GoogleEndpointProvider)
     assert seen["provider"].model == "gemini-3.5-flash"
+    assert seen["max_concurrent_requests"] == 17
+    assert callable(seen["fn"])
 
 
 def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
@@ -190,7 +173,6 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
 
     row = _lerobot_row(tmp_path, tasks=["open the drawer"])
     block = mdr.robotics.subtask_annotation(
-        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
     )
     request = {}
@@ -211,7 +193,7 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
 
-    assert seen["provider"].model == "gemini-flash-latest"
+    assert seen["provider"].model == "gemini-3.5-flash"
     assert request["temperature"] == 0.1
     assert request["schema"] is subtask_annotation_module._SubtaskAnnotationResult
     message = request["messages"][0]
@@ -249,7 +231,6 @@ def test_subtask_annotation_can_include_contact_sheet_manifest(
 
     row = _lerobot_row(tmp_path, tasks=["open the drawer"])
     block = mdr.robotics.subtask_annotation(
-        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
         include_contact_sheet_manifest=True,
     )
@@ -284,7 +265,6 @@ def test_subtask_annotation_prompt_uses_configured_contact_sheet_layout(
 
     row = _lerobot_row(tmp_path)
     block = mdr.robotics.subtask_annotation(
-        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
         frames_per_sheet=6,
         columns=4,
@@ -319,7 +299,6 @@ def test_subtask_annotation_keeps_short_segments_by_default(
 
     row = _lerobot_row(tmp_path)
     block = mdr.robotics.subtask_annotation(
-        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
     )
 
