@@ -36,6 +36,48 @@ macrodata jobs manifest job_123 --json
 Use `--deps` to show dependencies and `--code` to show captured script text.
 Use `--json` for an agent, notebook, or CI job.
 
+## Dependency Entries
+
+Cloud launch normally captures installed packages from the submitting Python
+environment. Those entries appear as package/version pairs in the manifest:
+
+```text
+pandas==2.3.3
+pyarrow==23.0.1
+```
+
+`launch_cloud(extra_dependencies=[...])` merges additional pip requirement
+strings into that list. Extra dependencies take precedence over captured
+packages with the same normalized package name:
+
+```python
+pipeline.launch_cloud(
+    name="gpu-run",
+    extra_dependencies=[
+        "torch==2.6.0",
+        "transformers>=4.55",
+        "ego-vision[models,detection]==0.1.6",
+    ],
+)
+```
+
+Exact pins are shown as package/version pairs. Versionless requirements and
+ranges are shown as the submitted install string:
+
+```text
+torch==2.6.0
+transformers>=4.55
+ego-vision[detection,models]==0.1.6
+```
+
+Environment markers are not preserved. Do not include markers in
+`extra_dependencies`; list the package as it should install on Macrodata Cloud.
+For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
+
+If `sync_local_dependencies=False`, the manifest skips locally detected
+packages. Explicit `extra_dependencies` still appear and install in the cloud
+runtime.
+
 ## What To Look For
 
 | Field | Why it matters |

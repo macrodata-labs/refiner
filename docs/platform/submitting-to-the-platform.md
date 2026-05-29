@@ -80,12 +80,44 @@ Common launch settings:
 | `cpus_per_worker` | CPU allocation per worker. |
 | `mem_mb_per_worker` | Memory allocation per worker. |
 | `gpu` | GPU type/count per worker. |
+| `sync_local_dependencies` | Include detected packages from the submitting environment. Defaults to `True`. |
+| `extra_dependencies` | Additional pip requirement strings to install on workers. These override captured packages with the same package name. |
 | `secrets` | Secret values or workspace secret references passed to workers. |
 | `env` | Non-secret environment variables. |
 | `continue_from_job` | Reuse compatible outputs from a prior cloud job. |
 
 See [Cloud Launcher](../running-pipelines/cloud-launcher.md) and
 [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md).
+
+### Dependency Overrides
+
+Most cloud launches use the locally captured package list. Use
+`extra_dependencies` when the worker needs a package that is not installed
+locally, or when a cloud run should pin a different version:
+
+```python
+pipeline.launch_cloud(
+    name="hand-tracking-smoke",
+    gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
+    extra_dependencies=[
+        "ego-vision[models,detection]==0.1.6",
+        "opencv-python-headless",
+        "torch",
+    ],
+)
+```
+
+Entries are pip requirement strings. Exact pins, versionless requirements,
+ranges, and extras are supported. Extra dependencies are merged into the
+dependency manifest by package name and take precedence over locally captured
+packages with the same name.
+
+Environment markers are not preserved. Do not include markers in
+`extra_dependencies`; list the package as it should install on Macrodata Cloud.
+For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
+
+Set `sync_local_dependencies=False` to skip local package capture while still
+installing explicitly listed `extra_dependencies`.
 
 ## What Gets Submitted
 
