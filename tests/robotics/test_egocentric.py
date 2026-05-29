@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 import refiner as mdr
 from refiner.pipeline.data import datatype
@@ -94,6 +95,73 @@ def test_track_hands_is_available_from_robotics_namespace() -> None:
     )
 
     assert pipeline.pipeline_steps[-1].op_name == "batch_map"
+
+
+def test_track_hands_accepts_config_factory(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    class EpisodeInput:
+        def __init__(self, *, frames):
+            self.frames = list(frames)
+
+    class HandTrackingConfig:
+        def __init__(self, *, device=None, hand_reconstruction=None):
+            self.device = device
+            self.hand_reconstruction = hand_reconstruction
+
+    class HaworReconstructionConfig:
+        pass
+
+    class Result:
+        def to_dict(self) -> dict[str, Any]:
+            return {"ok": True}
+
+    class HandTrackingPipeline:
+        def __init__(self, config):
+            seen["device"] = config.device
+
+        def predict_episodes(self, episodes):
+            seen["frame_counts"] = [len(episode.frames) for episode in episodes]
+            return [Result() for _ in episodes]
+
+    fake_egovision = ModuleType("egovision")
+    setattr(fake_egovision, "EpisodeInput", EpisodeInput)
+    setattr(fake_egovision, "HandTrackingConfig", HandTrackingConfig)
+    setattr(fake_egovision, "HandTrackingPipeline", HandTrackingPipeline)
+    setattr(fake_egovision, "HaworReconstructionConfig", HaworReconstructionConfig)
+    monkeypatch.setitem(sys.modules, "egovision", fake_egovision)
+
+    def config_factory(egovision):
+        seen["factory_module"] = egovision.__name__
+        return egovision.HandTrackingConfig(
+            device="cuda",
+            hand_reconstruction=egovision.HaworReconstructionConfig(),
+        )
+
+    frames = np.zeros((2, 4, 5, 3), dtype=np.uint8)
+    row = _robot_row_converter(video_keys={"video": "video"})(
+        DictRow({"video": VideoFrameArray(frames, fps=10)})
+    )
+
+    out = list(track_hands(config_factory=config_factory)([row]))
+
+    assert seen == {
+        "factory_module": "egovision",
+        "device": "cuda",
+        "frame_counts": [2],
+    }
+    assert out[0]["hand_tracking"] == {"ok": True}
+
+
+def test_track_hands_rejects_config_and_config_factory() -> None:
+    def config_factory(egovision):
+        return egovision.HandTrackingConfig()
+
+    with pytest.raises(
+        ValueError,
+        match="config and config_factory are mutually exclusive",
+    ):
+        track_hands(config=object(), config_factory=config_factory)
 
 
 def test_track_hands_runs_from_parquet_robotics_rows(tmp_path, monkeypatch) -> None:

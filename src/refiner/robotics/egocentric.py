@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from refiner.execution.asyncio.runtime import submit
@@ -16,6 +16,7 @@ def track_hands(
     video_key: str = "video",
     output_key: str = "hand_tracking",
     config: Any | None = None,
+    config_factory: Callable[[Any], Any] | None = None,
 ) -> BatchFn:
     """Return a ``batch_map`` function for ego-vision hand tracking.
 
@@ -27,6 +28,8 @@ def track_hands(
         raise ValueError("video_key cannot be empty")
     if not output_key:
         raise ValueError("output_key cannot be empty")
+    if config is not None and config_factory is not None:
+        raise ValueError("config and config_factory are mutually exclusive")
 
     pipeline = None
     episode_input = None
@@ -35,11 +38,12 @@ def track_hands(
         "robotics.egocentric:track_hands",
         video_key=video_key,
         output_key=output_key,
+        has_config_factory=config_factory is not None,
     )
     def _track(rows: list[Row]) -> Iterable[Row]:
         nonlocal episode_input, pipeline
         if pipeline is None:
-            pipeline, episode_input = _load_egovision(config)
+            pipeline, episode_input = _load_egovision(config, config_factory)
 
         episodes = []
         for row in rows:
@@ -62,7 +66,10 @@ def track_hands(
     return _track
 
 
-def _load_egovision(config: Any | None) -> tuple[Any, Any]:
+def _load_egovision(
+    config: Any | None,
+    config_factory: Callable[[Any], Any] | None,
+) -> tuple[Any, Any]:
     try:
         egovision = importlib.import_module("egovision")
     except ImportError as exc:
@@ -71,7 +78,9 @@ def _load_egovision(config: Any | None) -> tuple[Any, Any]:
             "`pip install macrodata-refiner[egocentric]`."
         ) from exc
 
-    if config is None:
+    if config_factory is not None:
+        config = config_factory(egovision)
+    elif config is None:
         config = egovision.HandTrackingConfig(
             hand_reconstruction=egovision.HaworReconstructionConfig(),
         )

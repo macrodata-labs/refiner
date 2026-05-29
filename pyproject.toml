@@ -40,7 +40,8 @@ hf = [
 egocentric = [
     "macrodata-refiner[hf]",
     "macrodata-refiner[video]",
-    "ego-vision[models]>=0.1.2",
+    "ego-vision[models]>=0.1.4",
+    "opencv-python-headless",
 ]
 text = [
     "warcio",
