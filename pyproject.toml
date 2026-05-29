@@ -40,7 +40,7 @@ hf = [
 egocentric = [
     "macrodata-refiner[hf]",
     "macrodata-refiner[video]",
-    "ego-vision[models]>=0.1.0",
+    "ego-vision[models]>=0.1.2",
 ]
 text = [
     "warcio",
