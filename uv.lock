@@ -873,15 +873,15 @@ wheels = [
 
 [[package]]
 name = "ego-vision"
-version = "0.1.4"
+version = "0.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/96/3bd96590b386f4a232cfd9dae6a154a48fa427dfaa3c7b2bdcaa23c3b254/ego_vision-0.1.4.tar.gz", hash = "sha256:3ddda978b18a7aee9874446f2db4cbb7a5e505d5f3b59410d260d43753b4eec7", size = 102005, upload-time = "2026-05-29T11:18:11.3Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/c9/e97b241e10e38cf80183b88daf74c189f2bc55e16b5a10a1774d12af4e54/ego_vision-0.1.5.tar.gz", hash = "sha256:e29ec512ac64b369857b27dca243e667c8ae10f93409fcb9daaa1983739703db", size = 102000, upload-time = "2026-05-29T12:25:45.234Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/1f/62346980eb1263afd2680057567a89735b7f6f1540cb90295c2ea55dfdbd/ego_vision-0.1.4-py3-none-any.whl", hash = "sha256:eeecf8c2c6bfcf170331c747890aeb379d6713d171ff80c265c0f583820df982", size = 121614, upload-time = "2026-05-29T11:18:10.011Z" },
+    { url = "https://files.pythonhosted.org/packages/82/6b/54cea562a86bf6132b7862135b08f09b4ab4626e7f81c5df2ace27c0a7d6/ego_vision-0.1.5-py3-none-any.whl", hash = "sha256:867275cfff20c41af6e92dd6d7f7bfe63671533a176a4e12993029563ef8c5d9", size = 121623, upload-time = "2026-05-29T12:25:43.406Z" },
 ]
 
 [package.optional-dependencies]
@@ -1659,7 +1659,7 @@ requires-dist = [
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "datasets", marker = "extra == 'hf'", specifier = ">=3.0.0" },
-    { name = "ego-vision", extras = ["models"], marker = "extra == 'egocentric'", specifier = ">=0.1.4" },
+    { name = "ego-vision", extras = ["models"], marker = "extra == 'egocentric'", specifier = ">=0.1.5" },
     { name = "fsspec", extras = ["http"] },
     { name = "h5py", marker = "extra == 'hdf5'" },
     { name = "hf", marker = "extra == 'hf'", specifier = ">=1.7.1" },
