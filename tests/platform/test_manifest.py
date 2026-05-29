@@ -7,6 +7,8 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from urllib import error as urllib_error
 
+import pytest
+
 from refiner.platform.manifest import build_run_manifest, refiner_ref_exists_on_remote
 
 
@@ -40,6 +42,122 @@ def test_build_run_manifest_captures_script_from_argv(
     assert manifest["environment"]["refiner_version"] == "0.2.0"
     assert manifest["environment"]["refiner_ref"] == "abc123def456"
     assert isinstance(manifest["dependencies"], list)
+
+
+def test_build_run_manifest_can_skip_dependency_capture(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_installed_version",
+        lambda: "0.2.0",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
+        lambda: "abc123def456",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
+    )
+
+    manifest = build_run_manifest(capture_dependencies=False)
+
+    assert manifest["version"] == 1
+    assert "dependencies" not in manifest
+
+
+def test_build_run_manifest_merges_extra_dependencies(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_installed_version",
+        lambda: "0.2.0",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
+        lambda: "abc123def456",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._collect_dependencies",
+        lambda: [
+            {"name": "cloudpickle", "version": "3.1.2"},
+            {"name": "ego-vision", "version": "0.1.1"},
+            {"name": "Requests", "version": "2.32.5"},
+            {"name": "torch", "version": "2.4.0"},
+        ],
+    )
+
+    manifest = build_run_manifest(
+        extra_dependencies=[
+            "torch==2.6.0",
+            "ego-vision[models]==0.1.2",
+            "new-package",
+            "transformers>=4.55",
+        ],
+    )
+
+    assert manifest["dependencies"] == [
+        {"name": "cloudpickle", "version": "3.1.2"},
+        {"name": "ego-vision[models]", "version": "0.1.2"},
+        {"name": "Requests", "version": "2.32.5"},
+        {"name": "torch", "version": "2.6.0"},
+        {"name": "new-package"},
+        {"name": "transformers>=4.55"},
+    ]
+
+
+def test_build_run_manifest_adds_extra_dependencies_without_capture(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_installed_version",
+        lambda: "0.2.0",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_direct_url_git_sha",
+        lambda: "abc123def456",
+    )
+    monkeypatch.setattr(
+        "refiner.platform.manifest._resolve_local_repo_git_sha",
+        lambda: None,
+    )
+
+    manifest = build_run_manifest(
+        capture_dependencies=False,
+        extra_dependencies=["torch==2.6.0"],
+    )
+
+    assert manifest["dependencies"] == [{"name": "torch", "version": "2.6.0"}]
+
+
+def test_build_run_manifest_rejects_invalid_extra_dependency(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+
+    with pytest.raises(
+        ValueError, match="extra_dependencies contains invalid requirement"
+    ):
+        build_run_manifest(extra_dependencies=["not a requirement"])
 
 
 def test_build_run_manifest_redacts_secret_values(monkeypatch, tmp_path: Path) -> None:

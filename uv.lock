@@ -1581,6 +1581,7 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "orjson" },
+    { name = "packaging" },
     { name = "pyarrow" },
     { name = "pydantic" },
 ]
@@ -1678,6 +1679,7 @@ requires-dist = [
     { name = "numcodecs", marker = "extra == 'zarr'", specifier = "<0.16" },
     { name = "numpy" },
     { name = "orjson" },
+    { name = "packaging" },
     { name = "pillow", marker = "extra == 'video'" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.0.0" },

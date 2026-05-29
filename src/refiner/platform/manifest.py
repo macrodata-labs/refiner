@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import platform
+import re
 import subprocess
 import sys
 from urllib import error as urllib_error
@@ -13,7 +14,10 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
+from packaging.requirements import InvalidRequirement, Requirement
+
 _REDACTION_PLACEHOLDER = "REDACTED_SECRET"
+_NORMALIZED_DEPENDENCY_SEPARATOR_PATTERN = re.compile(r"[-_.]+")
 
 
 def _redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
@@ -90,6 +94,49 @@ def _collect_dependencies() -> list[dict[str, str]]:
     ]
 
 
+def _dependency_key(name: str) -> str:
+    try:
+        package_name = Requirement(name).name
+    except InvalidRequirement:
+        package_name = name.split("[", 1)[0].strip()
+    return _NORMALIZED_DEPENDENCY_SEPARATOR_PATTERN.sub("-", package_name).lower()
+
+
+def _merge_extra_dependencies(
+    dependencies: list[dict[str, str]],
+    extra_dependencies: Sequence[str] | None,
+) -> list[dict[str, str]]:
+    if not extra_dependencies:
+        return dependencies
+    if isinstance(extra_dependencies, str):
+        raise ValueError("extra_dependencies must be a sequence of requirement strings")
+
+    merged = {_dependency_key(dep["name"]): dict(dep) for dep in dependencies}
+    for dependency in extra_dependencies:
+        text = str(dependency).strip()
+        if not text:
+            raise ValueError("extra_dependencies contains an empty dependency name")
+        try:
+            requirement = Requirement(text)
+        except InvalidRequirement as err:
+            raise ValueError(
+                f"extra_dependencies contains invalid requirement {text!r}"
+            ) from err
+
+        specifiers = list(requirement.specifier)
+        if len(specifiers) == 1 and specifiers[0].operator == "==":
+            name = requirement.name
+            if requirement.extras:
+                name = f"{name}[{','.join(sorted(requirement.extras))}]"
+            merged[_dependency_key(requirement.name)] = {
+                "name": name,
+                "version": specifiers[0].version,
+            }
+        else:
+            merged[_dependency_key(requirement.name)] = {"name": text}
+    return list(merged.values())
+
+
 def _resolve_installed_version() -> str | None:
     try:
         version = importlib_metadata.version("macrodata-refiner").strip()
@@ -156,7 +203,12 @@ def refiner_ref_exists_on_remote(ref: str) -> bool:
         return False
 
 
-def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
+def build_run_manifest(
+    *,
+    secret_values: Sequence[str] = (),
+    capture_dependencies: bool = True,
+    extra_dependencies: Sequence[str] | None = None,
+) -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
     refiner_version = _resolve_installed_version()
@@ -177,8 +229,13 @@ def build_run_manifest(*, secret_values: Sequence[str] = ()) -> dict[str, Any]:
             "refiner_ref": refiner_ref,
             "platform": f"{platform.system().lower()}-{platform.machine().lower()}",
         },
-        "dependencies": _collect_dependencies(),
     }
+    dependencies = _collect_dependencies() if capture_dependencies else []
+    if capture_dependencies or extra_dependencies:
+        manifest["dependencies"] = _merge_extra_dependencies(
+            dependencies,
+            extra_dependencies,
+        )
     return manifest
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 import os
 import re
 import sys
@@ -27,7 +28,7 @@ from refiner.platform.client import (
     StagePayload,
 )
 from refiner.platform.client.serialize import PreparedPipelinePayload
-from refiner.platform.manifest import refiner_ref_exists_on_remote
+from refiner.platform.manifest import build_run_manifest, refiner_ref_exists_on_remote
 from refiner.launchers.secrets import SecretInput, resolve_env_mapping
 from refiner.launchers.secrets import normalize_secret_sources, resolve_secret_sources
 from refiner.pipeline.resources import GPU
@@ -100,7 +101,11 @@ class CloudLauncher(BaseLauncher):
         cpus_per_worker: Optional requested CPU cores per worker.
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
         gpu: Optional GPU runtime request for cloud scheduling.
-        sync_local_dependencies: Whether to sync submitting environment dependencies.
+        sync_local_dependencies: Whether to include packages detected from the
+            local environment in the cloud runtime.
+        extra_dependencies: Additional packages to install in the cloud runtime.
+            Entries are requirement strings. These take precedence over packages
+            detected from the local environment.
         secrets: Optional secret sources mounted into the cloud runtime.
         env: Optional plain environment variables mounted into the cloud runtime.
     """
@@ -115,6 +120,7 @@ class CloudLauncher(BaseLauncher):
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
         sync_local_dependencies: bool = True,
+        extra_dependencies: Sequence[str] | None = None,
         secrets: SecretInput | None = None,
         env: dict[str, object | None] | None = None,
         continue_from_job: str | None = None,
@@ -135,6 +141,7 @@ class CloudLauncher(BaseLauncher):
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.sync_local_dependencies = sync_local_dependencies
+        self.extra_dependencies = extra_dependencies
         self.secrets = normalize_secret_sources(secrets)
         self.env = env
         self.continue_from_job = normalized_continue_from_job
@@ -148,7 +155,11 @@ class CloudLauncher(BaseLauncher):
     def _resolve_cloud_manifest(
         self, *, secret_values: tuple[str, ...]
     ) -> dict[str, object]:
-        manifest = self._run_manifest(secret_values=secret_values)
+        manifest = build_run_manifest(
+            secret_values=secret_values,
+            capture_dependencies=self.sync_local_dependencies,
+            extra_dependencies=self.extra_dependencies,
+        )
         environment = manifest.get("environment")
         if environment is None:
             return manifest
@@ -299,7 +310,6 @@ class CloudLauncher(BaseLauncher):
                     for stage in stages
                 ],
                 manifest=manifest,
-                sync_local_dependencies=self.sync_local_dependencies,
                 secrets=resolved_secret_sources,
                 env=resolved_env,
                 continue_from_job=self.continue_from_job,
