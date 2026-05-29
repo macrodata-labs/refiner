@@ -22,10 +22,6 @@ pipeline = (
 )
 ```
 
-By default, `subtask_annotation` uses
-`mdr.inference.GoogleEndpointProvider(model="gemini-3.5-flash")`. Pass
-`provider=` to use another hosted endpoint or a local VLLM service.
-
 ## Output Shape
 
 The output column contains a list of segments:
