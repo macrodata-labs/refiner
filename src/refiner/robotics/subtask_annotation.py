@@ -99,7 +99,7 @@ class TimestampedContactSheet:
 
 def subtask_annotation(
     *,
-    provider: SubtaskAnnotationProvider,
+    provider: SubtaskAnnotationProvider | None = None,
     video_key: str | None = None,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
@@ -117,11 +117,13 @@ def subtask_annotation(
     """Return an async map block that annotates LeRobot episode subtasks."""
 
     from refiner.inference import generate_text
+    from refiner.inference.providers import GoogleEndpointProvider
 
     if not output_column.strip():
         raise ValueError("output_column must be non-empty")
     if min_segment_duration_sec is not None and min_segment_duration_sec < 0:
         raise ValueError("min_segment_duration_sec must be >= 0")
+    selected_provider = provider or GoogleEndpointProvider(model="gemini-3.5-flash")
 
     async def _annotate_subtasks(
         row: Row,
@@ -170,7 +172,7 @@ def subtask_annotation(
 
     return generate_text(
         fn=_annotate_subtasks,
-        provider=provider,
+        provider=selected_provider,
         max_concurrent_requests=max_concurrent_requests,
     )
 

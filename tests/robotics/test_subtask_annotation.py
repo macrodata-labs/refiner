@@ -163,6 +163,22 @@ def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
     assert callable(seen["fn"])
 
 
+def test_subtask_annotation_defaults_to_gemini_flash(monkeypatch) -> None:
+    seen = {}
+
+    def _fake_generate_text(**kwargs):
+        seen.update(kwargs)
+        return "annotation-block"
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    block = mdr.robotics.subtask_annotation()
+
+    assert block == "annotation-block"
+    assert isinstance(seen["provider"], mdr.inference.GoogleEndpointProvider)
+    assert seen["provider"].model == "gemini-3.5-flash"
+
+
 def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
     seen = {}
 

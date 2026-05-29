@@ -8,15 +8,10 @@ description: "Add VLM-generated temporal subtask annotations to episodes"
 ```python
 import refiner as mdr
 
-provider = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen2.5-VL-7B-Instruct",
-)
-
 pipeline = (
     mdr.read_lerobot("hf://datasets/acme/raw-demos")
     .map_async(
         mdr.robotics.subtask_annotation(
-            provider=provider,
             video_key="observation.images.top",
             output_column="predicted_subtasks",
         ),

@@ -9,13 +9,10 @@ description: "Use vision-language models to annotate temporal subtask segments"
 vision-language model to return temporal subtask segments.
 
 ```python
-provider = mdr.inference.VLLMProvider(model="Qwen/Qwen2.5-VL-7B-Instruct")
-
 pipeline = (
     mdr.read_lerobot("hf://datasets/acme/demos")
     .map_async(
         mdr.robotics.subtask_annotation(
-            provider=provider,
             video_key="observation.images.top",
             output_column="predicted_subtasks",
             sample_sec=0.5,
@@ -24,6 +21,10 @@ pipeline = (
     )
 )
 ```
+
+By default, `subtask_annotation` uses
+`mdr.inference.GoogleEndpointProvider(model="gemini-3.5-flash")`. Pass
+`provider=` to use another hosted endpoint or a local VLLM service.
 
 ## Output Shape
 
