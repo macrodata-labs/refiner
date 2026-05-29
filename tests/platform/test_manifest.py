@@ -121,6 +121,33 @@ def test_build_run_manifest_environment_does_not_include_rundir_by_default(
     assert "rundir" not in manifest["environment"]
 
 
+def test_build_run_manifest_prefers_headless_opencv(monkeypatch) -> None:
+    class _Dist:
+        def __init__(self, name: str, version: str) -> None:
+            self.metadata = {"Name": name}
+            self.version = version
+
+    monkeypatch.setattr(sys, "argv", ["-c"])
+    monkeypatch.setattr(
+        "refiner.platform.manifest.importlib_metadata.distributions",
+        lambda: [
+            _Dist("opencv-python", "4.13.0.92"),
+            _Dist("opencv-python-headless", "4.13.0.92"),
+            _Dist("ultralytics", "8.4.53"),
+        ],
+    )
+
+    manifest = build_run_manifest()
+
+    dependencies = {
+        dependency["name"]: dependency["version"]
+        for dependency in manifest["dependencies"]
+    }
+    assert "opencv-python" not in dependencies
+    assert dependencies["opencv-python-headless"] == "4.13.0.92"
+    assert dependencies["ultralytics"] == "8.4.53"
+
+
 def test_refiner_ref_exists_on_remote_returns_true_on_success(monkeypatch) -> None:
     monkeypatch.setattr(
         "refiner.platform.manifest.urllib_request.urlopen",

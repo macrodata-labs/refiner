@@ -84,10 +84,21 @@ def _collect_dependencies() -> list[dict[str, str]]:
             continue
         dependencies_by_name[dist_name] = dist_version
 
+    _prefer_headless_opencv(dependencies_by_name)
     return [
         {"name": name, "version": dependencies_by_name[name]}
         for name in sorted(dependencies_by_name, key=lambda item: item.lower())
     ]
+
+
+def _prefer_headless_opencv(dependencies_by_name: dict[str, str]) -> None:
+    normalized_names = {name.lower(): name for name in dependencies_by_name}
+    if "opencv-python-headless" not in normalized_names:
+        return
+    for gui_dist_name in ("opencv-python", "opencv-contrib-python"):
+        existing_name = normalized_names.get(gui_dist_name)
+        if existing_name is not None:
+            dependencies_by_name.pop(existing_name, None)
 
 
 def _resolve_installed_version() -> str | None:
