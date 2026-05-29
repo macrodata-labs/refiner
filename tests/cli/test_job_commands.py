@@ -118,7 +118,7 @@ class _FakeClient:
                     "refiner_version": "0.1.0",
                     "platform": "linux",
                 },
-                "dependencies": [{"name": "pandas", "version": "2.0.0"}],
+                "dependencies": [{"name": "pandas"}],
                 "script": {
                     "path": "pipeline.py",
                     "sha256": "abc123",
@@ -2299,7 +2299,8 @@ def test_jobs_manifest_keeps_runtime_when_extra_sections_requested(
     assert rc == 0
     assert "Runtime" in out.out
     assert "Dependencies: 1 dependency" in out.out
-    assert "pandas==2.0.0" in out.out
+    assert "pandas" in out.out
+    assert "pandas==" not in out.out
     assert "Code" in out.out
     assert "Path: pipeline.py" in out.out
     assert "SHA256: abc123" in out.out
@@ -2351,7 +2352,7 @@ def test_jobs_manifest_json_respects_deps_and_code_flags(monkeypatch, capsys) ->
             manifest = cast(dict[str, Any], payload["manifest"])
             manifest["dependencies"] = [
                 {"name": "pandas", "version": "2.0.0"},
-                {"name": "pyarrow", "version": "17.0.0"},
+                {"name": "pyarrow"},
             ]
             manifest["script"] = {
                 "path": "pipeline.py",
@@ -2389,7 +2390,7 @@ def test_jobs_manifest_json_respects_deps_and_code_flags(monkeypatch, capsys) ->
 
     assert rc == 0
     assert '"dependencyCount": 2' in out.out
-    assert '"dependencies": "pandas==2.0.0\\npyarrow==17.0.0"' in out.out
+    assert '"dependencies": "pandas==2.0.0\\npyarrow"' in out.out
     assert '"text": "print(\'ok\')[31m\\nnext_line()"' in out.out
 
 

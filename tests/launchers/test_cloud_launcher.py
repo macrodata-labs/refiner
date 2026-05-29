@@ -177,7 +177,7 @@ def _stub_cloud_submit(
         ],
     )
     monkeypatch.setattr(
-        "refiner.launchers.base.build_run_manifest",
+        "refiner.launchers.cloud.build_run_manifest",
         manifest if callable(manifest) else (lambda **_: manifest or {"version": 1}),
     )
     return captured
@@ -213,7 +213,6 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.name == "demo cloud"
-    assert request.sync_local_dependencies is True
     assert request.plan["stages"][0]["name"] == "stage_0"
     assert request.plan["stages"][0]["requested_num_workers"] == 3
     assert request.plan["stages"][0]["cpus_per_worker"] == 2
@@ -318,18 +317,32 @@ def test_gpu_rejects_unsupported_values() -> None:
         GPU(count=1, type="h100", cuda_version="13.0")  # type: ignore[arg-type]
 
 
-def test_pipeline_launch_cloud_can_disable_dependency_install(monkeypatch) -> None:
-    captured = _stub_cloud_submit(monkeypatch)
+def test_pipeline_launch_cloud_can_skip_local_dependency_capture(monkeypatch) -> None:
+    captured_manifest_kwargs = {}
+
+    def manifest(**kwargs):
+        captured_manifest_kwargs.update(kwargs)
+        if kwargs.get("capture_dependencies") is True:
+            return {"version": 1, "dependencies": [{"name": "local", "version": "1"}]}
+        return {"version": 1}
+
+    captured = _stub_cloud_submit(monkeypatch, manifest=manifest)
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
         lambda ref: True,
     )
 
     pipeline = read_jsonl("input.jsonl")
-    pipeline.launch_cloud(name="demo cloud", sync_local_dependencies=False)
+    pipeline.launch_cloud(
+        name="demo cloud",
+        sync_local_dependencies=False,
+        extra_dependencies=["torch"],
+    )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
-    assert request.sync_local_dependencies is False
+    assert request.manifest == {"version": 1}
+    assert captured_manifest_kwargs["capture_dependencies"] is False
+    assert captured_manifest_kwargs["extra_dependencies"] == ["torch"]
 
 
 def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
@@ -936,7 +949,7 @@ def test_pipeline_launch_cloud_submits_one_stage_payload_per_planned_stage(
         ],
     )
     monkeypatch.setattr(
-        "refiner.launchers.base.build_run_manifest",
+        "refiner.launchers.cloud.build_run_manifest",
         lambda **_: {"version": 1},
     )
     monkeypatch.setattr(
@@ -988,7 +1001,7 @@ def test_pipeline_launch_cloud_interactive_ref_fallback_accepts(monkeypatch) -> 
 def test_pipeline_launch_cloud_interactive_ref_fallback_rejects(monkeypatch) -> None:
     _stub_cloud_submit(monkeypatch, fail_on_submit=True)
     monkeypatch.setattr(
-        "refiner.launchers.base.build_run_manifest",
+        "refiner.launchers.cloud.build_run_manifest",
         lambda **_: {
             "version": 1,
             "environment": {"refiner_version": "0.2.0", "refiner_ref": "deadbeef"},
@@ -1035,7 +1048,7 @@ def test_pipeline_launch_cloud_noninteractive_ref_fallback_requires_override(
 ) -> None:
     _stub_cloud_submit(monkeypatch, fail_on_submit=True)
     monkeypatch.setattr(
-        "refiner.launchers.base.build_run_manifest",
+        "refiner.launchers.cloud.build_run_manifest",
         lambda **_: {
             "version": 1,
             "environment": {"refiner_version": "0.2.0", "refiner_ref": "deadbeef"},
@@ -1345,7 +1358,6 @@ def test_pipeline_launch_cloud_continue_from_job_posts_submit_request(
     )
     assert request.stage_payloads[0].runtime.num_workers == 3
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
-    assert request.sync_local_dependencies is True
 
 
 def test_pipeline_launch_cloud_continue_from_job_stage_posts_submit_request(

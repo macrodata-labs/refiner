@@ -14,6 +14,7 @@ pipeline.launch_cloud(
     num_workers=8,
     cpus_per_worker=4,
     mem_mb_per_worker=8192,
+    extra_dependencies=["torch", "ego-vision[models,detection]==0.1.6"],
     secrets={"HF_TOKEN": None},
 )
 ```
@@ -31,6 +32,58 @@ A cloud submission includes:
 
 You can inspect submitted metadata through the platform and CLI. See
 [Manifests](../platform/manifests.md) and [CLI Jobs](../cli/jobs-logs-and-metrics.md).
+
+## Runtime Dependencies
+
+By default, cloud launch captures packages from the local Python environment and
+adds them to the job manifest. Workers install the submitted dependency list
+before running the pipeline.
+
+Use `extra_dependencies` when a cloud worker needs packages that are not present
+locally, or when the cloud package should override the locally captured version:
+
+```python
+pipeline.launch_cloud(
+    name="egocentric-smoke",
+    gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
+    extra_dependencies=[
+        "ego-vision[models,detection]==0.1.6",
+        "opencv-python-headless",
+        "torch",
+    ],
+)
+```
+
+Each entry is a pip requirement string. Versionless requirements, exact pins,
+ranges, and extras are accepted:
+
+```python
+extra_dependencies=[
+    "torch",
+    "transformers>=4.55",
+    "ego-vision[models,detection]==0.1.6",
+]
+```
+
+Environment markers are not preserved. Do not include markers in
+`extra_dependencies`; list the package as it should install on Macrodata Cloud.
+For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
+
+Extra dependencies take precedence over captured local packages with the same
+package name. For example, if the local environment has `torch==2.4.0` but
+`extra_dependencies` includes `torch==2.6.0`, the submitted manifest keeps the
+explicit `torch==2.6.0` pin.
+
+Set `sync_local_dependencies=False` to skip local environment capture. Extra
+dependencies still install:
+
+```python
+pipeline.launch_cloud(
+    name="minimal-runtime",
+    sync_local_dependencies=False,
+    extra_dependencies=["torch", "macrodata-refiner[hf]"],
+)
+```
 
 ## Secrets
 

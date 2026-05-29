@@ -86,7 +86,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert "http_client" in captured
     assert captured["timeout_s"] == 30.0
     json_payload = cast(dict[str, object], captured["json_payload"])
-    assert json_payload["executor"] == {"sync_local_dependencies": True}
+    assert json_payload["executor"] == {}
     stage_payloads = cast(list[dict[str, object]], json_payload["stage_payloads"])
     assert stage_payloads == [
         {
@@ -166,7 +166,6 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
                 )
             ],
             manifest={"version": 1},
-            sync_local_dependencies=False,
             unsafe_continue=True,
         )
     )
@@ -182,9 +181,7 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
     json_payload = cast(dict[str, object], captured["json_payload"])
     assert json_payload["name"] == "demo-cloud-job"
     assert json_payload["continue_from_job"] == "00000000-0000-1000-8000-000000000123:2"
-    assert json_payload["executor"] == {
-        "sync_local_dependencies": False,
-    }
+    assert json_payload["executor"] == {}
     assert json_payload["unsafe_continue"] is True
     assert json_payload["plan"] == {"stages": [{"name": "stage_0", "steps": []}]}
     assert json_payload["manifest"] == {"version": 1}

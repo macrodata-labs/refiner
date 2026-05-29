@@ -14,7 +14,6 @@ from refiner.pipeline.planning import (
     plan_pipeline_stages,
 )
 from refiner.pipeline.resources import GPU
-from refiner.platform.manifest import build_run_manifest
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -96,11 +95,6 @@ class BaseLauncher(ABC):
             ),
             gpu=compute.gpu if compute.gpu is not None else getattr(self, "gpu", None),
         )
-
-    def _run_manifest(
-        self, *, secret_values: tuple[str, ...] = ()
-    ) -> dict[str, object]:
-        return build_run_manifest(secret_values=secret_values)
 
     @abstractmethod
     def launch(self):

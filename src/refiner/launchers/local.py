@@ -25,6 +25,7 @@ from refiner.pipeline.planning import PlannedStage
 from refiner.pipeline.resources import GPU
 from refiner.platform.auth import MacrodataCredentialsError, current_api_key
 from refiner.platform.client.api import MacrodataClient, request_json
+from refiner.platform.manifest import build_run_manifest
 from refiner.services.discovery import (
     collect_pipeline_services,
     runtime_service_specs_to_dicts,
@@ -200,7 +201,7 @@ class LocalLauncher(BaseLauncher):
 
         tracking_client = MacrodataClient(api_key=api_key)
         try:
-            manifest = self._run_manifest()
+            manifest = build_run_manifest()
             manifest_environment = cast(
                 dict[str, Any], manifest.setdefault("environment", {})
             )
