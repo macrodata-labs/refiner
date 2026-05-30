@@ -57,12 +57,19 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
             ]
             return [Result(index) for index, _ in enumerate(episodes)]
 
+    log_messages: list[str] = []
+
+    class FakeLogger:
+        def info(self, message: str) -> None:
+            log_messages.append(message)
+
     fake_egovision = ModuleType("egovision")
     setattr(fake_egovision, "EpisodeInput", EpisodeInput)
     setattr(fake_egovision, "HandTrackingConfig", HandTrackingConfig)
     setattr(fake_egovision, "HandTrackingPipeline", HandTrackingPipeline)
     setattr(fake_egovision, "HaworReconstructionConfig", HaworReconstructionConfig)
     monkeypatch.setitem(sys.modules, "egovision", fake_egovision)
+    monkeypatch.setattr("refiner.robotics.egocentric.logger", FakeLogger())
 
     frames = np.zeros((2, 4, 5, 3), dtype=np.uint8)
     to_robot_row = _robot_row_converter(
@@ -81,6 +88,8 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
         "frame_counts": [2, 2],
         "frame_shapes": [(4, 5, 3), (4, 5, 3)],
     }
+    assert log_messages[0] == "Initializing ego-vision hand tracking models"
+    assert log_messages[1].startswith("Initialized ego-vision hand tracking models in ")
     assert out[0]["hand_tracking"]["episode"] == 0
     assert out[1]["hand_tracking"]["hands_world"][0]["joints_world"] == [
         [1.0, 0.0, 0.0]

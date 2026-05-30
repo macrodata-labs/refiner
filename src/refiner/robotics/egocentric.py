@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from collections.abc import Iterable
 from typing import Any
 
@@ -9,6 +10,7 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.planning import describe_builtin
 from refiner.pipeline.steps import BatchFn
 from refiner.robotics.row import RoboticsRow
+from refiner.worker.context import logger
 
 
 def track_hands(
@@ -39,7 +41,13 @@ def track_hands(
     def _track(rows: list[Row]) -> Iterable[Row]:
         nonlocal episode_input, pipeline
         if pipeline is None:
+            init_start = time.perf_counter()
+            logger.info("Initializing ego-vision hand tracking models")
             pipeline, episode_input = _load_egovision(config)
+            logger.info(
+                "Initialized ego-vision hand tracking models in "
+                f"{time.perf_counter() - init_start:.2f}s"
+            )
 
         episodes = []
         for row in rows:
