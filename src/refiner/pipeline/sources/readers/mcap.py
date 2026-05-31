@@ -257,8 +257,11 @@ class McapReader(BaseReader):
         )
         inferred_fps = self.fps or _infer_fps(sync_primary_events)
         video_fps = inferred_fps or 30
-        if self.videos and video_fps != int(video_fps):
-            raise ValueError("MCAP videos require integer fps")
+        if self.videos:
+            rounded_fps = round(video_fps)
+            if abs(video_fps - rounded_fps) > 1e-6:
+                raise ValueError("MCAP videos require integer fps")
+            video_fps = rounded_fps
         videos = _video_map(
             file_videos,
             topic_events,
@@ -274,7 +277,7 @@ class McapReader(BaseReader):
         if videos:
             row["videos"] = videos
         if inferred_fps is not None:
-            row["fps"] = float(inferred_fps)
+            row["fps"] = float(video_fps if self.videos else inferred_fps)
         return DictRow(self._with_file_path(row, source))
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:

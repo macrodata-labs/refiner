@@ -103,6 +103,43 @@ def _write_mcap(path: Path) -> None:
         writer.finish()
 
 
+def _write_nanosecond_rounded_fps_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        image_channel = writer.register_channel(
+            topic="/image",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        for index, timestamp_ns in enumerate((0, 33_333_333, 66_666_666), start=1):
+            writer.add_message(
+                channel_id=state_channel,
+                log_time=timestamp_ns,
+                data=f'{{"q":[{index}]}}'.encode(),
+                publish_time=timestamp_ns,
+                sequence=index * 2 - 1,
+            )
+            writer.add_message(
+                channel_id=image_channel,
+                log_time=timestamp_ns,
+                data=f'{{"frame":[[[{index},{index},{index}]]]}}'.encode(),
+                publish_time=timestamp_ns,
+                sequence=index * 2,
+            )
+        writer.finish()
+
+
 def _h264_chunk(rgb: tuple[int, int, int]) -> bytes:
     av = pytest.importorskip("av")
 
@@ -1123,6 +1160,22 @@ def test_mcap_reader_rejects_fractional_video_fps(tmp_path: Path) -> None:
             videos={"front": "/image.frame"},
             fps=29.97,
         ).materialize()
+
+
+def test_mcap_reader_rounds_near_integer_inferred_video_fps(tmp_path: Path) -> None:
+    path = tmp_path / "rounded-fps.mcap"
+    _write_nanosecond_rounded_fps_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/state.q"},
+        videos={"front": "/image.frame"},
+        sync_primary="state",
+    ).materialize()[0]
+
+    assert row["fps"] == 30.0
+    assert row["videos"]["front"].fps == 30
+    assert row["videos"]["front"].frame_count == 3
 
 
 def test_mcap_reader_decodes_compressed_image_byte_lists(tmp_path: Path) -> None:
