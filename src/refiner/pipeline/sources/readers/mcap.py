@@ -1030,25 +1030,48 @@ def _ros_image_frame(value: Mapping[str, Any]) -> np.ndarray:
         raw = data
     else:
         raw = bytes(data)
-    if encoding in {"mono8", "8uc1"}:
+    is_16_bit = encoding in {
+        "mono16",
+        "16uc1",
+        "rgb16",
+        "bgr16",
+        "rgba16",
+        "bgra16",
+    }
+    if encoding in {"mono8", "8uc1", "mono16", "16uc1"}:
         channels = 1
-    elif encoding in {"rgba8", "bgra8", "8uc4"}:
+    elif encoding in {"rgba8", "bgra8", "8uc4", "rgba16", "bgra16"}:
         channels = 4
     else:
         channels = 3
-    step = int(value.get("step") or width * channels)
+    bytes_per_channel = 2 if is_16_bit else 1
+    step = int(value.get("step") or width * channels * bytes_per_channel)
     expected_bytes = height * step
-    array = np.frombuffer(raw, dtype=np.uint8)
-    if array.size < expected_bytes:
+    if len(raw) < expected_bytes:
         raise ValueError("MCAP ROS image payload is smaller than height * step")
-    array = array[:expected_bytes].reshape((height, step))
-    array = array[:, : width * channels].reshape((height, width, channels))
+    if is_16_bit:
+        dtype = np.dtype(">u2" if bool(value.get("is_bigendian", 0)) else "<u2")
+        row_values = step // bytes_per_channel
+        array = np.frombuffer(raw[:expected_bytes], dtype=dtype).reshape(
+            (height, row_values)
+        )
+        array = array[:, : width * channels].reshape((height, width, channels))
+        array = (array // 257).astype(np.uint8)
+    else:
+        array = np.frombuffer(raw[:expected_bytes], dtype=np.uint8).reshape(
+            (height, step)
+        )
+        array = array[:, : width * channels].reshape((height, width, channels))
     if channels == 1:
         return np.repeat(array, 3, axis=2)
     if channels == 4:
-        array = array[:, :, [2, 1, 0]] if encoding == "bgra8" else array[:, :, :3]
+        array = (
+            array[:, :, [2, 1, 0]]
+            if encoding in {"bgra8", "bgra16"}
+            else array[:, :, :3]
+        )
         return array
-    if encoding in {"bgr8", "bgr"}:
+    if encoding in {"bgr8", "bgr", "bgr16"}:
         array = array[:, :, ::-1]
     return array
 

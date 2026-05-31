@@ -1216,6 +1216,30 @@ def test_mcap_reader_decodes_ros_image_stride_and_four_channels() -> None:
     assert bgra.tolist() == [[[3, 2, 1]]]
 
 
+def test_mcap_reader_decodes_sixteen_bit_ros_images() -> None:
+    rgb = _ros_image_frame(
+        {
+            "height": 1,
+            "width": 1,
+            "encoding": "rgb16",
+            "step": 8,
+            "data": np.array([257, 514, 771, 999], dtype="<u2").tobytes(),
+        }
+    )
+    bgr = _ros_image_frame(
+        {
+            "height": 1,
+            "width": 1,
+            "encoding": "bgr16",
+            "step": 6,
+            "data": np.array([257, 514, 771], dtype="<u2").tobytes(),
+        }
+    )
+
+    assert rgb.tolist() == [[[1, 2, 3]]]
+    assert bgr.tolist() == [[[3, 2, 1]]]
+
+
 def test_mcap_reader_rejects_unknown_episode_splitting(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
