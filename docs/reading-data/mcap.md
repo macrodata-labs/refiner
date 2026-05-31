@@ -316,6 +316,40 @@ single episode is the whole file.
 
 ## Conversion Examples
 
+Convert the Franka MCAP sample from Hugging Face to LeRobot and Zarr. The
+camera topic is the sync primary, so each output row corresponds to one decoded
+image frame and the robot state/action fields are aligned to that frame clock:
+
+```python
+source = (
+    mdr.read_mcap(
+        "hf://datasets/SLAI-scientific-embodied-2026/"
+        "Franka1_mcap_short_task1_0520/"
+        "task101-bag_20260517_195933/"
+        "task101-bag_20260517_195933_0.mcap",
+        fields={
+            "state": "/joint_states.position",
+            "action": "/joint_states.velocity",
+        },
+        videos={"front": "/cam1/realsense_camera/color/image_raw/compressed"},
+        sync_primary="front",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="records",
+        state_key="state",
+        action_key="action",
+        timestamp_key="timestamp",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+        robot_type="franka",
+    )
+)
+
+source.write_lerobot("s3://bucket/slai-franka-lerobot")
+source.write_zarr("s3://bucket/slai-franka.zarr")
+```
+
 Convert MCAP robot logs to LeRobot:
 
 ```python
