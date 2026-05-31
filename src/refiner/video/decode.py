@@ -84,7 +84,7 @@ async def export_clip(
             writer.append_prepared_video(prepared)
         else:
             fps = (
-                int(prepared.probe.fps)
+                float(prepared.probe.fps)
                 if prepared.probe is not None and prepared.probe.fps is not None
                 else None
             )

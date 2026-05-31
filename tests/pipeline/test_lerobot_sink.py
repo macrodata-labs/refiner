@@ -991,6 +991,40 @@ def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> No
             writer.close()
 
 
+def test_write_lerobot_rejects_fractional_fps(tmp_path: Path) -> None:
+    writer = LeRobotWriterSink(str(tmp_path / "out"))
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
+    ):
+        with pytest.raises(ValueError, match="LeRobot output requires integer fps"):
+            writer.write_shard_block(
+                "shard-1",
+                [
+                    _FakeRoboticsRow(
+                        episode_id="fractional",
+                        fps=29.97,
+                        robot_type="mockbot",
+                        frame_table=Tabular.from_rows(
+                            [
+                                DictRow(
+                                    {
+                                        "frame_index": 0,
+                                        "timestamp": 0.0,
+                                        "observation.state": [1.0],
+                                    }
+                                )
+                            ]
+                        ),
+                    )
+                ],
+            )
+            writer.close()
+
+
 class _FinalizedWorkersRuntime:
     def __init__(
         self,

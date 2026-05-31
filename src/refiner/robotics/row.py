@@ -250,7 +250,7 @@ class _RoboticsRowView(Row, RoboticsRow):
         videos: dict[str, VideoSource] = {}
         for key, (source_key, storage) in self._spec.video_source_map.items():
             value = _get_path(self._row, source_key, default=None)
-            video = video_from_storage_value(storage, value, fps=int(self.fps or 30))
+            video = video_from_storage_value(storage, value, fps=self.fps or 30.0)
             if video is not None:
                 videos[key] = video
         return videos

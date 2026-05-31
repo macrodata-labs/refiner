@@ -1150,16 +1150,18 @@ def test_mcap_reader_default_fields_resolve_sync_primary_from_file_topics(
     assert "videos" not in rows[1]
 
 
-def test_mcap_reader_rejects_fractional_video_fps(tmp_path: Path) -> None:
+def test_mcap_reader_preserves_fractional_video_fps(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
 
-    with pytest.raises(ValueError, match="integer fps"):
-        read_mcap(
-            str(path),
-            videos={"front": "/image.frame"},
-            fps=29.97,
-        ).materialize()
+    row = read_mcap(
+        str(path),
+        videos={"front": "/image.frame"},
+        fps=29.97,
+    ).materialize()[0]
+
+    assert row["fps"] == 29.97
+    assert row["videos"]["front"].fps == 29.97
 
 
 def test_mcap_reader_rounds_near_integer_inferred_video_fps(tmp_path: Path) -> None:

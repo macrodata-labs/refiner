@@ -232,9 +232,9 @@ mdr.read_mcap("run.mcap", sync_primary="state", fps=30)
 If `fps` is omitted and `sync_primary` is set, the reader infers fps from the
 median gap between sync-primary timestamps. If neither explicit fps nor inferred fps is
 available, the row has no `fps` column. Selected videos still need an fps value,
-so video frame arrays fall back to `30` when no better value is available. MCAP
-videos require an integer fps because `VideoFrameArray` stores integer-rate frame
-arrays.
+so video frame arrays fall back to `30` when no better value is available. Near
+integer inferred rates are normalized, so nanosecond-rounded `30 fps` timelines
+do not become `30.0000003`.
 
 ## Videos
 

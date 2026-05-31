@@ -259,16 +259,15 @@ class McapReader(BaseReader):
         video_fps = inferred_fps or 30
         if self.videos:
             rounded_fps = round(video_fps)
-            if abs(video_fps - rounded_fps) > 1e-6:
-                raise ValueError("MCAP videos require integer fps")
-            video_fps = rounded_fps
+            if abs(video_fps - rounded_fps) <= 1e-6:
+                video_fps = float(rounded_fps)
         videos = _video_map(
             file_videos,
             topic_events,
             sync_primary_events=sync_primary_events,
             sync_primary=sync_primary,
             sync_method=self.sync_method,
-            fps=int(video_fps),
+            fps=float(video_fps),
         )
         row: dict[str, Any] = {
             "records": Tabular(frame_table),
@@ -900,7 +899,7 @@ def _video_map(
     sync_primary_events: Sequence[_McapEvent] | None,
     sync_primary: tuple[str, str | None] | None,
     sync_method: SyncMethod,
-    fps: int,
+    fps: float,
 ) -> dict[str, VideoFrameArray]:
     out: dict[str, VideoFrameArray] = {}
     sync_primary_timestamps = (

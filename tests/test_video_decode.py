@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import numpy as np
+import pytest
 
 import refiner as mdr
 from refiner.io import DataFile
@@ -92,10 +93,20 @@ def test_video_frame_array_iter_frames() -> None:
     assert [int(frame[0, 0, 0]) for frame in arrays] == [0, 1, 2]
 
 
+def test_video_frame_array_preserves_fractional_fps() -> None:
+    frames = np.stack([np.full((4, 4, 3), value, dtype=np.uint8) for value in range(3)])
+    video = mdr.video.VideoFrameArray(frames, fps=29.97)
+
+    decoded = asyncio.run(_collect_frames(video))
+
+    assert video.fps == 29.97
+    assert decoded[1].timestamp_s == pytest.approx(1 / 29.97)
+
+
 def test_video_stream_writer_accepts_video_frame_array(tmp_path) -> None:
     video = mdr.video.VideoFrameArray(
         np.stack([np.full((8, 8, 3), value, dtype=np.uint8) for value in range(4)]),
-        fps=10,
+        fps=29.97,
     )
     writer = VideoStreamWriter(
         folder=DataFolder.resolve(tmp_path),
@@ -108,8 +119,8 @@ def test_video_stream_writer_accepts_video_frame_array(tmp_path) -> None:
     written = asyncio.run(video.write_to(writer))
     writer.close()
 
-    assert written.segment.fps == 10
-    assert written.segment.to_timestamp == 0.4
+    assert written.segment.fps == 29.97
+    assert written.segment.to_timestamp == pytest.approx(4 / 29.97)
 
 
 def test_iter_frame_windows_supports_lookahead(tmp_path) -> None:
