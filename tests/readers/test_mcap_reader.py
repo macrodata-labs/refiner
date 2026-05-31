@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from io import BufferedReader
+import base64
+import json
+from io import BufferedReader, BytesIO
 from pathlib import Path
 from typing import Any, cast
 
 from fsspec.implementations.local import LocalFileSystem
+import numpy as np
 import pytest
 
 from refiner.pipeline import read_mcap
@@ -88,6 +91,88 @@ def _write_mcap(path: Path) -> None:
             (cmd_channel, 900_000_000, b'{"target":[20]}', 900_000_000, 5),
             (image_channel, 1_000_000_000, b'{"frame":[[[4,5,6]]]}', 1_000_000_000, 6),
             (joint_channel, 2_000_000_000, b'{"q":[5,6]}', 2_000_000_000, 7),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
+def _h264_chunk(rgb: tuple[int, int, int]) -> bytes:
+    av = pytest.importorskip("av")
+
+    output = BytesIO()
+    container = av.open(output, mode="w", format="h264")
+    stream = container.add_stream("libx264", rate=2)
+    stream.width = 16
+    stream.height = 16
+    stream.pix_fmt = "yuv420p"
+    frame_array = np.zeros((16, 16, 3), dtype=np.uint8)
+    frame_array[:] = rgb
+    frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
+    for packet in stream.encode(frame):
+        container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+    return output.getvalue()
+
+
+def _write_h264_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        video_channel = writer.register_channel(
+            topic="/video",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (state_channel, 0, b'{"q":[1]}', 0, 1),
+            (
+                video_channel,
+                0,
+                json.dumps(
+                    {
+                        "format": "h264",
+                        "data": base64.b64encode(_h264_chunk((255, 0, 0))).decode(
+                            "ascii"
+                        ),
+                    }
+                ).encode("utf-8"),
+                0,
+                2,
+            ),
+            (state_channel, 500_000_000, b'{"q":[2]}', 500_000_000, 3),
+            (
+                video_channel,
+                500_000_000,
+                json.dumps(
+                    {
+                        "format": "h264",
+                        "data": base64.b64encode(_h264_chunk((0, 255, 0))).decode(
+                            "ascii"
+                        ),
+                    }
+                ).encode("utf-8"),
+                500_000_000,
+                4,
+            ),
         ]
         for channel_id, log_time, data, publish_time, sequence in messages:
             writer.add_message(
@@ -596,6 +681,27 @@ def test_mcap_reader_builds_video_frame_arrays_for_robot_rows(tmp_path: Path) ->
         [4, 5, 6],
         [4, 5, 6],
     ]
+
+
+def test_mcap_reader_decodes_h264_video_messages(tmp_path: Path) -> None:
+    path = tmp_path / "h264.mcap"
+    _write_h264_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/state.q"},
+        videos={"front": "/video"},
+        sync_primary="front",
+        fps=2,
+    ).materialize()[0]
+
+    assert row["records"].column("timestamp").to_pylist() == [0.0, 0.5]
+    assert row["records"].column("state").to_pylist() == [[1], [2]]
+    video = row["videos"]["front"]
+    assert video.frame_count == 2
+    red, green = [frame[0, 0] for frame in video.iter_frame_arrays()]
+    assert red[0] > 200 and red[1] < 20 and red[2] < 20
+    assert green[0] < 20 and green[1] > 200 and green[2] < 20
 
 
 def test_mcap_reader_omits_video_topics_from_default_fields(tmp_path: Path) -> None:

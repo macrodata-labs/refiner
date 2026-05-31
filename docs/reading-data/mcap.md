@@ -274,9 +274,8 @@ pipeline = (
 
 Video sources must resolve to image-like frame payloads: ROS compressed image
 messages, raw ROS image messages, decoded image arrays, or base64 image bytes.
-The reader does not decode encoded video packet streams such as H.264 byte
-streams. For those logs, read the packet metadata as fields, or decode the video
-stream before converting it to robotics rows.
+H.264 packet topics are decoded when messages include `format="h264"` and
+base64 or bytes `data`; the reader uses MCAP log timestamps as the frame clock.
 
 When `sync_primary` is set, videos are aligned to the sync-primary timestamps with
 `sync_method`, except `"interpolate"` falls back to nearest because video frames
@@ -430,8 +429,8 @@ For non-robotics event logs, write the record fields directly:
 
 - There is no max-skew cutoff or automatic row dropping. Use the generated
   `mcap.<field>.skew_ms` columns to filter after reading.
-- Encoded video packet streams, such as H.264 payloads, are not decoded into
-  frames.
+- H.264 packet topics are decoded only when messages include `format="h264"`
+  and base64 or bytes `data`.
 - MCAP files are read as atomic files. They are not split by byte range across
   workers.
 - Folder discovery only includes files with the `.mcap` extension. Explicit

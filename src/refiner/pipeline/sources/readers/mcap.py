@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import warnings
 from bisect import bisect_left, bisect_right
@@ -25,7 +26,7 @@ from refiner.pipeline.sources.readers.utils import (
     path_selection_map,
 )
 from refiner.utils import check_required_dependencies
-from refiner.video import VideoFrameArray
+from refiner.video import VideoFrameArray, decode_raw_h264_frames
 
 _MISSING = object()
 _RESERVED_FRAME_COLUMNS = frozenset({"frame_index", "timestamp"})
@@ -907,37 +908,86 @@ def _video_map(
     for name, source in videos.items():
         events = topic_events.get(source[0], ())
         if sync_primary is not None and source[0] == sync_primary[0]:
-            frames = [
-                _frame_from_value(_source_value(event[1], source[1]))
-                for event in sync_primary_events or ()
-            ]
+            source_events = sync_primary_events or ()
+            h264_events = _h264_frame_events(source_events, source[1])
+            frames = (
+                [event[1] for event in h264_events]
+                if h264_events is not None
+                else [
+                    _frame_from_value(_source_value(event[1], source[1]))
+                    for event in source_events
+                ]
+            )
         elif sync_primary_timestamps is not None:
             video_sync_method: SyncMethod = (
                 "nearest" if sync_method == "interpolate" else sync_method
             )
+            h264_events = _h264_frame_events(events, source[1])
             frames = []
             for aligned in _align_values(
-                events, sync_primary_timestamps, source[1], method=video_sync_method
+                h264_events if h264_events is not None else events,
+                sync_primary_timestamps,
+                None if h264_events is not None else source[1],
+                method=video_sync_method,
             ):
                 if aligned is None:
                     raise ValueError(
                         f"MCAP video {name!r} has no aligned frame for a sync_primary row"
                     )
-                frames.append(_frame_from_value(aligned.value))
+                frames.append(
+                    aligned.value
+                    if h264_events is not None
+                    else _frame_from_value(aligned.value)
+                )
         else:
-            frames = [
-                _frame_from_value(_source_value(event[1], source[1]))
-                for event in sorted(events, key=lambda event: event[0])
-            ]
+            h264_events = _h264_frame_events(events, source[1])
+            frames = (
+                [event[1] for event in h264_events]
+                if h264_events is not None
+                else [
+                    _frame_from_value(_source_value(event[1], source[1]))
+                    for event in sorted(events, key=lambda event: event[0])
+                ]
+            )
         if frames:
             out[name] = VideoFrameArray(np.stack(frames), fps=fps)
     return out
 
 
+def _h264_frame_events(
+    events: Sequence[_McapEvent],
+    field_path: str | None,
+) -> list[_McapEvent] | None:
+    if not events:
+        return []
+    chunks: list[bytes] = []
+    timestamps: list[int] = []
+    for timestamp_ns, value in sorted(events, key=lambda event: event[0]):
+        packet = _source_value(value, field_path, default=None)
+        if not isinstance(packet, Mapping) or str(
+            packet.get("format", "")
+        ).lower() not in {"h264", "h.264", "video/h264"}:
+            return None
+        data = packet.get("data")
+        if isinstance(data, str):
+            payload = base64.b64decode(data)
+        elif isinstance(data, bytes):
+            payload = data
+        elif data is not None:
+            payload = bytes(data)
+        else:
+            return None
+        timestamps.append(timestamp_ns)
+        chunks.append(payload)
+
+    frames = decode_raw_h264_frames(chunks)
+    if len(frames) != len(timestamps):
+        raise ValueError("MCAP H.264 video frame count does not match message count")
+    return list(zip(timestamps, frames, strict=True))
+
+
 def _frame_from_value(value: Any) -> np.ndarray:
     if isinstance(value, str):
-        import base64
-
         return _frame_from_value(base64.b64decode(value))
     if isinstance(value, bytes):
         try:

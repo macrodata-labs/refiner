@@ -6,6 +6,9 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+import numpy as np
+
+from refiner.utils import check_required_dependencies
 from refiner.video.remux import (
     RemuxWriter,
     prepared_source_is_remuxable,
@@ -125,6 +128,22 @@ async def iter_encoded_frames(
             )
     finally:
         prepared.close()
+
+
+def decode_raw_h264_frames(chunks: Sequence[bytes]) -> list[np.ndarray]:
+    check_required_dependencies("raw H.264 video decoding", ["av"], dist="video")
+    import av
+
+    with av.open(io.BytesIO(b"".join(chunks)), mode="r", format="h264") as container:
+        stream = next(
+            (item for item in container.streams if item.type == "video"), None
+        )
+        if stream is None:
+            raise ValueError("H.264 payload has no video stream")
+        return [
+            cast(Any, frame).to_ndarray(format="rgb24")
+            for frame in container.decode(stream)
+        ]
 
 
 async def iter_frame_windows(
@@ -254,6 +273,7 @@ def _frame_timestamp_s(frame: Any) -> float | None:
 __all__ = [
     "DecodedFrameWindow",
     "DecodedVideoFrame",
+    "decode_raw_h264_frames",
     "export_clip",
     "iter_frame_windows",
 ]
