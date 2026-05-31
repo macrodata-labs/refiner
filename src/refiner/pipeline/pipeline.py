@@ -924,15 +924,51 @@ def read_mcap(
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
     file_path_column: str | None = "file_path",
+    episode_splitting: str | Mapping[str, Any] = "single",
+    stream_episodes: bool = False,
     fields: PathSelection | None = None,
     videos: PathSelection | None = None,
-    primary: str | None = None,
-    fps: float | None = None,
+    sync_primary: str | None = None,
     sync_method: SyncMethod = "nearest",
     include_skew: bool = True,
-    episode_splitting: str | Mapping[str, Any] = "single",
+    fps: float | None = None,
 ) -> RefinerPipeline:
-    """Create a pipeline with an MCAP file reader source."""
+    """Create a pipeline with an MCAP reader source.
+
+    Each emitted row represents one episode and contains a `records` `Tabular`
+    table. When `videos` is set, rows also include a `videos` mapping of
+    selected names to `VideoFrameArray` values. Set `sync_primary` to align
+    records and videos to a field, topic, or video timeline; otherwise selected
+    fields are emitted sparsely at their original MCAP log timestamps.
+
+    Args:
+        inputs: MCAP file, glob, directory, or sequence of inputs.
+        fs: Optional fsspec filesystem for string inputs.
+        storage_options: Optional fsspec storage options.
+        recursive: Whether directory inputs should be expanded recursively.
+        target_shard_bytes: Target shard size used when planning files.
+        num_shards: Requested number of planned shards. MCAP files are atomic,
+            so readers may emit fewer shards when there are fewer files.
+        file_path_column: Output column for the source file path, or `None` to
+            omit it.
+        episode_splitting: `"single"`, `{"time_gap_s": seconds}`, or
+            `{"marker_topic": topic}`.
+        stream_episodes: When splitting episodes, buffer one episode at a time
+            for seekable indexed MCAPs.
+        fields: Record-table selections as output-name to MCAP source mapping,
+            a single source string, a source sequence, or `None` to derive
+            default fields from decoded non-video messages.
+        videos: Video selections as video-name to MCAP source mapping, a single
+            source string, a source sequence, or `None`.
+        sync_primary: Optional selected field/video name, topic, or dotted MCAP
+            source that defines aligned record timestamps.
+        sync_method: Alignment method for non-primary fields and videos:
+            `"nearest"`, `"hold"`, or `"interpolate"`.
+        include_skew: Whether to add alignment timestamp/skew columns for
+            non-primary aligned fields.
+        fps: Explicit video/frame rate. If omitted, aligned reads infer it from
+            `sync_primary` timestamps when possible.
+    """
     return RefinerPipeline(
         source=McapReader(
             inputs,
@@ -942,13 +978,14 @@ def read_mcap(
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             file_path_column=file_path_column,
+            episode_splitting=episode_splitting,
+            stream_episodes=stream_episodes,
             fields=fields,
             videos=videos,
-            primary=primary,
-            fps=fps,
+            sync_primary=sync_primary,
             sync_method=sync_method,
             include_skew=include_skew,
-            episode_splitting=episode_splitting,
+            fps=fps,
         )
     )
 

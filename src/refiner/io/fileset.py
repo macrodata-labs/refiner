@@ -286,6 +286,7 @@ class DataFileSet:
                             files,
                             DataFile(fs=next_fs, path=expanded_path),
                             size=size if isinstance(size, int) else None,
+                            apply_extensions=False,
                         )
                 else:
                     raise AssertionError(

@@ -386,7 +386,7 @@ def _write_sparse_edge_mcap(path: Path) -> None:
         writer.finish()
 
 
-def _write_out_of_order_primary_mcap(path: Path) -> None:
+def _write_out_of_order_sync_primary_mcap(path: Path) -> None:
     with path.open("wb") as stream:
         writer = mcap_writer.Writer(stream)
         writer.start()
@@ -431,7 +431,7 @@ def test_mcap_reader_defaults_to_sparse_frame_table(tmp_path: Path) -> None:
     row = read_mcap(str(path)).materialize()[0]
 
     assert row["file_path"] == str(path)
-    frames = row["frames"]
+    frames = row["records"]
     assert set(frames.table.column_names) == {
         "frame_index",
         "timestamp",
@@ -449,7 +449,7 @@ def test_mcap_reader_defaults_to_sparse_frame_table(tmp_path: Path) -> None:
     ]
 
 
-def test_mcap_reader_maps_fields_and_aligns_to_primary(tmp_path: Path) -> None:
+def test_mcap_reader_maps_fields_and_aligns_to_sync_primary(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
 
@@ -459,14 +459,15 @@ def test_mcap_reader_maps_fields_and_aligns_to_primary(tmp_path: Path) -> None:
             "state": "/joint_states.q",
             "target": "/cmd.target",
         },
-        primary="state",
+        sync_primary="state",
     ).materialize()[0]
 
-    frames = row["frames"]
+    frames = row["records"]
     assert frames.table.num_rows == 3
     assert frames.column("timestamp").to_pylist() == [0.0, 1.0, 2.0]
     assert frames.column("state").to_pylist() == [[1, 2], [3, 4], [5, 6]]
     assert frames.column("target").to_pylist() == [[10], [20], [20]]
+    assert "mcap.state.skew_ms" not in frames.table.column_names
     assert frames.column("mcap.target.skew_ms").to_pylist() == [100.0, -100.0, -1100.0]
     assert row["fps"] == 1.0
 
@@ -478,13 +479,13 @@ def test_mcap_reader_interpolates_numeric_fields(tmp_path: Path) -> None:
     row = read_mcap(
         str(path),
         fields={"state": "/joint_states.q", "target": "/cmd.target"},
-        primary="target",
+        sync_primary="target",
         sync_method="interpolate",
         include_skew=False,
     ).materialize()[0]
 
-    assert row["frames"].column("timestamp").to_pylist() == [0.1, 0.9]
-    assert row["frames"].column("state").to_pylist() == [
+    assert row["records"].column("timestamp").to_pylist() == [0.1, 0.9]
+    assert row["records"].column("state").to_pylist() == [
         pytest.approx([1.2, 2.2]),
         pytest.approx([2.8, 3.8]),
     ]
@@ -497,13 +498,13 @@ def test_mcap_reader_holds_previous_field_value(tmp_path: Path) -> None:
     row = read_mcap(
         str(path),
         fields={"state": "/joint_states.q", "target": "/cmd.target"},
-        primary="target",
+        sync_primary="target",
         sync_method="hold",
         include_skew=False,
     ).materialize()[0]
 
-    assert row["frames"].column("timestamp").to_pylist() == [0.1, 0.9]
-    assert row["frames"].column("state").to_pylist() == [[1, 2], [1, 2]]
+    assert row["records"].column("timestamp").to_pylist() == [0.1, 0.9]
+    assert row["records"].column("state").to_pylist() == [[1, 2], [1, 2]]
 
 
 def test_mcap_reader_hold_does_not_use_future_values(tmp_path: Path) -> None:
@@ -513,44 +514,46 @@ def test_mcap_reader_hold_does_not_use_future_values(tmp_path: Path) -> None:
     row = read_mcap(
         str(path),
         fields={"state": "/joint_states.q", "target": "/cmd.target"},
-        primary="state",
+        sync_primary="state",
         sync_method="hold",
         include_skew=False,
     ).materialize()[0]
 
-    assert row["frames"].column("target").to_pylist() == [None, [20], [20]]
+    assert row["records"].column("target").to_pylist() == [None, [20], [20]]
 
 
-def test_mcap_reader_can_align_to_unselected_primary_source(tmp_path: Path) -> None:
+def test_mcap_reader_can_align_to_unselected_sync_primary_source(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
 
     row = read_mcap(
         str(path),
         fields={"target": "/cmd.target"},
-        primary="/joint_states.q",
+        sync_primary="/joint_states.q",
         include_skew=False,
     ).materialize()[0]
 
-    frames = row["frames"]
+    frames = row["records"]
     assert frames.table.column_names == ["frame_index", "timestamp", "target"]
     assert frames.table.num_rows == 3
     assert frames.column("timestamp").to_pylist() == [0.0, 1.0, 2.0]
     assert frames.column("target").to_pylist() == [[10], [20], [20]]
 
 
-def test_mcap_reader_sorts_primary_events_before_alignment(tmp_path: Path) -> None:
+def test_mcap_reader_sorts_sync_primary_events_before_alignment(tmp_path: Path) -> None:
     path = tmp_path / "out-of-order.mcap"
-    _write_out_of_order_primary_mcap(path)
+    _write_out_of_order_sync_primary_mcap(path)
 
     row = read_mcap(
         str(path),
         fields={"state": "/state.q", "target": "/target.u"},
-        primary="state",
+        sync_primary="state",
         include_skew=False,
     ).materialize()[0]
 
-    frames = row["frames"]
+    frames = row["records"]
     assert frames.column("timestamp").to_pylist() == [0.0, 1.0, 2.0]
     assert frames.column("state").to_pylist() == [[0], [1], [2]]
     assert frames.column("target").to_pylist() == [[0], [1], [2]]
@@ -566,11 +569,11 @@ def test_mcap_reader_builds_video_frame_arrays_for_robot_rows(tmp_path: Path) ->
             str(path),
             fields={"state": "/joint_states.q"},
             videos={"front": "/image.frame"},
-            primary="state",
+            sync_primary="state",
             fps=12,
         )
         .to_robot_rows(
-            nested_frames_key="frames",
+            nested_frames_key="records",
             state_key="state",
             timestamp_key="timestamp",
             action_key=None,
@@ -601,7 +604,7 @@ def test_mcap_reader_omits_video_topics_from_default_fields(tmp_path: Path) -> N
 
     row = read_mcap(str(path), videos={"front": "/image.frame"}).materialize()[0]
 
-    assert "/image.frame" not in row["frames"].table.column_names
+    assert "/image.frame" not in row["records"].table.column_names
     assert row["videos"]["front"].frame_count == 2
 
 
@@ -614,7 +617,29 @@ def test_mcap_reader_reads_non_seekable_streams(tmp_path: Path) -> None:
         fields={"state": "/joint_states.q"},
     ).materialize()[0]
 
-    assert row["frames"].column("state").to_pylist() == [[1, 2], [3, 4], [5, 6]]
+    assert row["records"].column("state").to_pylist() == [[1, 2], [3, 4], [5, 6]]
+
+
+def test_mcap_reader_stream_episodes_falls_back_for_non_seekable_streams(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    with pytest.warns(RuntimeWarning, match="fell back to buffered reading"):
+        rows = read_mcap(
+            (str(path), _NonSeekableLocalFileSystem()),
+            fields={"state": "/joint_states.q"},
+            sync_primary="state",
+            episode_splitting={"time_gap_s": 0.5},
+            stream_episodes=True,
+        ).materialize()
+
+    assert [row["records"].column("state").to_pylist()[0] for row in rows] == [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ]
 
 
 def test_mcap_reader_treats_string_fields_as_one_source(tmp_path: Path) -> None:
@@ -623,12 +648,12 @@ def test_mcap_reader_treats_string_fields_as_one_source(tmp_path: Path) -> None:
 
     row = read_mcap(str(path), fields="/cmd.target").materialize()[0]
 
-    assert row["frames"].table.column_names == [
+    assert row["records"].table.column_names == [
         "frame_index",
         "timestamp",
         "/cmd.target",
     ]
-    assert row["frames"].column("/cmd.target").to_pylist() == [[10], [20]]
+    assert row["records"].column("/cmd.target").to_pylist() == [[10], [20]]
 
 
 def test_mcap_reader_preserves_explicit_empty_fields(tmp_path: Path) -> None:
@@ -637,7 +662,7 @@ def test_mcap_reader_preserves_explicit_empty_fields(tmp_path: Path) -> None:
 
     row = read_mcap(str(path), fields={}).materialize()[0]
 
-    assert row["frames"].table.column_names == []
+    assert row["records"].table.column_names == []
 
 
 def test_mcap_reader_rejects_unknown_field_source(tmp_path: Path) -> None:
@@ -653,7 +678,7 @@ def test_mcap_reader_rejects_file_path_column_collisions(tmp_path: Path) -> None
     _write_mcap(path)
 
     with pytest.raises(ValueError, match="file_path_column"):
-        read_mcap(str(path), file_path_column="frames").materialize()
+        read_mcap(str(path), file_path_column="records").materialize()
 
 
 def test_mcap_reader_rejects_reserved_frame_field_names(tmp_path: Path) -> None:
@@ -671,13 +696,33 @@ def test_mcap_reader_splits_on_time_gaps(tmp_path: Path) -> None:
     rows = read_mcap(
         str(path),
         fields={"state": "/joint_states.q"},
-        primary="state",
+        sync_primary="state",
         episode_splitting={"time_gap_s": 0.5},
     ).materialize()
 
     assert [row["episode_index"] for row in rows] == [0, 1, 2]
-    assert [row["frames"].table.num_rows for row in rows] == [1, 1, 1]
-    assert [row["frames"].column("state").to_pylist()[0] for row in rows] == [
+    assert [row["records"].table.num_rows for row in rows] == [1, 1, 1]
+    assert [row["records"].column("state").to_pylist()[0] for row in rows] == [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ]
+
+
+def test_mcap_reader_streams_time_gap_episodes(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    rows = read_mcap(
+        str(path),
+        fields={"state": "/joint_states.q"},
+        sync_primary="state",
+        episode_splitting={"time_gap_s": 0.5},
+        stream_episodes=True,
+    ).materialize()
+
+    assert [row["episode_index"] for row in rows] == [0, 1, 2]
+    assert [row["records"].column("state").to_pylist()[0] for row in rows] == [
         [1, 2],
         [3, 4],
         [5, 6],
@@ -691,12 +736,30 @@ def test_mcap_reader_splits_on_marker_topic(tmp_path: Path) -> None:
     rows = read_mcap(
         str(path),
         fields={"state": "/state.q"},
-        primary="state",
+        sync_primary="state",
         episode_splitting={"marker_topic": "/episode_start"},
     ).materialize()
 
     assert [row["episode_index"] for row in rows] == [0, 1]
-    assert [row["frames"].column("state").to_pylist() for row in rows] == [
+    assert [row["records"].column("state").to_pylist() for row in rows] == [
+        [[1], [2]],
+        [[3]],
+    ]
+
+
+def test_mcap_reader_streams_marker_episodes(tmp_path: Path) -> None:
+    path = tmp_path / "markers.mcap"
+    _write_marker_mcap(path)
+
+    rows = read_mcap(
+        str(path),
+        fields={"state": "/state.q"},
+        sync_primary="state",
+        episode_splitting={"marker_topic": "/episode_start"},
+        stream_episodes=True,
+    ).materialize()
+
+    assert [row["records"].column("state").to_pylist() for row in rows] == [
         [[1], [2]],
         [[3]],
     ]
@@ -709,12 +772,12 @@ def test_mcap_reader_preserves_selected_empty_episode_fields(tmp_path: Path) -> 
     rows = read_mcap(
         str(path),
         fields={"state": "/state.q", "action": "/action.u"},
-        primary="state",
+        sync_primary="state",
         episode_splitting={"marker_topic": "/episode_start"},
         include_skew=False,
     ).materialize()
 
-    assert [row["frames"].column("action").to_pylist() for row in rows] == [
+    assert [row["records"].column("action").to_pylist() for row in rows] == [
         [[10]],
         [None],
     ]
@@ -727,11 +790,11 @@ def test_mcap_reader_sorts_marker_events_before_splitting(tmp_path: Path) -> Non
     rows = read_mcap(
         str(path),
         fields={"state": "/state.q"},
-        primary="state",
+        sync_primary="state",
         episode_splitting={"marker_topic": "/episode_start"},
     ).materialize()
 
-    assert [row["frames"].column("state").to_pylist() for row in rows] == [
+    assert [row["records"].column("state").to_pylist() for row in rows] == [
         [[1], [2]],
         [[3]],
     ]
@@ -744,11 +807,11 @@ def test_mcap_reader_reads_marker_topic_with_selected_fields(tmp_path: Path) -> 
     rows = read_mcap(
         str(path),
         fields={"state": "/state.q"},
-        primary="state",
+        sync_primary="state",
         episode_splitting={"marker_topic": "/episode_start"},
     ).materialize()
 
-    assert [row["frames"].column("state").to_pylist() for row in rows] == [
+    assert [row["records"].column("state").to_pylist() for row in rows] == [
         [[1], [2]],
         [[3]],
     ]
@@ -763,7 +826,7 @@ def test_mcap_reader_marker_topic_is_not_a_default_field(tmp_path: Path) -> None
         episode_splitting={"marker_topic": "/episode_start"},
     ).materialize()
 
-    assert rows[0]["frames"].table.column_names == [
+    assert rows[0]["records"].table.column_names == [
         "frame_index",
         "timestamp",
         "/state.q",
@@ -776,7 +839,7 @@ def test_mcap_reader_default_fields_union_optional_keys(tmp_path: Path) -> None:
 
     row = read_mcap(str(path)).materialize()[0]
 
-    frames = row["frames"]
+    frames = row["records"]
     assert "/event.a" in frames.table.column_names
     assert "/event.b" in frames.table.column_names
     assert frames.column("/event.a").to_pylist() == [1, None, None, None]
@@ -791,12 +854,12 @@ def test_mcap_reader_sparse_mode_preserves_duplicate_timestamps(
 
     row = read_mcap(str(path), fields="/state.q").materialize()[0]
 
-    frames = row["frames"]
+    frames = row["records"]
     assert frames.column("timestamp").to_pylist() == [1e-08, 1e-08]
     assert frames.column("/state.q").to_pylist() == [[1], [2]]
 
 
-def test_mcap_reader_aligned_mode_preserves_duplicate_primary_values(
+def test_mcap_reader_aligned_mode_preserves_duplicate_sync_primary_values(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "sparse-edge.mcap"
@@ -805,13 +868,49 @@ def test_mcap_reader_aligned_mode_preserves_duplicate_primary_values(
     row = read_mcap(
         str(path),
         fields={"state": "/state.q"},
-        primary="state",
+        sync_primary="state",
         include_skew=False,
     ).materialize()[0]
 
-    frames = row["frames"]
+    frames = row["records"]
     assert frames.column("timestamp").to_pylist() == [1e-08, 1e-08]
     assert frames.column("state").to_pylist() == [[1], [2]]
+
+
+def test_mcap_reader_preserves_duplicate_subfields_for_topic_sync_primary(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sparse-edge.mcap"
+    _write_sparse_edge_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/state.q"},
+        sync_primary="/state",
+        include_skew=False,
+    ).materialize()[0]
+
+    frames = row["records"]
+    assert frames.column("timestamp").to_pylist() == [1e-08, 1e-08]
+    assert frames.column("state").to_pylist() == [[1], [2]]
+
+
+def test_mcap_reader_rejects_generated_skew_field_name_collisions(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sparse-edge.mcap"
+    _write_sparse_edge_mcap(path)
+
+    with pytest.raises(ValueError, match="generated skew/timestamp"):
+        read_mcap(
+            str(path),
+            fields={
+                "clock": "/event.a",
+                "target": "/state.q",
+                "mcap.target.skew_ms": "/event.b",
+            },
+            sync_primary="clock",
+        ).materialize()
 
 
 def test_mcap_reader_sorts_unaligned_video_frames(tmp_path: Path) -> None:
@@ -828,20 +927,20 @@ def test_mcap_reader_sorts_unaligned_video_frames(tmp_path: Path) -> None:
     ]
 
 
-def test_mcap_reader_preserves_duplicate_primary_video_frames(
+def test_mcap_reader_preserves_duplicate_sync_primary_video_frames(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "duplicate-video-primary.mcap"
+    path = tmp_path / "duplicate-video-sync-primary.mcap"
     _write_duplicate_video_timestamp_mcap(path)
 
     row = read_mcap(
         str(path),
         videos={"front": "/image.frame"},
-        primary="front",
+        sync_primary="front",
         fps=1,
     ).materialize()[0]
 
-    assert row["frames"].table.num_rows == 2
+    assert row["records"].table.num_rows == 2
     assert [
         frame[0, 0].tolist() for frame in row["videos"]["front"].iter_frame_arrays()
     ] == [
@@ -861,13 +960,13 @@ def test_mcap_reader_rejects_missing_hold_aligned_video_frame(
             str(path),
             fields={"state": "/state.q"},
             videos={"front": "/image.frame"},
-            primary="state",
+            sync_primary="state",
             sync_method="hold",
             fps=1,
         ).materialize()
 
 
-def test_mcap_reader_keeps_videos_aligned_to_empty_primary_episode(
+def test_mcap_reader_keeps_videos_aligned_to_empty_sync_primary_episode(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "video-only-episode.mcap"
@@ -877,14 +976,14 @@ def test_mcap_reader_keeps_videos_aligned_to_empty_primary_episode(
         str(path),
         fields={"state": "/state.q"},
         videos={"front": "/image.frame"},
-        primary="state",
+        sync_primary="state",
         episode_splitting={"marker_topic": "/episode_start"},
         fps=1,
     ).materialize()
 
-    assert rows[0]["frames"].table.num_rows == 1
+    assert rows[0]["records"].table.num_rows == 1
     assert rows[0]["videos"]["front"].frame_count == 1
-    assert rows[1]["frames"].table.num_rows == 0
+    assert rows[1]["records"].table.num_rows == 0
     assert "videos" not in rows[1]
 
 
