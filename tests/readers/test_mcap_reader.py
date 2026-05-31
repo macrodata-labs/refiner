@@ -1093,6 +1093,26 @@ def test_mcap_reader_keeps_videos_aligned_to_empty_sync_primary_episode(
     assert "videos" not in rows[1]
 
 
+def test_mcap_reader_default_fields_resolve_sync_primary_from_file_topics(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "video-only-episode.mcap"
+    _write_marker_mcap_with_video_only_episode(path)
+
+    rows = read_mcap(
+        str(path),
+        videos={"front": "/image.frame"},
+        sync_primary="/state.q",
+        episode_splitting={"marker_topic": "/episode_start"},
+        fps=1,
+    ).materialize()
+
+    assert rows[0]["records"].column("/state.q").to_pylist() == [[1]]
+    assert rows[0]["videos"]["front"].frame_count == 1
+    assert rows[1]["records"].table.num_rows == 0
+    assert "videos" not in rows[1]
+
+
 def test_mcap_reader_rejects_fractional_video_fps(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)

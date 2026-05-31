@@ -207,7 +207,7 @@ class McapReader(BaseReader):
                 self.sync_primary
             )
             if sync_primary is None:
-                sync_primary = _resolve_source(self.sync_primary, source_topics)
+                sync_primary = _resolve_source(self.sync_primary, file_topics)
         field_names = set(resolved_fields)
         reserved_fields = sorted(field_names & _RESERVED_FRAME_COLUMNS)
         if reserved_fields:

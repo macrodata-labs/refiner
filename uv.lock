@@ -1322,6 +1322,7 @@ hf = [
     { name = "huggingface-hub" },
 ]
 mcap = [
+    { name = "av" },
     { name = "mcap" },
     { name = "mcap-protobuf-support" },
     { name = "mcap-ros2-support" },
@@ -1369,6 +1370,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av", marker = "extra == 'mcap'" },
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "datasets", marker = "extra == 'hf'", specifier = ">=3.0.0" },
