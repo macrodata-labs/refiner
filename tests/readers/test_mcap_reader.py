@@ -546,6 +546,36 @@ def _write_out_of_order_sync_primary_mcap(path: Path) -> None:
         writer.finish()
 
 
+def _write_mixed_state_shape_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (state_channel, 0, b'{"q":[0]}', 0, 1),
+            (state_channel, 500_000_000, b'{"diagnostic":"ok"}', 500_000_000, 2),
+            (state_channel, 1_000_000_000, b'{"q":[1]}', 1_000_000_000, 3),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
 def test_mcap_reader_defaults_to_sparse_frame_table(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -679,6 +709,22 @@ def test_mcap_reader_sorts_sync_primary_events_before_alignment(tmp_path: Path) 
     assert frames.column("timestamp").to_pylist() == [0.0, 1.0, 2.0]
     assert frames.column("state").to_pylist() == [[0], [1], [2]]
     assert frames.column("target").to_pylist() == [[0], [1], [2]]
+    assert row["fps"] == 1.0
+
+
+def test_mcap_reader_filters_sync_primary_subfield_events(tmp_path: Path) -> None:
+    path = tmp_path / "mixed-state-shape.mcap"
+    _write_mixed_state_shape_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/state.q"},
+        sync_primary="/state.q",
+    ).materialize()[0]
+
+    frames = row["records"]
+    assert frames.column("timestamp").to_pylist() == [0.0, 1.0]
+    assert frames.column("state").to_pylist() == [[0], [1]]
     assert row["fps"] == 1.0
 
 

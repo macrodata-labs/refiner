@@ -233,7 +233,12 @@ class McapReader(BaseReader):
                 )
         sync_primary_events = (
             sorted(
-                topic_events.get(sync_primary[0], ()),
+                (
+                    event
+                    for event in topic_events.get(sync_primary[0], ())
+                    if sync_primary[1] is None
+                    or source_value(event[1], sync_primary[1], default=None) is not None
+                ),
                 key=lambda event: event[0],
             )
             if sync_primary is not None
