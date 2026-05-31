@@ -349,6 +349,30 @@ source.write_lerobot("s3://bucket/slai-franka-lerobot")
 source.write_zarr("s3://bucket/slai-franka.zarr")
 ```
 
+Convert an H.264 packet video topic the same way. Messages on the selected
+topic must include `format="h264"` and base64 or bytes `data`:
+
+```python
+(
+    mdr.read_mcap(
+        "run.mcap",
+        fields={},
+        videos={"front": "/camera/h264"},
+        sync_primary="front",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="records",
+        state_key=None,
+        action_key=None,
+        timestamp_key="timestamp",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+    )
+    .write_lerobot("s3://bucket/h264-video-dataset")
+)
+```
+
 Convert MCAP robot logs to LeRobot:
 
 ```python

@@ -73,6 +73,7 @@
 - [ALOHA HDF5](examples/aloha-hdf5.md)
 - [robomimic HDF5](examples/robomimic-hdf5.md)
 - [Zarr Replay Buffer](examples/zarr-replay-buffer.md)
+- [MCAP Franka](examples/mcap-franka.md)
 - [Merge LeRobot Datasets](examples/merge-lerobot-datasets.md)
 - [Annotate Subtasks](examples/annotate-subtasks.md)
 - [Score Rewards](examples/score-rewards.md)
