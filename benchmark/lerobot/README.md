@@ -66,3 +66,6 @@ Artifacts are written under `benchmark/lerobot/artifacts/` by default:
 - merged output directories
 - isolated Hugging Face cache directories
 - one summary JSON for the whole benchmark session
+
+For LIBERO HDF5, the final benchmark target is the full eval dataset across all
+four subsets: `libero_spatial`, `libero_object`, `libero_goal`, and `libero_10`.

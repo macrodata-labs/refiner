@@ -27,7 +27,12 @@ DEFAULT_CLOUD_DEPENDENCIES = (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Benchmark LIBERO HDF5 conversion. The full eval target is all four "
+            "subsets: libero_spatial, libero_object, libero_goal, and libero_10."
+        )
+    )
     parser.add_argument("--input", action="append")
     parser.add_argument("--eval-suite", action="store_true")
     parser.add_argument("--dataset-root", default=DEFAULT_DATASET_ROOT)
