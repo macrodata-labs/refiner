@@ -10,7 +10,6 @@ from refiner.pipeline.data.row import Row
 DEFAULT_DATASET_ROOT = "hf://datasets/yifengzhu-hf/LIBERO-datasets"
 DEFAULT_OUTPUT_PREFIX = "hf://buckets/macrodata/test_bucket/libero-hdf5-benchmark"
 EVAL_SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
-EPISODES_PER_FILE = 50
 FPS = 20.0
 
 
@@ -32,12 +31,12 @@ def normalize_libero_row(row: Row) -> Row:
 
 def main() -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = f"{DEFAULT_OUTPUT_PREFIX}/{stamp}-{EPISODES_PER_FILE}ep"
+    output = f"{DEFAULT_OUTPUT_PREFIX}/{stamp}-full-eval"
 
     (
         mdr.read_hdf5(
             [f"{DEFAULT_DATASET_ROOT}/{suite}" for suite in EVAL_SUITES],
-            groups=[f"/data/demo_{index}" for index in range(EPISODES_PER_FILE)],
+            groups="/data/demo_*",
             datasets={
                 "raw_action": "actions",
                 "observation.images.image": "obs/agentview_rgb",
@@ -64,7 +63,7 @@ def main() -> None:
         )
         .write_lerobot(output)
         .launch_cloud(
-            name=f"libero-hdf5-eval-{EPISODES_PER_FILE}ep-cached",
+            name="libero-hdf5-full-eval-cached",
             num_workers=40,
             cpus_per_worker=1,
             mem_mb_per_worker=1024,
