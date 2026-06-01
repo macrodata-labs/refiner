@@ -18,6 +18,7 @@ from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameSequence
 
 _DEFAULT_EXAMPLES_PER_SHARD = 10_000
+_VideoPath = tuple[str, str, tuple[str, ...]]
 
 
 class TfdsReader(BaseSource):
@@ -105,12 +106,21 @@ class TfdsReader(BaseSource):
         self.read_config = read_config
         self.decoders = dict(decoders) if decoders else None
         self.as_supervised = as_supervised
-        self.videos = path_selection_map(videos, format_name="TFDS")
-        self.video_paths = {
-            name: tuple(path.split("/")) for name, path in self.videos.items()
+        video_map = path_selection_map(videos, format_name="TFDS")
+        split_video_paths = {
+            name: tuple(path.split("/")) for name, path in video_map.items()
         }
-        if any(len(parts) < 2 for parts in self.video_paths.values()):
+        if any(len(parts) < 2 for parts in split_video_paths.values()):
             raise ValueError("TFDS video paths must include a dataset and frame field")
+        self.video_paths = tuple(
+            (name, parts[0], parts[1:]) for name, parts in split_video_paths.items()
+        )
+        excluded_video_paths: dict[str, list[tuple[str, ...]]] = {}
+        for _, dataset_key, frame_path in self.video_paths:
+            excluded_video_paths.setdefault(dataset_key, []).append(frame_path)
+        self.excluded_video_paths = {
+            key: tuple(paths) for key, paths in excluded_video_paths.items()
+        }
         self.fps = float(fps)
         if builder_dir is not None:
             self.builder = self.tfds.builder_from_directory(builder_dir)
@@ -137,7 +147,10 @@ class TfdsReader(BaseSource):
             "batch_size": self.batch_size,
             "examples_per_shard": self.examples_per_shard,
             "num_shards": self.num_shards,
-            "videos": self.videos,
+            "videos": {
+                name: "/".join((dataset_key, *frame_path))
+                for name, dataset_key, frame_path in self.video_paths
+            },
             "fps": self.fps,
         }
 
@@ -195,53 +208,45 @@ class TfdsReader(BaseSource):
         for batch in dataset.prefetch(1):
             if self.as_supervised:
                 batch = {"input": batch[0], "target": batch[1]}
-            if self.videos:
-                yield DictRow(_rlds_row(batch, self.tf, self.video_paths, self.fps))
+            if self.video_paths:
+                row: dict[str, Any] = {}
+                for name, value in batch.items():
+                    if isinstance(value, self.tf.data.Dataset):
+                        paths = self.excluded_video_paths.get(name, ())
+                        if paths:
+                            value = value.map(
+                                lambda step, paths=paths: _drop_tf_paths(step, paths)
+                            )
+                        row[name] = [
+                            tensorflow_value_to_python(step)
+                            for step in value.as_numpy_iterator()
+                        ]
+                    else:
+                        row[name] = tensorflow_value_to_python(value)
+
+                row["videos"] = {
+                    name: VideoFrameSequence(
+                        lambda dataset=batch[dataset_key], frame_path=frame_path: (
+                            tensorflow_value_to_python(frame)
+                            for frame in dataset.map(
+                                lambda step, frame_path=frame_path: _get_tf_path(
+                                    step, frame_path
+                                )
+                            ).as_numpy_iterator()
+                        ),
+                        fps=self.fps,
+                        frame_count=len(row[dataset_key]),
+                    )
+                    for name, dataset_key, frame_path in self.video_paths
+                }
+                yield DictRow(row)
                 continue
             table = tensorflow_batch_to_table(batch)
             if table.num_rows > 0:
                 yield Tabular(table)
 
 
-def _rlds_row(
-    example: Mapping[str, Any],
-    tf,
-    videos: Mapping[str, tuple[str, ...]],
-    fps: float,
-) -> dict[str, Any]:
-    excluded: dict[str, list[tuple[str, ...]]] = {}
-    for parts in videos.values():
-        excluded.setdefault(parts[0], []).append(parts[1:])
-
-    row: dict[str, Any] = {}
-    for name, value in example.items():
-        if isinstance(value, tf.data.Dataset):
-            paths = tuple(excluded.get(name, ()))
-            if paths:
-                value = value.map(lambda step, paths=paths: _tf_drop_paths(step, paths))
-            row[name] = [
-                tensorflow_value_to_python(step) for step in value.as_numpy_iterator()
-            ]
-        else:
-            row[name] = tensorflow_value_to_python(value)
-
-    row["videos"] = {
-        name: VideoFrameSequence(
-            lambda dataset=example[parts[0]], frame_path=parts[1:]: (
-                tensorflow_value_to_python(frame)
-                for frame in dataset.map(
-                    lambda step, frame_path=frame_path: _tf_path_value(step, frame_path)
-                ).as_numpy_iterator()
-            ),
-            fps=fps,
-            frame_count=len(row[parts[0]]),
-        )
-        for name, parts in videos.items()
-    }
-    return row
-
-
-def _tf_drop_paths(value: Any, paths: Sequence[tuple[str, ...]]) -> Any:
+def _drop_tf_paths(value: Any, paths: Sequence[tuple[str, ...]]) -> Any:
     if not paths or not isinstance(value, Mapping):
         return value
     out = {}
@@ -249,11 +254,11 @@ def _tf_drop_paths(value: Any, paths: Sequence[tuple[str, ...]]) -> Any:
         child_paths = tuple(path[1:] for path in paths if path and path[0] == name)
         if () in child_paths:
             continue
-        out[name] = _tf_drop_paths(child, child_paths)
+        out[name] = _drop_tf_paths(child, child_paths)
     return out
 
 
-def _tf_path_value(value: Mapping[str, Any], path: Sequence[str]) -> Any:
+def _get_tf_path(value: Mapping[str, Any], path: Sequence[str]) -> Any:
     current: Any = value
     for part in path:
         current = current[part]
