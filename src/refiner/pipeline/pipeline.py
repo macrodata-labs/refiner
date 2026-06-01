@@ -1176,7 +1176,7 @@ def read_tfrecords(
 
 
 def read_tfds(
-    input: str,
+    input: str | Sequence[str],
     *,
     config: str | None = None,
     split: str = "train",
@@ -1198,7 +1198,8 @@ def read_tfds(
     single plain split name.
 
     Args:
-        input: TFDS dataset name or prepared TFDS directory.
+        input: TFDS dataset name, prepared TFDS directory, or a sequence of
+            prepared directories/names with the same feature schema.
         config: Optional TFDS builder config.
         split: Plain split name from `builder.info.splits`.
         data_dir: Optional local TFDS data directory.

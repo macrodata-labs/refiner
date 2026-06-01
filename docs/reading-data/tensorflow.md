@@ -84,7 +84,7 @@ same column name, Refiner leaves the parsed value unchanged.
 ## TensorFlow Datasets
 
 Use `read_tfds(...)` for datasets available through TensorFlow Datasets, a
-local TFDS `data_dir`, or a prepared TFDS directory. Prepared TFDS directories
+local TFDS `data_dir`, or prepared TFDS directories. Prepared TFDS directories
 can be local paths or remote fsspec paths such as `hf://datasets/...`:
 
 ```python
@@ -119,14 +119,17 @@ pipeline = mdr.read_tfds(
 ```
 
 For RLDS datasets published as TFDS directories, pass the dataset version
-directory as the input:
+directory as the input. Pass a sequence of directories to read compatible
+datasets into one pipeline:
 
 ```python
 pipeline = mdr.read_tfds(
-    "hf://datasets/openvla/modified_libero_rlds/libero_10_no_noops/1.0.0",
-    split="train",
+    [
+        "hf://datasets/openvla/modified_libero_rlds/libero_10_no_noops/1.0.0",
+        "hf://datasets/openvla/modified_libero_rlds/libero_goal_no_noops/1.0.0",
+    ],
     videos={"front": "steps/observation/image"},
-    fps=30,
+    fps=10,
 )
 ```
 
@@ -147,7 +150,7 @@ from the per-step table.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `input` | required | TFDS dataset name, local prepared TFDS directory, or remote prepared TFDS directory. |
+| `input` | required | TFDS dataset name, prepared TFDS directory, or sequence of compatible names/directories. |
 | `config` | `None` | Optional TFDS builder config. Not used with prepared TFDS directories. |
 | `split` | `"train"` | Plain split name from `builder.info.splits`. |
 | `data_dir` | `None` | Optional local TFDS data directory for catalog datasets. Not used with prepared TFDS directories. |

@@ -37,7 +37,7 @@ class TfdsReader(BaseSource):
 
     def __init__(
         self,
-        input: str,
+        input: str | Sequence[str],
         *,
         config: str | None = None,
         split: str = "train",
@@ -56,7 +56,8 @@ class TfdsReader(BaseSource):
         """Create a TensorFlow Datasets reader.
 
         Args:
-            input: TFDS dataset name or prepared TFDS directory.
+            input: TFDS dataset name, prepared TFDS directory, or a sequence of
+                prepared directories/names with the same feature schema.
             config: Optional TFDS builder config.
             split: Plain split name from `builder.info.splits`, such as
                 `"train"` or `"validation"`.
@@ -90,7 +91,11 @@ class TfdsReader(BaseSource):
         )
         self.tf = importlib.import_module("tensorflow")
         self.tfds = importlib.import_module("tensorflow_datasets")
-        self.input = input
+        self.inputs = (input,) if isinstance(input, str) else tuple(input)
+        if not self.inputs:
+            raise ValueError("read_tfds input sequence cannot be empty")
+        if any(not isinstance(item, str) for item in self.inputs):
+            raise TypeError("read_tfds inputs must be strings")
         self.config = config
         self.data_dir = data_dir
         self.download = download
@@ -118,28 +123,28 @@ class TfdsReader(BaseSource):
             key: tuple(paths) for key, paths in excluded_video_paths.items()
         }
         self.fps = float(fps)
-        self._builder: Any | None = None
-        self._prepared_dir: str | None = None
-        self._remote_folder: DataFolder | None = None
-        self._remote_input = "://" in input
-        self.dataset_name: str | None = None
-        self.num_examples: int | None = None
+        self._builders: dict[int, Any] = {}
+        self._prepared_dirs: dict[int, str] = {}
+        self._remote_folders: dict[int, DataFolder] = {}
+        self._remote_inputs = tuple("://" in input for input in self.inputs)
+        self.dataset_names: list[str | None] = [None] * len(self.inputs)
+        self.num_examples_by_input: list[int | None] = [None] * len(self.inputs)
 
     def __getstate__(self) -> dict[str, Any]:
         state = dict(self.__dict__)
-        state["_builder"] = None
-        state["_prepared_dir"] = None
-        state["_remote_folder"] = None
-        state["num_examples"] = None
-        if self._remote_input:
-            state["dataset_name"] = None
+        state["_builders"] = {}
+        state["_prepared_dirs"] = {}
+        state["_remote_folders"] = {}
+        state["num_examples_by_input"] = [None] * len(self.inputs)
+        state["dataset_names"] = [None] * len(self.inputs)
         return state
 
-    def _ensure_builder(self) -> Any:
-        if self._builder is not None:
-            return self._builder
+    def _ensure_builder(self, input_index: int) -> Any:
+        builder = self._builders.get(input_index)
+        if builder is not None:
+            return builder
 
-        input = self._ensure_prepared_dir()
+        input = self._ensure_prepared_dir(input_index)
         input_path = Path(input)
         is_prepared_dir = (
             input_path.is_dir()
@@ -167,31 +172,41 @@ class TfdsReader(BaseSource):
                 "read_tfds currently shards plain split names only; pass a split "
                 f"from builder.info.splits, got {self.split!r}"
             )
-        self._builder = builder
-        self.dataset_name = builder.info.name
-        self.num_examples = int(builder.info.splits[self.split].num_examples)
+        self._builders[input_index] = builder
+        self.dataset_names[input_index] = builder.info.name
+        self.num_examples_by_input[input_index] = int(
+            builder.info.splits[self.split].num_examples
+        )
         return builder
 
-    def _ensure_prepared_dir(self) -> str:
-        if not self._remote_input:
-            return self.input
-        if self._prepared_dir is None:
+    def _ensure_builders(self) -> None:
+        for input_index in range(len(self.inputs)):
+            self._ensure_builder(input_index)
+
+    def _ensure_prepared_dir(self, input_index: int) -> str:
+        if not self._remote_inputs[input_index]:
+            return self.inputs[input_index]
+        prepared_dir = self._prepared_dirs.get(input_index)
+        if prepared_dir is None:
             local_dir = Path(tempfile.mkdtemp(prefix="refiner-tfds-"))
-            folder = self._ensure_remote_folder()
+            folder = self._ensure_remote_folder(input_index)
             for name in ("dataset_info.json", "features.json"):
                 folder.file(name).copy(str(local_dir / name))
-            self._prepared_dir = str(local_dir)
-        return self._prepared_dir
+            prepared_dir = str(local_dir)
+            self._prepared_dirs[input_index] = prepared_dir
+        return prepared_dir
 
-    def _ensure_remote_folder(self) -> DataFolder:
-        if self._remote_folder is None:
-            self._remote_folder = DataFolder.resolve(self.input)
-        return self._remote_folder
+    def _ensure_remote_folder(self, input_index: int) -> DataFolder:
+        folder = self._remote_folders.get(input_index)
+        if folder is None:
+            folder = DataFolder.resolve(self.inputs[input_index])
+            self._remote_folders[input_index] = folder
+        return folder
 
-    def _materialize_remote_shards(self, split: str) -> list[Path]:
-        if not self._remote_input:
+    def _materialize_remote_shards(self, input_index: int, split: str) -> list[Path]:
+        if not self._remote_inputs[input_index]:
             return []
-        builder = self._ensure_builder()
+        builder = self._ensure_builder(input_index)
         tfds_splits = importlib.import_module("tensorflow_datasets.core.splits")
         instructions = tfds_splits._make_file_instructions(  # noqa: SLF001
             list(builder.info.splits.values()),
@@ -204,18 +219,24 @@ class TfdsReader(BaseSource):
             if filename in seen:
                 continue
             seen.add(filename)
-            assert self._prepared_dir is not None
-            local_file = Path(self._prepared_dir) / filename
+            prepared_dir = self._prepared_dirs[input_index]
+            local_file = Path(prepared_dir) / filename
             if not local_file.exists():
-                self._ensure_remote_folder().file(filename).copy(str(local_file))
+                self._ensure_remote_folder(input_index).file(filename).copy(
+                    str(local_file)
+                )
             paths.append(local_file)
         return paths
 
     def describe(self) -> dict[str, Any]:
         return {
             "name": self.name,
-            "input": self.input,
-            "dataset": self.dataset_name,
+            "input": self.inputs[0] if len(self.inputs) == 1 else list(self.inputs),
+            "dataset": (
+                self.dataset_names[0]
+                if len(self.dataset_names) == 1
+                else list(self.dataset_names)
+            ),
             "config": self.config,
             "split": self.split,
             "batch_size": self.batch_size,
@@ -230,22 +251,26 @@ class TfdsReader(BaseSource):
 
     def list_shards(self) -> list[Shard]:
         """Plan deterministic row ranges for the configured split."""
-        self._ensure_builder()
-        assert self.num_examples is not None
+        self._ensure_builders()
+        counts = [int(count or 0) for count in self.num_examples_by_input]
+        total_examples = sum(counts)
         shards: list[Shard] = []
         if self.num_shards is None:
-            for start in range(0, self.num_examples, self.examples_per_shard):
-                shards.append(
-                    Shard.from_row_range(
-                        start=start,
-                        end=min(start + self.examples_per_shard, self.num_examples),
-                        global_ordinal=len(shards),
+            offset = 0
+            for count in counts:
+                for start in range(offset, offset + count, self.examples_per_shard):
+                    shards.append(
+                        Shard.from_row_range(
+                            start=start,
+                            end=min(start + self.examples_per_shard, offset + count),
+                            global_ordinal=len(shards),
+                        )
                     )
-                )
+                offset += count
             return shards
         for ordinal in range(self.num_shards):
-            start = ordinal * self.num_examples // self.num_shards
-            end = (ordinal + 1) * self.num_examples // self.num_shards
+            start = ordinal * total_examples // self.num_shards
+            end = (ordinal + 1) * total_examples // self.num_shards
             if start != end:
                 shards.append(
                     Shard.from_row_range(
@@ -261,7 +286,27 @@ class TfdsReader(BaseSource):
         descriptor = shard.descriptor
         if not isinstance(descriptor, RowRangeDescriptor):
             raise TypeError("TfdsReader requires row-range shards")
-        split = f"{self.split}[{descriptor.start}:{descriptor.end}]"
+        self._ensure_builders()
+        offset = 0
+        for input_index, count in enumerate(self.num_examples_by_input):
+            assert count is not None
+            start = max(int(descriptor.start), offset)
+            end = min(int(descriptor.end), offset + count)
+            if start < end:
+                yield from self._read_input_range(
+                    input_index,
+                    start - offset,
+                    end - offset,
+                )
+            offset += count
+
+    def _read_input_range(
+        self,
+        input_index: int,
+        start: int,
+        end: int,
+    ) -> Iterator[SourceUnit]:
+        split = f"{self.split}[{start}:{end}]"
         dataset_kwargs = {
             "split": split,
             "shuffle_files": self.shuffle_files,
@@ -269,8 +314,8 @@ class TfdsReader(BaseSource):
             "decoders": self.decoders,
             "as_supervised": self.as_supervised,
         }
-        builder = self._ensure_builder()
-        materialized_files = self._materialize_remote_shards(split)
+        builder = self._ensure_builder(input_index)
+        materialized_files = self._materialize_remote_shards(input_index, split)
         dataset = builder.as_dataset(
             **dataset_kwargs,
             batch_size=None,

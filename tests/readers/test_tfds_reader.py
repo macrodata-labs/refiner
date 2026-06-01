@@ -182,6 +182,24 @@ def test_read_tfds_accepts_prepared_tfds_directory(tmp_path: Path) -> None:
     assert sorted(row["id"] for row in pipeline.take(5)) == [0, 1, 2, 3, 4]
 
 
+def test_read_tfds_accepts_multiple_prepared_directories(tmp_path: Path) -> None:
+    first = TinyDataset(data_dir=str(tmp_path / "first"))
+    second = TinyDataset(data_dir=str(tmp_path / "second"))
+    first.download_and_prepare()
+    second.download_and_prepare()
+
+    reader = TfdsReader([first.data_dir, second.data_dir], examples_per_shard=3)
+
+    ranges = []
+    for shard in reader.list_shards():
+        assert isinstance(shard.descriptor, RowRangeDescriptor)
+        ranges.append((shard.descriptor.start, shard.descriptor.end))
+    rows = _rows_from_reader(reader)
+
+    assert ranges == [(0, 3), (3, 5), (5, 8), (8, 10)]
+    assert sorted(row["id"] for row in rows) == [0, 0, 1, 1, 2, 2, 3, 3, 4, 4]
+
+
 def test_read_tfds_materializes_remote_directory_shards_lazily(
     tmp_path: Path, monkeypatch
 ) -> None:
