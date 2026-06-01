@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import warnings
 from collections import defaultdict
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from io import BytesIO
 from itertools import chain
 from typing import Any
@@ -303,6 +303,7 @@ class McapReader(BaseReader):
             with source.open(mode="rb") as stream:
                 stream_is_seekable = stream.seekable()
                 reader = make_reader(stream)
+                decoder_cache: dict[int, Callable[[bytes], Any] | None] = {}
                 # If sync_primary is already a selected output name, its topic is
                 # already covered by fields/videos.
                 sync_primary_source = (
@@ -449,9 +450,11 @@ class McapReader(BaseReader):
                         schema, channel, message = item
                         decoded = _decode_message(
                             schema,
+                            message.channel_id,
                             channel.message_encoding,
                             message.data,
                             decoder_factories,
+                            decoder_cache,
                             plain=plain_decoding,
                         )
                         pending.append((channel.topic, (message.log_time, decoded)))
@@ -464,9 +467,11 @@ class McapReader(BaseReader):
                 ):
                     decoded = _decode_message(
                         schema,
+                        message.channel_id,
                         channel.message_encoding,
                         message.data,
                         decoder_factories,
+                        decoder_cache,
                         plain=plain_decoding,
                     )
                     topic_events[channel.topic].append((message.log_time, decoded))
@@ -589,20 +594,30 @@ def _decoder_factories() -> list[Any]:
 
 def _decode_message(
     schema: Any,
+    channel_id: int,
     message_encoding: str,
     data: bytes,
     decoder_factories: Sequence[Any],
+    decoder_cache: dict[int, Callable[[bytes], Any] | None],
     *,
     plain: bool = True,
 ) -> Any:
     encoding = message_encoding.lower()
     if encoding in {"json", "application/json"}:
         return msgspec.json.decode(data)
+    if channel_id in decoder_cache:
+        decoder = decoder_cache[channel_id]
+        if decoder is None:
+            return data
+        decoded = decoder(data)
+        return _plain_value(decoded) if plain else decoded
     for factory in decoder_factories:
         decoder = factory.decoder_for(message_encoding, schema)
         if decoder is not None:
+            decoder_cache[channel_id] = decoder
             decoded = decoder(data)
             return _plain_value(decoded) if plain else decoded
+    decoder_cache[channel_id] = None
     return data
 
 

@@ -4,7 +4,7 @@ import base64
 import json
 from io import BufferedReader, BytesIO
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 from fsspec.implementations.local import LocalFileSystem
 import numpy as np
@@ -104,7 +104,7 @@ def _write_mcap(path: Path) -> None:
         writer.finish()
 
 
-def _write_custom_encoding_mcap(path: Path) -> None:
+def _write_custom_encoding_mcap(path: Path, values: Sequence[int] = (7,)) -> None:
     with path.open("wb") as stream:
         writer = mcap_writer.Writer(stream)
         writer.start()
@@ -118,13 +118,14 @@ def _write_custom_encoding_mcap(path: Path) -> None:
             message_encoding="custom",
             schema_id=schema_id,
         )
-        writer.add_message(
-            channel_id=channel,
-            log_time=0,
-            data=b"7",
-            publish_time=0,
-            sequence=1,
-        )
+        for index, value in enumerate(values):
+            writer.add_message(
+                channel_id=channel,
+                log_time=index,
+                data=str(value).encode(),
+                publish_time=index,
+                sequence=index + 1,
+            )
         writer.finish()
 
 
@@ -978,6 +979,34 @@ def test_mcap_reader_keeps_explicit_subfield_decoding_raw(
     row = read_mcap(str(path), fields={"value": "/custom.value"}).materialize()[0]
 
     assert row["records"].column("value").to_pylist() == [7]
+
+
+def test_mcap_reader_caches_decoders_per_channel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Decoded:
+        def __init__(self, value: int):
+            self.value = value
+
+    class DecoderFactory:
+        calls = 0
+
+        def decoder_for(self, message_encoding: str, schema: Any):
+            self.calls += 1
+            if message_encoding == "custom":
+                return lambda data: Decoded(int(data))
+            return None
+
+    path = tmp_path / "custom.mcap"
+    _write_custom_encoding_mcap(path, values=(7, 8))
+    factory = DecoderFactory()
+    monkeypatch.setattr(mcap_reader, "_decoder_factories", lambda: [factory])
+
+    row = read_mcap(str(path), fields={"value": "/custom.value"}).materialize()[0]
+
+    assert row["records"].column("value").to_pylist() == [7, 8]
+    assert factory.calls == 1
 
 
 def test_mcap_reader_preserves_explicit_empty_fields(tmp_path: Path) -> None:
