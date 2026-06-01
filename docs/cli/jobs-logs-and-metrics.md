@@ -54,6 +54,8 @@ macrodata jobs get job_123 --json
 runtime resources, step summaries, and availability of manifest, logs, and
 metrics.
 
+With `--json`, `get` prints the normalized job object directly.
+
 Example output:
 
 ```text

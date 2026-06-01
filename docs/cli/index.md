@@ -59,6 +59,8 @@ Pagination commands return cursors in JSON responses and print a follow-up
 command in human-readable mode. Use `--cursor` with `jobs list`, `jobs workers`,
 and `jobs logs`.
 
+`macrodata jobs get <job_id> --json` prints the job object directly.
+
 ## Help
 
 Every command exposes its current options through `--help`:

@@ -49,7 +49,7 @@ def register_jobs_command(
 
     jobs_get = jobs_subparsers.add_parser("get", help="Get job summary")
     jobs_get.add_argument("job_id", help="Job identifier")
-    jobs_get.add_argument("--json", action="store_true", help="Print raw JSON response")
+    jobs_get.add_argument("--json", action="store_true", help="Print job JSON")
     jobs_get.set_defaults(handler=cmd_jobs_get)
 
     jobs_attach = jobs_subparsers.add_parser(

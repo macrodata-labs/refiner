@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import json
 from argparse import Namespace
 from datetime import datetime
 from types import SimpleNamespace
@@ -312,6 +313,19 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "columns=18" in out.out
     assert "__meta" not in out.out
     assert "\x1b[" not in out.out
+
+
+def test_jobs_get_json_output_prints_job_object(monkeypatch, capsys) -> None:
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_get(Namespace(job_id="job-1", json=True))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    payload = json.loads(out.out)
+    assert payload["id"] == "job-1"
+    assert payload["name"] == "cloud pipeline"
+    assert "job" not in payload
 
 
 def test_jobs_get_plain_output_shows_rundir_for_local_jobs(monkeypatch, capsys) -> None:

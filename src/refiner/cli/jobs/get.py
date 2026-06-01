@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 import sys
-from typing import Any
+from typing import Any, cast
 
 from refiner.cli.common import create_client
 from refiner.cli.common import print_table
@@ -230,8 +230,14 @@ def _render_job(payload: dict[str, Any]) -> int:
 
 
 def cmd_jobs_get(args: Namespace) -> int:
+    def _fetch() -> dict[str, Any]:
+        payload = create_client().cli_get_job(job_id=args.job_id)
+        if args.json:
+            return cast(dict[str, Any], payload["job"])
+        return payload
+
     return _run_job_command(
         as_json=args.json,
-        fetch=lambda: create_client().cli_get_job(job_id=args.job_id),
+        fetch=_fetch,
         renderer=_render_job,
     )
