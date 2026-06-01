@@ -63,7 +63,9 @@ def reward_score(
             max_frames=max_frames,
         )
         task_text = _resolve_task_text(row, task)
-        content: list[dict[str, Any]] = [{"type": "text", "text": task_text}]
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": _robometer_progress_prompt(task_text)}
+        ]
         for frame in frames:
             content.append(
                 {
@@ -181,6 +183,16 @@ def _resolve_task_text(row: LeRobotRow, task: TaskSource | None) -> str:
     if not value.strip():
         raise ValueError(f"episode {row.episode_index} has no task text")
     return value.strip().removesuffix(".")
+
+
+def _robometer_progress_prompt(task_text: str) -> str:
+    return (
+        f"The task for the robot is '{task_text}'. Given the trajectory video, "
+        "predict the task progress at each frame, how far along the robot is "
+        "towards completing the task, a float between 0 and 1, where 0 is the "
+        "starting state and 1 is when the task is completed. If the robot is "
+        "not performing the same task, predict 0 progress."
+    )
 
 
 async def _sample_video_frames(
