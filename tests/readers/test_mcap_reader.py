@@ -1171,6 +1171,28 @@ def test_mcap_reader_streams_marker_episodes(tmp_path: Path) -> None:
     ]
 
 
+def test_mcap_reader_allows_missing_marker_topic_with_explicit_fields(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    rows = read_mcap(
+        str(path),
+        fields={"state": "/joint_states.q"},
+        sync_primary="state",
+        episode_splitting={"marker_topic": "/episode_start"},
+        stream_episodes=True,
+    ).materialize()
+
+    assert len(rows) == 1
+    assert rows[0]["records"].column("state").to_pylist() == [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ]
+
+
 def test_mcap_reader_preserves_selected_empty_episode_fields(tmp_path: Path) -> None:
     path = tmp_path / "markers-sparse-action.mcap"
     _write_marker_mcap_with_sparse_action(path)

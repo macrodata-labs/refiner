@@ -355,14 +355,16 @@ class McapReader(BaseReader):
                     if not selected_sources:
                         read_topics = ()
                     elif summary_topics:
-                        read_topics = tuple(
-                            sorted(
-                                {
-                                    _resolve_source(source, summary_topics)[0]
-                                    for source in selected_sources
-                                }
-                            )
-                        )
+                        topics: set[str] = set()
+                        for selected_source in selected_sources:
+                            try:
+                                topics.add(
+                                    _resolve_source(selected_source, summary_topics)[0]
+                                )
+                            except KeyError:
+                                if selected_source != self._marker_topic:
+                                    raise
+                        read_topics = tuple(sorted(topics))
                 plain_decoding = True
                 if selected_sources is not None and summary_topics and not self.videos:
                     plain_decoding = any(
