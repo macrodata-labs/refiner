@@ -34,6 +34,9 @@ def parse_args() -> argparse.Namespace:
         "--max-files-per-suite", type=int, default=None, help=argparse.SUPPRESS
     )
     parser.add_argument("--workers", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--cpus-per-worker", type=int, default=1, help=argparse.SUPPRESS
+    )
     parser.add_argument("--codec", default="mpeg4", help=argparse.SUPPRESS)
     parser.add_argument("--pix-fmt", default="yuv420p", help=argparse.SUPPRESS)
     parser.add_argument("--cloud", action="store_true")
@@ -127,7 +130,7 @@ def main() -> None:
         pipeline.launch_cloud(
             name=f"libero-hdf5-eval-{args.episodes}ep-cached",
             num_workers=args.workers or input_file_count,
-            cpus_per_worker=1,
+            cpus_per_worker=args.cpus_per_worker,
             mem_mb_per_worker=1024,
             extra_dependencies=DEFAULT_CLOUD_DEPENDENCIES,
             secrets=mdr.Secrets.env(name="default", keys=["HF_TOKEN"]),
