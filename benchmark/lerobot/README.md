@@ -68,14 +68,9 @@ Artifacts are written under `benchmark/lerobot/artifacts/` by default:
 - one summary JSON for the whole benchmark session
 
 For LIBERO HDF5, the final benchmark target is the full eval dataset across all
-four subsets: `libero_spatial`, `libero_object`, `libero_goal`, and `libero_10`.
-Run the cached full-eval benchmark with:
+four subsets: `libero_spatial`, `libero_object`, `libero_goal`, and `libero_10`,
+using 50 episodes per file. Run it with:
 
 ```bash
 MACRODATA_BASE_URL=https://dev.macrodata.co uv run python benchmark/lerobot/run_libero_hdf5_benchmark.py
 ```
-
-The important speedup is `read_hdf5(..., cache_remote_files=True)`: on the
-single-file 50-episode cloud benchmark, stage 0 dropped from about 113s to 49s.
-The benchmark keeps the default video encoding settings, uses one CPU per
-worker, and prepares up to two episode videos in flight per worker.
