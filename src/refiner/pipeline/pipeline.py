@@ -966,8 +966,8 @@ def read_mcap(
             `"nearest"`, `"hold"`, or `"interpolate"`.
         include_skew: Whether to add alignment timestamp/skew columns for
             non-primary aligned fields.
-        fps: Explicit video/frame rate. If omitted, aligned reads infer it from
-            `sync_primary` timestamps when possible.
+        fps: Positive explicit video/frame rate. If omitted, aligned reads infer
+            it from `sync_primary` timestamps when possible.
     """
     return RefinerPipeline(
         source=McapReader(

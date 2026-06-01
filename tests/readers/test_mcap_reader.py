@@ -1345,6 +1345,14 @@ def test_mcap_reader_preserves_fractional_video_fps(tmp_path: Path) -> None:
     assert row["videos"]["front"].fps == 29.97
 
 
+def test_mcap_reader_rejects_non_positive_fps(tmp_path: Path) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    with pytest.raises(ValueError, match="fps must be > 0"):
+        read_mcap(str(path), videos={"front": "/image.frame"}, fps=0).materialize()
+
+
 def test_mcap_reader_rounds_near_integer_inferred_video_fps(tmp_path: Path) -> None:
     path = tmp_path / "rounded-fps.mcap"
     _write_nanosecond_rounded_fps_mcap(path)

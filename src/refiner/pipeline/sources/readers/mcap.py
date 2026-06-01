@@ -100,12 +100,16 @@ class McapReader(BaseReader):
                 `"nearest"`, `"hold"`, or `"interpolate"`.
             include_skew: Whether to add alignment timestamp/skew columns for
                 non-primary aligned fields.
-            fps: Explicit video/frame rate. If omitted, aligned reads infer it
-                from `sync_primary` timestamps when possible.
+            fps: Positive explicit video/frame rate. If omitted, aligned reads
+                infer it from `sync_primary` timestamps when possible.
         """
         time_gap_s, marker_topic = _parse_episode_splitting(episode_splitting)
         if sync_method not in ("nearest", "interpolate", "hold"):
             raise ValueError("sync_method must be 'nearest', 'interpolate', or 'hold'")
+        if fps is not None:
+            fps = float(fps)
+            if not np.isfinite(fps) or fps <= 0:
+                raise ValueError("fps must be > 0")
         if file_path_column in _ROW_COLUMNS:
             raise ValueError(
                 f"file_path_column cannot use reserved MCAP row column {file_path_column!r}"
@@ -256,8 +260,10 @@ class McapReader(BaseReader):
                 include_skew=self.include_skew,
             )
         )
-        inferred_fps = self.fps or _infer_fps(sync_primary_events)
-        video_fps = inferred_fps or 30
+        inferred_fps = (
+            self.fps if self.fps is not None else _infer_fps(sync_primary_events)
+        )
+        video_fps = inferred_fps if inferred_fps is not None else 30
         if self.videos:
             rounded_fps = round(video_fps)
             if abs(video_fps - rounded_fps) <= 1e-6:

@@ -137,9 +137,9 @@ the same timestamps. `read_mcap` supports these synchronization choices:
 
 | Mode | How to select it | Output rows | Best for |
 | --- | --- | --- | --- |
-| Unsynchronized | Leave `sync_primary=None` | One records table row for each selected field message timestamp. Missing fields are null. Selected videos stay separate in `videos`. | Event logs, debugging, preserving each topic's original timing. |
+| Unsynchronized | Leave `sync_primary=None` | One records table row for each selected field value timestamp. Missing fields are null. Selected videos stay separate in `videos`. | Event logs, debugging, preserving each topic's original timing. |
 | Field sync-primary aligned | Set `sync_primary` to a selected field name, topic, or dotted source path. | One records table row for each sync-primary field timestamp. Other fields and videos are aligned with `sync_method`. | Robot state or action streams that define the trajectory clock. |
-| Video sync-primary aligned | Set `sync_primary` to a selected video name, video topic, or dotted video source path. | One records table row for each sync-primary video frame timestamp. Fields and other videos are aligned with `sync_method`. | Camera-driven datasets where image frames define the training samples. |
+| Video sync-primary aligned | Set `sync_primary` to a selected video name, video topic, or dotted video source path. | One records table row for each sync-primary video frame timestamp. Fields and other videos are aligned with `sync_method`. | Camera-driven datasets where image frames define the output rows. |
 
 ### Unsynchronized Mode
 
@@ -155,9 +155,10 @@ mdr.read_mcap(
 )
 ```
 
-This creates one records table over the union of selected message
-timestamps. For example, if state arrives at `0.0` and `1.0` seconds, while
-commands arrive at `0.5` seconds, the output is:
+This creates one records table over the union of selected field value
+timestamps. Messages where a selected dotted subfield is absent are skipped.
+For example, if state arrives at `0.0` and `1.0` seconds, while commands
+arrive at `0.5` seconds, the output is:
 
 | timestamp | state | command |
 | --- | --- | --- |
@@ -214,7 +215,7 @@ slightly after each state sample:
 
 If `include_skew=True`, `read_mcap` also adds columns such as
 `mcap.command.timestamp` and `mcap.command.skew_ms` so you can inspect how far
-each non-primary aligned sample was from the sync-primary timestamp. Set
+each non-primary aligned value was from the sync-primary timestamp. Set
 `include_skew=False` to omit those diagnostic columns.
 
 The reader does not assume raw MCAP events arrive in timestamp order. It sorts
@@ -223,7 +224,7 @@ rows, sync-primary alignment, and fps inference.
 
 ## FPS
 
-Pass `fps=...` when you already know the intended episode frame rate:
+Pass a positive `fps=...` when you already know the intended episode frame rate:
 
 ```python
 mdr.read_mcap("run.mcap", sync_primary="state", fps=30)
@@ -483,7 +484,7 @@ For non-robotics event logs, write the record fields directly:
 | `sync_primary` | `None` | Source used for sync-primary-aligned synchronization. |
 | `sync_method` | `"nearest"` | Alignment method for sync-primary-aligned mode: `"nearest"`, `"hold"`, or `"interpolate"`. |
 | `include_skew` | `True` | Add alignment timestamp/skew columns in sync-primary-aligned mode. |
-| `fps` | `None` | Explicit frame rate. Overrides inferred fps. |
+| `fps` | `None` | Positive explicit frame rate. Overrides inferred fps. |
 
 ## Related Pages
 
