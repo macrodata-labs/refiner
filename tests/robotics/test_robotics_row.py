@@ -227,6 +227,22 @@ def test_to_robot_rows_accepts_literal_fps_and_robot_type() -> None:
     assert robotics_row.robot_type == "koch"
 
 
+def test_to_robot_rows_infers_timestamps_from_literal_fps() -> None:
+    row = DictRow({"episode_id": "episode-1", "action": [[0.0], [0.1], [0.2]]})
+
+    robotics_row = _robot_row(row, fps=10.0, state_key=None)
+
+    assert robotics_row.to_frame_table().column(
+        "timestamp"
+    ).to_pylist() == pytest.approx(
+        [
+            0.0,
+            0.1,
+            0.2,
+        ]
+    )
+
+
 def test_to_robot_rows_preserves_explicit_fps_and_robot_type_keys() -> None:
     row = DictRow(
         {

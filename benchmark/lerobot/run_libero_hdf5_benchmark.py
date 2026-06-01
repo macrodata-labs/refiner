@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import numpy as np
 
 import refiner as mdr
 from refiner.pipeline.data.row import Row
@@ -10,23 +9,17 @@ from refiner.pipeline.data.row import Row
 DEFAULT_DATASET_ROOT = "hf://datasets/yifengzhu-hf/LIBERO-datasets"
 DEFAULT_OUTPUT_PREFIX = "hf://buckets/macrodata/test_bucket/libero-hdf5-benchmark"
 EVAL_SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
-FPS = 20.0
+FPS = 10.0
 
 
-def normalize_libero_row(row: Row) -> Row:
-    action = np.asarray(row["raw_action"], dtype=np.float32)
+def label_libero_row(row: Row) -> Row:
     file_path = str(row["file_path"])
     task = file_path.rsplit("/", 1)[-1].removesuffix(".hdf5").removesuffix("_demo")
     demo = str(row["hdf5_group"]).rsplit("/", 1)[-1]
     return row.update(
         episode_id=f"{file_path.rsplit('/', 2)[-2]}/{task}/{demo}",
         task=task.replace("_", " "),
-        action=np.concatenate(
-            [action[:, :6], (1.0 - np.clip(action[:, -1], 0.0, 1.0))[:, None]],
-            axis=1,
-        ),
-        timestamp=np.arange(action.shape[0], dtype=np.float32) / FPS,
-    ).drop("raw_action")
+    )
 
 
 def main() -> None:
@@ -48,13 +41,13 @@ def main() -> None:
             group_path_column="hdf5_group",
             cache_remote_files=True,
         )
-        .map(normalize_libero_row)
+        .map(label_libero_row)
         .to_robot_rows(
             episode_id_key="episode_id",
             task_key="task",
             fps=FPS,
             robot_type="libero",
-            action_key="action",
+            action_key="raw_action",
             state_key=("ee_state", "gripper_state"),
             video_keys={
                 "observation.images.image": "observation.images.image",

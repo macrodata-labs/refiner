@@ -395,15 +395,23 @@ class _RoboticsRowView(Row, RoboticsRow):
         table = self._nested_frame_table()
         if table is not None:
             return self._semantic_frame_table(table)
-        return Tabular(
-            pa.table(
-                {
-                    semantic_key: _source_values(self._row, source_key)
-                    for semantic_key, source_key in self._spec.frame_source_map.items()
-                    if _has_source(self._row, source_key)
-                }
+        values = {
+            semantic_key: _source_values(self._row, source_key)
+            for semantic_key, source_key in self._spec.frame_source_map.items()
+            if _has_source(self._row, source_key)
+        }
+        if (
+            "timestamp" in self._spec.frame_source_map
+            and "timestamp" not in values
+            and self.fps is not None
+            and values
+        ):
+            length = len(next(iter(values.values())))
+            values["timestamp"] = pa.array(
+                [index / float(self.fps) for index in range(length)],
+                type=pa.float32(),
             )
-        )
+        return Tabular(pa.table(values))
 
     def drop_stats(self, feature: str) -> "_RoboticsRowView":
         row = self._row
