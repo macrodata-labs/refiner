@@ -64,6 +64,23 @@ By default, Refiner adds a `file_path` column with the source TFRecord path. Set
 `file_path_column=None` to omit it. If your parsed features already include the
 same column name, Refiner leaves the parsed value unchanged.
 
+### TFRecord Options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `inputs` | required | TFRecord file, glob, directory, or sequence of inputs. |
+| `features` | required | Mapping passed to `tf.io.parse_example`. |
+| `fs` | `None` | Optional fsspec filesystem for string inputs. TensorFlow reads resolved local paths. |
+| `storage_options` | `None` | Optional fsspec options when constructing a filesystem. |
+| `recursive` | `False` | Recursively list directory inputs. |
+| `target_shard_bytes` | `128 MiB` | Target file-shard planning size. TFRecord files remain atomic. |
+| `num_shards` | `None` | Optional target number of planned file shards. |
+| `batch_size` | `1024` | Serialized examples parsed per TensorFlow batch. |
+| `compression` | `"auto"` | `None`, `"auto"`, `"gzip"`, or `"zlib"`. |
+| `num_parallel_calls` | `None` | TensorFlow parse map parallelism. |
+| `prefetch` | `1` | TensorFlow prefetch depth. Set to `None` to disable prefetching. |
+| `file_path_column` | `"file_path"` | Source file column name. Set to `None` to omit it. Existing parsed feature names are not overwritten. |
+
 ## TensorFlow Datasets
 
 Use `read_tfds(...)` for datasets available through TensorFlow Datasets, a
@@ -124,6 +141,25 @@ TFDS decoding stays under TensorFlow Datasets. Pass `decoders`, `read_config`,
 For RLDS-style datasets, `videos` lifts image sequences from nested `steps`
 datasets into lazy `VideoFrameSequence` values and removes those frame arrays
 from the per-step table.
+
+### TFDS Options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `input` | required | TFDS dataset name or prepared TFDS directory. |
+| `config` | `None` | Optional TFDS builder config. Not used with prepared TFDS directories. |
+| `split` | `"train"` | Plain split name from `builder.info.splits`. |
+| `data_dir` | `None` | Optional local TFDS data directory for catalog datasets. Not used with prepared TFDS directories. |
+| `download` | `False` | Call `download_and_prepare()` for catalog datasets. Not used with prepared TFDS directories. |
+| `batch_size` | `1024` | Decoded examples per emitted tabular batch when the dataset can be batched. |
+| `examples_per_shard` | `10_000` | Target examples per planned shard when `num_shards` is omitted. |
+| `num_shards` | `None` | Optional target number of planned row-range shards. |
+| `shuffle_files` | `False` | Passed to `builder.as_dataset`. |
+| `read_config` | `None` | Optional TFDS read config. |
+| `decoders` | `None` | Optional TFDS feature decoders. |
+| `as_supervised` | `False` | Read supervised `(input, target)` pairs. |
+| `videos` | `None` | Video-name to nested dataset frame path mapping, such as `{"front": "steps/observation/image"}`. |
+| `fps` | `30.0` | Frame rate used for `videos`. |
 
 ## Performance Trade-Offs
 
