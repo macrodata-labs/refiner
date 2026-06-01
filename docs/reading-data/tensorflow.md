@@ -20,6 +20,24 @@ Use `read_tfrecords(...)` when you already have TFRecord files and know the
 `tf.io` feature spec:
 
 ```python
+mdr.read_tfrecords(
+    inputs,
+    *,
+    features,
+    fs=None,
+    storage_options=None,
+    recursive=False,
+    target_shard_bytes=128 * 1024 * 1024,
+    num_shards=None,
+    batch_size=1024,
+    compression="auto",
+    num_parallel_calls=None,
+    prefetch=1,
+    file_path_column="file_path",
+)
+```
+
+```python
 import tensorflow as tf
 import refiner as mdr
 
@@ -50,6 +68,26 @@ same column name, Refiner leaves the parsed value unchanged.
 
 Use `read_tfds(...)` for datasets available through TensorFlow Datasets, a
 local TFDS `data_dir`, or a prepared TFDS directory:
+
+```python
+mdr.read_tfds(
+    input,
+    *,
+    config=None,
+    split="train",
+    data_dir=None,
+    download=False,
+    batch_size=1024,
+    examples_per_shard=10_000,
+    num_shards=None,
+    shuffle_files=False,
+    read_config=None,
+    decoders=None,
+    as_supervised=False,
+    videos=None,
+    fps=30.0,
+)
+```
 
 ```python
 import refiner as mdr
