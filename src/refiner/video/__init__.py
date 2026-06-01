@@ -1,6 +1,7 @@
 from refiner.video.decode import (
     DecodedFrameWindow,
     DecodedVideoFrame,
+    decode_raw_h264_frames,
     export_clip,
     iter_frame_windows,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "VideoTranscodeConfig",
     "WrittenVideo",
     "WrittenVideoSegment",
+    "decode_raw_h264_frames",
     "export_clip",
     "iter_frame_windows",
     "prepared_source_is_remuxable",

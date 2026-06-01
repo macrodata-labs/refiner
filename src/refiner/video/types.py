@@ -215,11 +215,12 @@ class VideoBytes:
 @dataclass(frozen=True, slots=True, eq=False)
 class VideoFrameArray:
     frames: Any = field(repr=False, compare=False)
-    fps: int = 30
+    fps: float = 30.0
     _array: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if int(self.fps) <= 0:
+        fps = float(self.fps)
+        if not math.isfinite(fps) or fps <= 0:
             raise ValueError("fps must be > 0")
         array = np.asarray(self.frames)
         if array.ndim != 4:
@@ -232,7 +233,7 @@ class VideoFrameArray:
             array = np.clip(array, 0, 255).astype(np.uint8)
         if not array.flags.c_contiguous:
             array = np.ascontiguousarray(array)
-        object.__setattr__(self, "fps", int(self.fps))
+        object.__setattr__(self, "fps", fps)
         object.__setattr__(self, "_array", array)
 
     @property
@@ -277,7 +278,8 @@ class VideoFrameArray:
         for index, frame_array in enumerate(self._array):
             frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
             frame.pts = index
-            frame.time_base = Fraction(1, self.fps)
+            rate = Fraction(self.fps).limit_denominator(100000)
+            frame.time_base = Fraction(rate.denominator, rate.numerator)
             yield DecodedVideoFrame(
                 index=index,
                 pts=index,
@@ -320,7 +322,7 @@ def video_from_storage_value(
     storage: str | None,
     value: Any,
     *,
-    fps: int = 30,
+    fps: float = 30.0,
 ) -> VideoSource | None:
     if value is None:
         return None

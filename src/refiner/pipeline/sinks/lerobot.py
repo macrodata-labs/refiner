@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Sequence, cast
 
 import pyarrow as pa
@@ -251,7 +252,7 @@ class LeRobotWriterSink(BaseSink):
         is_lerobot_row = isinstance(row, LeRobotRow)
         is_generic_robotics_row = not is_lerobot_row and isinstance(row, RoboticsRow)
         if isinstance(row, LeRobotRow):
-            metadata = row.metadata
+            metadata = _metadata_with_lerobot_fps(row.metadata)
             frames = (
                 row.frames
                 if isinstance(row.frames, Tabular)
@@ -296,9 +297,7 @@ class LeRobotWriterSink(BaseSink):
 
             metadata = LeRobotMetadata(
                 info=LeRobotInfo(
-                    fps=(
-                        int(robotics_row.fps) if robotics_row.fps is not None else None
-                    ),
+                    fps=_lerobot_integer_fps(robotics_row.fps),
                     robot_type=robotics_row.robot_type,
                 ),
                 stats=LeRobotStatsFile({}),
@@ -528,7 +527,7 @@ class LeRobotWriterSink(BaseSink):
                 codec=segment.codec,
                 pix_fmt=segment.pix_fmt,
                 is_depth_map=False,
-                fps=segment.fps,
+                fps=_lerobot_integer_fps(segment.fps),
                 has_audio=False,
             ),
         )
@@ -617,6 +616,26 @@ class LeRobotWriterSink(BaseSink):
 
     def build_reducer(self) -> BaseSink:
         return LeRobotMetaReduceSink(output=self.output)
+
+
+def _metadata_with_lerobot_fps(metadata: LeRobotMetadata) -> LeRobotMetadata:
+    fps = _lerobot_integer_fps(metadata.info.fps)
+    if fps == metadata.info.fps:
+        return metadata
+    return replace(metadata, info=replace(metadata.info, fps=fps))
+
+
+def _lerobot_integer_fps(fps: float | int | None) -> int | None:
+    if fps is None:
+        return None
+    value = float(fps)
+    rounded = round(value)
+    if not math.isfinite(value) or abs(value - rounded) > 1e-6:
+        raise ValueError(
+            "LeRobot output requires integer fps; "
+            f"got {fps}. Pass an integer fps or resample before writing."
+        )
+    return int(rounded)
 
 
 __all__ = [

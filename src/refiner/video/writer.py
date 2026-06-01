@@ -31,7 +31,7 @@ class WrittenVideoSegment:
     output_rel: str
     from_timestamp: float
     to_timestamp: float
-    fps: int
+    fps: float
     width: int
     height: int
     codec: str
@@ -152,7 +152,7 @@ class VideoStreamWriter:
             output_rel=self._current_output_rel,
             from_timestamp=from_timestamp,
             to_timestamp=to_timestamp,
-            fps=int(writer.fps),
+            fps=float(writer.fps),
             width=int(writer.stream.width),
             height=int(writer.stream.height),
             codec=self.transcode_config.codec,
@@ -184,7 +184,7 @@ class VideoStreamWriter:
                 output_rel=self._current_output_rel,
                 from_timestamp=from_timestamp,
                 to_timestamp=to_timestamp,
-                fps=int(probe.fps),
+                fps=float(probe.fps),
                 width=int(probe.width),
                 height=int(probe.height),
                 codec=str(probe.codec or self.transcode_config.codec),
@@ -195,9 +195,9 @@ class VideoStreamWriter:
             return WrittenVideo(segment=segment, mode="remux")
 
         fps = (
-            int(prepared.probe.fps)
+            float(prepared.probe.fps)
             if prepared.probe is not None and prepared.probe.fps is not None
-            else int(self._writer.fps)
+            else float(self._writer.fps)
             if isinstance(self._writer, TranscodeWriter)
             else None
         )
@@ -217,7 +217,7 @@ class VideoStreamWriter:
             output_rel=self._current_output_rel,
             from_timestamp=from_timestamp,
             to_timestamp=to_timestamp,
-            fps=int(writer.fps),
+            fps=float(writer.fps),
             width=int(writer.stream.width),
             height=int(writer.stream.height),
             codec=self.transcode_config.codec,
@@ -227,7 +227,7 @@ class VideoStreamWriter:
             self._rotate_writer()
         return WrittenVideo(segment=segment, mode="transcode")
 
-    def _ensure_transcode_writer(self, fps: int) -> TranscodeWriter:
+    def _ensure_transcode_writer(self, fps: float) -> TranscodeWriter:
         writer = self._writer
         if isinstance(writer, TranscodeWriter) and writer.fps == fps:
             if writer.size_bytes >= self.video_bytes_limit:

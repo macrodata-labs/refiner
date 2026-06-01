@@ -2025,6 +2025,66 @@ def test_write_zarr_materializes_frame_array_videos(tmp_path: Path) -> None:
     np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
 
 
+def test_write_zarr_defaults_include_robotics_videos(tmp_path: Path) -> None:
+    output = tmp_path / "default-video.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "frames": frames, "action": [[0.0], [0.1]]}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"observation.images.front": "frames"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(str(output), reduce_to_single_store=False).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    row = mdr.read_zarr(
+        zarr_store,
+        arrays={
+            "action": "data/action",
+            "front": "data/observation.images.front",
+        },
+        file_path_column=None,
+    ).take(1)[0]
+    np.testing.assert_array_equal(row["front"], frames)
+    np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
+
+
+def test_write_zarr_defaults_include_non_observation_robotics_videos(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "default-video-short-key.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "frames": frames, "action": [[0.0], [0.1]]}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"front": "frames"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(str(output), reduce_to_single_store=False).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    row = mdr.read_zarr(
+        zarr_store,
+        arrays={"front": "data/front"},
+        file_path_column=None,
+    ).take(1)[0]
+    np.testing.assert_array_equal(row["front"], frames)
+
+
 def test_write_zarr_rejects_empty_frame_array_videos(tmp_path: Path) -> None:
     output = tmp_path / "empty-video.zarr"
     frames = np.empty((0, 4, 5, 3), dtype=np.uint8)

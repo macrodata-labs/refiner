@@ -421,6 +421,8 @@ def _default_robotics_arrays(row: Row) -> dict[str, str]:
         arrays["data/observation.state"] = "observation.state"
     if row.timestamps is not None:
         arrays["data/timestamp"] = "timestamp"
+    for key in row.videos:
+        arrays[f"data/{key}"] = key
     return arrays
 
 
@@ -500,14 +502,11 @@ def _row_value(row: Row, key: str) -> Any:
             return row.states
         if key == "timestamp":
             return row.timestamps
+        video = row.videos.get(key)
+        if video is not None:
+            return video
         if key.startswith("observation."):
-            try:
-                return row.observations(key)
-            except KeyError:
-                video = row.videos.get(key)
-                if video is None:
-                    raise
-                return video
+            return row.observations(key)
     return row[key]
 
 

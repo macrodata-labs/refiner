@@ -53,12 +53,20 @@ zarr = [
     "zarr>=2.18,<3",
     "numcodecs<0.16",
 ]
+mcap = [
+    "av",
+    "mcap",
+    "mcap-protobuf-support",
+    "mcap-ros2-support",
+    "pillow",
+]
 s3 = [
     "s3fs",
 ]
 testing = [
     "macrodata-refiner[hdf5]",
     "macrodata-refiner[hf]",
+    "macrodata-refiner[mcap]",
     "macrodata-refiner[video]",
     "macrodata-refiner[zarr]",
     "macrodata-refiner[text]",

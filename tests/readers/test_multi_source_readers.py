@@ -83,6 +83,17 @@ def test_datafileset_extensions_do_not_filter_explicit_files() -> None:
         assert fileset.files[0].path == str(local_path)
 
 
+def test_datafileset_extensions_do_not_filter_explicit_globs() -> None:
+    with TemporaryDirectory() as tmp:
+        local_path = Path(tmp) / "local.txt"
+        local_path.write_text("x")
+
+        fileset = DataFileSet.resolve(str(Path(tmp) / "*.txt"), extensions=(".jsonl",))
+
+        assert len(fileset.files) == 1
+        assert fileset.files[0].path == str(local_path)
+
+
 def test_jsonl_reader_reads_across_multiple_directories() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)

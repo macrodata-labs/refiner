@@ -7,6 +7,7 @@ from refiner.pipeline.sources.readers import (
     Hdf5Reader,
     JsonReader,
     LeRobotEpisodeReader,
+    McapReader,
     ParquetReader,
     ZarrReader,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "Hdf5Reader",
     "JsonReader",
     "LeRobotEpisodeReader",
+    "McapReader",
     "ParquetReader",
     "ZarrReader",
 ]
