@@ -585,7 +585,7 @@ class RefinerPipeline:
         *,
         data_files_size_in_mb: int = 100,
         video_files_size_in_mb: int = 200,
-        max_video_prepare_in_flight: int = 2,
+        max_video_prepare_in_flight: int = 10,
         codec: str = "mpeg4",
         pix_fmt: str = "yuv420p",
         transencoding_threads: int | None = None,

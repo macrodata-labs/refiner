@@ -49,7 +49,7 @@ def main() -> None:
                 "observation.images.wrist_image": "observation.images.wrist_image",
             },
         )
-        .write_lerobot(output)
+        .write_lerobot(output, max_video_prepare_in_flight=2)
         .launch_cloud(
             name="libero-hdf5-full-eval",
             num_workers=40,

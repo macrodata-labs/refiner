@@ -40,7 +40,7 @@ def main() -> None:
             fps=FPS,
             robot_type="libero",
         )
-        .write_lerobot(output)
+        .write_lerobot(output, max_video_prepare_in_flight=2)
         .launch_cloud(
             name="libero-rlds-full-eval",
             num_workers=40,
