@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +46,7 @@ class BaseReader(BaseSource):
         storage_options: Mapping[str, Any] | None = None,
         recursive: bool = False,
         extensions: Sequence[str] = (),
+        include_file: Callable[[str], bool] | None = None,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
         file_path_column: str | None = "file_path",
@@ -60,6 +61,7 @@ class BaseReader(BaseSource):
             storage_options: Optional fsspec init options (used only when `fs` is not provided).
             recursive: If a directory input is provided, whether to list recursively.
             extensions: If a directory input is provided, filter by these suffixes (case-insensitive).
+            include_file: Optional predicate for files discovered from directory inputs.
             target_shard_bytes: Target approximate byte size for planned shards.
             num_shards: Optional explicit number of planned shards.
             dtypes: Optional dtype overrides exposed as this source's schema.
@@ -70,6 +72,7 @@ class BaseReader(BaseSource):
             storage_options=storage_options,
             recursive=recursive,
             extensions=extensions,
+            include_file=include_file,
         )
         self.target_shard_bytes = max(1, target_shard_bytes)
         self.num_shards = num_shards

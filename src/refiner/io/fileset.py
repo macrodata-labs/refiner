@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import glob
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from os import PathLike
 from typing import Any, Literal, TypeAlias, Union, cast
@@ -38,6 +38,7 @@ class DataFileSet:
     entries: tuple[DataFile | DataFolder | _PathSource, ...]
     recursive: bool = False
     extensions: tuple[str, ...] = ()
+    include_file: Callable[[str], bool] | None = None
     _expanded_sources: tuple[tuple[DataFile, ...], ...] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -54,9 +55,13 @@ class DataFileSet:
         storage_options: Mapping[str, Any] | None = None,
         recursive: bool = False,
         extensions: Sequence[str] | None = None,
+        include_file: Callable[[str], bool] | None = None,
         expect_type: Literal["file", "folder"] | None = None,
     ) -> "DataFileSet":
-        """Normalize input specs into a lazy file set without listing them yet."""
+        """Normalize input specs into a lazy file set without listing them yet.
+
+        `include_file` filters files discovered from directory inputs only.
+        """
         if isinstance(data, cls):
             return data
 
@@ -148,6 +153,7 @@ class DataFileSet:
             entries=tuple(normalized_entries),
             recursive=recursive,
             extensions=tuple(extensions or ()),
+            include_file=include_file,
         )
 
     @property
@@ -223,6 +229,7 @@ class DataFileSet:
             return cached
 
         exts = tuple(e.lower() for e in self.extensions)
+        include_file = self.include_file
         seen: set[tuple[int, str]] = set()
         expanded: list[tuple[DataFile, ...]] = []
         sizes = dict(self._sizes)
@@ -235,6 +242,12 @@ class DataFileSet:
             apply_extensions: bool = True,
         ) -> None:
             if apply_extensions and exts and not file.path.lower().endswith(exts):
+                return
+            if (
+                apply_extensions
+                and include_file is not None
+                and not include_file(file.path)
+            ):
                 return
             key = (id(file.fs), file.path)
             if key in seen:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -17,6 +18,19 @@ from refiner.pipeline.sources.readers.utils import (
     tensorflow_batch_to_table,
 )
 from refiner.utils import check_required_dependencies
+
+_TFRECORD_SUFFIXES = (
+    ".tfrecord",
+    ".tfrecords",
+    ".tfrec",
+    ".tfrecord.gz",
+    ".tfrecords.gz",
+    ".tfrec.gz",
+    ".tfrecord.zlib",
+    ".tfrecords.zlib",
+    ".tfrec.zlib",
+)
+_TFRECORD_SHARD_RE = re.compile(r"\.(?:tfrecords?|tfrec)-\d+-of-\d+(?:\.(?:gz|zlib))?$")
 
 
 class TfrecordReader(BaseReader):
@@ -75,17 +89,7 @@ class TfrecordReader(BaseReader):
             fs=fs,
             storage_options=storage_options,
             recursive=recursive,
-            extensions=(
-                ".tfrecord",
-                ".tfrecords",
-                ".tfrec",
-                ".tfrecord.gz",
-                ".tfrecords.gz",
-                ".tfrec.gz",
-                ".tfrecord.zlib",
-                ".tfrecords.zlib",
-                ".tfrec.zlib",
-            ),
+            include_file=_is_tfrecord_path,
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             file_path_column=file_path_column,
@@ -189,6 +193,13 @@ class TfrecordReader(BaseReader):
         if path.endswith(".zlib"):
             return "ZLIB"
         return ""
+
+
+def _is_tfrecord_path(path: str) -> bool:
+    path = path.lower()
+    return (
+        path.endswith(_TFRECORD_SUFFIXES) or _TFRECORD_SHARD_RE.search(path) is not None
+    )
 
 
 __all__ = ["TfrecordReader"]

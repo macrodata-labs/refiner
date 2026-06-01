@@ -135,6 +135,19 @@ def test_tfrecord_reader_finds_auto_compressed_directory_files(
     assert sorted(row["id"] for row in rows) == [3, 4]
 
 
+def test_tfrecord_reader_finds_standard_directory_shard_files(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "dataset-train.tfrecord-00000-of-00001"
+    _write_tfrecord(path, [(5, b"shard", [5.0, 5.5])])
+    (tmp_path / "notes.txt").write_text("not a tfrecord")
+
+    reader = TfrecordReader(str(tmp_path), features=_features(), batch_size=4)
+
+    rows = _rows_from_reader(reader)
+    assert [row["id"] for row in rows] == [5]
+
+
 def test_tfrecord_reader_does_not_overwrite_file_path_feature(tmp_path: Path) -> None:
     path = tmp_path / "data.tfrecord"
     with tf.io.TFRecordWriter(str(path)) as writer:
