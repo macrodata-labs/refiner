@@ -34,6 +34,8 @@ def parse_args() -> argparse.Namespace:
         "--max-files-per-suite", type=int, default=None, help=argparse.SUPPRESS
     )
     parser.add_argument("--workers", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--codec", default="mpeg4", help=argparse.SUPPRESS)
+    parser.add_argument("--pix-fmt", default="yuv420p", help=argparse.SUPPRESS)
     parser.add_argument("--cloud", action="store_true")
     return parser.parse_args()
 
@@ -115,7 +117,8 @@ def main() -> None:
         )
         .write_lerobot(
             output,
-            codec="mpeg4",
+            codec=args.codec,
+            pix_fmt=args.pix_fmt,
             max_video_prepare_in_flight=args.max_video_prepare_in_flight,
         )
     )
