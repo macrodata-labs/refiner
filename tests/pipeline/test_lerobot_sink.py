@@ -670,6 +670,62 @@ def test_write_lerobot_accepts_generic_robotics_rows(tmp_path: Path) -> None:
     ]
 
 
+def test_write_lerobot_generates_missing_generic_episode_ids(tmp_path: Path) -> None:
+    out_root = tmp_path / "generated-episode-ids"
+    writer = LeRobotWriterSink(str(out_root))
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
+    ):
+        writer.write_shard_block(
+            "shard-a",
+            [
+                _FakeRoboticsRow(
+                    episode_id="-1",
+                    fps=10,
+                    robot_type="mockbot",
+                    frame_table=Tabular.from_rows(
+                        [
+                            DictRow(
+                                {
+                                    "timestamp": 0.0,
+                                    "observation.state": [1.0],
+                                }
+                            )
+                        ]
+                    ),
+                ),
+                _FakeRoboticsRow(
+                    episode_id="-1",
+                    fps=10,
+                    robot_type="mockbot",
+                    frame_table=Tabular.from_rows(
+                        [
+                            DictRow(
+                                {
+                                    "timestamp": 0.0,
+                                    "observation.state": [2.0],
+                                }
+                            )
+                        ]
+                    ),
+                ),
+            ],
+        )
+        writer.on_shard_complete("shard-a")
+
+    chunk = f"shard-a__w{worker_token_for('worker-1')}"
+    episodes = pq.read_table(
+        out_root / "meta" / f"chunk-{chunk}" / "episodes" / "file-000.parquet"
+    )
+
+    assert episodes.column("episode_id").to_pylist() == ["shard-a/0", "shard-a/1"]
+
+
 def test_write_lerobot_accepts_to_robot_rows_after_vectorized_filter(
     tmp_path: Path,
 ) -> None:

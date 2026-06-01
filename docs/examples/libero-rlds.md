@@ -18,17 +18,18 @@ pipeline = (
             "front": "steps/observation/image",
             "wrist": "steps/observation/wrist_image",
         },
-        fps=30,
+        fps=10,
     )
     .to_robot_rows(
         nested_frames_key="steps",
+        task_key="steps/language_instruction",
         action_key="action",
         state_key="observation/state",
         video_keys={
             "observation.images.front": "videos/front",
             "observation.images.wrist": "videos/wrist",
         },
-        fps=30,
+        fps=10,
         robot_type="libero",
     )
 )

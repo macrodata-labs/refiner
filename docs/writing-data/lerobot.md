@@ -27,6 +27,8 @@ Rows must be one of:
 
 Plain rows should be adapted before writing; see
 [Converting to Robot Rows](../episode-data/converting-to-robot-rows.md).
+If a generic `RoboticsRow` has no episode id, the writer generates one from the
+shard id and row position.
 
 ## Output Layout
 

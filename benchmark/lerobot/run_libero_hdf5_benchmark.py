@@ -15,11 +15,7 @@ FPS = 10.0
 def label_libero_row(row: Row) -> Row:
     file_path = str(row["file_path"])
     task = file_path.rsplit("/", 1)[-1].removesuffix(".hdf5").removesuffix("_demo")
-    demo = str(row["hdf5_group"]).rsplit("/", 1)[-1]
-    return row.update(
-        episode_id=f"{file_path.rsplit('/', 2)[-2]}/{task}/{demo}",
-        task=task.replace("_", " "),
-    )
+    return row.update(task=task.replace("_", " "))
 
 
 def main() -> None:
@@ -43,7 +39,6 @@ def main() -> None:
         )
         .map(label_libero_row)
         .to_robot_rows(
-            episode_id_key="episode_id",
             task_key="task",
             fps=FPS,
             robot_type="libero",

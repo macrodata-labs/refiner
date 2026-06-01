@@ -207,7 +207,11 @@ class _RoboticsRowView(Row, RoboticsRow):
     def episode_id(self) -> str:
         if self._spec.episode_id_key is None:
             return "-1"
-        value = self._row.get(self._spec.episode_id_key)
+        value = _get_path(self._row, self._spec.episode_id_key, default=None)
+        if hasattr(value, "as_py"):
+            value = value.as_py()
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
         return str(value) if value is not None else "-1"
 
     @property
@@ -224,7 +228,26 @@ class _RoboticsRowView(Row, RoboticsRow):
     def task(self) -> str | None:
         if self._spec.task_key is None:
             return None
-        value = self._row.get(self._spec.task_key)
+        value = _get_path(self._row, self._spec.task_key, default=None)
+        if value is None:
+            nested_frames_key = _valid_nested_frames_key(
+                self._row,
+                self._spec.nested_frames_key,
+            )
+            if nested_frames_key is not None and self._spec.task_key.startswith(
+                f"{nested_frames_key}/"
+            ):
+                field = self._spec.task_key[len(nested_frames_key) + 1 :]
+                table = self._nested_frame_table()
+                if table is not None and field in table.names:
+                    value = next(
+                        (item for item in table.column(field).to_pylist() if item),
+                        None,
+                    )
+        if hasattr(value, "as_py"):
+            value = value.as_py()
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
         return value if isinstance(value, str) else None
 
     @property

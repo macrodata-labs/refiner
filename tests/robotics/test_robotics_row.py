@@ -218,6 +218,28 @@ def test_to_robot_rows_defaults_to_no_episode_id_source() -> None:
     assert dict(cast(Row, robotics_row).items())["episode_id"] == "source-value"
 
 
+def test_to_robot_rows_reads_nested_episode_task() -> None:
+    row = DictRow(
+        {
+            "steps": [
+                {
+                    "language_instruction": b"pick up the cup",
+                    "action": [0.0],
+                    "observation": {"state": [1.0]},
+                }
+            ]
+        }
+    )
+
+    robotics_row = _robot_row(
+        row,
+        nested_frames_key="steps",
+        task_key="steps/language_instruction",
+    )
+
+    assert robotics_row.task == "pick up the cup"
+
+
 def test_to_robot_rows_accepts_literal_fps_and_robot_type() -> None:
     row = DictRow({"episode_id": "episode-1"})
 

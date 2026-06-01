@@ -197,6 +197,12 @@ class RefinerPipeline:
         ``.filter(lambda row: row.episode_id == "ep-1")`` uses the view property,
         while ``.filter(col("episode_id") == "ep-1")`` requires a physical
         ``episode_id`` column.
+
+        ``episode_id_key`` and ``task_key`` may use slash paths. For nested frame
+        rows, ``task_key`` may point inside ``nested_frames_key``; the first
+        non-empty frame value is used as the episode task. If ``timestamp_key`` is
+        requested but absent and ``fps`` is known, timestamps are generated from
+        frame indices.
         """
         from refiner.robotics.row import _robot_row_converter
 
