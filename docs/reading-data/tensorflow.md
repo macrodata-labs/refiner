@@ -172,6 +172,7 @@ from the per-step table.
   `examples_per_shard` or `num_shards` to control parallelism.
 - Remote prepared TFDS directories copy metadata locally during planning, then
   copy only the TFDS data shard files needed by each `read_shard()` row range.
+  Those copied data shard files are deleted when that `read_shard()` finishes.
 - RLDS-style TFDS datasets with dataset-valued `steps` are streamed one episode
   at a time because TensorFlow cannot batch nested datasets.
 - `videos` avoids keeping selected decoded image sequences in the row table, but

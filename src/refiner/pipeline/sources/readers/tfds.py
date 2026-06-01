@@ -122,7 +122,6 @@ class TfdsReader(BaseSource):
         self._prepared_dir: str | None = None
         self._remote_folder: DataFolder | None = None
         self._remote_input = "://" in input
-        self._downloaded_remote_files: set[str] = set()
         self.dataset_name: str | None = None
         self.num_examples: int | None = None
 
@@ -131,7 +130,6 @@ class TfdsReader(BaseSource):
         state["_builder"] = None
         state["_prepared_dir"] = None
         state["_remote_folder"] = None
-        state["_downloaded_remote_files"] = set()
         state["num_examples"] = None
         if self._remote_input:
             state["dataset_name"] = None
@@ -190,24 +188,28 @@ class TfdsReader(BaseSource):
             self._remote_folder = DataFolder.resolve(self.input)
         return self._remote_folder
 
-    def _materialize_remote_shards(self, split: str) -> None:
+    def _materialize_remote_shards(self, split: str) -> list[Path]:
         if not self._remote_input:
-            return
+            return []
         builder = self._ensure_builder()
         tfds_splits = importlib.import_module("tensorflow_datasets.core.splits")
         instructions = tfds_splits._make_file_instructions(  # noqa: SLF001
             list(builder.info.splits.values()),
             split,
         )
+        paths: list[Path] = []
+        seen: set[str] = set()
         for instruction in instructions:
             filename = Path(instruction.filename).name
-            if filename in self._downloaded_remote_files:
+            if filename in seen:
                 continue
+            seen.add(filename)
             assert self._prepared_dir is not None
             local_file = Path(self._prepared_dir) / filename
             if not local_file.exists():
                 self._ensure_remote_folder().file(filename).copy(str(local_file))
-            self._downloaded_remote_files.add(filename)
+            paths.append(local_file)
+        return paths
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -268,57 +270,66 @@ class TfdsReader(BaseSource):
             "as_supervised": self.as_supervised,
         }
         builder = self._ensure_builder()
-        self._materialize_remote_shards(split)
+        materialized_files = self._materialize_remote_shards(split)
         dataset = builder.as_dataset(
             **dataset_kwargs,
             batch_size=None,
         )
-        has_nested_datasets = any(
-            isinstance(spec, self.tf.data.DatasetSpec)
-            for spec in self.tf.nest.flatten(dataset.element_spec)
-        )
-        if not has_nested_datasets:
-            dataset = dataset.ragged_batch(self.batch_size)
-        for batch in dataset.prefetch(1):
-            if self.as_supervised:
-                batch = {"input": batch[0], "target": batch[1]}
-            if has_nested_datasets:
-                row: dict[str, Any] = {}
-                for name, value in batch.items():
-                    if isinstance(value, self.tf.data.Dataset):
-                        paths = self._excluded_video_paths.get(name, ())
-                        if paths:
-                            value = value.map(
-                                lambda step, paths=paths: _drop_tf_paths(step, paths)
-                            )
-                        row[name] = [
-                            tensorflow_value_to_python(step)
-                            for step in value.as_numpy_iterator()
-                        ]
-                    else:
-                        row[name] = tensorflow_value_to_python(value)
-
-                if self._video_paths:
-                    row["videos"] = {
-                        name: VideoFrameSequence(
-                            lambda dataset=batch[dataset_key], frame_path=frame_path: (
-                                tensorflow_value_to_python(frame)
-                                for frame in dataset.map(
-                                    lambda step, frame_path=frame_path: reduce(
-                                        getitem, frame_path, step
+        try:
+            has_nested_datasets = any(
+                isinstance(spec, self.tf.data.DatasetSpec)
+                for spec in self.tf.nest.flatten(dataset.element_spec)
+            )
+            if not has_nested_datasets:
+                dataset = dataset.ragged_batch(self.batch_size)
+            for batch in dataset.prefetch(1):
+                if self.as_supervised:
+                    batch = {"input": batch[0], "target": batch[1]}
+                if has_nested_datasets:
+                    row: dict[str, Any] = {}
+                    for name, value in batch.items():
+                        if isinstance(value, self.tf.data.Dataset):
+                            paths = self._excluded_video_paths.get(name, ())
+                            if paths:
+                                value = value.map(
+                                    lambda step, paths=paths: _drop_tf_paths(
+                                        step, paths
                                     )
-                                ).as_numpy_iterator()
-                            ),
-                            fps=self.fps,
-                            frame_count=len(row[dataset_key]),
-                        )
-                        for name, dataset_key, frame_path in self._video_paths
-                    }
-                yield DictRow(row)
-                continue
-            table = tensorflow_batch_to_table(batch)
-            if table.num_rows > 0:
-                yield Tabular(table)
+                                )
+                            row[name] = [
+                                tensorflow_value_to_python(step)
+                                for step in value.as_numpy_iterator()
+                            ]
+                        else:
+                            row[name] = tensorflow_value_to_python(value)
+
+                    if self._video_paths:
+                        row["videos"] = {
+                            name: VideoFrameSequence(
+                                lambda dataset=batch[dataset_key], frame_path=frame_path: (
+                                    tensorflow_value_to_python(frame)
+                                    for frame in dataset.map(
+                                        lambda step, frame_path=frame_path: reduce(
+                                            getitem, frame_path, step
+                                        )
+                                    ).as_numpy_iterator()
+                                ),
+                                fps=self.fps,
+                                frame_count=len(row[dataset_key]),
+                            )
+                            for name, dataset_key, frame_path in self._video_paths
+                        }
+                    yield DictRow(row)
+                    continue
+                table = tensorflow_batch_to_table(batch)
+                if table.num_rows > 0:
+                    yield Tabular(table)
+        finally:
+            for path in materialized_files:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
 
 
 def _drop_tf_paths(value: Any, paths: Sequence[tuple[str, ...]]) -> Any:

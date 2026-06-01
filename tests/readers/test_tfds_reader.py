@@ -197,20 +197,25 @@ def test_read_tfds_materializes_remote_directory_shards_lazily(
         ):
             shutil.copyfileobj(src, dst)
 
-    copied = []
+    copied: dict[str, Path] = {}
     original_copy = DataFile.copy
 
     def copy_and_record(self, dest, **kwargs):
-        copied.append(Path(self.path).name)
+        copied[Path(self.path).name] = Path(dest)
         return original_copy(self, dest, **kwargs)
 
     monkeypatch.setattr(DataFile, "copy", copy_and_record)
 
     rows = read_tfds(remote, num_shards=2, batch_size=3).take(5)
 
-    assert copied.count("dataset_info.json") == 1
-    assert copied.count("features.json") == 1
-    assert copied.count("tiny_dataset-train.tfrecord-00000-of-00001") == 1
+    assert set(copied) == {
+        "dataset_info.json",
+        "features.json",
+        "tiny_dataset-train.tfrecord-00000-of-00001",
+    }
+    assert copied["dataset_info.json"].exists()
+    assert copied["features.json"].exists()
+    assert not copied["tiny_dataset-train.tfrecord-00000-of-00001"].exists()
     assert sorted(row["id"] for row in rows) == [0, 1, 2, 3, 4]
 
 
