@@ -11,6 +11,7 @@ from typing import Any, TypeAlias, cast
 
 from pydantic import BaseModel
 
+from refiner.inference.providers import GoogleEndpointProvider
 from refiner.inference.types import Message, ProviderOptions
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
@@ -23,7 +24,6 @@ if TYPE_CHECKING:
     from refiner.inference.generate_text import GenerateTextFn
     from refiner.inference.providers import (
         AnthropicEndpointProvider,
-        GoogleEndpointProvider,
         OpenAIEndpointProvider,
         OpenAIResponsesProvider,
         VLLMProvider,
@@ -99,7 +99,9 @@ class TimestampedContactSheet:
 
 def subtask_annotation(
     *,
-    provider: SubtaskAnnotationProvider,
+    provider: SubtaskAnnotationProvider = GoogleEndpointProvider(
+        model="gemini-3.5-flash"
+    ),
     video_key: str | None = None,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
