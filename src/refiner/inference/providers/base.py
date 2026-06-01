@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from refiner.services import VLLMServiceDefinition
+if TYPE_CHECKING:
+    from refiner.services import VLLMServiceDefinition
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +113,8 @@ class VLLMProvider:
             raise ValueError("config must be 'throughput'")
 
     def service_definition(self) -> VLLMServiceDefinition:
+        from refiner.services import VLLMServiceDefinition
+
         return VLLMServiceDefinition(
             model_name_or_path=self.model,
             config=self.config,
