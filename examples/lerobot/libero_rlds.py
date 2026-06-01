@@ -26,6 +26,7 @@ def main() -> None:
                 "wrist": "steps/observation/wrist_image",
             },
             fps=FPS,
+            num_shards=100,
         )
         .to_robot_rows(
             nested_frames_key="steps",
@@ -43,7 +44,7 @@ def main() -> None:
         .write_lerobot(output, max_video_prepare_in_flight=2)
         .launch_cloud(
             name="libero-rlds-full-eval",
-            num_workers=40,
+            num_workers=100,
             cpus_per_worker=1,
             mem_mb_per_worker=1024,
             extra_dependencies=(
