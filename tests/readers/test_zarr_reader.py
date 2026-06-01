@@ -2085,6 +2085,56 @@ def test_write_zarr_defaults_include_non_observation_robotics_videos(
     np.testing.assert_array_equal(row["front"], frames)
 
 
+def test_write_zarr_defaults_normalize_leading_slash_video_keys(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "default-video-topic.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    rows = list(
+        mdr.from_items(
+            [
+                {"episode_id": "episode-1", "frames": frames},
+                {"episode_id": "episode-2", "frames": frames + 1},
+            ]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key=None,
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"/cam": "frames"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(str(output), reduce_to_single_store=False).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    root = _open_test_zarr(zarr_store, mode="r")
+    np.testing.assert_array_equal(np.asarray(root["data/cam"])[:2], frames)
+
+
+def test_write_zarr_defaults_reject_duplicate_normalized_video_paths(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "duplicate-video-topic.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "cam": frames, "slash_cam": frames + 1}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key=None,
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"cam": "cam", "/cam": "slash_cam"},
+            fps=10,
+        )
+    )
+
+    with pytest.raises(ValueError, match="Duplicate Zarr array path: data/cam"):
+        ZarrSink(str(output), reduce_to_single_store=False).write_block(rows)
+
+
 def test_write_zarr_rejects_empty_frame_array_videos(tmp_path: Path) -> None:
     output = tmp_path / "empty-video.zarr"
     frames = np.empty((0, 4, 5, 3), dtype=np.uint8)

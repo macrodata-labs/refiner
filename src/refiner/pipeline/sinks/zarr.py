@@ -422,7 +422,10 @@ def _default_robotics_arrays(row: Row) -> dict[str, str]:
     if row.timestamps is not None:
         arrays["data/timestamp"] = "timestamp"
     for key in row.videos:
-        arrays[f"data/{key}"] = key
+        path = _normalize_public_zarr_path(f"data/{key}", "Zarr array path")
+        if path in arrays:
+            raise ValueError(f"Duplicate Zarr array path: {path}")
+        arrays[path] = key
     return arrays
 
 
