@@ -199,10 +199,11 @@ class TfdsReader(BaseSource):
             **dataset_kwargs,
             batch_size=None,
         )
-        if not any(
+        has_nested_datasets = any(
             isinstance(spec, self.tf.data.DatasetSpec)
             for spec in self.tf.nest.flatten(dataset.element_spec)
-        ):
+        )
+        if not has_nested_datasets:
             dataset = dataset.padded_batch(
                 self.batch_size,
                 self.tf.compat.v1.data.get_output_shapes(dataset),
@@ -210,7 +211,7 @@ class TfdsReader(BaseSource):
         for batch in dataset.prefetch(1):
             if self.as_supervised:
                 batch = {"input": batch[0], "target": batch[1]}
-            if self._video_paths:
+            if has_nested_datasets:
                 row: dict[str, Any] = {}
                 for name, value in batch.items():
                     if isinstance(value, self.tf.data.Dataset):
@@ -226,21 +227,22 @@ class TfdsReader(BaseSource):
                     else:
                         row[name] = tensorflow_value_to_python(value)
 
-                row["videos"] = {
-                    name: VideoFrameSequence(
-                        lambda dataset=batch[dataset_key], frame_path=frame_path: (
-                            tensorflow_value_to_python(frame)
-                            for frame in dataset.map(
-                                lambda step, frame_path=frame_path: reduce(
-                                    getitem, frame_path, step
-                                )
-                            ).as_numpy_iterator()
-                        ),
-                        fps=self.fps,
-                        frame_count=len(row[dataset_key]),
-                    )
-                    for name, dataset_key, frame_path in self._video_paths
-                }
+                if self._video_paths:
+                    row["videos"] = {
+                        name: VideoFrameSequence(
+                            lambda dataset=batch[dataset_key], frame_path=frame_path: (
+                                tensorflow_value_to_python(frame)
+                                for frame in dataset.map(
+                                    lambda step, frame_path=frame_path: reduce(
+                                        getitem, frame_path, step
+                                    )
+                                ).as_numpy_iterator()
+                            ),
+                            fps=self.fps,
+                            frame_count=len(row[dataset_key]),
+                        )
+                        for name, dataset_key, frame_path in self._video_paths
+                    }
                 yield DictRow(row)
                 continue
             table = tensorflow_batch_to_table(batch)

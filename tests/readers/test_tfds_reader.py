@@ -79,6 +79,10 @@ class TinyRldsDataset(tfds.core.GeneratorBasedBuilder):
                     "episode_metadata": {
                         "file_path": tfds.features.Text(),
                     },
+                    "episode_vector": tfds.features.Tensor(
+                        shape=(3,),
+                        dtype=np.float32,
+                    ),
                 }
             ),
         )
@@ -110,6 +114,7 @@ class TinyRldsDataset(tfds.core.GeneratorBasedBuilder):
                         },
                     ],
                     "episode_metadata": {"file_path": f"episode-{idx}"},
+                    "episode_vector": [float(idx), float(idx + 1), float(idx + 2)],
                 },
             )
 
@@ -182,6 +187,7 @@ def test_read_tfds_streams_dataset_valued_features(tmp_path: Path) -> None:
     ]
     assert len(rows[0]["steps"]) == 2
     assert rows[0]["steps"][1]["action"] == pytest.approx([0.0, 1.0])
+    assert rows[0]["episode_vector"] == pytest.approx([0.0, 1.0, 2.0])
 
 
 def test_read_tfds_lifts_rlds_images_into_video_sequences(tmp_path: Path) -> None:
