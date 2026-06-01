@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--codec", default="mpeg4")
     parser.add_argument("--threads", type=int, default=None)
     parser.add_argument("--max-video-prepare-in-flight", type=int, default=2)
+    parser.add_argument("--secret-env", default="default")
     parser.add_argument("--sync-local-dependencies", action="store_true")
     return parser.parse_args()
 
@@ -126,7 +127,7 @@ def main() -> None:
             mem_mb_per_worker=args.mem_mb,
             sync_local_dependencies=args.sync_local_dependencies,
             extra_dependencies=DEFAULT_CLOUD_DEPENDENCIES,
-            secrets=mdr.Secrets.env(name="production", keys=["HF_TOKEN"]),
+            secrets=mdr.Secrets.env(name=args.secret_env, keys=["HF_TOKEN"]),
         )
     else:
         pipeline.launch_local(name=name, num_workers=args.workers)
