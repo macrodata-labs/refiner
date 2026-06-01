@@ -601,6 +601,37 @@ def _write_mixed_state_shape_mcap(path: Path) -> None:
         writer.finish()
 
 
+def _write_mixed_camera_shape_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        camera_channel = writer.register_channel(
+            topic="/cam",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (camera_channel, 0, b'{"frame":[[[1,2,3]]]}', 0, 1),
+            (camera_channel, 100_000_000, b'{"clock":0}', 100_000_000, 2),
+            (camera_channel, 1_000_000_000, b'{"frame":[[[4,5,6]]]}', 1_000_000_000, 3),
+            (camera_channel, 1_100_000_000, b'{"clock":1}', 1_100_000_000, 4),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
 def test_mcap_reader_defaults_to_sparse_frame_table(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)
@@ -753,6 +784,17 @@ def test_mcap_reader_filters_sync_primary_subfield_events(tmp_path: Path) -> Non
     assert row["fps"] == 1.0
 
 
+def test_mcap_reader_filters_sparse_subfield_timestamps(tmp_path: Path) -> None:
+    path = tmp_path / "mixed-state-shape.mcap"
+    _write_mixed_state_shape_mcap(path)
+
+    row = read_mcap(str(path), fields={"state": "/state.q"}).materialize()[0]
+
+    frames = row["records"]
+    assert frames.column("timestamp").to_pylist() == [0.0, 1.0]
+    assert frames.column("state").to_pylist() == [[0], [1]]
+
+
 def test_mcap_reader_aligns_same_topic_non_primary_subfields(tmp_path: Path) -> None:
     path = tmp_path / "mixed-state-shape.mcap"
     _write_mixed_state_shape_mcap(path)
@@ -768,6 +810,29 @@ def test_mcap_reader_aligns_same_topic_non_primary_subfields(tmp_path: Path) -> 
     assert frames.column("timestamp").to_pylist() == [0.0, 1.0]
     assert frames.column("state").to_pylist() == [[0], [1]]
     assert frames.column("diagnostic").to_pylist() == ["ok", "ok"]
+
+
+def test_mcap_reader_aligns_same_topic_video_subfields(tmp_path: Path) -> None:
+    path = tmp_path / "mixed-camera-shape.mcap"
+    _write_mixed_camera_shape_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"clock": "/cam.clock"},
+        videos={"front": "/cam.frame"},
+        sync_primary="clock",
+        fps=1,
+    ).materialize()[0]
+
+    frames = row["records"]
+    assert frames.column("timestamp").to_pylist() == [0.1, 1.1]
+    assert frames.column("clock").to_pylist() == [0, 1]
+    video = row["videos"]["front"]
+    assert video.frame_count == 2
+    assert [frame[0, 0].tolist() for frame in video.iter_frame_arrays()] == [
+        [1, 2, 3],
+        [4, 5, 6],
+    ]
 
 
 def test_mcap_reader_builds_video_frame_arrays_for_robot_rows(tmp_path: Path) -> None:

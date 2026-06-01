@@ -33,14 +33,12 @@ def sparse_frame_table(
     for name, source in fields.items():
         values: dict[int, list[Any]] = defaultdict(list)
         for event in topic_events.get(source[0], ()):
-            values[event[0]].append(source_value(event[1], source[1], default=None))
+            value = source_value(event[1], source[1], default=None)
+            if value is not None:
+                values[event[0]].append(value)
         values_by_field[name] = values
     timestamps = sorted(
-        {
-            event[0]
-            for source in fields.values()
-            for event in topic_events.get(source[0], ())
-        }
+        {timestamp for values in values_by_field.values() for timestamp in values}
     )
     rows: list[dict[str, Any]] = []
     for timestamp_ns in timestamps:

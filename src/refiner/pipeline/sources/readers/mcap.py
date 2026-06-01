@@ -709,7 +709,7 @@ def _video_map(
     )
     for name, source in videos.items():
         events = topic_events.get(source[0], ())
-        if sync_primary is not None and source[0] == sync_primary[0]:
+        if sync_primary is not None and source == sync_primary:
             source_events = sync_primary_events or ()
             h264_events = _h264_frame_events(source_events, source[1])
             frames = (
