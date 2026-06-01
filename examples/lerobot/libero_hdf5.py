@@ -3,19 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import refiner as mdr
-from refiner.pipeline.data.row import Row
 
 
 DEFAULT_DATASET_ROOT = "hf://datasets/yifengzhu-hf/LIBERO-datasets"
 DEFAULT_OUTPUT_PREFIX = "hf://buckets/macrodata/test_bucket/libero-hdf5"
 EVAL_SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
 FPS = 10.0
-
-
-def label_libero_row(row: Row) -> Row:
-    file_path = str(row["file_path"])
-    task = file_path.rsplit("/", 1)[-1].removesuffix(".hdf5").removesuffix("_demo")
-    return row.update(task=task.replace("_", " "))
 
 
 def main() -> None:
@@ -37,7 +30,15 @@ def main() -> None:
             group_path_column="hdf5_group",
             cache_remote_files=True,
         )
-        .map(label_libero_row)
+        .map(
+            lambda row: row.update(
+                task=str(row["file_path"])
+                .rsplit("/", 1)[-1]
+                .removesuffix(".hdf5")
+                .removesuffix("_demo")
+                .replace("_", " ")
+            )
+        )
         .to_robot_rows(
             task_key="task",
             fps=FPS,

@@ -18,12 +18,6 @@ eval_suites = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
 fps = 10.0
 
 
-def label_libero_row(row: mdr.Row) -> mdr.Row:
-    file_path = str(row["file_path"])
-    task = file_path.rsplit("/", 1)[-1].removesuffix(".hdf5").removesuffix("_demo")
-    return row.update(task=task.replace("_", " "))
-
-
 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 output = f"{output_prefix}/{stamp}-full-eval"
 
@@ -42,7 +36,15 @@ output = f"{output_prefix}/{stamp}-full-eval"
         group_path_column="hdf5_group",
         cache_remote_files=True,
     )
-    .map(label_libero_row)
+    .map(
+        lambda row: row.update(
+            task=str(row["file_path"])
+            .rsplit("/", 1)[-1]
+            .removesuffix(".hdf5")
+            .removesuffix("_demo")
+            .replace("_", " ")
+        )
+    )
     .to_robot_rows(
         task_key="task",
         fps=fps,
