@@ -7,7 +7,7 @@ from refiner.pipeline.data.row import Row
 
 
 DEFAULT_DATASET_ROOT = "hf://datasets/yifengzhu-hf/LIBERO-datasets"
-DEFAULT_OUTPUT_PREFIX = "hf://buckets/macrodata/test_bucket/libero-hdf5-benchmark"
+DEFAULT_OUTPUT_PREFIX = "hf://buckets/macrodata/test_bucket/libero-hdf5"
 EVAL_SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
 FPS = 10.0
 
@@ -51,7 +51,7 @@ def main() -> None:
         )
         .write_lerobot(output)
         .launch_cloud(
-            name="libero-hdf5-full-eval-cached",
+            name="libero-hdf5-full-eval",
             num_workers=40,
             cpus_per_worker=1,
             mem_mb_per_worker=1024,

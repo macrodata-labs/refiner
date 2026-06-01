@@ -75,6 +75,7 @@
 - [robomimic HDF5](examples/robomimic-hdf5.md)
 - [Zarr Replay Buffer](examples/zarr-replay-buffer.md)
 - [MCAP Franka](examples/mcap-franka.md)
+- [Libero HDF5](examples/libero-hdf5.md)
 - [Libero RLDS](examples/libero-rlds.md)
 - [Merge LeRobot Datasets](examples/merge-lerobot-datasets.md)
 - [Annotate Subtasks](examples/annotate-subtasks.md)

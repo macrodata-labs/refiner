@@ -9,6 +9,8 @@ Libero-style RLDS datasets store each episode as a TFDS `steps` dataset. Keep
 state and actions in `steps`, and lift camera streams into videos.
 
 ```python
+from datetime import datetime, timezone
+
 import refiner as mdr
 
 raw_datasets = [
@@ -17,15 +19,20 @@ raw_datasets = [
     "hf://datasets/openvla/modified_libero_rlds/libero_object_no_noops/1.0.0",
     "hf://datasets/openvla/modified_libero_rlds/libero_spatial_no_noops/1.0.0",
 ]
+output_prefix = "hf://buckets/acme-robotics/libero-rlds"
+fps = 10.0
 
-pipeline = (
+stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+output = f"{output_prefix}/{stamp}-full-eval"
+
+(
     mdr.read_tfds(
         raw_datasets,
         videos={
             "front": "steps/observation/image",
             "wrist": "steps/observation/wrist_image",
         },
-        fps=10,
+        fps=fps,
     )
     .to_robot_rows(
         nested_frames_key="steps",
@@ -37,29 +44,24 @@ pipeline = (
             "observation.images.front": "videos/front",
             "observation.images.wrist": "videos/wrist",
         },
-        fps=10,
+        fps=fps,
         robot_type="libero",
     )
-)
-```
-
-Write LeRobot:
-
-```python
-pipeline.write_lerobot("hf://buckets/acme-robotics/libero-10-lerobot")
-```
-
-Write Zarr:
-
-```python
-pipeline.write_zarr(
-    "hf://buckets/acme-robotics/libero-10.zarr",
-    arrays={
-        "data/action": "action",
-        "data/state": "observation.state",
-        "data/front": "observation.images.front",
-        "data/wrist": "observation.images.wrist",
-    },
+    .write_lerobot(output)
+    .launch_cloud(
+        name="libero-rlds-full-eval",
+        num_workers=40,
+        cpus_per_worker=1,
+        mem_mb_per_worker=1024,
+        extra_dependencies=(
+            "av",
+            "huggingface-hub>=1.4.1",
+            "pillow",
+            "tensorflow",
+            "tensorflow-datasets",
+        ),
+        secrets=mdr.Secrets.env(name="default", keys=["HF_TOKEN"]),
+    )
 )
 ```
 
