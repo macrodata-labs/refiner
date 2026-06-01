@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import warnings
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
@@ -10,6 +9,7 @@ from itertools import chain
 from typing import Any
 
 from fsspec import AbstractFileSystem
+import msgspec
 import numpy as np
 
 from refiner.io.fileset import DataFileSetLike
@@ -341,6 +341,13 @@ class McapReader(BaseReader):
                                 }
                             )
                         )
+                plain_decoding = True
+                if selected_sources is not None and summary_topics and not self.videos:
+                    plain_decoding = any(
+                        _resolve_source(selected_source, summary_topics)[1] is None
+                        for selected_source in selected_sources
+                        if selected_source != self._marker_topic
+                    )
                 can_stream = (
                     wants_stream
                     and stream_is_seekable
@@ -439,6 +446,7 @@ class McapReader(BaseReader):
                             channel.message_encoding,
                             message.data,
                             decoder_factories,
+                            plain=plain_decoding,
                         )
                         pending.append((channel.topic, (message.log_time, decoded)))
                         pending_ts = message.log_time
@@ -453,6 +461,7 @@ class McapReader(BaseReader):
                         channel.message_encoding,
                         message.data,
                         decoder_factories,
+                        plain=plain_decoding,
                     )
                     topic_events[channel.topic].append((message.log_time, decoded))
             # Buffered path: split after reading the whole file.
@@ -577,14 +586,17 @@ def _decode_message(
     message_encoding: str,
     data: bytes,
     decoder_factories: Sequence[Any],
+    *,
+    plain: bool = True,
 ) -> Any:
     encoding = message_encoding.lower()
     if encoding in {"json", "application/json"}:
-        return json.loads(data.decode("utf-8"))
+        return msgspec.json.decode(data)
     for factory in decoder_factories:
         decoder = factory.decoder_for(message_encoding, schema)
         if decoder is not None:
-            return _plain_value(decoder(data))
+            decoded = decoder(data)
+            return _plain_value(decoded) if plain else decoded
     return data
 
 

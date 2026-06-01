@@ -12,6 +12,7 @@ import pytest
 
 from refiner.pipeline import read_mcap
 from refiner.pipeline.sources.readers.mcap import _frame_from_value, _ros_image_frame
+from refiner.pipeline.sources.readers import mcap as mcap_reader
 from refiner.pipeline.sources.readers import McapReader
 from refiner.robotics.row import RoboticsRow
 from refiner.video import VideoFrameArray
@@ -100,6 +101,30 @@ def _write_mcap(path: Path) -> None:
                 publish_time=publish_time,
                 sequence=sequence,
             )
+        writer.finish()
+
+
+def _write_custom_encoding_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Custom",
+            encoding="custom",
+            data=b"",
+        )
+        channel = writer.register_channel(
+            topic="/custom",
+            message_encoding="custom",
+            schema_id=schema_id,
+        )
+        writer.add_message(
+            channel_id=channel,
+            log_time=0,
+            data=b"7",
+            publish_time=0,
+            sequence=1,
+        )
         writer.finish()
 
 
@@ -843,6 +868,34 @@ def test_mcap_reader_treats_string_fields_as_one_source(tmp_path: Path) -> None:
         "/cmd.target",
     ]
     assert row["records"].column("/cmd.target").to_pylist() == [[10], [20]]
+
+
+def test_mcap_reader_keeps_explicit_subfield_decoding_raw(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Decoded:
+        def __init__(self, value: int):
+            self.value = value
+
+    class DecoderFactory:
+        def decoder_for(self, message_encoding: str, schema: Any):
+            if message_encoding == "custom":
+                return lambda data: Decoded(int(data))
+            return None
+
+    path = tmp_path / "custom.mcap"
+    _write_custom_encoding_mcap(path)
+    monkeypatch.setattr(mcap_reader, "_decoder_factories", lambda: [DecoderFactory()])
+    monkeypatch.setattr(
+        mcap_reader,
+        "_plain_value",
+        lambda value: pytest.fail("explicit subfields should not normalize messages"),
+    )
+
+    row = read_mcap(str(path), fields={"value": "/custom.value"}).materialize()[0]
+
+    assert row["records"].column("value").to_pylist() == [7]
 
 
 def test_mcap_reader_preserves_explicit_empty_fields(tmp_path: Path) -> None:

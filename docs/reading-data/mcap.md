@@ -302,6 +302,11 @@ emitting episode rows. This favors sequential reads and is usually best for
 throughput, especially on cloud object storage, but peak memory grows with the
 selected decoded messages and video frames.
 
+For throughput-sensitive reads, pass explicit `fields` and `videos` selections.
+That limits decoding to the required topics and skips default record-column
+discovery across every decoded non-video message. Explicit decoded subfields can
+also avoid normalizing whole protobuf or ROS messages before extracting values.
+
 The `stream_episodes` option is the low-memory path for split episodes. When
 `stream_episodes=True` and `episode_splitting` is not `"single"`, the reader
 uses MCAP log-time ordering and buffers one episode at a time. This lowers peak
