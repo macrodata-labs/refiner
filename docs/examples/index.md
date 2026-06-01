@@ -14,7 +14,6 @@ These examples are complete patterns you can adapt.
 | [Zarr Replay Buffer](zarr-replay-buffer.md) | Convert replay-buffer arrays to episode rows. |
 | [MCAP Franka](mcap-franka.md) | Convert MCAP state/action/video topics to LeRobot and Zarr. |
 | [Libero HDF5](libero-hdf5.md) | Convert the LIBERO HDF5 eval datasets on cloud workers. |
-| [Libero RLDS](libero-rlds.md) | Convert TFDS/RLDS episodes with camera streams. |
 | [Merge LeRobot Datasets](merge-lerobot-datasets.md) | Combine compatible LeRobot roots. |
 | [Annotate Subtasks](annotate-subtasks.md) | Use a VLM to add temporal labels. |
 | [Score Rewards](score-rewards.md) | Use reward scoring over episode videos. |
