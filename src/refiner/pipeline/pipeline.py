@@ -41,6 +41,8 @@ from refiner.pipeline.sources import (
     JsonReader,
     McapReader,
     ParquetReader,
+    TfdsReader,
+    TfrecordReader,
     ZarrReader,
 )
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
@@ -1100,6 +1102,119 @@ def read_lerobot(
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             split_row_groups=split_row_groups,
+        )
+    )
+
+
+def read_tfrecords(
+    inputs: DataFileSetLike,
+    *,
+    features: Mapping[str, Any],
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    batch_size: int = 1024,
+    compression: str | None = "auto",
+    num_parallel_calls: int | None = None,
+    prefetch: int | None = 1,
+    file_path_column: str | None = "file_path",
+) -> RefinerPipeline:
+    """Create a pipeline with a TensorFlow TFRecord reader source.
+
+    Records are parsed with `tf.io.parse_example(features)` and emitted as
+    Arrow-backed `Tabular` batches. Sharding is file-level; one large TFRecord
+    file is one source shard.
+
+    Args:
+        inputs: TFRecord file, glob, directory, or sequence of inputs.
+        features: Mapping passed to `tf.io.parse_example`.
+        fs: Optional fsspec filesystem for string inputs. TensorFlow reads only
+            local resolved paths.
+        storage_options: Optional fsspec storage options.
+        recursive: Whether directory inputs should be expanded recursively.
+        target_shard_bytes: Target shard size used when grouping whole files.
+        num_shards: Optional requested number of planned file shards.
+        batch_size: Number of serialized examples parsed per batch.
+        compression: `None`, `"auto"`, `"gzip"`, or `"zlib"`.
+        num_parallel_calls: Optional TensorFlow map parallelism.
+        prefetch: Optional TensorFlow prefetch depth.
+        file_path_column: Source file path column, or `None` to omit it.
+    """
+    return RefinerPipeline(
+        source=TfrecordReader(
+            inputs,
+            features=features,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            batch_size=batch_size,
+            compression=compression,
+            num_parallel_calls=num_parallel_calls,
+            prefetch=prefetch,
+            file_path_column=file_path_column,
+        )
+    )
+
+
+def read_tfds(
+    input: str,
+    *,
+    config: str | None = None,
+    split: str = "train",
+    data_dir: str | None = None,
+    download: bool = False,
+    batch_size: int = 1024,
+    examples_per_shard: int = 10_000,
+    num_shards: int | None = None,
+    shuffle_files: bool = False,
+    read_config: Any | None = None,
+    decoders: Mapping[str, Any] | None = None,
+    as_supervised: bool = False,
+    videos: PathSelection | None = None,
+    fps: float = 30.0,
+) -> RefinerPipeline:
+    """Create a pipeline with a TensorFlow Datasets reader source.
+
+    The reader uses TFDS feature decoding and plans row-range shards within a
+    single plain split name.
+
+    Args:
+        input: TFDS dataset name or prepared TFDS directory.
+        config: Optional TFDS builder config.
+        split: Plain split name from `builder.info.splits`.
+        data_dir: Optional local TFDS data directory.
+        download: Whether to call `download_and_prepare()`.
+        batch_size: Number of decoded examples per emitted batch.
+        examples_per_shard: Target examples per shard when `num_shards` is
+            omitted.
+        num_shards: Optional requested number of row-range shards.
+        shuffle_files: Passed to `builder.as_dataset`.
+        read_config: Optional TFDS read config.
+        decoders: Optional TFDS feature decoders.
+        as_supervised: Whether to read supervised `(input, target)` pairs.
+        videos: Optional video-name to nested dataset frame path mapping.
+        fps: Frame rate used for `videos`.
+    """
+    return RefinerPipeline(
+        source=TfdsReader(
+            input,
+            config=config,
+            split=split,
+            data_dir=data_dir,
+            download=download,
+            batch_size=batch_size,
+            examples_per_shard=examples_per_shard,
+            num_shards=num_shards,
+            shuffle_files=shuffle_files,
+            read_config=read_config,
+            decoders=decoders,
+            as_supervised=as_supervised,
+            videos=videos,
+            fps=fps,
         )
     )
 

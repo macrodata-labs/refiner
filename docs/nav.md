@@ -23,6 +23,7 @@
 - [Tabular Files](reading-data/tabular-files.md)
 - [Files and Videos](reading-data/files-and-videos.md)
 - [Hugging Face](reading-data/hugging-face.md)
+- [TensorFlow](reading-data/tensorflow.md)
 - [Custom Readers](reading-data/custom-readers.md)
 
 ## Episode Data
@@ -74,6 +75,7 @@
 - [robomimic HDF5](examples/robomimic-hdf5.md)
 - [Zarr Replay Buffer](examples/zarr-replay-buffer.md)
 - [MCAP Franka](examples/mcap-franka.md)
+- [Libero RLDS](examples/libero-rlds.md)
 - [Merge LeRobot Datasets](examples/merge-lerobot-datasets.md)
 - [Annotate Subtasks](examples/annotate-subtasks.md)
 - [Score Rewards](examples/score-rewards.md)

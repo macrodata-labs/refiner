@@ -25,6 +25,7 @@ pipeline = mdr.read_lerobot("hf://datasets/lerobot/aloha_sim_transfer_cube_human
 | Parquet, JSON, JSONL, CSV tables | `read_parquet`, `read_json`, `read_jsonl`, `read_csv` | [Tabular Files](tabular-files.md) |
 | Raw files or media files | `read_files`, `read_videos` | [Files and Videos](files-and-videos.md) |
 | Hugging Face datasets table | `read_hf_dataset` | [Hugging Face](hugging-face.md) |
+| TFRecord files or TensorFlow Datasets | `read_tfrecords`, `read_tfds` | [TensorFlow](tensorflow.md) |
 | Your own source system | `from_source` | [Custom Readers](custom-readers.md) |
 
 ## Core Ideas
