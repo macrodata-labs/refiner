@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
+from fsspec import url_to_fs
 import numpy as np
 
 import refiner as mdr
@@ -28,8 +29,28 @@ def parse_args() -> argparse.Namespace:
         description="Convert the full LIBERO HDF5 eval set to LeRobot with cached remote reads."
     )
     parser.add_argument("--episodes", type=int, default=5)
+    parser.add_argument("--max-video-prepare-in-flight", type=int, default=1)
+    parser.add_argument(
+        "--max-files-per-suite", type=int, default=None, help=argparse.SUPPRESS
+    )
+    parser.add_argument("--workers", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--cloud", action="store_true")
     return parser.parse_args()
+
+
+def resolve_inputs(max_files_per_suite: int | None) -> tuple[list[str], int]:
+    roots: list[str] = [f"{DEFAULT_DATASET_ROOT}/{suite}" for suite in EVAL_SUITES]
+    if max_files_per_suite is None:
+        return roots, FULL_EVAL_FILES
+
+    inputs: list[str] = []
+    for root in roots:
+        fs, path = url_to_fs(root)
+        matches = sorted(fs.glob(f"{path}/*.hdf5"))
+        inputs.extend(
+            fs.unstrip_protocol(match) for match in matches[:max_files_per_suite]
+        )
+    return inputs, len(inputs)
 
 
 def normalize_libero_row(row: Row, *, fps: float) -> Row:
@@ -57,10 +78,12 @@ def main() -> None:
     args = parse_args()
     if args.episodes <= 0:
         raise ValueError("--episodes must be positive")
+    if args.max_files_per_suite is not None and args.max_files_per_suite <= 0:
+        raise ValueError("--max-files-per-suite must be positive")
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output = f"{DEFAULT_OUTPUT_PREFIX}/{stamp}-{args.episodes}ep"
-    inputs = [f"{DEFAULT_DATASET_ROOT}/{suite}" for suite in EVAL_SUITES]
+    inputs, input_file_count = resolve_inputs(args.max_files_per_suite)
 
     pipeline = (
         mdr.read_hdf5(
@@ -93,14 +116,14 @@ def main() -> None:
         .write_lerobot(
             output,
             codec="mpeg4",
-            max_video_prepare_in_flight=1,
+            max_video_prepare_in_flight=args.max_video_prepare_in_flight,
         )
     )
 
     if args.cloud:
         pipeline.launch_cloud(
             name=f"libero-hdf5-eval-{args.episodes}ep-cached",
-            num_workers=FULL_EVAL_FILES,
+            num_workers=args.workers or input_file_count,
             cpus_per_worker=1,
             mem_mb_per_worker=1024,
             extra_dependencies=DEFAULT_CLOUD_DEPENDENCIES,
