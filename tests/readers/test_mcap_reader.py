@@ -939,6 +939,29 @@ def test_mcap_reader_stream_episodes_falls_back_for_non_seekable_streams(
     ]
 
 
+def test_mcap_reader_streams_non_seekable_log_time_ordered_files(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "demo.mcap"
+    _write_mcap(path)
+
+    rows = read_mcap(
+        (str(path), _NonSeekableLocalFileSystem()),
+        fields={"state": "/joint_states.q"},
+        sync_primary="state",
+        episode_splitting={"time_gap_s": 0.5},
+        stream_episodes=True,
+        assume_log_time_order=True,
+    ).materialize()
+
+    assert [row["episode_index"] for row in rows] == [0, 1, 2]
+    assert [row["records"].column("state").to_pylist()[0] for row in rows] == [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ]
+
+
 def test_mcap_reader_treats_string_fields_as_one_source(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)

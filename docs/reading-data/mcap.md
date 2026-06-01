@@ -316,8 +316,14 @@ chunk seeks, and on S3-like storage those seeks can become ranged requests.
 
 For non-seekable streams, `stream_episodes=True` falls back to buffered reading
 because MCAP log-time ordering would require buffering and sorting the stream.
-When `episode_splitting="single"`, `stream_episodes` is ignored because the
-single episode is the whole file.
+If the MCAP was written in log-time order, set `assume_log_time_order=True` to
+stream non-seekable or unindexed files in physical file order instead. When
+`episode_splitting="single"`, `stream_episodes` is ignored because the single
+episode is the whole file.
+
+For non-seekable streams without an MCAP summary, explicit dotted selections may
+still require scanning all topics because the reader cannot resolve source
+strings to exact MCAP topics before reading.
 
 ## Conversion Examples
 
@@ -479,6 +485,7 @@ For non-robotics event logs, write the record fields directly:
 | `file_path_column` | `"file_path"` | Source file column name. Set to `None` to omit it. Cannot collide with `records`, `episode_index`, `videos`, or `fps`. |
 | `episode_splitting` | `"single"` | One file per episode, `{"time_gap_s": seconds}`, or `{"marker_topic": topic}`. |
 | `stream_episodes` | `False` | Buffer one split episode at a time for seekable indexed MCAPs. Ignored for single-episode reads. |
+| `assume_log_time_order` | `False` | With `stream_episodes=True`, stream non-seekable or unindexed split files in physical file order. Use only when messages are already ordered by log time. |
 | `fields` | `None` | Mapping, sequence, or string selecting record fields. |
 | `videos` | `None` | Mapping, sequence, or string selecting image-like video frame sources. |
 | `sync_primary` | `None` | Source used for sync-primary-aligned synchronization. |

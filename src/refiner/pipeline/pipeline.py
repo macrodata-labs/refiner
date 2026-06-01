@@ -926,6 +926,7 @@ def read_mcap(
     file_path_column: str | None = "file_path",
     episode_splitting: str | Mapping[str, Any] = "single",
     stream_episodes: bool = False,
+    assume_log_time_order: bool = False,
     fields: PathSelection | None = None,
     videos: PathSelection | None = None,
     sync_primary: str | None = None,
@@ -955,6 +956,9 @@ def read_mcap(
             `{"marker_topic": topic}`.
         stream_episodes: When splitting episodes, buffer one episode at a time
             for seekable indexed MCAPs.
+        assume_log_time_order: When `stream_episodes=True`, stream
+            non-seekable or unindexed files in physical file order instead of
+            falling back, assuming messages are already ordered by log_time.
         fields: Record-table selections as output-name to MCAP source mapping,
             a single source string, a source sequence, or `None` to derive
             default fields from decoded non-video messages.
@@ -980,6 +984,7 @@ def read_mcap(
             file_path_column=file_path_column,
             episode_splitting=episode_splitting,
             stream_episodes=stream_episodes,
+            assume_log_time_order=assume_log_time_order,
             fields=fields,
             videos=videos,
             sync_primary=sync_primary,

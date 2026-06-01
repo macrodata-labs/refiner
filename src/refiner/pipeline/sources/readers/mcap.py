@@ -60,6 +60,7 @@ class McapReader(BaseReader):
         file_path_column: str | None = "file_path",
         episode_splitting: str | Mapping[str, Any] = "single",
         stream_episodes: bool = False,
+        assume_log_time_order: bool = False,
         fields: PathSelection | None = None,
         videos: PathSelection | None = None,
         sync_primary: str | None = None,
@@ -89,6 +90,10 @@ class McapReader(BaseReader):
                 `{"marker_topic": topic}`.
             stream_episodes: When splitting episodes, buffer one episode at a
                 time for seekable indexed MCAPs.
+            assume_log_time_order: When `stream_episodes=True`, stream
+                non-seekable or unindexed files in physical file order instead
+                of falling back, assuming messages are already ordered by
+                log_time.
             fields: Record-table selections as output-name to MCAP source
                 mapping, a single source string, a source sequence, or `None`
                 to derive default fields from decoded non-video messages.
@@ -157,6 +162,7 @@ class McapReader(BaseReader):
         self.sync_method = sync_method
         self.include_skew = include_skew
         self.stream_episodes = stream_episodes
+        self.assume_log_time_order = assume_log_time_order
         self.episode_splitting = episode_splitting
         self._time_gap_s = time_gap_s
         self._marker_topic = marker_topic
@@ -172,6 +178,7 @@ class McapReader(BaseReader):
                 "sync_method": self.sync_method,
                 "include_skew": self.include_skew,
                 "stream_episodes": self.stream_episodes,
+                "assume_log_time_order": self.assume_log_time_order,
                 "episode_splitting": self.episode_splitting,
             }
         )
@@ -361,7 +368,10 @@ class McapReader(BaseReader):
                     and summary is not None
                     and bool(summary.chunk_indexes)
                 )
-                if wants_stream and not can_stream:
+                stream_in_file_order = (
+                    wants_stream and self.assume_log_time_order and not can_stream
+                )
+                if wants_stream and not (can_stream or stream_in_file_order):
                     # Non-seekable or unindexed inputs fall back because MCAP
                     # log-time ordering would require buffering the stream.
                     warnings.warn(
@@ -369,20 +379,34 @@ class McapReader(BaseReader):
                         RuntimeWarning,
                         stacklevel=2,
                     )
-                if can_stream:
-                    file_topics = summary_topics
-                    file_fields = (
-                        None
-                        if self._read_default_fields
-                        else {
-                            output: _resolve_source(source, file_topics)
-                            for output, source in self.fields.items()
+                if can_stream or stream_in_file_order:
+                    file_topics = set(summary_topics)
+
+                    def current_file_selections():
+                        topics = file_topics or set(topic_events)
+
+                        def resolve(source: str):
+                            try:
+                                return _resolve_source(source, topics)
+                            except KeyError:
+                                if stream_in_file_order and summary is None:
+                                    return source, None
+                                raise
+
+                        fields = (
+                            None
+                            if self._read_default_fields
+                            else {
+                                output: resolve(source)
+                                for output, source in self.fields.items()
+                            }
+                        )
+                        videos = {
+                            output: resolve(source)
+                            for output, source in self.videos.items()
                         }
-                    )
-                    file_videos = {
-                        output: _resolve_source(source, file_topics)
-                        for output, source in self.videos.items()
-                    }
+                        return topics, fields, videos
+
                     episode_index = 0
                     # Group same-timestamp messages before deciding boundaries
                     # so marker messages include peer events at the same time.
@@ -399,7 +423,7 @@ class McapReader(BaseReader):
                     for item in chain(
                         reader.iter_messages(
                             topics=read_topics,
-                            log_time_order=True,
+                            log_time_order=can_stream,
                         ),
                         (None,),
                     ):
@@ -424,9 +448,12 @@ class McapReader(BaseReader):
                                 # timestamp group, so flush the previous group
                                 # before appending the pending messages.
                                 if should_yield:
+                                    current_topics, file_fields, file_videos = (
+                                        current_file_selections()
+                                    )
                                     yield self._episode_row(
                                         topic_events,
-                                        file_topics=file_topics,
+                                        file_topics=current_topics,
                                         file_fields=file_fields,
                                         file_videos=file_videos,
                                         episode_index=episode_index,
@@ -438,9 +465,12 @@ class McapReader(BaseReader):
                                 topic_events[topic].append(event)
                             pending = []
                         if item is None:
+                            current_topics, file_fields, file_videos = (
+                                current_file_selections()
+                            )
                             yield self._episode_row(
                                 topic_events if saw_message else {},
-                                file_topics=file_topics,
+                                file_topics=current_topics,
                                 file_fields=file_fields,
                                 file_videos=file_videos,
                                 episode_index=episode_index,
@@ -448,6 +478,8 @@ class McapReader(BaseReader):
                             )
                             break
                         schema, channel, message = item
+                        if stream_in_file_order:
+                            file_topics.add(channel.topic)
                         decoded = _decode_message(
                             schema,
                             message.channel_id,
