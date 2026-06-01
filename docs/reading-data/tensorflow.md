@@ -49,7 +49,7 @@ same column name, Refiner leaves the parsed value unchanged.
 ## TensorFlow Datasets
 
 Use `read_tfds(...)` for datasets available through TensorFlow Datasets, a
-local TFDS `data_dir`, or a prepared TFDS builder directory:
+local TFDS `data_dir`, or a prepared TFDS directory:
 
 ```python
 import refiner as mdr
@@ -63,11 +63,11 @@ pipeline = mdr.read_tfds(
 ```
 
 For RLDS datasets published as TFDS directories, pass the dataset version
-directory:
+directory as the input:
 
 ```python
 pipeline = mdr.read_tfds(
-    builder_dir="data/libero_10_no_noops/1.0.0",
+    "data/libero_10_no_noops/1.0.0",
     split="train",
     videos={"front": "steps/observation/image"},
     fps=30,

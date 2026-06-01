@@ -18,11 +18,11 @@ dataset_root = snapshot_download(
     repo_type="dataset",
     allow_patterns="libero_10_no_noops/1.0.0/*",
 )
-builder_dir = f"{dataset_root}/libero_10_no_noops/1.0.0"
+dataset_dir = f"{dataset_root}/libero_10_no_noops/1.0.0"
 
 pipeline = (
     mdr.read_tfds(
-        builder_dir=builder_dir,
+        dataset_dir,
         videos={
             "front": "steps/observation/image",
             "wrist": "steps/observation/wrist_image",

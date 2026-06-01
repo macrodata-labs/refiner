@@ -119,6 +119,30 @@ class TinyRldsDataset(tfds.core.GeneratorBasedBuilder):
             )
 
 
+class TinySequenceDataset(tfds.core.GeneratorBasedBuilder):
+    VERSION = tfds.core.Version("1.0.0")
+
+    def _info(self):
+        return tfds.core.DatasetInfo(
+            builder=self,
+            features=tfds.features.FeaturesDict(
+                {
+                    "id": tfds.features.Scalar(dtype=np.int64),
+                    "values": tfds.features.Sequence(
+                        tfds.features.Scalar(dtype=np.int64)
+                    ),
+                }
+            ),
+        )
+
+    def _split_generators(self, dl_manager):
+        return {"train": self._generate_examples()}
+
+    def _generate_examples(self):
+        yield "0", {"id": 0, "values": [1, 2]}
+        yield "1", {"id": 1, "values": [3, 4, 5]}
+
+
 def _rows_from_reader(reader: TfdsReader) -> list[dict]:
     rows = []
     for shard in reader.list_shards():
@@ -166,11 +190,11 @@ def test_read_tfds_pipeline_entrypoint(tmp_path: Path, monkeypatch) -> None:
     assert sorted(row["id"] for row in pipeline.take(5)) == [0, 1, 2, 3, 4]
 
 
-def test_read_tfds_accepts_prepared_builder_dir(tmp_path: Path) -> None:
+def test_read_tfds_accepts_prepared_tfds_directory(tmp_path: Path) -> None:
     builder = TinyDataset(data_dir=str(tmp_path))
     builder.download_and_prepare()
 
-    pipeline = read_tfds(builder_dir=builder.data_dir, num_shards=2, batch_size=3)
+    pipeline = read_tfds(builder.data_dir, num_shards=2, batch_size=3)
 
     assert sorted(row["id"] for row in pipeline.take(5)) == [0, 1, 2, 3, 4]
 
@@ -179,7 +203,7 @@ def test_read_tfds_streams_dataset_valued_features(tmp_path: Path) -> None:
     builder = TinyRldsDataset(data_dir=str(tmp_path))
     builder.download_and_prepare()
 
-    rows = read_tfds(builder_dir=builder.data_dir, batch_size=2).take(2)
+    rows = read_tfds(builder.data_dir, batch_size=2).take(2)
 
     assert [row["episode_metadata"]["file_path"] for row in rows] == [
         b"episode-0",
@@ -190,12 +214,22 @@ def test_read_tfds_streams_dataset_valued_features(tmp_path: Path) -> None:
     assert rows[0]["episode_vector"] == pytest.approx([0.0, 1.0, 2.0])
 
 
+def test_read_tfds_preserves_variable_length_sequences(tmp_path: Path) -> None:
+    builder = TinySequenceDataset(data_dir=str(tmp_path))
+    builder.download_and_prepare()
+
+    rows = read_tfds(builder.data_dir, batch_size=2).take(2)
+
+    assert [row["id"] for row in rows] == [0, 1]
+    assert [row["values"] for row in rows] == [[1, 2], [3, 4, 5]]
+
+
 def test_read_tfds_lifts_rlds_images_into_video_sequences(tmp_path: Path) -> None:
     builder = TinyRldsDataset(data_dir=str(tmp_path))
     builder.download_and_prepare()
 
     row = read_tfds(
-        builder_dir=builder.data_dir,
+        builder.data_dir,
         videos={"front": "steps/observation/image"},
         fps=5,
     ).take(1)[0]
@@ -217,7 +251,7 @@ def test_read_tfds_video_sequences_work_with_robot_rows(tmp_path: Path) -> None:
         RoboticsRow,
         (
             read_tfds(
-                builder_dir=builder.data_dir,
+                builder.data_dir,
                 videos={"front": "steps/observation/image"},
                 fps=5,
             )

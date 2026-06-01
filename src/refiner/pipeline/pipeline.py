@@ -1161,12 +1161,11 @@ def read_tfrecords(
 
 
 def read_tfds(
-    name: str | None = None,
+    input: str,
     *,
     config: str | None = None,
     split: str = "train",
     data_dir: str | None = None,
-    builder_dir: str | None = None,
     download: bool = False,
     batch_size: int = 1024,
     examples_per_shard: int = 10_000,
@@ -1184,12 +1183,10 @@ def read_tfds(
     single plain split name.
 
     Args:
-        name: TFDS dataset name. Required unless `builder_dir` is set.
+        input: TFDS dataset name or prepared TFDS directory.
         config: Optional TFDS builder config.
         split: Plain split name from `builder.info.splits`.
         data_dir: Optional local TFDS data directory.
-        builder_dir: Optional path to a prepared TFDS builder directory,
-            such as a Hugging Face RLDS dataset version directory.
         download: Whether to call `download_and_prepare()`.
         batch_size: Number of decoded examples per emitted batch.
         examples_per_shard: Target examples per shard when `num_shards` is
@@ -1204,11 +1201,10 @@ def read_tfds(
     """
     return RefinerPipeline(
         source=TfdsReader(
-            name,
+            input,
             config=config,
             split=split,
             data_dir=data_dir,
-            builder_dir=builder_dir,
             download=download,
             batch_size=batch_size,
             examples_per_shard=examples_per_shard,

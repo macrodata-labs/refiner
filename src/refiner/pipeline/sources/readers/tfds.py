@@ -4,6 +4,7 @@ import importlib
 from collections.abc import Iterator, Mapping, Sequence
 from functools import reduce
 from operator import getitem
+from pathlib import Path
 from typing import Any
 
 from refiner.pipeline.data.row import DictRow
@@ -34,12 +35,11 @@ class TfdsReader(BaseSource):
 
     def __init__(
         self,
-        name: str | None = None,
+        input: str,
         *,
         config: str | None = None,
         split: str = "train",
         data_dir: str | None = None,
-        builder_dir: str | None = None,
         download: bool = False,
         batch_size: int = 1024,
         examples_per_shard: int = _DEFAULT_EXAMPLES_PER_SHARD,
@@ -54,13 +54,11 @@ class TfdsReader(BaseSource):
         """Create a TensorFlow Datasets reader.
 
         Args:
-            name: TFDS dataset name. Required unless `builder_dir` is set.
+            input: TFDS dataset name or prepared TFDS directory.
             config: Optional TFDS builder config.
             split: Plain split name from `builder.info.splits`, such as
                 `"train"` or `"validation"`.
             data_dir: Optional local TFDS data directory.
-            builder_dir: Optional path to a prepared TFDS builder directory,
-                such as a Hugging Face RLDS dataset version directory.
             download: Whether to call `download_and_prepare()`.
             batch_size: Number of examples converted per emitted batch.
             examples_per_shard: Target number of examples per planned shard
@@ -90,16 +88,18 @@ class TfdsReader(BaseSource):
         )
         self.tf = importlib.import_module("tensorflow")
         self.tfds = importlib.import_module("tensorflow_datasets")
-        if builder_dir is None and name is None:
-            raise ValueError("name is required unless builder_dir is provided")
-        if builder_dir is not None and any(
-            value is not None for value in (config, data_dir)
-        ):
-            raise ValueError("config and data_dir cannot be used with builder_dir")
-        if builder_dir is not None and download:
-            raise ValueError("download cannot be used with builder_dir")
+        input_path = Path(input)
+        is_prepared_dir = (
+            input_path.is_dir()
+            and (input_path / "dataset_info.json").exists()
+            and (input_path / "features.json").exists()
+        )
+        if is_prepared_dir and any(value is not None for value in (config, data_dir)):
+            raise ValueError("config and data_dir cannot be used with a TFDS directory")
+        if is_prepared_dir and download:
+            raise ValueError("download cannot be used with a prepared TFDS directory")
+        self.input = input
         self.config = config
-        self.builder_dir = builder_dir
         self.split = split
         self.batch_size = int(batch_size)
         self.examples_per_shard = int(examples_per_shard)
@@ -124,14 +124,13 @@ class TfdsReader(BaseSource):
             key: tuple(paths) for key, paths in excluded_video_paths.items()
         }
         self.fps = float(fps)
-        if builder_dir is not None:
-            self.builder = self.tfds.builder_from_directory(builder_dir)
+        if is_prepared_dir:
+            self.builder = self.tfds.builder_from_directory(input)
         else:
-            assert name is not None
-            self.builder = self.tfds.builder(name, config=config, data_dir=data_dir)
+            self.builder = self.tfds.builder(input, config=config, data_dir=data_dir)
         if download:
             self.builder.download_and_prepare()
-        self.dataset_name = name or self.builder.info.name
+        self.dataset_name = self.builder.info.name
         if split not in self.builder.info.splits:
             raise ValueError(
                 "read_tfds currently shards plain split names only; pass a split "
@@ -142,9 +141,9 @@ class TfdsReader(BaseSource):
     def describe(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            "input": self.input,
             "dataset": self.dataset_name,
             "config": self.config,
-            "builder_dir": self.builder_dir,
             "split": self.split,
             "batch_size": self.batch_size,
             "examples_per_shard": self.examples_per_shard,
@@ -204,10 +203,7 @@ class TfdsReader(BaseSource):
             for spec in self.tf.nest.flatten(dataset.element_spec)
         )
         if not has_nested_datasets:
-            dataset = dataset.padded_batch(
-                self.batch_size,
-                self.tf.compat.v1.data.get_output_shapes(dataset),
-            )
+            dataset = dataset.ragged_batch(self.batch_size)
         for batch in dataset.prefetch(1):
             if self.as_supervised:
                 batch = {"input": batch[0], "target": batch[1]}
