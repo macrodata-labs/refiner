@@ -26,6 +26,7 @@ from refiner.video.types import (
     VideoBytes,
     VideoFile,
     VideoFrameArray,
+    VideoFrameSequence,
     VideoSource,
     video_from_storage_value,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "VideoFile",
     "VideoBytes",
     "VideoFrameArray",
+    "VideoFrameSequence",
     "VideoSource",
     "video_from_storage_value",
     "VideoPtsAlignment",

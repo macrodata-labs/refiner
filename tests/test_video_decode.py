@@ -93,6 +93,50 @@ def test_video_frame_array_iter_frames() -> None:
     assert [int(frame[0, 0, 0]) for frame in arrays] == [0, 1, 2]
 
 
+def test_video_frame_sequence_iterates_without_stacking() -> None:
+    calls = 0
+
+    def frames():
+        nonlocal calls
+        for value in range(3):
+            calls += 1
+            yield np.full((4, 4, 3), value, dtype=np.uint8)
+
+    video = mdr.video.VideoFrameSequence(frames, fps=5, frame_count=3)
+
+    decoded = asyncio.run(_collect_frames(video))
+    arrays = list(video.iter_frame_arrays())
+
+    assert video.frame_count == 3
+    assert [frame.index for frame in decoded] == [0, 1, 2]
+    assert [frame.timestamp_s for frame in decoded] == [0.0, 0.2, 0.4]
+    assert [int(frame[0, 0, 0]) for frame in arrays] == [0, 1, 2]
+    assert calls == 6
+
+
+def test_video_frame_sequence_rejects_one_shot_iterators() -> None:
+    frames = (np.full((4, 4, 3), value, dtype=np.uint8) for value in range(3))
+
+    with pytest.raises(ValueError, match="frames must be repeatable"):
+        mdr.video.VideoFrameSequence(frames, fps=5, frame_count=3)
+
+
+def test_video_frame_sequence_clips_frame_count() -> None:
+    video = mdr.video.VideoFrameSequence(
+        lambda: (np.full((4, 4, 3), value, dtype=np.uint8) for value in range(5)),
+        fps=2,
+        frame_count=5,
+    )
+
+    clipped = video.clipped(from_timestamp_s=0.5, to_timestamp_s=1.5)
+    decoded = asyncio.run(_collect_frames(clipped))
+
+    assert clipped.frame_count == 2
+    assert [int(frame[0, 0, 0]) for frame in clipped.iter_frame_arrays()] == [1, 2]
+    assert [frame.index for frame in decoded] == [0, 1]
+    assert [frame.timestamp_s for frame in decoded] == [0.0, 0.5]
+
+
 def test_video_frame_array_preserves_fractional_fps() -> None:
     frames = np.stack([np.full((4, 4, 3), value, dtype=np.uint8) for value in range(3)])
     video = mdr.video.VideoFrameArray(frames, fps=29.97)
@@ -107,6 +151,27 @@ def test_video_stream_writer_accepts_video_frame_array(tmp_path) -> None:
     video = mdr.video.VideoFrameArray(
         np.stack([np.full((8, 8, 3), value, dtype=np.uint8) for value in range(4)]),
         fps=29.97,
+    )
+    writer = VideoStreamWriter(
+        folder=DataFolder.resolve(tmp_path),
+        stream_key="camera",
+        transcode_config=VideoTranscodeConfig(),
+        video_bytes_limit=1024 * 1024,
+        output_rel_template="videos/{stream_key}/file-{file_index:03d}.mp4",
+    )
+
+    written = asyncio.run(video.write_to(writer))
+    writer.close()
+
+    assert written.segment.fps == 29.97
+    assert written.segment.to_timestamp == pytest.approx(4 / 29.97)
+
+
+def test_video_stream_writer_accepts_video_frame_sequence(tmp_path) -> None:
+    video = mdr.video.VideoFrameSequence(
+        lambda: (np.full((8, 8, 3), value, dtype=np.uint8) for value in range(4)),
+        fps=29.97,
+        frame_count=4,
     )
     writer = VideoStreamWriter(
         folder=DataFolder.resolve(tmp_path),

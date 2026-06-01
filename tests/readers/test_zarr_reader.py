@@ -2025,6 +2025,57 @@ def test_write_zarr_materializes_frame_array_videos(tmp_path: Path) -> None:
     np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
 
 
+def test_write_zarr_streams_frame_sequence_videos(tmp_path: Path) -> None:
+    output = tmp_path / "video-sequence.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    calls = 0
+
+    def iter_frames():
+        nonlocal calls
+        calls += 1
+        yield from frames
+
+    rows = list(
+        mdr.from_items(
+            [
+                {
+                    "episode_id": "episode-1",
+                    "video": mdr.video.VideoFrameSequence(
+                        iter_frames, fps=10, frame_count=2
+                    ),
+                    "action": [[0.0], [0.1]],
+                }
+            ]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"observation.images.front": "video"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(
+        str(output),
+        arrays={
+            "data/action": "action",
+            "data/rgb": "observation.images.front",
+        },
+        reduce_to_single_store=False,
+    ).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    row = mdr.read_zarr(
+        zarr_store,
+        arrays={"action": "data/action", "rgb": "data/rgb"},
+        file_path_column=None,
+    ).take(1)[0]
+    np.testing.assert_array_equal(row["rgb"], frames)
+    np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
+    assert calls == 1
+
+
 def test_write_zarr_defaults_include_robotics_videos(tmp_path: Path) -> None:
     output = tmp_path / "default-video.zarr"
     frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)

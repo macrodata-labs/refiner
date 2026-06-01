@@ -15,7 +15,7 @@ from refiner.pipeline.sources.readers.mcap import _frame_from_value, _ros_image_
 from refiner.pipeline.sources.readers import mcap as mcap_reader
 from refiner.pipeline.sources.readers import McapReader
 from refiner.robotics.row import RoboticsRow
-from refiner.video import VideoFrameArray
+from refiner.video import VideoFrameSequence
 
 mcap_writer = pytest.importorskip("mcap.writer")
 
@@ -894,7 +894,7 @@ def test_mcap_reader_builds_video_frame_arrays_for_robot_rows(tmp_path: Path) ->
     assert robot_row.fps == 12
     assert robot_row.states.to_pylist() == [[1, 2], [3, 4], [5, 6]]
     video = robot_row.videos["observation.images.front"]
-    assert isinstance(video, VideoFrameArray)
+    assert isinstance(video, VideoFrameSequence)
     assert video.frame_count == 3
     assert video.fps == 12
     assert [frame[0, 0].tolist() for frame in video.iter_frame_arrays()] == [
@@ -919,6 +919,7 @@ def test_mcap_reader_decodes_h264_video_messages(tmp_path: Path) -> None:
     assert row["records"].column("timestamp").to_pylist() == [0.0, 0.5]
     assert row["records"].column("state").to_pylist() == [[1], [2]]
     video = row["videos"]["front"]
+    assert isinstance(video, VideoFrameSequence)
     assert video.frame_count == 2
     red, green = [frame[0, 0] for frame in video.iter_frame_arrays()]
     assert red[0] > 200 and red[1] < 20 and red[2] < 20
@@ -932,6 +933,7 @@ def test_mcap_reader_omits_video_topics_from_default_fields(tmp_path: Path) -> N
     row = read_mcap(str(path), videos={"front": "/image.frame"}).materialize()[0]
 
     assert "/image.frame" not in row["records"].table.column_names
+    assert isinstance(row["videos"]["front"], VideoFrameSequence)
     assert row["videos"]["front"].frame_count == 2
 
 
