@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import fsspec
 import h5py
 import numpy as np
 import pyarrow as pa
@@ -51,6 +52,25 @@ def test_hdf5_reader_reads_one_row_per_matching_group(tmp_path: Path) -> None:
     assert isinstance(rows[0]["actions"], np.ndarray)
     np.testing.assert_array_equal(rows[0]["actions"], np.array([[1, 2], [3, 4]]))
     assert np.asarray(rows[0]["frames"]).shape == (2, 4, 4, 3)
+
+
+def test_hdf5_reader_can_cache_remote_file_before_reading(tmp_path: Path) -> None:
+    path = tmp_path / "demo.hdf5"
+    _write_demo_file(path)
+    fs = fsspec.filesystem("memory")
+    remote_path = "/remote/demo.hdf5"
+    with open(path, "rb") as src, fs.open(remote_path, "wb") as dst:
+        dst.write(src.read())
+
+    row = read_hdf5(
+        (remote_path, fs),
+        groups="/data/demo_0",
+        datasets={"actions": "actions"},
+        cache_remote_files=True,
+    ).take(1)[0]
+
+    assert row["file_path"] == "memory:///remote/demo.hdf5"
+    np.testing.assert_array_equal(row["actions"], np.array([[1, 2], [3, 4]]))
 
 
 def test_hdf5_reader_reads_root_group_by_default(tmp_path: Path) -> None:

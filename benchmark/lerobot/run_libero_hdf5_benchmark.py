@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpus", type=int, default=2)
     parser.add_argument("--mem-mb", type=int, default=4096)
     parser.add_argument("--fps", type=float, default=20.0)
+    parser.add_argument("--cache-remote-files", action="store_true")
     parser.add_argument("--codec", default="mpeg4")
     parser.add_argument("--threads", type=int, default=None)
     parser.add_argument("--max-video-prepare-in-flight", type=int, default=2)
@@ -83,6 +84,7 @@ def main() -> None:
             },
             file_path_column="file_path",
             group_path_column="hdf5_group",
+            cache_remote_files=args.cache_remote_files,
         )
         .map(partial(normalize_libero_row, fps=args.fps))
         .to_robot_rows(

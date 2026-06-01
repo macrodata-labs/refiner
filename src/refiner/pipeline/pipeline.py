@@ -818,6 +818,7 @@ def read_hdf5(
     file_path_column: str | None = "file_path",
     group_path_column: str | None = "hdf5_group",
     missing_policy: MissingPolicy = "error",
+    cache_remote_files: bool = False,
     dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with an HDF5 reader source.
@@ -848,6 +849,9 @@ def read_hdf5(
             matched groups: `"error"` raises, `"drop_row"` drops the matched
             group row, and `"set_null"` keeps the row with nulls for missing
             selected values.
+        cache_remote_files: If True, copy non-local HDF5 files to worker-local
+            temporary storage before opening them. This can reduce random-access
+            reads against object stores at the cost of downloading each file once.
         dtypes: Optional dtype overrides for output columns.
     """
     return RefinerPipeline(
@@ -864,6 +868,7 @@ def read_hdf5(
             file_path_column=file_path_column,
             group_path_column=group_path_column,
             missing_policy=missing_policy,
+            cache_remote_files=cache_remote_files,
             dtypes=dtypes,
         )
     )
