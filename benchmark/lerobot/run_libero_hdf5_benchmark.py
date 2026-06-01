@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
+from fsspec import url_to_fs
 import numpy as np
 
 import refiner as mdr
@@ -14,6 +15,8 @@ from refiner.pipeline.data.row import Row
 DEFAULT_INPUT = (
     "hf://datasets/yifengzhu-hf/LIBERO-datasets/libero_goal/turn_on_the_stove_demo.hdf5"
 )
+DEFAULT_DATASET_ROOT = "hf://datasets/yifengzhu-hf/LIBERO-datasets"
+EVAL_SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
 DEFAULT_OUTPUT_PREFIX = "hf://buckets/macrodata/test_bucket/libero-hdf5-benchmark"
 DEFAULT_CLOUD_DEPENDENCIES = (
     "av",
@@ -25,7 +28,10 @@ DEFAULT_CLOUD_DEPENDENCIES = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default=DEFAULT_INPUT)
+    parser.add_argument("--input", action="append")
+    parser.add_argument("--eval-suite", action="store_true")
+    parser.add_argument("--dataset-root", default=DEFAULT_DATASET_ROOT)
+    parser.add_argument("--max-files-per-suite", type=int, default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--name", default=None)
@@ -43,17 +49,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_inputs(args: argparse.Namespace) -> str | list[str]:
+    if not args.eval_suite:
+        return args.input or DEFAULT_INPUT
+
+    roots = [f"{args.dataset_root.rstrip('/')}/{suite}" for suite in EVAL_SUITES]
+    if args.max_files_per_suite is None:
+        return roots
+
+    inputs: list[str] = []
+    for root in roots:
+        fs, path = url_to_fs(root)
+        matches = sorted(fs.glob(f"{path}/*.hdf5"))
+        inputs.extend(
+            fs.unstrip_protocol(match) for match in matches[: args.max_files_per_suite]
+        )
+    return inputs
+
+
 def normalize_libero_row(row: Row, *, fps: float) -> Row:
     action = np.asarray(row["raw_action"], dtype=np.float32)
     action = np.concatenate(
         [action[:, :6], (1.0 - np.clip(action[:, -1], 0.0, 1.0))[:, None]],
         axis=1,
     )
-    task = Path(str(row["file_path"]).rsplit("/", 1)[-1]).stem.removesuffix("_demo")
+    file_path = str(row["file_path"])
+    task = Path(file_path.rsplit("/", 1)[-1]).stem.removesuffix("_demo")
+    suite = Path(file_path.rsplit("/", 2)[0]).name
     demo = str(row["hdf5_group"]).rsplit("/", 1)[-1]
     length = int(action.shape[0])
     return row.update(
-        episode_id=f"{task}/{demo}",
+        episode_id=f"{suite}/{task}/{demo}",
         task=task.replace("_", " "),
         action=action,
         **{
@@ -66,14 +92,17 @@ def main() -> None:
     args = parse_args()
     if args.episodes <= 0:
         raise ValueError("--episodes must be positive")
+    if args.max_files_per_suite is not None and args.max_files_per_suite <= 0:
+        raise ValueError("--max-files-per-suite must be positive")
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output = args.output or f"{DEFAULT_OUTPUT_PREFIX}/{stamp}-{args.episodes}ep"
     name = args.name or f"libero-hdf5-{args.episodes}ep"
+    inputs = resolve_inputs(args)
 
     pipeline = (
         mdr.read_hdf5(
-            args.input,
+            inputs,
             groups=[f"/data/demo_{index}" for index in range(args.episodes)],
             datasets={
                 "raw_action": "actions",
