@@ -84,7 +84,9 @@ same column name, Refiner leaves the parsed value unchanged.
 ## TensorFlow Datasets
 
 Use `read_tfds(...)` for datasets available through TensorFlow Datasets, a
-local TFDS `data_dir`, or a prepared TFDS directory:
+local TFDS `data_dir`, or a prepared TFDS directory. Prepared TFDS directories
+can be local paths or `hf://datasets/...` paths that are downloaded inside the
+process running the pipeline:
 
 ```python
 mdr.read_tfds(
@@ -122,7 +124,7 @@ directory as the input:
 
 ```python
 pipeline = mdr.read_tfds(
-    "data/libero_10_no_noops/1.0.0",
+    "hf://datasets/openvla/modified_libero_rlds/libero_10_no_noops/1.0.0",
     split="train",
     videos={"front": "steps/observation/image"},
     fps=30,
@@ -146,7 +148,7 @@ from the per-step table.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `input` | required | TFDS dataset name or prepared TFDS directory. |
+| `input` | required | TFDS dataset name, local prepared TFDS directory, or `hf://datasets/...` prepared TFDS directory. |
 | `config` | `None` | Optional TFDS builder config. Not used with prepared TFDS directories. |
 | `split` | `"train"` | Plain split name from `builder.info.splits`. |
 | `data_dir` | `None` | Optional local TFDS data directory for catalog datasets. Not used with prepared TFDS directories. |

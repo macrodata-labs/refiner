@@ -21,6 +21,7 @@ from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameSequence
 
 _DEFAULT_EXAMPLES_PER_SHARD = 10_000
+_HF_DATASETS_PREFIX = "hf://datasets/"
 _VideoPath = tuple[str, str, tuple[str, ...]]
 
 
@@ -88,18 +89,10 @@ class TfdsReader(BaseSource):
         )
         self.tf = importlib.import_module("tensorflow")
         self.tfds = importlib.import_module("tensorflow_datasets")
-        input_path = Path(input)
-        is_prepared_dir = (
-            input_path.is_dir()
-            and (input_path / "dataset_info.json").exists()
-            and (input_path / "features.json").exists()
-        )
-        if is_prepared_dir and any(value is not None for value in (config, data_dir)):
-            raise ValueError("config and data_dir cannot be used with a TFDS directory")
-        if is_prepared_dir and download:
-            raise ValueError("download cannot be used with a prepared TFDS directory")
         self.input = input
         self.config = config
+        self.data_dir = data_dir
+        self.download = download
         self.split = split
         self.batch_size = int(batch_size)
         self.examples_per_shard = int(examples_per_shard)
@@ -124,19 +117,54 @@ class TfdsReader(BaseSource):
             key: tuple(paths) for key, paths in excluded_video_paths.items()
         }
         self.fps = float(fps)
+        self._builder: Any | None = None
+        self.dataset_name: str | None = None
+        self.num_examples: int | None = None
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = dict(self.__dict__)
+        state["_builder"] = None
+        state["num_examples"] = None
+        if self.input.startswith(_HF_DATASETS_PREFIX):
+            state["dataset_name"] = None
+        return state
+
+    def _ensure_builder(self) -> Any:
+        if self._builder is not None:
+            return self._builder
+
+        input = _materialize_hf_tfds_dir(self.input)
+        input_path = Path(input)
+        is_prepared_dir = (
+            input_path.is_dir()
+            and (input_path / "dataset_info.json").exists()
+            and (input_path / "features.json").exists()
+        )
+        if is_prepared_dir and any(
+            value is not None for value in (self.config, self.data_dir)
+        ):
+            raise ValueError("config and data_dir cannot be used with a TFDS directory")
+        if is_prepared_dir and self.download:
+            raise ValueError("download cannot be used with a prepared TFDS directory")
         if is_prepared_dir:
-            self.builder = self.tfds.builder_from_directory(input)
+            builder = self.tfds.builder_from_directory(input)
         else:
-            self.builder = self.tfds.builder(input, config=config, data_dir=data_dir)
-        if download:
-            self.builder.download_and_prepare()
-        self.dataset_name = self.builder.info.name
-        if split not in self.builder.info.splits:
+            builder = self.tfds.builder(
+                input,
+                config=self.config,
+                data_dir=self.data_dir,
+            )
+        if self.download:
+            builder.download_and_prepare()
+        if self.split not in builder.info.splits:
             raise ValueError(
                 "read_tfds currently shards plain split names only; pass a split "
-                f"from builder.info.splits, got {split!r}"
+                f"from builder.info.splits, got {self.split!r}"
             )
-        self.num_examples = int(self.builder.info.splits[split].num_examples)
+        self._builder = builder
+        self.dataset_name = builder.info.name
+        self.num_examples = int(builder.info.splits[self.split].num_examples)
+        return builder
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -157,6 +185,8 @@ class TfdsReader(BaseSource):
 
     def list_shards(self) -> list[Shard]:
         """Plan deterministic row ranges for the configured split."""
+        self._ensure_builder()
+        assert self.num_examples is not None
         shards: list[Shard] = []
         if self.num_shards is None:
             for start in range(0, self.num_examples, self.examples_per_shard):
@@ -194,7 +224,8 @@ class TfdsReader(BaseSource):
             "decoders": self.decoders,
             "as_supervised": self.as_supervised,
         }
-        dataset = self.builder.as_dataset(
+        builder = self._ensure_builder()
+        dataset = builder.as_dataset(
             **dataset_kwargs,
             batch_size=None,
         )
@@ -256,6 +287,27 @@ def _drop_tf_paths(value: Any, paths: Sequence[tuple[str, ...]]) -> Any:
             continue
         out[name] = _drop_tf_paths(child, child_paths)
     return out
+
+
+def _materialize_hf_tfds_dir(input: str) -> str:
+    if not input.startswith(_HF_DATASETS_PREFIX):
+        return input
+    parts = input.removeprefix(_HF_DATASETS_PREFIX).strip("/").split("/")
+    if len(parts) < 2:
+        raise ValueError(
+            "Hugging Face TFDS inputs must be hf://datasets/{owner}/{repo}/{path}"
+        )
+    repo, _, revision = parts[1].partition("@")
+    repo_id = f"{parts[0]}/{repo}"
+    subdir = "/".join(parts[2:])
+    snapshot_download = importlib.import_module("huggingface_hub").snapshot_download
+    root = snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        revision=revision or None,
+        allow_patterns=f"{subdir}/**" if subdir else None,
+    )
+    return str(Path(root) / subdir) if subdir else str(root)
 
 
 __all__ = ["TfdsReader"]

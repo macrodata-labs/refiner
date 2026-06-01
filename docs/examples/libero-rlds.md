@@ -9,20 +9,11 @@ Libero-style RLDS datasets store each episode as a TFDS `steps` dataset. Keep
 state and actions in `steps`, and lift camera streams into videos.
 
 ```python
-from huggingface_hub import snapshot_download
-
 import refiner as mdr
-
-dataset_root = snapshot_download(
-    repo_id="openvla/modified_libero_rlds",
-    repo_type="dataset",
-    allow_patterns="libero_10_no_noops/1.0.0/*",
-)
-dataset_dir = f"{dataset_root}/libero_10_no_noops/1.0.0"
 
 pipeline = (
     mdr.read_tfds(
-        dataset_dir,
+        "hf://datasets/openvla/modified_libero_rlds/libero_10_no_noops/1.0.0",
         videos={
             "front": "steps/observation/image",
             "wrist": "steps/observation/wrist_image",

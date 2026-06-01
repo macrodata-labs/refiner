@@ -5,6 +5,7 @@ from typing import cast
 
 import numpy as np
 import pytest
+import huggingface_hub
 
 from refiner.pipeline import read_tfds
 from refiner.pipeline.data.shard import RowRangeDescriptor
@@ -179,6 +180,36 @@ def test_read_tfds_accepts_prepared_tfds_directory(tmp_path: Path) -> None:
     assert sorted(row["id"] for row in pipeline.take(5)) == [0, 1, 2, 3, 4]
 
 
+def test_read_tfds_materializes_hf_dataset_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    builder = TinyDataset(data_dir=str(tmp_path))
+    builder.download_and_prepare()
+    calls = []
+
+    def snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return str(tmp_path)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+
+    rows = read_tfds(
+        "hf://datasets/org/repo@abc/tiny_dataset/1.0.0",
+        num_shards=2,
+        batch_size=3,
+    ).take(5)
+
+    assert calls == [
+        {
+            "repo_id": "org/repo",
+            "repo_type": "dataset",
+            "revision": "abc",
+            "allow_patterns": "tiny_dataset/1.0.0/**",
+        }
+    ]
+    assert sorted(row["id"] for row in rows) == [0, 1, 2, 3, 4]
+
+
 def test_read_tfds_streams_dataset_valued_features(tmp_path: Path) -> None:
     builder = TinyRldsDataset(data_dir=str(tmp_path))
     builder.download_and_prepare()
@@ -262,7 +293,7 @@ def test_tfds_reader_requires_plain_split_name(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setattr(tfds, "builder", lambda *args, **kwargs: builder)
 
     with pytest.raises(ValueError, match="plain split names"):
-        TfdsReader("tiny_dataset", split="train[:2]")
+        TfdsReader("tiny_dataset", split="train[:2]").list_shards()
 
 
 def test_tfds_reader_rejects_non_positive_num_shards(
