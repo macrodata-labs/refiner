@@ -72,7 +72,7 @@ four subsets: `libero_spatial`, `libero_object`, `libero_goal`, and `libero_10`.
 Run the cached full-eval benchmark with:
 
 ```bash
-MACRODATA_BASE_URL=https://dev.macrodata.co uv run python benchmark/lerobot/run_libero_hdf5_benchmark.py --cloud --episodes 50
+MACRODATA_BASE_URL=https://dev.macrodata.co uv run python benchmark/lerobot/run_libero_hdf5_benchmark.py
 ```
 
 The important speedup is `read_hdf5(..., cache_remote_files=True)`: on the

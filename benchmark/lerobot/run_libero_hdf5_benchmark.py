@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import argparse
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
-from fsspec import url_to_fs
 import numpy as np
 
 import refiner as mdr
@@ -16,46 +14,13 @@ DEFAULT_DATASET_ROOT = "hf://datasets/yifengzhu-hf/LIBERO-datasets"
 EVAL_SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
 DEFAULT_OUTPUT_PREFIX = "hf://buckets/macrodata/test_bucket/libero-hdf5-benchmark"
 FULL_EVAL_FILES = 40
+EPISODES_PER_FILE = 50
 DEFAULT_CLOUD_DEPENDENCIES = (
     "av",
     "h5py",
     "huggingface-hub>=1.4.1",
     "pillow",
 )
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Convert the full LIBERO HDF5 eval set to LeRobot with cached remote reads."
-    )
-    parser.add_argument("--episodes", type=int, default=5)
-    parser.add_argument("--max-video-prepare-in-flight", type=int, default=2)
-    parser.add_argument(
-        "--max-files-per-suite", type=int, default=None, help=argparse.SUPPRESS
-    )
-    parser.add_argument("--workers", type=int, default=None, help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--cpus-per-worker", type=int, default=1, help=argparse.SUPPRESS
-    )
-    parser.add_argument("--codec", default="mpeg4", help=argparse.SUPPRESS)
-    parser.add_argument("--pix-fmt", default="yuv420p", help=argparse.SUPPRESS)
-    parser.add_argument("--cloud", action="store_true")
-    return parser.parse_args()
-
-
-def resolve_inputs(max_files_per_suite: int | None) -> tuple[list[str], int]:
-    roots: list[str] = [f"{DEFAULT_DATASET_ROOT}/{suite}" for suite in EVAL_SUITES]
-    if max_files_per_suite is None:
-        return roots, FULL_EVAL_FILES
-
-    inputs: list[str] = []
-    for root in roots:
-        fs, path = url_to_fs(root)
-        matches = sorted(fs.glob(f"{path}/*.hdf5"))
-        inputs.extend(
-            fs.unstrip_protocol(match) for match in matches[:max_files_per_suite]
-        )
-    return inputs, len(inputs)
 
 
 def normalize_libero_row(row: Row, *, fps: float) -> Row:
@@ -80,20 +45,13 @@ def normalize_libero_row(row: Row, *, fps: float) -> Row:
 
 
 def main() -> None:
-    args = parse_args()
-    if args.episodes <= 0:
-        raise ValueError("--episodes must be positive")
-    if args.max_files_per_suite is not None and args.max_files_per_suite <= 0:
-        raise ValueError("--max-files-per-suite must be positive")
-
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = f"{DEFAULT_OUTPUT_PREFIX}/{stamp}-{args.episodes}ep"
-    inputs, input_file_count = resolve_inputs(args.max_files_per_suite)
+    output = f"{DEFAULT_OUTPUT_PREFIX}/{stamp}-{EPISODES_PER_FILE}ep"
 
-    pipeline = (
+    (
         mdr.read_hdf5(
-            inputs,
-            groups=[f"/data/demo_{index}" for index in range(args.episodes)],
+            [f"{DEFAULT_DATASET_ROOT}/{suite}" for suite in EVAL_SUITES],
+            groups=[f"/data/demo_{index}" for index in range(EPISODES_PER_FILE)],
             datasets={
                 "raw_action": "actions",
                 "observation.images.image": "obs/agentview_rgb",
@@ -120,23 +78,16 @@ def main() -> None:
         )
         .write_lerobot(
             output,
-            codec=args.codec,
-            pix_fmt=args.pix_fmt,
-            max_video_prepare_in_flight=args.max_video_prepare_in_flight,
         )
-    )
-
-    if args.cloud:
-        pipeline.launch_cloud(
-            name=f"libero-hdf5-eval-{args.episodes}ep-cached",
-            num_workers=args.workers or input_file_count,
-            cpus_per_worker=args.cpus_per_worker,
+        .launch_cloud(
+            name=f"libero-hdf5-eval-{EPISODES_PER_FILE}ep-cached",
+            num_workers=FULL_EVAL_FILES,
+            cpus_per_worker=1,
             mem_mb_per_worker=1024,
             extra_dependencies=DEFAULT_CLOUD_DEPENDENCIES,
             secrets=mdr.Secrets.env(name="default", keys=["HF_TOKEN"]),
         )
-    else:
-        pipeline.launch_local(name=f"libero-hdf5-eval-{args.episodes}ep-cached")
+    )
 
 
 if __name__ == "__main__":
