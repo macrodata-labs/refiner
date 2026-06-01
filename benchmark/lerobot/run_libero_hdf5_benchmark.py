@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
         description="Convert the full LIBERO HDF5 eval set to LeRobot with cached remote reads."
     )
     parser.add_argument("--episodes", type=int, default=5)
-    parser.add_argument("--max-video-prepare-in-flight", type=int, default=1)
+    parser.add_argument("--max-video-prepare-in-flight", type=int, default=2)
     parser.add_argument(
         "--max-files-per-suite", type=int, default=None, help=argparse.SUPPRESS
     )
