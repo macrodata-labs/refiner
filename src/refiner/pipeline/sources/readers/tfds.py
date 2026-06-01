@@ -5,8 +5,10 @@ from collections.abc import Iterator, Mapping, Sequence
 from functools import reduce
 from operator import getitem
 from pathlib import Path
+import tempfile
 from typing import Any
 
+from refiner.io import DataFolder
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
@@ -21,7 +23,6 @@ from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameSequence
 
 _DEFAULT_EXAMPLES_PER_SHARD = 10_000
-_HF_DATASETS_PREFIX = "hf://datasets/"
 _VideoPath = tuple[str, str, tuple[str, ...]]
 
 
@@ -118,14 +119,21 @@ class TfdsReader(BaseSource):
         }
         self.fps = float(fps)
         self._builder: Any | None = None
+        self._prepared_dir: str | None = None
+        self._remote_folder: DataFolder | None = None
+        self._remote_input = "://" in input
+        self._downloaded_remote_files: set[str] = set()
         self.dataset_name: str | None = None
         self.num_examples: int | None = None
 
     def __getstate__(self) -> dict[str, Any]:
         state = dict(self.__dict__)
         state["_builder"] = None
+        state["_prepared_dir"] = None
+        state["_remote_folder"] = None
+        state["_downloaded_remote_files"] = set()
         state["num_examples"] = None
-        if self.input.startswith(_HF_DATASETS_PREFIX):
+        if self._remote_input:
             state["dataset_name"] = None
         return state
 
@@ -133,7 +141,7 @@ class TfdsReader(BaseSource):
         if self._builder is not None:
             return self._builder
 
-        input = _materialize_hf_tfds_dir(self.input)
+        input = self._ensure_prepared_dir()
         input_path = Path(input)
         is_prepared_dir = (
             input_path.is_dir()
@@ -165,6 +173,41 @@ class TfdsReader(BaseSource):
         self.dataset_name = builder.info.name
         self.num_examples = int(builder.info.splits[self.split].num_examples)
         return builder
+
+    def _ensure_prepared_dir(self) -> str:
+        if not self._remote_input:
+            return self.input
+        if self._prepared_dir is None:
+            local_dir = Path(tempfile.mkdtemp(prefix="refiner-tfds-"))
+            folder = self._ensure_remote_folder()
+            for name in ("dataset_info.json", "features.json"):
+                folder.file(name).copy(str(local_dir / name))
+            self._prepared_dir = str(local_dir)
+        return self._prepared_dir
+
+    def _ensure_remote_folder(self) -> DataFolder:
+        if self._remote_folder is None:
+            self._remote_folder = DataFolder.resolve(self.input)
+        return self._remote_folder
+
+    def _materialize_remote_shards(self, split: str) -> None:
+        if not self._remote_input:
+            return
+        builder = self._ensure_builder()
+        tfds_splits = importlib.import_module("tensorflow_datasets.core.splits")
+        instructions = tfds_splits._make_file_instructions(  # noqa: SLF001
+            list(builder.info.splits.values()),
+            split,
+        )
+        for instruction in instructions:
+            filename = Path(instruction.filename).name
+            if filename in self._downloaded_remote_files:
+                continue
+            assert self._prepared_dir is not None
+            local_file = Path(self._prepared_dir) / filename
+            if not local_file.exists():
+                self._ensure_remote_folder().file(filename).copy(str(local_file))
+            self._downloaded_remote_files.add(filename)
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -225,6 +268,7 @@ class TfdsReader(BaseSource):
             "as_supervised": self.as_supervised,
         }
         builder = self._ensure_builder()
+        self._materialize_remote_shards(split)
         dataset = builder.as_dataset(
             **dataset_kwargs,
             batch_size=None,
@@ -287,27 +331,6 @@ def _drop_tf_paths(value: Any, paths: Sequence[tuple[str, ...]]) -> Any:
             continue
         out[name] = _drop_tf_paths(child, child_paths)
     return out
-
-
-def _materialize_hf_tfds_dir(input: str) -> str:
-    if not input.startswith(_HF_DATASETS_PREFIX):
-        return input
-    parts = input.removeprefix(_HF_DATASETS_PREFIX).strip("/").split("/")
-    if len(parts) < 2:
-        raise ValueError(
-            "Hugging Face TFDS inputs must be hf://datasets/{owner}/{repo}/{path}"
-        )
-    repo, _, revision = parts[1].partition("@")
-    repo_id = f"{parts[0]}/{repo}"
-    subdir = "/".join(parts[2:])
-    snapshot_download = importlib.import_module("huggingface_hub").snapshot_download
-    root = snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        revision=revision or None,
-        allow_patterns=f"{subdir}/**" if subdir else None,
-    )
-    return str(Path(root) / subdir) if subdir else str(root)
 
 
 __all__ = ["TfdsReader"]

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 from typing import cast
 
 import numpy as np
 import pytest
-import huggingface_hub
 
+from refiner.io import DataFolder
+from refiner.io.datafile import DataFile
 from refiner.pipeline import read_tfds
 from refiner.pipeline.data.shard import RowRangeDescriptor
 from refiner.pipeline.data.tabular import Tabular
@@ -180,33 +182,35 @@ def test_read_tfds_accepts_prepared_tfds_directory(tmp_path: Path) -> None:
     assert sorted(row["id"] for row in pipeline.take(5)) == [0, 1, 2, 3, 4]
 
 
-def test_read_tfds_materializes_hf_dataset_directory(
+def test_read_tfds_materializes_remote_directory_shards_lazily(
     tmp_path: Path, monkeypatch
 ) -> None:
     builder = TinyDataset(data_dir=str(tmp_path))
     builder.download_and_prepare()
-    calls = []
 
-    def snapshot_download(**kwargs):
-        calls.append(kwargs)
-        return str(tmp_path)
+    remote = "memory://tfds/tiny_dataset/1.0.0"
+    remote_folder = DataFolder.resolve(remote)
+    for source in Path(builder.data_dir).iterdir():
+        with (
+            source.open("rb") as src,
+            remote_folder.open(source.name, mode="wb") as dst,
+        ):
+            shutil.copyfileobj(src, dst)
 
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    copied = []
+    original_copy = DataFile.copy
 
-    rows = read_tfds(
-        "hf://datasets/org/repo@abc/tiny_dataset/1.0.0",
-        num_shards=2,
-        batch_size=3,
-    ).take(5)
+    def copy_and_record(self, dest, **kwargs):
+        copied.append(Path(self.path).name)
+        return original_copy(self, dest, **kwargs)
 
-    assert calls == [
-        {
-            "repo_id": "org/repo",
-            "repo_type": "dataset",
-            "revision": "abc",
-            "allow_patterns": "tiny_dataset/1.0.0/**",
-        }
-    ]
+    monkeypatch.setattr(DataFile, "copy", copy_and_record)
+
+    rows = read_tfds(remote, num_shards=2, batch_size=3).take(5)
+
+    assert copied.count("dataset_info.json") == 1
+    assert copied.count("features.json") == 1
+    assert copied.count("tiny_dataset-train.tfrecord-00000-of-00001") == 1
     assert sorted(row["id"] for row in rows) == [0, 1, 2, 3, 4]
 
 

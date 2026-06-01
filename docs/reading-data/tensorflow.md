@@ -85,8 +85,7 @@ same column name, Refiner leaves the parsed value unchanged.
 
 Use `read_tfds(...)` for datasets available through TensorFlow Datasets, a
 local TFDS `data_dir`, or a prepared TFDS directory. Prepared TFDS directories
-can be local paths or `hf://datasets/...` paths that are downloaded inside the
-process running the pipeline:
+can be local paths or remote fsspec paths such as `hf://datasets/...`:
 
 ```python
 mdr.read_tfds(
@@ -148,7 +147,7 @@ from the per-step table.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `input` | required | TFDS dataset name, local prepared TFDS directory, or `hf://datasets/...` prepared TFDS directory. |
+| `input` | required | TFDS dataset name, local prepared TFDS directory, or remote prepared TFDS directory. |
 | `config` | `None` | Optional TFDS builder config. Not used with prepared TFDS directories. |
 | `split` | `"train"` | Plain split name from `builder.info.splits`. |
 | `data_dir` | `None` | Optional local TFDS data directory for catalog datasets. Not used with prepared TFDS directories. |
@@ -171,6 +170,8 @@ from the per-step table.
   one very large file runs as one source shard.
 - TFDS shard planning is example-range based within one split. Use
   `examples_per_shard` or `num_shards` to control parallelism.
+- Remote prepared TFDS directories copy metadata locally during planning, then
+  copy only the TFDS data shard files needed by each `read_shard()` row range.
 - RLDS-style TFDS datasets with dataset-valued `steps` are streamed one episode
   at a time because TensorFlow cannot batch nested datasets.
 - `videos` avoids keeping selected decoded image sequences in the row table, but
