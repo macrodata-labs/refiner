@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -9,6 +10,8 @@ from refiner.pipeline import read_tfds
 from refiner.pipeline.data.shard import RowRangeDescriptor
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers import TfdsReader
+from refiner.robotics import RoboticsRow
+from refiner.video import VideoFrameSequence
 
 tfds = pytest.importorskip("tensorflow_datasets")
 pytest.importorskip("tensorflow")
@@ -60,6 +63,16 @@ class TinyRldsDataset(tfds.core.GeneratorBasedBuilder):
                                 shape=(2,),
                                 dtype=np.float32,
                             ),
+                            "observation": {
+                                "image": tfds.features.Tensor(
+                                    shape=(2, 2, 3),
+                                    dtype=np.uint8,
+                                ),
+                                "state": tfds.features.Tensor(
+                                    shape=(2,),
+                                    dtype=np.float32,
+                                ),
+                            },
                             "is_first": tfds.features.Scalar(dtype=np.bool_),
                         }
                     ),
@@ -79,8 +92,22 @@ class TinyRldsDataset(tfds.core.GeneratorBasedBuilder):
                 str(idx),
                 {
                     "steps": [
-                        {"action": [float(idx), 0.0], "is_first": True},
-                        {"action": [float(idx), 1.0], "is_first": False},
+                        {
+                            "action": [float(idx), 0.0],
+                            "observation": {
+                                "image": np.full((2, 2, 3), idx, dtype=np.uint8),
+                                "state": [float(idx), 0.0],
+                            },
+                            "is_first": True,
+                        },
+                        {
+                            "action": [float(idx), 1.0],
+                            "observation": {
+                                "image": np.full((2, 2, 3), idx + 1, dtype=np.uint8),
+                                "state": [float(idx), 1.0],
+                            },
+                            "is_first": False,
+                        },
                     ],
                     "episode_metadata": {"file_path": f"episode-{idx}"},
                 },
@@ -155,6 +182,53 @@ def test_read_tfds_streams_dataset_valued_features(tmp_path: Path) -> None:
     ]
     assert len(rows[0]["steps"]) == 2
     assert rows[0]["steps"][1]["action"] == pytest.approx([0.0, 1.0])
+
+
+def test_read_tfds_lifts_rlds_images_into_video_sequences(tmp_path: Path) -> None:
+    builder = TinyRldsDataset(data_dir=str(tmp_path))
+    builder.download_and_prepare()
+
+    row = read_tfds(
+        builder_dir=builder.data_dir,
+        videos={"front": "steps/observation/image"},
+        fps=5,
+    ).take(1)[0]
+
+    video = row["videos"]["front"]
+    assert isinstance(video, VideoFrameSequence)
+    assert video.frame_count == 2
+    assert video.fps == 5
+    assert "image" not in row["steps"][0]["observation"]
+    assert row["steps"][1]["action"] == pytest.approx([0.0, 1.0])
+    assert [int(frame[0, 0, 0]) for frame in video.iter_frame_arrays()] == [0, 1]
+
+
+def test_read_tfds_video_sequences_work_with_robot_rows(tmp_path: Path) -> None:
+    builder = TinyRldsDataset(data_dir=str(tmp_path))
+    builder.download_and_prepare()
+
+    robot_row = cast(
+        RoboticsRow,
+        (
+            read_tfds(
+                builder_dir=builder.data_dir,
+                videos={"front": "steps/observation/image"},
+                fps=5,
+            )
+            .to_robot_rows(
+                nested_frames_key="steps",
+                state_key="observation/state",
+                video_keys={"observation.images.front": "videos/front"},
+            )
+            .take(1)[0]
+        ),
+    )
+
+    video = robot_row.videos["observation.images.front"]
+    assert isinstance(video, VideoFrameSequence)
+    assert video.frame_count == 2
+    assert robot_row.actions[1].as_py() == pytest.approx([0.0, 1.0])
+    assert [int(frame[0, 0, 0]) for frame in video.iter_frame_arrays()] == [0, 1]
 
 
 def test_tfds_reader_requires_plain_split_name(tmp_path: Path, monkeypatch) -> None:

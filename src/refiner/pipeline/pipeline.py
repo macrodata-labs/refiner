@@ -1175,6 +1175,8 @@ def read_tfds(
     read_config: Any | None = None,
     decoders: Mapping[str, Any] | None = None,
     as_supervised: bool = False,
+    videos: PathSelection | None = None,
+    fps: float = 30.0,
 ) -> RefinerPipeline:
     """Create a pipeline with a TensorFlow Datasets reader source.
 
@@ -1197,6 +1199,8 @@ def read_tfds(
         read_config: Optional TFDS read config.
         decoders: Optional TFDS feature decoders.
         as_supervised: Whether to read supervised `(input, target)` pairs.
+        videos: Optional video-name to nested dataset frame path mapping.
+        fps: Frame rate used for `videos`.
     """
     return RefinerPipeline(
         source=TfdsReader(
@@ -1213,6 +1217,8 @@ def read_tfds(
             read_config=read_config,
             decoders=decoders,
             as_supervised=as_supervised,
+            videos=videos,
+            fps=fps,
         )
     )
 

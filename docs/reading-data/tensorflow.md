@@ -69,6 +69,8 @@ directory:
 pipeline = mdr.read_tfds(
     builder_dir="data/libero_10_no_noops/1.0.0",
     split="train",
+    videos={"front": "steps/observation/image"},
+    fps=30,
 )
 ```
 
@@ -81,6 +83,10 @@ TFDS decoding stays under TensorFlow Datasets. Pass `decoders`, `read_config`,
 `shuffle_files`, or `as_supervised` when you need the same controls as
 `builder.as_dataset(...)`.
 
+For RLDS-style datasets, `videos` lifts image sequences from nested `steps`
+datasets into lazy `VideoFrameSequence` values and removes those frame arrays
+from the per-step table.
+
 ## Performance Trade-Offs
 
 - TFRecord files are read through `tf.data.TFRecordDataset`, batched, parsed, and
@@ -91,6 +97,9 @@ TFDS decoding stays under TensorFlow Datasets. Pass `decoders`, `read_config`,
   `examples_per_shard` or `num_shards` to control parallelism.
 - RLDS-style TFDS datasets with dataset-valued `steps` are streamed one episode
   at a time because TensorFlow cannot batch nested datasets.
+- `videos` avoids keeping selected decoded image sequences in the row table, but
+  writing those videos still decodes the underlying TFDS frames when the video is
+  consumed.
 - For image-heavy TFDS/RLDS reads, pass TFDS `decoders` such as
   `tfds.decode.SkipDecoding()` when you want encoded image bytes instead of
   decoded pixel arrays.

@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
+from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
-from refiner.pipeline.sources.readers.utils import tensorflow_batch_to_table
+from refiner.pipeline.sources.readers.utils import (
+    PathSelection,
+    path_selection_map,
+    tensorflow_batch_to_table,
+    tensorflow_value_to_python,
+)
 from refiner.utils import check_required_dependencies
+from refiner.video import VideoFrameSequence
 
 _DEFAULT_EXAMPLES_PER_SHARD = 10_000
 
@@ -38,6 +45,8 @@ class TfdsReader(BaseSource):
         read_config: Any | None = None,
         decoders: Mapping[str, Any] | None = None,
         as_supervised: bool = False,
+        videos: PathSelection | None = None,
+        fps: float = 30.0,
     ):
         """Create a TensorFlow Datasets reader.
 
@@ -58,6 +67,9 @@ class TfdsReader(BaseSource):
             read_config: Optional TFDS read config.
             decoders: Optional TFDS feature decoders.
             as_supervised: Whether to read supervised `(input, target)` pairs.
+            videos: Optional video-name to nested dataset frame path mapping,
+                such as `{"front": "steps/observation/image"}`.
+            fps: Frame rate used for `videos`.
         """
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0")
@@ -93,6 +105,13 @@ class TfdsReader(BaseSource):
         self.read_config = read_config
         self.decoders = dict(decoders) if decoders else None
         self.as_supervised = as_supervised
+        self.videos = path_selection_map(videos, format_name="TFDS")
+        self.video_paths = {
+            name: tuple(path.split("/")) for name, path in self.videos.items()
+        }
+        if any(len(parts) < 2 for parts in self.video_paths.values()):
+            raise ValueError("TFDS video paths must include a dataset and frame field")
+        self.fps = float(fps)
         if builder_dir is not None:
             self.builder = self.tfds.builder_from_directory(builder_dir)
         else:
@@ -118,6 +137,8 @@ class TfdsReader(BaseSource):
             "batch_size": self.batch_size,
             "examples_per_shard": self.examples_per_shard,
             "num_shards": self.num_shards,
+            "videos": self.videos,
+            "fps": self.fps,
         }
 
     def list_shards(self) -> list[Shard]:
@@ -174,9 +195,69 @@ class TfdsReader(BaseSource):
         for batch in dataset.prefetch(1):
             if self.as_supervised:
                 batch = {"input": batch[0], "target": batch[1]}
+            if self.videos:
+                yield DictRow(_rlds_row(batch, self.tf, self.video_paths, self.fps))
+                continue
             table = tensorflow_batch_to_table(batch)
             if table.num_rows > 0:
                 yield Tabular(table)
+
+
+def _rlds_row(
+    example: Mapping[str, Any],
+    tf,
+    videos: Mapping[str, tuple[str, ...]],
+    fps: float,
+) -> dict[str, Any]:
+    excluded: dict[str, list[tuple[str, ...]]] = {}
+    for parts in videos.values():
+        excluded.setdefault(parts[0], []).append(parts[1:])
+
+    row: dict[str, Any] = {}
+    for name, value in example.items():
+        if isinstance(value, tf.data.Dataset):
+            paths = tuple(excluded.get(name, ()))
+            if paths:
+                value = value.map(lambda step, paths=paths: _tf_drop_paths(step, paths))
+            row[name] = [
+                tensorflow_value_to_python(step) for step in value.as_numpy_iterator()
+            ]
+        else:
+            row[name] = tensorflow_value_to_python(value)
+
+    row["videos"] = {
+        name: VideoFrameSequence(
+            lambda dataset=example[parts[0]], frame_path=parts[1:]: (
+                tensorflow_value_to_python(frame)
+                for frame in dataset.map(
+                    lambda step, frame_path=frame_path: _tf_path_value(step, frame_path)
+                ).as_numpy_iterator()
+            ),
+            fps=fps,
+            frame_count=len(row[parts[0]]),
+        )
+        for name, parts in videos.items()
+    }
+    return row
+
+
+def _tf_drop_paths(value: Any, paths: Sequence[tuple[str, ...]]) -> Any:
+    if not paths or not isinstance(value, Mapping):
+        return value
+    out = {}
+    for name, child in value.items():
+        child_paths = tuple(path[1:] for path in paths if path and path[0] == name)
+        if () in child_paths:
+            continue
+        out[name] = _tf_drop_paths(child, child_paths)
+    return out
+
+
+def _tf_path_value(value: Mapping[str, Any], path: Sequence[str]) -> Any:
+    current: Any = value
+    for part in path:
+        current = current[part]
+    return current
 
 
 __all__ = ["TfdsReader"]

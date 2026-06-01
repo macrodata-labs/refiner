@@ -84,7 +84,7 @@ def _tensorflow_column(value: Any, tf) -> pa.Array | list[Any]:
         return pa.StructArray.from_arrays(columns, names=names)
 
     if isinstance(value, tf.data.Dataset):
-        return [[_python_value(row) for row in value.as_numpy_iterator()]]
+        return [[tensorflow_value_to_python(row) for row in value.as_numpy_iterator()]]
     if isinstance(value, tf.SparseTensor):
         return tf.RaggedTensor.from_sparse(value).to_list()
     if isinstance(value, tf.RaggedTensor):
@@ -104,9 +104,13 @@ def _tensorflow_column(value: Any, tf) -> pa.Array | list[Any]:
     return array.tolist()
 
 
-def _python_value(value: Any) -> Any:
+def tensorflow_value_to_python(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return {name: _python_value(child) for name, child in value.items()}
+        return {
+            name: tensorflow_value_to_python(child) for name, child in value.items()
+        }
+    if hasattr(value, "numpy"):
+        value = value.numpy()
     if hasattr(value, "tolist"):
         return value.tolist()
     return value

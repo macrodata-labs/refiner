@@ -1704,6 +1704,8 @@ all = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "s3fs" },
+    { name = "tensorflow" },
+    { name = "tensorflow-datasets" },
     { name = "warcio" },
     { name = "zarr" },
 ]
@@ -1750,6 +1752,8 @@ testing = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "s3fs" },
+    { name = "tensorflow" },
+    { name = "tensorflow-datasets" },
     { name = "warcio" },
     { name = "zarr" },
 ]
@@ -1798,6 +1802,7 @@ requires-dist = [
     { name = "macrodata-refiner", extras = ["tensorflow"], marker = "extra == 'tfds'" },
     { name = "macrodata-refiner", extras = ["testing"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["text"], marker = "extra == 'testing'" },
+    { name = "macrodata-refiner", extras = ["tfds"], marker = "extra == 'testing'" },
     { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'egocentric'" },
     { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'testing'" },
     { name = "macrodata-refiner", extras = ["zarr"], marker = "extra == 'testing'" },

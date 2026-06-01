@@ -78,6 +78,7 @@ testing = [
     "macrodata-refiner[zarr]",
     "macrodata-refiner[text]",
     "macrodata-refiner[s3]",
+    "macrodata-refiner[tfds]",
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
 ]
