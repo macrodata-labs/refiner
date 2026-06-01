@@ -48,13 +48,6 @@ def normalize_libero_row(row: Row, *, fps: float) -> Row:
         [action[:, :6], (1.0 - np.clip(action[:, -1], 0.0, 1.0))[:, None]],
         axis=1,
     )
-    state = np.concatenate(
-        [
-            np.asarray(row["ee_state"], dtype=np.float32),
-            np.asarray(row["gripper_state"], dtype=np.float32),
-        ],
-        axis=1,
-    )
     task = Path(str(row["file_path"]).rsplit("/", 1)[-1]).stem.removesuffix("_demo")
     demo = str(row["hdf5_group"]).rsplit("/", 1)[-1]
     length = int(action.shape[0])
@@ -64,15 +57,8 @@ def normalize_libero_row(row: Row, *, fps: float) -> Row:
         action=action,
         **{
             "timestamp": np.arange(length, dtype=np.float32) / fps,
-            "observation.state": state,
-            "observation.images.image": np.asarray(
-                row["agentview_rgb"], dtype=np.uint8
-            ),
-            "observation.images.wrist_image": np.asarray(
-                row["eye_in_hand_rgb"], dtype=np.uint8
-            ),
         },
-    )
+    ).drop("raw_action")
 
 
 def main() -> None:
@@ -90,8 +76,8 @@ def main() -> None:
             groups=[f"/data/demo_{index}" for index in range(args.episodes)],
             datasets={
                 "raw_action": "actions",
-                "agentview_rgb": "obs/agentview_rgb",
-                "eye_in_hand_rgb": "obs/eye_in_hand_rgb",
+                "observation.images.image": "obs/agentview_rgb",
+                "observation.images.wrist_image": "obs/eye_in_hand_rgb",
                 "ee_state": "obs/ee_states",
                 "gripper_state": "obs/gripper_states",
             },
@@ -105,7 +91,7 @@ def main() -> None:
             fps_key="fps",
             robot_type="libero",
             action_key="action",
-            state_key="observation.state",
+            state_key=("ee_state", "gripper_state"),
             video_keys={
                 "observation.images.image": "observation.images.image",
                 "observation.images.wrist_image": "observation.images.wrist_image",
