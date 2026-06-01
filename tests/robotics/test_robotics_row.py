@@ -265,6 +265,32 @@ def test_to_robot_rows_infers_timestamps_from_literal_fps() -> None:
     )
 
 
+def test_to_robot_rows_infers_nested_frame_timestamps_from_literal_fps() -> None:
+    row = DictRow(
+        {
+            "episode_id": "episode-1",
+            "frames": [
+                {"action": [0.0], "observation.state": [1.0]},
+                {"action": [0.1], "observation.state": [1.1]},
+            ],
+        }
+    )
+
+    robotics_row = _robot_row(
+        row,
+        nested_frames_key="frames",
+        fps=10.0,
+    )
+
+    frame_table = robotics_row.to_frame_table()
+    assert frame_table.table.column_names == [
+        "timestamp",
+        "action",
+        "observation.state",
+    ]
+    assert frame_table.column("timestamp").to_pylist() == pytest.approx([0.0, 0.1])
+
+
 def test_to_robot_rows_preserves_explicit_fps_and_robot_type_keys() -> None:
     row = DictRow(
         {

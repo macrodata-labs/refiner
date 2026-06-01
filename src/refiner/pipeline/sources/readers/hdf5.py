@@ -164,26 +164,24 @@ class Hdf5Reader(BaseReader):
         import h5py
 
         with TemporaryDirectory(prefix="refiner-hdf5-") as tempdir:
-            cached_sources: dict[tuple[int, str], DataFile] = {}
-            for part in descriptor.parts:
+            for part_index, part in enumerate(descriptor.parts):
                 source = self.fileset.resolve_file(part.source_index, part.path)
                 open_source = source
+                local_path: Path | None = None
                 if self.cache_remote_files and not source.is_local:
-                    cache_key = (part.source_index, part.path)
-                    open_source = cached_sources.get(cache_key)
-                    if open_source is None:
-                        suffix = Path(source.path).suffix or ".hdf5"
-                        local_path = (
-                            Path(tempdir) / f"source-{len(cached_sources):06d}{suffix}"
-                        )
-                        source.copy(str(local_path))
-                        open_source = DataFile.resolve(str(local_path))
-                    cached_sources[cache_key] = open_source
-                with open_source.open(mode="rb") as raw, h5py.File(raw, "r") as h5:
-                    for group_path, group in self._iter_groups(h5, h5py):
-                        row = self._read_group(source, group, group_path, h5py)
-                        if row is not None:
-                            yield DictRow(row)
+                    suffix = Path(source.path).suffix or ".hdf5"
+                    local_path = Path(tempdir) / f"source-{part_index:06d}{suffix}"
+                    source.copy(str(local_path))
+                    open_source = DataFile.resolve(str(local_path))
+                try:
+                    with open_source.open(mode="rb") as raw, h5py.File(raw, "r") as h5:
+                        for group_path, group in self._iter_groups(h5, h5py):
+                            row = self._read_group(source, group, group_path, h5py)
+                            if row is not None:
+                                yield DictRow(row)
+                finally:
+                    if local_path is not None:
+                        local_path.unlink(missing_ok=True)
 
     def _iter_groups(self, h5, h5py) -> Iterator[tuple[str, Any]]:
         if isinstance(self.groups, str):

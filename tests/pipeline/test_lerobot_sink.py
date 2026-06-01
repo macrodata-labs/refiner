@@ -724,6 +724,11 @@ def test_write_lerobot_generates_missing_generic_episode_ids(tmp_path: Path) -> 
     )
 
     assert episodes.column("episode_id").to_pylist() == ["shard-a/0", "shard-a/1"]
+    frames = pq.read_table(out_root / "data" / f"chunk-{chunk}" / "file-000.parquet")
+    assert (
+        frames.column("episode_index").to_pylist()
+        == episodes.column("episode_index").to_pylist()
+    )
 
 
 def test_write_lerobot_accepts_to_robot_rows_after_vectorized_filter(

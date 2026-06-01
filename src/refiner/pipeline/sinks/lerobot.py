@@ -373,6 +373,13 @@ class LeRobotWriterSink(BaseSink):
             else:
                 base_values["episode_index"] = episode_index
                 base_values["episode_id"] = episode_id
+                frames = frames.with_table(
+                    set_or_append_column(
+                        frames.table,
+                        "episode_index",
+                        pa.array([episode_index] * frames.num_rows, type=pa.int64()),
+                    )
+                )
             if robotics_row.task is not None:
                 base_values.setdefault("task", robotics_row.task)
             base_row = DictRow(base_values, shard_id=row.shard_id)

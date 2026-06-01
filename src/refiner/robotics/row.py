@@ -563,6 +563,19 @@ class _RoboticsRowView(Row, RoboticsRow):
                     )
             elif source_key in table.names:
                 columns[semantic_key] = table.column(source_key)
+        if (
+            "timestamp" in self._spec.frame_source_map
+            and "timestamp" not in columns
+            and self.fps is not None
+            and columns
+        ):
+            columns = {
+                "timestamp": pa.array(
+                    [index / float(self.fps) for index in range(table.num_rows)],
+                    type=pa.float32(),
+                ),
+                **columns,
+            }
         return Tabular(pa.table(columns))
 
 
