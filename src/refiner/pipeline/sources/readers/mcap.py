@@ -31,7 +31,7 @@ from refiner.robotics.synchronization import (
     sparse_frame_table,
 )
 from refiner.utils import check_required_dependencies
-from refiner.video import VideoFrameArray, decode_raw_h264_frames
+from refiner.video import VideoFrameSequence, decode_raw_h264_frames
 
 _RESERVED_FRAME_COLUMNS = frozenset({"frame_index", "timestamp"})
 _ROW_COLUMNS = frozenset({"records", "episode_index", "videos", "fps"})
@@ -763,8 +763,8 @@ def _video_map(
     sync_primary: tuple[str, str | None] | None,
     sync_method: SyncMethod,
     fps: float,
-) -> dict[str, VideoFrameArray]:
-    out: dict[str, VideoFrameArray] = {}
+) -> dict[str, VideoFrameSequence]:
+    out: dict[str, VideoFrameSequence] = {}
     sync_primary_timestamps = (
         [event[0] for event in sync_primary_events]
         if sync_primary_events is not None
@@ -772,50 +772,75 @@ def _video_map(
     )
     for name, source in videos.items():
         events = topic_events.get(source[0], ())
+        frame_events = None
+        aligned_frame_events = None
+        predecoded = False
         if sync_primary is not None and source == sync_primary:
             source_events = sync_primary_events or ()
             h264_events = _h264_frame_events(source_events, source[1])
-            frames = (
-                [event[1] for event in h264_events]
-                if h264_events is not None
-                else [
-                    _frame_from_value(source_value(event[1], source[1]))
-                    for event in source_events
-                ]
-            )
+            if h264_events is not None:
+                frame_events = h264_events
+                predecoded = True
+            else:
+                frame_events = source_events
+            frame_count = len(frame_events)
+
         elif sync_primary_timestamps is not None:
             video_sync_method: SyncMethod = (
                 "nearest" if sync_method == "interpolate" else sync_method
             )
             h264_events = _h264_frame_events(events, source[1])
-            frames = []
-            for aligned in align_values(
-                h264_events if h264_events is not None else events,
+            predecoded = h264_events is not None
+            aligned_events = align_values(
+                h264_events if h264_events is not None else tuple(events),
                 sync_primary_timestamps,
                 None if h264_events is not None else source[1],
                 method=video_sync_method,
-            ):
-                if aligned is None:
-                    raise ValueError(
-                        f"MCAP video {name!r} has no aligned frame for a sync_primary row"
-                    )
-                frames.append(
-                    aligned.value
-                    if h264_events is not None
-                    else _frame_from_value(aligned.value)
+            )
+            if any(aligned is None for aligned in aligned_events):
+                raise ValueError(
+                    f"MCAP video {name!r} has no aligned frame for a sync_primary row"
                 )
+            aligned_frame_events = [
+                aligned for aligned in aligned_events if aligned is not None
+            ]
+            frame_count = len(sync_primary_timestamps)
+
         else:
             h264_events = _h264_frame_events(events, source[1])
-            frames = (
-                [event[1] for event in h264_events]
-                if h264_events is not None
-                else [
-                    _frame_from_value(source_value(event[1], source[1]))
-                    for event in sorted(events, key=lambda event: event[0])
-                ]
-            )
-        if frames:
-            out[name] = VideoFrameArray(np.stack(frames), fps=fps)
+            sorted_events = tuple(sorted(events, key=lambda event: event[0]))
+            if h264_events is not None:
+                frame_events = h264_events
+                predecoded = True
+            else:
+                frame_events = sorted_events
+            frame_count = len(frame_events)
+
+        if frame_count:
+
+            def frames(
+                frame_events=frame_events,
+                aligned_frame_events=aligned_frame_events,
+                field_path=source[1],
+                predecoded=predecoded,
+            ):
+                if aligned_frame_events is not None:
+                    for aligned in aligned_frame_events:
+                        yield (
+                            aligned.value
+                            if predecoded
+                            else _frame_from_value(aligned.value)
+                        )
+                    return
+                assert frame_events is not None
+                for _timestamp_ns, value in frame_events:
+                    yield (
+                        value
+                        if predecoded
+                        else _frame_from_value(source_value(value, field_path))
+                    )
+
+            out[name] = VideoFrameSequence(frames, fps=fps, frame_count=frame_count)
     return out
 
 

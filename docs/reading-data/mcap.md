@@ -49,7 +49,7 @@ Each row includes:
 | `file_path` | Source MCAP file path. |
 | `episode_index` | Episode number within the file. |
 | `records` | `Tabular` records table. |
-| `videos` | Mapping of selected video names to `VideoFrameArray` values, when `videos` is set. |
+| `videos` | Mapping of selected video names to video source values, when `videos` is set. |
 | `fps` | Explicit fps, or inferred fps when possible. |
 
 ## Episode Splitting
@@ -233,7 +233,7 @@ mdr.read_mcap("run.mcap", sync_primary="state", fps=30)
 If `fps` is omitted and `sync_primary` is set, the reader infers fps from the
 median gap between sync-primary timestamps. If neither explicit fps nor inferred fps is
 available, the row has no `fps` column. Selected videos still need an fps value,
-so video frame arrays fall back to `30` when no better value is available. Near
+so video sources fall back to `30` when no better value is available. Near
 integer inferred rates are normalized, so nanosecond-rounded `30 fps` timelines
 do not become `30.0000003`.
 
@@ -250,7 +250,7 @@ mdr.read_mcap(
 )
 ```
 
-Each selected video becomes a `VideoFrameArray` under the row's `videos` column.
+Each selected video becomes a frame sequence under the row's `videos` column.
 When you later call `to_robot_rows`, map those values into semantic video keys:
 
 ```python

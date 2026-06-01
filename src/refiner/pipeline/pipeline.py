@@ -938,7 +938,7 @@ def read_mcap(
 
     Each emitted row represents one episode and contains a `records` `Tabular`
     table. When `videos` is set, rows also include a `videos` mapping of
-    selected names to `VideoFrameArray` values. Set `sync_primary` to align
+    selected names to video source values. Set `sync_primary` to align
     records and videos to a field, topic, or video timeline; otherwise selected
     fields are emitted sparsely at their original MCAP log timestamps.
 

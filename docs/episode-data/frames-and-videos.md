@@ -48,8 +48,8 @@ for key, video in row.videos.items():
     print(key, video)
 ```
 
-Video sources may be path-backed files, bytes, or in-memory frame arrays. They
-share the same core operations:
+Video sources may be path-backed files, bytes, in-memory frame arrays, or frame
+sequences. They share the same core operations:
 
 | Operation | Purpose |
 | --- | --- |
@@ -77,4 +77,3 @@ whether to remux or transcode the selected time range.
 - [Files and Videos Reader](../reading-data/files-and-videos.md)
 - [Media Assets and Reducers](../writing-data/media-assets-and-reducers.md)
 - [Motion Trimming](../episode-operations/motion-trimming.md)
-

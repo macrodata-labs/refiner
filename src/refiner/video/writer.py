@@ -21,7 +21,12 @@ from refiner.video.transcode import (
     TranscodeWriter,
     VideoTranscodeConfig,
 )
-from refiner.video.types import VideoBytes, VideoFile, VideoFrameArray
+from refiner.video.types import (
+    VideoBytes,
+    VideoFile,
+    VideoFrameArray,
+    VideoFrameSequence,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +81,7 @@ class VideoStreamWriter:
 
     async def write_frame_array_video(
         self,
-        video: VideoFrameArray,
+        video: VideoFrameArray | VideoFrameSequence,
         *,
         frame_observer: FrameObserver | None = None,
     ) -> WrittenVideo:
@@ -117,7 +122,7 @@ class VideoStreamWriter:
 
     async def _commit_frame_arrays(
         self,
-        video: VideoFrameArray,
+        video: VideoFrameArray | VideoFrameSequence,
         *,
         frame_observer: FrameObserver | None,
     ) -> WrittenVideo:
@@ -134,7 +139,7 @@ class VideoStreamWriter:
 
     def _commit_frame_arrays_sync(
         self,
-        video: VideoFrameArray,
+        video: VideoFrameArray | VideoFrameSequence,
         *,
         frame_observer: FrameObserver | None,
     ) -> WrittenVideo:

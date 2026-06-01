@@ -55,11 +55,11 @@ async def export_clip(
     transcode_config: VideoTranscodeConfig | None = None,
 ) -> bytes:
     from refiner.video.transcode import TranscodeWriter, VideoTranscodeConfig
-    from refiner.video.types import VideoFrameArray
+    from refiner.video.types import VideoFrameArray, VideoFrameSequence
 
     output_file = _NonClosingBytesIO()
     config = transcode_config or VideoTranscodeConfig()
-    if isinstance(video, VideoFrameArray):
+    if isinstance(video, VideoFrameArray | VideoFrameSequence):
         writer = TranscodeWriter.open_file(
             output_file=output_file,
             config=config,
