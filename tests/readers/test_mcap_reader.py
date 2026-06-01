@@ -753,6 +753,23 @@ def test_mcap_reader_filters_sync_primary_subfield_events(tmp_path: Path) -> Non
     assert row["fps"] == 1.0
 
 
+def test_mcap_reader_aligns_same_topic_non_primary_subfields(tmp_path: Path) -> None:
+    path = tmp_path / "mixed-state-shape.mcap"
+    _write_mixed_state_shape_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"state": "/state.q", "diagnostic": "/state.diagnostic"},
+        sync_primary="state",
+        include_skew=False,
+    ).materialize()[0]
+
+    frames = row["records"]
+    assert frames.column("timestamp").to_pylist() == [0.0, 1.0]
+    assert frames.column("state").to_pylist() == [[0], [1]]
+    assert frames.column("diagnostic").to_pylist() == ["ok", "ok"]
+
+
 def test_mcap_reader_builds_video_frame_arrays_for_robot_rows(tmp_path: Path) -> None:
     path = tmp_path / "demo.mcap"
     _write_mcap(path)

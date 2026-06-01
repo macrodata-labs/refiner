@@ -74,6 +74,12 @@ def aligned_frame_table(
     include_skew: bool,
 ) -> pa.Table:
     sync_primary_timestamps = [event[0] for event in sync_primary_events]
+    primary_event_sources = {
+        source
+        for source in fields.values()
+        if source[0] == sync_primary[0]
+        and (sync_primary[1] is None or source == sync_primary)
+    }
     aligned_values = {
         name: align_values(
             topic_events.get(source[0], ()),
@@ -82,7 +88,7 @@ def aligned_frame_table(
             method=sync_method,
         )
         for name, source in fields.items()
-        if source[0] != sync_primary[0]
+        if source not in primary_event_sources
     }
     rows: list[dict[str, Any]] = []
     for index, sync_primary_event in enumerate(sync_primary_events):
@@ -93,7 +99,7 @@ def aligned_frame_table(
         }
         for name in fields:
             source = fields[name]
-            if source[0] == sync_primary[0]:
+            if source in primary_event_sources:
                 row[name] = source_value(sync_primary_event[1], source[1], default=None)
                 continue
             aligned = aligned_values[name][index]
@@ -134,11 +140,15 @@ def align_values(
 ) -> list[_AlignedValue | None]:
     if not events:
         return [None] * len(timestamps_ns)
-    sorted_events = sorted(events, key=lambda event: event[0])
-    source_timestamps = [event[0] for event in sorted_events]
-    source_values = [
-        source_value(event[1], field_path, default=None) for event in sorted_events
+    sorted_values = [
+        (event[0], value)
+        for event in sorted(events, key=lambda event: event[0])
+        if (value := source_value(event[1], field_path, default=None)) is not None
     ]
+    if not sorted_values:
+        return [None] * len(timestamps_ns)
+    source_timestamps = [timestamp for timestamp, _ in sorted_values]
+    source_values = [value for _, value in sorted_values]
     align = _nearest_value
     if method == "hold":
         align = _hold_value
