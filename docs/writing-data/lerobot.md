@@ -50,9 +50,6 @@ or writer options.
 ```python
 pipeline.write_lerobot(
     "hf://buckets/acme-robotics/output",
-    codec="libx264",
-    pix_fmt="yuv420p",
-    max_video_prepare_in_flight=8,
 )
 ```
 
@@ -62,7 +59,9 @@ pipeline.write_lerobot(
 | --- | --- |
 | `data_files_size_in_mb` | Target frame parquet file size. |
 | `video_files_size_in_mb` | Target video file size. |
-| `max_video_prepare_in_flight` | Bound concurrent video preparation per worker. |
+| `codec` | Video codec for transcoded videos. Defaults to `mpeg4`. |
+| `pix_fmt` | Pixel format for transcoded videos. Defaults to `yuv420p`. |
+| `max_video_prepare_in_flight` | Bound concurrent episode video preparation per worker. Defaults to `2`. |
 | `quantile_bins` | Accuracy/cost tradeoff for video stats quantiles. |
 | `force_recompute_video_stats` | Recompute stats even when existing stats could be reused. |
 
@@ -71,4 +70,3 @@ pipeline.write_lerobot(
 - [Metadata, Tasks, and Stats](../episode-data/metadata-tasks-and-stats.md)
 - [Media Assets and Reducers](media-assets-and-reducers.md)
 - [Merge LeRobot Datasets](../examples/merge-lerobot-datasets.md)
-

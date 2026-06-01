@@ -77,6 +77,5 @@ MACRODATA_BASE_URL=https://dev.macrodata.co uv run python benchmark/lerobot/run_
 
 The important speedup is `read_hdf5(..., cache_remote_files=True)`: on the
 single-file 50-episode cloud benchmark, stage 0 dropped from about 113s to 49s.
-The benchmark also uses two video preparations in flight per worker, which was
-faster than one on the 4-file eval smoke test without exceeding the 1GB worker
-shape.
+The benchmark keeps the default video encoding settings, uses one CPU per
+worker, and prepares up to two episode videos in flight per worker.

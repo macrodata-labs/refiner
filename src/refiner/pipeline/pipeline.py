@@ -579,7 +579,7 @@ class RefinerPipeline:
         *,
         data_files_size_in_mb: int = 100,
         video_files_size_in_mb: int = 200,
-        max_video_prepare_in_flight: int = 10,
+        max_video_prepare_in_flight: int = 2,
         codec: str = "mpeg4",
         pix_fmt: str = "yuv420p",
         transencoding_threads: int | None = None,
@@ -587,7 +587,11 @@ class RefinerPipeline:
         quantile_bins: int = 5000,
         force_recompute_video_stats: bool = False,
     ) -> "RefinerPipeline":
-        """Append a deferred LeRobot writer sink and return a pipeline."""
+        """Append a LeRobot writer sink.
+
+        Video output defaults to `mpeg4`/`yuv420p`. `max_video_prepare_in_flight`
+        bounds concurrent episode video preparation per worker.
+        """
         from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
 
         return self.with_sink(
