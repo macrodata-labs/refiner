@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator, Mapping, Sequence
+from functools import reduce
+from operator import getitem
 from typing import Any
 
 from refiner.pipeline.data.row import DictRow
@@ -112,13 +114,13 @@ class TfdsReader(BaseSource):
         }
         if any(len(parts) < 2 for parts in split_video_paths.values()):
             raise ValueError("TFDS video paths must include a dataset and frame field")
-        self.video_paths = tuple(
+        self._video_paths = tuple(
             (name, parts[0], parts[1:]) for name, parts in split_video_paths.items()
         )
         excluded_video_paths: dict[str, list[tuple[str, ...]]] = {}
-        for _, dataset_key, frame_path in self.video_paths:
+        for _, dataset_key, frame_path in self._video_paths:
             excluded_video_paths.setdefault(dataset_key, []).append(frame_path)
-        self.excluded_video_paths = {
+        self._excluded_video_paths = {
             key: tuple(paths) for key, paths in excluded_video_paths.items()
         }
         self.fps = float(fps)
@@ -149,7 +151,7 @@ class TfdsReader(BaseSource):
             "num_shards": self.num_shards,
             "videos": {
                 name: "/".join((dataset_key, *frame_path))
-                for name, dataset_key, frame_path in self.video_paths
+                for name, dataset_key, frame_path in self._video_paths
             },
             "fps": self.fps,
         }
@@ -208,11 +210,11 @@ class TfdsReader(BaseSource):
         for batch in dataset.prefetch(1):
             if self.as_supervised:
                 batch = {"input": batch[0], "target": batch[1]}
-            if self.video_paths:
+            if self._video_paths:
                 row: dict[str, Any] = {}
                 for name, value in batch.items():
                     if isinstance(value, self.tf.data.Dataset):
-                        paths = self.excluded_video_paths.get(name, ())
+                        paths = self._excluded_video_paths.get(name, ())
                         if paths:
                             value = value.map(
                                 lambda step, paths=paths: _drop_tf_paths(step, paths)
@@ -229,15 +231,15 @@ class TfdsReader(BaseSource):
                         lambda dataset=batch[dataset_key], frame_path=frame_path: (
                             tensorflow_value_to_python(frame)
                             for frame in dataset.map(
-                                lambda step, frame_path=frame_path: _get_tf_path(
-                                    step, frame_path
+                                lambda step, frame_path=frame_path: reduce(
+                                    getitem, frame_path, step
                                 )
                             ).as_numpy_iterator()
                         ),
                         fps=self.fps,
                         frame_count=len(row[dataset_key]),
                     )
-                    for name, dataset_key, frame_path in self.video_paths
+                    for name, dataset_key, frame_path in self._video_paths
                 }
                 yield DictRow(row)
                 continue
@@ -256,13 +258,6 @@ def _drop_tf_paths(value: Any, paths: Sequence[tuple[str, ...]]) -> Any:
             continue
         out[name] = _drop_tf_paths(child, child_paths)
     return out
-
-
-def _get_tf_path(value: Mapping[str, Any], path: Sequence[str]) -> Any:
-    current: Any = value
-    for part in path:
-        current = current[part]
-    return current
 
 
 __all__ = ["TfdsReader"]
