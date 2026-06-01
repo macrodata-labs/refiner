@@ -79,6 +79,12 @@ def reward_score(
             {
                 "task": "token_classify",
                 "use_activation": False,
+                "chat_template_kwargs": {
+                    "add_vision_id": True,
+                    "enable_thinking": False,
+                    "fps": 1,
+                },
+                "mm_processor_kwargs": {"do_resize": False},
                 "messages": [{"role": "user", "content": content}],
             }
         )
@@ -239,19 +245,18 @@ def _frame_data_url(frame: DecodedVideoFrame) -> str:
 
 
 def _encode_png(frame: DecodedVideoFrame) -> bytes:
-    import av
+    from PIL import Image
 
     output = io.BytesIO()
-    with av.open(output, mode="w", format="image2pipe") as container:
-        stream = container.add_stream("png", rate=1)
-        stream.width = frame.width
-        stream.height = frame.height
-        stream.pix_fmt = "rgb24"
-        video_frame = frame.frame.reformat(format="rgb24")
-        for packet in stream.encode(video_frame):
-            container.mux(packet)
-        for packet in stream.encode(None):
-            container.mux(packet)
+    image = (
+        frame.frame.to_image()
+        .convert("RGB")
+        .resize(
+            (256, 256),
+            Image.Resampling.BICUBIC,
+        )
+    )
+    image.save(output, format="PNG")
     return output.getvalue()
 
 

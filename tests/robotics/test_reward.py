@@ -100,6 +100,12 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
         "model": "aliangdw/Robometer-4B",
         "task": "token_classify",
         "use_activation": False,
+        "chat_template_kwargs": {
+            "add_vision_id": True,
+            "enable_thinking": False,
+            "fps": 1,
+        },
+        "mm_processor_kwargs": {"do_resize": False},
         "messages": [
             {
                 "role": "user",
