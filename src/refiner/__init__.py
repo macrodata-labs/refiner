@@ -5,6 +5,7 @@ import refiner.robotics as robotics
 import refiner.text as text
 import refiner.video as video
 from refiner.pipeline.data import datatype
+from refiner.pipeline.data.row import Row
 from refiner.pipeline import (
     CUDAVersion,
     GPU,
@@ -49,6 +50,7 @@ __all__ = [
     "SUPPORTED_CUDA_VERSIONS",
     "SUPPORTED_GPU_TYPES",
     "Secrets",
+    "Row",
     "read_csv",
     "read_files",
     "read_hf_dataset",

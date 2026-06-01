@@ -11,7 +11,6 @@ Convert all four LIBERO HDF5 eval subsets to LeRobot on cloud workers:
 from datetime import datetime, timezone
 
 import refiner as mdr
-from refiner.pipeline.data.row import Row
 
 dataset_root = "hf://datasets/yifengzhu-hf/LIBERO-datasets"
 output_prefix = "hf://buckets/acme-robotics/libero-hdf5"
@@ -19,7 +18,7 @@ eval_suites = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
 fps = 10.0
 
 
-def label_libero_row(row: Row) -> Row:
+def label_libero_row(row: mdr.Row) -> mdr.Row:
     file_path = str(row["file_path"])
     task = file_path.rsplit("/", 1)[-1].removesuffix(".hdf5").removesuffix("_demo")
     return row.update(task=task.replace("_", " "))
