@@ -9,21 +9,19 @@ description: "Use vision-language models to annotate temporal subtask segments"
 vision-language model to return temporal subtask segments.
 
 ```python
-provider = mdr.inference.VLLMProvider(model="Qwen/Qwen2.5-VL-7B-Instruct")
-
 pipeline = (
     mdr.read_lerobot("hf://datasets/acme/demos")
     .map_async(
         mdr.robotics.subtask_annotation(
-            provider=provider,
             video_key="observation.images.top",
             output_column="predicted_subtasks",
-            sample_sec=0.5,
         ),
-        max_in_flight=64,
     )
 )
 ```
+
+`subtask_annotation` uses Gemini 3.5 Flash through `GoogleEndpointProvider`,
+so you need to provide `GOOGLE_GENERATIVE_AI_API_KEY`.
 
 ## Output Shape
 
@@ -38,8 +36,8 @@ The output column contains a list of segments:
 
 ## Contact Sheets
 
-Contact sheets reduce video into timestamped image grids. This is often cheaper
-and easier for VLMs than sending the full video.
+Contact sheets reduce video into timestamped image grids. We found this to be
+the most efficient way to give VLMs temporal context for subtask annotation.
 
 | Parameter | Meaning |
 | --- | --- |
@@ -47,6 +45,7 @@ and easier for VLMs than sending the full video.
 | `frame_width` | Width of each sampled frame in the sheet. |
 | `frames_per_sheet` | Number of frames per sheet image. |
 | `columns` | Contact sheet grid columns. |
+| `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `84`. |
 | `include_contact_sheet_manifest` | Add textual sheet descriptions to the prompt. |
 | `min_segment_duration_sec` | Minimum returned segment duration. Defaults to `0.0`, so valid short segments are kept. |
 
