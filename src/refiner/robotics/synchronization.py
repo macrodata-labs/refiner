@@ -16,6 +16,7 @@ SyncMethod = Literal["nearest", "interpolate", "hold"]
 TimestampedValue = tuple[int, Any]
 
 _MISSING = object()
+_ABSENT = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,8 +34,8 @@ def sparse_frame_table(
     for name, source in fields.items():
         values: dict[int, list[Any]] = defaultdict(list)
         for event in topic_events.get(source[0], ()):
-            value = source_value(event[1], source[1], default=None)
-            if value is not None:
+            value = source_value(event[1], source[1], default=_ABSENT)
+            if value is not _ABSENT:
                 values[event[0]].append(value)
         values_by_field[name] = values
     timestamps = sorted(
@@ -141,7 +142,7 @@ def align_values(
     sorted_values = [
         (event[0], value)
         for event in sorted(events, key=lambda event: event[0])
-        if (value := source_value(event[1], field_path, default=None)) is not None
+        if (value := source_value(event[1], field_path, default=_ABSENT)) is not _ABSENT
     ]
     if not sorted_values:
         return [None] * len(timestamps_ns)

@@ -41,6 +41,7 @@ _EPISODE_SPLITTING_ERROR = (
 )
 _McapEvent = TimestampedValue
 _EpisodeWindow = tuple[int | None, int | None]
+_MISSING_FIELD = object()
 
 
 class McapReader(BaseReader):
@@ -223,10 +224,16 @@ class McapReader(BaseReader):
                 + ", ".join(reserved_fields)
             )
         if self.include_skew and sync_primary is not None:
+            primary_event_sources = {
+                source
+                for source in resolved_fields.values()
+                if source[0] == sync_primary[0]
+                and (sync_primary[1] is None or source == sync_primary)
+            }
             skew_field_names = {
                 name
                 for name, source in resolved_fields.items()
-                if source[0] != sync_primary[0]
+                if source not in primary_event_sources
             }
             generated_fields = {
                 generated
@@ -248,7 +255,8 @@ class McapReader(BaseReader):
                     event
                     for event in topic_events.get(sync_primary[0], ())
                     if sync_primary[1] is None
-                    or source_value(event[1], sync_primary[1], default=None) is not None
+                    or source_value(event[1], sync_primary[1], default=_MISSING_FIELD)
+                    is not _MISSING_FIELD
                 ),
                 key=lambda event: event[0],
             )

@@ -534,6 +534,36 @@ def _write_sparse_edge_mcap(path: Path) -> None:
         writer.finish()
 
 
+def _write_nullable_field_mcap(path: Path) -> None:
+    with path.open("wb") as stream:
+        writer = mcap_writer.Writer(stream)
+        writer.start()
+        schema_id = writer.register_schema(
+            name="demo.Json",
+            encoding="jsonschema",
+            data=b'{"type":"object"}',
+        )
+        state_channel = writer.register_channel(
+            topic="/state",
+            message_encoding="json",
+            schema_id=schema_id,
+        )
+        messages = [
+            (state_channel, 0, b'{"value":null}', 0, 1),
+            (state_channel, 1, b'{"other":1}', 1, 2),
+            (state_channel, 2, b'{"value":5}', 2, 3),
+        ]
+        for channel_id, log_time, data, publish_time, sequence in messages:
+            writer.add_message(
+                channel_id=channel_id,
+                log_time=log_time,
+                data=data,
+                publish_time=publish_time,
+                sequence=sequence,
+            )
+        writer.finish()
+
+
 def _write_out_of_order_sync_primary_mcap(path: Path) -> None:
     with path.open("wb") as stream:
         writer = mcap_writer.Writer(stream)
@@ -1222,6 +1252,36 @@ def test_mcap_reader_default_fields_union_optional_keys(tmp_path: Path) -> None:
     assert frames.column("/event.b").to_pylist() == [None, 2, None, None]
 
 
+def test_mcap_reader_sparse_mode_preserves_explicit_null_fields(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "nullable.mcap"
+    _write_nullable_field_mcap(path)
+
+    row = read_mcap(str(path), fields={"value": "/state.value"}).materialize()[0]
+
+    frames = row["records"]
+    assert frames.column("timestamp").to_pylist() == [0.0, 2e-09]
+    assert frames.column("value").to_pylist() == [None, 5]
+
+
+def test_mcap_reader_sync_primary_preserves_explicit_null_fields(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "nullable.mcap"
+    _write_nullable_field_mcap(path)
+
+    row = read_mcap(
+        str(path),
+        fields={"value": "/state.value"},
+        sync_primary="value",
+    ).materialize()[0]
+
+    frames = row["records"]
+    assert frames.column("timestamp").to_pylist() == [0.0, 2e-09]
+    assert frames.column("value").to_pylist() == [None, 5]
+
+
 def test_mcap_reader_sparse_mode_preserves_duplicate_timestamps(
     tmp_path: Path,
 ) -> None:
@@ -1284,6 +1344,24 @@ def test_mcap_reader_rejects_generated_skew_field_name_collisions(
                 "clock": "/event.a",
                 "target": "/state.q",
                 "mcap.target.skew_ms": "/event.b",
+            },
+            sync_primary="clock",
+        ).materialize()
+
+
+def test_mcap_reader_rejects_same_topic_generated_skew_field_name_collisions(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mixed-state-shape.mcap"
+    _write_mixed_state_shape_mcap(path)
+
+    with pytest.raises(ValueError, match="generated skew/timestamp"):
+        read_mcap(
+            str(path),
+            fields={
+                "clock": "/state.q",
+                "diagnostic": "/state.diagnostic",
+                "mcap.diagnostic.skew_ms": "/state.q",
             },
             sync_primary="clock",
         ).materialize()
