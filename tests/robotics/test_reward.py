@@ -100,11 +100,28 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
         "model": "aliangdw/Robometer-4B",
         "task": "token_classify",
         "use_activation": False,
+        "chat_template_kwargs": {
+            "add_vision_id": True,
+            "enable_thinking": False,
+            "fps": 1,
+        },
+        "mm_processor_kwargs": {"do_resize": False},
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "open the drawer"},
+                    {
+                        "type": "text",
+                        "text": (
+                            "The task for the robot is 'open the drawer'. Given "
+                            "the trajectory video, predict the task progress at "
+                            "each frame, how far along the robot is towards "
+                            "completing the task, a float between 0 and 1, "
+                            "where 0 is the starting state and 1 is when the "
+                            "task is completed. If the robot is not performing "
+                            "the same task, predict 0 progress."
+                        ),
+                    },
                     {
                         "type": "image_url",
                         "image_url": {"url": "data:image/png;base64,frame"},

@@ -63,7 +63,9 @@ def reward_score(
             max_frames=max_frames,
         )
         task_text = _resolve_task_text(row, task)
-        content: list[dict[str, Any]] = [{"type": "text", "text": task_text}]
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": _robometer_progress_prompt(task_text)}
+        ]
         for frame in frames:
             content.append(
                 {
@@ -77,6 +79,12 @@ def reward_score(
             {
                 "task": "token_classify",
                 "use_activation": False,
+                "chat_template_kwargs": {
+                    "add_vision_id": True,
+                    "enable_thinking": False,
+                    "fps": 1,
+                },
+                "mm_processor_kwargs": {"do_resize": False},
                 "messages": [{"role": "user", "content": content}],
             }
         )
@@ -183,6 +191,16 @@ def _resolve_task_text(row: LeRobotRow, task: TaskSource | None) -> str:
     return value.strip().removesuffix(".")
 
 
+def _robometer_progress_prompt(task_text: str) -> str:
+    return (
+        f"The task for the robot is '{task_text}'. Given the trajectory video, "
+        "predict the task progress at each frame, how far along the robot is "
+        "towards completing the task, a float between 0 and 1, where 0 is the "
+        "starting state and 1 is when the task is completed. If the robot is "
+        "not performing the same task, predict 0 progress."
+    )
+
+
 async def _sample_video_frames(
     row: LeRobotRow,
     *,
@@ -227,19 +245,18 @@ def _frame_data_url(frame: DecodedVideoFrame) -> str:
 
 
 def _encode_png(frame: DecodedVideoFrame) -> bytes:
-    import av
+    from PIL import Image
 
     output = io.BytesIO()
-    with av.open(output, mode="w", format="image2pipe") as container:
-        stream = container.add_stream("png", rate=1)
-        stream.width = frame.width
-        stream.height = frame.height
-        stream.pix_fmt = "rgb24"
-        video_frame = frame.frame.reformat(format="rgb24")
-        for packet in stream.encode(video_frame):
-            container.mux(packet)
-        for packet in stream.encode(None):
-            container.mux(packet)
+    image = (
+        frame.frame.to_image()
+        .convert("RGB")
+        .resize(
+            (256, 256),
+            Image.Resampling.BICUBIC,
+        )
+    )
+    image.save(output, format="PNG")
     return output.getvalue()
 
 
