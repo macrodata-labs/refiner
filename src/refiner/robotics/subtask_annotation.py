@@ -206,16 +206,15 @@ def contact_sheet_prompt_manifest(
 
 
 def _resolve_video(row: RoboticsRow, video_key: str | None) -> VideoSource:
+    if not row.videos:
+        raise ValueError(f"episode {row.episode_id!r} has no videos")
     if video_key is not None:
         if video_key not in row.videos:
             raise ValueError(
                 f"episode {row.episode_id!r} is missing video key {video_key!r}"
             )
         return row.videos[video_key]
-    for video in row.videos.values():
-        return video
-    else:
-        raise ValueError(f"episode {row.episode_id!r} has no videos")
+    return next(iter(row.videos.values()))
 
 
 def _parse_subtask_annotation_result(text: str) -> _SubtaskAnnotationResult:
