@@ -8,6 +8,10 @@ from typing import Any, cast
 import pytest
 
 import refiner as mdr
+from refiner.inference.internal.transport import (
+    InferenceAPICallError,
+    InferenceRetryError,
+)
 from refiner.inference.providers import openai as openai_provider
 from refiner.pipeline.data.row import DictRow
 from refiner.robotics import reward as reward_module
@@ -135,3 +139,81 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
             }
         ],
     }
+
+
+def test_reward_score_returns_debug_row_when_pooling_disconnects(monkeypatch) -> None:
+    async def _fake_sample_video_frames(row, *, video_key, max_frames):
+        del video_key, max_frames
+        frame = type("Frame", (), {"index": 4})()
+        return [frame]
+
+    def _fake_frame_data_url(frame):
+        del frame
+        return "data:image/png;base64," + ("a" * 128)
+
+    async def _fake_pooling(self, payload):
+        del self, payload
+        api_error = InferenceAPICallError(
+            message=(
+                "Cannot connect to API: RemoteProtocolError: "
+                "Server disconnected without sending a response."
+            ),
+            url="https://example.modal.host/pooling",
+            request_body={},
+            is_retryable=True,
+        )
+        raise InferenceRetryError(
+            message=f"Failed after 3 attempts. Last error: {api_error}",
+            reason="maxRetriesExceeded",
+            errors=[api_error],
+        ) from api_error
+
+    class _FakeServiceManager:
+        async def get(self, name: str):
+            del name
+            return VLLMRuntimeServiceBinding(
+                name="vllm-test",
+                kind="llm",
+                endpoint="http://127.0.0.1:8000",
+            )
+
+    runtime_module = importlib.import_module("refiner.inference.internal.runtime")
+
+    monkeypatch.setattr(
+        reward_module, "_sample_video_frames", _fake_sample_video_frames
+    )
+    monkeypatch.setattr(reward_module, "_frame_data_url", _fake_frame_data_url)
+    monkeypatch.setattr(openai_provider._OpenAIEndpointClient, "pooling", _fake_pooling)
+    monkeypatch.setattr(
+        runtime_module, "get_active_service_manager", lambda: _FakeServiceManager()
+    )
+
+    row = LeRobotRow(
+        DictRow(
+            {
+                "episode_index": 9,
+                "length": 50,
+                "tasks": ["put the battery in the holder"],
+                "videos/observation.images.main/from_timestamp": 0.0,
+                "videos/observation.images.main/to_timestamp": 1.0,
+            }
+        ),
+        metadata=cast(LeRobotMetadata, None),
+        frames=[],
+    )
+    score = mdr.robotics.reward_score(
+        video_key="observation.images.main",
+        max_frames=1,
+    )
+
+    result = asyncio.run(score(row))
+
+    assert result["reward_score"] == []
+    assert result["robometer_success"] == []
+    assert "Server disconnected without sending a response" in result["robometer_error"]
+    debug = result["robometer_debug"]
+    assert debug["exception_type"] == "InferenceRetryError"
+    assert debug["episode_index"] == 9
+    assert debug["sampled_frame_indexes"] == [4]
+    assert debug["payload"]["image_count"] == 1
+    assert debug["payload"]["image_url_length_total"] > 128

@@ -88,10 +88,14 @@ def inference_map(
             if isinstance(provider, OpenAIEndpointProvider):
                 client = _OpenAIEndpointClient(
                     base_url=provider.base_url,
+                    max_connections=max_concurrent_requests,
+                    max_keepalive_connections=max_concurrent_requests,
                 )
             elif isinstance(provider, OpenAIResponsesProvider):
                 client = _OpenAIResponsesClient(
                     base_url=provider.base_url,
+                    max_connections=max_concurrent_requests,
+                    max_keepalive_connections=max_concurrent_requests,
                 )
             elif isinstance(provider, GoogleEndpointProvider):
                 client = _GoogleEndpointClient(
@@ -118,6 +122,8 @@ def inference_map(
                 client = _OpenAIEndpointClient(
                     base_url=binding.endpoint,
                     api_key=binding.api_key,
+                    max_connections=max_concurrent_requests,
+                    max_keepalive_connections=max_concurrent_requests,
                 )
             _register_metrics()
             return client

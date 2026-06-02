@@ -106,8 +106,7 @@ async def post_json_to_api(
             ConnectionError,
             OSError,
             asyncio.TimeoutError,
-            httpx.NetworkError,
-            httpx.TimeoutException,
+            httpx.TransportError,
         ) as err:
             raise InferenceAPICallError(
                 message=f"Cannot connect to API: {type(err).__name__}: {err}",

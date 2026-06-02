@@ -38,10 +38,11 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
+        def __init__(self, *, base_url, headers, timeout, limits):
             seen["base_url"] = str(base_url)
             seen["headers"] = dict(headers)
             seen["timeout"] = timeout
+            seen["limits"] = limits
 
         async def post(self, path, *, json):
             seen["path"] = path
@@ -70,6 +71,9 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["headers"] == {"Authorization": "Bearer secret"}
+    limits = cast(httpx.Limits, seen["limits"])
+    assert limits.max_connections == 256
+    assert limits.max_keepalive_connections == 256
 
 
 def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
@@ -122,6 +126,54 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
         "model": "openai/gpt-5.2",
         "messages": [{"role": "user", "content": "hello"}],
     }
+
+
+def test_openai_endpoint_applies_configured_connection_limits(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, object]:
+            return {
+                "choices": [
+                    {
+                        "text": "ok",
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {},
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout, limits):
+            del base_url, headers, timeout
+            seen["limits"] = limits
+
+        async def post(self, path, *, json):
+            del path, json
+            return _FakeResponse()
+
+    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+
+    response = asyncio.run(
+        openai_provider._OpenAIEndpointClient(
+            base_url="https://api.example.com",
+            max_connections=512,
+            max_keepalive_connections=512,
+        ).generate(
+            {
+                "model": "gpt-test",
+                "prompt": "hello",
+            }
+        )
+    )
+
+    assert response.text == "ok"
+    limits = cast(httpx.Limits, seen["limits"])
+    assert limits.max_connections == 512
+    assert limits.max_keepalive_connections == 512
 
 
 def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
@@ -207,6 +259,59 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
     async def _fake_sleep(delay: float) -> None:
         seen["sleeps"] += 1
         assert delay == 2.0
+
+    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
+
+    response = asyncio.run(
+        openai_provider._OpenAIEndpointClient(
+            base_url="https://api.example.com",
+        ).generate(
+            {
+                "model": "gpt-test",
+                "prompt": "hello",
+            }
+        )
+    )
+
+    assert response.text == "ok"
+    assert seen == {"calls": 2, "sleeps": 1}
+
+
+def test_openai_endpoint_retries_on_remote_protocol_error(monkeypatch) -> None:
+    seen: dict[str, int] = {"calls": 0, "sleeps": 0}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, object]:
+            return {
+                "choices": [
+                    {
+                        "text": "ok",
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {},
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            del base_url, headers, timeout
+
+        async def post(self, path, *, json):
+            del path, json
+            seen["calls"] += 1
+            if seen["calls"] == 1:
+                raise httpx.RemoteProtocolError(
+                    "Server disconnected without sending a response."
+                )
+            return _FakeResponse()
+
+    async def _fake_sleep(delay: float) -> None:
+        assert delay == 2.0
+        seen["sleeps"] += 1
 
     monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
