@@ -36,6 +36,12 @@ Provider: TypeAlias = (
 RequestFn: TypeAlias = Callable[[Mapping[str, Any]], Awaitable[Any]]
 MapFn: TypeAlias = Callable[[Row, RequestFn], Awaitable[MapResult] | MapResult]
 ClientCall: TypeAlias = Callable[[Any, Mapping[str, Any]], Awaitable[Any]]
+InferenceClient: TypeAlias = (
+    _AnthropicEndpointClient
+    | _GoogleEndpointClient
+    | _OpenAIEndpointClient
+    | _OpenAIResponsesClient
+)
 
 
 def inference_map(
@@ -52,13 +58,7 @@ def inference_map(
 ) -> Callable[[Row], Awaitable[MapResult]]:
     if max_concurrent_requests <= 0:
         raise ValueError("max_concurrent_requests must be > 0")
-    client: (
-        _AnthropicEndpointClient
-        | _GoogleEndpointClient
-        | _OpenAIEndpointClient
-        | _OpenAIResponsesClient
-        | None
-    ) = None
+    client: InferenceClient | None = None
     client_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(max_concurrent_requests)
     gauges_registered = False
@@ -73,12 +73,7 @@ def inference_map(
         register_gauge("running_requests", lambda: running_requests, unit="requests")
         gauges_registered = True
 
-    async def _client() -> (
-        _AnthropicEndpointClient
-        | _GoogleEndpointClient
-        | _OpenAIEndpointClient
-        | _OpenAIResponsesClient
-    ):
+    async def _client() -> InferenceClient:
         nonlocal client
         if client is not None:
             return client
@@ -170,11 +165,7 @@ def inference_map(
         if resolved_client is None:
             return
         client = None
-        close = getattr(resolved_client, "close", None)
-        if close is not None:
-            result = close()
-            if inspect.isawaitable(result):
-                await result
+        await resolved_client.close()
 
     service = provider.service_definition()
     args: dict[str, Any] = {
