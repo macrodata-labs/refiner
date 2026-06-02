@@ -91,7 +91,8 @@ class AsyncWindow(Generic[T]):
         while self._futures and (
             return_when == ALL_COMPLETED or len(self._futures) >= self.max_in_flight
         ):
-            done, _ = wait(self._futures, return_when=return_when)
+            wait_mode = FIRST_COMPLETED if return_when == ALL_COMPLETED else return_when
+            done, _ = wait(self._futures, return_when=wait_mode)
             self._collect_done(done)
 
     def _store_result(self, idx: int, value: T) -> None:

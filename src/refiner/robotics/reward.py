@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import io
 import math
 import time
@@ -50,8 +51,16 @@ def reward_score(
     from refiner.inference.providers import VLLMProvider
 
     provider = VLLMProvider(model=model, config="throughput")
+    episode_semaphore = asyncio.Semaphore(max_concurrent_requests)
 
     async def _score_episode(
+        row: Row,
+        generate_pooling_request: GeneratePoolingFn,
+    ) -> MapResult:
+        async with episode_semaphore:
+            return await _score_episode_unbounded(row, generate_pooling_request)
+
+    async def _score_episode_unbounded(
         row: Row,
         generate_pooling_request: GeneratePoolingFn,
     ) -> MapResult:
