@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 from urllib.parse import quote, urlencode
 
 import msgspec
@@ -66,7 +67,16 @@ class MacrodataApiError(Exception):
         return f"HTTP {self.status}: {self.message}"
 
 
-def _decode_json_object(resp: Any, *, context: str) -> dict[str, Any]:
+class _ResponseLike(Protocol):
+    status_code: int
+    headers: Mapping[str, str]
+    text: str
+    reason: str | None
+
+    def json(self) -> Any: ...
+
+
+def _decode_json_object(resp: _ResponseLike, *, context: str) -> dict[str, Any]:
     try:
         payload = resp.json()
     except ValueError as err:
@@ -80,7 +90,7 @@ def _decode_json_object(resp: Any, *, context: str) -> dict[str, Any]:
     return payload
 
 
-def _http_error_message(resp: Any) -> str:
+def _http_error_message(resp: _ResponseLike) -> str:
     try:
         payload = resp.json()
     except ValueError:
