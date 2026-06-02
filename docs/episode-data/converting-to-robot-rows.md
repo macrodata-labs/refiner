@@ -40,7 +40,7 @@ adds semantic properties such as `row.actions`, `row.states`, and `row.videos`.
 | Option | Use it for |
 | --- | --- |
 | `episode_id_key` | Source column or slash path for episode identity. |
-| `task_key` | Source column or slash path containing task text. |
+| `task_key` | Source column or slash path containing task text. Strings become `row.tasks = [task]`; string sequences are preserved. |
 | `fps` or `fps_key` | Literal fps or source column for fps. |
 | `robot_type` or `robot_type_key` | Literal robot type or source column. |
 | `timestamp_key` | Frame-aligned timestamp column. If missing and `fps` is known, timestamps are generated from frame indices. |

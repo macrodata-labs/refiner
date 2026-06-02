@@ -30,6 +30,8 @@ print(row.tasks)
 print(row.task)
 ```
 
+`row.task` is a convenience alias for the first item in `row.tasks`.
+
 When reading multiple LeRobot roots, Refiner merges task tables and remaps
 indices so task text stays stable.
 
@@ -66,4 +68,3 @@ See [Writing LeRobot](../writing-data/lerobot.md).
 - [LeRobot Reader](../reading-data/lerobot.md)
 - [LeRobot Writer](../writing-data/lerobot.md)
 - [Motion Trimming](../episode-operations/motion-trimming.md)
-
