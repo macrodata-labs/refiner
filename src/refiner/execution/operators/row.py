@@ -95,11 +95,16 @@ def execute_row_steps(
                 if window is None:
                     return
                 for row in inp.take_all():
-                    row.log_throughput("rows_processed", 1, unit="rows")
                     window.submit_blocking(_run_async_step(step=step, row=row))
-                out.extend(window.take_completed())
+                completed_rows = window.take_completed()
+                for row in completed_rows:
+                    row.log_throughput("rows_processed", 1, unit="rows")
+                out.extend(completed_rows)
                 if flush_all:
-                    out.extend(window.drain())
+                    drained_rows = window.drain()
+                    for row in drained_rows:
+                        row.log_throughput("rows_processed", 1, unit="rows")
+                    out.extend(drained_rows)
                 return
 
             if isinstance(step, FilterRowStep):
