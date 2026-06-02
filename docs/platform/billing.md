@@ -114,7 +114,7 @@ usage reported by the billing provider.
 
 Runtime services are billed separately from worker compute but remain grouped
 under the job that started them when possible. This matters for inference-heavy
-robotics pipelines where workers call a shared VLLM service: the job line shows
+robotics pipelines where workers call a shared vLLM service: the job line shows
 compute usage and service usage together.
 
 Open [Services](/services) to inspect running and stopped service groups. See

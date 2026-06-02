@@ -7,7 +7,7 @@ description: "Inspect runtime services started by Refiner cloud jobs"
 
 Services are runtime processes started for cloud jobs. They are used when a
 pipeline needs a shared process alongside workers, most commonly model-serving
-workloads such as VLLM-backed inference.
+workloads such as vLLM-backed inference.
 
 Open [Services](/services), which redirects to the active workspace.
 
@@ -21,7 +21,7 @@ A runtime service lets Refiner include a managed service in the cloud runtime
 plan. Workers then call the service while processing shards.
 
 See [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)
-and [Providers and VLLM](../inference/providers-and-vllm.md).
+and [Providers and vLLM](../inference/providers-and-vllm.md).
 
 ## Services List
 
@@ -86,6 +86,6 @@ See [Billing](billing.md).
 ## Related Pages
 
 - [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)
-- [Providers and VLLM](../inference/providers-and-vllm.md)
+- [Providers and vLLM](../inference/providers-and-vllm.md)
 - [Observability](../running-pipelines/observability.md)
 - [Billing](billing.md)

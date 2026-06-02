@@ -38,7 +38,7 @@ pattern you want.
 
 ## Runtime Services
 
-Some inference workloads are better served by a runtime service, such as VLLM,
+Some inference workloads are better served by a runtime service, such as vLLM,
 instead of loading a model inside every transform worker.
 
 ```python
@@ -49,7 +49,7 @@ provider = mdr.inference.VLLMProvider(
 ```
 
 When a provider requires a service, Refiner can include that service in the
-cloud runtime plan. See [Providers and VLLM](../inference/providers-and-vllm.md).
+cloud runtime plan. See [Providers and vLLM](../inference/providers-and-vllm.md).
 
 ## Choosing Worker Count
 

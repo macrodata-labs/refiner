@@ -47,6 +47,29 @@ macrodata secrets list --env production
 
 See [CLI Secrets](../cli/secrets.md).
 
+## Pass Secrets In Code
+
+Use `mdr.Secrets.dict(...)` when the value is available in Python at submission
+time:
+
+```python
+pipeline.launch_cloud(
+    name="private-hf-read",
+    secrets=mdr.Secrets.dict({"HF_TOKEN": "---"}),
+)
+```
+
+The value is sent as a cloud job secret and redacted from logs. Replace `"---"`
+with the real token before submitting. You can also pass a plain mapping, but
+`mdr.Secrets.dict(...)` makes the intent explicit:
+
+```python
+pipeline.launch_cloud(
+    name="private-hf-read",
+    secrets={"HF_TOKEN": "---"},
+)
+```
+
 ## Submit Local Environment Values
 
 Use this when the secret value exists on your submitting machine and should be
@@ -55,12 +78,34 @@ sent with this job:
 ```python
 pipeline.launch_cloud(
     name="private-hf-read",
-    secrets={"HF_TOKEN": None},
+    secrets=mdr.Secrets.dict({"HF_TOKEN": None}),
 )
 ```
 
 `None` means Refiner reads `HF_TOKEN` from your local environment at submission
 time and passes the value as a secret for the job.
+
+## Load A Dotenv File
+
+Use `mdr.Secrets.dotenv(...)` to load job secrets from a local dotenv file at
+submission time:
+
+```python
+pipeline.launch_cloud(
+    name="private-hf-read",
+    secrets=mdr.Secrets.dotenv(".env"),
+)
+```
+
+For example, `.env` can contain:
+
+```bash
+HF_TOKEN=hf_...
+WANDB_API_KEY=...
+```
+
+The dotenv file is read locally when you submit the job. The file itself is not
+uploaded.
 
 ## Use Stored Workspace Secrets
 

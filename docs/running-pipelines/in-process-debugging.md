@@ -59,8 +59,8 @@ Keep debug transforms small and remove them before launching real jobs.
 
 ## Sinks In Process
 
-A pipeline with a sink writes when launched. For quick inspection, usually
-inspect the pipeline before the sink:
+Sinks do not write through in-process inspection methods like `take()` or
+`iter_rows()`. Inspect the pipeline before attaching the sink:
 
 ```python
 source = mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
@@ -69,7 +69,7 @@ trimmed = source.map(mdr.robotics.motion_trim(threshold=0.001))
 print(trimmed.take(1)[0].num_frames)
 ```
 
-Then attach the writer once the transform does what you expect:
+Attach the writer when you are ready to launch the pipeline:
 
 ```python
 pipeline = trimmed.write_lerobot("hf://buckets/acme-robotics/aloha_trimmed")
@@ -80,4 +80,3 @@ pipeline = trimmed.write_lerobot("hf://buckets/acme-robotics/aloha_trimmed")
 - [Episode Rows](../episode-data/episode-rows.md)
 - [Row Transforms](../transforms/row-transforms.md)
 - [Motion Trimming](../episode-operations/motion-trimming.md)
-

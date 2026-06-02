@@ -93,7 +93,7 @@ class LeRobotWriterSink(BaseSink):
         *,
         data_files_size_in_mb: int = _DEFAULT_DATA_FILE_SIZE_IN_MB,
         video_files_size_in_mb: int = _DEFAULT_VIDEO_FILE_SIZE_IN_MB,
-        max_video_prepare_in_flight: int = 10,
+        max_video_prepare_in_flight: int = 4,
         codec: str = "mpeg4",
         pix_fmt: str = "yuv420p",
         transencoding_threads: int | None = None,

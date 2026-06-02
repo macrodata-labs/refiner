@@ -61,6 +61,39 @@ def test_to_robot_rows_does_not_treat_video_uri_frames_as_frame_table() -> None:
     assert video.uri.endswith("/clips/episode-1.mp4")
 
 
+def test_robotics_row_repr_summarizes_episode() -> None:
+    row = DictRow(
+        {
+            "id": "episode-1",
+            "task": "pick the cup",
+            "action": [[0.0], [1.0]],
+            "camera": "clips/episode-1.mp4",
+            "payload": "kept",
+        }
+    )
+
+    robotics_row = _robot_row(
+        row,
+        episode_id_key="id",
+        task_key="task",
+        fps=12,
+        robot_type="mockbot",
+        video_keys={"observation.images.main": "camera"},
+    )
+
+    text = repr(robotics_row)
+
+    assert text.startswith("RoboticsRow(")
+    assert "episode_id='episode-1'" in text
+    assert "num_frames=2" in text
+    assert "task='pick the cup'" in text
+    assert "fps=12" in text
+    assert "robot_type='mockbot'" in text
+    assert "videos=['observation.images.main']" in text
+    assert "actions (row.actions): double[2, 1]" in text
+    assert "source_fields=['id', 'task', 'payload']" in text
+
+
 def test_to_robot_rows_exposes_stats_and_embedded_video_bytes() -> None:
     row = DictRow(
         {

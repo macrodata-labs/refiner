@@ -50,5 +50,5 @@ mdr.robotics.reward_score(task=lambda row: row.task or "; ".join(row.tasks))
 
 ## Inference Backend
 
-`reward_score` uses pooling inference through a VLLM provider. See
-[Pooling](../inference/pooling.md) and [Providers and VLLM](../inference/providers-and-vllm.md).
+`reward_score` uses pooling inference through a vLLM provider. See
+[Pooling](../inference/pooling.md) and [Providers and vLLM](../inference/providers-and-vllm.md).

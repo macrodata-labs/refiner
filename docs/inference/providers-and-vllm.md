@@ -1,9 +1,9 @@
 ---
-title: "Providers and VLLM"
+title: "Providers and vLLM"
 description: "Configure model providers for Refiner inference"
 ---
 
-# Providers And VLLM
+# Providers and vLLM
 
 Providers describe where inference requests go and how payloads are formatted.
 
@@ -40,7 +40,7 @@ provider = mdr.inference.AnthropicEndpointProvider(
 )
 ```
 
-## VLLM
+## vLLM
 
 ```python
 provider = mdr.inference.VLLMProvider(
@@ -49,7 +49,7 @@ provider = mdr.inference.VLLMProvider(
 )
 ```
 
-When used with cloud launch, VLLM providers can be represented as runtime
+When used with cloud launch, vLLM providers can be represented as runtime
 services so workers call a model server instead of loading the model directly
 inside every worker.
 

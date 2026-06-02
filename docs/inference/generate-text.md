@@ -74,5 +74,5 @@ mdr.inference.generate_text(
 ## Related Pages
 
 - [Multimodal and Structured Output](multimodal-and-structured-output.md)
-- [Providers and VLLM](providers-and-vllm.md)
+- [Providers and vLLM](providers-and-vllm.md)
 - [Async and Batch Transforms](../transforms/async-and-batch-transforms.md)

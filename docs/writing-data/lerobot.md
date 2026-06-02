@@ -63,7 +63,7 @@ pipeline.write_lerobot(
 | `video_files_size_in_mb` | Target video file size. |
 | `codec` | Video codec for transcoded videos. Defaults to `mpeg4`. |
 | `pix_fmt` | Pixel format for transcoded videos. Defaults to `yuv420p`. |
-| `max_video_prepare_in_flight` | Bound concurrent episode video preparation per worker. Defaults to `10`. |
+| `max_video_prepare_in_flight` | Bound concurrent episode video preparation per worker. Defaults to `4`. |
 | `quantile_bins` | Accuracy/cost tradeoff for video stats quantiles. |
 | `force_recompute_video_stats` | Recompute stats even when existing stats could be reused. |
 

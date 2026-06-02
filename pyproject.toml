@@ -71,6 +71,11 @@ tfds = [
     "tensorflow-datasets",
 ]
 testing = [
+    "macrodata-refiner[all]",
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+]
+all = [
     "macrodata-refiner[hdf5]",
     "macrodata-refiner[hf]",
     "macrodata-refiner[mcap]",
@@ -79,11 +84,6 @@ testing = [
     "macrodata-refiner[text]",
     "macrodata-refiner[s3]",
     "macrodata-refiner[tfds]",
-    "pytest>=8.0.0",
-    "pytest-cov>=5.0.0",
-]
-all = [
-    "macrodata-refiner[testing]",
 ]
 
 [project.scripts]
@@ -102,7 +102,7 @@ refiner = ["py.typed"]
 
 [dependency-groups]
 dev = [
-    "macrodata-refiner[all]",
+    "macrodata-refiner[testing]",
     "pre-commit>=4.0.0",
     "ruff>=0.14.10",
     "ty>=0.0.7",
