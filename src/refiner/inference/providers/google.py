@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 from urllib.parse import urlparse
 
-import httpx
-
 from refiner.inference.internal.media import (
     base64_data,
     is_url,
@@ -25,6 +23,7 @@ from refiner.inference.internal.response import (
     _text_from_content,
 )
 from refiner.inference.internal.transport import (
+    AiohttpAPIClient,
     post_json_to_api,
     provider_request_options,
 )
@@ -69,7 +68,7 @@ class _GoogleEndpointClient:
     model: str
     api_key: str | None = None
     headers: Mapping[str, str] | None = None
-    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _client: AiohttpAPIClient | None = field(default=None, init=False, repr=False)
     _resolved_headers: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -83,13 +82,13 @@ class _GoogleEndpointClient:
             headers["x-goog-api-key"] = resolved_api_key
         self._resolved_headers = headers
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    def _ensure_client(self) -> AiohttpAPIClient:
         client = self._client
         if client is None:
-            client = httpx.AsyncClient(
+            client = AiohttpAPIClient(
                 base_url=self.base_url.rstrip("/"),
                 headers=self._resolved_headers,
-                timeout=_ENDPOINT_TIMEOUT_SECONDS,
+                timeout_s=_ENDPOINT_TIMEOUT_SECONDS,
             )
             self._client = client
         return client

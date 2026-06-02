@@ -1679,7 +1679,6 @@ dependencies = [
     { name = "aiohttp" },
     { name = "cloudpickle" },
     { name = "fsspec", extra = ["http"] },
-    { name = "httpx" },
     { name = "loguru" },
     { name = "msgspec" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -1688,6 +1687,7 @@ dependencies = [
     { name = "packaging" },
     { name = "pyarrow" },
     { name = "pydantic" },
+    { name = "requests" },
 ]
 
 [package.optional-dependencies]
@@ -1791,7 +1791,6 @@ requires-dist = [
     { name = "fsspec", extras = ["http"] },
     { name = "h5py", marker = "extra == 'hdf5'" },
     { name = "hf", marker = "extra == 'hf'", specifier = ">=1.7.1" },
-    { name = "httpx" },
     { name = "huggingface-hub", marker = "extra == 'hf'", specifier = ">=1.4.1" },
     { name = "loguru" },
     { name = "macrodata-refiner", extras = ["all"], marker = "extra == 'testing'" },
@@ -1820,6 +1819,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'testing'", specifier = ">=8.0.0" },
     { name = "pytest-cov", marker = "extra == 'testing'", specifier = ">=5.0.0" },
+    { name = "requests" },
     { name = "s3fs", marker = "extra == 's3'" },
     { name = "tensorflow", marker = "extra == 'tensorflow'" },
     { name = "tensorflow-datasets", marker = "extra == 'tfds'" },

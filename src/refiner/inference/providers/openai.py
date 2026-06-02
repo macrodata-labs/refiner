@@ -5,9 +5,6 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
-from urllib.parse import urljoin
-
-import aiohttp
 
 from refiner.inference.internal.media import (
     base64_data,
@@ -28,6 +25,7 @@ from refiner.inference.internal.response import (
     _text_from_content,
 )
 from refiner.inference.internal.transport import (
+    AiohttpAPIClient,
     post_json_to_api,
     provider_request_options,
 )
@@ -81,43 +79,13 @@ _ENDPOINT_TIMEOUT_SECONDS = 600.0
 
 
 @dataclass(slots=True)
-class _AiohttpAPIClient:
-    base_url: str
-    headers: Mapping[str, str]
-    max_connections: int | None = None
-    max_keepalive_connections: int | None = None
-    _session: aiohttp.ClientSession | None = field(default=None, init=False, repr=False)
-
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        session = self._session
-        if session is None:
-            connector_kwargs: dict[str, Any] = {}
-            if self.max_connections is not None:
-                connector_kwargs["limit"] = self.max_connections
-            connector = aiohttp.TCPConnector(**connector_kwargs)
-            session = aiohttp.ClientSession(
-                connector=connector,
-                headers=dict(self.headers),
-                timeout=aiohttp.ClientTimeout(total=_ENDPOINT_TIMEOUT_SECONDS),
-            )
-            self._session = session
-        return session
-
-    async def post(self, endpoint_path: str, **kwargs: Any) -> aiohttp.ClientResponse:
-        return await self._ensure_session().post(
-            _join_endpoint_url(self.base_url, endpoint_path),
-            **kwargs,
-        )
-
-
-@dataclass(slots=True)
 class _OpenAIEndpointClient:
     base_url: str
     api_key: str | None = None
     headers: Mapping[str, str] | None = None
     max_connections: int | None = None
     max_keepalive_connections: int | None = None
-    _client: _AiohttpAPIClient | None = field(default=None, init=False, repr=False)
+    _client: AiohttpAPIClient | None = field(default=None, init=False, repr=False)
     _resolved_headers: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -131,12 +99,13 @@ class _OpenAIEndpointClient:
             headers["Authorization"] = f"Bearer {resolved_api_key}"
         self._resolved_headers = headers
 
-    def _ensure_client(self) -> _AiohttpAPIClient:
+    def _ensure_client(self) -> AiohttpAPIClient:
         client = self._client
         if client is None:
-            client = _AiohttpAPIClient(
+            client = AiohttpAPIClient(
                 base_url=_normalize_base_url(self.base_url),
                 headers=self._resolved_headers,
+                timeout_s=_ENDPOINT_TIMEOUT_SECONDS,
                 max_connections=self.max_connections,
                 max_keepalive_connections=self.max_keepalive_connections,
             )
@@ -189,7 +158,7 @@ class _OpenAIResponsesClient:
     headers: Mapping[str, str] | None = None
     max_connections: int | None = None
     max_keepalive_connections: int | None = None
-    _client: _AiohttpAPIClient | None = field(default=None, init=False, repr=False)
+    _client: AiohttpAPIClient | None = field(default=None, init=False, repr=False)
     _resolved_headers: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -203,12 +172,13 @@ class _OpenAIResponsesClient:
             headers["Authorization"] = f"Bearer {resolved_api_key}"
         self._resolved_headers = headers
 
-    def _ensure_client(self) -> _AiohttpAPIClient:
+    def _ensure_client(self) -> AiohttpAPIClient:
         client = self._client
         if client is None:
-            client = _AiohttpAPIClient(
+            client = AiohttpAPIClient(
                 base_url=_normalize_base_url(self.base_url),
                 headers=self._resolved_headers,
+                timeout_s=_ENDPOINT_TIMEOUT_SECONDS,
                 max_connections=self.max_connections,
                 max_keepalive_connections=self.max_keepalive_connections,
             )
@@ -240,10 +210,6 @@ def _normalize_base_url(base_url: str) -> str:
     if normalized.endswith("/v1"):
         normalized = normalized[:-3]
     return normalized
-
-
-def _join_endpoint_url(base_url: str, endpoint_path: str) -> str:
-    return urljoin(f"{base_url.rstrip('/')}/", endpoint_path.lstrip("/"))
 
 
 def model_capabilities(model: str, *, responses_api: bool) -> ModelCapabilities:

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 from urllib.parse import quote, urlencode
 
-import httpx
 import msgspec
+import requests
 
 from refiner.platform.auth import MacrodataCredentialsError, current_api_key
 from refiner.platform.client.models import (
@@ -66,7 +66,7 @@ class MacrodataApiError(Exception):
         return f"HTTP {self.status}: {self.message}"
 
 
-def _decode_json_object(resp: httpx.Response, *, context: str) -> dict[str, Any]:
+def _decode_json_object(resp: Any, *, context: str) -> dict[str, Any]:
     try:
         payload = resp.json()
     except ValueError as err:
@@ -80,16 +80,16 @@ def _decode_json_object(resp: httpx.Response, *, context: str) -> dict[str, Any]
     return payload
 
 
-def _http_error_message(resp: httpx.Response) -> str:
+def _http_error_message(resp: Any) -> str:
     try:
         payload = resp.json()
     except ValueError:
         content_type = resp.headers.get("content-type", "").lower()
         text = resp.text.strip()
         if "html" in content_type:
-            return sanitize_terminal_text(resp.reason_phrase or "HTTP error")
+            return sanitize_terminal_text(resp.reason or "HTTP error")
         if not text:
-            return sanitize_terminal_text(resp.reason_phrase or "HTTP error")
+            return sanitize_terminal_text(resp.reason or "HTTP error")
         one_line = " ".join(text.split())
         if len(one_line) > 200:
             one_line = f"{one_line[:197]}..."
@@ -98,7 +98,7 @@ def _http_error_message(resp: httpx.Response) -> str:
         message = payload.get("error") or payload.get("message")
         if isinstance(message, str) and message:
             return sanitize_terminal_text(message)
-    return sanitize_terminal_text(resp.reason_phrase or "HTTP error")
+    return sanitize_terminal_text(resp.reason or "HTTP error")
 
 
 def request_json(
@@ -107,7 +107,7 @@ def request_json(
     path: str,
     api_key: str | None = None,
     base_url: str | None = None,
-    http_client: httpx.Client | None = None,
+    http_client: requests.Session | None = None,
     json_payload: dict[str, Any] | None = None,
     timeout_s: float = 10.0,
 ) -> dict[str, Any]:
@@ -125,17 +125,17 @@ def request_json(
             headers = {"User-Agent": _USER_AGENT}
             if api_key is not None and api_key.strip():
                 headers["Authorization"] = f"Bearer {api_key}"
-            resp = httpx.request(
+            resp = requests.request(
                 method,
                 url,
                 headers=headers,
                 json=json_payload,
                 timeout=timeout_s,
             )
-    except httpx.RequestError as err:
+    except requests.RequestException as err:
         raise MacrodataApiError(status=0, message=str(err)) from err
 
-    if resp.is_error:
+    if resp.status_code >= 400:
         if resp.status_code == 401:
             raise MacrodataCredentialsError(
                 _http_error_message(resp),
@@ -166,7 +166,8 @@ class MacrodataClient:
         headers = {"User-Agent": _USER_AGENT}
         if self.api_key.strip():
             headers["Authorization"] = f"Bearer {self.api_key}"
-        self._http_client = httpx.Client(headers=headers)
+        self._http_client = requests.Session()
+        self._http_client.headers.update(headers)
 
     def close(self) -> None:
         self._http_client.close()
@@ -342,14 +343,14 @@ class MacrodataClient:
             return
         url, required_headers = upload_target
         try:
-            response = httpx.request(
+            response = requests.request(
                 method="PUT",
                 url=url,
                 headers=required_headers,
                 content=payload_bytes,
                 timeout=timeout_s,
             )
-        except httpx.RequestError as err:
+        except requests.RequestException as err:
             raise MacrodataApiError(status=0, message=str(err)) from err
         if response.status_code < 200 or response.status_code >= 300:
             raise MacrodataApiError(

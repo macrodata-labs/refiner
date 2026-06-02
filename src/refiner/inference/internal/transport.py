@@ -4,11 +4,11 @@ import asyncio
 import email.utils
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypeVar
+from urllib.parse import urljoin
 
 import aiohttp
-import httpx
 
 T = TypeVar("T")
 
@@ -66,6 +66,37 @@ class InferenceRetryError(RuntimeError):
         self.errors = errors
 
 
+@dataclass(slots=True)
+class AiohttpAPIClient:
+    base_url: str
+    headers: Mapping[str, str]
+    timeout_s: float = 600.0
+    max_connections: int | None = None
+    max_keepalive_connections: int | None = None
+    _session: aiohttp.ClientSession | None = field(default=None, init=False, repr=False)
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        session = self._session
+        if session is None:
+            connector_kwargs: dict[str, Any] = {}
+            if self.max_connections is not None:
+                connector_kwargs["limit"] = self.max_connections
+            connector = aiohttp.TCPConnector(**connector_kwargs)
+            session = aiohttp.ClientSession(
+                connector=connector,
+                headers=dict(self.headers),
+                timeout=aiohttp.ClientTimeout(total=self.timeout_s),
+            )
+            self._session = session
+        return session
+
+    async def post(self, endpoint_path: str, **kwargs: Any) -> aiohttp.ClientResponse:
+        return await self._ensure_session().post(
+            urljoin(f"{self.base_url.rstrip('/')}/", endpoint_path.lstrip("/")),
+            **kwargs,
+        )
+
+
 def provider_request_options(
     payload: Mapping[str, Any],
 ) -> tuple[dict[str, Any], int | None, dict[str, str] | None]:
@@ -108,7 +139,6 @@ async def post_json_to_api(
             ConnectionError,
             OSError,
             asyncio.TimeoutError,
-            httpx.TransportError,
         ) as err:
             raise InferenceAPICallError(
                 message=f"Cannot connect to API: {type(err).__name__}: {err}",
@@ -299,7 +329,7 @@ def _is_reasonable_retry_delay(
     )
 
 
-def _response_headers(response: httpx.Response) -> dict[str, str]:
+def _response_headers(response: Any) -> dict[str, str]:
     headers = getattr(response, "headers", {})
     return {str(key).lower(): str(value) for key, value in dict(headers).items()}
 
@@ -398,6 +428,7 @@ def _truncate_error_text(
 
 __all__ = [
     "APIResponse",
+    "AiohttpAPIClient",
     "InferenceAPICallError",
     "InferenceRetryError",
     "provider_request_options",

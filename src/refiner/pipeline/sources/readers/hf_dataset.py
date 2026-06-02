@@ -5,8 +5,8 @@ from typing import Any
 from typing import cast
 from urllib.parse import quote
 
-import httpx
 import pyarrow as pa
+import requests
 
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeMapping
@@ -136,7 +136,12 @@ class HFDatasetReader(BaseSource):
     def list_shards(self) -> list[Shard]:
         try:
             return self._parquet_reader().list_shards()
-        except (FileNotFoundError, httpx.HTTPError, OSError, pa.ArrowException):
+        except (
+            FileNotFoundError,
+            requests.RequestException,
+            OSError,
+            pa.ArrowException,
+        ):
             return self._fallback_shards(self.num_shards)
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
@@ -394,18 +399,18 @@ def _list_parquet_urls(
 def _get_json_or_none(url: str, *, timeout: float) -> object:
     try:
         return _get_json(url, timeout=timeout)
-    except httpx.HTTPError:
+    except requests.RequestException:
         return None
 
 
 def _get_json(url: str, *, timeout: float) -> object:
     from huggingface_hub.utils import build_hf_headers
 
-    response = httpx.get(
+    response = requests.get(
         url,
         headers=build_hf_headers(),
         timeout=timeout,
-        follow_redirects=True,
+        allow_redirects=True,
     )
     response.raise_for_status()
     return response.json()
