@@ -56,7 +56,7 @@
 - [Overview](inference/index.md)
 - [Generate Text](inference/generate-text.md)
 - [Multimodal and Structured Output](inference/multimodal-and-structured-output.md)
-- [Providers and VLLM](inference/providers-and-vllm.md)
+- [Providers and vLLM](inference/providers-and-vllm.md)
 - [Pooling](inference/pooling.md)
 
 ## Writing Data

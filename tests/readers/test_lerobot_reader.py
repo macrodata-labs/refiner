@@ -17,10 +17,12 @@ from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.robotics.lerobot_format import (
     LeRobotInfo,
+    LeRobotFeatureInfo,
     LeRobotMetadata,
     LeRobotRow,
     LeRobotStatsFile,
     LeRobotTasks,
+    LeRobotVideoInfo,
     remap_task_index_table,
 )
 
@@ -213,6 +215,58 @@ def test_lerobot_row_uses_absolute_video_uri_directly() -> None:
     assert video.uri == uri
 
     assert row.update(root=None).videos["observation.images.main"].uri == uri
+
+
+def test_lerobot_row_repr_summarizes_episode() -> None:
+    row = LeRobotRow(
+        DictRow(
+            {
+                "episode_index": 7,
+                "episode_id": "battery-7",
+                "length": 2,
+                "task": "battery insertion",
+                "videos/observation.images.main/uri": "hf://datasets/org/repo/video.mp4",
+                "videos/observation.images.main/from_timestamp": 0.0,
+                "videos/observation.images.main/to_timestamp": 1.0,
+            }
+        ),
+        metadata=LeRobotMetadata(
+            info=LeRobotInfo(
+                fps=30,
+                robot_type="aloha",
+                features={
+                    "observation.images.main": LeRobotFeatureInfo(
+                        dtype="video",
+                        shape=(480, 640, 3),
+                        video_info=LeRobotVideoInfo(fps=30),
+                    )
+                },
+            ),
+            stats=LeRobotStatsFile({}),
+            tasks=LeRobotTasks({0: "pick"}),
+        ),
+        frames=[
+            DictRow({"frame_index": 0, "action": [0.0]}),
+            DictRow({"frame_index": 1, "action": [1.0]}),
+        ],
+        root=None,
+    )
+
+    text = repr(row)
+
+    assert text.startswith("LeRobotRow(")
+    assert "episode_id='battery-7'" in text
+    assert "num_frames=2" in text
+    assert "task='battery insertion'" in text
+    assert "fps=30" in text
+    assert "robot_type='aloha'" in text
+    assert "actions (row.actions): double[2, 1]" in text
+    assert "frame_index" not in text
+    assert "observation.images.main: video[480, 640, 3]@30fps" in text
+    assert "metadata=" not in text
+    assert "frames=[" not in text
+    assert "_row=" not in text
+    assert "fields=" not in text
 
 
 def test_lerobot_reader_exposes_episode_shard_planning_knobs(tmp_path: Path) -> None:

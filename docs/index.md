@@ -20,7 +20,7 @@ The docs are organized around the path most teams follow:
 | Understand rows | [Episode Data](episode-data/index.md) | How episodes, frame tables, videos, metadata, tasks, and stats are represented. |
 | Transform data | [Transforms](transforms/index.md) | How `map`, `map_async`, `batch_map`, expressions, and dtypes fit together. |
 | Use packaged workflows | [Episode Operations](episode-operations/index.md) | How to trim motion, annotate subtasks, score rewards, and run perception models. |
-| Call models | [Inference](inference/index.md) | How to use text, multimodal, structured, VLLM, and pooling inference. |
+| Call models | [Inference](inference/index.md) | How to use text, multimodal, structured, vLLM, and pooling inference. |
 | Save outputs | [Writing Data](writing-data/index.md) | How writers stage files, media, and reducers. |
 | Follow recipes | [Examples](examples/index.md) | End-to-end dataset conversion and enrichment workflows. |
 | Use Macrodata Cloud | [Platform](platform/index.md) | Workspaces, API keys, manifests, cloud jobs, files, and secrets. |

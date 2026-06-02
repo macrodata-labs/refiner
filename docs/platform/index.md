@@ -119,7 +119,7 @@ See [Billing](billing.md).
 ## Services
 
 Services are runtime processes started for jobs, usually for model serving
-workloads such as VLLM-backed inference. They let workers call a shared service
+workloads such as vLLM-backed inference. They let workers call a shared service
 instead of loading an expensive model in every worker process.
 
 Open [Services](/services) to see running and stopped service groups. Click

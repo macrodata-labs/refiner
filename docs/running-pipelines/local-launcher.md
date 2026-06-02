@@ -58,7 +58,8 @@ GPU scheduling has additional options; see
 Use [Cloud Launcher](cloud-launcher.md) when you need:
 
 - more workers than fit on your machine
+- fast network access to remote datasets, buckets, and model artifacts
 - managed logs and metrics
 - workspace secrets
 - resumable cloud jobs
-- hosted runtime services such as VLLM
+- hosted runtime services such as vLLM

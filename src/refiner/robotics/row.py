@@ -193,6 +193,59 @@ class _RoboticsRowView(Row, RoboticsRow):
     def __len__(self) -> int:
         return sum(1 for _ in self)
 
+    def __repr__(self) -> str:
+        parts = [
+            f"episode_id={self.episode_id!r}",
+            f"num_frames={self.num_frames}",
+        ]
+        if self.task is not None:
+            parts.append(f"task={self.task!r}")
+        if self.fps is not None:
+            parts.append(f"fps={self.fps:g}")
+        if self.robot_type is not None:
+            parts.append(f"robot_type={self.robot_type!r}")
+        video_keys = list(self.videos)
+        if video_keys:
+            parts.append(f"videos={video_keys!r}")
+        frame_data = _robotics_frame_data_repr(self)
+        if frame_data:
+            parts.append(f"frame_data={frame_data}")
+        stats = list(self.stats)
+        if stats:
+            parts.append(f"stats={stats!r}")
+        fields = _capped_list(list(self))
+        if fields:
+            parts.append(f"source_fields={fields!r}")
+        return f"RoboticsRow({', '.join(parts)})"
+
+    def __str__(self) -> str:
+        lines = [
+            "RoboticsRow",
+            f"  episode_id: {self.episode_id!r}",
+            f"  num_frames: {self.num_frames}",
+        ]
+        if self.task is not None:
+            lines.append(f"  task: {self.task!r}")
+        if self.fps is not None:
+            lines.append(f"  fps: {self.fps:g}")
+        if self.robot_type is not None:
+            lines.append(f"  robot_type: {self.robot_type!r}")
+        video_keys = list(self.videos)
+        if video_keys:
+            lines.append("  videos:")
+            lines.extend(f"    row.videos[{key!r}]" for key in video_keys)
+        frame_data = _robotics_frame_data_items(self)
+        if frame_data:
+            lines.append("  frame_data (row.to_frame_table()):")
+            lines.extend(f"    {item}" for item in frame_data)
+        stats = list(self.stats)
+        if stats:
+            lines.append(f"  stats: {_capped_list(stats)!r}")
+        fields = _capped_list(list(self))
+        if fields:
+            lines.append(f"  source_fields: {fields!r}")
+        return "\n".join(lines)
+
     @property
     def tabular_type(self) -> type["RoboticsTabular"]:
         from refiner.robotics.tabular import RoboticsTabular
@@ -704,6 +757,101 @@ def _observation_semantic_key(key: str) -> str:
 def _strip_observation_prefix(key: str) -> str:
     prefix = "observation."
     return key[len(prefix) :] if key.startswith(prefix) else key
+
+
+def _robotics_frame_data_repr(
+    row: RoboticsRow,
+    *,
+    include_other_columns: bool = True,
+) -> str:
+    items = _robotics_frame_data_items(
+        row,
+        include_other_columns=include_other_columns,
+    )
+    return "{" + ", ".join(items) + "}" if items else ""
+
+
+def _robotics_frame_data_items(
+    row: RoboticsRow,
+    *,
+    include_other_columns: bool = True,
+) -> list[str]:
+    try:
+        table = row.to_frame_table()
+    except Exception:
+        return []
+    column_names = tuple(getattr(cast(Any, table), "names", ())) or tuple(
+        getattr(cast(Any, table), "column_names", ())
+    )
+    if table.num_rows <= 0 or not column_names:
+        return []
+
+    accessors: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for key, accessor in (
+        ("action", "actions (row.actions)"),
+        ("observation.state", "states (row.states)"),
+        ("timestamp", "timestamps (row.timestamps)"),
+    ):
+        if key in column_names:
+            accessors.append((key, accessor))
+            seen.add(key)
+    for key in column_names:
+        if key.startswith("observation.") and key not in seen:
+            accessors.append((key, f"{key} (row.observations({key[12:]!r}))"))
+            seen.add(key)
+    if include_other_columns:
+        for key in column_names:
+            if key not in seen:
+                accessors.append((key, f"{key} (row.to_frame_table().column({key!r}))"))
+
+    items = [
+        f"{accessor}: {_column_signature(table.column(key))}"
+        for key, accessor in accessors[:6]
+    ]
+    if len(accessors) > 6:
+        items.append(f"... +{len(accessors) - 6} more")
+    return items
+
+
+def _column_signature(column: pa.Array | pa.ChunkedArray) -> str:
+    dtype, fixed_shape = _arrow_type_signature(column.type)
+    shape = [len(column), *fixed_shape]
+    if not fixed_shape:
+        shape.extend(_sample_shape(column))
+    return f"{dtype}[{', '.join(str(size) for size in shape)}]"
+
+
+def _arrow_type_signature(dtype: pa.DataType) -> tuple[str, list[int]]:
+    shape: list[int] = []
+    while pa.types.is_fixed_size_list(dtype):
+        shape.append(int(dtype.list_size))
+        dtype = dtype.value_type
+    while pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
+        dtype = dtype.value_type
+    return str(dtype), shape
+
+
+def _sample_shape(column: pa.Array | pa.ChunkedArray) -> list[int]:
+    for index in range(len(column)):
+        scalar = column[index]
+        if scalar.is_valid:
+            return list(_value_shape(scalar.as_py()))
+    return []
+
+
+def _value_shape(value: Any) -> tuple[int, ...]:
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        if not value:
+            return (0,)
+        return (len(value), *_value_shape(value[0]))
+    return ()
+
+
+def _capped_list(items: list[str], limit: int = 8) -> list[str]:
+    if len(items) <= limit:
+        return items
+    return [*items[:limit], f"... +{len(items) - limit} more"]
 
 
 def _frame_rows(value: Sequence[Any]) -> list[Row]:

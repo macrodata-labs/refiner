@@ -93,6 +93,16 @@ class RefinerPipeline:
         max_vectorized_block_bytes: int | None = None,
         sink: BaseSink | None = None,
     ):
+        """Create an immutable pipeline value.
+
+        Args:
+            source: Source that plans shards and emits source rows or blocks.
+            pipeline_steps: Ordered transform steps applied after the source.
+            max_vectorized_block_bytes: Optional target byte cap for vectorized
+                Arrow blocks. Smaller values reduce peak memory at the cost of
+                more block boundaries.
+            sink: Optional writer sink attached by a ``write_*`` method.
+        """
         if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
             raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
         self.source = source
@@ -102,6 +112,12 @@ class RefinerPipeline:
         self.sink = sink
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
+        """Return a new pipeline with one transform step appended.
+
+        Pipelines are immutable: this method does not mutate the current
+        instance and preserves the current source, sink, and vectorized block
+        settings.
+        """
         return self.__class__(
             self.source,
             self.pipeline_steps + (step,),
@@ -110,12 +126,23 @@ class RefinerPipeline:
         )
 
     def _next_step_index(self) -> int:
+        """Return the user-visible index assigned to the next operation.
+
+        Vectorized fused segments can contain multiple logical operations, so
+        this counts individual operations rather than raw pipeline step objects.
+        """
         return 1 + sum(
             len(step.ops) if isinstance(step, VectorizedSegmentStep) else 1
             for step in self.pipeline_steps
         )
 
     def _add_vectorized_op(self, op: VectorizedOp) -> "RefinerPipeline":
+        """Append an Arrow/vectorized operation, fusing adjacent vectorized ops.
+
+        Fusing keeps expression-backed transforms inside one Arrow execution
+        boundary, avoiding avoidable row materialization between compatible
+        operations.
+        """
         # Fuse adjacent expression-backed operations so each fused segment does
         # one row->Arrow and Arrow->row conversion boundary.
         if self.pipeline_steps and isinstance(
@@ -134,6 +161,12 @@ class RefinerPipeline:
     def with_max_vectorized_block_bytes(
         self, max_vectorized_block_bytes: int | None
     ) -> "RefinerPipeline":
+        """Return a copy with a different vectorized block byte cap.
+
+        Set this when vectorized expression/table operations should operate on
+        smaller Arrow chunks to reduce memory pressure. ``None`` leaves block
+        sizing to the execution engine.
+        """
         return self.__class__(
             self.source,
             self.pipeline_steps,
@@ -142,6 +175,12 @@ class RefinerPipeline:
         )
 
     def with_sink(self, sink: BaseSink | None) -> "RefinerPipeline":
+        """Return a copy with the given sink attached or removed.
+
+        Writer helpers such as ``write_jsonl`` and ``write_lerobot`` call this
+        method. Passing ``None`` removes the sink and leaves a read/transform
+        pipeline suitable for inspection.
+        """
         return self.__class__(
             self.source,
             self.pipeline_steps,
@@ -150,16 +189,34 @@ class RefinerPipeline:
         )
 
     def _get_compiled_segments(self) -> tuple[Segment, ...]:
+        """Compile and cache execution segments for the current step sequence.
+
+        Compilation groups compatible steps into executable segments. The result
+        is cached because pipelines are immutable after construction.
+        """
         if self._compiled_segments is None:
             self._compiled_segments = compile_segments(self.pipeline_steps)
         return self._compiled_segments
 
     def output_schema(self) -> pa.Schema | None:
+        """Return the best-known Arrow schema after vectorized transforms.
+
+        The result can be ``None`` when the source or row-level transforms do
+        not expose a static schema. Row-level Python callbacks may still emit
+        fields not visible here unless they declare ``dtypes``.
+        """
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
     def map(
         self, fn: MapFn, *, dtypes: DTypeMapping | None = None
     ) -> "RefinerPipeline":
+        """Apply a Python function to each row.
+
+        ``fn`` receives one ``Row`` and may return a replacement row, a mapping
+        patch, or another row-like object accepted by the execution engine.
+        Provide ``dtypes`` when the function creates or changes columns and you
+        want downstream vectorized operations or writers to know the schema.
+        """
         return self.add_step(
             FnRowStep(
                 fn=fn,
@@ -233,6 +290,15 @@ class RefinerPipeline:
         preserve_order: bool = True,
         dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
+        """Apply an async Python function to each row.
+
+        Args:
+            fn: Async callback receiving one row.
+            max_in_flight: Maximum unresolved callback tasks per worker.
+            preserve_order: If True, emit rows in input order. If False, emit
+                rows as callbacks finish.
+            dtypes: Optional dtype/schema hints for fields produced by ``fn``.
+        """
         return self.add_step(
             FnAsyncRowStep(
                 fn=fn,
@@ -251,6 +317,12 @@ class RefinerPipeline:
         batch_size: int,
         dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
+        """Apply a Python function to fixed-size row batches.
+
+        ``fn`` receives batches of rows and returns rows or row patches according
+        to the batch transform contract. Use this for APIs that are more
+        efficient when called on multiple rows at once.
+        """
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")
         return self.add_step(
@@ -269,6 +341,12 @@ class RefinerPipeline:
         *,
         dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
+        """Map each input row to zero or more output rows.
+
+        Use ``flat_map`` for expansion, filtering with emitted replacements, or
+        splitting one source row into several logical rows. Provide ``dtypes``
+        when the callback changes the output schema.
+        """
         return self.add_step(
             FnFlatMapStep(
                 fn=fn,
@@ -279,11 +357,23 @@ class RefinerPipeline:
         )
 
     def map_table(self, fn: Callable[[pa.Table], pa.Table]) -> "RefinerPipeline":
+        """Apply a vectorized Arrow table transform.
+
+        ``fn`` receives a ``pyarrow.Table`` and must return a ``pyarrow.Table``.
+        Adjacent vectorized operations are fused so they can run inside the same
+        Arrow segment.
+        """
         return self._add_vectorized_op(
             FnTableStep(fn=fn, index=self._next_step_index())
         )
 
     def filter(self, predicate: Callable[[Row], bool] | Expr) -> "RefinerPipeline":
+        """Keep rows matching a Python predicate or vectorized expression.
+
+        A Python callable receives one row at a time. An ``Expr`` runs as a
+        vectorized Arrow filter and can be fused with adjacent vectorized
+        operations.
+        """
         if isinstance(predicate, Expr):
             return self._add_vectorized_op(
                 FilterExprStep(predicate=predicate, index=self._next_step_index())
@@ -297,6 +387,11 @@ class RefinerPipeline:
         )
 
     def select(self, *columns: str) -> "RefinerPipeline":
+        """Keep only the named columns.
+
+        The internal shard id column is preserved automatically for execution
+        bookkeeping and is not part of the public column selection.
+        """
         if not columns:
             raise ValueError("select requires at least one column")
         if SHARD_ID_COLUMN in columns:
@@ -309,6 +404,11 @@ class RefinerPipeline:
         )
 
     def with_columns(self, **assignments: Expr | Any) -> "RefinerPipeline":
+        """Add or replace columns with vectorized expressions or literals.
+
+        Keyword names are output columns. Values that are not ``Expr`` instances
+        are treated as literals and broadcast to each row in the current block.
+        """
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
         if SHARD_ID_COLUMN in assignments:
@@ -322,6 +422,11 @@ class RefinerPipeline:
         )
 
     def with_column(self, name: str, value: Expr | Any) -> "RefinerPipeline":
+        """Add or replace one column with a vectorized expression or literal.
+
+        This is a convenience wrapper around ``with_columns`` for a single
+        assignment. Non-expression values are treated as literals.
+        """
         if name == SHARD_ID_COLUMN:
             raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
@@ -330,6 +435,11 @@ class RefinerPipeline:
         )
 
     def drop(self, *columns: str) -> "RefinerPipeline":
+        """Drop the named columns from each row or Arrow block.
+
+        ``drop`` is vectorized and can be fused with adjacent expression-backed
+        operations. The internal shard id column cannot be dropped.
+        """
         if not columns:
             raise ValueError("drop requires at least one column")
         if SHARD_ID_COLUMN in columns:
@@ -339,6 +449,11 @@ class RefinerPipeline:
         )
 
     def rename(self, **mapping: str) -> "RefinerPipeline":
+        """Rename columns using ``old_name=new_name`` keyword arguments.
+
+        For example, ``pipeline.rename(old="new")`` renames column ``old`` to
+        ``new``. The internal shard id column cannot be renamed.
+        """
         if not mapping:
             raise ValueError("rename requires at least one mapping")
         if SHARD_ID_COLUMN in mapping or SHARD_ID_COLUMN in mapping.values():
@@ -348,6 +463,11 @@ class RefinerPipeline:
         )
 
     def cast(self, **dtypes: DTypeLike) -> "RefinerPipeline":
+        """Cast columns to Arrow/refiner dtypes.
+
+        Keyword names are column names and values are dtype specifications
+        accepted by ``refiner.pipeline.data.datatype``.
+        """
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
         if SHARD_ID_COLUMN in dtypes:
@@ -364,8 +484,15 @@ class RefinerPipeline:
     ) -> Iterable[Block]:
         """Execute source stream through compiled segments.
 
-        Returns internal execution blocks (row blocks or tabular blocks).
-        Use `iter_rows()` to force row iteration.
+        This is the low-level execution primitive used by workers and local
+        inspection helpers. It returns internal row or table blocks rather than
+        forcing materialization as rows. Most user code should prefer
+        ``iter_rows()``, ``take()``, or a launcher.
+
+        Args:
+            rows: Source units from ``source.read()`` or a compatible stream.
+            on_shard_delta: Optional callback used by workers to track shard
+                progress as rows move through the pipeline.
         """
         yield from execute_segments(
             rows,
@@ -376,18 +503,37 @@ class RefinerPipeline:
         )
 
     def iter_rows(self) -> Iterable[Row]:
-        """Local execution mode: lazily process all shards and yield output rows."""
+        """Lazily execute the pipeline locally and yield rows.
+
+        This is an in-process inspection path. It does not launch worker
+        processes and does not run attached sinks; use ``launch_local`` or
+        ``launch_cloud`` to execute writers.
+        """
         return iter_rows(self.execute(self.source.read()))
 
     def list_shards(self):
+        """Return the source shards that would be processed by a launch.
+
+        This delegates to the source shard planner and is useful for debugging
+        sharding decisions without executing the pipeline transforms.
+        """
         return list(self.source.list_shards())
 
     def materialize(self) -> list[Row]:
-        """Compute all output rows into memory (local/dev utility)."""
+        """Execute locally and collect every output row into memory.
+
+        This is intended for small local/debug workloads. For large datasets,
+        prefer ``iter_rows()``, ``take()``, or launched execution.
+        """
         return list(self.iter_rows())
 
     def take(self, n: int) -> list[Row]:
-        """Return up to the first `n` rows from local execution."""
+        """Return up to the first ``n`` rows from local execution.
+
+        ``take`` stops reading as soon as enough rows have been produced, making
+        it the preferred way to inspect schemas, media references, and transform
+        outputs before launching a full pipeline.
+        """
         if n < 0:
             raise ValueError("n must be >= 0")
         out: list[Row] = []
@@ -407,6 +553,20 @@ class RefinerPipeline:
         max_asset_uploads_in_flight: int = 16,
         missing_asset_policy: MissingAssetPolicy = "error",
     ) -> "RefinerPipeline":
+        """Attach a JSONL writer sink.
+
+        Args:
+            output: Output folder or URL prefix.
+            filename_template: Per-worker output filename template. Available
+                fields include ``shard_id`` and ``worker_id``.
+            upload_assets: Whether referenced local assets should be copied
+                beside the JSONL output and rewritten to output paths.
+            assets_subdir: Subdirectory used when ``upload_assets`` is enabled.
+            max_asset_uploads_in_flight: Concurrent asset uploads per worker.
+            missing_asset_policy: How missing assets are handled when uploading:
+                error, keep the original reference, or write null depending on
+                the sink policy.
+        """
         return self.with_sink(
             JsonlSink(
                 output=output,
@@ -430,6 +590,20 @@ class RefinerPipeline:
         missing_asset_policy: MissingAssetPolicy = "error",
         dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
+        """Attach a Parquet writer sink.
+
+        Args:
+            output: Output folder or URL prefix.
+            filename_template: Per-worker output filename template. Available
+                fields include ``shard_id`` and ``worker_id``.
+            compression: Optional Parquet compression codec.
+            upload_assets: Whether referenced local assets should be copied
+                beside the Parquet output and rewritten to output paths.
+            assets_subdir: Subdirectory used when ``upload_assets`` is enabled.
+            max_asset_uploads_in_flight: Concurrent asset uploads per worker.
+            missing_asset_policy: How missing assets are handled when uploading.
+            dtypes: Optional dtype overrides for written columns.
+        """
         return self.with_sink(
             ParquetSink(
                 output=output,
@@ -491,6 +665,11 @@ class RefinerPipeline:
         )
 
     def __iter__(self) -> Iterator[Row]:
+        """Iterate over rows using in-process local execution.
+
+        This makes ``for row in pipeline`` equivalent to ``pipeline.iter_rows()``.
+        Attached sinks are not executed by iteration.
+        """
         return iter(self.iter_rows())
 
     def launch_local(
@@ -585,7 +764,7 @@ class RefinerPipeline:
         *,
         data_files_size_in_mb: int = 100,
         video_files_size_in_mb: int = 200,
-        max_video_prepare_in_flight: int = 10,
+        max_video_prepare_in_flight: int = 4,
         codec: str = "mpeg4",
         pix_fmt: str = "yuv420p",
         transencoding_threads: int | None = None,
@@ -595,8 +774,25 @@ class RefinerPipeline:
     ) -> "RefinerPipeline":
         """Append a LeRobot writer sink.
 
-        Video output defaults to `mpeg4`/`yuv420p`. `max_video_prepare_in_flight`
-        bounds concurrent episode video preparation per worker.
+        The writer expects ``LeRobotRow`` or ``RoboticsRow`` inputs. It writes
+        LeRobot frame parquet files, episode metadata, task metadata, video
+        files, and aggregate statistics. Launched execution adds a reducer stage
+        that finalizes global metadata after shard-local writes complete.
+
+        Args:
+            output: LeRobot output dataset root.
+            data_files_size_in_mb: Target frame parquet file size.
+            video_files_size_in_mb: Target video file size.
+            max_video_prepare_in_flight: Bound concurrent episode video
+                preparation per worker. Lower values reduce remote-video load
+                and memory pressure.
+            codec: Codec used when videos must be transcoded.
+            pix_fmt: Pixel format used when videos must be transcoded.
+            transencoding_threads: Optional encoder thread count.
+            encoder_options: Optional codec-specific encoder options.
+            quantile_bins: Accuracy/cost tradeoff for video stats quantiles.
+            force_recompute_video_stats: Recompute video stats even when source
+                LeRobot stats are available.
         """
         from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
 
@@ -700,7 +896,11 @@ def read_jsonl(
     parse_use_threads: bool = False,
     dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
-    """Alias for `read_json(..., lines=True)`."""
+    """Create a pipeline with a JSON Lines reader source.
+
+    This is equivalent to ``read_json(..., lines=True)`` and exposes the same
+    sharding, parsing, file path, and dtype options.
+    """
     return read_json(
         inputs,
         fs=fs,
@@ -1255,6 +1455,11 @@ def from_items(
 
 
 def from_source(source: BaseSource) -> RefinerPipeline:
+    """Create a pipeline from an already-constructed source.
+
+    Use this when implementing or testing custom sources. Most user code should
+    prefer a typed reader helper such as ``read_parquet`` or ``read_lerobot``.
+    """
     return RefinerPipeline(source=source)
 
 
@@ -1263,7 +1468,12 @@ def task(
     *,
     num_tasks: int,
 ) -> RefinerPipeline:
-    """Create a task-style pipeline with one callback invocation per rank."""
+    """Create a task-style pipeline with one callback invocation per rank.
+
+    ``fn`` receives ``(task_rank, num_tasks)`` and is invoked once for each
+    integer rank in ``range(num_tasks)``. This is useful for jobs that perform
+    side effects or generate work without reading an input dataset.
+    """
     source = TaskSource(num_tasks=num_tasks)
     return RefinerPipeline(source=source).add_step(
         FnRowStep(
