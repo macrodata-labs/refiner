@@ -207,7 +207,11 @@ class _RoboticsRowView(Row, RoboticsRow):
     def episode_id(self) -> str:
         if self._spec.episode_id_key is None:
             return "-1"
-        value = self._row.get(self._spec.episode_id_key)
+        value = _get_path(self._row, self._spec.episode_id_key, default=None)
+        if hasattr(value, "as_py"):
+            value = value.as_py()
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
         return str(value) if value is not None else "-1"
 
     @property
@@ -224,7 +228,26 @@ class _RoboticsRowView(Row, RoboticsRow):
     def task(self) -> str | None:
         if self._spec.task_key is None:
             return None
-        value = self._row.get(self._spec.task_key)
+        value = _get_path(self._row, self._spec.task_key, default=None)
+        if value is None:
+            nested_frames_key = _valid_nested_frames_key(
+                self._row,
+                self._spec.nested_frames_key,
+            )
+            if nested_frames_key is not None and self._spec.task_key.startswith(
+                f"{nested_frames_key}/"
+            ):
+                field = self._spec.task_key[len(nested_frames_key) + 1 :]
+                table = self._nested_frame_table()
+                if table is not None and field in table.names:
+                    value = next(
+                        (item for item in table.column(field).to_pylist() if item),
+                        None,
+                    )
+        if hasattr(value, "as_py"):
+            value = value.as_py()
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
         return value if isinstance(value, str) else None
 
     @property
@@ -395,15 +418,23 @@ class _RoboticsRowView(Row, RoboticsRow):
         table = self._nested_frame_table()
         if table is not None:
             return self._semantic_frame_table(table)
-        return Tabular(
-            pa.table(
-                {
-                    semantic_key: _source_values(self._row, source_key)
-                    for semantic_key, source_key in self._spec.frame_source_map.items()
-                    if _has_source(self._row, source_key)
-                }
+        values = {
+            semantic_key: _source_values(self._row, source_key)
+            for semantic_key, source_key in self._spec.frame_source_map.items()
+            if _has_source(self._row, source_key)
+        }
+        if (
+            "timestamp" in self._spec.frame_source_map
+            and "timestamp" not in values
+            and self.fps is not None
+            and values
+        ):
+            length = len(next(iter(values.values())))
+            values["timestamp"] = pa.array(
+                [index / float(self.fps) for index in range(length)],
+                type=pa.float32(),
             )
-        )
+        return Tabular(pa.table(values))
 
     def drop_stats(self, feature: str) -> "_RoboticsRowView":
         row = self._row
@@ -532,6 +563,19 @@ class _RoboticsRowView(Row, RoboticsRow):
                     )
             elif source_key in table.names:
                 columns[semantic_key] = table.column(source_key)
+        if (
+            "timestamp" in self._spec.frame_source_map
+            and "timestamp" not in columns
+            and self.fps is not None
+            and columns
+        ):
+            columns = {
+                "timestamp": pa.array(
+                    [index / float(self.fps) for index in range(table.num_rows)],
+                    type=pa.float32(),
+                ),
+                **columns,
+            }
         return Tabular(pa.table(columns))
 
 

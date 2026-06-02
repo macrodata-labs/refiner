@@ -197,6 +197,12 @@ class RefinerPipeline:
         ``.filter(lambda row: row.episode_id == "ep-1")`` uses the view property,
         while ``.filter(col("episode_id") == "ep-1")`` requires a physical
         ``episode_id`` column.
+
+        ``episode_id_key`` and ``task_key`` may use slash paths. For nested frame
+        rows, ``task_key`` may point inside ``nested_frames_key``; the first
+        non-empty frame value is used as the episode task. If ``timestamp_key`` is
+        requested but absent and ``fps`` is known, timestamps are generated from
+        frame indices.
         """
         from refiner.robotics.row import _robot_row_converter
 
@@ -587,7 +593,11 @@ class RefinerPipeline:
         quantile_bins: int = 5000,
         force_recompute_video_stats: bool = False,
     ) -> "RefinerPipeline":
-        """Append a deferred LeRobot writer sink and return a pipeline."""
+        """Append a LeRobot writer sink.
+
+        Video output defaults to `mpeg4`/`yuv420p`. `max_video_prepare_in_flight`
+        bounds concurrent episode video preparation per worker.
+        """
         from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
 
         return self.with_sink(
@@ -818,6 +828,7 @@ def read_hdf5(
     file_path_column: str | None = "file_path",
     group_path_column: str | None = "hdf5_group",
     missing_policy: MissingPolicy = "error",
+    cache_remote_files: bool = False,
     dtypes: DTypeMapping | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with an HDF5 reader source.
@@ -848,6 +859,9 @@ def read_hdf5(
             matched groups: `"error"` raises, `"drop_row"` drops the matched
             group row, and `"set_null"` keeps the row with nulls for missing
             selected values.
+        cache_remote_files: If True, copy non-local HDF5 files to worker-local
+            temporary storage before opening them. This can reduce random-access
+            reads against object stores at the cost of downloading each file once.
         dtypes: Optional dtype overrides for output columns.
     """
     return RefinerPipeline(
@@ -864,6 +878,7 @@ def read_hdf5(
             file_path_column=file_path_column,
             group_path_column=group_path_column,
             missing_policy=missing_policy,
+            cache_remote_files=cache_remote_files,
             dtypes=dtypes,
         )
     )
@@ -1161,7 +1176,7 @@ def read_tfrecords(
 
 
 def read_tfds(
-    input: str,
+    input: str | Sequence[str],
     *,
     config: str | None = None,
     split: str = "train",
@@ -1183,7 +1198,8 @@ def read_tfds(
     single plain split name.
 
     Args:
-        input: TFDS dataset name or prepared TFDS directory.
+        input: TFDS dataset name, prepared TFDS directory, or a sequence of
+            prepared directories/names with the same feature schema.
         config: Optional TFDS builder config.
         split: Plain split name from `builder.info.splits`.
         data_dir: Optional local TFDS data directory.

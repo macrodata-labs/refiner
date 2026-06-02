@@ -61,6 +61,7 @@ class _LeRobotShardState:
         default_factory=dict, init=False
     )
     generic_task_to_index: dict[str, int] = field(default_factory=dict, init=False)
+    generated_episode_count: int = field(default=0, init=False)
 
 
 @dataclass(slots=True)
@@ -133,7 +134,21 @@ class LeRobotWriterSink(BaseSink):
             self._episodes_in_flight_registered = True
         state = self._state_for_shard(shard_id)
         for row in block:
-            self._async_window.submit_blocking(self._write_row(state, row))
+            generated_episode_id = None
+            if (
+                not isinstance(row, LeRobotRow)
+                and isinstance(row, RoboticsRow)
+                and row.episode_id == "-1"
+            ):
+                generated_episode_id = f"{shard_id}/{state.generated_episode_count}"
+                state.generated_episode_count += 1
+            self._async_window.submit_blocking(
+                self._write_row(
+                    state,
+                    row,
+                    generated_episode_id=generated_episode_id,
+                )
+            )
 
     def on_shard_complete(self, shard_id: str) -> None:
         """Flush pending async work and persist one shard-local output chunk."""
@@ -247,7 +262,13 @@ class LeRobotWriterSink(BaseSink):
         ) as out:
             out.write(json.dumps(info_record, sort_keys=True))
 
-    async def _write_row(self, state: _LeRobotShardState, row: Row) -> None:
+    async def _write_row(
+        self,
+        state: _LeRobotShardState,
+        row: Row,
+        *,
+        generated_episode_id: str | None = None,
+    ) -> None:
         """Write one LeRobot episode into staged shard-local outputs."""
         is_lerobot_row = isinstance(row, LeRobotRow)
         is_generic_robotics_row = not is_lerobot_row and isinstance(row, RoboticsRow)
@@ -325,6 +346,7 @@ class LeRobotWriterSink(BaseSink):
             frame_count = row.length
         else:
             robotics_row = cast(RoboticsRow, row)
+            episode_id = generated_episode_id or robotics_row.episode_id
             base_values: dict[str, Any] = {}
             if isinstance(row, Mapping):
                 base_values.update(
@@ -336,17 +358,28 @@ class LeRobotWriterSink(BaseSink):
                     }
                 )
             try:
-                episode_index = int(robotics_row.episode_id)
+                episode_index = int(episode_id)
             except ValueError:
                 episode_index = -1
             if not (0 <= episode_index < 2**63):
                 digest = hashlib.blake2b(
-                    robotics_row.episode_id.encode("utf-8"),
+                    episode_id.encode("utf-8"),
                     digest_size=8,
                 ).digest()
                 episode_index = int.from_bytes(digest, "big") & ((1 << 63) - 1)
-            base_values.setdefault("episode_index", episode_index)
-            base_values.setdefault("episode_id", robotics_row.episode_id)
+            if generated_episode_id is None:
+                base_values.setdefault("episode_index", episode_index)
+                base_values.setdefault("episode_id", episode_id)
+            else:
+                base_values["episode_index"] = episode_index
+                base_values["episode_id"] = episode_id
+                frames = frames.with_table(
+                    set_or_append_column(
+                        frames.table,
+                        "episode_index",
+                        pa.array([episode_index] * frames.num_rows, type=pa.int64()),
+                    )
+                )
             if robotics_row.task is not None:
                 base_values.setdefault("task", robotics_row.task)
             base_row = DictRow(base_values, shard_id=row.shard_id)
