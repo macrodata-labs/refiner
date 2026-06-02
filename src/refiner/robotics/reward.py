@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 else:
     GeneratePoolingFn = Callable[[Mapping[str, Any]], Any]
 
-_DEFAULT_ROBOMETER_MODEL = "aliangdw/Robometer-4B"
+_DEFAULT_ROBOMETER_MODEL = "robometer/Robometer-4B"
 _PROGRESS_TOKEN = "<|prog_token|>"
 
 

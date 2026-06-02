@@ -74,7 +74,6 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
         frames=[],
     )
     score = mdr.robotics.reward_score(
-        model="aliangdw/Robometer-4B",
         video_key="observation.images.main",
         max_frames=2,
     )
@@ -83,7 +82,7 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
     result = asyncio.run(score(row))
 
     assert services[0].config == {
-        "model_name_or_path": "aliangdw/Robometer-4B",
+        "model_name_or_path": "robometer/Robometer-4B",
         "config": "throughput",
     }
     assert "robometer_progress" not in result
@@ -97,7 +96,7 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
         "max_frames": 2,
     }
     assert seen["payload"] == {
-        "model": "aliangdw/Robometer-4B",
+        "model": "robometer/Robometer-4B",
         "task": "token_classify",
         "use_activation": False,
         "chat_template_kwargs": {
