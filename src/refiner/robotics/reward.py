@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import io
-import logging
 import math
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
@@ -19,9 +18,6 @@ else:
 
 _DEFAULT_ROBOMETER_MODEL = "robometer/Robometer-4B"
 _PROGRESS_TOKEN = "<|prog_token|>"
-_MAX_DEBUG_TEXT_CHARS = 1000
-
-logger = logging.getLogger(__name__)
 
 
 TaskSource = str | Callable[[LeRobotRow], str]
@@ -35,10 +31,7 @@ def reward_score(
     max_frames: int = 8,
     output_column: str = "reward_score",
     success_column: str = "robometer_success",
-    error_column: str = "robometer_error",
-    debug_column: str = "robometer_debug",
     max_concurrent_requests: int = 256,
-    fail_soft: bool = False,
 ) -> Callable[[Row], Any]:
     """Return an async map function that scores LeRobot episodes with Robometer."""
 
@@ -50,16 +43,8 @@ def reward_score(
         raise ValueError("output_column must be non-empty")
     if not success_column.strip():
         raise ValueError("success_column must be non-empty")
-    if fail_soft and not error_column.strip():
-        raise ValueError("error_column must be non-empty when fail_soft=True")
-    if fail_soft and not debug_column.strip():
-        raise ValueError("debug_column must be non-empty when fail_soft=True")
 
-    from refiner.inference import (
-        InferenceAPICallError,
-        InferenceRetryError,
-        generate_pooling,
-    )
+    from refiner.inference import generate_pooling
     from refiner.inference.providers import VLLMProvider
 
     provider = VLLMProvider(model=model, config="throughput")
@@ -101,32 +86,10 @@ def reward_score(
             "mm_processor_kwargs": {"do_resize": False},
             "messages": [{"role": "user", "content": content}],
         }
-        try:
-            response = await generate_pooling_request(payload)
-            token_logits = _extract_progress_token_logits(response, len(frames))
-            progress = [expected_progress(row) for row in token_logits]
-            success = [sigmoid(float(row[10])) for row in token_logits]
-        except (InferenceAPICallError, InferenceRetryError) as exc:
-            if not fail_soft:
-                raise
-            debug = _robometer_failure_debug(
-                exc,
-                row=row,
-                video_key=selected_video_key,
-                task_text=task_text,
-                frames=frames,
-                payload=payload,
-            )
-            logger.debug("Robometer failure debug: %s", debug)
-            row.log_throughput("robometer_failed_rows", 1, unit="rows")
-            return row.update(
-                {
-                    output_column: [],
-                    success_column: [],
-                    error_column: debug["error"],
-                    debug_column: debug,
-                }
-            )
+        response = await generate_pooling_request(payload)
+        token_logits = _extract_progress_token_logits(response, len(frames))
+        progress = [expected_progress(row) for row in token_logits]
+        success = [sigmoid(float(row[10])) for row in token_logits]
         return row.update(
             {
                 output_column: progress,
@@ -200,109 +163,6 @@ def _extract_progress_token_logits(
             "sampled frames"
         )
     return logits[-expected_count:]
-
-
-def _robometer_failure_debug(
-    exc: BaseException,
-    *,
-    row: LeRobotRow,
-    video_key: str,
-    task_text: str,
-    frames: Sequence[DecodedVideoFrame],
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
-    frame_indexes = [int(frame.index) for frame in frames]
-    return {
-        "error": _exception_summary(exc),
-        "exception_type": type(exc).__name__,
-        "exception_chain": _exception_chain(exc),
-        "episode_index": row.episode_index,
-        "row_length": row.length,
-        "video_key": video_key,
-        "video_keys": list(row.videos),
-        "task_text": task_text,
-        "sampled_frame_count": len(frames),
-        "sampled_frame_indexes": frame_indexes,
-        "payload": _pooling_payload_debug(payload),
-    }
-
-
-def _exception_summary(exc: BaseException) -> str:
-    return _truncate_debug_text(f"{type(exc).__name__}: {exc}")
-
-
-def _exception_chain(exc: BaseException) -> list[dict[str, str]]:
-    chain: list[dict[str, str]] = []
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        chain.append(
-            {
-                "type": type(current).__name__,
-                "message": _truncate_debug_text(str(current)),
-            }
-        )
-        current = current.__cause__ or current.__context__
-    return chain
-
-
-def _pooling_payload_debug(payload: Mapping[str, Any]) -> dict[str, Any]:
-    messages = payload.get("messages")
-    content: Sequence[Any] = ()
-    if (
-        isinstance(messages, Sequence)
-        and not isinstance(messages, str | bytes | bytearray)
-        and messages
-        and isinstance(messages[0], Mapping)
-    ):
-        raw_content = messages[0].get("content")
-        if isinstance(raw_content, Sequence) and not isinstance(
-            raw_content, str | bytes | bytearray
-        ):
-            content = raw_content
-
-    image_url_lengths: list[int] = []
-    text_lengths: list[int] = []
-    content_types: list[str] = []
-    for part in content:
-        if not isinstance(part, Mapping):
-            content_types.append(type(part).__name__)
-            continue
-        part_type = part.get("type")
-        content_types.append(str(part_type))
-        if part_type == "image_url":
-            image_url = part.get("image_url")
-            if isinstance(image_url, Mapping):
-                url = image_url.get("url")
-                if isinstance(url, str):
-                    image_url_lengths.append(len(url))
-        elif part_type == "text":
-            text = part.get("text")
-            if isinstance(text, str):
-                text_lengths.append(len(text))
-
-    return {
-        "task": payload.get("task"),
-        "use_activation": payload.get("use_activation"),
-        "chat_template_kwargs": payload.get("chat_template_kwargs"),
-        "mm_processor_kwargs": payload.get("mm_processor_kwargs"),
-        "message_count": len(messages) if isinstance(messages, Sequence) else None,
-        "content_count": len(content),
-        "content_types": content_types,
-        "image_count": len(image_url_lengths),
-        "image_url_length_min": min(image_url_lengths) if image_url_lengths else None,
-        "image_url_length_max": max(image_url_lengths) if image_url_lengths else None,
-        "image_url_length_total": sum(image_url_lengths),
-        "text_count": len(text_lengths),
-        "text_length_total": sum(text_lengths),
-    }
-
-
-def _truncate_debug_text(text: str, *, limit: int = _MAX_DEBUG_TEXT_CHARS) -> str:
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]}... <truncated {len(text) - limit} chars>"
 
 
 def _resolve_video_key(row: LeRobotRow, video_key: str | None) -> str:
