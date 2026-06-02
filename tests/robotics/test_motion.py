@@ -87,6 +87,18 @@ def test_motion_trim_rewrites_video_file_bounds() -> None:
     assert "observation.images.main" not in trimmed.stats
 
 
+def test_lerobot_row_task_uses_tasks() -> None:
+    row = _row(frames=[], from_ts=0.0, to_ts=0.0).update(
+        {
+            "tasks": ["pick", "place"],
+        }
+    )
+
+    assert row.task == "pick"
+    assert row.update({"tasks": "reset"}).tasks == ["reset"]
+    assert row.update({"task": "reset"}).tasks == ["reset"]
+
+
 def test_motion_trim_returns_empty_frames_when_no_motion() -> None:
     row = _row(
         frames=[

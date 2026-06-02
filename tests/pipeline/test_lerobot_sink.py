@@ -49,13 +49,14 @@ class _FakeRoboticsRow(Row, RoboticsRow):
         episode_id: str,
         frame_table: Tabular,
         task: str | None = None,
+        tasks: Sequence[str] | None = None,
         fps: float | None = None,
         robot_type: str | None = None,
         videos: Mapping[str, VideoSource] | None = None,
     ) -> None:
         self._data = {"episode_id": episode_id}
         self._frame_table = frame_table
-        self._task = task
+        self._tasks = list(tasks) if tasks is not None else ([task] if task else [])
         self._fps = fps
         self._robot_type = robot_type
         self._videos = dict(videos or {})
@@ -78,8 +79,12 @@ class _FakeRoboticsRow(Row, RoboticsRow):
         return self._frame_table.num_rows
 
     @property
+    def tasks(self) -> list[str]:
+        return self._tasks
+
+    @property
     def task(self) -> str | None:
-        return self._task
+        return next(iter(self.tasks), None)
 
     @property
     def fps(self) -> float | None:
@@ -544,7 +549,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     assert stats_json["observation.images.main"]["count"] == [expected_video_count]
 
     out_rows = mdr.read_lerobot(str(out_root)).materialize()
-    assert sorted(row["task"] for row in out_rows) == ["pick", "place"]
+    assert sorted(cast(LeRobotRow, row).task for row in out_rows) == ["pick", "place"]
 
 
 def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> None:
@@ -668,6 +673,41 @@ def test_write_lerobot_accepts_generic_robotics_rows(tmp_path: Path) -> None:
         "pick",
         "place",
     ]
+
+
+def test_write_lerobot_keeps_unassigned_generic_tasks(tmp_path: Path) -> None:
+    out_root = tmp_path / "generic-unassigned-tasks"
+    row = _FakeRoboticsRow(
+        episode_id="demo",
+        tasks=["pick", "place"],
+        fps=10,
+        robot_type="mockbot",
+        frame_table=Tabular.from_rows(
+            [
+                DictRow({"timestamp": 0.0, "observation.state": [1.0]}),
+                DictRow({"timestamp": 0.1, "observation.state": [2.0]}),
+            ]
+        ),
+    )
+    writer = LeRobotWriterSink(str(out_root))
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
+    ):
+        writer.write_shard_block("shard-1", [row])
+        writer.on_shard_complete("shard-1")
+
+    data_file = next((out_root / "data").glob("chunk-*/file-000.parquet"))
+    episode_file = next((out_root / "meta").glob("chunk-*/episodes/file-000.parquet"))
+    frames = pq.read_table(data_file)
+    episodes = pq.read_table(episode_file)
+
+    assert "task_index" not in frames.column_names
+    assert episodes.column("tasks").to_pylist() == [["pick", "place"]]
 
 
 def test_write_lerobot_generates_missing_generic_episode_ids(tmp_path: Path) -> None:
@@ -1021,7 +1061,6 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
         out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
     )
     assert episodes.column("tasks").to_pylist() == [["pick"], ["place"]]
-    assert episodes.column("task").to_pylist() == ["pick", "place"]
 
 
 def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> None:

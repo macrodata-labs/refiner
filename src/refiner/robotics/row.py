@@ -99,6 +99,9 @@ class RoboticsRow(Protocol):
     def num_frames(self) -> int: ...
 
     @property
+    def tasks(self) -> list[str]: ...
+
+    @property
     def task(self) -> str | None: ...
 
     @property
@@ -183,6 +186,8 @@ class _RoboticsRowView(Row, RoboticsRow):
         hidden.update(
             source_key for source_key, _ in self._spec.video_source_map.values()
         )
+        if self._spec.task_key is not None:
+            hidden.add(self._spec.task_key)
         for key in tuple(hidden):
             if "/" in key and key not in self._row:
                 hidden.add(key.split("/", 1)[0])
@@ -279,10 +284,15 @@ class _RoboticsRowView(Row, RoboticsRow):
 
     @property
     def task(self) -> str | None:
+        return next(iter(self.tasks), None)
+
+    @property
+    def tasks(self) -> list[str]:
         if self._spec.task_key is None:
-            return None
-        value = _get_path(self._row, self._spec.task_key, default=None)
-        if value is None:
+            value = self._row.get("tasks", self._row.get("task"))
+        else:
+            value = _get_path(self._row, self._spec.task_key, default=None)
+        if value is None and self._spec.task_key is not None:
             nested_frames_key = _valid_nested_frames_key(
                 self._row,
                 self._spec.nested_frames_key,
@@ -293,15 +303,16 @@ class _RoboticsRowView(Row, RoboticsRow):
                 field = self._spec.task_key[len(nested_frames_key) + 1 :]
                 table = self._nested_frame_table()
                 if table is not None and field in table.names:
-                    value = next(
-                        (item for item in table.column(field).to_pylist() if item),
-                        None,
-                    )
+                    value = table.column(field).unique().to_pylist()
         if hasattr(value, "as_py"):
             value = value.as_py()
         if isinstance(value, bytes):
-            return value.decode("utf-8")
-        return value if isinstance(value, str) else None
+            value = value.decode("utf-8")
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+            return cast(list[str], list(value))
+        return []
 
     @property
     def fps(self) -> float | None:
@@ -517,7 +528,18 @@ class _RoboticsRowView(Row, RoboticsRow):
         /,
         **kwargs: Any,
     ) -> "_RoboticsRowView":
-        return self._replace(self._row.update(patch, **kwargs))
+        merged = dict(patch or {})
+        merged.update(kwargs)
+        if "task" in merged:
+            task = merged.pop("task")
+            merged["tasks"] = [task] if isinstance(task, str) and task.strip() else []
+        if "tasks" in merged and self._spec.task_key is not None:
+            value = merged.pop("tasks")
+            if isinstance(value, str):
+                value = [value] if value.strip() else []
+            row = self._row.update(_set_path(self._row, self._spec.task_key, value))
+            return self._replace(row.update(merged))
+        return self._replace(self._row.update(merged))
 
     def drop(self, *keys: str) -> "_RoboticsRowView":
         return self._replace(self._row.drop(*keys))

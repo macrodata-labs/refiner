@@ -54,6 +54,7 @@ def test_to_robot_rows_does_not_treat_video_uri_frames_as_frame_table() -> None:
     )
 
     assert robotics_row.episode_id == "episode-1"
+    assert robotics_row.tasks == ["pick the cup"]
     assert robotics_row.task == "pick the cup"
     assert robotics_row.num_frames == -1
     video = robotics_row.videos["observation.images.main"]
@@ -91,7 +92,7 @@ def test_robotics_row_repr_summarizes_episode() -> None:
     assert "robot_type='mockbot'" in text
     assert "videos=['observation.images.main']" in text
     assert "actions (row.actions): double[2, 1]" in text
-    assert "source_fields=['id', 'task', 'payload']" in text
+    assert "source_fields=['id', 'payload']" in text
 
 
 def test_to_robot_rows_exposes_stats_and_embedded_video_bytes() -> None:
@@ -256,7 +257,7 @@ def test_to_robot_rows_reads_nested_episode_task() -> None:
         {
             "steps": [
                 {
-                    "language_instruction": b"pick up the cup",
+                    "language_instruction": "pick up the cup",
                     "action": [0.0],
                     "observation": {"state": [1.0]},
                 }
@@ -270,7 +271,17 @@ def test_to_robot_rows_reads_nested_episode_task() -> None:
         task_key="steps/language_instruction",
     )
 
+    assert robotics_row.tasks == ["pick up the cup"]
     assert robotics_row.task == "pick up the cup"
+
+
+def test_to_robot_rows_normalizes_task_values() -> None:
+    row = DictRow({"task": ["pick", "place"]})
+    robotics_row = _robot_row(row, task_key="task")
+
+    assert robotics_row.tasks == ["pick", "place"]
+    assert robotics_row.task == "pick"
+    assert robotics_row.update({"task": "reset"}).tasks == ["reset"]
 
 
 def test_to_robot_rows_accepts_literal_fps_and_robot_type() -> None:

@@ -272,6 +272,7 @@ class LeRobotWriterSink(BaseSink):
         """Write one LeRobot episode into staged shard-local outputs."""
         is_lerobot_row = isinstance(row, LeRobotRow)
         is_generic_robotics_row = not is_lerobot_row and isinstance(row, RoboticsRow)
+        generic_tasks: list[str] = []
         if isinstance(row, LeRobotRow):
             metadata = _metadata_with_lerobot_fps(row.metadata)
             frames = (
@@ -281,31 +282,78 @@ class LeRobotWriterSink(BaseSink):
             )
         elif is_generic_robotics_row:
             robotics_row = cast(RoboticsRow, row)
-            task_index = None
-            if robotics_row.task is not None:
-                task_index = state.generic_task_to_index.get(robotics_row.task)
-                if task_index is None:
-                    digest = hashlib.blake2b(
-                        robotics_row.task.encode("utf-8"),
-                        digest_size=8,
-                    ).digest()
-                    task_index = int.from_bytes(digest, "big") & ((1 << 63) - 1)
+            generic_tasks = robotics_row.tasks
+            frames = robotics_row.to_frame_table()
+            task_indices = (
+                sorted(
+                    {
+                        int(task_index)
+                        for task_index in (
+                            frames.table.column("task_index").unique().to_pylist()
+                        )
+                        if task_index is not None
+                    }
+                )
+                if "task_index" in frames.table.column_names
+                else []
+            )
+            if task_indices and generic_tasks:
+                if len(task_indices) != len(generic_tasks):
+                    raise ValueError(
+                        "LeRobot writer requires one task label per frame task_index"
+                    )
+                for task_index, task in zip(task_indices, generic_tasks, strict=True):
+                    existing_index = state.generic_task_to_index.get(task)
+                    if existing_index is not None and existing_index != task_index:
+                        raise ValueError(
+                            "LeRobot writer encountered mismatched task_index values "
+                            f"for task {task!r}"
+                        )
                     existing_task = next(
                         (
-                            task
-                            for task, index in state.generic_task_to_index.items()
-                            if index == task_index
+                            existing_task
+                            for existing_task, existing_task_index in (
+                                state.generic_task_to_index.items()
+                            )
+                            if existing_task_index == task_index
+                            and existing_task != task
                         ),
                         None,
                     )
                     if existing_task is not None:
                         raise ValueError(
                             "LeRobot writer encountered colliding task_index values "
-                            f"for {existing_task!r} and {robotics_row.task!r}"
+                            f"for {existing_task!r} and {task!r}"
                         )
-                    state.generic_task_to_index[robotics_row.task] = task_index
-            frames = robotics_row.to_frame_table()
-            if task_index is not None:
+                    state.generic_task_to_index[task] = task_index
+            else:
+                for task in generic_tasks:
+                    task_index = state.generic_task_to_index.get(task)
+                    if task_index is not None:
+                        continue
+                    digest = hashlib.blake2b(
+                        task.encode("utf-8"),
+                        digest_size=8,
+                    ).digest()
+                    task_index = int.from_bytes(digest, "big") & ((1 << 63) - 1)
+                    existing_task = next(
+                        (
+                            existing_task
+                            for existing_task, existing_task_index in (
+                                state.generic_task_to_index.items()
+                            )
+                            if existing_task_index == task_index
+                        ),
+                        None,
+                    )
+                    if existing_task is not None:
+                        raise ValueError(
+                            "LeRobot writer encountered colliding task_index values "
+                            f"for {existing_task!r} and {task!r}"
+                        )
+                    state.generic_task_to_index[task] = task_index
+            if not task_indices and len(generic_tasks) == 1:
+                task_index = state.generic_task_to_index.get(generic_tasks[0])
                 frames = frames.with_table(
                     set_or_append_column(
                         frames.table,
@@ -313,8 +361,6 @@ class LeRobotWriterSink(BaseSink):
                         pa.array([task_index] * frames.num_rows, type=pa.int64()),
                     )
                 )
-            elif "task_index" in frames.table.column_names:
-                frames = frames.with_table(frames.table.drop(["task_index"]))
 
             metadata = LeRobotMetadata(
                 info=LeRobotInfo(
@@ -380,8 +426,8 @@ class LeRobotWriterSink(BaseSink):
                         pa.array([episode_index] * frames.num_rows, type=pa.int64()),
                     )
                 )
-            if robotics_row.task is not None:
-                base_values.setdefault("task", robotics_row.task)
+            if generic_tasks:
+                base_values.setdefault("tasks", generic_tasks)
             base_row = DictRow(base_values, shard_id=row.shard_id)
             video_inputs = list(robotics_row.videos.items())
             source_stats_by_key = {key: None for key, _ in video_inputs}
@@ -451,13 +497,26 @@ class LeRobotWriterSink(BaseSink):
             task_indices = sorted(
                 {
                     int(task_index)
-                    for task_index in frames.table.column("task_index").to_pylist()
+                    for task_index in (
+                        frames.table.column("task_index").unique().to_pylist()
+                    )
                     if task_index is not None
                 }
             )
-            episode_row_patch["tasks"] = [
-                metadata.tasks.index_to_task[task_index] for task_index in task_indices
+            missing_task_indices = [
+                task_index
+                for task_index in task_indices
+                if task_index not in metadata.tasks.index_to_task
             ]
+            if not missing_task_indices:
+                episode_row_patch["tasks"] = [
+                    metadata.tasks.index_to_task[task_index]
+                    for task_index in task_indices
+                ]
+            elif not is_generic_robotics_row:
+                raise KeyError(missing_task_indices[0])
+        elif generic_tasks:
+            episode_row_patch["tasks"] = generic_tasks
 
         # video work
         video_tasks = [
