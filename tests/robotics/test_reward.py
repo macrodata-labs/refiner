@@ -136,3 +136,16 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
             }
         ],
     }
+
+
+def test_robometer_sample_indexes_match_official_rounding() -> None:
+    assert reward_module._sample_indexes(32, max_frames=8) == (
+        0,
+        4,
+        9,
+        13,
+        18,
+        22,
+        27,
+        31,
+    )
