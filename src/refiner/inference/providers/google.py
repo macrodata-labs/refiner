@@ -342,7 +342,7 @@ def _with_google_thought_signature(
     *,
     is_vertex_provider: bool,
 ) -> dict[str, Any]:
-    google_options = _google_options(part.get("providerOptions"), is_vertex_provider)
+    google_options = _google_options(part.get("provider_options"), is_vertex_provider)
     thought_signature = google_options.get("thoughtSignature")
     if isinstance(thought_signature, str):
         payload["thoughtSignature"] = thought_signature

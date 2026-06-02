@@ -7,28 +7,22 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from typing import Any, TypeAlias, cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 
 from refiner.inference.providers import GoogleEndpointProvider
-from refiner.inference.types import Message, ProviderOptions
+from refiner.inference.types import InferenceProvider, Message, ProviderOptions
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
-from refiner.robotics.lerobot_format import LeRobotRow
+from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
 
 if TYPE_CHECKING:
     from PIL import Image
 
     from refiner.inference.generate_text import GenerateTextFn
-    from refiner.inference.providers import (
-        AnthropicEndpointProvider,
-        OpenAIEndpointProvider,
-        OpenAIResponsesProvider,
-        VLLMProvider,
-    )
-    from refiner.video import VideoFile
+    from refiner.video import VideoSource
 
 _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from timestamped contact sheets.
 
@@ -50,17 +44,6 @@ Rules:
 - If the same action repeats on different objects or target locations, output separate repeated events.
 - Avoid segments for idle time, camera motion, hesitation, or tiny hand adjustments.
 """
-
-if TYPE_CHECKING:
-    SubtaskAnnotationProvider: TypeAlias = (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    )
-else:
-    SubtaskAnnotationProvider: TypeAlias = Any
 
 
 class _SubtaskSegment(BaseModel):
@@ -99,9 +82,7 @@ class TimestampedContactSheet:
 
 def subtask_annotation(
     *,
-    provider: SubtaskAnnotationProvider = GoogleEndpointProvider(
-        model="gemini-3.5-flash"
-    ),
+    provider: InferenceProvider = GoogleEndpointProvider(model="gemini-3.5-flash"),
     video_key: str | None = None,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
@@ -112,11 +93,31 @@ def subtask_annotation(
     temperature: float = 0.1,
     min_segment_duration_sec: float | None = 0.0,
     include_contact_sheet_manifest: bool = False,
-    providerOptions: ProviderOptions | None = None,
+    provider_options: ProviderOptions | None = None,
     generation_params: Mapping[str, Any] | None = None,
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
-    """Return an async map block that annotates LeRobot episode subtasks."""
+    """Return an async map block that annotates robotics episode subtasks.
+
+    Args:
+        provider: Text-generation provider used to run the vision-language model.
+        video_key: Video key to annotate. When omitted, the first episode video is
+            used.
+        output_column: Row column that receives the predicted subtask segments.
+        sample_sec: Seconds between sampled video frames in the contact sheets.
+        frame_width: Width, in pixels, for each sampled frame tile.
+        frames_per_sheet: Maximum number of sampled frames packed into one sheet.
+        columns: Number of columns in each contact-sheet grid.
+        quality: JPEG quality for contact-sheet images, from 1 to 100.
+        temperature: Generation temperature passed to the provider request.
+        min_segment_duration_sec: Minimum segment duration to keep. Set to
+            ``None`` to disable duration filtering.
+        include_contact_sheet_manifest: Include textual sheet ranges in the prompt.
+        provider_options: Provider-specific options passed to the generation request.
+        generation_params: Additional generation parameters merged into the request.
+        max_concurrent_requests: Maximum provider requests allowed at once per
+            worker.
+    """
 
     from refiner.inference import generate_text
 
@@ -129,11 +130,10 @@ def subtask_annotation(
         row: Row,
         generate_text: "GenerateTextFn",
     ) -> MapResult:
-        if not isinstance(row, LeRobotRow):
-            raise TypeError("subtask_annotation expects rows from read_lerobot(...)")
+        if not isinstance(row, RoboticsRow):
+            raise TypeError("subtask_annotation expects RoboticsRow inputs")
 
-        selected_video_key = _resolve_video_key(row, video_key)
-        video = row.videos[selected_video_key]
+        video = _resolve_video(row, video_key)
         content = await _subtask_annotation_content(
             video=video,
             tasks=row.tasks,
@@ -151,7 +151,7 @@ def subtask_annotation(
         messages = cast(list[Message], [{"role": "user", "content": content}])
         response = await generate_text(
             messages=messages,
-            providerOptions=providerOptions,
+            provider_options=provider_options,
             schema=_SubtaskAnnotationResult,
             **params,
         )
@@ -160,10 +160,14 @@ def subtask_annotation(
             if isinstance(response.object, _SubtaskAnnotationResult)
             else _parse_subtask_annotation_result(response.text)
         )
-        segments = _filter_segments(
-            _normalize_segments(parsed.segments),
-            min_duration_sec=min_segment_duration_sec,
-        )
+        segments = _normalize_segments(parsed.segments)
+        if min_segment_duration_sec is not None:
+            segments = [
+                segment
+                for segment in segments
+                if float(segment["end_sec"]) - float(segment["start_sec"])
+                >= min_segment_duration_sec
+            ]
         return row.update(
             {
                 output_column: segments,
@@ -201,24 +205,17 @@ def contact_sheet_prompt_manifest(
     return "\n".join(lines)
 
 
-def _resolve_video_key(row: LeRobotRow, video_key: str | None) -> str:
-    video_keys = list(row.videos)
+def _resolve_video(row: RoboticsRow, video_key: str | None) -> VideoSource:
     if video_key is not None:
-        if video_key not in video_keys:
+        if video_key not in row.videos:
             raise ValueError(
-                f"episode {row.episode_index} is missing video key {video_key!r}"
+                f"episode {row.episode_id!r} is missing video key {video_key!r}"
             )
-        return video_key
-    if not video_keys:
-        raise ValueError(f"episode {row.episode_index} has no videos")
-    return video_keys[0]
-
-
-def _prompt_with_instruction(prompt: str, tasks: list[str]) -> str:
-    instruction = "; ".join(task for task in tasks if task.strip())
-    if not instruction:
-        return prompt
-    return f"{prompt}\nEpisode instruction: {instruction}\n"
+        return row.videos[video_key]
+    for video in row.videos.values():
+        return video
+    else:
+        raise ValueError(f"episode {row.episode_id!r} has no videos")
 
 
 def _parse_subtask_annotation_result(text: str) -> _SubtaskAnnotationResult:
@@ -241,7 +238,7 @@ def _parse_subtask_annotation_result(text: str) -> _SubtaskAnnotationResult:
 
 async def _subtask_annotation_content(
     *,
-    video: VideoFile,
+    video: VideoSource,
     tasks: list[str],
     sample_sec: float,
     frame_width: int,
@@ -263,7 +260,9 @@ async def _subtask_annotation_content(
         "{columns_count}",
         str(first_sheet.columns),
     ).replace("{rows_count}", str(first_sheet.rows))
-    text = _prompt_with_instruction(text, tasks)
+    instruction = "; ".join(task for task in tasks if task.strip())
+    if instruction:
+        text = f"{text}\nEpisode instruction: {instruction}\n"
     if include_contact_sheet_manifest:
         text = f"{text}\n\n{contact_sheet_prompt_manifest(sheets)}"
     return [
@@ -297,22 +296,8 @@ def _normalize_segments(segments: list[_SubtaskSegment]) -> list[dict[str, Any]]
     )
 
 
-def _filter_segments(
-    segments: list[dict[str, Any]],
-    *,
-    min_duration_sec: float | None,
-) -> list[dict[str, Any]]:
-    if min_duration_sec is None:
-        return segments
-    return [
-        segment
-        for segment in segments
-        if float(segment["end_sec"]) - float(segment["start_sec"]) >= min_duration_sec
-    ]
-
-
 async def timestamped_contact_sheets(
-    video: VideoFile,
+    video: VideoSource,
     *,
     sample_sec: float = 0.5,
     frame_width: int = 224,
@@ -356,7 +341,7 @@ async def timestamped_contact_sheets(
 
 
 async def _sample_timestamped_frames(
-    video: VideoFile,
+    video: VideoSource,
     *,
     sample_sec: float,
     frame_width: int,
@@ -370,20 +355,15 @@ async def _sample_timestamped_frames(
             continue
 
         image = frame.frame.to_image().convert("RGB")
-        image = _resize_to_width(image, frame_width)
+        if image.width != frame_width:
+            # resize
+            height = max(1, round(image.height * frame_width / image.width))
+            image = image.resize((frame_width, height))
         image = _draw_timestamp_badge(image, timestamp)
         samples.append((timestamp, image))
         next_timestamp = timestamp + sample_sec
 
     return samples
-
-
-def _resize_to_width(image: Image.Image, width: int) -> Image.Image:
-    if image.width == width:
-        return image
-
-    height = max(1, round(image.height * width / image.width))
-    return image.resize((width, height))
 
 
 def _draw_timestamp_badge(image: Image.Image, timestamp: float) -> Image.Image:
@@ -435,9 +415,11 @@ def _build_contact_sheets(
             y = (index // columns) * frame_height
             sheet.paste(image, (x, y))
 
+        output = io.BytesIO()
+        sheet.save(output, format="JPEG", quality=quality)
         sheets.append(
             TimestampedContactSheet(
-                data=_encode_jpeg(sheet, quality=quality),
+                data=output.getvalue(),
                 media_type="image/jpeg",
                 index=sheet_index,
                 timestamps=tuple(timestamp for timestamp, _ in chunk),
@@ -451,14 +433,7 @@ def _build_contact_sheets(
     return sheets
 
 
-def _encode_jpeg(image: Image.Image, *, quality: int) -> bytes:
-    output = io.BytesIO()
-    image.save(output, format="JPEG", quality=quality)
-    return output.getvalue()
-
-
 __all__ = [
-    "SubtaskAnnotationProvider",
     "TimestampedContactSheet",
     "contact_sheet_prompt_manifest",
     "subtask_annotation",

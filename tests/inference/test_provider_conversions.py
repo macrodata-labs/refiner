@@ -20,7 +20,7 @@ def test_openai_chat_conversion_matches_provider_wire_shape() -> None:
                         "type": "file",
                         "mediaType": "image/png",
                         "data": b"\x89PNG\r\n\x1a\nimage",
-                        "providerOptions": {"openai": {"imageDetail": "low"}},
+                        "provider_options": {"openai": {"imageDetail": "low"}},
                     },
                 ],
             },
@@ -178,7 +178,7 @@ def test_anthropic_conversion_matches_provider_wire_shape() -> None:
                         "type": "file",
                         "mediaType": "application/pdf",
                         "data": b"pdf-bytes",
-                        "providerOptions": {
+                        "provider_options": {
                             "anthropic": {"citations": {"enabled": True}}
                         },
                     },

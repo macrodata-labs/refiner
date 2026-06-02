@@ -46,7 +46,7 @@ def test_inference_generate_text_converts_messages_for_anthropic(monkeypatch) ->
                             "mediaType": "application/pdf",
                             "filename": "paper.pdf",
                             "data": row["pdf"],
-                            "providerOptions": {
+                            "provider_options": {
                                 "anthropic": {
                                     "title": "Paper",
                                     "citations": {"enabled": True},
@@ -57,7 +57,7 @@ def test_inference_generate_text_converts_messages_for_anthropic(monkeypatch) ->
                     ],
                 },
             ],
-            providerOptions={
+            provider_options={
                 "anthropic": {
                     "thinking": {"type": "enabled", "budgetTokens": 1024},
                     "metadata": {"user_id": "user-1"},
@@ -154,7 +154,7 @@ def test_inference_generate_text_converts_anthropic_assistant_reasoning(
                         {
                             "type": "reasoning",
                             "text": "Signed reasoning.",
-                            "providerOptions": {
+                            "provider_options": {
                                 "anthropic": {"signature": "thinking-sig"}
                             },
                         },

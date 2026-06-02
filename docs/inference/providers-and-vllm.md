@@ -55,10 +55,10 @@ inside every worker.
 
 ## Provider Options
 
-Provider-specific options are passed through `providerOptions`:
+Provider-specific options are passed through `provider_options`:
 
 Provider options are typed objects for model-specific request settings. They are
-passed as `providerOptions` to `generate_text(...)`.
+passed as `provider_options` to `generate_text(...)`.
 
 Use provider options sparingly. Keep pipeline code portable unless you need a
 specific model feature.

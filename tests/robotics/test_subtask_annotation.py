@@ -15,6 +15,7 @@ from refiner.io import DataFolder
 from refiner.inference import InferenceResponse
 from refiner.pipeline.data.row import DictRow
 from refiner.robotics.lerobot_format import LeRobotMetadata, LeRobotRow
+from refiner.robotics.row import RoboticsRow, _robot_row_converter
 
 subtask_annotation_module = importlib.import_module(
     "refiner.robotics.subtask_annotation"
@@ -71,6 +72,29 @@ def _lerobot_row(tmp_path, *, tasks: list[str] | None = None) -> LeRobotRow:
         frames=[],
         root=DataFolder.resolve(tmp_path),
     )
+
+
+def _robotics_row(
+    tmp_path,
+    *,
+    tasks: str | list[str] | None = None,
+) -> RoboticsRow:
+    path = tmp_path / "video.mp4"
+    _write_video(path, num_frames=3, fps=5)
+    row = DictRow(
+        {
+            "episode_id": "episode-1",
+            "tasks": [] if tasks is None else tasks,
+            "video": str(path),
+        }
+    )
+    converter = _robot_row_converter(
+        episode_id_key="episode_id",
+        task_key="tasks",
+        fps=5,
+        video_keys={"observation.images.main": "video"},
+    )
+    return cast(RoboticsRow, converter(row))
 
 
 def test_timestamped_contact_sheets_sample_and_tile_video(tmp_path) -> None:
@@ -237,6 +261,39 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
     assert "predicted_subtasks_json" not in result
     assert "annotation_model" not in result
     assert "raw_annotation_output" not in result
+
+
+def test_subtask_annotation_accepts_robotics_row(tmp_path, monkeypatch) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _robotics_row(tmp_path, tasks=["pick cable", "route cable"])
+    block = mdr.robotics.subtask_annotation(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+    )
+    request = {}
+
+    async def _fake_request(**kwargs):
+        request.update(kwargs)
+        return InferenceResponse(
+            text='{"segments":[{"start_sec":0.0,"end_sec":0.4,"subtask":"pick"}]}',
+            finish_reason="stop",
+            usage={},
+            response={},
+        )
+
+    result = asyncio.run(cast(Any, block)(row, _fake_request))
+
+    assert (
+        "Episode instruction: pick cable; route cable"
+        in request["messages"][0]["content"][0]["text"]
+    )
+    assert result["predicted_subtasks"] == [
+        {"start_sec": 0.0, "end_sec": 0.4, "subtask": "pick"}
+    ]
 
 
 def test_subtask_annotation_can_include_contact_sheet_manifest(

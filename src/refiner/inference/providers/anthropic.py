@@ -150,7 +150,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"AnthropicEndpointProvider model {model!r} is not known to support "
                 "adaptive thinking.",
-                setting="providerOptions.anthropic.thinking",
+                setting="provider_options.anthropic.thinking",
                 details="AI SDK only enables adaptive thinking for Claude 4.6+ model families.",
             )
         )
@@ -160,7 +160,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"AnthropicEndpointProvider model {model!r} is not known to support "
                 "xhigh effort.",
-                setting="providerOptions.anthropic.effort",
+                setting="provider_options.anthropic.effort",
                 details="AI SDK only enables xhigh effort for Claude Opus 4.7+.",
             )
         )
@@ -438,7 +438,7 @@ def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[st
         }
     else:
         raise ValueError(f"anthropic file part media type {media_type} is unsupported")
-    anthropic_options = _provider_options(part.get("providerOptions"), "anthropic")
+    anthropic_options = _provider_options(part.get("provider_options"), "anthropic")
     if isinstance(anthropic_options.get("context"), str):
         payload["context"] = anthropic_options["context"]
     citations = anthropic_options.get("citations")
@@ -466,7 +466,7 @@ def _convert_anthropic_assistant_content(content: object) -> list[dict[str, Any]
         elif part_type == "reasoning" and isinstance(part_text, str):
             thinking_part = {"type": "thinking", "thinking": part_text}
             anthropic_options = _provider_options(
-                part.get("providerOptions"),
+                part.get("provider_options"),
                 "anthropic",
             )
             signature = anthropic_options.get("signature")
@@ -510,7 +510,7 @@ def _anthropic_text_source(data: object) -> dict[str, Any]:
 
 
 def _anthropic_file_title(part: Mapping[str, Any], index: int) -> str | None:
-    anthropic_options = _provider_options(part.get("providerOptions"), "anthropic")
+    anthropic_options = _provider_options(part.get("provider_options"), "anthropic")
     title = anthropic_options.get("title")
     if isinstance(title, str):
         return title
@@ -521,7 +521,7 @@ def _anthropic_file_title(part: Mapping[str, Any], index: int) -> str | None:
 
 
 def _anthropic_cache_control(part: Mapping[str, Any]) -> object:
-    anthropic_options = _provider_options(part.get("providerOptions"), "anthropic")
+    anthropic_options = _provider_options(part.get("provider_options"), "anthropic")
     return anthropic_options.get("cacheControl")
 
 

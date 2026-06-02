@@ -265,7 +265,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"{provider_name} model {model!r} is not known to support "
                 "reasoningEffort.",
-                setting="providerOptions.openai.reasoningEffort",
+                setting="provider_options.openai.reasoningEffort",
                 details="AI SDK only enables reasoning effort for known reasoning models.",
             )
         )
@@ -278,7 +278,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"{provider_name} model {model!r} is not known to support "
                 "reasoningSummary.",
-                setting="providerOptions.openai.reasoningSummary",
+                setting="provider_options.openai.reasoningSummary",
                 details="AI SDK only enables reasoning summaries for known reasoning models.",
             )
         )
@@ -287,7 +287,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 "OpenAI chat-completions provider options do not support "
                 "reasoningSummary; use OpenAIResponsesProvider for reasoning summaries.",
-                setting="providerOptions.openai.reasoningSummary",
+                setting="provider_options.openai.reasoningSummary",
             )
         )
 
@@ -297,7 +297,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"{provider_name} model {model!r} is not known to support "
                 "flex service tier.",
-                setting="providerOptions.openai.serviceTier",
+                setting="provider_options.openai.serviceTier",
                 details="AI SDK enables flex processing for o3, o4-mini, and GPT-5 non-chat models.",
             )
         )
@@ -306,7 +306,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"{provider_name} model {model!r} is not known to support "
                 "priority service tier.",
-                setting="providerOptions.openai.serviceTier",
+                setting="provider_options.openai.serviceTier",
                 details=(
                     "AI SDK enables priority processing for GPT-4, selected GPT-5, "
                     "o3, and o4-mini models."
@@ -337,7 +337,7 @@ def model_setting_warnings(
                         "on GPT-5.1+ models.",
                         setting=setting
                         if setting in params
-                        else f"providerOptions.openai.{setting}",
+                        else f"provider_options.openai.{setting}",
                     )
                 )
     return warnings

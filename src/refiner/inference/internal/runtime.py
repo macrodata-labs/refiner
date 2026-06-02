@@ -10,7 +10,6 @@ from refiner.inference.providers import (
     GoogleEndpointProvider,
     OpenAIEndpointProvider,
     OpenAIResponsesProvider,
-    VLLMProvider,
 )
 from refiner.inference.providers.anthropic import _AnthropicEndpointClient
 from refiner.inference.providers.google import _GoogleEndpointClient
@@ -18,6 +17,7 @@ from refiner.inference.providers.openai import (
     _OpenAIEndpointClient,
     _OpenAIResponsesClient,
 )
+from refiner.inference.types import InferenceProvider
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.services import VLLMRuntimeServiceBinding
@@ -26,13 +26,6 @@ from refiner.worker.metrics.api import register_gauge
 
 _REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
-Provider: TypeAlias = (
-    AnthropicEndpointProvider
-    | GoogleEndpointProvider
-    | OpenAIEndpointProvider
-    | OpenAIResponsesProvider
-    | VLLMProvider
-)
 RequestFn: TypeAlias = Callable[[Mapping[str, Any]], Awaitable[Any]]
 MapFn: TypeAlias = Callable[[Row, RequestFn], Awaitable[MapResult] | MapResult]
 ClientCall: TypeAlias = Callable[[Any, Mapping[str, Any]], Awaitable[Any]]
@@ -42,7 +35,7 @@ def inference_map(
     *,
     name: str,
     fn: MapFn,
-    provider: Provider,
+    provider: InferenceProvider,
     defaults: Mapping[str, Any] | None,
     defaults_key: str | None = None,
     merge_defaults: bool = True,
@@ -162,12 +155,22 @@ def inference_map(
     }
     if defaults_key is not None:
         args[defaults_key] = dict(defaults or {})
+    builtin = getattr(fn, _REFINER_BUILTIN_CALL_ATTR, None)
+    builtin_name = name
+    builtin_args = args
+    if isinstance(builtin, dict):
+        candidate_name = builtin.get("name")
+        candidate_args = builtin.get("args")
+        if isinstance(candidate_name, str) and candidate_name:
+            builtin_name = candidate_name
+        if isinstance(candidate_args, dict):
+            builtin_args = candidate_args
     setattr(
         _wrapped,
         _REFINER_BUILTIN_CALL_ATTR,
         {
-            "name": name,
-            "args": args,
+            "name": builtin_name,
+            "args": builtin_args,
             "services": [] if service is None else [service.to_spec()],
         },
     )

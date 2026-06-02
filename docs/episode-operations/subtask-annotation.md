@@ -5,8 +5,8 @@ description: "Use vision-language models to annotate temporal subtask segments"
 
 # Subtask Annotation
 
-`subtask_annotation` samples contact sheets from an episode video and asks a
-vision-language model to return temporal subtask segments.
+`subtask_annotation` samples contact sheets from a `RoboticsRow` episode video
+and asks a vision-language model to return temporal subtask segments.
 
 ```python
 pipeline = (
@@ -17,6 +17,23 @@ pipeline = (
             output_column="predicted_subtasks",
         ),
     )
+)
+```
+
+Input rows must implement `RoboticsRow` and expose at least one video through
+`row.videos`. `read_lerobot(...)` rows already satisfy this. For other readers,
+call `to_robot_rows(...)` first and map the video/task fields:
+
+```python
+pipeline = (
+    mdr.read_parquet("/data/episodes.parquet")
+    .to_robot_rows(
+        episode_id_key="episode_id",
+        task_key="tasks",
+        video_keys={"observation.images.top": "video_uri"},
+        fps=30.0,
+    )
+    .map_async(mdr.robotics.subtask_annotation())
 )
 ```
 
