@@ -38,18 +38,25 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout, limits):
+        def __init__(
+            self,
+            *,
+            base_url,
+            headers,
+            max_connections,
+            max_keepalive_connections,
+        ):
             seen["base_url"] = str(base_url)
             seen["headers"] = dict(headers)
-            seen["timeout"] = timeout
-            seen["limits"] = limits
+            seen["max_connections"] = max_connections
+            seen["max_keepalive_connections"] = max_keepalive_connections
 
         async def post(self, path, *, json):
             seen["path"] = path
             seen["payload"] = dict(json)
             return _FakeResponse()
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
 
     async def _inference_fn(row, generate_text):
         response = await generate_text(raw_payload={"prompt": row["prompt"]})
@@ -71,9 +78,8 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
 
     assert result == {"output": "ok"}
     assert seen["headers"] == {"Authorization": "Bearer secret"}
-    limits = cast(httpx.Limits, seen["limits"])
-    assert limits.max_connections == 256
-    assert limits.max_keepalive_connections == 256
+    assert seen["max_connections"] == 256
+    assert seen["max_keepalive_connections"] == 256
 
 
 def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
@@ -95,17 +101,24 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
+        def __init__(
+            self,
+            *,
+            base_url,
+            headers,
+            max_connections,
+            max_keepalive_connections,
+        ):
+            del max_connections, max_keepalive_connections
             seen["base_url"] = str(base_url)
             seen["headers"] = dict(headers)
-            seen["timeout"] = timeout
 
         async def post(self, path, *, json):
             seen["path"] = path
             seen["payload"] = dict(json)
             return _FakeResponse()
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
 
     response = asyncio.run(
         openai_provider._OpenAIEndpointClient(
@@ -120,7 +133,6 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
 
     assert response.text == "ok"
     assert seen["base_url"] == "https://openrouter.ai/api"
-    assert seen["timeout"] == 600.0
     assert seen["path"] == "v1/chat/completions"
     assert seen["payload"] == {
         "model": "openai/gpt-5.2",
@@ -147,15 +159,23 @@ def test_openai_endpoint_applies_configured_connection_limits(monkeypatch) -> No
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout, limits):
-            del base_url, headers, timeout
-            seen["limits"] = limits
+        def __init__(
+            self,
+            *,
+            base_url,
+            headers,
+            max_connections,
+            max_keepalive_connections,
+        ):
+            del base_url, headers
+            seen["max_connections"] = max_connections
+            seen["max_keepalive_connections"] = max_keepalive_connections
 
         async def post(self, path, *, json):
             del path, json
             return _FakeResponse()
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
 
     response = asyncio.run(
         openai_provider._OpenAIEndpointClient(
@@ -171,9 +191,8 @@ def test_openai_endpoint_applies_configured_connection_limits(monkeypatch) -> No
     )
 
     assert response.text == "ok"
-    limits = cast(httpx.Limits, seen["limits"])
-    assert limits.max_connections == 512
-    assert limits.max_keepalive_connections == 512
+    assert seen["max_connections"] == 512
+    assert seen["max_keepalive_connections"] == 512
 
 
 def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
@@ -195,8 +214,10 @@ def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, headers, timeout
+        def __init__(
+            self, *, base_url, headers, max_connections, max_keepalive_connections
+        ):
+            del base_url, headers, max_connections, max_keepalive_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -209,7 +230,7 @@ def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
         seen["sleeps"] += 1
         assert delay in (2.0, 4.0)
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
@@ -246,8 +267,10 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, headers, timeout
+        def __init__(
+            self, *, base_url, headers, max_connections, max_keepalive_connections
+        ):
+            del base_url, headers, max_connections, max_keepalive_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -260,7 +283,7 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
         seen["sleeps"] += 1
         assert delay == 2.0
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
@@ -297,8 +320,10 @@ def test_openai_endpoint_retries_on_remote_protocol_error(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, headers, timeout
+        def __init__(
+            self, *, base_url, headers, max_connections, max_keepalive_connections
+        ):
+            del base_url, headers, max_connections, max_keepalive_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -313,7 +338,7 @@ def test_openai_endpoint_retries_on_remote_protocol_error(monkeypatch) -> None:
         assert delay == 2.0
         seen["sleeps"] += 1
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
@@ -386,8 +411,10 @@ def test_openai_endpoint_retries_on_http_503(monkeypatch) -> None:
     )
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, headers, timeout
+        def __init__(
+            self, *, base_url, headers, max_connections, max_keepalive_connections
+        ):
+            del base_url, headers, max_connections, max_keepalive_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -400,7 +427,7 @@ def test_openai_endpoint_retries_on_http_503(monkeypatch) -> None:
         assert delay == 2.0
         seen["sleeps"] += 1
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
@@ -444,8 +471,10 @@ def test_openai_endpoint_respects_retry_after_ms(monkeypatch) -> None:
     )
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, headers, timeout
+        def __init__(
+            self, *, base_url, headers, max_connections, max_keepalive_connections
+        ):
+            del base_url, headers, max_connections, max_keepalive_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -457,7 +486,7 @@ def test_openai_endpoint_respects_retry_after_ms(monkeypatch) -> None:
     async def _fake_sleep(delay: float) -> None:
         cast(list[float], seen["sleeps"]).append(delay)
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     response = asyncio.run(
@@ -487,8 +516,10 @@ def test_openai_endpoint_can_disable_retries(monkeypatch) -> None:
     )
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, headers, timeout
+        def __init__(
+            self, *, base_url, headers, max_connections, max_keepalive_connections
+        ):
+            del base_url, headers, max_connections, max_keepalive_connections
 
         async def post(self, path, *, json):
             del path
@@ -500,7 +531,7 @@ def test_openai_endpoint_can_disable_retries(monkeypatch) -> None:
         del delay
         seen["sleeps"] += 1
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
     monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
 
     with pytest.raises(
@@ -535,14 +566,16 @@ def test_inference_api_errors_store_bounded_payloads(monkeypatch) -> None:
     )
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, headers, timeout
+        def __init__(
+            self, *, base_url, headers, max_connections, max_keepalive_connections
+        ):
+            del base_url, headers, max_connections, max_keepalive_connections
 
         async def post(self, path, *, json):
             del path, json
             return response
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "_AiohttpAPIClient", _FakeAsyncClient)
 
     with pytest.raises(mdr.inference.InferenceAPICallError) as err:
         asyncio.run(

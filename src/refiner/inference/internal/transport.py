@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
+import aiohttp
 import httpx
 
 T = TypeVar("T")
@@ -86,7 +87,7 @@ def provider_request_options(
 
 
 async def post_json_to_api(
-    client: httpx.AsyncClient,
+    client: Any,
     endpoint_path: str,
     payload: Mapping[str, Any],
     *,
@@ -103,6 +104,7 @@ async def post_json_to_api(
                 kwargs["headers"] = dict(extra_headers)
             response = await client.post(endpoint_path, **kwargs)
         except (
+            aiohttp.ClientError,
             ConnectionError,
             OSError,
             asyncio.TimeoutError,
@@ -115,7 +117,7 @@ async def post_json_to_api(
                 is_retryable=True,
             ) from err
 
-        return _handle_json_response(
+        return await _handle_json_response(
             response,
             url=_request_url(client, endpoint_path),
             request_body=dict(payload),
@@ -125,22 +127,26 @@ async def post_json_to_api(
     return await retry(_post)
 
 
-def _handle_json_response(
-    response: httpx.Response,
+async def _handle_json_response(
+    response: Any,
     *,
     url: str,
     request_body: Mapping[str, Any],
     operation: str,
 ) -> APIResponse:
     response_headers = _response_headers(response)
-    status_code = getattr(response, "status_code", 200)
+    status_code = getattr(response, "status_code", getattr(response, "status", 200))
     if status_code >= 400:
-        response_body = _response_text(response)
-        data = _response_json_or_none(response)
+        response_body = await _response_text(response)
+        data = await _response_json_or_none(response)
         message = _error_message(
             operation=operation,
             status_code=status_code,
-            status_text=getattr(response, "reason_phrase", ""),
+            status_text=getattr(
+                response,
+                "reason_phrase",
+                getattr(response, "reason", ""),
+            ),
             data=data,
             response_body=response_body,
         )
@@ -155,15 +161,20 @@ def _handle_json_response(
         )
 
     try:
-        value = response.json()
-    except ValueError as err:
+        if isinstance(response, aiohttp.ClientResponse):
+            value = await response.json(content_type=None)
+        else:
+            value = response.json()
+            if hasattr(value, "__await__"):
+                value = await value
+    except (ValueError, aiohttp.ContentTypeError) as err:
         raise InferenceAPICallError(
             message="Invalid JSON response",
             url=url,
             request_body=request_body,
             status_code=status_code,
             response_headers=response_headers,
-            response_body=_response_text(response),
+            response_body=await _response_text(response),
             is_retryable=False,
         ) from err
     return APIResponse(
@@ -293,23 +304,38 @@ def _response_headers(response: httpx.Response) -> dict[str, str]:
     return {str(key).lower(): str(value) for key, value in dict(headers).items()}
 
 
-def _request_url(client: httpx.AsyncClient, endpoint_path: str) -> str:
+def _request_url(client: Any, endpoint_path: str) -> str:
     base_url = getattr(client, "base_url", None)
+    if isinstance(base_url, str):
+        return _join_endpoint_url(base_url, endpoint_path)
     if hasattr(base_url, "join"):
         return str(base_url.join(endpoint_path))
     return endpoint_path
 
 
-def _response_json_or_none(response: httpx.Response) -> Any | None:
+async def _response_json_or_none(response: Any) -> Any | None:
     try:
-        return response.json()
-    except ValueError:
+        if isinstance(response, aiohttp.ClientResponse):
+            return await response.json(content_type=None)
+        value = response.json()
+        if hasattr(value, "__await__"):
+            return await value
+        return value
+    except (ValueError, aiohttp.ContentTypeError):
         return None
 
 
-def _response_text(response: httpx.Response) -> str:
+async def _response_text(response: Any) -> str:
     text = getattr(response, "text", "")
+    if callable(text):
+        text = text()
+    if hasattr(text, "__await__"):
+        text = await text
     return text if isinstance(text, str) else str(text)
+
+
+def _join_endpoint_url(base_url: str, endpoint_path: str) -> str:
+    return f"{base_url.rstrip('/')}/{endpoint_path.lstrip('/')}"
 
 
 def _error_message(
