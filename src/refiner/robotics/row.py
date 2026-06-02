@@ -303,9 +303,14 @@ class _RoboticsRowView(Row, RoboticsRow):
                 field = self._spec.task_key[len(nested_frames_key) + 1 :]
                 table = self._nested_frame_table()
                 if table is not None and field in table.names:
-                    value = table.column(field).unique().to_pylist()
-        if hasattr(value, "as_py"):
-            value = value.as_py()
+                    value = [
+                        task
+                        for task in table.column(field).unique().to_pylist()
+                        if isinstance(task, str) and task.strip()
+                    ]
+        as_py = getattr(cast(Any, value), "as_py", None)
+        if callable(as_py):
+            value = as_py()
         if isinstance(value, bytes):
             value = value.decode("utf-8")
         if isinstance(value, str):
