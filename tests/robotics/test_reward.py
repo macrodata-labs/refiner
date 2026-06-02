@@ -78,10 +78,12 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
         video_key="observation.images.main",
         max_frames=2,
     )
+    builtin = getattr(score, "__refiner_builtin_call__")
     services = collect_pipeline_services(mdr.from_items([{}]).map_async(score))
 
     result = asyncio.run(score(row))
 
+    assert builtin["args"]["max_concurrent_requests"] == 4
     assert services[0].config == {
         "model_name_or_path": "aliangdw/Robometer-4B",
         "config": "throughput",

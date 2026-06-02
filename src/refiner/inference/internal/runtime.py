@@ -119,7 +119,6 @@ def inference_map(
                     base_url=binding.endpoint,
                     api_key=binding.api_key,
                 )
-            _register_metrics()
             return client
 
     async def _request(row: Row, payload: Mapping[str, Any]) -> Any:
@@ -130,18 +129,22 @@ def inference_map(
         }
         if not isinstance(provider, GoogleEndpointProvider):
             request_payload = {"model": provider.model, **request_payload}
-        resolved_client = await _client()
+        _register_metrics()
         waiting_requests += 1
         await semaphore.acquire()
         waiting_requests -= 1
-        running_requests += 1
+        request_running = False
         try:
+            resolved_client = await _client()
+            running_requests += 1
+            request_running = True
             response = await call(resolved_client, request_payload)
         except Exception:
             row.log_throughput("failed_requests", 1, unit="requests")
             raise
         finally:
-            running_requests -= 1
+            if request_running:
+                running_requests -= 1
             semaphore.release()
         row.log_throughput("successful_requests", 1, unit="requests")
         if record is not None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import math
+import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
@@ -17,6 +18,7 @@ else:
     GeneratePoolingFn = Callable[[Mapping[str, Any]], Any]
 
 _DEFAULT_ROBOMETER_MODEL = "aliangdw/Robometer-4B"
+_DEFAULT_MAX_CONCURRENT_REQUESTS = 4
 _PROGRESS_TOKEN = "<|prog_token|>"
 
 
@@ -31,7 +33,7 @@ def reward_score(
     max_frames: int = 8,
     output_column: str = "reward_score",
     success_column: str = "robometer_success",
-    max_concurrent_requests: int = 256,
+    max_concurrent_requests: int = _DEFAULT_MAX_CONCURRENT_REQUESTS,
 ) -> Callable[[Row], Any]:
     """Return an async map function that scores LeRobot episodes with Robometer."""
 
@@ -57,15 +59,23 @@ def reward_score(
             raise TypeError("reward_score expects rows from read_lerobot(...)")
 
         selected_video_key = _resolve_video_key(row, video_key)
+        sample_t0 = time.perf_counter()
         frames = await _sample_video_frames(
             row,
             video_key=selected_video_key,
             max_frames=max_frames,
         )
+        row.log_histogram(
+            "robometer_video_sample_seconds",
+            time.perf_counter() - sample_t0,
+            unit="seconds",
+        )
+        row.log_histogram("robometer_sampled_frames", len(frames), unit="frames")
         task_text = _resolve_task_text(row, task)
         content: list[dict[str, Any]] = [
             {"type": "text", "text": _robometer_progress_prompt(task_text)}
         ]
+        encode_t0 = time.perf_counter()
         for frame in frames:
             content.append(
                 {
@@ -74,7 +84,13 @@ def reward_score(
                 }
             )
             content.append({"type": "text", "text": _PROGRESS_TOKEN})
+        row.log_histogram(
+            "robometer_frame_encode_seconds",
+            time.perf_counter() - encode_t0,
+            unit="seconds",
+        )
 
+        request_t0 = time.perf_counter()
         response = await generate_pooling_request(
             {
                 "task": "token_classify",
@@ -87,6 +103,11 @@ def reward_score(
                 "mm_processor_kwargs": {"do_resize": False},
                 "messages": [{"role": "user", "content": content}],
             }
+        )
+        row.log_histogram(
+            "robometer_request_seconds",
+            time.perf_counter() - request_t0,
+            unit="seconds",
         )
         token_logits = _extract_progress_token_logits(response, len(frames))
         progress = [expected_progress(row) for row in token_logits]
