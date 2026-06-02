@@ -13,6 +13,7 @@ pipeline = (
     mdr.read_lerobot("hf://datasets/acme/demos")
     .map_async(
         mdr.robotics.reward_score(
+            model="robometer/Robometer-4B",
             video_key="observation.images.top",
             task=lambda row: "; ".join(row.tasks),
             max_frames=8,
@@ -51,4 +52,3 @@ mdr.robotics.reward_score(task=lambda row: row.task or "; ".join(row.tasks))
 
 `reward_score` uses pooling inference through a VLLM provider. See
 [Pooling](../inference/pooling.md) and [Providers and VLLM](../inference/providers-and-vllm.md).
-
