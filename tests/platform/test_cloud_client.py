@@ -280,13 +280,11 @@ def test_cloud_client_uploads_cloud_file_without_macrodata_auth(monkeypatch) -> 
     class FakeResponse:
         status_code = 204
 
-    def fake_httpx_request(**kwargs: object) -> FakeResponse:
+    def fake_request(**kwargs: object) -> FakeResponse:
         captured.update(kwargs)
         return FakeResponse()
 
-    monkeypatch.setattr(
-        "refiner.platform.client.api.requests.request", fake_httpx_request
-    )
+    monkeypatch.setattr("refiner.platform.client.api.requests.request", fake_request)
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     client.cloud_upload_file(
@@ -308,7 +306,8 @@ def test_cloud_client_uploads_cloud_file_without_macrodata_auth(monkeypatch) -> 
 
     assert captured["method"] == "PUT"
     assert captured["url"] == "https://payloads.example/upload"
-    assert captured["content"] == b"payload"
+    assert captured["data"] == b"payload"
+    assert "content" not in captured
     headers = cast(dict[str, str], captured["headers"])
     assert headers["content-length"] == "7"
     assert headers["x-amz-checksum-sha256"] == "checksum"
@@ -317,13 +316,11 @@ def test_cloud_client_uploads_cloud_file_without_macrodata_auth(monkeypatch) -> 
 
 
 def test_cloud_client_cloud_upload_file_noops_when_file_exists(monkeypatch) -> None:
-    def fake_httpx_request(**kwargs: object) -> None:
+    def fake_request(**kwargs: object) -> None:
         del kwargs
         raise AssertionError("existing cloud files should not be uploaded")
 
-    monkeypatch.setattr(
-        "refiner.platform.client.api.requests.request", fake_httpx_request
-    )
+    monkeypatch.setattr("refiner.platform.client.api.requests.request", fake_request)
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     client.cloud_upload_file(
@@ -341,16 +338,14 @@ def test_cloud_client_cloud_upload_file_noops_when_file_exists(monkeypatch) -> N
 def test_cloud_client_cloud_file_upload_failure_includes_provider_message(
     monkeypatch,
 ) -> None:
-    def fake_httpx_request(**kwargs: object) -> _FakeResponse:
+    def fake_request(**kwargs: object) -> _FakeResponse:
         del kwargs
         return _FakeResponse(
             403,
             json_payload={"message": "SignatureDoesNotMatch"},
         )
 
-    monkeypatch.setattr(
-        "refiner.platform.client.api.requests.request", fake_httpx_request
-    )
+    monkeypatch.setattr("refiner.platform.client.api.requests.request", fake_request)
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     try:

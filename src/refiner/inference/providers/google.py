@@ -68,6 +68,7 @@ class _GoogleEndpointClient:
     model: str
     api_key: str | None = None
     headers: Mapping[str, str] | None = None
+    max_connections: int | None = None
     _client: AiohttpAPIClient | None = field(default=None, init=False, repr=False)
     _resolved_headers: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
@@ -89,9 +90,16 @@ class _GoogleEndpointClient:
                 base_url=self.base_url.rstrip("/"),
                 headers=self._resolved_headers,
                 timeout_s=_ENDPOINT_TIMEOUT_SECONDS,
+                max_connections=self.max_connections,
             )
             self._client = client
         return client
+
+    async def close(self) -> None:
+        client = self._client
+        if client is not None:
+            self._client = None
+            await client.close()
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
         request_payload, max_retries, extra_headers = provider_request_options(payload)

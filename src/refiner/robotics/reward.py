@@ -38,7 +38,7 @@ def reward_score(
     error_column: str = "robometer_error",
     debug_column: str = "robometer_debug",
     max_concurrent_requests: int = 256,
-    fail_soft: bool = True,
+    fail_soft: bool = False,
 ) -> Callable[[Row], Any]:
     """Return an async map function that scores LeRobot episodes with Robometer."""
 
@@ -116,12 +116,6 @@ def reward_score(
                 task_text=task_text,
                 frames=frames,
                 payload=payload,
-            )
-            logger.warning(
-                "Robometer scoring failed for episode %s video_key=%s: %s",
-                row.episode_index,
-                selected_video_key,
-                debug["error"],
             )
             logger.debug("Robometer failure debug: %s", debug)
             row.log_throughput("robometer_failed_rows", 1, unit="rows")

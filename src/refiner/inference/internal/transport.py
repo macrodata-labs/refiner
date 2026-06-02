@@ -6,7 +6,6 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
-from urllib.parse import urljoin
 
 import aiohttp
 
@@ -72,12 +71,24 @@ class AiohttpAPIClient:
     headers: Mapping[str, str]
     timeout_s: float = 600.0
     max_connections: int | None = None
-    max_keepalive_connections: int | None = None
     _session: aiohttp.ClientSession | None = field(default=None, init=False, repr=False)
+    _session_loop: asyncio.AbstractEventLoop | None = field(
+        default=None, init=False, repr=False
+    )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
+        loop = asyncio.get_running_loop()
         session = self._session
-        if session is None:
+        if (
+            session is not None
+            and not session.closed
+            and self._session_loop is not loop
+        ):
+            raise RuntimeError(
+                "AiohttpAPIClient cannot be reused across event loops while its "
+                "session is open; call close() before reusing it on another loop."
+            )
+        if session is None or session.closed:
             connector_kwargs: dict[str, Any] = {}
             if self.max_connections is not None:
                 connector_kwargs["limit"] = self.max_connections
@@ -86,15 +97,25 @@ class AiohttpAPIClient:
                 connector=connector,
                 headers=dict(self.headers),
                 timeout=aiohttp.ClientTimeout(total=self.timeout_s),
+                trust_env=True,
             )
             self._session = session
+            self._session_loop = loop
         return session
 
     async def post(self, endpoint_path: str, **kwargs: Any) -> aiohttp.ClientResponse:
         return await self._ensure_session().post(
-            urljoin(f"{self.base_url.rstrip('/')}/", endpoint_path.lstrip("/")),
+            _join_endpoint_url(self.base_url, endpoint_path),
             **kwargs,
         )
+
+    async def close(self) -> None:
+        session = self._session
+        if session is None:
+            return
+        self._session = None
+        self._session_loop = None
+        await session.close()
 
 
 def provider_request_options(
@@ -191,12 +212,7 @@ async def _handle_json_response(
         )
 
     try:
-        if isinstance(response, aiohttp.ClientResponse):
-            value = await response.json(content_type=None)
-        else:
-            value = response.json()
-            if hasattr(value, "__await__"):
-                value = await value
+        value = await _response_json(response)
     except (ValueError, aiohttp.ContentTypeError) as err:
         raise InferenceAPICallError(
             message="Invalid JSON response",
@@ -345,14 +361,18 @@ def _request_url(client: Any, endpoint_path: str) -> str:
 
 async def _response_json_or_none(response: Any) -> Any | None:
     try:
-        if isinstance(response, aiohttp.ClientResponse):
-            return await response.json(content_type=None)
-        value = response.json()
-        if hasattr(value, "__await__"):
-            return await value
-        return value
+        return await _response_json(response)
     except (ValueError, aiohttp.ContentTypeError):
         return None
+
+
+async def _response_json(response: Any) -> Any:
+    if isinstance(response, aiohttp.ClientResponse):
+        return await response.json(content_type=None)
+    value = response.json()
+    if hasattr(value, "__await__"):
+        return await value
+    return value
 
 
 async def _response_text(response: Any) -> str:

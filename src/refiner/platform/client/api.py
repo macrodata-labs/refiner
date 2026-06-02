@@ -347,7 +347,7 @@ class MacrodataClient:
                 method="PUT",
                 url=url,
                 headers=required_headers,
-                content=payload_bytes,
+                data=payload_bytes,
                 timeout=timeout_s,
             )
         except requests.RequestException as err:
