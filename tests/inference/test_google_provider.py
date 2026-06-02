@@ -256,6 +256,7 @@ def test_google_endpoint_client_posts_generate_content(monkeypatch) -> None:
     class _FakeAsyncClient:
         def __init__(self, *, base_url, headers, timeout_s, max_connections):
             del max_connections
+            self.base_url = str(base_url)
             seen["base_url"] = str(base_url)
             seen["headers"] = dict(headers)
             seen["timeout"] = timeout_s
@@ -316,6 +317,7 @@ def test_google_endpoint_client_passes_vertex_request_headers(monkeypatch) -> No
     class _FakeAsyncClient:
         def __init__(self, *, base_url, headers, timeout_s, max_connections):
             del max_connections
+            self.base_url = str(base_url)
             seen["base_url"] = str(base_url)
             seen["client_headers"] = dict(headers)
             seen["timeout"] = timeout_s

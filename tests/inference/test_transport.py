@@ -115,6 +115,7 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
             timeout_s,
             max_connections,
         ):
+            self.base_url = str(base_url)
             seen["base_url"] = str(base_url)
             seen["headers"] = dict(headers)
             seen["max_connections"] = max_connections
@@ -177,6 +178,7 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
             max_connections,
         ):
             del timeout_s, max_connections
+            self.base_url = str(base_url)
             seen["base_url"] = str(base_url)
             seen["headers"] = dict(headers)
 
@@ -234,7 +236,8 @@ def test_openai_endpoint_applies_configured_connection_limits(monkeypatch) -> No
             timeout_s,
             max_connections,
         ):
-            del base_url, headers
+            self.base_url = str(base_url)
+            del headers
             seen["max_connections"] = max_connections
 
         async def post(self, path, *, json):
@@ -276,7 +279,8 @@ def test_inference_map_exposes_client_close_hook(monkeypatch) -> None:
 
     class _FakeAsyncClient:
         def __init__(self, *, base_url, headers, timeout_s, max_connections):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -420,7 +424,8 @@ def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
             timeout_s,
             max_connections,
         ):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -478,7 +483,8 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
             timeout_s,
             max_connections,
         ):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -536,7 +542,8 @@ def test_openai_endpoint_retries_on_remote_protocol_error(monkeypatch) -> None:
             timeout_s,
             max_connections,
         ):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -629,7 +636,8 @@ def test_openai_endpoint_retries_on_http_503(monkeypatch) -> None:
             timeout_s,
             max_connections,
         ):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -691,7 +699,8 @@ def test_openai_endpoint_respects_retry_after_ms(monkeypatch) -> None:
             timeout_s,
             max_connections,
         ):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             del path, json
@@ -739,7 +748,8 @@ def test_openai_endpoint_can_disable_retries(monkeypatch) -> None:
             timeout_s,
             max_connections,
         ):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             del path
@@ -793,7 +803,8 @@ def test_inference_api_errors_store_bounded_payloads(monkeypatch) -> None:
             timeout_s,
             max_connections,
         ):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             del path, json

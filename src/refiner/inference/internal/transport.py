@@ -139,7 +139,7 @@ def provider_request_options(
 
 
 async def post_json_to_api(
-    client: Any,
+    client: AiohttpAPIClient,
     endpoint_path: str,
     payload: Mapping[str, Any],
     *,
@@ -350,13 +350,8 @@ def _response_headers(response: Any) -> dict[str, str]:
     return {str(key).lower(): str(value) for key, value in dict(headers).items()}
 
 
-def _request_url(client: Any, endpoint_path: str) -> str:
-    base_url = getattr(client, "base_url", None)
-    if isinstance(base_url, str):
-        return _join_endpoint_url(base_url, endpoint_path)
-    if hasattr(base_url, "join"):
-        return str(base_url.join(endpoint_path))
-    return endpoint_path
+def _request_url(client: AiohttpAPIClient, endpoint_path: str) -> str:
+    return _join_endpoint_url(client.base_url, endpoint_path)
 
 
 async def _response_json_or_none(response: Any) -> Any | None:

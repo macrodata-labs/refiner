@@ -371,7 +371,8 @@ def test_openai_chat_reasoning_models_strip_unsupported_settings(monkeypatch) ->
             timeout_s,
             max_connections,
         ):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             seen["path"] = path
@@ -436,7 +437,8 @@ def test_openai_gpt_51_reasoning_none_keeps_compatible_settings(
             timeout_s,
             max_connections,
         ):
-            del base_url, headers, timeout_s, max_connections
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             seen["path"] = path
