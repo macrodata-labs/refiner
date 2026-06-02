@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import cast
 
+import httpx
 import msgspec
 
 from refiner.pipeline.resources import GPU
@@ -21,28 +22,6 @@ from refiner.platform.client import (
 from refiner.services import RuntimeServiceSpec
 
 _TEST_TIMESTAMP = datetime(2026, 5, 20, 12, 0, tzinfo=timezone.utc)
-
-
-class _FakeResponse:
-    def __init__(
-        self,
-        status_code: int,
-        *,
-        json_payload: object | None = None,
-        text: str = "",
-        headers: dict[str, str] | None = None,
-        reason: str = "HTTP error",
-    ) -> None:
-        self.status_code = status_code
-        self._json_payload = json_payload
-        self.text = text
-        self.headers = headers or {}
-        self.reason = reason
-
-    def json(self) -> object:
-        if self._json_payload is None:
-            raise ValueError("no JSON")
-        return self._json_payload
 
 
 def _request() -> CloudRunCreateRequest:
@@ -280,11 +259,11 @@ def test_cloud_client_uploads_cloud_file_without_macrodata_auth(monkeypatch) -> 
     class FakeResponse:
         status_code = 204
 
-    def fake_request(**kwargs: object) -> FakeResponse:
+    def fake_httpx_request(**kwargs: object) -> FakeResponse:
         captured.update(kwargs)
         return FakeResponse()
 
-    monkeypatch.setattr("refiner.platform.client.api.requests.request", fake_request)
+    monkeypatch.setattr("refiner.platform.client.api.httpx.request", fake_httpx_request)
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     client.cloud_upload_file(
@@ -306,8 +285,7 @@ def test_cloud_client_uploads_cloud_file_without_macrodata_auth(monkeypatch) -> 
 
     assert captured["method"] == "PUT"
     assert captured["url"] == "https://payloads.example/upload"
-    assert captured["data"] == b"payload"
-    assert "content" not in captured
+    assert captured["content"] == b"payload"
     headers = cast(dict[str, str], captured["headers"])
     assert headers["content-length"] == "7"
     assert headers["x-amz-checksum-sha256"] == "checksum"
@@ -316,11 +294,11 @@ def test_cloud_client_uploads_cloud_file_without_macrodata_auth(monkeypatch) -> 
 
 
 def test_cloud_client_cloud_upload_file_noops_when_file_exists(monkeypatch) -> None:
-    def fake_request(**kwargs: object) -> None:
+    def fake_httpx_request(**kwargs: object) -> None:
         del kwargs
         raise AssertionError("existing cloud files should not be uploaded")
 
-    monkeypatch.setattr("refiner.platform.client.api.requests.request", fake_request)
+    monkeypatch.setattr("refiner.platform.client.api.httpx.request", fake_httpx_request)
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     client.cloud_upload_file(
@@ -338,14 +316,14 @@ def test_cloud_client_cloud_upload_file_noops_when_file_exists(monkeypatch) -> N
 def test_cloud_client_cloud_file_upload_failure_includes_provider_message(
     monkeypatch,
 ) -> None:
-    def fake_request(**kwargs: object) -> _FakeResponse:
+    def fake_httpx_request(**kwargs: object) -> httpx.Response:
         del kwargs
-        return _FakeResponse(
+        return httpx.Response(
             403,
-            json_payload={"message": "SignatureDoesNotMatch"},
+            json={"message": "SignatureDoesNotMatch"},
         )
 
-    monkeypatch.setattr("refiner.platform.client.api.requests.request", fake_request)
+    monkeypatch.setattr("refiner.platform.client.api.httpx.request", fake_httpx_request)
 
     client = MacrodataClient(api_key="md_test", base_url="https://example.com")
     try:
