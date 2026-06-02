@@ -257,10 +257,20 @@ def test_to_robot_rows_reads_nested_episode_task() -> None:
         {
             "steps": [
                 {
+                    "language_instruction": None,
+                    "action": [0.0],
+                    "observation": {"state": [1.0]},
+                },
+                {
+                    "language_instruction": "",
+                    "action": [0.0],
+                    "observation": {"state": [1.0]},
+                },
+                {
                     "language_instruction": "pick up the cup",
                     "action": [0.0],
                     "observation": {"state": [1.0]},
-                }
+                },
             ]
         }
     )
