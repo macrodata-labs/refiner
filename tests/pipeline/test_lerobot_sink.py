@@ -579,6 +579,27 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     assert (out_root / "meta" / "tasks.parquet").exists()
 
 
+def test_write_lerobot_skips_shard_with_only_empty_frame_rows(
+    tmp_path: Path,
+) -> None:
+    out_root = tmp_path / "empty-frame-shard"
+    writer = LeRobotWriterSink(str(out_root))
+    row = _FakeRoboticsRow(
+        episode_id="empty",
+        task="pick",
+        fps=10,
+        robot_type="mockbot",
+        frame_table=Tabular.from_rows([]),
+    )
+
+    writer.write_shard_block("shard-empty", [row])
+    writer.on_shard_complete("shard-empty")
+    writer.close()
+
+    worker_token = worker_token_for("local")
+    assert not (out_root / "meta" / f"chunk-shard-empty__w{worker_token}").exists()
+
+
 def test_write_lerobot_accepts_generic_robotics_rows(tmp_path: Path) -> None:
     out_root = tmp_path / "generic-robotics"
     rows = [
