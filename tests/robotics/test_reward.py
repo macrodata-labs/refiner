@@ -34,7 +34,8 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
             "video_key": video_key,
             "max_frames": max_frames,
         }
-        return [object(), object()]
+        yield object()
+        yield object()
 
     def _fake_frame_data_url(frame):
         del frame
@@ -144,7 +145,7 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
 def test_reward_score_hard_fails_on_pooling_disconnect_by_default(monkeypatch) -> None:
     async def _fake_sample_video_frames(row, *, video_key, max_frames):
         del row, video_key, max_frames
-        return [type("Frame", (), {"index": 4})()]
+        yield type("Frame", (), {"index": 4})()
 
     def _fake_frame_data_url(frame):
         del frame

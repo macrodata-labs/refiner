@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from refiner.pipeline.data.row import Row
@@ -57,16 +57,16 @@ def reward_score(
             raise TypeError("reward_score expects rows from read_lerobot(...)")
 
         selected_video_key = _resolve_video_key(row, video_key)
-        frames = await _sample_video_frames(
-            row,
-            video_key=selected_video_key,
-            max_frames=max_frames,
-        )
         task_text = _resolve_task_text(row, task)
         content: list[dict[str, Any]] = [
             {"type": "text", "text": _robometer_progress_prompt(task_text)}
         ]
-        for decoded_frame in frames:
+        frame_count = 0
+        async for decoded_frame in _sample_video_frames(
+            row,
+            video_key=selected_video_key,
+            max_frames=max_frames,
+        ):
             content.append(
                 {
                     "type": "image_url",
@@ -74,8 +74,7 @@ def reward_score(
                 }
             )
             content.append({"type": "text", "text": _PROGRESS_TOKEN})
-        frame_count = len(frames)
-        del frames, decoded_frame
+            frame_count += 1
 
         payload = {
             "task": "token_classify",
@@ -207,19 +206,19 @@ async def _sample_video_frames(
     *,
     video_key: str,
     max_frames: int,
-) -> list[DecodedVideoFrame]:
+) -> AsyncIterator[DecodedVideoFrame]:
     target_indexes = set(_sample_indexes(row.length, max_frames=max_frames))
-    frames: list[DecodedVideoFrame] = []
+    yielded = 0
     async for frame in row.videos[video_key].iter_frames():
         if frame.index in target_indexes:
-            frames.append(frame)
-        if len(frames) == len(target_indexes):
+            yielded += 1
+            yield frame
+        if yielded == len(target_indexes):
             break
-    if not frames:
+    if yielded == 0:
         raise ValueError(
             f"episode {row.episode_index} video {video_key!r} has no frames"
         )
-    return frames
 
 
 def _sample_indexes(length: int, *, max_frames: int) -> tuple[int, ...]:
