@@ -118,32 +118,28 @@ class LeRobotEpisodeReader(ParquetReader):
                 if batch.num_rows <= 0:
                     continue
 
-                episode_rows = batch.table.select(
-                    [
-                        "episode_index",
-                        "length",
-                        "data/chunk_index",
-                        "data/file_index",
-                        "dataset_from_index",
-                        "dataset_to_index",
-                    ]
-                ).to_pylist()
-                keep = [
-                    actual == int(row["length"])
-                    for row, actual in zip(episode_rows, frame_counts, strict=True)
-                ]
+                keep = []
+                for row_idx, actual in enumerate(frame_counts):
+                    expected = int(self._episode_value(batch, row_idx, "length"))
+                    keep.append(actual == expected)
                 skipped = keep.count(False)
                 if skipped:
                     row_idx = keep.index(False)
-                    row = episode_rows[row_idx]
-                    chunk = row["data/chunk_index"]
-                    file_idx = row["data/file_index"]
-                    from_idx = int(row["dataset_from_index"])
-                    to_idx = int(row["dataset_to_index"])
-                    expected = int(row["length"])
+                    chunk = self._episode_value(batch, row_idx, "data/chunk_index")
+                    file_idx = self._episode_value(batch, row_idx, "data/file_index")
+                    from_idx = int(
+                        self._episode_value(batch, row_idx, "dataset_from_index")
+                    )
+                    to_idx = int(
+                        self._episode_value(batch, row_idx, "dataset_to_index")
+                    )
+                    expected = int(self._episode_value(batch, row_idx, "length"))
                     actual = frame_counts[row_idx]
+                    episode_index = int(
+                        self._episode_value(batch, row_idx, "episode_index")
+                    )
                     error = (
-                        f"episode {int(row['episode_index'])} expected {expected} "
+                        f"episode {episode_index} expected {expected} "
                         f"frames from chunk {chunk!r} file {file_idx!r} "
                         f"index range [{from_idx}, {to_idx}), got {actual}"
                     )
@@ -262,11 +258,15 @@ class LeRobotEpisodeReader(ParquetReader):
         )
 
         tables: dict[tuple[Any, Any], pa.Table] = {}
-        for row in request_ranges.to_pylist():
-            chunk = row["data/chunk_index"]
-            file_idx = row["data/file_index"]
-            from_idx = int(row["dataset_from_index_min"])
-            to_idx = int(row["dataset_to_index_max"])
+        range_chunks = request_ranges.column("data/chunk_index")
+        range_files = request_ranges.column("data/file_index")
+        range_from_indices = request_ranges.column("dataset_from_index_min")
+        range_to_indices = request_ranges.column("dataset_to_index_max")
+        for row_idx in range(request_ranges.num_rows):
+            chunk = range_chunks[row_idx].as_py()
+            file_idx = range_files[row_idx].as_py()
+            from_idx = int(range_from_indices[row_idx].as_py())
+            to_idx = int(range_to_indices[row_idx].as_py())
             table = self._get_frame_file_table(
                 source_index=source_index,
                 root=root,
@@ -290,19 +290,16 @@ class LeRobotEpisodeReader(ParquetReader):
             for key, table in tables.items()
         }
         frame_counts = []
-        for row in tabular.table.select(
-            [
-                "data/chunk_index",
-                "data/file_index",
-                "dataset_from_index",
-                "dataset_to_index",
-            ]
-        ).to_pylist():
-            indexes = index_by_file[(row["data/chunk_index"], row["data/file_index"])]
+        chunks = tabular.columns[tabular.index_by_name["data/chunk_index"]]
+        files = tabular.columns[tabular.index_by_name["data/file_index"]]
+        from_indices = tabular.columns[tabular.index_by_name["dataset_from_index"]]
+        to_indices = tabular.columns[tabular.index_by_name["dataset_to_index"]]
+        for row_idx in range(tabular.num_rows):
+            indexes = index_by_file[(chunks[row_idx].as_py(), files[row_idx].as_py())]
             frame_counts.append(
                 int(
-                    np.searchsorted(indexes, int(row["dataset_to_index"]))
-                    - np.searchsorted(indexes, int(row["dataset_from_index"]))
+                    np.searchsorted(indexes, int(to_indices[row_idx].as_py()))
+                    - np.searchsorted(indexes, int(from_indices[row_idx].as_py()))
                 )
             )
         return tables, frame_counts
