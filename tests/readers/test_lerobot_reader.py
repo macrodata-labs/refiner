@@ -3,20 +3,21 @@ from __future__ import annotations
 import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from typing import cast
 
 import refiner as mdr
 from refiner.io import DataFolder
 from refiner.pipeline.data.row import DictRow
+from refiner.video import VideoFile
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.robotics.lerobot_format import (
-    LeRobotFeatureInfo,
     LeRobotInfo,
+    LeRobotFeatureInfo,
     LeRobotMetadata,
     LeRobotRow,
     LeRobotStatsFile,
@@ -24,7 +25,6 @@ from refiner.robotics.lerobot_format import (
     LeRobotVideoInfo,
     remap_task_index_table,
 )
-from refiner.video import VideoFile
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
