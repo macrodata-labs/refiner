@@ -7,14 +7,14 @@ import refiner as mdr
 
 INPUT_DATASET = os.environ.get(
     "ROBOMETER_INPUT_DATASET",
-    "hf://datasets/lerobot/aloha_static_battery",
+    "hf://datasets/lerobot/libero",
 )
 OUTPUT_ROOT = os.environ.get(
     "ROBOMETER_OUTPUT_ROOT",
-    "hf://buckets/macrodata/test_bucket/robometer-reward",
+    "hf://buckets/macrodata/test_bucket/libero-robometer-reward",
 )
 VIDEO_KEY = os.environ.get("ROBOMETER_VIDEO_KEY") or None
-TASK = os.environ.get("ROBOMETER_TASK") or None
+TASK = os.environ.get("ROBOMETER_TASK") or "complete the robot manipulation task"
 MAX_FRAMES = int(os.environ.get("ROBOMETER_MAX_FRAMES", "8"))
 MAX_IN_FLIGHT = int(os.environ.get("ROBOMETER_MAX_IN_FLIGHT", "256"))
 NUM_WORKERS = int(os.environ.get("ROBOMETER_NUM_WORKERS", "1"))
