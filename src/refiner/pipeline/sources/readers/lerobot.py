@@ -124,7 +124,7 @@ class LeRobotEpisodeReader(ParquetReader):
                     for row_idx, actual in enumerate(frame_counts)
                 ]
                 skipped = keep.count(False)
-                if skipped:
+                if skipped and not self.skip_malformed_rows:
                     row_idx = keep.index(False)
                     expected = int(lengths[row_idx].as_py())
                     actual = frame_counts[row_idx]
@@ -135,10 +135,11 @@ class LeRobotEpisodeReader(ParquetReader):
                         f"episode {episode_index} expected {expected} "
                         f"frames, got {actual}"
                     )
-                    if not self.skip_malformed_rows:
-                        raise ValueError(error)
+                    raise ValueError(error)
+
+                if skipped:
                     if not self._warned_malformed_row:
-                        logger.warning("Skipping malformed LeRobot row: {}", error)
+                        logger.warning("Skipping malformed LeRobot episodes")
                         self._warned_malformed_row = True
                     log_throughput(
                         "malformed_lerobot_episodes_skipped",
