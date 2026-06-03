@@ -19,10 +19,55 @@ def track_hands(
     output_key: str = "hand_tracking",
     config: Any | None = None,
 ) -> BatchFn:
-    """Return a ``batch_map`` function for ego-vision hand tracking.
+    """Return a ``batch_map`` function that annotates videos with hand tracks.
 
-    Refiner owns row access and passes lazy decoded ``av.VideoFrame`` iterators
-    to ``egovision.HandTrackingPipeline``.
+    Input rows must be ``RoboticsRow`` values with a video source available at
+    ``row.videos[video_key]``. Use ``Pipeline.to_robot_rows(video_keys=...)`` to
+    convert a URL, local path, or video asset column into that robotics view. The
+    video source must expose ``iter_frames()``, yielding decoded frames that can
+    be converted to RGB by ego-vision.
+
+    Args:
+        video_key: Key in ``row.videos`` to process. Defaults to ``"video"``.
+        output_key: Row column that will receive the hand-tracking payload.
+            Defaults to ``"hand_tracking"``.
+        config: Optional ``egovision.HandTrackingConfig``. If omitted, Refiner
+            constructs the default ego-vision hand-tracking pipeline with HaWoR
+            reconstruction.
+
+    Returns:
+        A ``BatchFn`` for ``Pipeline.batch_map``. Each output row is the input
+        row plus ``row[output_key]``, a dictionary with:
+
+        ``episode_id``:
+            Ego-vision episode identifier.
+        ``camera_trajectory``:
+            ``numpy.ndarray | None`` of per-frame world-from-camera transforms,
+            shaped ``[T, 4, 4]`` when camera tracking is available.
+        ``intrinsics``:
+            ``numpy.ndarray | None`` of per-frame camera intrinsics, usually
+            shaped ``[T, 3, 3]``.
+        ``hands_camera``:
+            Dictionary keyed by ``"left"`` and/or ``"right"``. Each hand entry
+            may contain ``joints_camera`` ``[T, 21, 3]``, ``T_camera_wrist``
+            ``[T, 4, 4]``, ``mano_pose`` ``[T, 96]``, ``mano_shape``
+            ``[T, 10]``, ``mano_translation`` ``[T, 3]``, ``confidence`` ``[T]``,
+            and ``infilled`` ``[T]``.
+        ``hands_world``:
+            Dictionary keyed by ``"left"`` and/or ``"right"``. Each hand entry
+            may contain ``joints_world`` ``[T, 21, 3]``, ``T_world_wrist``
+            ``[T, 4, 4]``, ``mano_pose`` ``[T, 96]``, ``mano_shape`` ``[T, 10]``,
+            ``confidence`` ``[T]``, and ``infilled`` ``[T]``.
+        ``metadata``:
+            Optional dictionary with pipeline settings such as
+            ``vggt_seq_length`` and ``hawor_seq_length``.
+        ``diagnostics``:
+            Optional ego-vision timing/debug information.
+
+    Metrics:
+        Logs ``egovision_frames_decoded`` while frames are read,
+        ``frames_processed`` from the resulting hand-track frame count, and
+        ``egovision_episodes_processed`` once an episode has been annotated.
     """
 
     if not video_key:
