@@ -5,8 +5,14 @@ description: "Use vision-language models to annotate temporal subtask segments"
 
 # Subtask Annotation
 
-`subtask_annotation` samples contact sheets from an episode video and asks a
-vision-language model to return temporal subtask segments.
+Use `subtask_annotation` to add temporal action segments to LeRobot episodes.
+The annotator samples the episode video into timestamped contact sheets, sends
+those sheets to a vision-language model, and writes the returned segments back
+onto each row.
+
+This is useful when you want coarse manipulation events such as reaching,
+grasping, moving, pouring, opening, closing, or placing objects without manually
+labeling every episode.
 
 ```python
 provider = mdr.inference.VLLMProvider(model="Qwen/Qwen2.5-VL-7B-Instruct")
@@ -27,7 +33,8 @@ pipeline = (
 
 ## Output Shape
 
-The output column contains a list of segments:
+The output column contains a list of segment dictionaries. Each segment has a
+start time, an end time, and a short action description:
 
 ```python
 [
@@ -38,8 +45,9 @@ The output column contains a list of segments:
 
 ## Contact Sheets
 
-Contact sheets reduce video into timestamped image grids. This is often cheaper
-and easier for VLMs than sending the full video.
+Contact sheets reduce each video to a sequence of timestamped image grids. This
+keeps requests smaller than full-video prompting while preserving enough visual
+context for the model to choose event boundaries.
 
 | Parameter | Meaning |
 | --- | --- |
