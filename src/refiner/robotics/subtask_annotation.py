@@ -272,16 +272,16 @@ async def _subtask_annotation_content(
     quality: int,
     include_contact_sheet_manifest: bool,
 ) -> list[dict[str, Any]]:
-    samples = await _sample_timestamped_frames(
+    produced_frames = await _sample_timestamped_frames(
         video,
         sample_sec=sample_sec,
         frame_width=frame_width,
     )
-    if not samples:
+    if not produced_frames:
         raise ValueError("video produced no frames")
 
     sheets = _build_contact_sheets(
-        samples,
+        produced_frames,
         frames_per_sheet=frames_per_sheet,
         columns=columns,
         quality=quality,
