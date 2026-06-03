@@ -17,6 +17,7 @@ VIDEO_KEY = os.environ.get("ROBOMETER_VIDEO_KEY") or None
 TASK = os.environ.get("ROBOMETER_TASK") or "complete the robot manipulation task"
 MAX_FRAMES = int(os.environ.get("ROBOMETER_MAX_FRAMES", "8"))
 MAX_IN_FLIGHT = int(os.environ.get("ROBOMETER_MAX_IN_FLIGHT", "512"))
+NUM_SHARDS = int(os.environ.get("ROBOMETER_NUM_SHARDS", "5"))
 NUM_WORKERS = int(os.environ.get("ROBOMETER_NUM_WORKERS", "1"))
 MEM_MB_PER_WORKER = int(os.environ.get("ROBOMETER_MEM_MB_PER_WORKER", "4096"))
 
@@ -26,7 +27,7 @@ def main() -> None:
     output = f"{OUTPUT_ROOT}/{stamp}"
 
     (
-        mdr.read_lerobot(INPUT_DATASET)
+        mdr.read_lerobot(INPUT_DATASET, num_shards=NUM_SHARDS)
         .map_async(
             mdr.robotics.reward_score(
                 model="robometer/Robometer-4B",
