@@ -137,7 +137,7 @@ def track_hands(
     return _track
 
 
-def _load_egovision(config: Any | None) -> tuple[_HandTrackingPipeline, _EpisodeInput]:
+def _load_egovision(config: Any | None) -> tuple[Any, Any]:
     try:
         egovision: Any = importlib.import_module("egovision")
     except ImportError as exc:
