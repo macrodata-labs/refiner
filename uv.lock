@@ -822,15 +822,15 @@ wheels = [
 
 [[package]]
 name = "ego-vision"
-version = "0.1.15"
+version = "0.1.16"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4f/ba/95a1a682119931a9043deb45dba3bde53e0f78a6479a77846dc062bfef54/ego_vision-0.1.15.tar.gz", hash = "sha256:6808520ec4c1a8d50078cd4730985dc157902044c551abc4cf6f54f8ed1abd40", size = 117254, upload-time = "2026-06-03T20:03:29.859Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fd/51/bd50c8c337c6f005fa8d7991ccd6e909a1857108c36f85e9aeca8cec25da/ego_vision-0.1.16.tar.gz", hash = "sha256:8a04bd5751383457fed12d7e870048a92c3b6d382d9f81748410ed4563e7dedb", size = 118331, upload-time = "2026-06-03T22:23:04.527Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/5a/13f363916b7d5af904a4974df516a5c59331cb5c4dd8c9ecc9c1c2aa8028/ego_vision-0.1.15-py3-none-any.whl", hash = "sha256:5f9406feb744b9691d4b900d693db90451c689293d2c4dd709c1e6a332ffc0fd", size = 138100, upload-time = "2026-06-03T20:03:28.542Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/3c/2e805de0b1f153a8d44addc99a7b1f99250b530ab5578070acfff02ed362/ego_vision-0.1.16-py3-none-any.whl", hash = "sha256:5c7e81922781ac860d8f196ddb5f8512098f1361c506b44576af089757e1be5f", size = 139149, upload-time = "2026-06-03T22:23:03.136Z" },
 ]
 
 [package.optional-dependencies]
@@ -1787,7 +1787,7 @@ requires-dist = [
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "datasets", marker = "extra == 'hf'", specifier = ">=3.0.0" },
-    { name = "ego-vision", extras = ["models"], marker = "extra == 'hand-tracking'", specifier = ">=0.1.15" },
+    { name = "ego-vision", extras = ["models"], marker = "extra == 'hand-tracking'", specifier = ">=0.1.16" },
     { name = "fsspec", extras = ["http"] },
     { name = "h5py", marker = "extra == 'hdf5'" },
     { name = "hf", marker = "extra == 'hf'", specifier = ">=1.7.1" },
