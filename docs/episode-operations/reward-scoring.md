@@ -8,18 +8,25 @@ description: "Score episode progress and success with a pooling model"
 `reward_score` samples frames from an episode video and uses a Robometer-style
 pooling model to estimate progress and success.
 
+As of right now, Refiner supports the state-of-the-art Robometer reward model
+([paper](https://arxiv.org/abs/2603.02115)) for dense progress and success
+signals on robot episodes.
+
 ```python
 pipeline = (
-    mdr.read_lerobot("hf://datasets/acme/demos")
+    mdr.read_lerobot("hf://datasets/nvidia/LIBERO_LeRobot_v3/libero_90")
     .map_async(
         mdr.robotics.reward_score(
             model="robometer/Robometer-4B",
-            video_key="observation.images.top",
-            task=lambda row: "; ".join(row.tasks),
+            video_key="observation.images.image",
+            task="complete the robot manipulation task",
             max_frames=8,
+            max_concurrent_requests=256,
         ),
-        max_in_flight=32,
+        max_in_flight=256,
+        preserve_order=False,
     )
+    .write_lerobot("hf://buckets/acme-robotics/libero-robometer-reward")
 )
 ```
 
@@ -36,7 +43,8 @@ Customize names with `output_column` and `success_column`.
 
 ## Task Text
 
-Task text can come from:
+Beyond the video to score, you must provide a task description. This can be a
+string or a function that takes the row and returns the task description:
 
 ```python
 mdr.robotics.reward_score(task="open the drawer")
@@ -52,3 +60,6 @@ mdr.robotics.reward_score(task=lambda row: row.task or "; ".join(row.tasks))
 
 `reward_score` uses pooling inference through a vLLM provider. See
 [Pooling](../inference/pooling.md) and [Providers and vLLM](../inference/providers-and-vllm.md).
+
+For a complete cloud example, see
+[`examples/lerobot/robometer_reward.py`](../../examples/lerobot/robometer_reward.py).

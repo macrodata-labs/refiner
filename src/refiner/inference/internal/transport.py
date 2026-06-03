@@ -4,10 +4,10 @@ import asyncio
 import email.utils
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
-import httpx
+import aiohttp
 
 T = TypeVar("T")
 
@@ -65,6 +65,59 @@ class InferenceRetryError(RuntimeError):
         self.errors = errors
 
 
+@dataclass(slots=True)
+class AiohttpAPIClient:
+    base_url: str
+    headers: Mapping[str, str]
+    timeout_s: float = 600.0
+    max_connections: int | None = None
+    _session: aiohttp.ClientSession | None = field(default=None, init=False, repr=False)
+    _session_loop: asyncio.AbstractEventLoop | None = field(
+        default=None, init=False, repr=False
+    )
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        loop = asyncio.get_running_loop()
+        session = self._session
+        if (
+            session is not None
+            and not session.closed
+            and self._session_loop is not loop
+        ):
+            raise RuntimeError(
+                "AiohttpAPIClient cannot be reused across event loops while its "
+                "session is open; call close() before reusing it on another loop."
+            )
+        if session is None or session.closed:
+            connector_kwargs: dict[str, Any] = {}
+            if self.max_connections is not None:
+                connector_kwargs["limit"] = self.max_connections
+            connector = aiohttp.TCPConnector(**connector_kwargs)
+            session = aiohttp.ClientSession(
+                connector=connector,
+                headers=dict(self.headers),
+                timeout=aiohttp.ClientTimeout(total=self.timeout_s),
+                trust_env=True,
+            )
+            self._session = session
+            self._session_loop = loop
+        return session
+
+    async def post(self, endpoint_path: str, **kwargs: Any) -> aiohttp.ClientResponse:
+        return await self._ensure_session().post(
+            f"{self.base_url.rstrip('/')}/{endpoint_path.lstrip('/')}",
+            **kwargs,
+        )
+
+    async def close(self) -> None:
+        session = self._session
+        if session is None:
+            return
+        self._session = None
+        self._session_loop = None
+        await session.close()
+
+
 def provider_request_options(
     payload: Mapping[str, Any],
 ) -> tuple[dict[str, Any], int | None, dict[str, str] | None]:
@@ -86,7 +139,7 @@ def provider_request_options(
 
 
 async def post_json_to_api(
-    client: httpx.AsyncClient,
+    client: AiohttpAPIClient,
     endpoint_path: str,
     payload: Mapping[str, Any],
     *,
@@ -95,6 +148,7 @@ async def post_json_to_api(
     extra_headers: Mapping[str, str] | None = None,
 ) -> APIResponse:
     retry = _prepare_retries(max_retries)
+    request_url = f"{client.base_url.rstrip('/')}/{endpoint_path.lstrip('/')}"
 
     async def _post() -> APIResponse:
         try:
@@ -102,46 +156,50 @@ async def post_json_to_api(
             if extra_headers:
                 kwargs["headers"] = dict(extra_headers)
             response = await client.post(endpoint_path, **kwargs)
+
+            return await _handle_json_response(
+                response,
+                url=request_url,
+                request_body=dict(payload),
+                operation=operation,
+            )
         except (
+            aiohttp.ClientError,
             ConnectionError,
             OSError,
             asyncio.TimeoutError,
-            httpx.NetworkError,
-            httpx.TimeoutException,
         ) as err:
             raise InferenceAPICallError(
                 message=f"Cannot connect to API: {type(err).__name__}: {err}",
-                url=_request_url(client, endpoint_path),
+                url=request_url,
                 request_body=dict(payload),
                 is_retryable=True,
             ) from err
 
-        return _handle_json_response(
-            response,
-            url=_request_url(client, endpoint_path),
-            request_body=dict(payload),
-            operation=operation,
-        )
-
     return await retry(_post)
 
 
-def _handle_json_response(
-    response: httpx.Response,
+async def _handle_json_response(
+    response: aiohttp.ClientResponse,
     *,
     url: str,
     request_body: Mapping[str, Any],
     operation: str,
 ) -> APIResponse:
-    response_headers = _response_headers(response)
-    status_code = getattr(response, "status_code", 200)
+    response_headers = {
+        str(key).lower(): str(value) for key, value in dict(response.headers).items()
+    }
+    status_code = response.status
     if status_code >= 400:
-        response_body = _response_text(response)
-        data = _response_json_or_none(response)
+        response_body = await response.text()
+        try:
+            data = await response.json(content_type=None)
+        except (ValueError, aiohttp.ContentTypeError):
+            data = None
         message = _error_message(
             operation=operation,
             status_code=status_code,
-            status_text=getattr(response, "reason_phrase", ""),
+            status_text=response.reason or "",
             data=data,
             response_body=response_body,
         )
@@ -156,15 +214,15 @@ def _handle_json_response(
         )
 
     try:
-        value = response.json()
-    except ValueError as err:
+        value = await response.json(content_type=None)
+    except (ValueError, aiohttp.ContentTypeError) as err:
         raise InferenceAPICallError(
             message="Invalid JSON response",
             url=url,
             request_body=request_body,
             status_code=status_code,
             response_headers=response_headers,
-            response_body=_response_text(response),
+            response_body=await response.text(),
             is_retryable=False,
         ) from err
     return APIResponse(
@@ -289,30 +347,6 @@ def _is_reasonable_retry_delay(
     )
 
 
-def _response_headers(response: httpx.Response) -> dict[str, str]:
-    headers = getattr(response, "headers", {})
-    return {str(key).lower(): str(value) for key, value in dict(headers).items()}
-
-
-def _request_url(client: httpx.AsyncClient, endpoint_path: str) -> str:
-    base_url = getattr(client, "base_url", None)
-    if hasattr(base_url, "join"):
-        return str(base_url.join(endpoint_path))
-    return endpoint_path
-
-
-def _response_json_or_none(response: httpx.Response) -> Any | None:
-    try:
-        return response.json()
-    except ValueError:
-        return None
-
-
-def _response_text(response: httpx.Response) -> str:
-    text = getattr(response, "text", "")
-    return text if isinstance(text, str) else str(text)
-
-
 def _error_message(
     *,
     operation: str,
@@ -373,6 +407,7 @@ def _truncate_error_text(
 
 __all__ = [
     "APIResponse",
+    "AiohttpAPIClient",
     "InferenceAPICallError",
     "InferenceRetryError",
     "provider_request_options",

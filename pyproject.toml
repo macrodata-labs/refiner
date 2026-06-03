@@ -16,6 +16,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "aiohttp",
     "cloudpickle==3.1.2",
     "fsspec[http]",
     "httpx",

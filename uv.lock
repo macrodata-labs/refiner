@@ -1676,6 +1676,7 @@ name = "macrodata-refiner"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "cloudpickle" },
     { name = "fsspec", extra = ["http"] },
     { name = "httpx" },
@@ -1781,6 +1782,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp" },
     { name = "av", marker = "extra == 'mcap'" },
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },

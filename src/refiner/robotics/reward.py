@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from refiner.pipeline.data.row import Row
@@ -33,7 +33,14 @@ def reward_score(
     success_column: str = "robometer_success",
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
-    """Return an async map function that scores LeRobot episodes with Robometer."""
+    """Return an async map function that scores LeRobot episodes with Robometer.
+
+    The mapper samples up to `max_frames` frames from each LeRobot episode,
+    sends them to a vLLM-hosted Robometer pooling model, and adds two list
+    columns to the row: per-frame task progress and per-frame success
+    probability. When `task` is omitted, the episode's LeRobot task metadata is
+    used as the Robometer instruction.
+    """
 
     if not model.strip():
         raise ValueError("model must be non-empty")
@@ -57,38 +64,38 @@ def reward_score(
             raise TypeError("reward_score expects rows from read_lerobot(...)")
 
         selected_video_key = _resolve_video_key(row, video_key)
-        frames = await _sample_video_frames(
-            row,
-            video_key=selected_video_key,
-            max_frames=max_frames,
-        )
         task_text = _resolve_task_text(row, task)
         content: list[dict[str, Any]] = [
             {"type": "text", "text": _robometer_progress_prompt(task_text)}
         ]
-        for frame in frames:
+        frame_count = 0
+        async for decoded_frame in _sample_video_frames(
+            row,
+            video_key=selected_video_key,
+            max_frames=max_frames,
+        ):
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": _frame_data_url(frame)},
+                    "image_url": {"url": _frame_data_url(decoded_frame)},
                 }
             )
             content.append({"type": "text", "text": _PROGRESS_TOKEN})
+            frame_count += 1
 
-        response = await generate_pooling_request(
-            {
-                "task": "token_classify",
-                "use_activation": False,
-                "chat_template_kwargs": {
-                    "add_vision_id": True,
-                    "enable_thinking": False,
-                    "fps": 1,
-                },
-                "mm_processor_kwargs": {"do_resize": False},
-                "messages": [{"role": "user", "content": content}],
-            }
-        )
-        token_logits = _extract_progress_token_logits(response, len(frames))
+        payload = {
+            "task": "token_classify",
+            "use_activation": False,
+            "chat_template_kwargs": {
+                "add_vision_id": True,
+                "enable_thinking": False,
+                "fps": 1,
+            },
+            "mm_processor_kwargs": {"do_resize": False},
+            "messages": [{"role": "user", "content": content}],
+        }
+        response = await generate_pooling_request(payload)
+        token_logits = _extract_progress_token_logits(response, frame_count)
         progress = [expected_progress(row) for row in token_logits]
         success = [sigmoid(float(row[10])) for row in token_logits]
         return row.update(
@@ -206,19 +213,21 @@ async def _sample_video_frames(
     *,
     video_key: str,
     max_frames: int,
-) -> list[DecodedVideoFrame]:
+) -> AsyncIterator[DecodedVideoFrame]:
+    # Deriving video length from frame rows is not reliable yet; use the episode
+    # length until https://github.com/macrodata-labs/refiner/issues/192 lands.
     target_indexes = set(_sample_indexes(row.length, max_frames=max_frames))
-    frames: list[DecodedVideoFrame] = []
+    yielded = 0
     async for frame in row.videos[video_key].iter_frames():
         if frame.index in target_indexes:
-            frames.append(frame)
-        if len(frames) == len(target_indexes):
+            yielded += 1
+            yield frame
+        if yielded == len(target_indexes):
             break
-    if not frames:
+    if yielded == 0:
         raise ValueError(
             f"episode {row.episode_index} video {video_key!r} has no frames"
         )
-    return frames
 
 
 def _sample_indexes(length: int, *, max_frames: int) -> tuple[int, ...]:

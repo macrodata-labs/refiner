@@ -6,8 +6,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-import httpx
-
 from refiner.inference.internal.media import (
     base64_data,
     is_url,
@@ -25,6 +23,7 @@ from refiner.inference.internal.response import (
     _text_from_content,
 )
 from refiner.inference.internal.transport import (
+    AiohttpAPIClient,
     post_json_to_api,
     provider_request_options,
 )
@@ -64,7 +63,8 @@ class _AnthropicEndpointClient:
     api_key: str | None = None
     anthropic_version: str = "2023-06-01"
     headers: Mapping[str, str] | None = None
-    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    max_connections: int | None = None
+    _client: AiohttpAPIClient | None = field(default=None, init=False, repr=False)
     _resolved_headers: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -79,16 +79,23 @@ class _AnthropicEndpointClient:
         headers["anthropic-version"] = self.anthropic_version
         self._resolved_headers = headers
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    def _ensure_client(self) -> AiohttpAPIClient:
         client = self._client
         if client is None:
-            client = httpx.AsyncClient(
+            client = AiohttpAPIClient(
                 base_url=self.base_url.rstrip("/"),
                 headers=self._resolved_headers,
-                timeout=_ENDPOINT_TIMEOUT_SECONDS,
+                timeout_s=_ENDPOINT_TIMEOUT_SECONDS,
+                max_connections=self.max_connections,
             )
             self._client = client
         return client
+
+    async def close(self) -> None:
+        client = self._client
+        if client is not None:
+            self._client = None
+            await client.close()
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
         request_payload, max_retries, extra_headers = provider_request_options(payload)
