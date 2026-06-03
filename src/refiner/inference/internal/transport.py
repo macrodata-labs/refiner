@@ -105,7 +105,7 @@ class AiohttpAPIClient:
 
     async def post(self, endpoint_path: str, **kwargs: Any) -> aiohttp.ClientResponse:
         return await self._ensure_session().post(
-            _request_url(self, endpoint_path),
+            f"{self.base_url.rstrip('/')}/{endpoint_path.lstrip('/')}",
             **kwargs,
         )
 
@@ -148,6 +148,7 @@ async def post_json_to_api(
     extra_headers: Mapping[str, str] | None = None,
 ) -> APIResponse:
     retry = _prepare_retries(max_retries)
+    request_url = f"{client.base_url.rstrip('/')}/{endpoint_path.lstrip('/')}"
 
     async def _post() -> APIResponse:
         try:
@@ -158,7 +159,7 @@ async def post_json_to_api(
 
             return await _handle_json_response(
                 response,
-                url=_request_url(client, endpoint_path),
+                url=request_url,
                 request_body=dict(payload),
                 operation=operation,
             )
@@ -170,7 +171,7 @@ async def post_json_to_api(
         ) as err:
             raise InferenceAPICallError(
                 message=f"Cannot connect to API: {type(err).__name__}: {err}",
-                url=_request_url(client, endpoint_path),
+                url=request_url,
                 request_body=dict(payload),
                 is_retryable=True,
             ) from err
@@ -185,7 +186,9 @@ async def _handle_json_response(
     request_body: Mapping[str, Any],
     operation: str,
 ) -> APIResponse:
-    response_headers = _response_headers(response)
+    response_headers = {
+        str(key).lower(): str(value) for key, value in dict(response.headers).items()
+    }
     status_code = response.status
     if status_code >= 400:
         response_body = await response.text()
@@ -342,15 +345,6 @@ def _is_reasonable_retry_delay(
             or delay < exponential_backoff_delay
         )
     )
-
-
-def _response_headers(response: aiohttp.ClientResponse) -> dict[str, str]:
-    headers = getattr(response, "headers", {})
-    return {str(key).lower(): str(value) for key, value in dict(headers).items()}
-
-
-def _request_url(client: AiohttpAPIClient, endpoint_path: str) -> str:
-    return f"{client.base_url.rstrip('/')}/{endpoint_path.lstrip('/')}"
 
 
 def _error_message(

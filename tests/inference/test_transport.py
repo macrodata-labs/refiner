@@ -97,6 +97,7 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
     class _FakeResponse:
         status = 200
         reason = ""
+        headers: Mapping[str, str] = {}
 
         def raise_for_status(self) -> None:
             return None
@@ -162,6 +163,7 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
     class _FakeResponse:
         status = 200
         reason = ""
+        headers: Mapping[str, str] = {}
 
         def raise_for_status(self) -> None:
             return None
@@ -224,6 +226,7 @@ def test_openai_endpoint_applies_configured_connection_limits(monkeypatch) -> No
     class _FakeResponse:
         status = 200
         reason = ""
+        headers: Mapping[str, str] = {}
 
         def raise_for_status(self) -> None:
             return None
@@ -280,6 +283,7 @@ def test_inference_map_exposes_client_close_hook(monkeypatch) -> None:
     class _FakeResponse:
         status = 200
         reason = ""
+        headers: Mapping[str, str] = {}
 
         async def json(self, content_type=None) -> Mapping[str, object]:
             return {
@@ -418,6 +422,7 @@ def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
     class _FakeResponse:
         status = 200
         reason = ""
+        headers: Mapping[str, str] = {}
 
         def raise_for_status(self) -> None:
             return None
@@ -480,6 +485,7 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
     class _FakeResponse:
         status = 200
         reason = ""
+        headers: Mapping[str, str] = {}
 
         def raise_for_status(self) -> None:
             return None
@@ -542,6 +548,7 @@ def test_openai_endpoint_retries_on_remote_protocol_error(monkeypatch) -> None:
     class _FakeResponse:
         status = 200
         reason = ""
+        headers: Mapping[str, str] = {}
 
         def raise_for_status(self) -> None:
             return None
@@ -617,6 +624,7 @@ def test_openai_endpoint_retries_on_response_body_read_error(monkeypatch) -> Non
     class _FakeResponse:
         status = 200
         reason = ""
+        headers: Mapping[str, str] = {}
 
         async def json(self, content_type=None) -> Mapping[str, object]:
             return {
