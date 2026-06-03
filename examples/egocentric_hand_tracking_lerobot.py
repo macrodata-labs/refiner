@@ -24,16 +24,17 @@ DEFAULT_VIDEO = (
 
 
 def add_egovision_outputs(row: Any) -> Any:
-    from egovision.pipelines import rerun_result, to_mano_actions
+    from egovision.pipelines import to_joint_actions, to_mano_actions
 
     hand_tracking = dict(row["hand_tracking"])
     hand_tracking.pop("relative_actions", None)
+    mano_actions = to_mano_actions(hand_tracking)
+    joint_actions = to_joint_actions(hand_tracking)
     return row.update(
         {
-            "egovision_rerun_result_json": json.dumps(
-                _json_ready(rerun_result(hand_tracking))
-            ),
-            "wrist_mano_actions": to_mano_actions(hand_tracking),
+            "egovision_hand_tracking_metadata": json.dumps(_json_ready(hand_tracking)),
+            "egovision_joint_actions_metadata": json.dumps(_json_ready(joint_actions)),
+            "wrist_mano_actions": mano_actions,
         }
     )
 
@@ -126,7 +127,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Run ego-vision hand tracking, save wrist+MANO relative actions as "
-            "LeRobot actions, and store Rerun-ready result JSON at episode level."
+            "LeRobot actions, and store full ego-vision metadata at episode level."
         )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
