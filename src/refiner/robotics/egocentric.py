@@ -72,14 +72,21 @@ def track_hands(
                 "ego-vision hand tracking returned "
                 f"{len(results)} results for {len(rows)} input rows"
             )
-        for row, result, frame_count in zip(rows, results, frame_counts, strict=True):
+        for row, result, decoded_frame_count in zip(
+            rows, results, frame_counts, strict=True
+        ):
+            hand_tracking = result.to_dict()
+            hawor_frame_count = _hand_tracking_frame_count(hand_tracking)
+            if hawor_frame_count <= 0:
+                hawor_frame_count = decoded_frame_count
+            row.log_throughput("frames_processed", hawor_frame_count, unit="frames")
             row.log_throughput(
-                "egovision_frames_processed",
-                frame_count,
+                "egovision_hawor_frames_processed",
+                hawor_frame_count,
                 unit="frames",
             )
             row.log_throughput("egovision_episodes_processed", 1, unit="episodes")
-            yield row.update({output_key: result.to_dict()})
+            yield row.update({output_key: hand_tracking})
 
     return _track
 
@@ -121,6 +128,29 @@ def _count_frames(
         frame_counts[row_index] += 1
         row.log_throughput("egovision_frames_decoded", 1, unit="frames")
         yield frame
+
+
+def _hand_tracking_frame_count(hand_tracking: Any) -> int:
+    hands_world = (
+        hand_tracking.get("hands_world") if isinstance(hand_tracking, dict) else None
+    )
+    if isinstance(hands_world, dict):
+        return max(
+            (_hand_frame_count(hand) for hand in hands_world.values()), default=0
+        )
+    if isinstance(hands_world, list):
+        return max((_hand_frame_count(hand) for hand in hands_world), default=0)
+    return 0
+
+
+def _hand_frame_count(hand: Any) -> int:
+    if not isinstance(hand, dict):
+        return 0
+    for key in ("confidence", "joints_world", "T_world_wrist", "mano_pose"):
+        value = hand.get(key)
+        if value is not None:
+            return len(value)
+    return 0
 
 
 __all__ = ["track_hands"]

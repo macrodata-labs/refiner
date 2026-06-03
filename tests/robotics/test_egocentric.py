@@ -109,9 +109,11 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
         ("egovision_frames_decoded", 1, "frames"),
         ("egovision_frames_decoded", 1, "frames"),
         ("egovision_frames_decoded", 1, "frames"),
-        ("egovision_frames_processed", 2, "frames"),
+        ("frames_processed", 1, "frames"),
+        ("egovision_hawor_frames_processed", 1, "frames"),
         ("egovision_episodes_processed", 1, "episodes"),
-        ("egovision_frames_processed", 2, "frames"),
+        ("frames_processed", 1, "frames"),
+        ("egovision_hawor_frames_processed", 1, "frames"),
         ("egovision_episodes_processed", 1, "episodes"),
     ]
     assert out[0]["hand_tracking"]["episode"] == 0
