@@ -207,6 +207,8 @@ async def _sample_video_frames(
     video_key: str,
     max_frames: int,
 ) -> AsyncIterator[DecodedVideoFrame]:
+    # Deriving video length from frame rows is not reliable yet; use the episode
+    # length until https://github.com/macrodata-labs/refiner/issues/192 lands.
     target_indexes = set(_sample_indexes(row.length, max_frames=max_frames))
     yielded = 0
     async for frame in row.videos[video_key].iter_frames():
