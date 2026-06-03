@@ -33,7 +33,14 @@ def reward_score(
     success_column: str = "robometer_success",
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
-    """Return an async map function that scores LeRobot episodes with Robometer."""
+    """Return an async map function that scores LeRobot episodes with Robometer.
+
+    The mapper samples up to `max_frames` frames from each LeRobot episode,
+    sends them to a vLLM-hosted Robometer pooling model, and adds two list
+    columns to the row: per-frame task progress and per-frame success
+    probability. When `task` is omitted, the episode's LeRobot task metadata is
+    used as the Robometer instruction.
+    """
 
     if not model.strip():
         raise ValueError("model must be non-empty")
