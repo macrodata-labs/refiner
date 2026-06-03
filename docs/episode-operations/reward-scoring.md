@@ -43,7 +43,8 @@ Customize names with `output_column` and `success_column`.
 
 ## Task Text
 
-Task text can come from:
+Beyond the video to score, you must provide a task description. This can be a
+string or a function that takes the row and returns the task description:
 
 ```python
 mdr.robotics.reward_score(task="open the drawer")
