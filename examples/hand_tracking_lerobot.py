@@ -270,7 +270,7 @@ def main() -> None:
             num_workers=args.num_workers,
             mem_mb_per_worker=args.mem_mb_per_worker,
             gpu=mdr.GPU(count=1, type=args.gpu),
-            extra_dependencies=("ego-vision[models]==0.1.16",),
+            extra_dependencies=("ego-vision[models]==0.1.17",),
             secrets=mdr.Secrets.env(keys=("HF_TOKEN",)),
         )
     else:
