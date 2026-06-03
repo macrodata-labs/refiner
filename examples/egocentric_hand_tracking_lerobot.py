@@ -5,11 +5,11 @@ from __future__ import annotations
 #   --with "macrodata-refiner[hf,video,egocentric]" \
 #   --with "ego-vision[models]==0.1.15" \
 #   examples/egocentric_hand_tracking_lerobot.py \
-#   --output hf://buckets/macrodata/test_bucket/egocentric-hand-tracking \
 #   --cloud
 
 import argparse
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -17,10 +17,9 @@ import numpy as np
 import refiner as mdr
 
 
-DEFAULT_VIDEO = (
-    "https://prodtlkcsafiles.blob.core.windows.net/ego-centric/"
-    "5_Pouring%20liquids_Video%20Pw.mp4"
-)
+DEFAULT_INPUT_DATASET = "toloka/HomER"
+DEFAULT_SPLIT = "train"
+DEFAULT_OUTPUT_ROOT = "hf://buckets/macrodata/test_bucket/homer-egocentric-hands"
 DEFAULT_NAME = "egocentric-hand-tracking-lerobot"
 DEFAULT_FPS = 30.0
 DEFAULT_BATCH_SIZE = 2
@@ -82,26 +81,76 @@ def create_joint_actions(row: Any) -> Any:
 def _wrist_mano_action_array(
     actions: dict[str, Any],
 ) -> tuple[list[list[float]], list[list[bool]]]:
+    count = max(
+        len(actions.get(side, {}).get("delta_T_world_wrist", []))
+        for side in ("left", "right")
+    )
     side_arrays = []
     side_valid = []
     for side in ("left", "right"):
         side_action = actions.get(side, {})
-        delta_transform = np.asarray(side_action["delta_T_world_wrist"]).reshape(-1, 16)
-        delta_pose = np.asarray(side_action["delta_mano_pose"]).reshape(
-            len(delta_transform), -1
+        delta_transform = np.asarray(
+            side_action.get("delta_T_world_wrist", []),
+            dtype=np.float64,
         )
-        count = min(len(delta_transform), len(delta_pose))
-        side_arrays.append(
-            np.concatenate(
-                [delta_transform[:count], delta_pose[:count]],
+        delta_pose = np.asarray(
+            side_action.get("delta_mano_pose", []),
+            dtype=np.float64,
+        )
+        side_count = min(len(delta_transform), len(delta_pose), count)
+        side_array = np.full((count, 16 + MANO_POSE_WIDTH), np.nan)
+        if side_count:
+            side_array[:side_count] = np.concatenate(
+                [
+                    delta_transform[:side_count].reshape(side_count, 16),
+                    delta_pose[:side_count].reshape(side_count, MANO_POSE_WIDTH),
+                ],
                 axis=1,
             )
-        )
-        side_valid.append(np.asarray(side_action["valid"], dtype=bool)[:count])
-    count = min(len(values) for values in side_arrays)
+        side_arrays.append(side_array)
+        valid = np.zeros(count, dtype=bool)
+        valid[:side_count] = np.asarray(
+            side_action.get("valid", []),
+            dtype=bool,
+        )[:side_count]
+        side_valid.append(valid)
     return (
-        np.concatenate([values[:count] for values in side_arrays], axis=1).tolist(),
-        np.stack([values[:count] for values in side_valid], axis=1).tolist(),
+        np.concatenate(side_arrays, axis=1).tolist(),
+        np.stack(side_valid, axis=1).tolist(),
+    )
+
+
+def _joint_action_array(
+    actions: dict[str, Any],
+) -> tuple[list[list[float]], list[list[bool]]]:
+    count = max(
+        len(actions.get(side, {}).get("delta_joints_world", []))
+        for side in ("left", "right")
+    )
+    side_arrays = []
+    side_valid = []
+    for side in ("left", "right"):
+        side_action = actions.get(side, {})
+        delta_joints = np.asarray(
+            side_action.get("delta_joints_world", []),
+            dtype=np.float64,
+        )
+        side_count = min(len(delta_joints), count)
+        side_array = np.full((count, JOINT_STATE_WIDTH), np.nan)
+        if side_count:
+            side_array[:side_count] = delta_joints[:side_count].reshape(
+                side_count, JOINT_STATE_WIDTH
+            )
+        side_arrays.append(side_array)
+        valid = np.zeros(count, dtype=bool)
+        valid[:side_count] = np.asarray(
+            side_action.get("valid", []),
+            dtype=bool,
+        )[:side_count]
+        side_valid.append(valid)
+    return (
+        np.concatenate(side_arrays, axis=1).tolist(),
+        np.stack(side_valid, axis=1).tolist(),
     )
 
 
@@ -114,7 +163,7 @@ def _wrist_mano_state_arrays(
         hand = _world_hand(hand_tracking, side)
         transforms = np.asarray(hand.get("T_world_wrist", []), dtype=np.float64)
         mano_pose = np.asarray(hand.get("mano_pose", []), dtype=np.float64)
-        if mano_pose.ndim == 1:
+        if len(mano_pose) and mano_pose.ndim == 1:
             mano_pose = mano_pose.reshape(len(mano_pose), -1)
         frame_count = min(count, len(transforms), len(mano_pose))
         state = np.full((count, 16 + MANO_POSE_WIDTH), np.nan)
@@ -128,26 +177,6 @@ def _wrist_mano_state_arrays(
             )
         states[side] = state.tolist()
     return states
-
-
-def _joint_action_array(
-    actions: dict[str, Any],
-) -> tuple[list[list[float]], list[list[bool]]]:
-    side_arrays = []
-    side_valid = []
-    for side in ("left", "right"):
-        side_action = actions.get(side, {})
-        delta_joints = np.asarray(side_action["delta_joints_world"])
-        delta_joints = delta_joints.reshape(len(delta_joints), -1)
-        side_arrays.append(delta_joints)
-        side_valid.append(
-            np.asarray(side_action["valid"], dtype=bool)[: len(delta_joints)]
-        )
-    count = min(len(values) for values in side_arrays)
-    return (
-        np.concatenate([values[:count] for values in side_arrays], axis=1).tolist(),
-        np.stack([values[:count] for values in side_valid], axis=1).tolist(),
-    )
 
 
 def _joint_state_arrays(
@@ -184,12 +213,13 @@ def _world_hand(hand_tracking: dict[str, Any], side: str) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Run ego-vision hand tracking and save the selected hand-action "
-            "representation as LeRobot actions."
+            "Read HomER videos from Hugging Face, run ego-vision hand tracking, "
+            "and write the selected hand-action representation as LeRobot."
         )
     )
-    parser.add_argument("videos", nargs="?", default=DEFAULT_VIDEO)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--input-dataset", default=DEFAULT_INPUT_DATASET)
+    parser.add_argument("--split", default=DEFAULT_SPLIT)
+    parser.add_argument("--output", default=None)
     parser.add_argument("--name", default=DEFAULT_NAME)
     parser.add_argument("--fps", type=float, default=DEFAULT_FPS)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
@@ -202,14 +232,27 @@ def main() -> None:
     parser.add_argument("--gpu", default=DEFAULT_GPU)
     parser.add_argument("--cloud", action="store_true")
     args = parser.parse_args()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    output = args.output or f"{DEFAULT_OUTPUT_ROOT}/{stamp}"
 
     pipeline = (
-        mdr.read_videos(args.videos, file_path_column="video")
+        mdr.read_hf_dataset(
+            args.input_dataset,
+            split=args.split,
+            columns_to_read=(
+                "video_id",
+                "video_url",
+                "description",
+            ),
+            dtypes={"video_url": mdr.datatype.video_path()},
+        )
+        .map(lambda row: row.update(episode_id=f"homer-{row['video_id']}"))
         .to_robot_rows(
-            episode_id_key="video",
+            episode_id_key="episode_id",
+            task_key="description",
             fps=args.fps,
             robot_type="human_egocentric_hands",
-            video_keys={"video": "video"},
+            video_keys={"video": "video_url"},
         )
         .batch_map(
             mdr.robotics.track_hands(
@@ -221,7 +264,7 @@ def main() -> None:
         .map(create_mano_actions)
         # To train on world-space joint deltas instead, swap the line above for:
         # .map(create_joint_actions)
-        .write_lerobot(args.output)
+        .write_lerobot(output)
     )
 
     if args.cloud:
