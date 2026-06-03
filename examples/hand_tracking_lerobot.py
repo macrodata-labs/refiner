@@ -26,6 +26,7 @@ DEFAULT_BATCH_SIZE = 2
 DEFAULT_NUM_WORKERS = 1
 DEFAULT_MEM_MB_PER_WORKER = 32 * 1024
 DEFAULT_GPU = "h100"
+DEFAULT_MAX_EPISODES: int | None = None
 MANO_POSE_WIDTH = 96
 JOINT_STATE_WIDTH = 63
 
@@ -208,6 +209,19 @@ def _world_hand(hand_tracking: dict[str, Any], side: str) -> dict[str, Any]:
     return {}
 
 
+def first_n_rows(count: int) -> Any:
+    seen = 0
+
+    def _keep(_: Any) -> bool:
+        nonlocal seen
+        if seen >= count:
+            return False
+        seen += 1
+        return True
+
+    return _keep
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -221,6 +235,7 @@ def main() -> None:
     parser.add_argument("--name", default=DEFAULT_NAME)
     parser.add_argument("--fps", type=float, default=DEFAULT_FPS)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--max-episodes", type=int, default=DEFAULT_MAX_EPISODES)
     parser.add_argument("--num-workers", type=int, default=DEFAULT_NUM_WORKERS)
     parser.add_argument(
         "--mem-mb-per-worker",
@@ -233,18 +248,21 @@ def main() -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output = args.output or f"{DEFAULT_OUTPUT_ROOT}/{stamp}"
 
+    pipeline = mdr.read_hf_dataset(
+        args.input_dataset,
+        split=args.split,
+        columns_to_read=(
+            "video_id",
+            "video_url",
+            "description",
+        ),
+        dtypes={"video_url": mdr.datatype.video_path()},
+    )
+    if args.max_episodes is not None:
+        pipeline = pipeline.filter(first_n_rows(args.max_episodes))
+
     pipeline = (
-        mdr.read_hf_dataset(
-            args.input_dataset,
-            split=args.split,
-            columns_to_read=(
-                "video_id",
-                "video_url",
-                "description",
-            ),
-            dtypes={"video_url": mdr.datatype.video_path()},
-        )
-        .to_robot_rows(
+        pipeline.to_robot_rows(
             episode_id_key="video_id",
             task_key="description",
             fps=args.fps,
