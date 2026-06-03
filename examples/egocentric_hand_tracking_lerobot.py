@@ -10,14 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pyarrow.parquet as pq
 
 import refiner as mdr
-from refiner.io import DataFolder
 
 
 DEFAULT_VIDEO = (
@@ -41,30 +38,17 @@ def add_egovision_outputs(row: Any) -> Any:
     return row.update(
         {
             "egovision_rerun_result_json": json.dumps(outputs["rerun_result"]),
-            "world_joint_actions": outputs["world_joint_actions"],
             "wrist_mano_actions": outputs["wrist_mano_actions"],
         }
     )
 
 
-def attach_actions_and_rerun_features(row: Any) -> Any:
-    frame_count = _frame_count(row)
-    wrist_mano, wrist_mano_valid = _wrist_mano_action_array(
-        row["wrist_mano_actions"],
-        frame_count=frame_count,
-    )
-    world_joints, world_joints_valid = _world_joint_action_array(
-        row["world_joint_actions"],
-        frame_count=frame_count,
-    )
-
+def attach_wrist_mano_actions(row: Any) -> Any:
+    actions, valid = _wrist_mano_action_array(row["wrist_mano_actions"])
     return (
-        row.with_actions(wrist_mano)
-        .with_observation("egovision.wrist_mano_delta_action", wrist_mano)
-        .with_observation("egovision.wrist_mano_delta_valid", wrist_mano_valid)
-        .with_observation("egovision.world_joint_delta_action", world_joints)
-        .with_observation("egovision.world_joint_delta_valid", world_joints_valid)
-        .drop("hand_tracking", "world_joint_actions", "wrist_mano_actions")
+        row.with_actions(actions)
+        .with_observation("egovision.wrist_mano_delta_valid", valid)
+        .drop("hand_tracking", "wrist_mano_actions")
     )
 
 
@@ -86,7 +70,7 @@ def run(args: argparse.Namespace) -> None:
             batch_size=args.batch_size,
         )
         .map(add_egovision_outputs)
-        .map(attach_actions_and_rerun_features)
+        .map(attach_wrist_mano_actions)
         .write_lerobot(args.output)
     )
 
@@ -106,136 +90,29 @@ def run(args: argparse.Namespace) -> None:
         )
 
 
-def materialize_rerun_json(args: argparse.Namespace) -> None:
-    folder = DataFolder.resolve(args.lerobot)
-    files = [path for path in folder.find("meta/episodes") if path.endswith(".parquet")]
-    if not files:
-        raise ValueError(f"no LeRobot episode parquet files found in {args.lerobot}")
-
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    written = 0
-    for file_index, rel_path in enumerate(sorted(files)):
-        with folder.open(rel_path, mode="rb") as handle:
-            table = pq.read_table(handle)
-        if "egovision_rerun_result_json" not in table.column_names:
-            raise ValueError(
-                f"{rel_path} is missing egovision_rerun_result_json; "
-                "run this example before materializing Rerun JSON"
-            )
-        episode_ids = (
-            table.column("episode_id").to_pylist()
-            if "episode_id" in table.column_names
-            else [None] * table.num_rows
-        )
-        payloads = table.column("egovision_rerun_result_json").to_pylist()
-        for row_index, (episode_id, payload) in enumerate(
-            zip(episode_ids, payloads, strict=True)
-        ):
-            name = _safe_name(str(episode_id or f"episode-{file_index}-{row_index}"))
-            path = output_dir / f"{name}.json"
-            path.write_text(str(payload), encoding="utf-8")
-            written += 1
-    print(f"wrote {written} Rerun result JSON file(s) to {output_dir}")
-
-
-def _frame_count(row: Any) -> int:
-    result = json.loads(row["egovision_rerun_result_json"])
-    camera = result.get("camera_trajectory")
-    if isinstance(camera, list) and camera:
-        return len(camera)
-    return int(row.num_frames)
-
-
 def _wrist_mano_action_array(
     actions: dict[str, Any],
-    *,
-    frame_count: int,
 ) -> tuple[list[list[float]], list[list[bool]]]:
-    pose_width = max(
-        _pose_width(
-            np.asarray(
-                actions.get(side, {}).get("delta_mano_pose", []),
-                dtype=np.float64,
+    side_arrays = []
+    side_valid = []
+    for side in ("left", "right"):
+        side_action = actions.get(side, {})
+        delta_transform = np.asarray(side_action["delta_T_world_wrist"]).reshape(-1, 16)
+        delta_pose = np.asarray(side_action["delta_mano_pose"]).reshape(
+            len(delta_transform), -1
+        )
+        count = min(len(delta_transform), len(delta_pose))
+        side_arrays.append(
+            np.concatenate(
+                [delta_transform[:count], delta_pose[:count]],
+                axis=1,
             )
         )
-        for side in ("left", "right")
-    )
-    side_arrays = []
-    side_valid = []
-    for side in ("left", "right"):
-        side_action = actions.get(side, {})
-        delta_transform = np.asarray(
-            side_action.get("delta_T_world_wrist", []),
-            dtype=np.float64,
-        ).reshape(-1, 16)
-        delta_pose = np.asarray(
-            side_action.get("delta_mano_pose", []),
-            dtype=np.float64,
-        )
-        if delta_pose.ndim == 1:
-            delta_pose = delta_pose.reshape(-1, 1)
-        valid = np.asarray(side_action.get("valid", []), dtype=bool).reshape(-1, 1)
-        count = min(len(delta_transform), len(delta_pose))
-        side_array = np.zeros((count, 16 + pose_width), dtype=np.float64)
-        if count:
-            side_array[:, :16] = delta_transform[:count]
-            side_array[:, 16 : 16 + min(pose_width, delta_pose.shape[1])] = delta_pose[
-                :count, :pose_width
-            ]
-        side_arrays.append(_pad_frames(side_array, frame_count=frame_count))
-        side_valid.append(_pad_frames(valid, frame_count=frame_count, dtype=bool))
+        side_valid.append(np.asarray(side_action["valid"], dtype=bool)[:count])
+    count = min(len(values) for values in side_arrays)
     return (
-        np.concatenate(side_arrays, axis=1).tolist(),
-        np.concatenate(side_valid, axis=1).tolist(),
-    )
-
-
-def _world_joint_action_array(
-    actions: dict[str, Any],
-    *,
-    frame_count: int,
-) -> tuple[list[list[float]], list[list[bool]]]:
-    side_arrays = []
-    side_valid = []
-    for side in ("left", "right"):
-        side_action = actions.get(side, {})
-        delta_joints = np.asarray(
-            side_action.get("delta_joints_world", []),
-            dtype=np.float64,
-        ).reshape(-1, 63)
-        valid = np.asarray(side_action.get("valid", []), dtype=bool).reshape(-1, 1)
-        side_arrays.append(_pad_frames(delta_joints, frame_count=frame_count))
-        side_valid.append(_pad_frames(valid, frame_count=frame_count, dtype=bool))
-    return (
-        np.concatenate(side_arrays, axis=1).tolist(),
-        np.concatenate(side_valid, axis=1).tolist(),
-    )
-
-
-def _pad_frames(
-    values: np.ndarray,
-    *,
-    frame_count: int,
-    dtype: type = float,
-) -> np.ndarray:
-    width = int(values.shape[1]) if values.ndim == 2 else 1
-    output = np.zeros((frame_count, width), dtype=dtype)
-    if len(values):
-        count = min(frame_count, len(values))
-        output[:count] = values[:count]
-    return output
-
-
-def _pose_width(values: np.ndarray) -> int:
-    if values.ndim == 1:
-        return 1 if len(values) else 0
-    return int(values.shape[1]) if values.ndim == 2 else 0
-
-
-def _safe_name(value: str) -> str:
-    return "".join(
-        char if char.isalnum() or char in {"-", "_"} else "_" for char in value
+        np.concatenate([values[:count] for values in side_arrays], axis=1).tolist(),
+        np.stack([values[:count] for values in side_valid], axis=1).tolist(),
     )
 
 
@@ -243,8 +120,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Run ego-vision hand tracking, save wrist+MANO relative actions as "
-            "LeRobot actions, keep world-joint relative actions as an alternate "
-            "observation, and store Rerun-ready result JSON at episode level."
+            "LeRobot actions, and store Rerun-ready result JSON at episode level."
         )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -260,11 +136,6 @@ def main() -> None:
     run_parser.add_argument("--gpu", default="h100")
     run_parser.add_argument("--cloud", action="store_true")
     run_parser.set_defaults(func=run)
-
-    rerun_parser = subparsers.add_parser("materialize-rerun-json")
-    rerun_parser.add_argument("lerobot")
-    rerun_parser.add_argument("--output-dir", default="artifacts/egovision-rerun")
-    rerun_parser.set_defaults(func=materialize_rerun_json)
 
     args = parser.parse_args()
     args.func(args)
