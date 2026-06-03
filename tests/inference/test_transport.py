@@ -31,14 +31,17 @@ class _FakeHTTPResponse:
     ) -> None:
         self.status_code = status_code
         self.headers = dict(headers or {})
-        self.text = text if text is not None else ""
+        self._text = text if text is not None else ""
         self.reason_phrase = reason_phrase
         self._json = json
 
-    def json(self) -> object:
+    async def json(self, content_type=None) -> object:
         if self._json is None:
             raise ValueError("no JSON")
         return self._json
+
+    async def text(self) -> str:
+        return self._text
 
 
 class _FakeAiohttpSession:
@@ -95,7 +98,7 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
                     {
@@ -157,7 +160,7 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
                     {
@@ -216,7 +219,7 @@ def test_openai_endpoint_applies_configured_connection_limits(monkeypatch) -> No
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
                     {
@@ -266,7 +269,7 @@ def test_inference_map_exposes_client_close_hook(monkeypatch) -> None:
     seen: dict[str, int] = {"closed": 0}
 
     class _FakeResponse:
-        def json(self) -> Mapping[str, object]:
+        async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
                     {
@@ -404,7 +407,7 @@ def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
                     {
@@ -463,7 +466,7 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
                     {
@@ -522,7 +525,7 @@ def test_openai_endpoint_retries_on_remote_protocol_error(monkeypatch) -> None:
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
                     {
@@ -582,13 +585,15 @@ def test_openai_endpoint_retries_on_response_body_read_error(monkeypatch) -> Non
     class _BrokenBodyResponse:
         status_code = 200
         headers: Mapping[str, str] = {}
-        text = ""
 
-        def json(self) -> object:
+        async def json(self, content_type=None) -> object:
             raise aiohttp.ClientPayloadError("response payload was not completed")
 
+        async def text(self) -> str:
+            return ""
+
     class _FakeResponse:
-        def json(self) -> Mapping[str, object]:
+        async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
                     {
@@ -897,5 +902,5 @@ def test_inference_api_errors_store_bounded_payloads(monkeypatch) -> None:
     assert large_response not in str(err.value)
     assert err.value.response_body is not None
     assert "<truncated " in err.value.response_body
-    assert len(err.value.response_body) < len(response.text)
+    assert len(err.value.response_body) < len(response._text)
     assert "<truncated " in err.value.data["raw"]

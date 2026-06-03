@@ -179,7 +179,7 @@ async def post_json_to_api(
 
 
 async def _handle_json_response(
-    response: Any,
+    response: aiohttp.ClientResponse,
     *,
     url: str,
     request_body: Mapping[str, Any],
@@ -345,7 +345,7 @@ def _is_reasonable_retry_delay(
     )
 
 
-def _response_headers(response: Any) -> dict[str, str]:
+def _response_headers(response: aiohttp.ClientResponse) -> dict[str, str]:
     headers = getattr(response, "headers", {})
     return {str(key).lower(): str(value) for key, value in dict(headers).items()}
 
@@ -354,29 +354,19 @@ def _request_url(client: AiohttpAPIClient, endpoint_path: str) -> str:
     return _join_endpoint_url(client.base_url, endpoint_path)
 
 
-async def _response_json_or_none(response: Any) -> Any | None:
+async def _response_json_or_none(response: aiohttp.ClientResponse) -> Any | None:
     try:
         return await _response_json(response)
     except (ValueError, aiohttp.ContentTypeError):
         return None
 
 
-async def _response_json(response: Any) -> Any:
-    if isinstance(response, aiohttp.ClientResponse):
-        return await response.json(content_type=None)
-    value = response.json()
-    if hasattr(value, "__await__"):
-        return await value
-    return value
+async def _response_json(response: aiohttp.ClientResponse) -> Any:
+    return await response.json(content_type=None)
 
 
-async def _response_text(response: Any) -> str:
-    text = getattr(response, "text", "")
-    if callable(text):
-        text = text()
-    if hasattr(text, "__await__"):
-        text = await text
-    return text if isinstance(text, str) else str(text)
+async def _response_text(response: aiohttp.ClientResponse) -> str:
+    return await response.text()
 
 
 def _join_endpoint_url(base_url: str, endpoint_path: str) -> str:
