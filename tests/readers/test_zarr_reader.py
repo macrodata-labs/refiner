@@ -34,6 +34,9 @@ class _FinalizedWorkersRuntime:
 
 
 class _EmptyVideoSource:
+    async def get_frame_count(self):
+        return 0
+
     def clipped(self, **_kwargs):
         return self
 

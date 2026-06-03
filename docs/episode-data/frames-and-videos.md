@@ -53,10 +53,25 @@ sequences. They share the same core operations:
 
 | Operation | Purpose |
 | --- | --- |
+| `get_frame_count()` | Return the exact frame count when it is known or reported by the encoded container. |
 | `clipped(...)` | Create a time-bounded view. |
 | `iter_frames()` | Decode video frames lazily. |
 | `iter_numpy_frames()` | Decode RGB arrays lazily. |
 | `write_to(...)` | Let a writer copy/remux/transcode media. |
+
+## Video Frame Counts
+
+```python
+async def add_frame_count(row):
+    video = row.videos["observation.images.top"]
+    return row.update(video_frame_count=await video.get_frame_count())
+```
+
+`get_frame_count()` is explicit because path-backed and bytes-backed videos may
+need to open the encoded container. In-memory frame arrays return their exact
+length. Frame sequences return their provided count, or count the repeatable
+sequence when no count was provided. Encoded videos use container metadata and
+raise an error when the container does not report an exact frame count.
 
 ## Clip A Video View
 
