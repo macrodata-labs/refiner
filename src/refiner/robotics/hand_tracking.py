@@ -5,33 +5,12 @@ import time
 from collections.abc import Iterable
 from typing import Any
 
-import numpy as np
-
 from refiner.execution.asyncio.runtime import submit
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.planning import describe_builtin
 from refiner.pipeline.steps import BatchFn
 from refiner.robotics.row import RoboticsRow
 from refiner.worker.context import logger
-
-HAND_SIDES: tuple[str, ...] = ("left", "right")
-CAMERA_HAND_FIELDS: dict[str, tuple[int, ...]] = {
-    "joints_camera": (21, 3),
-    "T_camera_wrist": (4, 4),
-    "mano_pose": (96,),
-    "mano_shape": (10,),
-    "mano_translation": (3,),
-    "confidence": (),
-    "infilled": (),
-}
-WORLD_HAND_FIELDS: dict[str, tuple[int, ...]] = {
-    "joints_world": (21, 3),
-    "T_world_wrist": (4, 4),
-    "mano_pose": (96,),
-    "mano_shape": (10,),
-    "confidence": (),
-    "infilled": (),
-}
 
 
 def track_hands(
@@ -139,11 +118,10 @@ def track_hands(
         for row, result, decoded_frame_count in zip(
             rows, results, frame_counts, strict=True
         ):
-            raw_hand_tracking = result.to_dict()
-            hawor_frame_count = _hand_tracking_frame_count(raw_hand_tracking)
+            hand_tracking = result.to_dict()
+            hawor_frame_count = _hand_tracking_frame_count(hand_tracking)
             if hawor_frame_count <= 0:
                 hawor_frame_count = decoded_frame_count
-            hand_tracking = _normalize_hand_tracking_payload(raw_hand_tracking)
             row.log_throughput("frames_processed", hawor_frame_count, unit="frames")
             row.log_throughput("egovision_episodes_processed", 1, unit="episodes")
             yield row.update({output_key: hand_tracking})
@@ -188,128 +166,6 @@ def _count_frames(
         frame_counts[row_index] += 1
         row.log_throughput("egovision_frames_decoded", 1, unit="frames")
         yield frame
-
-
-def _normalize_hand_tracking_payload(hand_tracking: dict[str, Any]) -> dict[str, Any]:
-    frame_count = _tracking_frame_count(hand_tracking)
-    payload = dict(hand_tracking)
-    payload["camera_trajectory"] = _array_or_empty(
-        payload.get("camera_trajectory"), frame_count, (4, 4)
-    )
-    payload["intrinsics"] = _array_or_empty(
-        payload.get("intrinsics"), frame_count, (3, 3)
-    )
-    payload["hands_camera"] = _normalize_hands(
-        payload.get("hands_camera"),
-        frame_count,
-        CAMERA_HAND_FIELDS,
-    )
-    payload["hands_world"] = _normalize_hands(
-        payload.get("hands_world"),
-        frame_count,
-        WORLD_HAND_FIELDS,
-    )
-    return payload
-
-
-def _tracking_frame_count(hand_tracking: dict[str, Any]) -> int:
-    for key in ("camera_trajectory", "intrinsics"):
-        value = hand_tracking.get(key)
-        if value is not None:
-            return len(value)
-    return max(
-        _hand_tracking_frame_count(hand_tracking),
-        _hand_group_frame_count(hand_tracking.get("hands_camera")),
-    )
-
-
-def _hand_group_frame_count(hands: Any) -> int:
-    if isinstance(hands, dict):
-        return max((_hand_frame_count(hand) for hand in hands.values()), default=0)
-    if isinstance(hands, list):
-        return max((_hand_frame_count(hand) for hand in hands), default=0)
-    return 0
-
-
-def _normalize_hands(
-    hands: Any,
-    frame_count: int,
-    field_shapes: dict[str, tuple[int, ...]],
-) -> dict[str, dict[str, np.ndarray]]:
-    hands_by_side = _hands_by_side(hands)
-    return {
-        side: {
-            field: _hand_field_array(
-                hands_by_side.get(side, {}).get(field),
-                frame_count,
-                shape,
-                field=field,
-            )
-            for field, shape in field_shapes.items()
-        }
-        for side in HAND_SIDES
-    }
-
-
-def _hands_by_side(hands: Any) -> dict[str, dict[str, Any]]:
-    if isinstance(hands, dict):
-        return {side: hand for side, hand in hands.items() if isinstance(hand, dict)}
-    if isinstance(hands, list):
-        return {
-            hand["handedness"]: hand
-            for hand in hands
-            if isinstance(hand, dict) and hand.get("handedness") in HAND_SIDES
-        }
-    return {}
-
-
-def _hand_field_array(
-    value: Any,
-    frame_count: int,
-    frame_shape: tuple[int, ...],
-    *,
-    field: str,
-) -> np.ndarray:
-    if value is None:
-        return _empty_hand_field(frame_count, frame_shape, field=field)
-    array = np.asarray(value)
-    if len(array) == frame_count:
-        return array
-    filled = _empty_hand_field(frame_count, frame_shape, field=field)
-    count = min(frame_count, len(array))
-    if count:
-        filled[:count] = array[:count]
-    return filled
-
-
-def _empty_hand_field(
-    frame_count: int,
-    frame_shape: tuple[int, ...],
-    *,
-    field: str,
-) -> np.ndarray:
-    if field == "infilled":
-        return np.zeros((frame_count, *frame_shape), dtype=bool)
-    if field == "confidence":
-        return np.zeros((frame_count, *frame_shape), dtype=np.float64)
-    return np.full((frame_count, *frame_shape), np.nan, dtype=np.float64)
-
-
-def _array_or_empty(
-    value: Any,
-    frame_count: int,
-    frame_shape: tuple[int, ...],
-) -> np.ndarray:
-    if value is None:
-        return np.full((frame_count, *frame_shape), np.nan, dtype=np.float64)
-    array = np.asarray(value)
-    if len(array) == frame_count:
-        return array
-    filled = np.full((frame_count, *frame_shape), np.nan, dtype=np.float64)
-    count = min(frame_count, len(array))
-    if count:
-        filled[:count] = array[:count]
-    return filled
 
 
 def _hand_tracking_frame_count(hand_tracking: Any) -> int:
