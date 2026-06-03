@@ -63,8 +63,7 @@ def track_hands(
             ``vggt_seq_length`` and ``hawor_seq_length``.
 
     Metrics:
-        Logs ``egovision_frames_decoded`` while frames are read,
-        ``frames_processed`` from the resulting hand-track frame count, and
+        Logs ``frames_processed`` as HaWoR model batches finish and
         ``egovision_episodes_processed`` once an episode has been annotated.
     """
 
@@ -93,36 +92,30 @@ def track_hands(
             )
 
         episodes = []
-        frame_counts = [0] * len(rows)
-        for row_index, row in enumerate(rows):
+        for row in rows:
             if not isinstance(row, RoboticsRow) or video_key not in row.videos:
                 raise TypeError(
                     "track_hands requires RoboticsRow inputs with video sources"
                 )
             episodes.append(
-                episode_input(
-                    frames=_count_frames(
-                        _iter_video_frames(row.videos[video_key]),
-                        row=row,
-                        frame_counts=frame_counts,
-                        row_index=row_index,
-                    )
-                )
+                episode_input(frames=_iter_video_frames(row.videos[video_key]))
             )
-        results = pipeline.predict_episodes(episodes)
+
+        def _log_hawor_batch(frame_count: int) -> None:
+            if rows:
+                rows[0].log_throughput("frames_processed", frame_count, unit="frames")
+
+        results = pipeline.predict_episodes(
+            episodes,
+            on_hawor_batch_processed=_log_hawor_batch,
+        )
         if len(results) != len(rows):
             raise ValueError(
                 "ego-vision hand tracking returned "
                 f"{len(results)} results for {len(rows)} input rows"
             )
-        for row, result, decoded_frame_count in zip(
-            rows, results, frame_counts, strict=True
-        ):
+        for row, result in zip(rows, results, strict=True):
             hand_tracking = result.to_dict()
-            hawor_frame_count = _hand_tracking_frame_count(hand_tracking)
-            if hawor_frame_count <= 0:
-                hawor_frame_count = decoded_frame_count
-            row.log_throughput("frames_processed", hawor_frame_count, unit="frames")
             row.log_throughput("egovision_episodes_processed", 1, unit="episodes")
             yield row.update({output_key: hand_tracking})
 
@@ -153,42 +146,6 @@ def _iter_video_frames(video: Any) -> Iterable[Any]:
         except StopAsyncIteration:
             return
         yield decoded.frame
-
-
-def _count_frames(
-    frames: Iterable[Any],
-    *,
-    row: Row,
-    frame_counts: list[int],
-    row_index: int,
-) -> Iterable[Any]:
-    for frame in frames:
-        frame_counts[row_index] += 1
-        row.log_throughput("egovision_frames_decoded", 1, unit="frames")
-        yield frame
-
-
-def _hand_tracking_frame_count(hand_tracking: Any) -> int:
-    hands_world = (
-        hand_tracking.get("hands_world") if isinstance(hand_tracking, dict) else None
-    )
-    if isinstance(hands_world, dict):
-        return max(
-            (_hand_frame_count(hand) for hand in hands_world.values()), default=0
-        )
-    if isinstance(hands_world, list):
-        return max((_hand_frame_count(hand) for hand in hands_world), default=0)
-    return 0
-
-
-def _hand_frame_count(hand: Any) -> int:
-    if not isinstance(hand, dict):
-        return 0
-    for key in ("confidence", "joints_world", "T_world_wrist", "mano_pose"):
-        value = hand.get(key)
-        if value is not None:
-            return len(value)
-    return 0
 
 
 __all__ = ["track_hands"]
