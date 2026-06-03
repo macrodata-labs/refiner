@@ -189,7 +189,10 @@ async def _handle_json_response(
     status_code = response.status
     if status_code >= 400:
         response_body = await response.text()
-        data = await _response_json_or_none(response)
+        try:
+            data = await response.json(content_type=None)
+        except (ValueError, aiohttp.ContentTypeError):
+            data = None
         message = _error_message(
             operation=operation,
             status_code=status_code,
@@ -348,13 +351,6 @@ def _response_headers(response: aiohttp.ClientResponse) -> dict[str, str]:
 
 def _request_url(client: AiohttpAPIClient, endpoint_path: str) -> str:
     return f"{client.base_url.rstrip('/')}/{endpoint_path.lstrip('/')}"
-
-
-async def _response_json_or_none(response: aiohttp.ClientResponse) -> Any | None:
-    try:
-        return await response.json(content_type=None)
-    except (ValueError, aiohttp.ContentTypeError):
-        return None
 
 
 def _error_message(
