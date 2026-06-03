@@ -90,7 +90,6 @@ The operation logs:
 | --- | --- |
 | `egovision_frames_decoded` | Frames decoded and handed to ego-vision. |
 | `frames_processed` | Hand-tracking frames emitted by ego-vision. |
-| `egovision_episodes_processed` | Episodes completed by hand tracking. |
 
 ## Action Conversion
 
