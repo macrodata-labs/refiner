@@ -89,7 +89,7 @@ def test_inference_generate_text_converts_messages_for_openai_responses(
                     ],
                 }
             ],
-            providerOptions={
+            provider_options={
                 "openai": {
                     "reasoningEffort": "low",
                     "textVerbosity": "low",
@@ -154,7 +154,7 @@ def test_inference_generate_text_maps_openai_responses_options_to_wire_names(
         del row
         await generate_text(
             messages=[{"role": "user", "content": "hello"}],
-            providerOptions={
+            provider_options={
                 "openai": {
                     "logprobs": True,
                     "maxToolCalls": 4,

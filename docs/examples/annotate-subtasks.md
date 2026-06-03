@@ -5,9 +5,10 @@ description: "Add VLM-generated temporal subtask annotations to episodes"
 
 # Annotate Subtasks
 
-This example reads a LeRobot dataset, runs temporal subtask annotation on the
+This example reads a LeRobot dataset, runs temporal subtask annotation on each
 episode video, writes the predicted segments into a new `predicted_subtasks`
-column, and saves the result back in LeRobot format.
+column, and saves the result back in LeRobot format. `subtask_annotation` also
+works on generic `RoboticsRow` inputs produced with `to_robot_rows(...)`.
 
 ```python
 import refiner as mdr

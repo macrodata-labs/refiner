@@ -143,7 +143,7 @@ def test_generate_text_rejects_typed_features_for_raw_payload() -> None:
         del row
         await generate_text(
             raw_payload={"prompt": "Hello"},
-            providerOptions={"openai": {"serviceTier": "flex"}},
+            provider_options={"openai": {"serviceTier": "flex"}},
         )
         return {}
 
@@ -156,6 +156,6 @@ def test_generate_text_rejects_typed_features_for_raw_payload() -> None:
     )
 
     with pytest.raises(
-        ValueError, match="providerOptions are not supported with raw_payload"
+        ValueError, match="provider_options are not supported with raw_payload"
     ):
         asyncio.run(cast(Any, infer(DictRow({}))))

@@ -293,7 +293,7 @@ def test_inference_generate_text_can_disable_google_structured_outputs(
         response = await generate_text(
             messages=[{"role": "user", "content": "caption"}],
             schema=_Caption,
-            providerOptions={"google": {"structuredOutputs": False}},
+            provider_options={"google": {"structuredOutputs": False}},
         )
         assert isinstance(response.object, _Caption)
         return {"title": response.object.title}

@@ -180,7 +180,7 @@ def test_inference_generate_text_converts_google_assistant_multimodal_history(
                             "type": "file",
                             "mediaType": "image",
                             "data": row["image"],
-                            "providerOptions": {
+                            "provider_options": {
                                 "google": {"thoughtSignature": "image-sig"}
                             },
                         },
@@ -387,7 +387,7 @@ def test_google_vertex_payload_reads_vertex_thought_signatures() -> None:
                     {
                         "type": "reasoning",
                         "text": "Previous thinking.",
-                        "providerOptions": {
+                        "provider_options": {
                             "googleVertex": {"thoughtSignature": "vertex-sig"}
                         },
                     }
@@ -440,7 +440,7 @@ def test_inference_generate_text_applies_google_provider_options(monkeypatch) ->
                     messages=[
                         {"role": "user", "content": "Generate an image caption."}
                     ],
-                    providerOptions={
+                    provider_options={
                         "google": {
                             "thinkingConfig": {"thinkingBudget": 128},
                             "responseModalities": ["TEXT"],

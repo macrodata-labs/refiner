@@ -9,12 +9,16 @@ from refiner.inference.providers import (
     GoogleEndpointProvider,
     OpenAIEndpointProvider,
     OpenAIResponsesProvider,
-    VLLMProvider,
 )
 from refiner.inference.providers import anthropic as anthropic_provider
 from refiner.inference.providers import google as google_provider
 from refiner.inference.providers import openai as openai_provider
-from refiner.inference.types import InferenceWarning, Message, ModelCapabilities
+from refiner.inference.types import (
+    InferenceProvider,
+    InferenceWarning,
+    Message,
+    ModelCapabilities,
+)
 
 _MEDIA_WARNING_BYTES = 20 * 1024 * 1024
 _BASE64_CHARS = frozenset(
@@ -29,15 +33,7 @@ _TOOL_SETTINGS = {
 }
 
 
-def model_capabilities(
-    provider: (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    ),
-) -> ModelCapabilities:
+def model_capabilities(provider: InferenceProvider) -> ModelCapabilities:
     model = provider.model.lower()
     if isinstance(provider, GoogleEndpointProvider):
         return google_provider.model_capabilities(model)
@@ -52,13 +48,7 @@ def model_capabilities(
 
 def capability_warnings(
     *,
-    provider: (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    ),
+    provider: InferenceProvider,
     messages: Sequence[Message],
     params: Mapping[str, Any],
     provider_options: Mapping[str, Mapping[str, Any]] | None,
@@ -137,13 +127,7 @@ def capability_warnings(
 
 def _model_setting_warnings(
     *,
-    provider: (
-        AnthropicEndpointProvider
-        | GoogleEndpointProvider
-        | OpenAIEndpointProvider
-        | OpenAIResponsesProvider
-        | VLLMProvider
-    ),
+    provider: InferenceProvider,
     params: Mapping[str, Any],
     provider_options: Mapping[str, Mapping[str, Any]] | None,
 ) -> list[InferenceWarning]:

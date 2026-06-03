@@ -21,7 +21,7 @@ def provider_option_warnings(
             warnings.append(
                 {
                     "type": "unsupported-provider-option",
-                    "setting": f"providerOptions.{namespace}",
+                    "setting": f"provider_options.{namespace}",
                     "message": (
                         f"{namespace!r} provider options are not used by "
                         f"{provider_name}."
@@ -36,7 +36,7 @@ def provider_option_warnings(
                     warnings.append(
                         {
                             "type": "unsupported-setting",
-                            "setting": f"providerOptions.{namespace}.{option}",
+                            "setting": f"provider_options.{namespace}.{option}",
                             "message": (
                                 f"{option!r} is not currently mapped by "
                                 f"{provider_name}."
