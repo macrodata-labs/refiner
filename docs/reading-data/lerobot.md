@@ -55,7 +55,7 @@ For a full recipe, see [Merge LeRobot Datasets](../examples/merge-lerobot-datase
 `read_lerobot` validates that each episode's declared frame count matches the
 frames loaded from its frame parquet. Mismatches raise by default. To drop those
 episodes instead, pass `skip_malformed_rows=True`; the reader logs the first
-skipped row and records `malformed_lerobot_rows_skipped`.
+skipped episode and records `malformed_lerobot_episodes_skipped`.
 
 ## Inspecting Rows
 

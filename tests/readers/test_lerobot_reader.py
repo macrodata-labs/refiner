@@ -266,7 +266,7 @@ def test_lerobot_reader_can_skip_malformed_rows(tmp_path: Path, monkeypatch) -> 
     assert len(warnings) == 1
     assert "episode 1 expected 2 frames" in warnings[0]
     assert [(label, value, unit) for label, value, _, unit in metrics] == [
-        ("malformed_lerobot_rows_skipped", 1, "rows")
+        ("malformed_lerobot_episodes_skipped", 1, "episodes")
     ]
 
 

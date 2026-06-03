@@ -153,10 +153,10 @@ class LeRobotEpisodeReader(ParquetReader):
                         logger.warning("Skipping malformed LeRobot row: {}", error)
                         self._warned_malformed_row = True
                     log_throughput(
-                        "malformed_lerobot_rows_skipped",
+                        "malformed_lerobot_episodes_skipped",
                         skipped,
                         shard_id=shard.id,
-                        unit="rows",
+                        unit="episodes",
                     )
                     batch = batch.with_table(
                         batch.table.filter(pa.array(keep, type=pa.bool_()))
