@@ -23,14 +23,6 @@ DEFAULT_VIDEO = (
 )
 
 
-def egovision_config(egovision: Any) -> Any:
-    return egovision.HandTrackingConfig(
-        hand_reconstruction=egovision.HaworReconstructionConfig(),
-        camera_pose_estimator=egovision.VggtOmegaConfig(),
-        device="cuda",
-    )
-
-
 def add_egovision_outputs(row: Any) -> Any:
     from egovision.pipelines.hand_tracking_outputs import hand_tracking_outputs
 
@@ -65,7 +57,6 @@ def run(args: argparse.Namespace) -> None:
             mdr.robotics.track_hands(
                 video_key="video",
                 output_key="hand_tracking",
-                config_factory=egovision_config,
             ),
             batch_size=args.batch_size,
         )
