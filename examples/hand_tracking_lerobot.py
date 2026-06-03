@@ -7,9 +7,10 @@ from __future__ import annotations
 #   --cloud
 
 import argparse
+import importlib
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -30,11 +31,10 @@ JOINT_STATE_WIDTH = 63
 
 
 def create_mano_actions(row: Any) -> Any:
-    from egovision.pipelines import to_mano_actions
-
     hand_tracking = dict(row["hand_tracking"])
     hand_tracking.pop("relative_actions", None)
-    mano_actions = to_mano_actions(hand_tracking)
+    egovision_pipelines = cast(Any, importlib.import_module("egovision.pipelines"))
+    mano_actions = egovision_pipelines.to_mano_actions(hand_tracking)
     actions, valid = _wrist_mano_action_array(mano_actions)
     states = _wrist_mano_state_arrays(hand_tracking, len(actions))
     return (
@@ -54,11 +54,10 @@ def create_mano_actions(row: Any) -> Any:
 
 
 def create_joint_actions(row: Any) -> Any:
-    from egovision.pipelines import to_joint_actions
-
     hand_tracking = dict(row["hand_tracking"])
     hand_tracking.pop("relative_actions", None)
-    joint_actions = to_joint_actions(hand_tracking)
+    egovision_pipelines = cast(Any, importlib.import_module("egovision.pipelines"))
+    joint_actions = egovision_pipelines.to_joint_actions(hand_tracking)
     actions, valid = _joint_action_array(joint_actions)
     states = _joint_state_arrays(hand_tracking, len(actions))
     return (
