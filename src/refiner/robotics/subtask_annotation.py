@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import math
 import re
 from collections.abc import Callable, Mapping
@@ -16,6 +17,8 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.robotics.lerobot_format import LeRobotRow
 from refiner.utils import check_required_dependencies
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -101,6 +104,7 @@ def subtask_annotation(
     *,
     provider: SubtaskAnnotationProvider,
     video_key: str | None = None,
+    prompt: str | None = None,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
     frame_width: int = 224,
@@ -122,6 +126,11 @@ def subtask_annotation(
         raise ValueError("output_column must be non-empty")
     if min_segment_duration_sec is not None and min_segment_duration_sec < 0:
         raise ValueError("min_segment_duration_sec must be >= 0")
+    if prompt is not None:
+        logger.warning(
+            "subtask_annotation prompt override is ignored; using the default "
+            "contact-sheet segmentation prompt"
+        )
 
     async def _annotate_subtasks(
         row: Row,

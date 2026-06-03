@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import io
+import logging
 from typing import Any, cast
 
 import numpy as np
@@ -175,6 +176,21 @@ def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
     assert seen["provider"] is provider
     assert seen["max_concurrent_requests"] == 17
     assert callable(seen["fn"])
+
+
+def test_subtask_annotation_logs_ignored_prompt_override(monkeypatch, caplog) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    with caplog.at_level(logging.WARNING):
+        mdr.robotics.subtask_annotation(
+            provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+            prompt="use reach, grasp, move, place",
+        )
+
+    assert "prompt override is ignored" in caplog.text
 
 
 def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
