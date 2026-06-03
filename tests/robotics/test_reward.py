@@ -102,6 +102,7 @@ def test_reward_score_builds_robometer_pooling_request(monkeypatch) -> None:
     }
     assert seen["payload"] == {
         "model": "robometer/Robometer-4B",
+        "__refiner_max_retries": 6,
         "task": "token_classify",
         "use_activation": False,
         "chat_template_kwargs": {
@@ -205,3 +206,8 @@ def test_reward_score_hard_fails_on_pooling_disconnect_by_default(monkeypatch) -
 
     with pytest.raises(InferenceRetryError):
         asyncio.run(score(row))
+
+
+def test_reward_score_rejects_negative_max_retries() -> None:
+    with pytest.raises(ValueError, match="max_retries"):
+        mdr.robotics.reward_score(max_retries=-1)
