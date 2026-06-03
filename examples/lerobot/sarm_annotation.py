@@ -13,7 +13,7 @@ OUTPUT_DATASET = (
     "hf://buckets/macrodata/test_bucket/aloha_sim_insertion_human_sarm_annotated"
 )
 VIDEO_KEY = "observation.images.top"
-MAX_IN_FLIGHT = 200
+MAX_IN_FLIGHT = 256
 
 SUBTASKS = [
     "reach object",
