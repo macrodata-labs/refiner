@@ -26,7 +26,9 @@ DEFAULT_VIDEO = (
 def add_egovision_outputs(row: Any) -> Any:
     from egovision.pipelines.hand_tracking_outputs import hand_tracking_outputs
 
-    outputs = hand_tracking_outputs(row["hand_tracking"])
+    hand_tracking = dict(row["hand_tracking"])
+    hand_tracking.pop("relative_actions", None)
+    outputs = hand_tracking_outputs(hand_tracking)
     return row.update(
         {
             "egovision_rerun_result_json": json.dumps(outputs["rerun_result"]),
