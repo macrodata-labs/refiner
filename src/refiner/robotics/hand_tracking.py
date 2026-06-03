@@ -42,11 +42,11 @@ def track_hands(
         ``episode_id``:
             Ego-vision episode identifier.
         ``camera_trajectory``:
-            ``numpy.ndarray | None`` of per-frame world-from-camera transforms,
-            shaped ``[T, 4, 4]`` when camera tracking is available.
+            ``numpy.ndarray`` of per-frame world-from-camera transforms,
+            shaped ``[T, 4, 4]``.
         ``intrinsics``:
-            ``numpy.ndarray | None`` of per-frame camera intrinsics, usually
-            shaped ``[T, 3, 3]``.
+            ``numpy.ndarray`` of per-frame camera intrinsics, usually shaped
+            ``[T, 3, 3]``.
         ``hands_camera``:
             Dictionary keyed by ``"left"`` and/or ``"right"``. Each hand entry
             may contain ``joints_camera`` ``[T, 21, 3]``, ``T_camera_wrist``

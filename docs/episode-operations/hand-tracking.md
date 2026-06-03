@@ -62,7 +62,7 @@ The payload contains:
 | Field | Meaning |
 | --- | --- |
 | `episode_id` | Ego-vision episode identifier. |
-| `camera_trajectory` | Per-frame world-from-camera transforms, shaped `[T, 4, 4]` when available. |
+| `camera_trajectory` | Per-frame world-from-camera transforms, shaped `[T, 4, 4]`. |
 | `intrinsics` | Per-frame camera intrinsics, usually `[T, 3, 3]`. |
 | `hands_camera` | Dict keyed by `left` and/or `right` with camera-space hand tracks. |
 | `hands_world` | Dict keyed by `left` and/or `right` with world-space hand tracks. |
