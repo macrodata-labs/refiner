@@ -226,10 +226,15 @@ def test_google_endpoint_client_posts_generate_content(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+        headers: Mapping[str, str] = {}
+
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, *args, **kwargs) -> Mapping[str, object]:
+            del args, kwargs
             return {
                 "candidates": [
                     {
@@ -291,10 +296,15 @@ def test_google_endpoint_client_passes_vertex_request_headers(monkeypatch) -> No
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+        headers: Mapping[str, str] = {}
+
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, *args, **kwargs) -> Mapping[str, object]:
+            del args, kwargs
             return {
                 "candidates": [
                     {

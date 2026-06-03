@@ -353,10 +353,15 @@ def test_openai_chat_reasoning_models_strip_unsupported_settings(monkeypatch) ->
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+        headers: Mapping[str, str] = {}
+
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, *args, **kwargs) -> Mapping[str, object]:
+            del args, kwargs
             return {
                 "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                 "usage": {},
@@ -422,10 +427,15 @@ def test_openai_gpt_51_reasoning_none_keeps_compatible_settings(
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+        headers: Mapping[str, str] = {}
+
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, *args, **kwargs) -> Mapping[str, object]:
+            del args, kwargs
             return {"output_text": "ok", "usage": {}}
 
     class _FakeAsyncClient:
