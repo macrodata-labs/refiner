@@ -16,7 +16,7 @@ import refiner as mdr
 
 INPUT_DATASET = os.environ.get(
     "ROBOMETER_INPUT_DATASET",
-    "hf://datasets/lerobot/libero",
+    "hf://datasets/nvidia/LIBERO_LeRobot_v3/libero_90",
 )
 OUTPUT_ROOT = os.environ.get(
     "ROBOMETER_OUTPUT_ROOT",
