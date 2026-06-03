@@ -105,7 +105,7 @@ class AiohttpAPIClient:
 
     async def post(self, endpoint_path: str, **kwargs: Any) -> aiohttp.ClientResponse:
         return await self._ensure_session().post(
-            _join_endpoint_url(self.base_url, endpoint_path),
+            _request_url(self, endpoint_path),
             **kwargs,
         )
 
@@ -351,7 +351,7 @@ def _response_headers(response: aiohttp.ClientResponse) -> dict[str, str]:
 
 
 def _request_url(client: AiohttpAPIClient, endpoint_path: str) -> str:
-    return _join_endpoint_url(client.base_url, endpoint_path)
+    return f"{client.base_url.rstrip('/')}/{endpoint_path.lstrip('/')}"
 
 
 async def _response_json_or_none(response: aiohttp.ClientResponse) -> Any | None:
@@ -367,10 +367,6 @@ async def _response_json(response: aiohttp.ClientResponse) -> Any:
 
 async def _response_text(response: aiohttp.ClientResponse) -> str:
     return await response.text()
-
-
-def _join_endpoint_url(base_url: str, endpoint_path: str) -> str:
-    return f"{base_url.rstrip('/')}/{endpoint_path.lstrip('/')}"
 
 
 def _error_message(
