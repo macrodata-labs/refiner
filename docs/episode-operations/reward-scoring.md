@@ -6,8 +6,7 @@ description: "Score episode progress and success with a pooling model"
 # Reward Scoring
 
 `reward_score` samples frames from an episode video and uses a Robometer-style
-pooling model to estimate progress and success. It expects rows from
-`read_lerobot(...)`.
+pooling model to estimate progress and success.
 
 ```python
 pipeline = (
@@ -56,9 +55,6 @@ mdr.robotics.reward_score(task=lambda row: row.task or "; ".join(row.tasks))
 
 `reward_score` uses pooling inference through a vLLM provider. See
 [Pooling](../inference/pooling.md) and [Providers and vLLM](../inference/providers-and-vllm.md).
-
-If the selected episode video has no decoded frames, `reward_score` raises for
-that row instead of emitting empty reward columns.
 
 For a complete cloud example, see
 [`examples/lerobot/robometer_reward.py`](../../examples/lerobot/robometer_reward.py).
