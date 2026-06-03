@@ -44,8 +44,8 @@ Install the hand-tracking extra:
 pip install macrodata-refiner[hand_tracking]
 ```
 
-Input rows must implement `RoboticsRow` and include the selected `video_key` in
-`row.videos`.
+Input rows must implement `RoboticsRow` and include the required `video_key` in
+`row.videos`. Pass `video_key` explicitly to `track_hands`.
 
 ## Output Payload
 

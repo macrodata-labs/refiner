@@ -15,7 +15,7 @@ from refiner.worker.context import logger
 
 def track_hands(
     *,
-    video_key: str = "video",
+    video_key: str,
     output_key: str = "hand_tracking",
     config: Any | None = None,
 ) -> BatchFn:
@@ -28,7 +28,7 @@ def track_hands(
     be converted to RGB by ego-vision.
 
     Args:
-        video_key: Key in ``row.videos`` to process. Defaults to ``"video"``.
+        video_key: Required key in ``row.videos`` to process.
         output_key: Row column that will receive the hand-tracking payload.
             Defaults to ``"hand_tracking"``.
         config: Optional ``egovision.HandTrackingConfig``. If omitted, Refiner
