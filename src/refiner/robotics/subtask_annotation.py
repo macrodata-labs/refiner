@@ -410,8 +410,13 @@ async def _sample_timestamped_frames(
 
         image = frame.frame.to_image().convert("RGB")
         if image.width != frame_width:
+            from PIL import Image
+
             height = max(1, round(image.height * frame_width / image.width))
-            image = image.resize((frame_width, height))
+            image = image.resize(
+                (frame_width, height),
+                resample=Image.Resampling.BILINEAR,
+            )
         yield timestamp, _draw_timestamp_badge(image, timestamp)
         next_timestamp = timestamp + sample_sec
 

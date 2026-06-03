@@ -29,7 +29,7 @@ pipeline = (
 
 pipeline.launch_cloud(
     name="berkeley-subtask-annotation",
-    num_workers=4,
+    num_workers=1,
     cpus_per_worker=1,
     mem_mb_per_worker=2048,
     secrets=[
