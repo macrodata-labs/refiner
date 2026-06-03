@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import refiner as mdr
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow
+from refiner.pipeline.data.row import Row
 from refiner.robotics.egocentric import track_hands
 from refiner.robotics.row import _robot_row_converter
 from refiner.video import VideoFrameArray
@@ -63,6 +64,18 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
         def info(self, message: str) -> None:
             log_messages.append(message)
 
+    metrics: list[tuple[str, float | int, str | None]] = []
+
+    def log_throughput(
+        self,
+        label: str,
+        value: float | int,
+        *,
+        unit: str | None = None,
+    ) -> None:
+        del self
+        metrics.append((label, value, unit))
+
     fake_egovision = ModuleType("egovision")
     setattr(fake_egovision, "EpisodeInput", EpisodeInput)
     setattr(fake_egovision, "HandTrackingConfig", HandTrackingConfig)
@@ -70,6 +83,7 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
     setattr(fake_egovision, "HaworReconstructionConfig", HaworReconstructionConfig)
     monkeypatch.setitem(sys.modules, "egovision", fake_egovision)
     monkeypatch.setattr("refiner.robotics.egocentric.logger", FakeLogger())
+    monkeypatch.setattr(Row, "log_throughput", log_throughput)
 
     frames = np.zeros((2, 4, 5, 3), dtype=np.uint8)
     to_robot_row = _robot_row_converter(
@@ -90,6 +104,16 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
     }
     assert log_messages[0] == "Initializing ego-vision hand tracking models"
     assert log_messages[1].startswith("Initialized ego-vision hand tracking models in ")
+    assert metrics == [
+        ("egovision_frames_decoded", 1, "frames"),
+        ("egovision_frames_decoded", 1, "frames"),
+        ("egovision_frames_decoded", 1, "frames"),
+        ("egovision_frames_decoded", 1, "frames"),
+        ("egovision_frames_processed", 2, "frames"),
+        ("egovision_episodes_processed", 1, "episodes"),
+        ("egovision_frames_processed", 2, "frames"),
+        ("egovision_episodes_processed", 1, "episodes"),
+    ]
     assert out[0]["hand_tracking"]["episode"] == 0
     assert out[1]["hand_tracking"]["hands_world"][0]["joints_world"] == [
         [1.0, 0.0, 0.0]

@@ -50,13 +50,21 @@ def track_hands(
             )
 
         episodes = []
-        for row in rows:
+        frame_counts = [0] * len(rows)
+        for row_index, row in enumerate(rows):
             if not isinstance(row, RoboticsRow) or video_key not in row.videos:
                 raise TypeError(
                     "track_hands requires RoboticsRow inputs with video sources"
                 )
             episodes.append(
-                episode_input(frames=_iter_video_frames(row.videos[video_key]))
+                episode_input(
+                    frames=_count_frames(
+                        _iter_video_frames(row.videos[video_key]),
+                        row=row,
+                        frame_counts=frame_counts,
+                        row_index=row_index,
+                    )
+                )
             )
         results = pipeline.predict_episodes(episodes)
         if len(results) != len(rows):
@@ -64,7 +72,13 @@ def track_hands(
                 "ego-vision hand tracking returned "
                 f"{len(results)} results for {len(rows)} input rows"
             )
-        for row, result in zip(rows, results, strict=True):
+        for row, result, frame_count in zip(rows, results, frame_counts, strict=True):
+            row.log_throughput(
+                "egovision_frames_processed",
+                frame_count,
+                unit="frames",
+            )
+            row.log_throughput("egovision_episodes_processed", 1, unit="episodes")
             yield row.update({output_key: result.to_dict()})
 
     return _track
@@ -94,6 +108,19 @@ def _iter_video_frames(video: Any) -> Iterable[Any]:
         except StopAsyncIteration:
             return
         yield decoded.frame
+
+
+def _count_frames(
+    frames: Iterable[Any],
+    *,
+    row: Row,
+    frame_counts: list[int],
+    row_index: int,
+) -> Iterable[Any]:
+    for frame in frames:
+        frame_counts[row_index] += 1
+        row.log_throughput("egovision_frames_decoded", 1, unit="frames")
+        yield frame
 
 
 __all__ = ["track_hands"]
