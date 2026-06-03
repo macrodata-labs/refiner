@@ -8,6 +8,11 @@ description: "Score episode progress and success with a pooling model"
 `reward_score` samples frames from an episode video and uses a Robometer-style
 pooling model to estimate progress and success.
 
+This is useful when you want dense progress and success signals for robot
+episodes without hand-labeling every frame; Robometer is trained to generalize
+reward scoring across diverse robot trajectories
+([paper](https://arxiv.org/abs/2603.02115)).
+
 ```python
 pipeline = (
     mdr.read_lerobot("hf://datasets/nvidia/LIBERO_LeRobot_v3/libero_90")
