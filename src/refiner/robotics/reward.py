@@ -66,14 +66,16 @@ def reward_score(
         content: list[dict[str, Any]] = [
             {"type": "text", "text": _robometer_progress_prompt(task_text)}
         ]
-        for frame in frames:
+        for decoded_frame in frames:
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": _frame_data_url(frame)},
+                    "image_url": {"url": _frame_data_url(decoded_frame)},
                 }
             )
             content.append({"type": "text", "text": _PROGRESS_TOKEN})
+        frame_count = len(frames)
+        del frames, decoded_frame
 
         payload = {
             "task": "token_classify",
@@ -87,7 +89,7 @@ def reward_score(
             "messages": [{"role": "user", "content": content}],
         }
         response = await generate_pooling_request(payload)
-        token_logits = _extract_progress_token_logits(response, len(frames))
+        token_logits = _extract_progress_token_logits(response, frame_count)
         progress = [expected_progress(row) for row in token_logits]
         success = [sigmoid(float(row[10])) for row in token_logits]
         return row.update(
