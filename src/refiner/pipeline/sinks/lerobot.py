@@ -197,8 +197,6 @@ class LeRobotWriterSink(BaseSink):
 
     def _commit_shard(self, state: _LeRobotShardState) -> None:
         """Write staged shard-local metadata files for one completed chunk."""
-        if state.metadata is None and state.frames.total_rows == 0:
-            return
         metadata = state.metadata
         if metadata is None:
             raise RuntimeError(
