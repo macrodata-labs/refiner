@@ -1300,6 +1300,7 @@ def read_lerobot(
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
     split_row_groups: bool = True,
+    skip_malformed_rows: bool = False,
 ) -> RefinerPipeline:
     """Create a pipeline with an episode-granular LeRobot reader source.
 
@@ -1307,7 +1308,9 @@ def read_lerobot(
     `num_shards` and `target_shard_bytes` affect only episode parquet shard
     planning. `split_row_groups` controls whether those planned spans are
     refined to row ranges inside an episode parquet file. Media loading stays
-    unchanged.
+    unchanged. By default, malformed episode rows whose declared frame count
+    does not match loaded frames raise an error; `skip_malformed_rows=True`
+    skips them with a warning and metric.
     """
     return RefinerPipeline(
         source=LeRobotEpisodeReader(
@@ -1317,6 +1320,7 @@ def read_lerobot(
             target_shard_bytes=target_shard_bytes,
             num_shards=num_shards,
             split_row_groups=split_row_groups,
+            skip_malformed_rows=skip_malformed_rows,
         )
     )
 

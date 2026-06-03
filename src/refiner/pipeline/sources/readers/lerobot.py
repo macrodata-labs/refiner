@@ -27,6 +27,8 @@ from refiner.robotics.lerobot_format import (
     merge_metadata,
     remap_task_index_table,
 )
+from refiner.worker.context import logger
+from refiner.worker.metrics.api import log_throughput
 
 _DEFAULT_EPISODES_GLOB_ROOT = "meta/episodes"
 _INFO_JSON = "meta/info.json"
@@ -54,6 +56,7 @@ class LeRobotEpisodeReader(ParquetReader):
         num_shards: int | None = None,
         arrow_batch_size: int = 65536,
         split_row_groups: bool = True,
+        skip_malformed_rows: bool = False,
     ) -> None:
         """Create a LeRobot episode reader over one or more dataset roots.
 
@@ -66,6 +69,8 @@ class LeRobotEpisodeReader(ParquetReader):
             storage_options=storage_options,
         )
         self._last_frame_table: tuple[tuple[int, Any, Any], pa.Table] | None = None
+        self.skip_malformed_rows = skip_malformed_rows
+        self._warned_malformed_row = False
 
         super().__init__(
             inputs=tuple(
@@ -109,22 +114,63 @@ class LeRobotEpisodeReader(ParquetReader):
                     metadata=metadata_for_source,
                     remap=remap,
                 )
-                if batch.num_rows > 0:
-                    yield LeRobotTabular(
-                        batch,
-                        metadata_by_row=(metadata_for_source,) * batch.num_rows,
-                        frames_by_row=tuple(
-                            Tabular(
-                                self._slice_episode_frame_table(
-                                    row_idx=row_idx,
-                                    tabular=batch,
-                                    frame_tables=frame_tables,
-                                )
-                            )
-                            for row_idx in range(batch.num_rows)
-                        ),
-                        roots_by_row=(root,) * batch.num_rows,
+                if batch.num_rows <= 0:
+                    continue
+
+                frames_by_row = tuple(
+                    self._slice_episode_frame_table(
+                        row_idx=row_idx,
+                        tabular=batch,
+                        frame_tables=frame_tables,
                     )
+                    for row_idx in range(batch.num_rows)
+                )
+                lengths = batch.columns[batch.index_by_name["length"]]
+                keep = [
+                    table.num_rows == int(lengths[row_idx].as_py())
+                    for row_idx, table in enumerate(frames_by_row)
+                ]
+                skipped = keep.count(False)
+                if skipped and not self.skip_malformed_rows:
+                    row_idx = keep.index(False)
+                    expected = int(lengths[row_idx].as_py())
+                    actual = frames_by_row[row_idx].num_rows
+                    episode_index = int(
+                        self._episode_value(batch, row_idx, "episode_index")
+                    )
+                    error = (
+                        f"episode {episode_index} expected {expected} "
+                        f"frames, got {actual}"
+                    )
+                    raise ValueError(error)
+
+                if skipped:
+                    if not self._warned_malformed_row:
+                        logger.warning("Skipping malformed LeRobot episodes")
+                        self._warned_malformed_row = True
+                    log_throughput(
+                        "malformed_lerobot_episodes_skipped",
+                        skipped,
+                        shard_id=shard.id,
+                        unit="episodes",
+                    )
+                    batch = batch.with_table(
+                        batch.table.filter(pa.array(keep, type=pa.bool_()))
+                    )
+                    frames_by_row = tuple(
+                        table
+                        for table, should_keep in zip(frames_by_row, keep, strict=True)
+                        if should_keep
+                    )
+                    if batch.num_rows == 0:
+                        continue
+
+                yield LeRobotTabular(
+                    batch,
+                    metadata_by_row=(metadata_for_source,) * batch.num_rows,
+                    frames_by_row=tuple(Tabular(table) for table in frames_by_row),
+                    roots_by_row=(root,) * batch.num_rows,
+                )
 
     @staticmethod
     def _resolve_roots(
@@ -208,11 +254,15 @@ class LeRobotEpisodeReader(ParquetReader):
         )
 
         tables: dict[tuple[Any, Any], pa.Table] = {}
-        for row in request_ranges.to_pylist():
-            chunk = row["data/chunk_index"]
-            file_idx = row["data/file_index"]
-            from_idx = int(row["dataset_from_index_min"])
-            to_idx = int(row["dataset_to_index_max"])
+        range_chunks = request_ranges.column("data/chunk_index")
+        range_files = request_ranges.column("data/file_index")
+        range_from_indices = request_ranges.column("dataset_from_index_min")
+        range_to_indices = request_ranges.column("dataset_to_index_max")
+        for row_idx in range(request_ranges.num_rows):
+            chunk = range_chunks[row_idx].as_py()
+            file_idx = range_files[row_idx].as_py()
+            from_idx = int(range_from_indices[row_idx].as_py())
+            to_idx = int(range_to_indices[row_idx].as_py())
             table = self._get_frame_file_table(
                 source_index=source_index,
                 root=root,

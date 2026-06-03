@@ -50,6 +50,13 @@ pipeline = mdr.read_lerobot(
 The reader merges metadata and remaps task indices so row tasks stay consistent.
 For a full recipe, see [Merge LeRobot Datasets](../examples/merge-lerobot-datasets.md).
 
+## Malformed Episodes
+
+`read_lerobot` validates that each episode's declared frame count matches the
+frames loaded from its frame parquet. Mismatches raise by default. To drop those
+episodes instead, pass `skip_malformed_rows=True`; the reader warns once and
+records `malformed_lerobot_episodes_skipped`.
+
 ## Inspecting Rows
 
 ```python

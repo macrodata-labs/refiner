@@ -89,6 +89,7 @@ def _build_sample_dataset(
         [
             {
                 "episode_index": 0,
+                "length": 2,
                 "dataset_from_index": 0,
                 "dataset_to_index": 2,
                 "data/chunk_index": 0,
@@ -104,6 +105,7 @@ def _build_sample_dataset(
             },
             {
                 "episode_index": 1,
+                "length": 2,
                 "dataset_from_index": 2,
                 "dataset_to_index": 4,
                 "data/chunk_index": 0,
@@ -186,6 +188,81 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert video.uri.endswith("/videos/observation.images.main/chunk-000/file-000.mp4")
     assert video.from_timestamp_s == 0.0
     assert video.to_timestamp_s == 1.0
+
+
+def test_lerobot_reader_raises_on_malformed_frame_count(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+    _write_parquet(
+        root / "data" / "chunk-000" / "file-000.parquet",
+        [
+            {
+                "index": 0,
+                "episode_index": 0,
+                "frame_index": 0,
+                "timestamp": 0.0,
+                "task_index": 0,
+            },
+            {
+                "index": 1,
+                "episode_index": 0,
+                "frame_index": 1,
+                "timestamp": 0.1,
+                "task_index": 0,
+            },
+        ],
+    )
+
+    reader = LeRobotEpisodeReader(str(root))
+
+    with pytest.raises(ValueError, match="episode 1 expected 2 frames"):
+        _episode_rows(reader)
+
+
+def test_lerobot_reader_can_skip_malformed_rows(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+    _write_parquet(
+        root / "data" / "chunk-000" / "file-000.parquet",
+        [
+            {
+                "index": 0,
+                "episode_index": 0,
+                "frame_index": 0,
+                "timestamp": 0.0,
+                "task_index": 0,
+            },
+            {
+                "index": 1,
+                "episode_index": 0,
+                "frame_index": 1,
+                "timestamp": 0.1,
+                "task_index": 0,
+            },
+        ],
+    )
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        "refiner.pipeline.sources.readers.lerobot.logger.warning",
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    metrics: list[tuple[str, int | float, str, str | None]] = []
+    monkeypatch.setattr(
+        "refiner.pipeline.sources.readers.lerobot.log_throughput",
+        lambda label, value, shard_id, *, unit=None, step_index=None: metrics.append(
+            (label, value, shard_id, unit)
+        ),
+    )
+
+    reader = LeRobotEpisodeReader(str(root), skip_malformed_rows=True)
+    rows = _episode_rows(reader)
+
+    assert [int(row["episode_index"]) for row in rows] == [0]
+    assert len(warnings) == 1
+    assert warnings[0] == "Skipping malformed LeRobot episodes"
+    assert [(label, value, unit) for label, value, _, unit in metrics] == [
+        ("malformed_lerobot_episodes_skipped", 1, "episodes")
+    ]
 
 
 def test_lerobot_row_uses_absolute_video_uri_directly() -> None:
