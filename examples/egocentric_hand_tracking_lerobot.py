@@ -23,28 +23,35 @@ DEFAULT_VIDEO = (
 )
 
 
-def add_egovision_outputs(row: Any) -> Any:
-    from egovision.pipelines import to_joint_actions, to_mano_actions
+def create_mano_actions(row: Any) -> Any:
+    from egovision.pipelines import to_mano_actions
 
-    hand_tracking = dict(row["hand_tracking"])
-    hand_tracking.pop("relative_actions", None)
+    hand_tracking = _hand_tracking(row)
     mano_actions = to_mano_actions(hand_tracking)
-    joint_actions = to_joint_actions(hand_tracking)
-    return row.update(
-        {
-            "egovision_hand_tracking_metadata": json.dumps(_json_ready(hand_tracking)),
-            "egovision_joint_actions_metadata": json.dumps(_json_ready(joint_actions)),
-            "wrist_mano_actions": mano_actions,
-        }
-    )
-
-
-def attach_wrist_mano_actions(row: Any) -> Any:
-    actions, valid = _wrist_mano_action_array(row["wrist_mano_actions"])
+    actions, valid = _wrist_mano_action_array(mano_actions)
     return (
         row.with_actions(actions)
         .with_observation("egovision.wrist_mano_delta_valid", valid)
-        .drop("hand_tracking", "wrist_mano_actions")
+        .update(
+            {"egovision_hand_tracking_metadata": json.dumps(_json_ready(hand_tracking))}
+        )
+        .drop("hand_tracking")
+    )
+
+
+def create_joint_actions(row: Any) -> Any:
+    from egovision.pipelines import to_joint_actions
+
+    hand_tracking = _hand_tracking(row)
+    joint_actions = to_joint_actions(hand_tracking)
+    actions, valid = _joint_action_array(joint_actions)
+    return (
+        row.with_actions(actions)
+        .with_observation("egovision.joint_delta_valid", valid)
+        .update(
+            {"egovision_hand_tracking_metadata": json.dumps(_json_ready(hand_tracking))}
+        )
+        .drop("hand_tracking")
     )
 
 
@@ -64,8 +71,9 @@ def run(args: argparse.Namespace) -> None:
             ),
             batch_size=args.batch_size,
         )
-        .map(add_egovision_outputs)
-        .map(attach_wrist_mano_actions)
+        .map(create_mano_actions)
+        # To train on world-space joint deltas instead, swap the line above for:
+        # .map(create_joint_actions)
         .write_lerobot(args.output)
     )
 
@@ -109,6 +117,32 @@ def _wrist_mano_action_array(
         np.concatenate([values[:count] for values in side_arrays], axis=1).tolist(),
         np.stack([values[:count] for values in side_valid], axis=1).tolist(),
     )
+
+
+def _joint_action_array(
+    actions: dict[str, Any],
+) -> tuple[list[list[float]], list[list[bool]]]:
+    side_arrays = []
+    side_valid = []
+    for side in ("left", "right"):
+        side_action = actions.get(side, {})
+        delta_joints = np.asarray(side_action["delta_joints_world"])
+        delta_joints = delta_joints.reshape(len(delta_joints), -1)
+        side_arrays.append(delta_joints)
+        side_valid.append(
+            np.asarray(side_action["valid"], dtype=bool)[: len(delta_joints)]
+        )
+    count = min(len(values) for values in side_arrays)
+    return (
+        np.concatenate([values[:count] for values in side_arrays], axis=1).tolist(),
+        np.stack([values[:count] for values in side_valid], axis=1).tolist(),
+    )
+
+
+def _hand_tracking(row: Any) -> dict[str, Any]:
+    hand_tracking = dict(row["hand_tracking"])
+    hand_tracking.pop("relative_actions", None)
+    return hand_tracking
 
 
 def _json_ready(value: Any) -> Any:
