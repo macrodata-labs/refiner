@@ -245,9 +245,8 @@ def main() -> None:
             ),
             dtypes={"video_url": mdr.datatype.video_path()},
         )
-        .map(lambda row: row.update(episode_id=f"homer-{row['video_id']}"))
         .to_robot_rows(
-            episode_id_key="episode_id",
+            episode_id_key="video_id",
             task_key="description",
             fps=args.fps,
             robot_type="human_hand_tracking",

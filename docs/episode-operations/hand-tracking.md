@@ -21,9 +21,8 @@ pipeline = (
         columns_to_read=("video_id", "video_url", "description"),
         dtypes={"video_url": mdr.datatype.video_path()},
     )
-    .map(lambda row: row.update(episode_id=f"homer-{row['video_id']}"))
     .to_robot_rows(
-        episode_id_key="episode_id",
+        episode_id_key="video_id",
         task_key="description",
         fps=30.0,
         robot_type="human_hand_tracking",
