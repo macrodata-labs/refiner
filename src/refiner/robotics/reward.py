@@ -32,7 +32,6 @@ def reward_score(
     output_column: str = "reward_score",
     success_column: str = "robometer_success",
     max_concurrent_requests: int = 256,
-    max_retries: int = 6,
 ) -> Callable[[Row], Any]:
     """Return an async map function that scores LeRobot episodes with Robometer.
 
@@ -40,8 +39,7 @@ def reward_score(
     sends them to a vLLM-hosted Robometer pooling model, and adds two list
     columns to the row: per-frame task progress and per-frame success
     probability. When `task` is omitted, the episode's LeRobot task metadata is
-    used as the Robometer instruction. Transient transport errors are retried up
-    to `max_retries` times before the row fails hard.
+    used as the Robometer instruction.
     """
 
     if not model.strip():
@@ -52,8 +50,6 @@ def reward_score(
         raise ValueError("output_column must be non-empty")
     if not success_column.strip():
         raise ValueError("success_column must be non-empty")
-    if max_retries < 0:
-        raise ValueError("max_retries must be >= 0")
 
     from refiner.inference import generate_pooling
     from refiner.inference.providers import VLLMProvider
@@ -88,7 +84,6 @@ def reward_score(
             frame_count += 1
 
         payload = {
-            "__refiner_max_retries": max_retries,
             "task": "token_classify",
             "use_activation": False,
             "chat_template_kwargs": {
