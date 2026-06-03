@@ -4,7 +4,7 @@ from __future__ import annotations
 # uv run --no-project \
 #   --with "macrodata-refiner[hf,video,egocentric]" \
 #   --with "ego-vision[models]==0.1.15" \
-#   examples/egocentric_hand_tracking_lerobot.py run \
+#   examples/egocentric_hand_tracking_lerobot.py \
 #   --output hf://buckets/macrodata/test_bucket/egocentric-hand-tracking \
 #   --cloud
 
@@ -21,6 +21,12 @@ DEFAULT_VIDEO = (
     "https://prodtlkcsafiles.blob.core.windows.net/ego-centric/"
     "5_Pouring%20liquids_Video%20Pw.mp4"
 )
+DEFAULT_NAME = "egocentric-hand-tracking-lerobot"
+DEFAULT_FPS = 30.0
+DEFAULT_BATCH_SIZE = 2
+DEFAULT_NUM_WORKERS = 1
+DEFAULT_MEM_MB_PER_WORKER = 32 * 1024
+DEFAULT_GPU = "h100"
 MANO_POSE_WIDTH = 96
 JOINT_STATE_WIDTH = 63
 
@@ -71,44 +77,6 @@ def create_joint_actions(row: Any) -> Any:
         )
         .drop("hand_tracking")
     )
-
-
-def run(args: argparse.Namespace) -> None:
-    pipeline = (
-        mdr.read_videos(args.videos, file_path_column="video")
-        .to_robot_rows(
-            episode_id_key="video",
-            fps=args.fps,
-            robot_type="human_egocentric_hands",
-            video_keys={"video": "video"},
-        )
-        .batch_map(
-            mdr.robotics.track_hands(
-                video_key="video",
-                output_key="hand_tracking",
-            ),
-            batch_size=args.batch_size,
-        )
-        .map(create_mano_actions)
-        # To train on world-space joint deltas instead, swap the line above for:
-        # .map(create_joint_actions)
-        .write_lerobot(args.output)
-    )
-
-    if args.cloud:
-        pipeline.launch_cloud(
-            name=args.name,
-            num_workers=args.num_workers,
-            mem_mb_per_worker=args.mem_mb_per_worker,
-            gpu=mdr.GPU(count=1, type=args.gpu),
-            secrets=mdr.Secrets.env(keys=("HF_TOKEN",)),
-        )
-    else:
-        pipeline.launch_local(
-            name=args.name,
-            num_workers=args.num_workers,
-            gpu=mdr.GPU(count=1, type=args.gpu) if args.gpu else None,
-        )
 
 
 def _wrist_mano_action_array(
@@ -216,26 +184,60 @@ def _world_hand(hand_tracking: dict[str, Any], side: str) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Run ego-vision hand tracking, save wrist+MANO relative actions as "
-            "LeRobot actions, and store full ego-vision metadata at episode level."
+            "Run ego-vision hand tracking and save the selected hand-action "
+            "representation as LeRobot actions."
         )
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    run_parser = subparsers.add_parser("run")
-    run_parser.add_argument("videos", nargs="?", default=DEFAULT_VIDEO)
-    run_parser.add_argument("--output", required=True)
-    run_parser.add_argument("--name", default="egocentric-hand-tracking-lerobot")
-    run_parser.add_argument("--fps", type=float, default=30.0)
-    run_parser.add_argument("--batch-size", type=int, default=2)
-    run_parser.add_argument("--num-workers", type=int, default=1)
-    run_parser.add_argument("--mem-mb-per-worker", type=int, default=32 * 1024)
-    run_parser.add_argument("--gpu", default="h100")
-    run_parser.add_argument("--cloud", action="store_true")
-    run_parser.set_defaults(func=run)
-
+    parser.add_argument("videos", nargs="?", default=DEFAULT_VIDEO)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--name", default=DEFAULT_NAME)
+    parser.add_argument("--fps", type=float, default=DEFAULT_FPS)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--num-workers", type=int, default=DEFAULT_NUM_WORKERS)
+    parser.add_argument(
+        "--mem-mb-per-worker",
+        type=int,
+        default=DEFAULT_MEM_MB_PER_WORKER,
+    )
+    parser.add_argument("--gpu", default=DEFAULT_GPU)
+    parser.add_argument("--cloud", action="store_true")
     args = parser.parse_args()
-    args.func(args)
+
+    pipeline = (
+        mdr.read_videos(args.videos, file_path_column="video")
+        .to_robot_rows(
+            episode_id_key="video",
+            fps=args.fps,
+            robot_type="human_egocentric_hands",
+            video_keys={"video": "video"},
+        )
+        .batch_map(
+            mdr.robotics.track_hands(
+                video_key="video",
+                output_key="hand_tracking",
+            ),
+            batch_size=args.batch_size,
+        )
+        .map(create_mano_actions)
+        # To train on world-space joint deltas instead, swap the line above for:
+        # .map(create_joint_actions)
+        .write_lerobot(args.output)
+    )
+
+    if args.cloud:
+        pipeline.launch_cloud(
+            name=args.name,
+            num_workers=args.num_workers,
+            mem_mb_per_worker=args.mem_mb_per_worker,
+            gpu=mdr.GPU(count=1, type=args.gpu),
+            secrets=mdr.Secrets.env(keys=("HF_TOKEN",)),
+        )
+    else:
+        pipeline.launch_local(
+            name=args.name,
+            num_workers=args.num_workers,
+            gpu=mdr.GPU(count=1, type=args.gpu) if args.gpu else None,
+        )
 
 
 if __name__ == "__main__":
