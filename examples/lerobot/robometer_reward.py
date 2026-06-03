@@ -2,9 +2,7 @@
 
 The example reads a LeRobot dataset, samples frames from each episode, calls the
 vLLM-backed Robometer reward model, and writes a new LeRobot dataset containing
-`reward_score` and `robometer_success` columns. Environment variables can
-override the input/output roots, frame count, input shard count, concurrency,
-retry count, worker count, and worker memory.
+`reward_score` and `robometer_success` columns.
 """
 
 from __future__ import annotations
