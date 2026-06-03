@@ -119,6 +119,50 @@ def test_timestamped_contact_sheets_sample_and_tile_video(tmp_path) -> None:
     assert sheets[0].data.startswith(b"\xff\xd8")
 
 
+def test_iter_timestamped_contact_sheets_streams_sheet_batches() -> None:
+    from PIL import Image
+
+    class _FakeImageFrame:
+        def __init__(self, value: int) -> None:
+            self._value = value
+
+        def to_image(self) -> Image.Image:
+            return Image.new("RGB", (16, 12), color=(self._value, 0, 0))
+
+    class _FakeDecodedFrame:
+        def __init__(self, timestamp_s: float, value: int) -> None:
+            self.timestamp_s = timestamp_s
+            self.frame = _FakeImageFrame(value)
+
+    class _FakeVideo:
+        def __init__(self) -> None:
+            self.frames_consumed = 0
+
+        async def iter_frames(self):
+            for index in range(5):
+                self.frames_consumed += 1
+                yield _FakeDecodedFrame(timestamp_s=index * 0.5, value=index)
+
+    async def _first_sheet(video: _FakeVideo):
+        sheets = subtask_annotation_module._iter_timestamped_contact_sheets(
+            cast(Any, video),
+            sample_sec=0.5,
+            frame_width=16,
+            frames_per_sheet=2,
+            columns=2,
+        )
+        try:
+            return await anext(sheets)
+        finally:
+            await sheets.aclose()
+
+    video = _FakeVideo()
+    sheet = asyncio.run(_first_sheet(video))
+
+    assert sheet.timestamps == (0.0, 0.5)
+    assert video.frames_consumed == 2
+
+
 def test_timestamped_contact_sheets_engravings_are_visible(tmp_path) -> None:
     from PIL import Image
 
@@ -178,6 +222,7 @@ def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
 
     block = mdr.robotics.subtask_annotation(
         provider=provider,
+        video_key="observation.images.main",
         max_concurrent_requests=17,
     )
 
@@ -187,21 +232,9 @@ def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
     assert callable(seen["fn"])
 
 
-def test_subtask_annotation_defaults_to_google_provider(monkeypatch) -> None:
-    seen = {}
-
-    def _fake_generate_text(**kwargs):
-        seen.update(kwargs)
-        return "annotation-block"
-
-    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
-
-    block = mdr.robotics.subtask_annotation()
-
-    assert block == "annotation-block"
-    assert isinstance(seen["provider"], mdr.inference.GoogleEndpointProvider)
-    assert seen["provider"].model == "gemini-3.5-flash"
-    assert callable(seen["fn"])
+def test_subtask_annotation_requires_video_key() -> None:
+    with pytest.raises(ValueError, match="video_key must be non-empty"):
+        mdr.robotics.subtask_annotation(video_key="")
 
 
 def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
@@ -401,4 +434,41 @@ def test_subtask_annotation_keeps_short_segments_by_default(
     assert result["predicted_subtasks"] == [
         {"start_sec": 0.0, "end_sec": 3.49, "subtask": "short action"},
         {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"},
+    ]
+
+
+def test_subtask_annotation_warns_on_overlapping_segments(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _lerobot_row(tmp_path)
+    block = mdr.robotics.subtask_annotation(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+    )
+
+    async def _fake_request(**kwargs):
+        return InferenceResponse(
+            text=(
+                '{"segments":['
+                '{"start_sec":0.0,"end_sec":2.0,"subtask":"reach"},'
+                '{"start_sec":1.5,"end_sec":3.0,"subtask":"grasp"}'
+                "]}"
+            ),
+            finish_reason="stop",
+            usage={},
+            response={},
+        )
+
+    with pytest.warns(RuntimeWarning, match="overlapping segments"):
+        result = asyncio.run(cast(Any, block)(row, _fake_request))
+
+    assert result["predicted_subtasks"] == [
+        {"start_sec": 0.0, "end_sec": 2.0, "subtask": "reach"},
+        {"start_sec": 1.5, "end_sec": 3.0, "subtask": "grasp"},
     ]
