@@ -108,7 +108,7 @@ class LeRobotEpisodeReader(ParquetReader):
                 root = self.roots[part.source_index]
                 metadata_for_source = metadata[part.source_index]
                 remap = remaps[part.source_index]
-                frame_tables = self._load_frame_tables(
+                frame_tables, frame_counts = self._load_frame_tables(
                     source_index=part.source_index,
                     tabular=batch,
                     root=root,
@@ -118,60 +118,51 @@ class LeRobotEpisodeReader(ParquetReader):
                 if batch.num_rows <= 0:
                     continue
 
-                if self.skip_malformed_rows:
-                    index_by_file = {
-                        key: table.column("index")
-                        .combine_chunks()
-                        .to_numpy(zero_copy_only=False)
-                        for key, table in frame_tables.items()
-                    }
-                    keep: list[bool] = []
-                    first_error: str | None = None
-                    for row in batch.table.select(
-                        [
-                            "episode_index",
-                            "length",
-                            "data/chunk_index",
-                            "data/file_index",
-                            "dataset_from_index",
-                            "dataset_to_index",
-                        ]
-                    ).to_pylist():
-                        chunk = row["data/chunk_index"]
-                        file_idx = row["data/file_index"]
-                        from_idx = int(row["dataset_from_index"])
-                        to_idx = int(row["dataset_to_index"])
-                        indexes = index_by_file[(chunk, file_idx)]
-                        actual = int(
-                            np.searchsorted(indexes, to_idx)
-                            - np.searchsorted(indexes, from_idx)
-                        )
-                        expected = int(row["length"])
-                        keep.append(actual == expected)
-                        if actual != expected and first_error is None:
-                            first_error = (
-                                f"episode {int(row['episode_index'])} expected {expected} "
-                                f"frames from chunk {chunk!r} file {file_idx!r} "
-                                f"index range [{from_idx}, {to_idx}), got {actual}"
-                            )
-                    skipped = keep.count(False)
-                    if skipped:
-                        if not self._warned_malformed_row:
-                            logger.warning(
-                                "Skipping malformed LeRobot row: {}", first_error
-                            )
-                            self._warned_malformed_row = True
-                        log_throughput(
-                            "malformed_lerobot_rows_skipped",
-                            skipped,
-                            shard_id=shard.id,
-                            unit="rows",
-                        )
-                        batch = batch.with_table(
-                            batch.table.filter(pa.array(keep, type=pa.bool_()))
-                        )
-                        if batch.num_rows == 0:
-                            continue
+                episode_rows = batch.table.select(
+                    [
+                        "episode_index",
+                        "length",
+                        "data/chunk_index",
+                        "data/file_index",
+                        "dataset_from_index",
+                        "dataset_to_index",
+                    ]
+                ).to_pylist()
+                keep = [
+                    actual == int(row["length"])
+                    for row, actual in zip(episode_rows, frame_counts, strict=True)
+                ]
+                skipped = keep.count(False)
+                if skipped:
+                    row_idx = keep.index(False)
+                    row = episode_rows[row_idx]
+                    chunk = row["data/chunk_index"]
+                    file_idx = row["data/file_index"]
+                    from_idx = int(row["dataset_from_index"])
+                    to_idx = int(row["dataset_to_index"])
+                    expected = int(row["length"])
+                    actual = frame_counts[row_idx]
+                    error = (
+                        f"episode {int(row['episode_index'])} expected {expected} "
+                        f"frames from chunk {chunk!r} file {file_idx!r} "
+                        f"index range [{from_idx}, {to_idx}), got {actual}"
+                    )
+                    if not self.skip_malformed_rows:
+                        raise ValueError(error)
+                    if not self._warned_malformed_row:
+                        logger.warning("Skipping malformed LeRobot row: {}", error)
+                        self._warned_malformed_row = True
+                    log_throughput(
+                        "malformed_lerobot_rows_skipped",
+                        skipped,
+                        shard_id=shard.id,
+                        unit="rows",
+                    )
+                    batch = batch.with_table(
+                        batch.table.filter(pa.array(keep, type=pa.bool_()))
+                    )
+                    if batch.num_rows == 0:
+                        continue
 
                 yield LeRobotTabular(
                     batch,
@@ -245,8 +236,8 @@ class LeRobotEpisodeReader(ParquetReader):
         root: DataFolder,
         metadata: LeRobotMetadata,
         remap: Mapping[int, int],
-    ) -> dict[tuple[Any, Any], pa.Table]:
-        """Load one reduced frame table per referenced `(chunk, file)` pair.
+    ) -> tuple[dict[tuple[Any, Any], pa.Table], list[int]]:
+        """Load reduced frame tables and per-episode frame counts.
 
         Each table is narrowed to the enclosing dataset-index span needed by
         the current episode batch and task indices are remapped once at the
@@ -293,7 +284,28 @@ class LeRobotEpisodeReader(ParquetReader):
             )
             table = remap_task_index_table(table, remap)
             tables[(chunk, file_idx)] = table
-        return tables
+
+        index_by_file = {
+            key: table.column("index").combine_chunks().to_numpy(zero_copy_only=False)
+            for key, table in tables.items()
+        }
+        frame_counts = []
+        for row in tabular.table.select(
+            [
+                "data/chunk_index",
+                "data/file_index",
+                "dataset_from_index",
+                "dataset_to_index",
+            ]
+        ).to_pylist():
+            indexes = index_by_file[(row["data/chunk_index"], row["data/file_index"])]
+            frame_counts.append(
+                int(
+                    np.searchsorted(indexes, int(row["dataset_to_index"]))
+                    - np.searchsorted(indexes, int(row["dataset_from_index"]))
+                )
+            )
+        return tables, frame_counts
 
     def _get_frame_file_table(
         self,
@@ -333,13 +345,6 @@ class LeRobotEpisodeReader(ParquetReader):
             & (pc.field("index") < pa.scalar(to_idx, type=pa.int64()))
         )
         episode_index = int(self._episode_value(tabular, row_idx, "episode_index"))
-        expected = int(self._episode_value(tabular, row_idx, "length"))
-        if table.num_rows != expected:
-            raise ValueError(
-                f"episode {episode_index} expected {expected} frames from "
-                f"chunk {chunk!r} file {file_idx!r} index range [{from_idx}, {to_idx}), "
-                f"got {table.num_rows}"
-            )
         episode_index_column = pa.array(
             [episode_index] * table.num_rows, type=pa.int64()
         )
