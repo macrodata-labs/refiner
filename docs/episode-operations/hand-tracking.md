@@ -64,12 +64,12 @@ The payload contains:
 | `episode_id` | Ego-vision episode identifier. |
 | `camera_trajectory` | Per-frame world-from-camera transforms, shaped `[T, 4, 4]`. |
 | `intrinsics` | Per-frame camera intrinsics, usually `[T, 3, 3]`. |
-| `hands_camera` | Dict keyed by `left` and/or `right` with camera-space hand tracks. |
-| `hands_world` | Dict keyed by `left` and/or `right` with world-space hand tracks. |
+| `hands_camera` | Dict keyed by `left` and `right` with camera-space hand tracks. |
+| `hands_world` | Dict keyed by `left` and `right` with world-space hand tracks. |
 | `metadata` | Pipeline settings such as `vggt_seq_length` and `hawor_seq_length`. |
 | `diagnostics` | Optional ego-vision timing/debug information. |
 
-Each hand entry may contain:
+Each hand entry contains:
 
 | Field | Shape | Meaning |
 | --- | --- | --- |

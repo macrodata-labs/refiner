@@ -48,16 +48,16 @@ def track_hands(
             ``numpy.ndarray`` of per-frame camera intrinsics, usually shaped
             ``[T, 3, 3]``.
         ``hands_camera``:
-            Dictionary keyed by ``"left"`` and/or ``"right"``. Each hand entry
-            may contain ``joints_camera`` ``[T, 21, 3]``, ``T_camera_wrist``
-            ``[T, 4, 4]``, ``mano_pose`` ``[T, 96]``, ``mano_shape``
-            ``[T, 10]``, ``mano_translation`` ``[T, 3]``, ``confidence`` ``[T]``,
-            and ``infilled`` ``[T]``.
+            Dictionary keyed by ``"left"`` and ``"right"``. Each hand entry has
+            ``joints_camera`` ``[T, 21, 3]``, ``T_camera_wrist`` ``[T, 4, 4]``,
+            ``mano_pose`` ``[T, 96]``, ``mano_shape`` ``[T, 10]``,
+            ``mano_translation`` ``[T, 3]``, ``confidence`` ``[T]``, and
+            ``infilled`` ``[T]``.
         ``hands_world``:
-            Dictionary keyed by ``"left"`` and/or ``"right"``. Each hand entry
-            may contain ``joints_world`` ``[T, 21, 3]``, ``T_world_wrist``
-            ``[T, 4, 4]``, ``mano_pose`` ``[T, 96]``, ``mano_shape`` ``[T, 10]``,
-            ``confidence`` ``[T]``, and ``infilled`` ``[T]``.
+            Dictionary keyed by ``"left"`` and ``"right"``. Each hand entry has
+            ``joints_world`` ``[T, 21, 3]``, ``T_world_wrist`` ``[T, 4, 4]``,
+            ``mano_pose`` ``[T, 96]``, ``mano_shape`` ``[T, 10]``, ``confidence``
+            ``[T]``, and ``infilled`` ``[T]``.
         ``metadata``:
             Optional dictionary with pipeline settings such as
             ``vggt_seq_length`` and ``hawor_seq_length``.
