@@ -27,6 +27,8 @@ from refiner.robotics.lerobot_format import (
     merge_metadata,
     remap_task_index_table,
 )
+from refiner.worker.context import logger
+from refiner.worker.metrics.api import log_throughput
 
 _DEFAULT_EPISODES_GLOB_ROOT = "meta/episodes"
 _INFO_JSON = "meta/info.json"
@@ -54,6 +56,7 @@ class LeRobotEpisodeReader(ParquetReader):
         num_shards: int | None = None,
         arrow_batch_size: int = 65536,
         split_row_groups: bool = True,
+        skip_malformed_rows: bool = False,
     ) -> None:
         """Create a LeRobot episode reader over one or more dataset roots.
 
@@ -66,6 +69,8 @@ class LeRobotEpisodeReader(ParquetReader):
             storage_options=storage_options,
         )
         self._last_frame_table: tuple[tuple[int, Any, Any], pa.Table] | None = None
+        self.skip_malformed_rows = skip_malformed_rows
+        self._warned_malformed_row = False
 
         super().__init__(
             inputs=tuple(
@@ -110,20 +115,46 @@ class LeRobotEpisodeReader(ParquetReader):
                     remap=remap,
                 )
                 if batch.num_rows > 0:
-                    yield LeRobotTabular(
-                        batch,
-                        metadata_by_row=(metadata_for_source,) * batch.num_rows,
-                        frames_by_row=tuple(
-                            Tabular(
-                                self._slice_episode_frame_table(
-                                    row_idx=row_idx,
-                                    tabular=batch,
-                                    frame_tables=frame_tables,
+                    row_indices: list[int] = []
+                    frames_by_row: list[Tabular] = []
+                    skipped = 0
+                    for row_idx in range(batch.num_rows):
+                        try:
+                            frames_by_row.append(
+                                Tabular(
+                                    self._slice_episode_frame_table(
+                                        row_idx=row_idx,
+                                        tabular=batch,
+                                        frame_tables=frame_tables,
+                                    )
                                 )
                             )
-                            for row_idx in range(batch.num_rows)
+                            row_indices.append(row_idx)
+                        except ValueError as err:
+                            if not self.skip_malformed_rows:
+                                raise
+                            skipped += 1
+                            if not self._warned_malformed_row:
+                                logger.warning(
+                                    "Skipping malformed LeRobot row: {}", err
+                                )
+                                self._warned_malformed_row = True
+                    if skipped:
+                        log_throughput(
+                            "malformed_lerobot_rows_skipped",
+                            skipped,
+                            shard_id=shard.id,
+                            unit="rows",
+                        )
+                    if not row_indices:
+                        continue
+                    yield LeRobotTabular(
+                        Tabular(
+                            batch.table.take(pa.array(row_indices, type=pa.int64()))
                         ),
-                        roots_by_row=(root,) * batch.num_rows,
+                        metadata_by_row=(metadata_for_source,) * len(row_indices),
+                        frames_by_row=tuple(frames_by_row),
+                        roots_by_row=(root,) * len(row_indices),
                     )
 
     @staticmethod
@@ -270,6 +301,13 @@ class LeRobotEpisodeReader(ParquetReader):
             & (pc.field("index") < pa.scalar(to_idx, type=pa.int64()))
         )
         episode_index = int(self._episode_value(tabular, row_idx, "episode_index"))
+        expected = int(self._episode_value(tabular, row_idx, "length"))
+        if table.num_rows != expected:
+            raise ValueError(
+                f"episode {episode_index} expected {expected} frames from "
+                f"chunk {chunk!r} file {file_idx!r} index range [{from_idx}, {to_idx}), "
+                f"got {table.num_rows}"
+            )
         episode_index_column = pa.array(
             [episode_index] * table.num_rows, type=pa.int64()
         )

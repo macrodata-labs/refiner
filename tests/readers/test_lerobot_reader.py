@@ -15,6 +15,8 @@ from refiner.pipeline.data.row import DictRow
 from refiner.video import VideoFile
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.worker.context import set_active_run_context
+from refiner.worker.metrics.emitter import UserMetricsEmitter
 from refiner.robotics.lerobot_format import (
     LeRobotInfo,
     LeRobotFeatureInfo,
@@ -25,6 +27,36 @@ from refiner.robotics.lerobot_format import (
     LeRobotVideoInfo,
     remap_task_index_table,
 )
+
+
+class _RecordingEmitter(UserMetricsEmitter):
+    def __init__(self) -> None:
+        self.counters: list[dict[str, object]] = []
+
+    def emit_user_counter(self, **kwargs) -> None:
+        self.counters.append(kwargs)
+
+
+class _Runtime:
+    def claim(self, previous=None):
+        del previous
+        return None
+
+    def heartbeat(self, shards):
+        del shards
+
+    def complete(self, shard):
+        del shard
+
+    def fail(self, shard, error=None):
+        del shard, error
+
+    def finalized_workers(self, *, stage_index=None):
+        del stage_index
+        return []
+
+    def shutdown(self) -> None:
+        return None
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -89,6 +121,7 @@ def _build_sample_dataset(
         [
             {
                 "episode_index": 0,
+                "length": 2,
                 "dataset_from_index": 0,
                 "dataset_to_index": 2,
                 "data/chunk_index": 0,
@@ -104,6 +137,7 @@ def _build_sample_dataset(
             },
             {
                 "episode_index": 1,
+                "length": 2,
                 "dataset_from_index": 2,
                 "dataset_to_index": 4,
                 "data/chunk_index": 0,
@@ -186,6 +220,90 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert video.uri.endswith("/videos/observation.images.main/chunk-000/file-000.mp4")
     assert video.from_timestamp_s == 0.0
     assert video.to_timestamp_s == 1.0
+
+
+def test_lerobot_reader_raises_on_malformed_frame_count(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+    _write_parquet(
+        root / "data" / "chunk-000" / "file-000.parquet",
+        [
+            {
+                "index": 0,
+                "episode_index": 0,
+                "frame_index": 0,
+                "timestamp": 0.0,
+                "task_index": 0,
+            },
+            {
+                "index": 1,
+                "episode_index": 0,
+                "frame_index": 1,
+                "timestamp": 0.1,
+                "task_index": 0,
+            },
+        ],
+    )
+
+    reader = LeRobotEpisodeReader(str(root))
+
+    with pytest.raises(ValueError, match="episode 1 expected 2 frames"):
+        _episode_rows(reader)
+
+
+def test_lerobot_reader_can_skip_malformed_rows(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+    _write_parquet(
+        root / "data" / "chunk-000" / "file-000.parquet",
+        [
+            {
+                "index": 0,
+                "episode_index": 0,
+                "frame_index": 0,
+                "timestamp": 0.0,
+                "task_index": 0,
+            },
+            {
+                "index": 1,
+                "episode_index": 0,
+                "frame_index": 1,
+                "timestamp": 0.1,
+                "task_index": 0,
+            },
+        ],
+    )
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        "refiner.pipeline.sources.readers.lerobot.logger.warning",
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+
+    reader = LeRobotEpisodeReader(str(root), skip_malformed_rows=True)
+    emitter = _RecordingEmitter()
+    with set_active_run_context(
+        job_id="job-1",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=_Runtime(),
+        user_metrics_emitter=emitter,
+    ):
+        rows = [
+            row
+            for shard in reader.list_shards()
+            for unit in reader.iter_shard_units(shard)
+            for row in cast(Tabular, unit).to_rows()
+        ]
+
+    assert [int(row["episode_index"]) for row in rows] == [0]
+    assert len(warnings) == 1
+    assert "episode 1 expected 2 frames" in warnings[0]
+    assert [
+        counter["value"]
+        for counter in emitter.counters
+        if counter["label"] == "malformed_lerobot_rows_skipped"
+    ] == [1.0]
 
 
 def test_lerobot_row_uses_absolute_video_uri_directly() -> None:
