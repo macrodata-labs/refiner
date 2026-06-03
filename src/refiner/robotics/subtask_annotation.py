@@ -248,10 +248,33 @@ async def _subtask_annotation_content(
     quality: int,
     include_contact_sheet_manifest: bool,
 ) -> list[dict[str, Any]]:
-    sheets = await timestamped_contact_sheets(
+    if sample_sec <= 0:
+        raise ValueError("sample_sec must be > 0")
+    if frame_width <= 0:
+        raise ValueError("frame_width must be > 0")
+    if frames_per_sheet <= 0:
+        raise ValueError("frames_per_sheet must be > 0")
+    if columns <= 0:
+        raise ValueError("columns must be > 0")
+    if quality <= 0 or quality > 100:
+        raise ValueError("quality must be between 1 and 100")
+
+    check_required_dependencies(
+        "subtask_annotation",
+        ["av", ("PIL", "pillow")],
+        dist="video",
+    )
+
+    samples = await _sample_timestamped_frames(
         video,
         sample_sec=sample_sec,
         frame_width=frame_width,
+    )
+    if not samples:
+        raise ValueError("video produced no frames")
+
+    sheets = _build_contact_sheets(
+        samples,
         frames_per_sheet=frames_per_sheet,
         columns=columns,
         quality=quality,
@@ -307,50 +330,6 @@ def _filter_segments(
         for segment in segments
         if float(segment["end_sec"]) - float(segment["start_sec"]) >= min_duration_sec
     ]
-
-
-async def timestamped_contact_sheets(
-    video: VideoFile,
-    *,
-    sample_sec: float = 0.5,
-    frame_width: int = 224,
-    frames_per_sheet: int = 20,
-    columns: int = 5,
-    quality: int = 84,
-) -> list[TimestampedContactSheet]:
-    """Sample a video into JPEG contact sheets with visible timestamp badges."""
-
-    if sample_sec <= 0:
-        raise ValueError("sample_sec must be > 0")
-    if frame_width <= 0:
-        raise ValueError("frame_width must be > 0")
-    if frames_per_sheet <= 0:
-        raise ValueError("frames_per_sheet must be > 0")
-    if columns <= 0:
-        raise ValueError("columns must be > 0")
-    if quality <= 0 or quality > 100:
-        raise ValueError("quality must be between 1 and 100")
-
-    check_required_dependencies(
-        "timestamped_contact_sheets",
-        ["av", ("PIL", "pillow")],
-        dist="video",
-    )
-
-    samples = await _sample_timestamped_frames(
-        video,
-        sample_sec=sample_sec,
-        frame_width=frame_width,
-    )
-    if not samples:
-        raise ValueError("video produced no frames")
-
-    return _build_contact_sheets(
-        samples,
-        frames_per_sheet=frames_per_sheet,
-        columns=columns,
-        quality=quality,
-    )
 
 
 async def _sample_timestamped_frames(
@@ -460,5 +439,4 @@ __all__ = [
     "TimestampedContactSheet",
     "contact_sheet_prompt_manifest",
     "subtask_annotation",
-    "timestamped_contact_sheets",
 ]

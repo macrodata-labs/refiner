@@ -43,10 +43,13 @@ def _write_video(path, *, num_frames: int = 6, fps: int = 5) -> None:
 
 
 async def _build_sheets(video: mdr.video.VideoFile):
-    return await mdr.robotics.timestamped_contact_sheets(
+    samples = await subtask_annotation_module._sample_timestamped_frames(
         video,
         sample_sec=0.4,
         frame_width=64,
+    )
+    return subtask_annotation_module._build_contact_sheets(
+        samples,
         frames_per_sheet=2,
         columns=2,
         quality=95,
@@ -73,7 +76,7 @@ def _lerobot_row(tmp_path, *, tasks: list[str] | None = None) -> LeRobotRow:
     )
 
 
-def test_timestamped_contact_sheets_sample_and_tile_video(tmp_path) -> None:
+def test_contact_sheet_sampling_tiles_video(tmp_path) -> None:
     path = tmp_path / "video.mp4"
     _write_video(path, num_frames=6, fps=5)
     video = mdr.video.VideoFile(DataFile.resolve(path))
@@ -95,7 +98,7 @@ def test_timestamped_contact_sheets_sample_and_tile_video(tmp_path) -> None:
     assert sheets[0].data.startswith(b"\xff\xd8")
 
 
-def test_timestamped_contact_sheets_engravings_are_visible(tmp_path) -> None:
+def test_contact_sheet_timestamp_engravings_are_visible(tmp_path) -> None:
     from PIL import Image
 
     path = tmp_path / "video.mp4"
@@ -114,13 +117,24 @@ def test_timestamped_contact_sheets_engravings_are_visible(tmp_path) -> None:
     assert plain_frame_area.mean() > badge.mean()
 
 
-def test_timestamped_contact_sheets_reject_invalid_options(tmp_path) -> None:
+def test_contact_sheet_content_rejects_invalid_options(tmp_path) -> None:
     path = tmp_path / "video.mp4"
     _write_video(path)
     video = mdr.video.VideoFile(DataFile.resolve(path))
 
     with pytest.raises(ValueError, match="sample_sec must be > 0"):
-        asyncio.run(mdr.robotics.timestamped_contact_sheets(video, sample_sec=0))
+        asyncio.run(
+            subtask_annotation_module._subtask_annotation_content(
+                video=video,
+                tasks=[],
+                sample_sec=0,
+                frame_width=64,
+                frames_per_sheet=2,
+                columns=2,
+                quality=95,
+                include_contact_sheet_manifest=False,
+            )
+        )
 
 
 def test_contact_sheet_prompt_manifest_describes_continuity(tmp_path) -> None:
