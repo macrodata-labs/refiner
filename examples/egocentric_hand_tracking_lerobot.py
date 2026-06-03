@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # Cloud usage from a clean environment:
 # uv run --no-project \
-#   --with "macrodata-refiner[hf,video,robotics]" \
+#   --with "macrodata-refiner[hf,video,egocentric]" \
 #   --with "ego-vision[models]==0.1.14" \
 #   examples/egocentric_hand_tracking_lerobot.py run \
 #   --output hf://buckets/macrodata/test_bucket/egocentric-hand-tracking \
