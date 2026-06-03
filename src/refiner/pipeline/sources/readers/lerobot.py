@@ -5,7 +5,6 @@ from collections.abc import Iterator, Mapping, Sequence
 from functools import cached_property
 from typing import Any
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -108,7 +107,7 @@ class LeRobotEpisodeReader(ParquetReader):
                 root = self.roots[part.source_index]
                 metadata_for_source = metadata[part.source_index]
                 remap = remaps[part.source_index]
-                frame_tables, frame_counts = self._load_frame_tables(
+                frame_tables = self._load_frame_tables(
                     source_index=part.source_index,
                     tabular=batch,
                     root=root,
@@ -118,16 +117,24 @@ class LeRobotEpisodeReader(ParquetReader):
                 if batch.num_rows <= 0:
                     continue
 
+                frames_by_row = tuple(
+                    self._slice_episode_frame_table(
+                        row_idx=row_idx,
+                        tabular=batch,
+                        frame_tables=frame_tables,
+                    )
+                    for row_idx in range(batch.num_rows)
+                )
                 lengths = batch.columns[batch.index_by_name["length"]]
                 keep = [
-                    actual == int(lengths[row_idx].as_py())
-                    for row_idx, actual in enumerate(frame_counts)
+                    table.num_rows == int(lengths[row_idx].as_py())
+                    for row_idx, table in enumerate(frames_by_row)
                 ]
                 skipped = keep.count(False)
                 if skipped and not self.skip_malformed_rows:
                     row_idx = keep.index(False)
                     expected = int(lengths[row_idx].as_py())
-                    actual = frame_counts[row_idx]
+                    actual = frames_by_row[row_idx].num_rows
                     episode_index = int(
                         self._episode_value(batch, row_idx, "episode_index")
                     )
@@ -150,22 +157,18 @@ class LeRobotEpisodeReader(ParquetReader):
                     batch = batch.with_table(
                         batch.table.filter(pa.array(keep, type=pa.bool_()))
                     )
+                    frames_by_row = tuple(
+                        table
+                        for table, should_keep in zip(frames_by_row, keep, strict=True)
+                        if should_keep
+                    )
                     if batch.num_rows == 0:
                         continue
 
                 yield LeRobotTabular(
                     batch,
                     metadata_by_row=(metadata_for_source,) * batch.num_rows,
-                    frames_by_row=tuple(
-                        Tabular(
-                            self._slice_episode_frame_table(
-                                row_idx=row_idx,
-                                tabular=batch,
-                                frame_tables=frame_tables,
-                            )
-                        )
-                        for row_idx in range(batch.num_rows)
-                    ),
+                    frames_by_row=tuple(Tabular(table) for table in frames_by_row),
                     roots_by_row=(root,) * batch.num_rows,
                 )
 
@@ -225,8 +228,8 @@ class LeRobotEpisodeReader(ParquetReader):
         root: DataFolder,
         metadata: LeRobotMetadata,
         remap: Mapping[int, int],
-    ) -> tuple[dict[tuple[Any, Any], pa.Table], list[int]]:
-        """Load reduced frame tables and per-episode frame counts.
+    ) -> dict[tuple[Any, Any], pa.Table]:
+        """Load one reduced frame table per referenced `(chunk, file)` pair.
 
         Each table is narrowed to the enclosing dataset-index span needed by
         the current episode batch and task indices are remapped once at the
@@ -277,25 +280,7 @@ class LeRobotEpisodeReader(ParquetReader):
             )
             table = remap_task_index_table(table, remap)
             tables[(chunk, file_idx)] = table
-
-        index_by_file = {
-            key: table.column("index").combine_chunks().to_numpy(zero_copy_only=False)
-            for key, table in tables.items()
-        }
-        frame_counts = []
-        chunks = tabular.columns[tabular.index_by_name["data/chunk_index"]]
-        files = tabular.columns[tabular.index_by_name["data/file_index"]]
-        from_indices = tabular.columns[tabular.index_by_name["dataset_from_index"]]
-        to_indices = tabular.columns[tabular.index_by_name["dataset_to_index"]]
-        for row_idx in range(tabular.num_rows):
-            indexes = index_by_file[(chunks[row_idx].as_py(), files[row_idx].as_py())]
-            frame_counts.append(
-                int(
-                    np.searchsorted(indexes, int(to_indices[row_idx].as_py()))
-                    - np.searchsorted(indexes, int(from_indices[row_idx].as_py()))
-                )
-            )
-        return tables, frame_counts
+        return tables
 
     def _get_frame_file_table(
         self,

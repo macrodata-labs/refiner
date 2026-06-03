@@ -255,12 +255,7 @@ def test_lerobot_reader_can_skip_malformed_rows(tmp_path: Path, monkeypatch) -> 
     )
 
     reader = LeRobotEpisodeReader(str(root), skip_malformed_rows=True)
-    rows = [
-        row
-        for shard in reader.list_shards()
-        for unit in reader.read_shard(shard)
-        for row in cast(Tabular, unit).to_rows()
-    ]
+    rows = _episode_rows(reader)
 
     assert [int(row["episode_index"]) for row in rows] == [0]
     assert len(warnings) == 1
