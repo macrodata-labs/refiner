@@ -186,18 +186,14 @@ async def _handle_json_response(
     operation: str,
 ) -> APIResponse:
     response_headers = _response_headers(response)
-    status_code = getattr(response, "status_code", getattr(response, "status", 200))
+    status_code = response.status
     if status_code >= 400:
         response_body = await _response_text(response)
         data = await _response_json_or_none(response)
         message = _error_message(
             operation=operation,
             status_code=status_code,
-            status_text=getattr(
-                response,
-                "reason_phrase",
-                getattr(response, "reason", ""),
-            ),
+            status_text=response.reason or "",
             data=data,
             response_body=response_body,
         )

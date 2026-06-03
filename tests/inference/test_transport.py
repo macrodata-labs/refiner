@@ -22,17 +22,17 @@ from ._helpers import (
 class _FakeHTTPResponse:
     def __init__(
         self,
-        status_code: int = 200,
+        status: int = 200,
         *,
         json: object | None = None,
         headers: Mapping[str, str] | None = None,
         text: str | None = None,
-        reason_phrase: str = "",
+        reason: str = "",
     ) -> None:
-        self.status_code = status_code
+        self.status = status
         self.headers = dict(headers or {})
         self._text = text if text is not None else ""
-        self.reason_phrase = reason_phrase
+        self.reason = reason
         self._json = json
 
     async def json(self, content_type=None) -> object:
@@ -95,6 +95,9 @@ def test_openai_endpoint_includes_api_key_in_requests(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+
         def raise_for_status(self) -> None:
             return None
 
@@ -157,6 +160,9 @@ def test_openai_endpoint_preserves_base_url_path_prefix(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+
         def raise_for_status(self) -> None:
             return None
 
@@ -216,6 +222,9 @@ def test_openai_endpoint_applies_configured_connection_limits(monkeypatch) -> No
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+
         def raise_for_status(self) -> None:
             return None
 
@@ -269,6 +278,9 @@ def test_inference_map_exposes_client_close_hook(monkeypatch) -> None:
     seen: dict[str, int] = {"closed": 0}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+
         async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
@@ -404,6 +416,9 @@ def test_openai_endpoint_retries_on_timeout(monkeypatch) -> None:
     seen: dict[str, int] = {"calls": 0, "sleeps": 0}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+
         def raise_for_status(self) -> None:
             return None
 
@@ -463,6 +478,9 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
     seen: dict[str, int] = {"calls": 0, "sleeps": 0}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+
         def raise_for_status(self) -> None:
             return None
 
@@ -522,6 +540,9 @@ def test_openai_endpoint_retries_on_remote_protocol_error(monkeypatch) -> None:
     seen: dict[str, int] = {"calls": 0, "sleeps": 0}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+
         def raise_for_status(self) -> None:
             return None
 
@@ -583,7 +604,8 @@ def test_openai_endpoint_retries_on_response_body_read_error(monkeypatch) -> Non
     seen: dict[str, int] = {"calls": 0, "sleeps": 0}
 
     class _BrokenBodyResponse:
-        status_code = 200
+        status = 200
+        reason = ""
         headers: Mapping[str, str] = {}
 
         async def json(self, content_type=None) -> object:
@@ -593,6 +615,9 @@ def test_openai_endpoint_retries_on_response_body_read_error(monkeypatch) -> Non
             return ""
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+
         async def json(self, content_type=None) -> Mapping[str, object]:
             return {
                 "choices": [
