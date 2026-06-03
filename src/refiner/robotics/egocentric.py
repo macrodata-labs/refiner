@@ -80,11 +80,6 @@ def track_hands(
             if hawor_frame_count <= 0:
                 hawor_frame_count = decoded_frame_count
             row.log_throughput("frames_processed", hawor_frame_count, unit="frames")
-            row.log_throughput(
-                "egovision_hawor_frames_processed",
-                hawor_frame_count,
-                unit="frames",
-            )
             row.log_throughput("egovision_episodes_processed", 1, unit="episodes")
             yield row.update({output_key: hand_tracking})
 
