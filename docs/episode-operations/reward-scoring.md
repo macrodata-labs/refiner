@@ -6,20 +6,24 @@ description: "Score episode progress and success with a pooling model"
 # Reward Scoring
 
 `reward_score` samples frames from an episode video and uses a Robometer-style
-pooling model to estimate progress and success.
+pooling model to estimate progress and success. It expects rows from
+`read_lerobot(...)`.
 
 ```python
 pipeline = (
-    mdr.read_lerobot("hf://datasets/acme/demos")
+    mdr.read_lerobot("hf://datasets/nvidia/LIBERO_LeRobot_v3/libero_90")
     .map_async(
         mdr.robotics.reward_score(
             model="robometer/Robometer-4B",
-            video_key="observation.images.top",
-            task=lambda row: "; ".join(row.tasks),
+            video_key="observation.images.image",
+            task="complete the robot manipulation task",
             max_frames=8,
+            max_concurrent_requests=256,
         ),
-        max_in_flight=32,
+        max_in_flight=256,
+        preserve_order=False,
     )
+    .write_lerobot("hf://buckets/acme-robotics/libero-robometer-reward")
 )
 ```
 
@@ -52,3 +56,9 @@ mdr.robotics.reward_score(task=lambda row: row.task or "; ".join(row.tasks))
 
 `reward_score` uses pooling inference through a vLLM provider. See
 [Pooling](../inference/pooling.md) and [Providers and vLLM](../inference/providers-and-vllm.md).
+
+If the selected episode video has no decoded frames, `reward_score` raises for
+that row instead of emitting empty reward columns.
+
+For a complete cloud example, see
+[`examples/lerobot/robometer_reward.py`](../../examples/lerobot/robometer_reward.py).
