@@ -67,7 +67,6 @@ The payload contains:
 | `hands_camera` | Dict keyed by `left` and `right` with camera-space hand tracks. |
 | `hands_world` | Dict keyed by `left` and `right` with world-space hand tracks. |
 | `metadata` | Pipeline settings such as `vggt_seq_length` and `hawor_seq_length`. |
-| `diagnostics` | Optional ego-vision timing/debug information. |
 
 Each hand entry contains:
 

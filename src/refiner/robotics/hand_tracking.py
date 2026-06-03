@@ -61,8 +61,6 @@ def track_hands(
         ``metadata``:
             Optional dictionary with pipeline settings such as
             ``vggt_seq_length`` and ``hawor_seq_length``.
-        ``diagnostics``:
-            Optional ego-vision timing/debug information.
 
     Metrics:
         Logs ``egovision_frames_decoded`` while frames are read,
