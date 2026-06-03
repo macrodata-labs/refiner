@@ -99,11 +99,7 @@ locally, or when a cloud run should pin a different version:
 pipeline.launch_cloud(
     name="hand-tracking-smoke",
     gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
-    extra_dependencies=[
-        "ego-vision[models,detection]==0.1.6",
-        "opencv-python-headless",
-        "torch",
-    ],
+    extra_dependencies=["macrodata-refiner[hand_tracking]"],
 )
 ```
 

@@ -2,8 +2,7 @@ from __future__ import annotations
 
 # Cloud usage from a clean environment:
 # uv run --no-project \
-#   --with "macrodata-refiner[hf,video,hand_tracking]" \
-#   --with "ego-vision[models]==0.1.15" \
+#   --with "macrodata-refiner[hand_tracking]" \
 #   examples/hand_tracking_lerobot.py \
 #   --cloud
 

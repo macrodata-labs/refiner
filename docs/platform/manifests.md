@@ -56,7 +56,7 @@ pipeline.launch_cloud(
     extra_dependencies=[
         "torch==2.6.0",
         "transformers>=4.55",
-        "ego-vision[models,detection]==0.1.6",
+        "macrodata-refiner[hand_tracking]",
     ],
 )
 ```
@@ -67,7 +67,7 @@ ranges are shown as the submitted install string:
 ```text
 torch==2.6.0
 transformers>=4.55
-ego-vision[detection,models]==0.1.6
+macrodata-refiner[hand_tracking]
 ```
 
 Environment markers are not preserved. Do not include markers in
