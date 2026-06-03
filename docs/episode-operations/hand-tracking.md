@@ -1,9 +1,9 @@
 ---
-title: "Egocentric Hand Tracking"
+title: "Hand Tracking"
 description: "Run batched hand tracking on robotics episode videos"
 ---
 
-# Egocentric Hand Tracking
+# Hand Tracking
 
 `track_hands` returns a `batch_map` function that runs an ego-vision hand
 tracking pipeline over episode videos.
@@ -21,10 +21,10 @@ pipeline = (
 
 ## Requirements
 
-Install the egocentric extra:
+Install the hand-tracking extra:
 
 ```bash
-pip install macrodata-refiner[egocentric]
+pip install macrodata-refiner[hand_tracking]
 ```
 
 Input rows must implement `RoboticsRow` and include the selected `video_key` in

@@ -34,7 +34,7 @@ def track_hands(
     episode_input = None
 
     @describe_builtin(
-        "robotics.egocentric:track_hands",
+        "robotics.hand_tracking:track_hands",
         video_key=video_key,
         output_key=output_key,
     )
@@ -92,7 +92,7 @@ def _load_egovision(config: Any | None) -> tuple[Any, Any]:
     except ImportError as exc:
         raise ImportError(
             "track_hands requires ego-vision. Install it with "
-            "`pip install macrodata-refiner[egocentric]`."
+            "`pip install macrodata-refiner[hand_tracking]`."
         ) from exc
 
     if config is None:

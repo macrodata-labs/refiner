@@ -1708,7 +1708,7 @@ all = [
     { name = "warcio" },
     { name = "zarr" },
 ]
-egocentric = [
+hand-tracking = [
     { name = "av" },
     { name = "datasets" },
     { name = "ego-vision", extra = ["models"] },
@@ -1787,7 +1787,7 @@ requires-dist = [
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "datasets", marker = "extra == 'hf'", specifier = ">=3.0.0" },
-    { name = "ego-vision", extras = ["models"], marker = "extra == 'egocentric'", specifier = ">=0.1.15" },
+    { name = "ego-vision", extras = ["models"], marker = "extra == 'hand-tracking'", specifier = ">=0.1.15" },
     { name = "fsspec", extras = ["http"] },
     { name = "h5py", marker = "extra == 'hdf5'" },
     { name = "hf", marker = "extra == 'hf'", specifier = ">=1.7.1" },
@@ -1797,14 +1797,14 @@ requires-dist = [
     { name = "macrodata-refiner", extras = ["all"], marker = "extra == 'testing'" },
     { name = "macrodata-refiner", extras = ["hdf5"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'all'" },
-    { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'egocentric'" },
+    { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'hand-tracking'" },
     { name = "macrodata-refiner", extras = ["mcap"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["s3"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["tensorflow"], marker = "extra == 'tfds'" },
     { name = "macrodata-refiner", extras = ["text"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["tfds"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'all'" },
-    { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'egocentric'" },
+    { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'hand-tracking'" },
     { name = "macrodata-refiner", extras = ["zarr"], marker = "extra == 'all'" },
     { name = "mcap", marker = "extra == 'mcap'" },
     { name = "mcap-protobuf-support", marker = "extra == 'mcap'" },
@@ -1826,7 +1826,7 @@ requires-dist = [
     { name = "warcio", marker = "extra == 'text'" },
     { name = "zarr", marker = "extra == 'zarr'", specifier = ">=2.18,<3" },
 ]
-provides-extras = ["video", "hf", "egocentric", "text", "hdf5", "zarr", "mcap", "s3", "tensorflow", "tfds", "testing", "all"]
+provides-extras = ["video", "hf", "hand-tracking", "text", "hdf5", "zarr", "mcap", "s3", "tensorflow", "tfds", "testing", "all"]
 
 [package.metadata.requires-dev]
 dev = [

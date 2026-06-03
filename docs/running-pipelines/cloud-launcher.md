@@ -44,7 +44,7 @@ locally, or when the cloud package should override the locally captured version:
 
 ```python
 pipeline.launch_cloud(
-    name="egocentric-smoke",
+    name="hand-tracking-smoke",
     gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
     extra_dependencies=[
         "ego-vision[models,detection]==0.1.6",

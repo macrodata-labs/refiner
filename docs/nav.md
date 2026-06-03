@@ -49,7 +49,7 @@
 - [Motion Trimming](episode-operations/motion-trimming.md)
 - [Subtask Annotation](episode-operations/subtask-annotation.md)
 - [Reward Scoring](episode-operations/reward-scoring.md)
-- [Egocentric Hand Tracking](episode-operations/egocentric-hand-tracking.md)
+- [Hand Tracking](episode-operations/hand-tracking.md)
 
 ## Inference
 

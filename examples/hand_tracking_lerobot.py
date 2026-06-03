@@ -2,9 +2,9 @@ from __future__ import annotations
 
 # Cloud usage from a clean environment:
 # uv run --no-project \
-#   --with "macrodata-refiner[hf,video,egocentric]" \
+#   --with "macrodata-refiner[hf,video,hand_tracking]" \
 #   --with "ego-vision[models]==0.1.15" \
-#   examples/egocentric_hand_tracking_lerobot.py \
+#   examples/hand_tracking_lerobot.py \
 #   --cloud
 
 import argparse
@@ -19,8 +19,8 @@ import refiner as mdr
 
 DEFAULT_INPUT_DATASET = "toloka/HomER"
 DEFAULT_SPLIT = "train"
-DEFAULT_OUTPUT_ROOT = "hf://buckets/macrodata/test_bucket/homer-egocentric-hands"
-DEFAULT_NAME = "egocentric-hand-tracking-lerobot"
+DEFAULT_OUTPUT_ROOT = "hf://buckets/macrodata/test_bucket/homer-hand-tracking"
+DEFAULT_NAME = "hand-tracking-lerobot"
 DEFAULT_FPS = 30.0
 DEFAULT_BATCH_SIZE = 2
 DEFAULT_NUM_WORKERS = 1
@@ -251,7 +251,7 @@ def main() -> None:
             episode_id_key="episode_id",
             task_key="description",
             fps=args.fps,
-            robot_type="human_egocentric_hands",
+            robot_type="human_hand_tracking",
             video_keys={"video": "video_url"},
         )
         .batch_map(

@@ -6,7 +6,7 @@ from refiner.robotics.subtask_annotation import (
     subtask_annotation,
     timestamped_contact_sheets,
 )
-from refiner.robotics.egocentric import track_hands
+from refiner.robotics.hand_tracking import track_hands
 from refiner.robotics.row import (
     RoboticsRow,
 )

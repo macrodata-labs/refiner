@@ -12,7 +12,7 @@ import refiner as mdr
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.row import Row
-from refiner.robotics.egocentric import track_hands
+from refiner.robotics.hand_tracking import track_hands
 from refiner.robotics.row import _robot_row_converter
 from refiner.video import VideoFrameArray
 
@@ -82,7 +82,7 @@ def test_track_hands_runs_episode_batch_map(monkeypatch) -> None:
     setattr(fake_egovision, "HandTrackingPipeline", HandTrackingPipeline)
     setattr(fake_egovision, "HaworReconstructionConfig", HaworReconstructionConfig)
     monkeypatch.setitem(sys.modules, "egovision", fake_egovision)
-    monkeypatch.setattr("refiner.robotics.egocentric.logger", FakeLogger())
+    monkeypatch.setattr("refiner.robotics.hand_tracking.logger", FakeLogger())
     monkeypatch.setattr(Row, "log_throughput", log_throughput)
 
     frames = np.zeros((2, 4, 5, 3), dtype=np.uint8)
