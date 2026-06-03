@@ -203,7 +203,11 @@ def _joint_state_arrays(
 
 
 def _world_hand(hand_tracking: dict[str, Any], side: str) -> dict[str, Any]:
-    for hand in hand_tracking.get("hands_world", []):
+    hands_world = hand_tracking.get("hands_world", {})
+    if isinstance(hands_world, dict):
+        hand = hands_world.get(side)
+        return hand if isinstance(hand, dict) else {}
+    for hand in hands_world:
         if hand.get("handedness") == side:
             return hand
     return {}
