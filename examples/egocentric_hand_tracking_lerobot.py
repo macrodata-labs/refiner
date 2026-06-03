@@ -3,7 +3,7 @@ from __future__ import annotations
 # Cloud usage from a clean environment:
 # uv run --no-project \
 #   --with "macrodata-refiner[hf,video,egocentric]" \
-#   --with "ego-vision[models]==0.1.14" \
+#   --with "ego-vision[models]==0.1.15" \
 #   examples/egocentric_hand_tracking_lerobot.py run \
 #   --output hf://buckets/macrodata/test_bucket/egocentric-hand-tracking \
 #   --cloud
@@ -24,15 +24,16 @@ DEFAULT_VIDEO = (
 
 
 def add_egovision_outputs(row: Any) -> Any:
-    from egovision.pipelines.hand_tracking_outputs import hand_tracking_outputs
+    from egovision.pipelines import rerun_result, to_mano_actions
 
     hand_tracking = dict(row["hand_tracking"])
     hand_tracking.pop("relative_actions", None)
-    outputs = hand_tracking_outputs(hand_tracking)
     return row.update(
         {
-            "egovision_rerun_result_json": json.dumps(outputs["rerun_result"]),
-            "wrist_mano_actions": outputs["wrist_mano_actions"],
+            "egovision_rerun_result_json": json.dumps(
+                _json_ready(rerun_result(hand_tracking))
+            ),
+            "wrist_mano_actions": to_mano_actions(hand_tracking),
         }
     )
 
@@ -107,6 +108,18 @@ def _wrist_mano_action_array(
         np.concatenate([values[:count] for values in side_arrays], axis=1).tolist(),
         np.stack([values[:count] for values in side_valid], axis=1).tolist(),
     )
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_ready(item) for item in value]
+    return value
 
 
 def main() -> None:
