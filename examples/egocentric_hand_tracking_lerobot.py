@@ -32,10 +32,11 @@ def create_mano_actions(row: Any) -> Any:
     hand_tracking.pop("relative_actions", None)
     mano_actions = to_mano_actions(hand_tracking)
     actions, valid = _wrist_mano_action_array(mano_actions)
-    states = _wrist_mano_state_array(hand_tracking, len(actions))
+    states = _wrist_mano_state_arrays(hand_tracking, len(actions))
     return (
         row.with_actions(actions)
-        .with_observation("state", states)
+        .with_observation("left_hand_state", states["left"])
+        .with_observation("right_hand_state", states["right"])
         .with_observation("egovision.wrist_mano_delta_valid", valid)
         .update(
             {
@@ -55,10 +56,11 @@ def create_joint_actions(row: Any) -> Any:
     hand_tracking.pop("relative_actions", None)
     joint_actions = to_joint_actions(hand_tracking)
     actions, valid = _joint_action_array(joint_actions)
-    states = _joint_state_array(hand_tracking, len(actions))
+    states = _joint_state_arrays(hand_tracking, len(actions))
     return (
         row.with_actions(actions)
-        .with_observation("state", states)
+        .with_observation("left_hand_state", states["left"])
+        .with_observation("right_hand_state", states["right"])
         .with_observation("egovision.joint_delta_valid", valid)
         .update(
             {
@@ -135,11 +137,11 @@ def _wrist_mano_action_array(
     )
 
 
-def _wrist_mano_state_array(
+def _wrist_mano_state_arrays(
     hand_tracking: dict[str, Any],
     count: int,
-) -> list[list[float]]:
-    side_arrays = []
+) -> dict[str, list[list[float]]]:
+    states = {}
     for side in ("left", "right"):
         hand = _world_hand(hand_tracking, side)
         transforms = np.asarray(hand.get("T_world_wrist", []), dtype=np.float64)
@@ -147,21 +149,17 @@ def _wrist_mano_state_array(
         if mano_pose.ndim == 1:
             mano_pose = mano_pose.reshape(len(mano_pose), -1)
         frame_count = min(count, len(transforms), len(mano_pose))
-        if frame_count == 0:
-            side_arrays.append(np.full((count, 16 + MANO_POSE_WIDTH), np.nan))
-        else:
-            pose_width = mano_pose.shape[1] if mano_pose.ndim == 2 else MANO_POSE_WIDTH
-            side_arrays.append(
-                np.concatenate(
-                    [
-                        transforms[:frame_count].reshape(frame_count, 16),
-                        mano_pose[:frame_count].reshape(frame_count, pose_width),
-                    ],
-                    axis=1,
-                )
+        state = np.full((count, 16 + MANO_POSE_WIDTH), np.nan)
+        if frame_count:
+            state[:frame_count] = np.concatenate(
+                [
+                    transforms[:frame_count].reshape(frame_count, 16),
+                    mano_pose[:frame_count].reshape(frame_count, MANO_POSE_WIDTH),
+                ],
+                axis=1,
             )
-    count = min(count, *(len(values) for values in side_arrays))
-    return np.concatenate([values[:count] for values in side_arrays], axis=1).tolist()
+        states[side] = state.tolist()
+    return states
 
 
 def _joint_action_array(
@@ -184,23 +182,24 @@ def _joint_action_array(
     )
 
 
-def _joint_state_array(
+def _joint_state_arrays(
     hand_tracking: dict[str, Any],
     count: int,
-) -> list[list[float]]:
-    side_arrays = []
+) -> dict[str, list[list[float]]]:
+    states = {}
     for side in ("left", "right"):
         joints = np.asarray(
             _world_hand(hand_tracking, side).get("joints_world", []),
             dtype=np.float64,
         )
         frame_count = min(count, len(joints))
-        if frame_count == 0:
-            side_arrays.append(np.full((count, JOINT_STATE_WIDTH), np.nan))
-        else:
-            side_arrays.append(joints[:frame_count].reshape(frame_count, -1))
-    count = min(count, *(len(values) for values in side_arrays))
-    return np.concatenate([values[:count] for values in side_arrays], axis=1).tolist()
+        state = np.full((count, JOINT_STATE_WIDTH), np.nan)
+        if frame_count:
+            state[:frame_count] = joints[:frame_count].reshape(
+                frame_count, JOINT_STATE_WIDTH
+            )
+        states[side] = state.tolist()
+    return states
 
 
 def _world_hand(hand_tracking: dict[str, Any], side: str) -> dict[str, Any]:
