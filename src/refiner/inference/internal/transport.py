@@ -155,6 +155,13 @@ async def post_json_to_api(
             if extra_headers:
                 kwargs["headers"] = dict(extra_headers)
             response = await client.post(endpoint_path, **kwargs)
+
+            return await _handle_json_response(
+                response,
+                url=_request_url(client, endpoint_path),
+                request_body=dict(payload),
+                operation=operation,
+            )
         except (
             aiohttp.ClientError,
             ConnectionError,
@@ -167,13 +174,6 @@ async def post_json_to_api(
                 request_body=dict(payload),
                 is_retryable=True,
             ) from err
-
-        return await _handle_json_response(
-            response,
-            url=_request_url(client, endpoint_path),
-            request_body=dict(payload),
-            operation=operation,
-        )
 
     return await retry(_post)
 

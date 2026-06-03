@@ -576,6 +576,70 @@ def test_openai_endpoint_retries_on_remote_protocol_error(monkeypatch) -> None:
     assert seen == {"calls": 2, "sleeps": 1}
 
 
+def test_openai_endpoint_retries_on_response_body_read_error(monkeypatch) -> None:
+    seen: dict[str, int] = {"calls": 0, "sleeps": 0}
+
+    class _BrokenBodyResponse:
+        status_code = 200
+        headers: Mapping[str, str] = {}
+        text = ""
+
+        def json(self) -> object:
+            raise aiohttp.ClientPayloadError("response payload was not completed")
+
+    class _FakeResponse:
+        def json(self) -> Mapping[str, object]:
+            return {
+                "choices": [
+                    {
+                        "text": "ok",
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {},
+            }
+
+    class _FakeAsyncClient:
+        def __init__(
+            self,
+            *,
+            base_url,
+            headers,
+            timeout_s,
+            max_connections,
+        ):
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
+
+        async def post(self, path, *, json):
+            del path, json
+            seen["calls"] += 1
+            if seen["calls"] == 1:
+                return _BrokenBodyResponse()
+            return _FakeResponse()
+
+    async def _fake_sleep(delay: float) -> None:
+        assert delay == 2.0
+        seen["sleeps"] += 1
+
+    monkeypatch.setattr(openai_provider, "AiohttpAPIClient", _FakeAsyncClient)
+    monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
+
+    response = asyncio.run(
+        openai_provider._OpenAIEndpointClient(
+            base_url="https://api.example.com",
+        ).generate(
+            {
+                "model": "gpt-test",
+                "prompt": "hello",
+            }
+        )
+    )
+
+    assert response.text == "ok"
+    assert seen == {"calls": 2, "sleeps": 1}
+
+
 def test_openai_endpoint_warns_on_null_chat_content(caplog) -> None:
     raw_response = {
         "choices": [
