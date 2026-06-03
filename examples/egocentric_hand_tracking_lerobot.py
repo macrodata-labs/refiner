@@ -28,7 +28,8 @@ JOINT_STATE_WIDTH = 63
 def create_mano_actions(row: Any) -> Any:
     from egovision.pipelines import to_mano_actions
 
-    hand_tracking = _hand_tracking(row)
+    hand_tracking = dict(row["hand_tracking"])
+    hand_tracking.pop("relative_actions", None)
     mano_actions = to_mano_actions(hand_tracking)
     actions, valid = _wrist_mano_action_array(mano_actions)
     states = _wrist_mano_state_array(hand_tracking, len(actions))
@@ -37,7 +38,11 @@ def create_mano_actions(row: Any) -> Any:
         .with_observation("state", states)
         .with_observation("egovision.wrist_mano_delta_valid", valid)
         .update(
-            {"egovision_hand_tracking_metadata": json.dumps(_json_ready(hand_tracking))}
+            {
+                "egovision_hand_tracking_metadata": json.dumps(
+                    hand_tracking, default=lambda value: value.tolist()
+                )
+            }
         )
         .drop("hand_tracking")
     )
@@ -46,7 +51,8 @@ def create_mano_actions(row: Any) -> Any:
 def create_joint_actions(row: Any) -> Any:
     from egovision.pipelines import to_joint_actions
 
-    hand_tracking = _hand_tracking(row)
+    hand_tracking = dict(row["hand_tracking"])
+    hand_tracking.pop("relative_actions", None)
     joint_actions = to_joint_actions(hand_tracking)
     actions, valid = _joint_action_array(joint_actions)
     states = _joint_state_array(hand_tracking, len(actions))
@@ -55,7 +61,11 @@ def create_joint_actions(row: Any) -> Any:
         .with_observation("state", states)
         .with_observation("egovision.joint_delta_valid", valid)
         .update(
-            {"egovision_hand_tracking_metadata": json.dumps(_json_ready(hand_tracking))}
+            {
+                "egovision_hand_tracking_metadata": json.dumps(
+                    hand_tracking, default=lambda value: value.tolist()
+                )
+            }
         )
         .drop("hand_tracking")
     )
@@ -198,24 +208,6 @@ def _world_hand(hand_tracking: dict[str, Any], side: str) -> dict[str, Any]:
         if hand.get("handedness") == side:
             return hand
     return {}
-
-
-def _hand_tracking(row: Any) -> dict[str, Any]:
-    hand_tracking = dict(row["hand_tracking"])
-    hand_tracking.pop("relative_actions", None)
-    return hand_tracking
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, dict):
-        return {key: _json_ready(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return [_json_ready(item) for item in value]
-    return value
 
 
 def main() -> None:
