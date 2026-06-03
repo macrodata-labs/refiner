@@ -124,8 +124,23 @@ def subtask_annotation(
 
     if not output_column.strip():
         raise ValueError("output_column must be non-empty")
+    if sample_sec <= 0:
+        raise ValueError("sample_sec must be > 0")
+    if frame_width <= 0:
+        raise ValueError("frame_width must be > 0")
+    if frames_per_sheet <= 0:
+        raise ValueError("frames_per_sheet must be > 0")
+    if columns <= 0:
+        raise ValueError("columns must be > 0")
+    if quality <= 0 or quality > 100:
+        raise ValueError("quality must be between 1 and 100")
     if min_segment_duration_sec is not None and min_segment_duration_sec < 0:
         raise ValueError("min_segment_duration_sec must be >= 0")
+    check_required_dependencies(
+        "subtask_annotation",
+        ["av", ("PIL", "pillow")],
+        dist="video",
+    )
     if prompt is not None:
         logger.warning(
             "subtask_annotation prompt override is ignored; using the default "
@@ -257,23 +272,6 @@ async def _subtask_annotation_content(
     quality: int,
     include_contact_sheet_manifest: bool,
 ) -> list[dict[str, Any]]:
-    if sample_sec <= 0:
-        raise ValueError("sample_sec must be > 0")
-    if frame_width <= 0:
-        raise ValueError("frame_width must be > 0")
-    if frames_per_sheet <= 0:
-        raise ValueError("frames_per_sheet must be > 0")
-    if columns <= 0:
-        raise ValueError("columns must be > 0")
-    if quality <= 0 or quality > 100:
-        raise ValueError("quality must be between 1 and 100")
-
-    check_required_dependencies(
-        "subtask_annotation",
-        ["av", ("PIL", "pillow")],
-        dist="video",
-    )
-
     samples = await _sample_timestamped_frames(
         video,
         sample_sec=sample_sec,

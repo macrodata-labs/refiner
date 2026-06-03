@@ -118,23 +118,11 @@ def test_contact_sheet_timestamp_engravings_are_visible(tmp_path) -> None:
     assert plain_frame_area.mean() > badge.mean()
 
 
-def test_contact_sheet_content_rejects_invalid_options(tmp_path) -> None:
-    path = tmp_path / "video.mp4"
-    _write_video(path)
-    video = mdr.video.VideoFile(DataFile.resolve(path))
-
+def test_subtask_annotation_rejects_invalid_contact_sheet_options() -> None:
     with pytest.raises(ValueError, match="sample_sec must be > 0"):
-        asyncio.run(
-            subtask_annotation_module._subtask_annotation_content(
-                video=video,
-                tasks=[],
-                sample_sec=0,
-                frame_width=64,
-                frames_per_sheet=2,
-                columns=2,
-                quality=95,
-                include_contact_sheet_manifest=False,
-            )
+        mdr.robotics.subtask_annotation(
+            provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+            sample_sec=0,
         )
 
 
