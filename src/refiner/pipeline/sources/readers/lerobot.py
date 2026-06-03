@@ -118,30 +118,22 @@ class LeRobotEpisodeReader(ParquetReader):
                 if batch.num_rows <= 0:
                     continue
 
-                keep = []
-                for row_idx, actual in enumerate(frame_counts):
-                    expected = int(self._episode_value(batch, row_idx, "length"))
-                    keep.append(actual == expected)
+                lengths = batch.columns[batch.index_by_name["length"]]
+                keep = [
+                    actual == int(lengths[row_idx].as_py())
+                    for row_idx, actual in enumerate(frame_counts)
+                ]
                 skipped = keep.count(False)
                 if skipped:
                     row_idx = keep.index(False)
-                    chunk = self._episode_value(batch, row_idx, "data/chunk_index")
-                    file_idx = self._episode_value(batch, row_idx, "data/file_index")
-                    from_idx = int(
-                        self._episode_value(batch, row_idx, "dataset_from_index")
-                    )
-                    to_idx = int(
-                        self._episode_value(batch, row_idx, "dataset_to_index")
-                    )
-                    expected = int(self._episode_value(batch, row_idx, "length"))
+                    expected = int(lengths[row_idx].as_py())
                     actual = frame_counts[row_idx]
                     episode_index = int(
                         self._episode_value(batch, row_idx, "episode_index")
                     )
                     error = (
                         f"episode {episode_index} expected {expected} "
-                        f"frames from chunk {chunk!r} file {file_idx!r} "
-                        f"index range [{from_idx}, {to_idx}), got {actual}"
+                        f"frames, got {actual}"
                     )
                     if not self.skip_malformed_rows:
                         raise ValueError(error)
