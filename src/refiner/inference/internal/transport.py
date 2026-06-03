@@ -188,7 +188,7 @@ async def _handle_json_response(
     response_headers = _response_headers(response)
     status_code = response.status
     if status_code >= 400:
-        response_body = await _response_text(response)
+        response_body = await response.text()
         data = await _response_json_or_none(response)
         message = _error_message(
             operation=operation,
@@ -208,7 +208,7 @@ async def _handle_json_response(
         )
 
     try:
-        value = await _response_json(response)
+        value = await response.json(content_type=None)
     except (ValueError, aiohttp.ContentTypeError) as err:
         raise InferenceAPICallError(
             message="Invalid JSON response",
@@ -216,7 +216,7 @@ async def _handle_json_response(
             request_body=request_body,
             status_code=status_code,
             response_headers=response_headers,
-            response_body=await _response_text(response),
+            response_body=await response.text(),
             is_retryable=False,
         ) from err
     return APIResponse(
@@ -352,17 +352,9 @@ def _request_url(client: AiohttpAPIClient, endpoint_path: str) -> str:
 
 async def _response_json_or_none(response: aiohttp.ClientResponse) -> Any | None:
     try:
-        return await _response_json(response)
+        return await response.json(content_type=None)
     except (ValueError, aiohttp.ContentTypeError):
         return None
-
-
-async def _response_json(response: aiohttp.ClientResponse) -> Any:
-    return await response.json(content_type=None)
-
-
-async def _response_text(response: aiohttp.ClientResponse) -> str:
-    return await response.text()
 
 
 def _error_message(
