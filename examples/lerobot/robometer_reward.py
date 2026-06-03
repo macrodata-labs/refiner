@@ -44,7 +44,7 @@ def main() -> None:
             num_workers=NUM_WORKERS,
             cpus_per_worker=1,
             mem_mb_per_worker=MEM_MB_PER_WORKER,
-            extra_dependencies=("av", "huggingface-hub>=1.4.1", "pillow"),
+            extra_dependencies=("macrodata-refiner[hf,video]",),
             secrets=mdr.Secrets.env(name="default", keys=["HF_TOKEN"]),
         )
     )
