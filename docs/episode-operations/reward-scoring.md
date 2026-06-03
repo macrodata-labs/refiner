@@ -8,10 +8,9 @@ description: "Score episode progress and success with a pooling model"
 `reward_score` samples frames from an episode video and uses a Robometer-style
 pooling model to estimate progress and success.
 
-This is useful when you want dense progress and success signals for robot
-episodes without hand-labeling every frame; Robometer is trained to generalize
-reward scoring across diverse robot trajectories
-([paper](https://arxiv.org/abs/2603.02115)).
+As of right now, Refiner supports the state-of-the-art Robometer reward model
+([paper](https://arxiv.org/abs/2603.02115)) for dense progress and success
+signals on robot episodes.
 
 ```python
 pipeline = (
