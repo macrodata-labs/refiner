@@ -79,6 +79,7 @@
 - [Merge LeRobot Datasets](examples/datasets/merge-lerobot-datasets.md)
 - [Video Subtask Annotations](examples/annotations/subtask-annotations.md)
 - [Running Reward Models](examples/annotations/reward-models.md)
+- [Hand Tracking](examples/annotations/hand-tracking.md)
 - [Cloud GPU Job](examples/cloud/cloud-gpu-job.md)
 
 ## Platform
