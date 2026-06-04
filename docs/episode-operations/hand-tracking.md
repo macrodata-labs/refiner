@@ -10,11 +10,17 @@ tracking over episode videos, with settings optimized for the HOT3D
 hand-tracking benchmark. It writes a side-keyed hand-tracking payload back to
 each row.
 
-The HomER example below uses `force_video_fps` from
-[`examples/hand_tracking_lerobot.py`](../../examples/hand_tracking_lerobot.py)
-so LeRobot writes the video at exactly 30 fps.
+The HomER example below writes one JSONL annotation row per input video.
 
 ```python
+def hand_tracking_annotation(row):
+    return {
+        "video_id": row["video_id"],
+        "description": row["description"],
+        "hand_tracking": row["hand_tracking"],
+    }
+
+
 pipeline = (
     mdr.read_hf_dataset(
         "toloka/HomER",
@@ -36,8 +42,8 @@ pipeline = (
         ),
         batch_size=2,
     )
-    .map(force_video_fps)
-    .write_lerobot("hf://buckets/acme-robotics/homer-hand-tracking")
+    .map(hand_tracking_annotation)
+    .write_jsonl("hf://buckets/acme-robotics/homer-hand-tracking")
     .launch_cloud(
         name="hand-tracking",
         num_workers=1,
@@ -104,6 +110,15 @@ config = egovision.HandTrackingConfig(
     hand_reconstruction=egovision.HaworReconstructionConfig(),
 )
 
+
+def hand_tracking_annotation(row):
+    return {
+        "video_id": row["video_id"],
+        "description": row["description"],
+        "hand_tracking": row["hand_tracking"],
+    }
+
+
 pipeline = (
     mdr.read_hf_dataset(
         "toloka/HomER",
@@ -126,8 +141,8 @@ pipeline = (
         ),
         batch_size=2,
     )
-    .map(force_video_fps)
-    .write_lerobot("hf://buckets/acme-robotics/homer-hand-tracking")
+    .map(hand_tracking_annotation)
+    .write_jsonl("hf://buckets/acme-robotics/homer-hand-tracking")
     .launch_cloud(
         name="hand-tracking",
         num_workers=1,
