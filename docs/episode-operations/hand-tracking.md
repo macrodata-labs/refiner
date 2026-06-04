@@ -10,7 +10,8 @@ tracking over episode videos, with settings optimized for the HOT3D
 hand-tracking benchmark. It writes a side-keyed hand-tracking payload back to
 each row.
 
-The HomER example below writes one JSONL annotation row per input video.
+The HomER example below writes one JSONL row per input video with raw
+hand-tracking annotations plus MANO and joint action conversions.
 
 ```python
 def hand_tracking_annotation(row):
@@ -282,7 +283,7 @@ hand. Joint actions are 63 numbers per hand. If you need a smaller control
 space, fit PCA or another learned bottleneck over the action vectors after
 filtering invalid frames.
 
-For a complete cloud example that writes hand-tracking annotations, see
+For a complete cloud example that writes hand-tracking annotations and actions, see
 [`examples/hand_tracking.py`](../../examples/hand_tracking.py).
 
 ## Throughput

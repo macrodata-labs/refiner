@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import importlib
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import refiner as mdr
 
@@ -12,10 +13,14 @@ OUTPUT_DATASET = f"{OUTPUT_ROOT}/{RUN_ID}"
 
 
 def hand_tracking_annotation(row: Any) -> dict[str, Any]:
+    pipelines = cast(Any, importlib.import_module("egovision.pipelines"))
+    hand_tracking = row["hand_tracking"]
     return {
         "video_id": row["video_id"],
         "description": row["description"],
-        "hand_tracking": row["hand_tracking"],
+        "hand_tracking": hand_tracking,
+        "mano_actions": pipelines.to_mano_actions(hand_tracking),
+        "joint_actions": pipelines.to_joint_actions(hand_tracking),
     }
 
 
