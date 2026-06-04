@@ -282,8 +282,8 @@ hand. Joint actions are 63 numbers per hand. If you need a smaller control
 space, fit PCA or another learned bottleneck over the action vectors after
 filtering invalid frames.
 
-For a complete cloud example that writes LeRobot actions, see
-[`examples/hand_tracking_lerobot.py`](../../examples/hand_tracking_lerobot.py).
+For a complete cloud example that writes hand-tracking annotations, see
+[`examples/hand_tracking.py`](../../examples/hand_tracking.py).
 
 ## Throughput
 
