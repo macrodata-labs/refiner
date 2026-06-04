@@ -42,7 +42,7 @@ hf = [
 hand_tracking = [
     "macrodata-refiner[hf]",
     "macrodata-refiner[video]",
-    "ego-vision[models]>=0.1.21",
+    "ego-vision[models]>=0.1.22",
 ]
 text = [
     "warcio",
