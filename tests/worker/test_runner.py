@@ -15,7 +15,7 @@ from refiner.execution.engine import iter_rows
 from refiner.pipeline.sinks import BaseSink
 from refiner.pipeline.data.shard import FilePart
 from refiner.services import RuntimeServiceSpec
-from refiner.worker.runner import Worker
+from refiner.worker.runner import Worker, WorkerShutdownError
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
@@ -378,6 +378,31 @@ def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
 
     assert stats.failed == 1
     assert runtime_lifecycle.failed_errors == ["RuntimeError"]
+
+
+def test_worker_shutdown_error_propagates_without_failing_shard() -> None:
+    shard = _shard("shutdown", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 1})]}
+
+    def shutdown(row: Row) -> Row:
+        del row
+        raise WorkerShutdownError("worker is shutting down")
+
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).map(shutdown),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    with pytest.raises(WorkerShutdownError, match="worker is shutting down"):
+        worker.run()
+
+    assert runtime_lifecycle.completed_ids == []
+    assert runtime_lifecycle.failed_ids == []
+    assert runtime_lifecycle.failed_errors == []
 
 
 def test_worker_can_batch_across_shards() -> None:

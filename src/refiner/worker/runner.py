@@ -26,6 +26,10 @@ class WorkerRunStats:
     output_rows: int = 0
 
 
+class WorkerShutdownError(RuntimeError):
+    pass
+
+
 class Worker:
     def __init__(
         self,
@@ -272,6 +276,8 @@ class Worker:
                         )
                         if sink.counts_output_rows:
                             output_rows += written_output_rows
+                except WorkerShutdownError:
+                    raise
                 except Exception as e:
                     execution_error = e
                     failed_error = str(e).strip() or type(e).__name__
