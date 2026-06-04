@@ -10,6 +10,10 @@ tracking over episode videos, with settings optimized for the HOT3D
 hand-tracking benchmark. It writes a side-keyed hand-tracking payload back to
 each row.
 
+The HomER example below uses `force_video_fps` from
+[`examples/hand_tracking_lerobot.py`](../../examples/hand_tracking_lerobot.py)
+so LeRobot writes the video at exactly 30 fps.
+
 ```python
 pipeline = (
     mdr.read_hf_dataset(
@@ -32,6 +36,7 @@ pipeline = (
         ),
         batch_size=2,
     )
+    .map(force_video_fps)
     .write_lerobot("hf://buckets/acme-robotics/homer-hand-tracking")
     .launch_cloud(
         name="hand-tracking",
@@ -121,6 +126,7 @@ pipeline = (
         ),
         batch_size=2,
     )
+    .map(force_video_fps)
     .write_lerobot("hf://buckets/acme-robotics/homer-hand-tracking")
     .launch_cloud(
         name="hand-tracking",
