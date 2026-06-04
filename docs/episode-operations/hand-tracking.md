@@ -1,20 +1,14 @@
 ---
 title: "Hand Tracking"
-description: "Run batched hand tracking on robotics episode videos"
+description: "Runs ego-centric hand tracking over inputed videos"
 ---
 
 # Hand Tracking
 
-`track_hands` runs ego-vision hand tracking over episode videos and writes a
-side-keyed hand-tracking payload back to each row. The current default settings
-were tuned against the HOT3D hand-tracking benchmark, so they are a strong
-starting point for egocentric human videos but should still be validated on a
-new camera domain.
-
-As of right now, Refiner supports ego-vision's HaWoR-based hand tracking
-pipeline for human egocentric videos. Inputs are robotics rows with a video
-source; URL strings, local files, and video assets can be converted with
-`to_robot_rows(video_keys=...)`.
+`track_hands` relies on the `ego-vision` package to run ego-centric hand
+tracking over episode videos, with settings optimized for the HOT3D
+hand-tracking benchmark. It writes a side-keyed hand-tracking payload back to
+each row.
 
 ```python
 pipeline = (
@@ -264,7 +258,9 @@ prediction after model initialization on the first HomER episode we tested
 read/write, LeRobot conversion, and action conversion, was about 6-7 fps. Exact
 throughput depends on clip length, resolution, worker cold-start cost, whether
 model compile/cuda graph cost has been amortized, and how much video writing the
-pipeline performs.
+pipeline performs. You can increase throughput by setting
+`EgoVisionConfig.vggt.camera_sample_fps` to run VGGT on a lower frame rate and
+interpolate the camera trajectory back to the full timeline.
 
 ## Related Pages
 
