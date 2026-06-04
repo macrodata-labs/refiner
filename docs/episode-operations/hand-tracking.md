@@ -33,6 +33,14 @@ pipeline = (
         batch_size=2,
     )
     .write_lerobot("hf://buckets/acme-robotics/homer-hand-tracking")
+    .launch_cloud(
+        name="hand-tracking",
+        num_workers=1,
+        mem_mb_per_worker=32 * 1024,
+        gpu=mdr.GPU(count=1, type="h100"),
+        extra_dependencies=("ego-vision[models]==0.1.25",),
+        secrets=mdr.Secrets.env(keys=("HF_TOKEN",)),
+    )
 )
 ```
 
@@ -91,13 +99,37 @@ config = egovision.HandTrackingConfig(
     hand_reconstruction=egovision.HaworReconstructionConfig(),
 )
 
-pipeline = pipeline.batch_map(
-    mdr.robotics.track_hands(
-        video_key="video",
-        output_key="hand_tracking",
-        config=config,
-    ),
-    batch_size=2,
+pipeline = (
+    mdr.read_hf_dataset(
+        "toloka/HomER",
+        split="train",
+        columns_to_read=("video_id", "video_url", "description"),
+        dtypes={"video_url": mdr.datatype.video_path()},
+    )
+    .to_robot_rows(
+        episode_id_key="video_id",
+        task_key="description",
+        fps=30.0,
+        robot_type="human_hand_tracking",
+        video_keys={"video": "video_url"},
+    )
+    .batch_map(
+        mdr.robotics.track_hands(
+            video_key="video",
+            output_key="hand_tracking",
+            config=config,
+        ),
+        batch_size=2,
+    )
+    .write_lerobot("hf://buckets/acme-robotics/homer-hand-tracking")
+    .launch_cloud(
+        name="hand-tracking",
+        num_workers=1,
+        mem_mb_per_worker=32 * 1024,
+        gpu=mdr.GPU(count=1, type="h100"),
+        extra_dependencies=("ego-vision[models]==0.1.25",),
+        secrets=mdr.Secrets.env(keys=("HF_TOKEN",)),
+    )
 )
 ```
 
@@ -106,10 +138,6 @@ The important ego-vision defaults are:
 ```python
 egovision.HandTrackingConfig(
     hand_reconstruction=egovision.HaworReconstructionConfig(
-        checkpoint="hf://macrodata/egovision-safetensors/hawor.safetensors",
-        detector_checkpoint="hf://macrodata/egovision-safetensors/yolo.safetensors",
-        mano_right="hf://macrodata/egovision-safetensors/MANO_RIGHT.safetensors",
-        mano_left="hf://macrodata/egovision-safetensors/MANO_LEFT.safetensors",
         chunk_size=16,
         batch_size=64,
         detector_batch_size=None,
@@ -119,7 +147,6 @@ egovision.HandTrackingConfig(
         compile_mode=None,
     ),
     camera_pose_estimator=egovision.VggtOmegaConfig(
-        checkpoint="hf://macrodata/egovision-safetensors/vggt_omega_1b_512.safetensors",
         batch_size=1,
         image_resolution=512,
         preprocess_backend="torch",
@@ -128,7 +155,6 @@ egovision.HandTrackingConfig(
         compile_mode=None,
     ),
     hand_fusion=egovision.HandFusionConfig(
-        infiller_checkpoint="hf://macrodata/egovision-safetensors/infiller.safetensors",
         infiller_batch_size=64,
         translation_window=7,
         translation_alpha=0.675,
@@ -157,9 +183,6 @@ In Refiner, configure the operation itself with:
 | `video_key` | Required key in `row.videos` to process. |
 | `output_key` | Output column for the ego-vision payload. Defaults to `hand_tracking`. |
 | `config` | Optional `egovision.HandTrackingConfig`. Defaults to the HOT3D-tuned ego-vision stack above. |
-| `batch_size` | `Pipeline.batch_map(...)` batch size. This controls how many episodes Refiner passes to one model call. |
-| `gpu` | Cloud/local worker GPU. The current path is intended for one H100. |
-| `mem_mb_per_worker` | Worker memory. Use at least `32768` MB for the default H100 hand-tracking stack. |
 
 ## Output Payload
 
@@ -206,15 +229,6 @@ Each hand entry contains:
 `hands_world` is the usual source for action labels because it includes head/camera
 motion through the VGGT world trajectory.
 
-## Metrics
-
-The operation logs:
-
-| Metric | Meaning |
-| --- | --- |
-| `egovision_frames_decoded` | Frames decoded and handed to ego-vision. |
-| `frames_processed` | Hand-tracking frames emitted by ego-vision. |
-
 ## Action Conversion
 
 The raw payload can be converted into training actions with ego-vision helpers:
@@ -253,14 +267,11 @@ For a complete cloud example that writes LeRobot actions, see
 ## Throughput
 
 On one H100, the current default stack runs around 10 fps for ego-vision
-prediction after model initialization on the first HomER episode we tested
-(`4,834` frames). The full cloud stage, including model initialization, video
-read/write, LeRobot conversion, and action conversion, was about 6-7 fps. Exact
-throughput depends on clip length, resolution, worker cold-start cost, whether
-model compile/cuda graph cost has been amortized, and how much video writing the
-pipeline performs. You can increase throughput by setting
-`EgoVisionConfig.vggt.camera_sample_fps` to run VGGT on a lower frame rate and
-interpolate the camera trajectory back to the full timeline.
+prediction. The full cloud stage, including model initialization, video
+read/write, LeRobot conversion, and action conversion, was about 6-7 fps. You
+can increase throughput by setting `EgoVisionConfig.vggt.camera_sample_fps` to
+run VGGT on a lower frame rate and interpolate the camera trajectory back to the
+full timeline.
 
 ## Related Pages
 
