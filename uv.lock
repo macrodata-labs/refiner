@@ -822,15 +822,16 @@ wheels = [
 
 [[package]]
 name = "ego-vision"
-version = "0.1.23"
+version = "0.1.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "torch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cb/58/25b6fdfe39e8e1e27898b27207b498ac0a051f68b2e9e0b5605278b926f2/ego_vision-0.1.23.tar.gz", hash = "sha256:56d8b370901ce38b328fcfb755a4969832627149a9ab5b6c8efe7577fcc1d56b", size = 119245, upload-time = "2026-06-04T05:56:53.459Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/ad/1d472f1f488e6020b54d930b95197aac3dcfd9a9f0be6c32c35ab883f61c/ego_vision-0.1.25.tar.gz", hash = "sha256:5e006a4f0f298eeeced609a0c77856c06e61d8591552b7a8e6f4468c0efeae8a", size = 123836, upload-time = "2026-06-04T10:13:30.711Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/0a/f91b8a733fcbf802f95a767d7f6515dc8ea35a7822a2e1627609e8ae118f/ego_vision-0.1.23-py3-none-any.whl", hash = "sha256:b46b5fc7998111b6fbd959afdb4019710d276f4064dfcfd442b8156dea65d510", size = 140148, upload-time = "2026-06-04T05:56:52.124Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/53/a2ab363cd2d853cf5dfbb4848aa06cd52632f916fd827693ae20d5720e52/ego_vision-0.1.25-py3-none-any.whl", hash = "sha256:501363d08e441a05b62903625c3a818c2f169b17e6198a9ab33ebed0d445d981", size = 144816, upload-time = "2026-06-04T10:13:29.447Z" },
 ]
 
 [package.optional-dependencies]
@@ -849,7 +850,6 @@ models = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "smplx" },
     { name = "timm" },
-    { name = "torch" },
     { name = "torchvision" },
 ]
 
@@ -1787,7 +1787,7 @@ requires-dist = [
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "datasets", marker = "extra == 'hf'", specifier = ">=3.0.0" },
-    { name = "ego-vision", extras = ["models"], marker = "extra == 'hand-tracking'", specifier = ">=0.1.23" },
+    { name = "ego-vision", extras = ["models"], marker = "extra == 'hand-tracking'", specifier = ">=0.1.25" },
     { name = "fsspec", extras = ["http"] },
     { name = "h5py", marker = "extra == 'hdf5'" },
     { name = "hf", marker = "extra == 'hf'", specifier = ">=1.7.1" },
