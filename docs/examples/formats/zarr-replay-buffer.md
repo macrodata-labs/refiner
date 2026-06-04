@@ -33,6 +33,5 @@ pipeline = (
 )
 ```
 
-Related: [Zarr Reader](../reading-data/zarr.md),
-[Frames and Videos](../episode-data/frames-and-videos.md).
-
+Related: [Zarr Reader](../../reading-data/zarr.md),
+[Frames and Videos](../../episode-data/frames-and-videos.md).

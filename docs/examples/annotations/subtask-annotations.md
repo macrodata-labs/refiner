@@ -5,7 +5,7 @@ description: "Add VLM-generated temporal subtask annotations to episodes"
 
 # Annotate Subtasks
 
-![Subtask annotation timeline](../images/subtask_annotations.png)
+![Subtask annotation timeline](../../images/subtask_annotations.png)
 
 This example reads a LeRobot dataset, runs temporal subtask annotation on each
 episode video, writes the predicted segments into a new `predicted_subtasks`
@@ -49,7 +49,7 @@ environment at submission time because each value is set to `None`. Refiner
 passes the resolved values to the Cloud job as redacted secrets. Export both
 variables before launching the pipeline.
 
-Use [Subtask Annotation](../episode-operations/subtask-annotation.md) for
+Use [Subtask Annotation](../../episode-operations/subtask-annotation.md) for
 parameter details and in-depth explanation. `subtask_annotation` uses Gemini
 3.5 Flash through `GoogleEndpointProvider`, so you need to provide
 `GOOGLE_GENERATIVE_AI_API_KEY`.

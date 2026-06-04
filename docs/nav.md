@@ -56,7 +56,7 @@
 - [Overview](inference/index.md)
 - [Generate Text](inference/generate-text.md)
 - [Multimodal and Structured Output](inference/multimodal-and-structured-output.md)
-- [Providers and vLLM](inference/providers-and-vllm.md)
+- [Providers and vLLM](inference/inference_providers.md)
 - [Pooling](inference/pooling.md)
 
 ## Writing Data
@@ -71,15 +71,15 @@
 ## Examples
 
 - [Overview](examples/index.md)
-- [ALOHA HDF5](examples/aloha-hdf5.md)
-- [robomimic HDF5](examples/robomimic-hdf5.md)
-- [Zarr Replay Buffer](examples/zarr-replay-buffer.md)
-- [MCAP Franka](examples/mcap-franka.md)
-- [Libero HDF5](examples/libero-hdf5.md)
-- [Merge LeRobot Datasets](examples/merge-lerobot-datasets.md)
-- [Video Subtask Annotations](examples/subtask-annotations.md)
-- [Running Reward Models](examples/reward-models.md)
-- [Cloud GPU Job](examples/cloud-gpu-job.md)
+- [ALOHA HDF5](examples/formats/aloha-hdf5.md)
+- [robomimic HDF5](examples/formats/robomimic-hdf5.md)
+- [Zarr Replay Buffer](examples/formats/zarr-replay-buffer.md)
+- [MCAP Franka](examples/formats/mcap-franka.md)
+- [Libero HDF5](examples/formats/libero-hdf5.md)
+- [Merge LeRobot Datasets](examples/datasets/merge-lerobot-datasets.md)
+- [Video Subtask Annotations](examples/annotations/subtask-annotations.md)
+- [Running Reward Models](examples/annotations/reward-models.md)
+- [Cloud GPU Job](examples/cloud/cloud-gpu-job.md)
 
 ## Platform
 

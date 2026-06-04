@@ -74,5 +74,5 @@ pipeline = (
 )
 ```
 
-Related: [MCAP Reader](../reading-data/mcap.md),
-[Converting to Robot Rows](../episode-data/converting-to-robot-rows.md).
+Related: [MCAP Reader](../../reading-data/mcap.md),
+[Converting to Robot Rows](../../episode-data/converting-to-robot-rows.md).

@@ -124,5 +124,5 @@ installs the packages needed to read HDF5, access Hugging Face storage, and
 encode videos. The `HF_TOKEN` secret is passed through so workers can read and
 write Hugging Face paths.
 
-Related: [HDF5 Reader](../reading-data/hdf5.md),
-[Converting to Robot Rows](../episode-data/converting-to-robot-rows.md).
+Related: [HDF5 Reader](../../reading-data/hdf5.md),
+[Converting to Robot Rows](../../episode-data/converting-to-robot-rows.md).

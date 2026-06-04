@@ -48,7 +48,7 @@ pipeline = mdr.read_lerobot(
 ```
 
 The reader merges metadata and remaps task indices so row tasks stay consistent.
-For a full recipe, see [Merge LeRobot Datasets](../examples/merge-lerobot-datasets.md).
+For a full recipe, see [Merge LeRobot Datasets](../examples/datasets/merge-lerobot-datasets.md).
 
 ## Malformed Episodes
 

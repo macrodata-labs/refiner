@@ -71,4 +71,4 @@ pipeline.write_lerobot(
 
 - [Metadata, Tasks, and Stats](../episode-data/metadata-tasks-and-stats.md)
 - [Media Assets and Reducers](media-assets-and-reducers.md)
-- [Merge LeRobot Datasets](../examples/merge-lerobot-datasets.md)
+- [Merge LeRobot Datasets](../examples/datasets/merge-lerobot-datasets.md)

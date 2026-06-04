@@ -103,3 +103,6 @@ The default settings sample one frame every `0.5` seconds, resize each tile to
 
 For lower-level inference controls, see [Generate Text](../inference/generate-text.md)
 and [Multimodal and Structured Output](../inference/multimodal-and-structured-output.md).
+
+For a complete cloud example, see
+[`examples/robotics/.py`](../examples/annotations/reward-models.md).

@@ -49,7 +49,7 @@ provider = mdr.inference.VLLMProvider(
 ```
 
 When a provider requires a service, Refiner can include that service in the
-cloud runtime plan. See [Providers and vLLM](../inference/providers-and-vllm.md).
+cloud runtime plan. See [Providers and vLLM](../inference/inference_providers.md).
 
 ## Choosing Worker Count
 
