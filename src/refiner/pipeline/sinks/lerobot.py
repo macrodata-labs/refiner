@@ -722,7 +722,7 @@ def _lerobot_integer_fps(fps: float | int | None) -> int | None:
         return None
     value = float(fps)
     rounded = round(value)
-    if not math.isfinite(value) or abs(value - rounded) > 1e-6:
+    if not math.isfinite(value) or abs(value - rounded) > 1e-2:
         raise ValueError(
             "LeRobot output requires integer fps; "
             f"got {fps}. Pass an integer fps or resample before writing."

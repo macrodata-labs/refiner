@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
@@ -29,6 +31,71 @@ DEFAULT_GPU = "h100"
 DEFAULT_MAX_EPISODES: int | None = None
 MANO_POSE_WIDTH = 96
 JOINT_STATE_WIDTH = 63
+
+
+@dataclass(frozen=True)
+class FixedFpsVideoSource:
+    source: Any
+    fps: float
+
+    def clipped(
+        self,
+        *,
+        from_timestamp_s: float | None = None,
+        to_timestamp_s: float | None = None,
+    ) -> "FixedFpsVideoSource":
+        return FixedFpsVideoSource(
+            self.source.clipped(
+                from_timestamp_s=from_timestamp_s,
+                to_timestamp_s=to_timestamp_s,
+            ),
+            fps=self.fps,
+        )
+
+    def iter_frames(self) -> AsyncIterator[Any]:
+        return self.source.iter_frames()
+
+    def iter_numpy_frames(self) -> AsyncIterator[np.ndarray]:
+        return self.source.iter_numpy_frames()
+
+    def iter_frame_windows(
+        self,
+        *,
+        offsets: Any,
+        stride: int = 1,
+        drop_incomplete: bool = True,
+    ) -> AsyncIterator[Any]:
+        return self.source.iter_frame_windows(
+            offsets=offsets,
+            stride=stride,
+            drop_incomplete=drop_incomplete,
+        )
+
+    async def write_to(
+        self,
+        writer: Any,
+        *,
+        frame_observer: Any = None,
+        force_transcode: bool = False,
+    ) -> Any:
+        frames = [frame async for frame in self.source.iter_numpy_frames()]
+        return await writer.write_frame_array_video(
+            mdr.video.VideoFrameSequence(
+                frames,
+                fps=self.fps,
+                frame_count=len(frames),
+            ),
+            frame_observer=frame_observer,
+        )
+
+
+def force_video_fps(fps: float) -> Callable[[Any], Any]:
+    def _map(row: Any) -> Any:
+        return row.with_video(
+            "video", FixedFpsVideoSource(row.videos["video"], fps=fps)
+        )
+
+    return _map
 
 
 def create_mano_actions(row: Any) -> Any:
@@ -279,7 +346,8 @@ def main() -> None:
         .map(create_mano_actions)
         # To train on world-space joint deltas instead, swap the line above for:
         # .map(create_joint_actions)
-        .write_lerobot(output)
+        .map(force_video_fps(args.fps))
+        .write_lerobot(output, codec="libx264")
     )
 
     if args.cloud:
