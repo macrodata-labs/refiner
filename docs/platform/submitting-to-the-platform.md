@@ -97,7 +97,7 @@ locally, or when a cloud run should pin a different version:
 
 ```python
 pipeline.launch_cloud(
-    name="hand-tracking-smoke",
+    name="hand-tracking",
     gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
     extra_dependencies=["macrodata-refiner[hand_tracking]"],
 )
