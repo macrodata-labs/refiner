@@ -65,6 +65,14 @@ The default ego-vision stack is:
 5. Run the configured hand cleanup/postprocessing, including the default
    infiller, and return dense per-frame arrays.
 
+The infiller is a temporal hand-motion model used after HaWoR reconstruction. It
+looks at the surrounding valid hand predictions and fills short gaps where the
+detector/reconstructor missed a hand or produced an unusable frame. Filled
+frames are marked in each hand's `infilled` mask, so downstream training code can
+keep them, drop them, or weight them differently. The infiller does not create
+new visual evidence; it makes the returned trajectory dense and smoother across
+brief detection gaps.
+
 VGGT is a sequence model. The default `vggt_seq_length` is `300`, which matches
 the current maximum 10 second, 30 fps episode target. When longer videos are
 chunked, frames at chunk boundaries can be less stable. Refiner does not
