@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import importlib
 import time
-from collections.abc import Callable, Iterable
-from typing import Any, Protocol
+from collections.abc import Iterable
+from typing import Any
 
 from refiner.execution.asyncio.runtime import submit
 from refiner.pipeline.data.row import Row
@@ -11,19 +11,6 @@ from refiner.pipeline.planning import describe_builtin
 from refiner.pipeline.steps import BatchFn
 from refiner.robotics.row import RoboticsRow
 from refiner.worker.context import logger
-
-
-class _HandTrackingPipeline(Protocol):
-    def predict_episodes(
-        self,
-        episodes: list[Any],
-        *,
-        on_hawor_batch_processed: Callable[[int], None],
-    ) -> list[Any]: ...
-
-
-class _EpisodeInput(Protocol):
-    def __call__(self, *, frames: Iterable[Any]) -> Any: ...
 
 
 def track_hands(
@@ -84,8 +71,8 @@ def track_hands(
     if not output_key:
         raise ValueError("output_key cannot be empty")
 
-    pipeline: _HandTrackingPipeline | None = None
-    episode_input: _EpisodeInput | None = None
+    pipeline: Any | None = None
+    episode_input: Any | None = None
 
     @describe_builtin(
         "robotics.hand_tracking:track_hands",
