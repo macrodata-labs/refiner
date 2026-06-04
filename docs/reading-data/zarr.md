@@ -68,6 +68,6 @@ pipeline = mdr.read_zarr(
 ## Related Pages
 
 - [Converting to Robot Rows](../episode-data/converting-to-robot-rows.md)
-- [Zarr Replay Buffer Example](../examples/zarr-replay-buffer.md)
+- [Zarr Replay Buffer Example](../examples/formats/zarr-replay-buffer.md)
 - [Writing Zarr](../writing-data/zarr.md)
 

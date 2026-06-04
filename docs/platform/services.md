@@ -21,7 +21,7 @@ A runtime service lets Refiner include a managed service in the cloud runtime
 plan. Workers then call the service while processing shards.
 
 See [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)
-and [Providers and vLLM](../inference/providers-and-vllm.md).
+and [Providers and vLLM](../inference/inference_providers.md).
 
 ## Services List
 
@@ -86,6 +86,6 @@ See [Billing](billing.md).
 ## Related Pages
 
 - [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)
-- [Providers and vLLM](../inference/providers-and-vllm.md)
+- [Providers and vLLM](../inference/inference_providers.md)
 - [Observability](../running-pipelines/observability.md)
 - [Billing](billing.md)

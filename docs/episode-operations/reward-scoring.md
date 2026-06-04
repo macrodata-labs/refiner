@@ -38,8 +38,9 @@ By default, the operation writes:
 | --- | --- |
 | `reward_score` | Expected progress for sampled frames. |
 | `robometer_success` | Success probability for sampled frames. |
+| `reward_frames` | Sampled frame metadata. Each item contains the video frame `index` and `timestamp_s` used for the matching score. |
 
-Customize names with `output_column` and `success_column`.
+Customize names with `output_column`, `success_column`, and `frames_column`.
 
 ## Task Text
 
@@ -59,7 +60,7 @@ mdr.robotics.reward_score(task=lambda row: row.task or "; ".join(row.tasks))
 ## Inference Backend
 
 `reward_score` uses pooling inference through a vLLM provider. See
-[Pooling](../inference/pooling.md) and [Providers and vLLM](../inference/providers-and-vllm.md).
+[Pooling](../inference/pooling.md) and [Providers and vLLM](../inference/inference_providers.md).
 
 For a complete cloud example, see
-[`examples/lerobot/robometer_reward.py`](../../examples/lerobot/robometer_reward.py).
+[Reward modeling example](../examples/annotations/reward-models.md).

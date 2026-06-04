@@ -87,6 +87,6 @@ pipeline = mdr.read_hdf5(
 ## Related Pages
 
 - [Converting to Robot Rows](../episode-data/converting-to-robot-rows.md)
-- [HDF5 Conversion Example](../examples/aloha-hdf5.md)
+- [HDF5 Conversion Example](../examples/formats/aloha-hdf5.md)
 - [Zarr Reader](zarr.md)
 

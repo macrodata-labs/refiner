@@ -11,5 +11,5 @@ mdr.read_lerobot(
     name="merge_aloha",
     num_workers=1,
     mem_mb_per_worker=1024 * 8,
-    secrets={"HF_TOKEN": "---"},
+    secrets={"HF_TOKEN": None},
 )

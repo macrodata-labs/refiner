@@ -4,11 +4,10 @@ import io
 import json
 import math
 import re
-import warnings
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel
 
@@ -18,6 +17,7 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
+from refiner.worker.context import logger
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -94,6 +94,7 @@ def subtask_annotation(
     temperature: float = 0.1,
     min_segment_duration_sec: float | None = 0.0,
     include_contact_sheet_manifest: bool = False,
+    on_blocked_prompt: Literal["empty", "raise"] = "empty",
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
     """Return an async map block that annotates robotics episode subtasks.
@@ -111,6 +112,9 @@ def subtask_annotation(
         min_segment_duration_sec: Minimum segment duration to keep. Set to
             ``None`` to disable duration filtering.
         include_contact_sheet_manifest: Include textual sheet ranges in the prompt.
+        on_blocked_prompt: Behavior when the provider blocks the prompt before
+            returning candidates. ``"empty"`` writes an empty segment list and
+            logs the block; ``"raise"`` propagates the provider error.
         max_concurrent_requests: Maximum provider requests allowed at once per
             worker.
     """
@@ -123,6 +127,8 @@ def subtask_annotation(
         raise ValueError("output_column must be non-empty")
     if min_segment_duration_sec is not None and min_segment_duration_sec < 0:
         raise ValueError("min_segment_duration_sec must be >= 0")
+    if on_blocked_prompt not in {"empty", "raise"}:
+        raise ValueError("on_blocked_prompt must be 'empty' or 'raise'")
 
     async def _annotate_subtasks(
         row: Row,
@@ -146,11 +152,22 @@ def subtask_annotation(
             "temperature": temperature,
         }
         messages = cast(list[Message], [{"role": "user", "content": content}])
-        response = await generate_text(
-            messages=messages,
-            schema=_SubtaskAnnotationResult,
-            **params,
-        )
+        try:
+            response = await generate_text(
+                messages=messages,
+                schema=_SubtaskAnnotationResult,
+                **params,
+            )
+        except RuntimeError as exc:
+            block_reason = _blocked_prompt_reason(exc)
+            if block_reason is None or on_blocked_prompt == "raise":
+                raise
+            logger.warning(
+                "subtask annotation provider blocked episode {}: {}",
+                row.episode_id,
+                block_reason,
+            )
+            return row.update({output_column: []})
         parsed = (
             response.object
             if isinstance(response.object, _SubtaskAnnotationResult)
@@ -175,6 +192,15 @@ def subtask_annotation(
         provider=provider,
         max_concurrent_requests=max_concurrent_requests,
     )
+
+
+def _blocked_prompt_reason(exc: RuntimeError) -> str | None:
+    marker = "promptFeedback.blockReason="
+    _, found, reason = str(exc).rpartition(marker)
+    if not found:
+        return None
+    reason = reason.strip()
+    return reason or None
 
 
 def contact_sheet_prompt_manifest(
@@ -299,11 +325,11 @@ def _normalize_segments(segments: list[_SubtaskSegment]) -> list[dict[str, Any]]
         normalized,
         key=lambda segment: (segment["start_sec"], segment["end_sec"]),
     )
-    _warn_on_overlapping_segments(sorted_segments)
+    _log_on_overlapping_segments(sorted_segments)
     return sorted_segments
 
 
-def _warn_on_overlapping_segments(segments: Sequence[Mapping[str, Any]]) -> None:
+def _log_on_overlapping_segments(segments: Sequence[Mapping[str, Any]]) -> None:
     previous: Mapping[str, Any] | None = None
     for segment in segments:
         start_sec = float(segment["start_sec"])
@@ -311,12 +337,13 @@ def _warn_on_overlapping_segments(segments: Sequence[Mapping[str, Any]]) -> None
         if previous is not None and start_sec < float(previous["end_sec"]):
             previous_start_sec = float(previous["start_sec"])
             previous_end_sec = float(previous["end_sec"])
-            warnings.warn(
+            logger.warning(
                 "subtask annotation produced overlapping segments: "
-                f"{previous_start_sec:.3f}s-{previous_end_sec:.3f}s overlaps "
-                f"{start_sec:.3f}s-{end_sec:.3f}s",
-                RuntimeWarning,
-                stacklevel=3,
+                "{:.3f}s-{:.3f}s overlaps {:.3f}s-{:.3f}s",
+                previous_start_sec,
+                previous_end_sec,
+                start_sec,
+                end_sec,
             )
         previous = segment
 

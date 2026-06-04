@@ -31,15 +31,16 @@ def reward_score(
     max_frames: int = 8,
     output_column: str = "reward_score",
     success_column: str = "robometer_success",
+    frames_column: str = "reward_frames",
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
     """Return an async map function that scores LeRobot episodes with Robometer.
 
     The mapper samples up to `max_frames` frames from each LeRobot episode,
-    sends them to a vLLM-hosted Robometer pooling model, and adds two list
-    columns to the row: per-frame task progress and per-frame success
-    probability. When `task` is omitted, the episode's LeRobot task metadata is
-    used as the Robometer instruction.
+    sends them to a vLLM-hosted Robometer pooling model, and adds list columns
+    to the row: per-frame task progress, per-frame success probability, and the
+    sampled frame indexes/timestamps used for scoring. When `task` is omitted,
+    the episode's LeRobot task metadata is used as the Robometer instruction.
     """
 
     if not model.strip():
@@ -50,6 +51,8 @@ def reward_score(
         raise ValueError("output_column must be non-empty")
     if not success_column.strip():
         raise ValueError("success_column must be non-empty")
+    if not frames_column.strip():
+        raise ValueError("frames_column must be non-empty")
 
     from refiner.inference import generate_pooling
     from refiner.inference.providers import VLLMProvider
@@ -68,12 +71,19 @@ def reward_score(
         content: list[dict[str, Any]] = [
             {"type": "text", "text": _robometer_progress_prompt(task_text)}
         ]
+        sampled_frames: list[dict[str, Any]] = []
         frame_count = 0
         async for decoded_frame in _sample_video_frames(
             row,
             video_key=selected_video_key,
             max_frames=max_frames,
         ):
+            sampled_frames.append(
+                {
+                    "index": decoded_frame.index,
+                    "timestamp_s": decoded_frame.timestamp_s,
+                }
+            )
             content.append(
                 {
                     "type": "image_url",
@@ -102,6 +112,7 @@ def reward_score(
             {
                 output_column: progress,
                 success_column: success,
+                frames_column: sampled_frames,
             }
         )
 

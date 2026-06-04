@@ -96,9 +96,13 @@ The default settings sample one frame every `0.5` seconds, resize each tile to
 | `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `84`. |
 | `include_contact_sheet_manifest` | Add textual sheet descriptions to the prompt. |
 | `min_segment_duration_sec` | Minimum returned segment duration. Defaults to `0.0`, so valid short segments are kept. |
+| `on_blocked_prompt` | Behavior when the provider blocks an episode prompt. Defaults to `"empty"`, which logs the block and writes an empty segment list. Use `"raise"` to fail the row instead. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
 ## Related Content
 
 For lower-level inference controls, see [Generate Text](../inference/generate-text.md)
 and [Multimodal and Structured Output](../inference/multimodal-and-structured-output.md).
+
+For a complete cloud example, see
+[Video Subtask Annotations](../examples/annotations/subtask-annotations.md).

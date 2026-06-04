@@ -229,7 +229,7 @@ the compute they actually use; see [Billing](platform/billing.md) or
 [pricing](/pricing).
 
 For the full four-suite LIBERO conversion, see
-[Libero HDF5](examples/libero-hdf5.md).
+[Libero HDF5](examples/formats/libero-hdf5.md).
 
 ## Where To Go Next
 

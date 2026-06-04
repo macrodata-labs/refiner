@@ -12,10 +12,9 @@ pipelines with bounded concurrency, metrics, retries, and media handling.
 | --- | --- |
 | [Generate Text](generate-text.md) | Text and chat-style inference inside transforms. |
 | [Multimodal and Structured Output](multimodal-and-structured-output.md) | Images, videos, files, and validated JSON output. |
-| [Providers and vLLM](providers-and-vllm.md) | OpenAI-compatible, Google, Anthropic, and vLLM providers. |
+| [Providers and vLLM](inference_providers.md) | OpenAI-compatible, Google, Anthropic, and vLLM providers. |
 | [Pooling](pooling.md) | Pooling/token-classification style inference used by reward scoring. |
 
 For episode-level VLM workflows, see
 [Subtask Annotation](../episode-operations/subtask-annotation.md) and
 [Reward Scoring](../episode-operations/reward-scoring.md).
-
