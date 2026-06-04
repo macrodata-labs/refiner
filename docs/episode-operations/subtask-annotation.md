@@ -105,4 +105,4 @@ For lower-level inference controls, see [Generate Text](../inference/generate-te
 and [Multimodal and Structured Output](../inference/multimodal-and-structured-output.md).
 
 For a complete cloud example, see
-[`examples/robotics/.py`](../examples/annotations/reward-models.md).
+[Video Subtask Annotations](../examples/annotations/subtask-annotations.md).
