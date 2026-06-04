@@ -1,59 +1,40 @@
-"""Score LeRobot episodes with Robometer and write the result as LeRobot.
-
-The example reads a LeRobot dataset, samples frames from each episode, calls the
-vLLM-backed Robometer reward model, and writes a new LeRobot dataset containing
-`reward_score` and `robometer_success` columns.
-"""
-
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 
 import refiner as mdr
 
-INPUT_DATASET = os.environ.get(
-    "ROBOMETER_INPUT_DATASET",
-    "hf://datasets/nvidia/LIBERO_LeRobot_v3/libero_90",
-)
-OUTPUT_ROOT = os.environ.get(
-    "ROBOMETER_OUTPUT_ROOT",
-    "hf://buckets/macrodata/test_bucket/libero-robometer-reward",
-)
-VIDEO_KEY = os.environ.get("ROBOMETER_VIDEO_KEY") or None
-TASK = os.environ.get("ROBOMETER_TASK") or "complete the robot manipulation task"
-MAX_FRAMES = int(os.environ.get("ROBOMETER_MAX_FRAMES", "8"))
-MAX_IN_FLIGHT = int(os.environ.get("ROBOMETER_MAX_IN_FLIGHT", "256"))
-NUM_SHARDS = int(os.environ.get("ROBOMETER_NUM_SHARDS", "5"))
-NUM_WORKERS = int(os.environ.get("ROBOMETER_NUM_WORKERS", "1"))
-MEM_MB_PER_WORKER = int(os.environ.get("ROBOMETER_MEM_MB_PER_WORKER", "4096"))
-
 
 def main() -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = f"{OUTPUT_ROOT}/{stamp}"
 
     (
-        mdr.read_lerobot(INPUT_DATASET, num_shards=NUM_SHARDS)
+        mdr.read_lerobot(
+            "hf://datasets/nvidia/LIBERO_LeRobot_v3/libero_90",
+            num_shards=5,
+        )
         .map_async(
             mdr.robotics.reward_score(
                 model="robometer/Robometer-4B",
-                video_key=VIDEO_KEY,
-                task=TASK,
-                max_frames=MAX_FRAMES,
-                max_concurrent_requests=MAX_IN_FLIGHT,
+                video_key="observation.images.image",
+                # Usually you will have task in the row itself use lambda row: row.task or "; ".join(row.tasks) if them
+                task="complete the robot manipulation task",
+                # This is robometer default, we don't recommend going above 16
+                max_frames=8,
+                max_concurrent_requests=256,
             ),
-            max_in_flight=MAX_IN_FLIGHT,
-            preserve_order=False,
+            max_in_flight=256,
         )
-        .write_lerobot(output)
+        .write_lerobot(
+            f"hf://buckets/macrodata/test_bucket/libero-robometer-reward/{stamp}"
+        )
         .launch_cloud(
             name="robometer-reward",
-            num_workers=NUM_WORKERS,
+            num_workers=1,
             cpus_per_worker=1,
-            mem_mb_per_worker=MEM_MB_PER_WORKER,
+            mem_mb_per_worker=4096,
             extra_dependencies=("macrodata-refiner[hf,video]",),
-            secrets=mdr.Secrets.env(name="default", keys=["HF_TOKEN"]),
+            secrets={"HF_TOKEN": None},
         )
     )
 
