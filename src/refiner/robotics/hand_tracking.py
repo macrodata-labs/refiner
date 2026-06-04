@@ -59,8 +59,8 @@ def track_hands(
             ``mano_pose`` ``[T, 96]``, ``mano_shape`` ``[T, 10]``, ``confidence``
             ``[T]``, and ``infilled`` ``[T]``.
         ``metadata``:
-            Optional dictionary with pipeline settings such as
-            ``vggt_seq_length`` and ``hawor_seq_length``.
+            Dictionary with pipeline settings such as ``vggt_seq_length`` and
+            ``hawor_seq_length``.
 
     Metrics:
         Logs ``frames_processed`` as HaWoR model batches finish.
