@@ -32,8 +32,10 @@ pipeline.launch_cloud(
     num_workers=1,
     cpus_per_worker=1,
     mem_mb_per_worker=2048,
-    secrets=[
-        mdr.Secrets.env(keys=["HF_TOKEN"]),
-        {"GOOGLE_GENERATIVE_AI_API_KEY": None},
-    ],
+    secrets=mdr.Secrets.dict(
+        {
+            "HF_TOKEN": None,
+            "GOOGLE_GENERATIVE_AI_API_KEY": None,
+        }
+    ),
 )

@@ -329,6 +329,58 @@ def test_subtask_annotation_accepts_robotics_row(tmp_path, monkeypatch) -> None:
     ]
 
 
+def test_subtask_annotation_writes_empty_segments_for_blocked_prompt(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _robotics_row(tmp_path, tasks=["inspect workspace"])
+    block = mdr.robotics.subtask_annotation(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+    )
+
+    async def _blocked_request(**kwargs):
+        raise RuntimeError(
+            "google generation response is missing candidates[0]: "
+            "promptFeedback.blockReason=PROHIBITED_CONTENT"
+        )
+
+    result = asyncio.run(cast(Any, block)(row, _blocked_request))
+
+    assert result["predicted_subtasks"] == []
+
+
+def test_subtask_annotation_can_raise_for_blocked_prompt(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _robotics_row(tmp_path, tasks=["inspect workspace"])
+    block = mdr.robotics.subtask_annotation(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+        on_blocked_prompt="raise",
+    )
+
+    async def _blocked_request(**kwargs):
+        raise RuntimeError(
+            "google generation response is missing candidates[0]: "
+            "promptFeedback.blockReason=PROHIBITED_CONTENT"
+        )
+
+    with pytest.raises(RuntimeError, match="PROHIBITED_CONTENT"):
+        asyncio.run(cast(Any, block)(row, _blocked_request))
+
+
 def test_subtask_annotation_can_include_contact_sheet_manifest(
     tmp_path,
     monkeypatch,
@@ -437,7 +489,7 @@ def test_subtask_annotation_keeps_short_segments_by_default(
     ]
 
 
-def test_subtask_annotation_warns_on_overlapping_segments(
+def test_subtask_annotation_logs_on_overlapping_segments(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -445,6 +497,12 @@ def test_subtask_annotation_warns_on_overlapping_segments(
         return kwargs["fn"]
 
     monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+    logged_warnings = []
+    monkeypatch.setattr(
+        subtask_annotation_module.logger,
+        "warning",
+        lambda *args: logged_warnings.append(args),
+    )
 
     row = _lerobot_row(tmp_path)
     block = mdr.robotics.subtask_annotation(
@@ -465,10 +523,11 @@ def test_subtask_annotation_warns_on_overlapping_segments(
             response={},
         )
 
-    with pytest.warns(RuntimeWarning, match="overlapping segments"):
-        result = asyncio.run(cast(Any, block)(row, _fake_request))
+    result = asyncio.run(cast(Any, block)(row, _fake_request))
 
     assert result["predicted_subtasks"] == [
         {"start_sec": 0.0, "end_sec": 2.0, "subtask": "reach"},
         {"start_sec": 1.5, "end_sec": 3.0, "subtask": "grasp"},
     ]
+    assert len(logged_warnings) == 1
+    assert "overlapping segments" in logged_warnings[0][0]

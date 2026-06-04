@@ -78,7 +78,7 @@
 - [Libero HDF5](examples/libero-hdf5.md)
 - [Merge LeRobot Datasets](examples/merge-lerobot-datasets.md)
 - [Annotate Subtasks](examples/annotate-subtasks.md)
-- [Score Rewards](examples/score-rewards.md)
+- [Running Reward Models](examples/reward-models.md)
 - [Cloud GPU Job](examples/cloud-gpu-job.md)
 
 ## Platform

@@ -16,5 +16,5 @@ These examples are complete patterns you can adapt.
 | [Libero HDF5](libero-hdf5.md) | Convert the LIBERO HDF5 eval datasets on cloud workers. |
 | [Merge LeRobot Datasets](merge-lerobot-datasets.md) | Combine compatible LeRobot roots. |
 | [Annotate Subtasks](annotate-subtasks.md) | Use a VLM to add temporal labels. |
-| [Score Rewards](score-rewards.md) | Use reward scoring over episode videos. |
+| [Running Reward Models](reward-models.md) | Use reward models to score episodes. |
 | [Cloud GPU Job](cloud-gpu-job.md) | Request GPUs for model-heavy work. |

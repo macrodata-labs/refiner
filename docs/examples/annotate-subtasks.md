@@ -5,10 +5,11 @@ description: "Add VLM-generated temporal subtask annotations to episodes"
 
 # Annotate Subtasks
 
+![Subtask annotation timeline](../images/subtask_annotations.png)
+
 This example reads a LeRobot dataset, runs temporal subtask annotation on each
 episode video, writes the predicted segments into a new `predicted_subtasks`
-column, and saves the result back in LeRobot format. `subtask_annotation` also
-works on generic `RoboticsRow` inputs produced with `to_robot_rows(...)`.
+column, and saves the result back in LeRobot format.
 
 ```python
 import refiner as mdr
@@ -31,22 +32,24 @@ pipeline = (
 
 pipeline.launch_cloud(
     name="berkeley-subtask-annotation",
-    num_workers=4,
+    num_workers=1,
     cpus_per_worker=1,
     mem_mb_per_worker=2048,
-    secrets=[
-        mdr.Secrets.env(keys=["HF_TOKEN"]),
-        {"GOOGLE_GENERATIVE_AI_API_KEY": None},
-    ],
+    secrets=mdr.Secrets.dict(
+        {
+            "HF_TOKEN": None,
+            "GOOGLE_GENERATIVE_AI_API_KEY": None,
+        }
+    ),
 )
 ```
 
-`HF_TOKEN` is passed through from the default Macrodata Cloud environment so the
-workers can read and write Hugging Face datasets and buckets without embedding
-the token in the script. `GOOGLE_GENERATIVE_AI_API_KEY` is declared as a secret
-that must be supplied by the launch environment because `subtask_annotation`
-uses Gemini 3.5 Flash through `GoogleEndpointProvider`.
+`HF_TOKEN` and `GOOGLE_GENERATIVE_AI_API_KEY` are loaded from your local
+environment at submission time because each value is set to `None`. Refiner
+passes the resolved values to the Cloud job as redacted secrets. Export both
+variables before launching the pipeline.
 
 Use [Subtask Annotation](../episode-operations/subtask-annotation.md) for
-parameter details. `subtask_annotation` uses Gemini 3.5 Flash through
-`GoogleEndpointProvider`, so you need to provide `GOOGLE_GENERATIVE_AI_API_KEY`.
+parameter details and in-depth explanation. `subtask_annotation` uses Gemini
+3.5 Flash through `GoogleEndpointProvider`, so you need to provide
+`GOOGLE_GENERATIVE_AI_API_KEY`.
