@@ -5,7 +5,7 @@ import refiner as mdr
 MAX_IMAGES = 1_000
 
 PROVIDER = mdr.inference.AnthropicEndpointProvider(
-    model="claude-sonnet-4",
+    model="claude-haiku-4-5-20251001",
 )
 
 
@@ -71,7 +71,7 @@ if __name__ == "__main__":
             preserve_order=False,
         )
         .write_parquet(
-            "hf://buckets/macrodata/test_bucket/food101-anthropic-descriptions-claude-sonnet-4-1k.parquet"
+            "hf://buckets/macrodata/test_bucket/food101-anthropic-descriptions-claude-haiku-4-5-20251001-1k.parquet"
         )
         .launch_cloud(
             name="food101-anthropic-descriptions",
