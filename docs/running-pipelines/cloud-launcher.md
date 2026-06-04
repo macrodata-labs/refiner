@@ -14,7 +14,7 @@ pipeline.launch_cloud(
     num_workers=8,
     cpus_per_worker=4,
     mem_mb_per_worker=8192,
-    extra_dependencies=["torch", "ego-vision[models,detection]==0.1.6"],
+    extra_dependencies=["macrodata-refiner[hand_tracking]"],
     secrets={"HF_TOKEN": None},
 )
 ```
@@ -44,13 +44,9 @@ locally, or when the cloud package should override the locally captured version:
 
 ```python
 pipeline.launch_cloud(
-    name="egocentric-smoke",
+    name="hand-tracking",
     gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
-    extra_dependencies=[
-        "ego-vision[models,detection]==0.1.6",
-        "opencv-python-headless",
-        "torch",
-    ],
+    extra_dependencies=["macrodata-refiner[hand_tracking]"],
 )
 ```
 
@@ -61,7 +57,7 @@ ranges, and extras are accepted:
 extra_dependencies=[
     "torch",
     "transformers>=4.55",
-    "ego-vision[models,detection]==0.1.6",
+    "macrodata-refiner[hand_tracking]",
 ]
 ```
 

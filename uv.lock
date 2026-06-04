@@ -822,15 +822,16 @@ wheels = [
 
 [[package]]
 name = "ego-vision"
-version = "0.1.8"
+version = "0.1.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "torch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6f/4f/aba517ce74de2b078bc29fe3cfcbb6129a6e504b3e0033ba810191be9ebe/ego_vision-0.1.8.tar.gz", hash = "sha256:e3fcb680b67e1f3792ad07814abb1c88b251cb95416721590f99076213a6d5eb", size = 106873, upload-time = "2026-05-30T13:27:37.372Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/ad/1d472f1f488e6020b54d930b95197aac3dcfd9a9f0be6c32c35ab883f61c/ego_vision-0.1.25.tar.gz", hash = "sha256:5e006a4f0f298eeeced609a0c77856c06e61d8591552b7a8e6f4468c0efeae8a", size = 123836, upload-time = "2026-06-04T10:13:30.711Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/c1/a45065e3addcdea8025e1987d23cc0be02e48263317ddda1067855cf59bf/ego_vision-0.1.8-py3-none-any.whl", hash = "sha256:f50483ff0691e711b5866a9f6a8c474ac83a801a213367653fd893cb72314952", size = 126878, upload-time = "2026-05-30T13:27:35.905Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/53/a2ab363cd2d853cf5dfbb4848aa06cd52632f916fd827693ae20d5720e52/ego_vision-0.1.25-py3-none-any.whl", hash = "sha256:501363d08e441a05b62903625c3a818c2f169b17e6198a9ab33ebed0d445d981", size = 144816, upload-time = "2026-06-04T10:13:29.447Z" },
 ]
 
 [package.optional-dependencies]
@@ -849,7 +850,6 @@ models = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "smplx" },
     { name = "timm" },
-    { name = "torch" },
     { name = "torchvision" },
 ]
 
@@ -1708,7 +1708,7 @@ all = [
     { name = "warcio" },
     { name = "zarr" },
 ]
-egocentric = [
+hand-tracking = [
     { name = "av" },
     { name = "datasets" },
     { name = "ego-vision", extra = ["models"] },
@@ -1787,7 +1787,7 @@ requires-dist = [
     { name = "av", marker = "extra == 'video'" },
     { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "datasets", marker = "extra == 'hf'", specifier = ">=3.0.0" },
-    { name = "ego-vision", extras = ["models"], marker = "extra == 'egocentric'", specifier = ">=0.1.8" },
+    { name = "ego-vision", extras = ["models"], marker = "extra == 'hand-tracking'", specifier = ">=0.1.25" },
     { name = "fsspec", extras = ["http"] },
     { name = "h5py", marker = "extra == 'hdf5'" },
     { name = "hf", marker = "extra == 'hf'", specifier = ">=1.7.1" },
@@ -1797,14 +1797,14 @@ requires-dist = [
     { name = "macrodata-refiner", extras = ["all"], marker = "extra == 'testing'" },
     { name = "macrodata-refiner", extras = ["hdf5"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'all'" },
-    { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'egocentric'" },
+    { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'hand-tracking'" },
     { name = "macrodata-refiner", extras = ["mcap"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["s3"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["tensorflow"], marker = "extra == 'tfds'" },
     { name = "macrodata-refiner", extras = ["text"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["tfds"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'all'" },
-    { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'egocentric'" },
+    { name = "macrodata-refiner", extras = ["video"], marker = "extra == 'hand-tracking'" },
     { name = "macrodata-refiner", extras = ["zarr"], marker = "extra == 'all'" },
     { name = "mcap", marker = "extra == 'mcap'" },
     { name = "mcap-protobuf-support", marker = "extra == 'mcap'" },
@@ -1826,7 +1826,7 @@ requires-dist = [
     { name = "warcio", marker = "extra == 'text'" },
     { name = "zarr", marker = "extra == 'zarr'", specifier = ">=2.18,<3" },
 ]
-provides-extras = ["video", "hf", "egocentric", "text", "hdf5", "zarr", "mcap", "s3", "tensorflow", "tfds", "testing", "all"]
+provides-extras = ["video", "hf", "hand-tracking", "text", "hdf5", "zarr", "mcap", "s3", "tensorflow", "tfds", "testing", "all"]
 
 [package.metadata.requires-dev]
 dev = [

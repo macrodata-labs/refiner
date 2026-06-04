@@ -13,6 +13,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from huggingface_hub.errors import HfHubHTTPError
 
 import refiner as mdr
 from refiner.io import DataFile, DataFolder
@@ -1189,15 +1190,20 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
 def test_hub_aloha_merge_uses_remux_and_preserves_episode_count(tmp_path: Path) -> None:
     out_root = tmp_path / "hub-aloha-merge"
     source_roots = [f"hf://datasets/{repo_id}" for repo_id in _ALOHA_REPO_IDS]
-    stats = (
-        mdr.read_lerobot(source_roots)
-        .write_lerobot(str(out_root))
-        .launch_local(
-            name="lerobot-hub-aloha-merge",
-            num_workers=1,
-            rundir=str(tmp_path / "workdir-hub-aloha-merge"),
+    try:
+        stats = (
+            mdr.read_lerobot(source_roots)
+            .write_lerobot(str(out_root))
+            .launch_local(
+                name="lerobot-hub-aloha-merge",
+                num_workers=1,
+                rundir=str(tmp_path / "workdir-hub-aloha-merge"),
+            )
         )
-    )
+    except HfHubHTTPError as exc:
+        if getattr(getattr(exc, "response", None), "status_code", None) == 429:
+            pytest.skip("Hugging Face rate-limited the live ALOHA dataset request")
+        raise
     assert stats.failed == 0
 
     with (out_root / "meta" / "info.json").open("r", encoding="utf-8") as fh:
