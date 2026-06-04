@@ -56,6 +56,8 @@ pipeline = (
 )
 ```
 
+![Hand tracking example output](../images/SCR-20260605-bgye.jpeg)
+
 ## Requirements
 
 Install the hand-tracking extra:
