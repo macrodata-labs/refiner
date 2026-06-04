@@ -77,7 +77,7 @@
 - [MCAP Franka](examples/mcap-franka.md)
 - [Libero HDF5](examples/libero-hdf5.md)
 - [Merge LeRobot Datasets](examples/merge-lerobot-datasets.md)
-- [Annotate Subtasks](examples/annotate-subtasks.md)
+- [Video Subtask Annotations](examples/subtask-annotations.md)
 - [Running Reward Models](examples/reward-models.md)
 - [Cloud GPU Job](examples/cloud-gpu-job.md)
 

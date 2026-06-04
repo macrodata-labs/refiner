@@ -15,6 +15,6 @@ These examples are complete patterns you can adapt.
 | [MCAP Franka](mcap-franka.md) | Convert MCAP state/action/video topics to LeRobot and Zarr. |
 | [Libero HDF5](libero-hdf5.md) | Convert the LIBERO HDF5 eval datasets on cloud workers. |
 | [Merge LeRobot Datasets](merge-lerobot-datasets.md) | Combine compatible LeRobot roots. |
-| [Annotate Subtasks](annotate-subtasks.md) | Use a VLM to add temporal labels. |
+| [Video Subtask Annotations](subtask-annotations.md) | Use a VLM to add segment and annotate your videos. |
 | [Running Reward Models](reward-models.md) | Use reward models to score episodes. |
 | [Cloud GPU Job](cloud-gpu-job.md) | Request GPUs for model-heavy work. |
