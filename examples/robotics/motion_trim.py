@@ -22,7 +22,7 @@ if __name__ == "__main__":
             num_workers=1,
             mem_mb_per_worker=1024 * 2,
             secrets={
-                "HF_TOKEN": "---",
+                "HF_TOKEN": None,
             },
         )
     )

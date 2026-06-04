@@ -57,7 +57,7 @@ def main() -> None:
             cpus_per_worker=1,
             mem_mb_per_worker=1024,
             extra_dependencies=("av", "h5py", "huggingface-hub>=1.4.1", "pillow"),
-            secrets=mdr.Secrets.env(name="default", keys=["HF_TOKEN"]),
+            secrets=mdr.Secrets.dict({"HF_TOKEN": None}),
         )
     )
 
