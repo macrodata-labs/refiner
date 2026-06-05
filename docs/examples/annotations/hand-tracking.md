@@ -5,7 +5,7 @@ description: "Run ego-centric hand tracking over HomER videos"
 
 # Track Hands
 
-![Hand tracking example output](../../images/hand-tracking-example-output.jpeg)
+![Hand tracking example output](../../assets/hand-tracking-example-output.jpeg)
 
 This example reads videos from the HomER dataset, converts each video into a
 robotics episode row, runs ego-vision hand tracking, and writes JSONL records

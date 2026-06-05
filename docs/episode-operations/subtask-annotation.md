@@ -78,7 +78,7 @@ Video input is sent as contact sheets: timestamped image grids that preserve
 temporal context without sending the full video. This keeps requests smaller
 while giving the model enough visual context to choose event boundaries.
 
-![Timestamped contact sheet](../images/contact-sheet.png)
+![Timestamped contact sheet](../assets/contact-sheet.png)
 
 The default settings sample one frame every `0.5` seconds, resize each tile to
 `224px` wide, and pack up to `20` frames per sheet in `5` columns.
