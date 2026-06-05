@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class VideoSource(Protocol):
+    async def get_frame_count(self) -> int: ...
+
     def clipped(
         self,
         *,
@@ -94,6 +96,21 @@ class VideoFile:
     def open(self) -> IO[bytes]:
         return self.data_file.open(mode="rb")
 
+    async def get_frame_count(self) -> int:
+        from refiner.video.remux import prepare_video_source
+
+        prepared = await prepare_video_source(video=self)
+        try:
+            if self.from_timestamp_s is not None or self.to_timestamp_s is not None:
+                raise ValueError(
+                    "encoded video frame count is unavailable for clipped videos"
+                )
+            if prepared.probe is None or prepared.probe.frame_count is None:
+                raise ValueError(f"Video frame count is unavailable for {self.uri!r}")
+            return prepared.probe.frame_count
+        finally:
+            prepared.close()
+
     def clipped(
         self,
         *,
@@ -160,6 +177,22 @@ class VideoBytes:
 
     def open(self) -> IO[bytes]:
         return io.BytesIO(self.data)
+
+    async def get_frame_count(self) -> int:
+        from refiner.video.remux import prepare_video_source
+
+        prepared = await prepare_video_source(video=self)
+        try:
+            if self.from_timestamp_s is not None or self.to_timestamp_s is not None:
+                raise ValueError(
+                    "encoded video frame count is unavailable for clipped videos"
+                )
+            if prepared.probe is None or prepared.probe.frame_count is None:
+                source = self.uri or type(self).__name__
+                raise ValueError(f"Video frame count is unavailable for {source!r}")
+            return prepared.probe.frame_count
+        finally:
+            prepared.close()
 
     def clipped(
         self,
@@ -249,6 +282,11 @@ class VideoFrameSequence:
         if self.frame_count is None:
             return None
         return self.frame_count / float(self.fps)
+
+    async def get_frame_count(self) -> int:
+        if self.frame_count is not None:
+            return self.frame_count
+        return sum(1 for _ in self.iter_frame_arrays())
 
     def iter_frame_arrays(self) -> Iterator[np.ndarray]:
         start_idx = (
@@ -408,6 +446,9 @@ class VideoFrameArray:
     @property
     def duration_s(self) -> float:
         return self.frame_count / float(self.fps)
+
+    async def get_frame_count(self) -> int:
+        return self.frame_count
 
     def iter_frame_arrays(self) -> Iterator[np.ndarray]:
         yield from self._array

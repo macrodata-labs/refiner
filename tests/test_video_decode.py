@@ -68,6 +68,35 @@ def test_iter_frames_respects_clip_bounds(tmp_path) -> None:
     assert [frame.timestamp_s for frame in frames] == [0.2, 0.4, 0.6]
 
 
+def test_video_file_get_frame_count_uses_container_metadata(tmp_path) -> None:
+    path = tmp_path / "video.mp4"
+    _write_video(path, num_frames=5, fps=5)
+    video = mdr.video.VideoFile(DataFile.resolve(path))
+
+    assert asyncio.run(video.get_frame_count()) == 5
+
+
+def test_video_bytes_get_frame_count_uses_container_metadata(tmp_path) -> None:
+    path = tmp_path / "video.mp4"
+    _write_video(path, num_frames=4, fps=5)
+    video = mdr.video.VideoBytes(path.read_bytes(), uri=str(path))
+
+    assert asyncio.run(video.get_frame_count()) == 4
+
+
+def test_clipped_encoded_video_get_frame_count_raises(tmp_path) -> None:
+    path = tmp_path / "video.mp4"
+    _write_video(path, num_frames=5, fps=5)
+    video = mdr.video.VideoFile(
+        DataFile.resolve(path),
+        from_timestamp_s=0.0,
+        to_timestamp_s=0.4,
+    )
+
+    with pytest.raises(ValueError, match="clipped videos"):
+        asyncio.run(video.get_frame_count())
+
+
 def test_video_frame_array_clip_returns_frame_view() -> None:
     frames = np.stack([np.full((4, 4, 3), value, dtype=np.uint8) for value in range(6)])
     video = mdr.video.VideoFrameArray(frames, fps=10)
@@ -79,6 +108,13 @@ def test_video_frame_array_clip_returns_frame_view() -> None:
     assert len(clipped_frames) == 3
     assert clipped_frames[0].shape == (4, 4, 3)
     assert [int(frame[0, 0, 0]) for frame in clipped_frames] == [2, 3, 4]
+
+
+def test_video_frame_array_get_frame_count() -> None:
+    frames = np.stack([np.full((4, 4, 3), value, dtype=np.uint8) for value in range(6)])
+    video = mdr.video.VideoFrameArray(frames, fps=10)
+
+    assert asyncio.run(video.get_frame_count()) == 6
 
 
 def test_video_frame_array_iter_frames() -> None:
@@ -112,6 +148,21 @@ def test_video_frame_sequence_iterates_without_stacking() -> None:
     assert [frame.timestamp_s for frame in decoded] == [0.0, 0.2, 0.4]
     assert [int(frame[0, 0, 0]) for frame in arrays] == [0, 1, 2]
     assert calls == 6
+
+
+def test_video_frame_sequence_get_frame_count_counts_unknown_sequence() -> None:
+    calls = 0
+
+    def frames():
+        nonlocal calls
+        for value in range(3):
+            calls += 1
+            yield np.full((4, 4, 3), value, dtype=np.uint8)
+
+    video = mdr.video.VideoFrameSequence(frames, fps=5)
+
+    assert asyncio.run(video.get_frame_count()) == 3
+    assert calls == 3
 
 
 def test_video_frame_sequence_rejects_one_shot_iterators() -> None:

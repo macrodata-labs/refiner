@@ -18,6 +18,7 @@ class VideoSourceProbe:
     width: int
     height: int
     fps: float | None
+    frame_count: int | None
     time_base: Fraction
     codec: str | None
     pix_fmt: str | None
@@ -85,11 +86,13 @@ def _probe_video_source(
         return None
 
     stream_fps = stream.average_rate or stream.base_rate
+    frame_count = int(stream.frames) if stream.frames else None
     codec_obj = getattr(getattr(stream, "codec_context", None), "codec", None)
     return VideoSourceProbe(
         width=int(stream.width),
         height=int(stream.height),
         fps=float(stream_fps) if stream_fps is not None else None,
+        frame_count=frame_count,
         time_base=Fraction(cast(Any, stream.time_base)),
         codec=str(
             getattr(codec_obj, "canonical_name", None)
