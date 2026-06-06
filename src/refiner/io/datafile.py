@@ -11,6 +11,7 @@ from typing import Any, TypeAlias, Union, cast
 from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.http import HTTPFileSystem
 from fsspec.implementations.local import LocalFileSystem
+from refiner.io.utils import required_refiner_extras
 
 DataFilePath: TypeAlias = str | PathLike[str]
 DataFileSpec: TypeAlias = tuple[DataFilePath, AbstractFileSystem]
@@ -145,6 +146,9 @@ class DataFile:
 
     def abs_path(self) -> str:
         return self.fs.unstrip_protocol(self.path).removeprefix("file://")
+
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        return required_refiner_extras(self.path, self.fs)
 
     @property
     def is_local(self) -> bool:

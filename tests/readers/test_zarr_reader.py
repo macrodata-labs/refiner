@@ -18,6 +18,7 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import RowRangeDescriptor
 from refiner.pipeline.sinks.reducer.zarr import ZarrReducerSink
 from refiner.pipeline.sinks.zarr import ZarrSink
+from refiner.pipeline.sources.readers.zarr import ZarrReader
 from refiner.worker.context import set_active_run_context, worker_token_for
 from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 
@@ -53,6 +54,18 @@ class _EmptyVideoSource:
         raise NotImplementedError
 
 
+class _S3MemoryFileSystem(MemoryFileSystem):
+    protocol = "s3"
+
+
+class _HFMemoryFileSystem(MemoryFileSystem):
+    protocol = "hf"
+
+
+class _GCSMemoryFileSystem(MemoryFileSystem):
+    protocol = "gcs"
+
+
 def _open_test_zarr(path: Path, *, mode: Literal["r", "r+", "a", "w", "w-"]):
     kwargs: dict[str, Any] = {"mode": mode, "zarr_format": 2}
     try:
@@ -66,6 +79,77 @@ def _create_array(root, name: str, data, **kwargs):
         kwargs.pop("shape", None)
         return root.create_array(name, data=data, **kwargs)
     return root.create_dataset(name, data=data, **kwargs)
+
+
+def test_read_zarr_constructor_defers_dependency_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise AssertionError("dependency check should be deferred")
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sources.readers.zarr.check_required_dependencies",
+        fail,
+    )
+
+    path = tmp_path / "episodes.zarr"
+    path.mkdir()
+    mdr.read_zarr(str(path))
+
+
+def test_write_zarr_constructor_defers_dependency_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise AssertionError("dependency check should be deferred")
+
+    monkeypatch.setattr("refiner.pipeline.sinks.zarr.check_required_dependencies", fail)
+
+    mdr.from_items([]).write_zarr(str(tmp_path / "out.zarr"))
+
+
+@pytest.mark.parametrize(
+    ("url", "fs", "extra"),
+    [
+        ("s3://bucket/out.zarr", _S3MemoryFileSystem(), "s3"),
+        ("hf://datasets/org/repo/out.zarr", _HFMemoryFileSystem(), "hf"),
+        ("gs://bucket/out.zarr", _GCSMemoryFileSystem(), "gcs"),
+    ],
+)
+def test_write_zarr_remote_output_declares_storage_extra(
+    url: str,
+    fs: MemoryFileSystem,
+    extra: str,
+) -> None:
+    output = (url, fs)
+
+    assert ZarrSink(output).required_refiner_extras() == (extra, "zarr")
+    assert ZarrReducerSink(
+        output,
+        store_template="{shard_id}__w{worker_id}.zarr",
+    ).required_refiner_extras() == (extra, "zarr")
+
+
+@pytest.mark.parametrize(
+    ("url", "fs", "extra"),
+    [
+        ("s3://bucket/input.zarr", _S3MemoryFileSystem(), "s3"),
+        ("hf://datasets/org/repo/input.zarr", _HFMemoryFileSystem(), "hf"),
+        ("gs://bucket/input.zarr", _GCSMemoryFileSystem(), "gcs"),
+    ],
+)
+def test_read_zarr_remote_input_declares_storage_extra(
+    url: str,
+    fs: MemoryFileSystem,
+    extra: str,
+) -> None:
+    fs.mkdir(url)
+
+    reader = ZarrReader((url, fs))
+
+    assert reader.required_refiner_extras() == (extra, "zarr")
 
 
 def _write_policy_zarr(path: Path) -> None:

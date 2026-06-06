@@ -12,12 +12,16 @@ from urllib import request as urllib_request
 from collections.abc import Sequence
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from refiner.pipeline.planning import PlannedStage
 
 from packaging.requirements import InvalidRequirement, Requirement
 
 _REDACTION_PLACEHOLDER = "REDACTED_SECRET"
 _NORMALIZED_DEPENDENCY_SEPARATOR_PATTERN = re.compile(r"[-_.]+")
+_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 
 def _redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
@@ -238,11 +242,35 @@ def build_run_manifest(
     capture_dependencies: bool = True,
     dependencies: Sequence[str] | None = None,
     refiner_extras: Sequence[str] | None = None,
+    pipeline_stages: Sequence["PlannedStage"] | None = None,
 ) -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
     refiner_version = _resolve_installed_version()
     refiner_ref = _resolve_direct_url_git_sha() or _resolve_local_repo_git_sha()
+    pipeline_refiner_extras: set[str] = set()
+    for stage in pipeline_stages or ():
+        pipeline = stage.pipeline
+        pipeline_refiner_extras.update(pipeline.source.required_refiner_extras())
+        for step in pipeline.pipeline_steps:
+            for candidate in getattr(step, "ops", (step,)):
+                for attr in ("fn", "predicate"):
+                    spec = getattr(
+                        getattr(candidate, attr, None), _REFINER_BUILTIN_CALL_ATTR, None
+                    )
+                    if isinstance(spec, dict):
+                        declared = spec.get("refiner_extras", ())
+                        if isinstance(declared, tuple):
+                            pipeline_refiner_extras.update(declared)
+        if pipeline.sink is not None:
+            pipeline_refiner_extras.update(pipeline.sink.required_refiner_extras())
+    if isinstance(refiner_extras, str):
+        merged_refiner_extras: Sequence[str] | None = refiner_extras
+    else:
+        merged_refiner_extras = [
+            *(refiner_extras or ()),
+            *sorted(pipeline_refiner_extras),
+        ]
 
     manifest: dict[str, Any] = {
         "version": 1,
@@ -257,7 +285,7 @@ def build_run_manifest(
             "python_version": platform.python_version(),
             "refiner_version": refiner_version,
             "refiner_ref": refiner_ref,
-            "refiner_extras": _normalize_refiner_extras(refiner_extras),
+            "refiner_extras": _normalize_refiner_extras(merged_refiner_extras),
             "platform": f"{platform.system().lower()}-{platform.machine().lower()}",
         },
     }

@@ -329,10 +329,19 @@ def _builtin_description(fn: Any) -> dict[str, Any] | None:
     return {"name": name, "args": args, "services": tuple(parsed_services)}
 
 
-def describe_builtin(name: str, **args: Any) -> Any:
+def describe_builtin(
+    name: str, *, refiner_extras: tuple[str, ...] = (), **args: Any
+) -> Any:
     def _decorate(fn: Any) -> Any:
         setattr(
-            fn, _REFINER_BUILTIN_CALL_ATTR, {"name": name, "args": args, "services": ()}
+            fn,
+            _REFINER_BUILTIN_CALL_ATTR,
+            {
+                "name": name,
+                "args": args,
+                "services": (),
+                "refiner_extras": refiner_extras,
+            },
         )
         return fn
 

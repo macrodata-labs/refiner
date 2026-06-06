@@ -7,6 +7,7 @@ from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from refiner.io.datafile import DataFile, _storage_options_for_path
+from refiner.io.utils import required_refiner_extras
 
 DataFolderPath: TypeAlias = str | PathLike[str]
 DataFolderSpec: TypeAlias = tuple[DataFolderPath, AbstractFileSystem]
@@ -101,6 +102,9 @@ class DataFolder(DirFileSystem):
     def abs_path(self, path: str = "") -> str:
         # make sure we strip file:// and similar
         return self.fs.unstrip_protocol(self._join(path)).removeprefix("file://")
+
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        return required_refiner_extras(self.path, self.fs)
 
     def abs_paths(self, paths: str | Iterable[str]) -> str | list[str]:
         """

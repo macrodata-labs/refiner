@@ -185,6 +185,9 @@ class McapReader(BaseReader):
         )
         return description
 
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("mcap",)
+
     def _episode_row(
         self,
         topic_events: Mapping[str, Sequence[_McapEvent]],

@@ -76,7 +76,6 @@ if __name__ == "__main__":
         .launch_cloud(
             name="food101-openai-descriptions",
             num_workers=1,
-            refiner_extras=("hf",),
             secrets=mdr.Secrets.dict({"HF_TOKEN": None, "OPENAI_API_KEY": None}),
         )
     )

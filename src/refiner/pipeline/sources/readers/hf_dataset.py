@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+import importlib.util
 from typing import Any
 from typing import cast
 from urllib.parse import quote
@@ -55,6 +56,8 @@ class HFDatasetReader(BaseSource):
         file_path_column: str | None = "file_path",
     ):
         self.repo = repo
+        self.config = config or "default"
+        self._config_arg = config
         self.split = split
         self.timeout = float(timeout)
         self.target_shard_bytes = target_shard_bytes
@@ -64,26 +67,9 @@ class HFDatasetReader(BaseSource):
             tuple(columns_to_read) if columns_to_read is not None else None
         )
         self.file_path_column = file_path_column
-
-        check_required_dependencies("read_hf_dataset", ["datasets"], dist="huggingface")
-        from datasets import get_dataset_config_info
-
-        info_kwargs: dict[str, Any] = {}
-        if config is not None:
-            info_kwargs["config_name"] = config
-        info = get_dataset_config_info(self.repo, **info_kwargs)
-        self.config: str = str(info.config_name or config or "default")
-
-        inferred_dtypes: dict[str, pa.Field] = {}
-        for name, feature in (info.features or {}).items():
-            dtype_factory = _HF_ASSET_FEATURE_DTYPES.get(type(feature).__name__)
-            if dtype_factory is not None:
-                inferred_dtypes[name] = dtype_factory()
-
-        effective_dtypes = dict(inferred_dtypes)
-        if dtypes:
-            effective_dtypes.update(dtypes)
-        self.dtypes = effective_dtypes or None
+        self._user_dtypes = dict(dtypes or {})
+        self.dtypes = self._user_dtypes or None
+        self._dataset_info_loaded = False
 
         referenced_filter_columns = (
             filter.referenced_columns() if filter is not None else set()
@@ -124,6 +110,8 @@ class HFDatasetReader(BaseSource):
                 for col in self._parquet_columns_to_read
                 if col != self.file_path_column
             )
+        if importlib.util.find_spec("datasets") is not None:
+            self._ensure_dataset_info()
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -132,6 +120,32 @@ class HFDatasetReader(BaseSource):
             "split": self.split,
             "dtypes": list(self.dtypes) if self.dtypes else None,
         }
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("datasets",)
+
+    def _ensure_dataset_info(self) -> None:
+        if self._dataset_info_loaded:
+            return
+        check_required_dependencies("read_hf_dataset", ["datasets"], dist="datasets")
+        from datasets import get_dataset_config_info
+
+        info_kwargs: dict[str, Any] = {}
+        if self._config_arg is not None:
+            info_kwargs["config_name"] = self._config_arg
+        info = get_dataset_config_info(self.repo, **info_kwargs)
+        self.config = str(info.config_name or self._config_arg or "default")
+
+        inferred_dtypes: dict[str, pa.Field] = {}
+        for name, feature in (info.features or {}).items():
+            dtype_factory = _HF_ASSET_FEATURE_DTYPES.get(type(feature).__name__)
+            if dtype_factory is not None:
+                inferred_dtypes[name] = dtype_factory()
+
+        effective_dtypes = dict(inferred_dtypes)
+        effective_dtypes.update(self._user_dtypes)
+        self.dtypes = effective_dtypes or None
+        self._dataset_info_loaded = True
 
     def list_shards(self) -> list[Shard]:
         try:
@@ -164,6 +178,7 @@ class HFDatasetReader(BaseSource):
         if self._delegate is not None:
             return self._delegate
 
+        self._ensure_dataset_info()
         # URL discovery is intentionally separate from scanning; ParquetReader still
         # owns byte planning, projection, filtering, and Arrow conversion.
         urls = _list_parquet_urls(
@@ -210,6 +225,7 @@ class HFDatasetReader(BaseSource):
         return self._make_parquet_reader(paths), parquet_shard
 
     def _make_parquet_reader(self, urls: Sequence[str]) -> ParquetReader:
+        self._ensure_dataset_info()
         return ParquetReader(
             list(urls),
             target_shard_bytes=self.target_shard_bytes,
@@ -239,6 +255,10 @@ class HFDatasetReader(BaseSource):
 
     def _load_fallback_dataset(self) -> object:
         if self._fallback_dataset is None:
+            self._ensure_dataset_info()
+            check_required_dependencies(
+                "read_hf_dataset", ["datasets"], dist="datasets"
+            )
             from datasets import load_dataset
 
             kwargs: dict[str, Any] = {
@@ -359,6 +379,7 @@ def _list_parquet_urls(
         if urls:
             return urls
 
+    check_required_dependencies("read_hf_dataset", ["datasets"], dist="datasets")
     from datasets import load_dataset_builder
     from datasets.packaged_modules.parquet.parquet import Parquet
 
@@ -399,6 +420,11 @@ def _get_json_or_none(url: str, *, timeout: float) -> object:
 
 
 def _get_json(url: str, *, timeout: float) -> object:
+    check_required_dependencies(
+        "read_hf_dataset",
+        [("huggingface_hub", "huggingface-hub")],
+        dist="datasets",
+    )
     from huggingface_hub.utils import build_hf_headers
 
     response = httpx.get(

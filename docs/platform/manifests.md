@@ -38,14 +38,19 @@ Use `--json` for an agent, notebook, or CI job.
 
 ## Dependency Entries
 
-Use `refiner_extras` for Refiner
-[optional dependency groups](../reference/optional-dependencies.md), such as
-Hugging Face, HDF5, video, S3, or hand tracking support:
+Built-in Refiner blocks automatically add the
+[optional dependency groups](../reference/optional-dependencies.md) they need to
+the manifest. Hugging Face dataset readers, Hugging Face paths, HDF5/Zarr
+readers, video writers, cloud storage paths, and hand tracking operations are
+recorded from the pipeline plan.
+
+Use `refiner_extras` only when code outside the built-in blocks needs a specific
+Refiner extra:
 
 ```python
 pipeline.launch_cloud(
-    name="hand-tracking",
-    refiner_extras=["hand_tracking"],
+    name="custom-datasets-helper",
+    refiner_extras=["datasets"],
 )
 ```
 
@@ -54,7 +59,6 @@ Use `dependencies` for other packages needed by your code:
 ```python
 pipeline.launch_cloud(
     name="custom-model-job",
-    refiner_extras=["hf"],
     dependencies=[
         "torch==2.6.0",
         "transformers>=4.55",

@@ -36,7 +36,6 @@ from refiner.robotics.lerobot_format import (
     infer_feature_info,
 )
 from refiner.robotics.row import RoboticsRow
-from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import register_gauge
 
@@ -101,7 +100,6 @@ class LeRobotWriterSink(BaseSink):
         quantile_bins: int = 5000,
         force_recompute_video_stats: bool = False,
     ):
-        check_required_dependencies("write_lerobot", ["av"], dist="robotics")
         self.output = DataFolder.resolve(output)
         self.data_files_size_in_mb = data_files_size_in_mb
         self.video_files_size_in_mb = video_files_size_in_mb
@@ -122,6 +120,9 @@ class LeRobotWriterSink(BaseSink):
             preserve_order=False,
         )
         self._episodes_in_flight_registered = False
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("video",)
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
         """Submit one async write task per episode row in the shard-local block."""

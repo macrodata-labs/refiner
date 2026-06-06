@@ -124,6 +124,9 @@ class TfrecordReader(BaseReader):
         )
         return description
 
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("tensorflow",)
+
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read one file-granular shard as parsed TensorFlow batches."""
         descriptor = shard.descriptor

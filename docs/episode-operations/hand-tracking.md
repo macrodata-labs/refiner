@@ -50,7 +50,6 @@ pipeline = (
         num_workers=1,
         mem_mb_per_worker=32 * 1024,
         gpu=mdr.GPU(count=1, type="h100"),
-        refiner_extras=("hand_tracking",),
         secrets=mdr.Secrets.env(keys=("HF_TOKEN",)),
     )
 )
@@ -58,10 +57,11 @@ pipeline = (
 
 ## Requirements
 
-Install the hand-tracking extra:
+Install the hand-tracking extra. If you use the `read_hf_dataset(...)` example
+on this page locally, install `datasets` too:
 
 ```bash
-pip install macrodata-refiner[hand_tracking]
+pip install macrodata-refiner[datasets,hand_tracking]
 ```
 
 Input rows must implement `RoboticsRow` and include the required `video_key` in
@@ -149,7 +149,6 @@ pipeline = (
         num_workers=1,
         mem_mb_per_worker=32 * 1024,
         gpu=mdr.GPU(count=1, type="h100"),
-        refiner_extras=("hand_tracking",),
         secrets=mdr.Secrets.env(keys=("HF_TOKEN",)),
     )
 )

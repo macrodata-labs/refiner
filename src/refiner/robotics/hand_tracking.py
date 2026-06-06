@@ -10,6 +10,7 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.planning import describe_builtin
 from refiner.pipeline.steps import BatchFn
 from refiner.robotics.row import RoboticsRow
+from refiner.utils import check_required_dependencies
 from refiner.worker.context import logger
 
 
@@ -76,6 +77,7 @@ def track_hands(
 
     @describe_builtin(
         "robotics.hand_tracking:track_hands",
+        refiner_extras=("hand_tracking",),
         video_key=video_key,
         output_key=output_key,
     )
@@ -123,13 +125,12 @@ def track_hands(
 
 
 def _load_egovision(config: Any | None) -> tuple[Any, Any]:
-    try:
-        egovision: Any = importlib.import_module("egovision")
-    except ImportError as exc:
-        raise ImportError(
-            "track_hands requires ego-vision. Install it with "
-            "`pip install macrodata-refiner[hand_tracking]`."
-        ) from exc
+    check_required_dependencies(
+        "track_hands",
+        [("egovision", "ego-vision")],
+        dist="hand_tracking",
+    )
+    egovision: Any = importlib.import_module("egovision")
 
     if config is None:
         config = egovision.HandTrackingConfig(
