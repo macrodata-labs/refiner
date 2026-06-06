@@ -67,6 +67,7 @@ pipeline.launch_cloud(
     num_workers=16,
     cpus_per_worker=8,
     mem_mb_per_worker=32768,
+    refiner_extras=["hf", "s3"],
     secrets=mdr.Secrets.env(name="production", keys=["HF_TOKEN"]),
 )
 ```
@@ -80,8 +81,9 @@ Common launch settings:
 | `cpus_per_worker` | CPU allocation per worker. |
 | `mem_mb_per_worker` | Memory allocation per worker. |
 | `gpu` | GPU type/count per worker. |
-| `sync_local_dependencies` | Include detected packages from the submitting environment. Defaults to `True`. |
-| `extra_dependencies` | Additional pip requirement strings to install on workers. These override captured packages with the same package name. |
+| `refiner_extras` | Refiner [optional dependency groups](../reference/optional-dependencies.md) to install on workers, such as `["hf", "video"]`. |
+| `dependencies` | Additional pip requirement strings to install on workers. |
+| `sync_local_dependencies` | Ask Refiner to try syncing packages from the submitting environment. Defaults to `False`. |
 | `secrets` | Secret values or workspace secret references passed to workers. |
 | `env` | Non-secret environment variables. |
 | `continue_from_job` | Reuse compatible outputs from a prior cloud job. |
@@ -91,29 +93,40 @@ See [Cloud Launcher](../running-pipelines/cloud-launcher.md) and
 
 ### Dependency Overrides
 
-Most cloud launches use the locally captured package list. Use
-`extra_dependencies` when the worker needs a package that is not installed
-locally, or when a cloud run should pin a different version:
+If your job requires support for a Refiner feature, pass the matching
+`refiner_extras`. See the
+[optional dependency groups](../reference/optional-dependencies.md):
 
 ```python
 pipeline.launch_cloud(
     name="hand-tracking",
     gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
-    extra_dependencies=["macrodata-refiner[hand_tracking]"],
+    refiner_extras=["hand_tracking"],
 )
 ```
 
-Entries are pip requirement strings. Exact pins, versionless requirements,
-ranges, and extras are supported. Extra dependencies are merged into the
-dependency manifest by package name and take precedence over locally captured
-packages with the same name.
+If your code needs other packages, pass them with `dependencies`:
+
+```python
+pipeline.launch_cloud(
+    name="custom-model-job",
+    refiner_extras=["hf"],
+    dependencies=["torch", "transformers>=4.55"],
+)
+```
+
+Dependency entries are pip requirement strings. Exact pins, versionless
+requirements, ranges, and package extras are supported.
 
 Environment markers are not preserved. Do not include markers in
-`extra_dependencies`; list the package as it should install on Macrodata Cloud.
+`dependencies`; list the package as it should install on Macrodata Cloud.
 For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
 
-Set `sync_local_dependencies=False` to skip local package capture while still
-installing explicitly listed `extra_dependencies`.
+Finally, if you would like Refiner to try syncing the packages installed in
+your current Python environment, set `sync_local_dependencies=True`. Explicit
+`dependencies` take precedence over synced packages with the same package name.
+If one of those packages cannot be resolved from PyPI during cloud image setup,
+the job will fail.
 
 ## What Gets Submitted
 

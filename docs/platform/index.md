@@ -78,6 +78,7 @@ pipeline.launch_cloud(
     num_workers=16,
     cpus_per_worker=8,
     mem_mb_per_worker=32768,
+    refiner_extras=["hf", "video"],
     secrets=mdr.Secrets.env(name="production", keys=["HF_TOKEN"]),
 )
 ```

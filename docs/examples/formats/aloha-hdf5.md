@@ -47,6 +47,7 @@ Then launch:
 pipeline.launch_cloud(
     name="convert-aloha",
     num_workers=8,
+    refiner_extras=("hdf5", "hf", "video"),
     secrets={"HF_TOKEN": None},
 )
 ```

@@ -32,6 +32,7 @@ pipeline.launch_cloud(
     num_workers=1,
     cpus_per_worker=1,
     mem_mb_per_worker=2048,
+    refiner_extras=("hf", "video"),
     secrets=mdr.Secrets.dict(
         {
             "HF_TOKEN": None,

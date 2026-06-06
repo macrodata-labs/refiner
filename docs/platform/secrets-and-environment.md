@@ -55,6 +55,7 @@ time:
 ```python
 pipeline.launch_cloud(
     name="private-hf-read",
+    refiner_extras=["hf"],
     secrets=mdr.Secrets.dict({"HF_TOKEN": "---"}),
 )
 ```
@@ -66,6 +67,7 @@ with the real token before submitting. You can also pass a plain mapping, but
 ```python
 pipeline.launch_cloud(
     name="private-hf-read",
+    refiner_extras=["hf"],
     secrets={"HF_TOKEN": "---"},
 )
 ```
@@ -78,6 +80,7 @@ sent with this job:
 ```python
 pipeline.launch_cloud(
     name="private-hf-read",
+    refiner_extras=["hf"],
     secrets=mdr.Secrets.dict({"HF_TOKEN": None}),
 )
 ```

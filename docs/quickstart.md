@@ -208,7 +208,7 @@ output = "hf://buckets/macrodata/test_bucket/libero-spatial"
         num_workers=10,
         cpus_per_worker=1,
         mem_mb_per_worker=1024,
-        extra_dependencies=("av", "h5py", "huggingface-hub>=1.4.1", "pillow"),
+        refiner_extras=("hdf5", "hf", "video"),
         # Replace this with a token that can write the output.
         secrets=mdr.Secrets.dict({"HF_TOKEN": "---"}),
     )

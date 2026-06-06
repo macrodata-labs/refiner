@@ -9,6 +9,7 @@ Install extras based on the data and operations you use.
 
 | Extra | Enables |
 | --- | --- |
+| `all` | Includes every extra below; useful for testing and development. |
 | `hf` | Hugging Face datasets, Hub APIs, and HF filesystem helpers. |
 | `hand_tracking` | Hand tracking with ego-vision. |
 | `hdf5` | HDF5 reader support. |
@@ -17,7 +18,6 @@ Install extras based on the data and operations you use.
 | `video` | Video decode/write support. |
 | `text` | Common Crawl text readers. |
 | `s3` | S3 filesystem support. |
-| `all` | Development/testing superset. |
 
 Examples:
 

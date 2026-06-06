@@ -21,6 +21,7 @@ if __name__ == "__main__":
             name="motion_trim-robot",
             num_workers=1,
             mem_mb_per_worker=1024 * 2,
+            refiner_extras=("hf", "video"),
             secrets={
                 "HF_TOKEN": None,
             },

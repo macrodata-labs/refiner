@@ -97,6 +97,7 @@ the manifest or source code.
 ```python
 pipeline.launch_cloud(
     name="private-dataset",
+    refiner_extras=["hf"],
     secrets=mdr.Secrets.env(name="production", keys=["HF_TOKEN"]),
 )
 ```
