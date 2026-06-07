@@ -249,6 +249,9 @@ class TfdsReader(BaseSource):
             "fps": self.fps,
         }
 
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("tfds",)
+
     def list_shards(self) -> list[Shard]:
         """Plan deterministic row ranges for the configured split."""
         self._ensure_builders()

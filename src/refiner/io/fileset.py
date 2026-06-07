@@ -8,8 +8,13 @@ from typing import Any, Literal, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
 
-from refiner.io.datafile import DataFile, DataFileSpec, _storage_options_for_path
+from refiner.io.datafile import (
+    DataFile,
+    DataFileSpec,
+    _storage_options_for_path,
+)
 from refiner.io.datafolder import DataFolder, DataFolderSpec
+from refiner.io.utils import required_refiner_extras
 
 DataFileSetInput: TypeAlias = Union[
     str, PathLike[str], DataFileSpec, DataFolderSpec, DataFile, DataFolder
@@ -21,6 +26,9 @@ DataFileSetLike: TypeAlias = Union[DataFileSetInput, Sequence[DataFileSetInput]]
 class _PathSource:
     path: str
     fs: AbstractFileSystem
+
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        return required_refiner_extras(self.path, self.fs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +181,17 @@ class DataFileSet:
         if not all(isinstance(entry, DataFolder) for entry in entries):
             raise TypeError("DataFileSet entries are not all folders")
         return cast(tuple[DataFolder, ...], entries)
+
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    extra
+                    for entry in self.entries
+                    for extra in entry.required_refiner_extras()
+                }
+            )
+        )
 
     @property
     def resolved_entries(self) -> tuple[DataFile | DataFolder, ...]:

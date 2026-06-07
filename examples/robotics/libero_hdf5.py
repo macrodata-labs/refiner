@@ -56,7 +56,6 @@ def main() -> None:
             num_workers=40,
             cpus_per_worker=1,
             mem_mb_per_worker=1024,
-            refiner_extras=("hdf5", "hf", "video"),
             secrets=mdr.Secrets.dict({"HF_TOKEN": None}),
         )
     )

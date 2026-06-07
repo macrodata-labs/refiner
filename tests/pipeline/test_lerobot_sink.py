@@ -9,6 +9,7 @@ from typing import Any, Iterator, cast
 
 import av
 import fsspec
+from fsspec.implementations.memory import MemoryFileSystem
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -41,6 +42,18 @@ _ALOHA_REPO_IDS = (
     "macrodata/aloha_static_battery_ep000_004",
     "macrodata/aloha_static_battery_ep005_009",
 )
+
+
+class _S3MemoryFileSystem(MemoryFileSystem):
+    protocol = "s3"
+
+
+class _HFMemoryFileSystem(MemoryFileSystem):
+    protocol = "hf"
+
+
+class _GCSMemoryFileSystem(MemoryFileSystem):
+    protocol = "gcs"
 
 
 class _FakeRoboticsRow(Row, RoboticsRow):
@@ -230,6 +243,25 @@ def test_lerobot_sink_defaults_encoder_options_to_none(tmp_path: Path) -> None:
     writer = LeRobotWriterSink(str(tmp_path / "out"))
 
     assert writer.video_transcode_config.encoder_options is None
+
+
+@pytest.mark.parametrize(
+    ("url", "fs", "extra"),
+    [
+        ("s3://bucket/out", _S3MemoryFileSystem(), "s3"),
+        ("hf://buckets/org/out", _HFMemoryFileSystem(), "hf"),
+        ("gs://bucket/out", _GCSMemoryFileSystem(), "gcs"),
+    ],
+)
+def test_write_lerobot_remote_output_declares_storage_extra(
+    url: str,
+    fs: MemoryFileSystem,
+    extra: str,
+) -> None:
+    output = (url, fs)
+
+    assert LeRobotWriterSink(output).required_refiner_extras() == (extra, "video")
+    assert LeRobotMetaReduceSink(output).required_refiner_extras() == (extra,)
 
 
 def test_write_lerobot_defaults_gop_to_two(tmp_path: Path) -> None:

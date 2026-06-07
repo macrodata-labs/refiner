@@ -117,6 +117,9 @@ class BaseReader(BaseSource):
             "file_path_column": self.file_path_column,
         }
 
+    def _io_refiner_extras(self) -> tuple[str, ...]:
+        return self.fileset.required_refiner_extras()
+
     def _with_file_path(
         self, row: dict[str, Any], source_file: DataFile
     ) -> dict[str, Any]:

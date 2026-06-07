@@ -170,6 +170,31 @@ def test_read_commoncrawl_s3_transport_checks_s3fs(monkeypatch) -> None:
     assert ("read_commoncrawl_from_index", ("s3fs",), "s3") in calls
 
 
+def test_read_commoncrawl_s3_base_url_declares_s3_extra(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[str, ...], str | None]] = []
+
+    def fake_check(name: str, deps: list[str], dist: str | None = None) -> None:
+        calls.append((name, tuple(deps), dist))
+
+    monkeypatch.setattr(
+        "refiner.text.commoncrawl.check_required_dependencies", fake_check
+    )
+
+    source = mdr.text.read_commoncrawl(
+        "CC-MAIN-TEST",
+        base_url="s3://commoncrawl",
+    ).source
+    index_source = mdr.text.read_commoncrawl_from_index(
+        "CC-MAIN-TEST",
+        base_url="s3://commoncrawl",
+    ).source
+
+    assert source.required_refiner_extras() == ("s3", "text")
+    assert index_source.required_refiner_extras() == ("s3", "text")
+    assert ("read_commoncrawl", ("s3fs",), "s3") in calls
+    assert ("read_commoncrawl_from_index", ("s3fs",), "s3") in calls
+
+
 def test_read_commoncrawl_warc_uses_file_backed_reader(tmp_path: Path) -> None:
     dump = "CC-MAIN-TEST"
     warc_rel = f"crawl-data/{dump}/segments/00000/warc/test.warc.gz"

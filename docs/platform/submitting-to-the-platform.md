@@ -67,7 +67,6 @@ pipeline.launch_cloud(
     num_workers=16,
     cpus_per_worker=8,
     mem_mb_per_worker=32768,
-    refiner_extras=["hf", "s3"],
     secrets=mdr.Secrets.env(name="production", keys=["HF_TOKEN"]),
 )
 ```
@@ -81,7 +80,7 @@ Common launch settings:
 | `cpus_per_worker` | CPU allocation per worker. |
 | `mem_mb_per_worker` | Memory allocation per worker. |
 | `gpu` | GPU type/count per worker. |
-| `refiner_extras` | Refiner [optional dependency groups](../reference/optional-dependencies.md) to install on workers, such as `["hf", "video"]`. |
+| `refiner_extras` | Extra Refiner [optional dependency groups](../reference/optional-dependencies.md) to install on workers. Built-in blocks declare their own required extras automatically. |
 | `dependencies` | Additional pip requirement strings to install on workers. |
 | `sync_local_dependencies` | Ask Refiner to try syncing packages from the submitting environment. Defaults to `False`. |
 | `secrets` | Secret values or workspace secret references passed to workers. |
@@ -93,15 +92,19 @@ See [Cloud Launcher](../running-pipelines/cloud-launcher.md) and
 
 ### Dependency Overrides
 
-If your job requires support for a Refiner feature, pass the matching
-`refiner_extras`. See the
+Built-in Refiner readers, writers, and operations automatically declare the
+extras they require. For example, `read_hf_dataset(...)` adds `datasets`, Hugging
+Face paths add `hf`, HDF5 readers add `hdf5`, LeRobot/Zarr writers add their
+encoding extras, and `mdr.robotics.track_hands(...)` adds `hand_tracking`.
+
+You can still pass `refiner_extras` explicitly when code outside the built-in
+pipeline blocks needs a specific Refiner extra. See the
 [optional dependency groups](../reference/optional-dependencies.md):
 
 ```python
 pipeline.launch_cloud(
-    name="hand-tracking",
-    gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
-    refiner_extras=["hand_tracking"],
+    name="custom-datasets-helper",
+    refiner_extras=["datasets"],
 )
 ```
 
@@ -110,7 +113,6 @@ If your code needs other packages, pass them with `dependencies`:
 ```python
 pipeline.launch_cloud(
     name="custom-model-job",
-    refiner_extras=["hf"],
     dependencies=["torch", "transformers>=4.55"],
 )
 ```

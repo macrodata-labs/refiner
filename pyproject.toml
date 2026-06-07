@@ -35,9 +35,12 @@ video = [
     "pillow",
 ]
 hf = [
-    "datasets>=3.0.0",
     "huggingface-hub>=1.4.1",
     "hf>=1.7.1",
+]
+datasets = [
+    "macrodata-refiner[hf]",
+    "datasets>=3.0.0",
 ]
 hand_tracking = [
     "macrodata-refiner[hf]",
@@ -64,6 +67,9 @@ mcap = [
 s3 = [
     "s3fs",
 ]
+gcs = [
+    "gcsfs",
+]
 tensorflow = [
     "tensorflow",
 ]
@@ -77,6 +83,7 @@ testing = [
     "pytest-cov>=5.0.0",
 ]
 all = [
+    "macrodata-refiner[datasets]",
     "macrodata-refiner[hdf5]",
     "macrodata-refiner[hf]",
     "macrodata-refiner[mcap]",
@@ -84,6 +91,7 @@ all = [
     "macrodata-refiner[zarr]",
     "macrodata-refiner[text]",
     "macrodata-refiner[s3]",
+    "macrodata-refiner[gcs]",
     "macrodata-refiner[tfds]",
 ]
 

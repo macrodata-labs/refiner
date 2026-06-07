@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from contextlib import nullcontext
 from email.message import Message
 from importlib import metadata as importlib_metadata
@@ -9,7 +10,39 @@ from urllib import error as urllib_error
 
 import pytest
 
+from refiner.pipeline import RefinerPipeline
+from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.planning import (
+    PlannedStage,
+    StageComputeRequirements,
+    describe_builtin,
+)
+from refiner.pipeline.sinks.base import BaseSink
+from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.platform.manifest import build_run_manifest, refiner_ref_exists_on_remote
+
+
+class _RefinerExtrasSource(BaseSource):
+    name = "extra_source"
+
+    def list_shards(self) -> list[Shard]:
+        return []
+
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
+        del shard
+        return iter(())
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("hf",)
+
+
+class _RefinerExtrasSink(BaseSink):
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        del shard_id, block
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("zarr",)
 
 
 def test_build_run_manifest_captures_script_from_argv(
@@ -170,6 +203,57 @@ def test_build_run_manifest_records_refiner_extras(monkeypatch, tmp_path: Path) 
 
     assert manifest["environment"]["refiner_extras"] == ["hf", "video"]
     assert "dependencies" not in manifest
+
+
+def test_build_run_manifest_adds_refiner_extras_declared_by_pipeline(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+
+    @describe_builtin("test:filter_needs_video", refiner_extras=("video",))
+    def keep_row(row) -> bool:
+        del row
+        return True
+
+    @describe_builtin(
+        "test:table_needs_hand_tracking", refiner_extras=("hand_tracking",)
+    )
+    def passthrough_table(table):
+        return table
+
+    pipeline = (
+        RefinerPipeline(_RefinerExtrasSource())
+        .filter(keep_row)
+        .select("value")
+        .map_table(passthrough_table)
+        .with_sink(_RefinerExtrasSink())
+    )
+    stages = [
+        PlannedStage(
+            index=0,
+            name="stage_0",
+            pipeline=pipeline,
+            compute=StageComputeRequirements(num_workers=1),
+        )
+    ]
+
+    manifest = build_run_manifest(
+        capture_dependencies=False,
+        refiner_extras=["text"],
+        pipeline_stages=stages,
+    )
+
+    assert manifest["environment"]["refiner_extras"] == [
+        "hand-tracking",
+        "hf",
+        "text",
+        "video",
+        "zarr",
+    ]
 
 
 def test_build_run_manifest_normalizes_refiner_extra_names(

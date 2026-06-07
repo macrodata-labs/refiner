@@ -348,6 +348,30 @@ def test_pipeline_launch_cloud_skips_local_dependency_capture_by_default(
     assert captured_manifest_kwargs["refiner_extras"] == ["hf", "video"]
 
 
+def test_pipeline_launch_cloud_passes_pipeline_stages_to_manifest(
+    monkeypatch,
+) -> None:
+    captured_manifest_kwargs = {}
+
+    def manifest(**kwargs):
+        captured_manifest_kwargs.update(kwargs)
+        return {"version": 1}
+
+    _stub_cloud_submit(monkeypatch, manifest=manifest)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    pipeline = read_jsonl("input.jsonl")
+    pipeline.launch_cloud(name="demo cloud", refiner_extras=["video"])
+
+    stages = cast(list[PlannedStage], captured_manifest_kwargs["pipeline_stages"])
+    assert captured_manifest_kwargs["refiner_extras"] == ["video"]
+    assert len(stages) == 1
+    assert stages[0].pipeline is pipeline
+
+
 def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "env-secret")

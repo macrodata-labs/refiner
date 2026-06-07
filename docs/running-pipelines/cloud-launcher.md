@@ -14,7 +14,6 @@ pipeline.launch_cloud(
     num_workers=8,
     cpus_per_worker=4,
     mem_mb_per_worker=8192,
-    refiner_extras=["hand_tracking"],
     secrets={"HF_TOKEN": None},
 )
 ```
@@ -35,18 +34,19 @@ You can inspect submitted metadata through the platform and CLI. See
 
 ## Runtime Dependencies
 
-By default, cloud launch installs base Refiner. Add only the runtime pieces your
-workers need.
+Built-in Refiner readers, writers, and operations automatically declare the
+[optional dependency groups](../reference/optional-dependencies.md) they need.
+For example, `read_hf_dataset(...)` adds `datasets`, Hugging Face paths add
+`hf`, HDF5 readers add `hdf5`, cloud storage paths add the relevant storage
+extra, and `mdr.robotics.track_hands(...)` adds `hand_tracking`.
 
-If your pipeline needs a Refiner feature such as Hugging Face readers, HDF5,
-video, S3, or hand tracking, pass the matching `refiner_extras`. See the
-[optional dependency groups](../reference/optional-dependencies.md):
+You can still pass `refiner_extras` explicitly when code outside the built-in
+pipeline blocks needs a specific Refiner extra:
 
 ```python
 pipeline.launch_cloud(
-    name="hand-tracking",
-    gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
-    refiner_extras=["hand_tracking"],
+    name="custom-datasets-helper",
+    refiner_extras=["datasets"],
 )
 ```
 
@@ -57,7 +57,6 @@ ranges, and package extras are accepted:
 ```python
 pipeline.launch_cloud(
     name="custom-model-job",
-    refiner_extras=["hf"],
     dependencies=[
         "torch",
         "transformers>=4.55",

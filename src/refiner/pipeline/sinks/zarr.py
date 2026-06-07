@@ -42,7 +42,6 @@ class ZarrSink(BaseSink):
         array_chunk_bytes: int = _DEFAULT_ARRAY_CHUNK_BYTES,
         reduce_to_single_store: bool = True,
     ):
-        check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
         if video_frame_batch_size <= 0:
             raise ValueError("video_frame_batch_size must be greater than zero")
         if array_chunk_bytes <= 0:
@@ -69,6 +68,9 @@ class ZarrSink(BaseSink):
         self.reduce_to_single_store = reduce_to_single_store
         self._stores: dict[str, _ZarrWriteState] = {}
         self._default_arrays: dict[str, str] | None = None
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("zarr",)
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
         count = 0
@@ -311,6 +313,7 @@ class ZarrSink(BaseSink):
         store = self._stores.get(relpath)
         if store is not None:
             return store
+        check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
         import zarr
 
         store = _ZarrWriteState(
@@ -535,6 +538,7 @@ def _matching_length(lengths: list[int]) -> int | None:
 
 
 def _zarr_store(output: DataFolder, path: str = "", *, mode: str = "r"):
+    check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
     import zarr
 
     return zarr.storage.FSStore(

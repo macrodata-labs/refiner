@@ -729,8 +729,10 @@ class RefinerPipeline:
             dependencies: Additional packages to install in the cloud runtime.
                 Entries are requirement strings such as `"torch"` or
                 `"ego-vision[models]==0.1.2"`.
-            refiner_extras: Optional macrodata-refiner extras to install in the
-                cloud runtime, such as `"hf"` or `"video"`.
+            refiner_extras: Additional macrodata-refiner extras to install in
+                the cloud runtime. Built-in blocks automatically declare the
+                extras they require; pass this for extras used outside those
+                blocks.
             secrets: Secret sources to mount inside the cloud image. A mapping keeps
                 the legacy behavior; `None` values are loaded from the submitting
                 environment. `Secrets.env(...)` references stored workspace secrets.

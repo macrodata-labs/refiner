@@ -119,6 +119,9 @@ class Hdf5Reader(BaseReader):
         )
         return description
 
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("hdf5",)
+
     def _validate_column_names(self) -> None:
         for name, path in self.datasets.items():
             if path.startswith("/"):

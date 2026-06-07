@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 
@@ -55,6 +55,27 @@ class BaseSink(ABC):
         pipeline descriptions.
         """
         return None
+
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        """macrodata-refiner extras required by this sink."""
+        return tuple(
+            sorted(
+                {
+                    *self._declared_refiner_extras(),
+                    *self._io_refiner_extras(),
+                }
+            )
+        )
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        """Feature extras declared by this sink."""
+        return ()
+
+    def _io_refiner_extras(self) -> tuple[str, ...]:
+        """Storage extras required by this sink's output, if it has one."""
+        if not hasattr(self, "output"):
+            return ()
+        return cast(Any, self).output.required_refiner_extras()
 
     def build_reducer(self) -> "BaseSink | None":
         """Return an optional 1-worker reducer sink for launched execution.

@@ -75,8 +75,9 @@ class ZarrReader(BaseSource):
                 or None to omit it.
             dtypes: Optional dtype overrides for output columns.
         """
+        self.fileset = DataFileSet.resolve(input)
         resolved_inputs: list[tuple[DataFolder | DataFile, str]] = []
-        for entry in DataFileSet.resolve(input).resolved_entries:
+        for entry in self.fileset.resolved_entries:
             if isinstance(entry, DataFile):
                 if not entry.path.endswith(".zip"):
                     raise TypeError("read_zarr file inputs must be .zip Zarr stores")
@@ -90,7 +91,6 @@ class ZarrReader(BaseSource):
         if not resolved_inputs:
             raise ValueError("read_zarr requires at least one input")
         self.inputs = resolved_inputs
-        check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
         if row_ends is not None and split_leading_axis:
             raise ValueError("row_ends and split_leading_axis are mutually exclusive")
         if leading_axis_row_size <= 0:
@@ -165,6 +165,12 @@ class ZarrReader(BaseSource):
                 else None
             ),
         }
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("zarr",)
+
+    def _io_refiner_extras(self) -> tuple[str, ...]:
+        return self.fileset.required_refiner_extras()
 
     def list_shards(self) -> list[Shard]:
         shards: list[Shard] = []
@@ -263,6 +269,7 @@ class ZarrReader(BaseSource):
 
     @contextmanager
     def _open_group(self, input: DataFolder | DataFile) -> Any:
+        check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
         import zarr
         import zarr.storage
 
