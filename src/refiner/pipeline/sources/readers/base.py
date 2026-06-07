@@ -110,7 +110,7 @@ class BaseReader(BaseSource):
             elif isinstance(entry, DataFolder):
                 inputs.append(str(entry.abs_paths("")))
             else:
-                inputs.append(str(entry.fs.unstrip_protocol(entry.path)))
+                inputs.append(entry.abs_path())
         return {
             "path": ", ".join(inputs),
             "inputs": inputs,

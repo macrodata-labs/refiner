@@ -412,6 +412,16 @@ def test_lerobot_reader_describe_uses_dataset_roots(tmp_path: Path) -> None:
     }
 
 
+def test_lerobot_reader_treats_lerobot_repo_shorthand_as_hf_dataset() -> None:
+    reader = LeRobotEpisodeReader("lerobot/aloha_mobile_cabinet")
+
+    assert reader.describe() == {
+        "path": "hf://datasets/lerobot/aloha_mobile_cabinet",
+        "inputs": ["hf://datasets/lerobot/aloha_mobile_cabinet"],
+    }
+    assert reader.required_refiner_extras() == ("hf",)
+
+
 def test_remap_task_index_table_raises_when_index_cannot_be_remapped() -> None:
     table = pa.Table.from_pydict(
         {

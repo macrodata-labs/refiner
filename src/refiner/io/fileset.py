@@ -22,13 +22,39 @@ DataFileSetInput: TypeAlias = Union[
 DataFileSetLike: TypeAlias = Union[DataFileSetInput, Sequence[DataFileSetInput]]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _PathSource:
-    path: str
-    fs: AbstractFileSystem
+    _path: str
+    _fs: AbstractFileSystem | None = None
+    _storage_options: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self._fs is not None:
+            self._path = self._fs._strip_protocol(self._path)
+
+    def _resolve(self) -> tuple[AbstractFileSystem, str]:
+        if self._fs is None:
+            self._fs, self._path = url_to_fs(
+                self._path,
+                **_storage_options_for_path(self._path, self._storage_options),
+            )
+        return self._fs, self._path
+
+    @property
+    def fs(self) -> AbstractFileSystem:
+        return self._resolve()[0]
+
+    @property
+    def path(self) -> str:
+        return self._resolve()[1]
+
+    def abs_path(self) -> str:
+        if self._fs is None:
+            return self._path.removeprefix("file://")
+        return self.fs.unstrip_protocol(self.path).removeprefix("file://")
 
     def required_refiner_extras(self) -> tuple[str, ...]:
-        return required_refiner_extras(self.path, self.fs)
+        return required_refiner_extras(self._path, self._fs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,11 +111,7 @@ class DataFileSet:
             inputs = tuple(data)
 
         normalized_entries: list[DataFile | DataFolder | _PathSource] = []
-
-        def append_path_source(path: str, path_fs: AbstractFileSystem) -> None:
-            normalized_entries.append(
-                _PathSource(path=path_fs._strip_protocol(path), fs=path_fs)
-            )
+        source_storage_options = dict(storage_options or {})
 
         for item in inputs:
             if isinstance(item, DataFile):
@@ -117,11 +139,11 @@ class DataFileSet:
                         "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                     )
                 if expect_type == "folder":
-                    append_path_source(path, item_fs)
+                    normalized_entries.append(_PathSource(_path=path, _fs=item_fs))
                 elif expect_type == "file":
                     normalized_entries.append(DataFile(path=path, fs=item_fs))
                 else:
-                    append_path_source(path, item_fs)
+                    normalized_entries.append(_PathSource(_path=path, _fs=item_fs))
                 continue
 
             if isinstance(item, PathLike):
@@ -134,28 +156,30 @@ class DataFileSet:
 
             if fs is not None:
                 if expect_type == "folder":
-                    append_path_source(item, fs)
+                    normalized_entries.append(_PathSource(_path=item, _fs=fs))
                 elif expect_type == "file":
                     normalized_entries.append(DataFile.resolve(item, fs=fs))
                 else:
-                    append_path_source(item, fs)
+                    normalized_entries.append(_PathSource(_path=item, _fs=fs))
             else:
                 if expect_type == "folder":
-                    item_fs, path = url_to_fs(
-                        item,
-                        **_storage_options_for_path(item, storage_options),
+                    normalized_entries.append(
+                        _PathSource(
+                            _path=item,
+                            _storage_options=source_storage_options,
+                        )
                     )
-                    append_path_source(path, item_fs)
                 elif expect_type == "file":
                     normalized_entries.append(
                         DataFile.resolve(item, storage_options=storage_options)
                     )
                 else:
-                    item_fs, path = url_to_fs(
-                        item,
-                        **_storage_options_for_path(item, storage_options),
+                    normalized_entries.append(
+                        _PathSource(
+                            _path=item,
+                            _storage_options=source_storage_options,
+                        )
                     )
-                    append_path_source(path, item_fs)
 
         return cls(
             entries=tuple(normalized_entries),

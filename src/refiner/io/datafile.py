@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 import os
 from os import PathLike
 import posixpath
@@ -32,7 +31,6 @@ def _storage_options_for_path(
     return options
 
 
-@dataclass(frozen=True, slots=True)
 class DataFile:
     """A minimal (fs, path) file abstraction with a small normalization factory.
 
@@ -43,8 +41,37 @@ class DataFile:
         - If `fs` is provided to `resolve()`, it wins and `storage_options` is ignored.
     """
 
-    fs: AbstractFileSystem
-    path: str
+    __slots__ = ("_fs", "_path", "_storage_options")
+
+    def __init__(
+        self,
+        fs: AbstractFileSystem | None,
+        path: str,
+        storage_options: Mapping[str, Any] | None = None,
+    ) -> None:
+        self._fs = fs
+        # Keep string paths unresolved so cloud submission can inspect manifests
+        # and infer extras without requiring local remote-storage credentials.
+        self._path = (
+            fs._strip_protocol(path) if fs is not None and "://" in path else path
+        )
+        self._storage_options = dict(storage_options or {})
+
+    def _resolve(self) -> tuple[AbstractFileSystem, str]:
+        if self._fs is None:
+            self._fs, self._path = url_to_fs(
+                self._path,
+                **_storage_options_for_path(self._path, self._storage_options),
+            )
+        return self._fs, self._path
+
+    @property
+    def fs(self) -> AbstractFileSystem:
+        return self._resolve()[0]
+
+    @property
+    def path(self) -> str:
+        return self._resolve()[1]
 
     @classmethod
     def resolve(
@@ -79,15 +106,9 @@ class DataFile:
         # simple string url/path
         if isinstance(data, str):
             if fs is not None:
-                # Best-effort strip protocol so `.path` is in the form expected by `fs.open/fs.exists`.
-                path = fs._strip_protocol(data)
-                return cls(fs=fs, path=path)
+                return cls(fs=fs, path=data)
 
-            next_fs, path = url_to_fs(
-                data,
-                **_storage_options_for_path(data, storage_options),
-            )
-            return cls(fs=next_fs, path=path)
+            return cls(fs=None, path=data, storage_options=storage_options)
 
         raise TypeError("DataFileLike must be: str | PathLike | (path, fs) | DataFile")
 
@@ -145,17 +166,31 @@ class DataFile:
         return self.fs.exists(self.path)
 
     def abs_path(self) -> str:
+        if self._fs is None:
+            if "://" not in self._path and "::" not in self._path:
+                return os.path.abspath(self._path)
+            return self._path.removeprefix("file://")
         return self.fs.unstrip_protocol(self.path).removeprefix("file://")
 
     def required_refiner_extras(self) -> tuple[str, ...]:
-        return required_refiner_extras(self.path, self.fs)
+        return required_refiner_extras(self._path, self._fs)
 
     @property
     def is_local(self) -> bool:
         return isinstance(self.fs, LocalFileSystem)
 
     def __str__(self) -> str:
+        if self._fs is None:
+            return self.abs_path()
         try:
             return self.fs.unstrip_protocol(self.path)
         except Exception:
             return self.path
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DataFile):
+            return NotImplemented
+        return self.fs == other.fs and self.path == other.path
+
+    def __hash__(self) -> int:
+        return hash((self.fs, self.path))
