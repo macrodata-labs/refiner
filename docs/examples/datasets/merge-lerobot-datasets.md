@@ -23,10 +23,10 @@ pipeline = (
 pipeline.launch_cloud(
     name="merge-pick-cubes",
     num_workers=4,
+    refiner_extras=("hf", "video"),
     secrets={"HF_TOKEN": None},
 )
 ```
 
 The reader merges task metadata. The writer finalizes output metadata in a
 reducer stage.
-

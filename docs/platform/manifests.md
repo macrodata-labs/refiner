@@ -38,25 +38,26 @@ Use `--json` for an agent, notebook, or CI job.
 
 ## Dependency Entries
 
-Cloud launch normally captures installed packages from the submitting Python
-environment. Those entries appear as package/version pairs in the manifest:
-
-```text
-pandas==2.3.3
-pyarrow==23.0.1
-```
-
-`launch_cloud(extra_dependencies=[...])` merges additional pip requirement
-strings into that list. Extra dependencies take precedence over captured
-packages with the same normalized package name:
+Use `refiner_extras` for Refiner
+[optional dependency groups](../reference/optional-dependencies.md), such as
+Hugging Face, HDF5, video, S3, or hand tracking support:
 
 ```python
 pipeline.launch_cloud(
-    name="gpu-run",
-    extra_dependencies=[
+    name="hand-tracking",
+    refiner_extras=["hand_tracking"],
+)
+```
+
+Use `dependencies` for other packages needed by your code:
+
+```python
+pipeline.launch_cloud(
+    name="custom-model-job",
+    refiner_extras=["hf"],
+    dependencies=[
         "torch==2.6.0",
         "transformers>=4.55",
-        "macrodata-refiner[hand_tracking]",
     ],
 )
 ```
@@ -67,16 +68,17 @@ ranges are shown as the submitted install string:
 ```text
 torch==2.6.0
 transformers>=4.55
-macrodata-refiner[hand_tracking]
 ```
 
 Environment markers are not preserved. Do not include markers in
-`extra_dependencies`; list the package as it should install on Macrodata Cloud.
+`dependencies`; list the package as it should install on Macrodata Cloud.
 For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
 
-If `sync_local_dependencies=False`, the manifest skips locally detected
-packages. Explicit `extra_dependencies` still appear and install in the cloud
-runtime.
+Finally, if `sync_local_dependencies=True`, Refiner tries to sync packages from
+the submitting Python environment. Those entries appear as package/version
+pairs in the manifest. Explicit `dependencies` take precedence over synced
+packages with the same package name. If any synced package cannot be resolved
+from PyPI during cloud image setup, the job will fail.
 
 ## What To Look For
 

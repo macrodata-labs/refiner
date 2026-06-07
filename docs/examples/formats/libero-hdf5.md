@@ -62,7 +62,7 @@ output = f"{output_prefix}/{stamp}-full-eval"
         num_workers=40,
         cpus_per_worker=1,
         mem_mb_per_worker=1024,
-        extra_dependencies=("av", "h5py", "huggingface-hub>=1.4.1", "pillow"),
+        refiner_extras=("hdf5", "hf", "video"),
         secrets=mdr.Secrets.env(name="default", keys=["HF_TOKEN"]),
     )
 )
@@ -119,7 +119,7 @@ with spaces.
 example bounds per-worker video preparation with `max_video_prepare_in_flight=2`
 to keep memory use predictable while two camera streams are encoded.
 
-`launch_cloud(...)` runs the conversion with 40 workers. `extra_dependencies`
+`launch_cloud(...)` runs the conversion with 40 workers. `refiner_extras`
 installs the packages needed to read HDF5, access Hugging Face storage, and
 encode videos. The `HF_TOKEN` secret is passed through so workers can read and
 write Hugging Face paths.

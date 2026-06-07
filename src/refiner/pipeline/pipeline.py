@@ -708,8 +708,9 @@ class RefinerPipeline:
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
-        sync_local_dependencies: bool = True,
-        extra_dependencies: Sequence[str] | None = None,
+        sync_local_dependencies: bool = False,
+        dependencies: Sequence[str] | None = None,
+        refiner_extras: Sequence[str] | None = None,
         secrets: SecretInput | None = None,
         env: Mapping[str, object | None] | None = None,
         continue_from_job: str | None = None,
@@ -725,10 +726,11 @@ class RefinerPipeline:
             gpu: Optional structured GPU request.
             sync_local_dependencies: Include packages detected from the local
                 environment in the cloud runtime.
-            extra_dependencies: Additional packages to install in the cloud runtime.
+            dependencies: Additional packages to install in the cloud runtime.
                 Entries are requirement strings such as `"torch"` or
-                `"ego-vision[models]==0.1.2"`. These take precedence over packages
-                detected from the local environment.
+                `"ego-vision[models]==0.1.2"`.
+            refiner_extras: Optional macrodata-refiner extras to install in the
+                cloud runtime, such as `"hf"` or `"video"`.
             secrets: Secret sources to mount inside the cloud image. A mapping keeps
                 the legacy behavior; `None` values are loaded from the submitting
                 environment. `Secrets.env(...)` references stored workspace secrets.
@@ -750,7 +752,8 @@ class RefinerPipeline:
             mem_mb_per_worker=mem_mb_per_worker,
             gpu=gpu,
             sync_local_dependencies=sync_local_dependencies,
-            extra_dependencies=extra_dependencies,
+            dependencies=dependencies,
+            refiner_extras=refiner_extras,
             secrets=secrets,
             env=dict(env) if env is not None else None,
             continue_from_job=continue_from_job,

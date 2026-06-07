@@ -62,7 +62,7 @@ def hand_tracking_annotation(row: Any) -> dict[str, Any]:
         num_workers=1,
         mem_mb_per_worker=32 * 1024,
         gpu=mdr.GPU(count=1, type="h100"),
-        extra_dependencies=("ego-vision[models]==0.1.25",),
+        refiner_extras=("hand_tracking",),
         secrets=mdr.Secrets.env(keys=("HF_TOKEN",)),
     )
 )

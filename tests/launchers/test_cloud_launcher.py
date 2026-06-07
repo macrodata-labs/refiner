@@ -317,7 +317,9 @@ def test_gpu_rejects_unsupported_values() -> None:
         GPU(count=1, type="h100", cuda_version="13.0")  # type: ignore[arg-type]
 
 
-def test_pipeline_launch_cloud_can_skip_local_dependency_capture(monkeypatch) -> None:
+def test_pipeline_launch_cloud_skips_local_dependency_capture_by_default(
+    monkeypatch,
+) -> None:
     captured_manifest_kwargs = {}
 
     def manifest(**kwargs):
@@ -335,14 +337,15 @@ def test_pipeline_launch_cloud_can_skip_local_dependency_capture(monkeypatch) ->
     pipeline = read_jsonl("input.jsonl")
     pipeline.launch_cloud(
         name="demo cloud",
-        sync_local_dependencies=False,
-        extra_dependencies=["torch"],
+        dependencies=["torch"],
+        refiner_extras=["hf", "video"],
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.manifest == {"version": 1}
     assert captured_manifest_kwargs["capture_dependencies"] is False
-    assert captured_manifest_kwargs["extra_dependencies"] == ["torch"]
+    assert captured_manifest_kwargs["dependencies"] == ["torch"]
+    assert captured_manifest_kwargs["refiner_extras"] == ["hf", "video"]
 
 
 def test_pipeline_launch_cloud_resolves_secrets(monkeypatch) -> None:

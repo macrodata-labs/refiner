@@ -33,7 +33,7 @@ def main() -> None:
             num_workers=1,
             cpus_per_worker=1,
             mem_mb_per_worker=4096,
-            extra_dependencies=("macrodata-refiner[hf,video]",),
+            refiner_extras=("hf", "video"),
             secrets={"HF_TOKEN": None},
         )
     )

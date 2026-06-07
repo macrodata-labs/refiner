@@ -23,6 +23,7 @@ For private datasets, provide `HF_TOKEN` locally or as a cloud secret.
 ```python
 pipeline.launch_cloud(
     name="private-dataset-job",
+    refiner_extras=["hf"],
     secrets={"HF_TOKEN": None},
 )
 ```
@@ -46,4 +47,3 @@ Use this for table-style datasets. For LeRobot dataset roots, prefer
 
 - [Path Formats](../reference/path-formats.md)
 - [Secrets and Environment](../platform/secrets-and-environment.md)
-

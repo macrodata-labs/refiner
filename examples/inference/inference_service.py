@@ -76,6 +76,7 @@ if __name__ == "__main__":
         .launch_cloud(
             name="food101-vllm-descriptions",
             num_workers=1,
+            refiner_extras=("hf",),
             secrets=mdr.Secrets.dict({"HF_TOKEN": None}),
         )
     )

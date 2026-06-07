@@ -14,7 +14,7 @@ pipeline.launch_cloud(
     num_workers=8,
     cpus_per_worker=4,
     mem_mb_per_worker=8192,
-    extra_dependencies=["macrodata-refiner[hand_tracking]"],
+    refiner_extras=["hand_tracking"],
     secrets={"HF_TOKEN": None},
 )
 ```
@@ -35,51 +35,45 @@ You can inspect submitted metadata through the platform and CLI. See
 
 ## Runtime Dependencies
 
-By default, cloud launch captures packages from the local Python environment and
-adds them to the job manifest. Workers install the submitted dependency list
-before running the pipeline.
+By default, cloud launch installs base Refiner. Add only the runtime pieces your
+workers need.
 
-Use `extra_dependencies` when a cloud worker needs packages that are not present
-locally, or when the cloud package should override the locally captured version:
+If your pipeline needs a Refiner feature such as Hugging Face readers, HDF5,
+video, S3, or hand tracking, pass the matching `refiner_extras`. See the
+[optional dependency groups](../reference/optional-dependencies.md):
 
 ```python
 pipeline.launch_cloud(
     name="hand-tracking",
     gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
-    extra_dependencies=["macrodata-refiner[hand_tracking]"],
+    refiner_extras=["hand_tracking"],
 )
 ```
 
+For packages outside Refiner's optional feature groups, pass `dependencies`.
 Each entry is a pip requirement string. Versionless requirements, exact pins,
-ranges, and extras are accepted:
-
-```python
-extra_dependencies=[
-    "torch",
-    "transformers>=4.55",
-    "macrodata-refiner[hand_tracking]",
-]
-```
-
-Environment markers are not preserved. Do not include markers in
-`extra_dependencies`; list the package as it should install on Macrodata Cloud.
-For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
-
-Extra dependencies take precedence over captured local packages with the same
-package name. For example, if the local environment has `torch==2.4.0` but
-`extra_dependencies` includes `torch==2.6.0`, the submitted manifest keeps the
-explicit `torch==2.6.0` pin.
-
-Set `sync_local_dependencies=False` to skip local environment capture. Extra
-dependencies still install:
+ranges, and package extras are accepted:
 
 ```python
 pipeline.launch_cloud(
-    name="minimal-runtime",
-    sync_local_dependencies=False,
-    extra_dependencies=["torch", "macrodata-refiner[hf]"],
+    name="custom-model-job",
+    refiner_extras=["hf"],
+    dependencies=[
+        "torch",
+        "transformers>=4.55",
+    ],
 )
 ```
+
+Environment markers are not preserved. Do not include markers in
+`dependencies`; list the package as it should install on Macrodata Cloud.
+For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
+
+Finally, if you would like Refiner to try syncing the packages installed in
+your current Python environment, set `sync_local_dependencies=True`. Explicit
+`dependencies` take precedence over synced packages with the same package name.
+If any synced package cannot be resolved from PyPI, the cloud job setup will
+fail.
 
 ## Secrets
 
