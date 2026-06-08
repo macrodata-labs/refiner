@@ -1,9 +1,9 @@
 ---
-title: "Optional Dependencies"
+title: "Optional dependencies"
 description: "Install Refiner extras for specific readers and workflows"
 ---
 
-# Optional Dependencies
+# Optional dependencies
 
 Install extras based on the data and operations you use.
 

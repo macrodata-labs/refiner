@@ -1,9 +1,9 @@
 ---
-title: "Tabular Files"
+title: "Tabular files"
 description: "Read Parquet, JSON, JSONL, and CSV files"
 ---
 
-# Tabular Files
+# Tabular files
 
 Use tabular readers when your input already has row-shaped records.
 
@@ -19,7 +19,7 @@ pipeline = mdr.read_parquet(
 Parquet is the best general-purpose tabular format when you control the data.
 It preserves schema information and works well with vectorized transforms.
 
-## JSON And JSONL
+## JSON and JSONL
 
 ```python
 json_pipeline = mdr.read_json("/data/episodes/*.json")
@@ -54,7 +54,7 @@ pipeline = mdr.read_parquet(
 
 See [Schemas and DTypes](../transforms/schemas-and-dtypes.md).
 
-## Related Pages
+## Related pages
 
 - [Vectorized Transforms](../transforms/vectorized-transforms.md)
 - [Parquet and JSONL Writers](../writing-data/parquet-and-jsonl.md)

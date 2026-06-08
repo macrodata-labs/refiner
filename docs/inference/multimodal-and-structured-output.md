@@ -1,13 +1,13 @@
 ---
-title: "Multimodal and Structured Output"
+title: "Multimodal and structured output"
 description: "Send media to models and validate structured model responses"
 ---
 
-# Multimodal And Structured Output
+# Multimodal and structured output
 
 Refiner can pass text, images, videos, and files to supported providers.
 
-## Image Content
+## Image content
 
 ```python
 async def describe_first_frame(row, generate_text):
@@ -26,13 +26,13 @@ async def describe_first_frame(row, generate_text):
     return row.update({"description": response.text})
 ```
 
-## Video Content
+## Video content
 
 Some providers accept video content. For providers that do not, use sampled
 frames or contact sheets. The subtask annotation operation uses contact sheets;
 see [Subtask Annotation](../episode-operations/subtask-annotation.md).
 
-## Structured Output
+## Structured output
 
 Use a Pydantic model when you need validated fields:
 
@@ -49,7 +49,7 @@ class Segments(BaseModel):
 
 Then pass `schema=Segments` to `generate_text`.
 
-## Raw Payloads
+## Raw payloads
 
 Use `raw_payload` only when a provider requires options that are not represented
 by the common interface:

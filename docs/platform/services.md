@@ -11,7 +11,7 @@ workloads such as vLLM-backed inference.
 
 Open [Services](/services), which redirects to the active workspace.
 
-## Why Services Exist
+## Why services exist
 
 Some robotics data workflows need expensive model processes: VLM annotation,
 reward scoring, captioning, embedding, or policy-evaluation helpers. Loading
@@ -23,7 +23,7 @@ plan. Workers then call the service while processing shards.
 See [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)
 and [Providers and vLLM](../inference/inference_providers.md).
 
-## Services List
+## Services list
 
 The services list is split into **Running** and **Stopped** sections.
 
@@ -40,7 +40,7 @@ Each row shows:
 If no job has started a runtime service in the workspace, the page says that no
 services have been instantiated yet.
 
-## Service Detail
+## Service detail
 
 Click **View** from [Services](/services).
 
@@ -83,7 +83,7 @@ To investigate service spend:
 
 See [Billing](billing.md).
 
-## Related Pages
+## Related pages
 
 - [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)
 - [Providers and vLLM](../inference/inference_providers.md)

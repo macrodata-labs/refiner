@@ -1,9 +1,9 @@
 ---
-title: "Running Pipelines"
-description: "How Refiner pipelines execute locally and on Macrodata Cloud"
+title: "Running pipelines"
+description: "How Refiner pipelines execute locally and on the Macrodata Cloud"
 ---
 
-# Running Pipelines
+# Running pipelines
 
 A Refiner pipeline can be evaluated three ways:
 
@@ -16,7 +16,7 @@ A Refiner pipeline can be evaluated three ways:
 Start with [In-Process Debugging](in-process-debugging.md), then move to
 [Local Launcher](local-launcher.md) or [Cloud Launcher](cloud-launcher.md).
 
-## Execution Terms
+## Execution terms
 
 | Term | Meaning |
 | --- | --- |
@@ -29,11 +29,10 @@ Start with [In-Process Debugging](in-process-debugging.md), then move to
 For input planning details, see [Reader Model](../reading-data/reader-model.md)
 and [Sharding](../reading-data/sharding.md).
 
-## Related Pages
+## Related pages
 
 - [In-Process Debugging](in-process-debugging.md)
 - [Local Launcher](local-launcher.md)
 - [Cloud Launcher](cloud-launcher.md)
 - [Resources, GPUs, and Services](resources-gpus-and-services.md)
 - [Observability](observability.md)
-

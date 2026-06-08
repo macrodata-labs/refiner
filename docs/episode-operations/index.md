@@ -1,9 +1,9 @@
 ---
-title: "Episode Operations"
+title: "Episode operations"
 description: "Higher-level operations for robotics episode data"
 ---
 
-# Episode Operations
+# Episode operations
 
 Episode operations are reusable workflows built on top of Refiner transforms.
 They operate on robotics episode rows rather than generic table columns.

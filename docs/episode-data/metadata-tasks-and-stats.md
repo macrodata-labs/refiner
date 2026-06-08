@@ -1,9 +1,9 @@
 ---
-title: "Metadata, Tasks, and Stats"
+title: "Metadata, tasks, and stats"
 description: "LeRobot metadata, task labels, feature stats, and when they change"
 ---
 
-# Metadata, Tasks, And Stats
+# Metadata, tasks, and stats
 
 LeRobot datasets carry metadata beside episode and frame data. Refiner reads and
 writes that metadata so downstream training code can understand the dataset.
@@ -48,7 +48,7 @@ Stats are preserved when they are still valid. Operations that change a feature
 should drop stale stats for that feature. For example, motion trimming drops
 video stats for clipped videos so the writer recomputes them.
 
-## Writer Behavior
+## Writer behavior
 
 `write_lerobot` writes:
 
@@ -63,7 +63,7 @@ video stats for clipped videos so the writer recomputes them.
 
 See [Writing LeRobot](../writing-data/lerobot.md).
 
-## Related Pages
+## Related pages
 
 - [LeRobot Reader](../reading-data/lerobot.md)
 - [LeRobot Writer](../writing-data/lerobot.md)

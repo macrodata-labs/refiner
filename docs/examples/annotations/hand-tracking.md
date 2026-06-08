@@ -1,9 +1,9 @@
 ---
-title: "Track Hands"
+title: "Track hands"
 description: "Run ego-centric hand tracking over HomER videos"
 ---
 
-# Track Hands
+# Track hands
 
 ![Hand tracking example output](../../assets/hand-tracking-example-output.jpeg)
 

@@ -1,9 +1,9 @@
 ---
-title: "Annotate Subtasks"
+title: "Annotate subtasks"
 description: "Add VLM-generated temporal subtask annotations to episodes"
 ---
 
-# Annotate Subtasks
+# Annotate subtasks
 
 ![Subtask annotation timeline](../../assets/subtask_annotations.png)
 

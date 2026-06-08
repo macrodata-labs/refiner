@@ -1,12 +1,12 @@
 ---
-title: "Local Launcher"
+title: "Local launcher"
 description: "Run Refiner pipelines with local worker processes"
 ---
 
-# Local Launcher
+# Local launcher
 
 Use the local launcher when you want worker and shard behavior without submitting
-to Macrodata Cloud.
+to the Macrodata Cloud.
 
 ```python
 pipeline.launch_local(
@@ -21,7 +21,7 @@ The local launcher is useful for:
 - checking that a transform is safe across multiple shards
 - debugging resource assumptions before a cloud launch
 
-## Run Directory
+## Run directory
 
 Local runs write run metadata under a local run directory. Pass `rundir` when
 you want a stable location:
@@ -53,7 +53,7 @@ Local GPU assignment controls `CUDA_VISIBLE_DEVICES` for worker processes. Cloud
 GPU scheduling has additional options; see
 [Resources, GPUs, and Services](resources-gpus-and-services.md).
 
-## When To Use Cloud Instead
+## When to use Cloud instead
 
 Use [Cloud Launcher](cloud-launcher.md) when you need:
 

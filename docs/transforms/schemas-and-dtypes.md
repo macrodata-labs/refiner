@@ -3,13 +3,13 @@ title: "Schemas and DTypes"
 description: "Use dtype metadata for assets, media, and writer schemas"
 ---
 
-# Schemas And DTypes
+# Schemas and DTypes
 
 DTypes attach semantic metadata to columns. This matters most for assets and
 media, where a string or bytes column needs to be treated as a file, image,
 audio, video, or PDF.
 
-## Video Columns
+## Video columns
 
 ```python
 pipeline = mdr.read_parquet(
@@ -28,7 +28,7 @@ pipeline = pipeline.to_robot_rows(
 )
 ```
 
-## Asset Types
+## Asset types
 
 | Helper | Use it for |
 | --- | --- |
@@ -39,7 +39,7 @@ pipeline = pipeline.to_robot_rows(
 | `video_frame_array()` | In-memory RGB frame arrays. |
 | `pdf_path()` / `pdf_bytes()` | PDFs. |
 
-## Transform Output DTypes
+## Transform output DTypes
 
 ```python
 def add_clip(row):
@@ -52,7 +52,7 @@ pipeline = pipeline.map(
 )
 ```
 
-## Related Pages
+## Related pages
 
 - [Files and Videos](../reading-data/files-and-videos.md)
 - [Media Assets and Reducers](../writing-data/media-assets-and-reducers.md)

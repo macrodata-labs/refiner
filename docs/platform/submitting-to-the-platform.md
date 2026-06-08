@@ -1,16 +1,16 @@
 ---
-title: "Submitting to the Platform"
+title: "Submitting to the platform"
 description: "Authenticate, launch cloud jobs, and inspect submitted Refiner runs"
 ---
 
-# Submitting To The Platform
+# Submitting to the platform
 
-Submitting a Refiner pipeline to Macrodata Cloud creates a workspace-owned job
-record. The platform stores the run metadata, starts workers, tracks progress,
-collects logs and metrics, preserves the manifest, and exposes the job in the
-browser and CLI.
+Submitting a Refiner pipeline to the Macrodata Cloud creates a workspace-owned
+job record. The platform stores the run metadata, starts workers, tracks
+progress, collects logs and metrics, preserves the manifest, and exposes the
+job in the browser and CLI.
 
-## Before You Submit
+## Before you submit
 
 You need:
 
@@ -49,7 +49,7 @@ export MACRODATA_API_KEY="md_..."
 macrodata whoami
 ```
 
-## Launch A Cloud Job
+## Launch a Cloud Job
 
 Use `launch_cloud()` on the same pipeline object you would launch locally:
 
@@ -84,13 +84,13 @@ Common launch settings:
 | `dependencies` | Additional pip requirement strings to install on workers. |
 | `sync_local_dependencies` | Ask Refiner to try syncing packages from the submitting environment. Defaults to `False`. |
 | `secrets` | Secret values or workspace secret references passed to workers. |
-| `env` | Non-secret environment variables. |
+| `env` | Non-secret [environment variables](environment-variables.md). |
 | `continue_from_job` | Reuse compatible outputs from a prior cloud job. |
 
 See [Cloud Launcher](../running-pipelines/cloud-launcher.md) and
 [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md).
 
-### Dependency Overrides
+### Dependency overrides
 
 Built-in Refiner readers, writers, and operations automatically declare the
 extras they require. For example, `read_hf_dataset(...)` adds `datasets`, Hugging
@@ -121,7 +121,7 @@ Dependency entries are pip requirement strings. Exact pins, versionless
 requirements, ranges, and package extras are supported.
 
 Environment markers are not preserved. Do not include markers in
-`dependencies`; list the package as it should install on Macrodata Cloud.
+`dependencies`; list the package as it should install on the Macrodata Cloud.
 For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
 
 Finally, if you would like Refiner to try syncing the packages installed in
@@ -130,7 +130,7 @@ your current Python environment, set `sync_local_dependencies=True`. Explicit
 If one of those packages cannot be resolved from PyPI during cloud image setup,
 the job will fail.
 
-## What Gets Submitted
+## What gets submitted
 
 A cloud submission includes:
 
@@ -150,7 +150,7 @@ macrodata jobs manifest job_123 --deps --code
 
 See [Manifests](manifests.md).
 
-## Find The Job
+## Find the Job
 
 After submission, open [Jobs](/jobs). The jobs list shows name, status,
 progress, duration, starter, and an action to open the job. Use **Load more**
@@ -169,7 +169,7 @@ Use `--json` when another program needs to parse the result:
 macrodata jobs get job_123 --json
 ```
 
-## Inspect A Job
+## Inspect a Job
 
 Open the job from [Jobs](/jobs). The job detail page has:
 
@@ -185,7 +185,7 @@ Open the job from [Jobs](/jobs). The job detail page has:
 Cloud jobs stream progress and observability while they run. Local jobs can
 appear in the platform, but advanced real-time observability is for cloud jobs.
 
-## Logs And Metrics
+## Logs and metrics
 
 Use the job page for interactive debugging. Use the CLI for terminal workflows:
 
@@ -200,7 +200,7 @@ macrodata jobs resource-metrics job_123 0 --range 15m
 See [Observability](../running-pipelines/observability.md) and
 [CLI Jobs, Logs, and Metrics](../cli/jobs-logs-and-metrics.md).
 
-## Cancel A Job
+## Cancel a Job
 
 Cancel from the job detail page when the header exposes cancellation, or use:
 
@@ -211,7 +211,7 @@ macrodata jobs cancel job_123
 Cancellation requests stop active work for that job. Use `jobs get` afterward
 to confirm the terminal state.
 
-## Billing And Submission Gates
+## Billing and submission gates
 
 Cloud submission checks workspace billing state. A workspace can submit while
 it has available included credits, or after a payment method is configured for
@@ -219,17 +219,17 @@ paid usage.
 
 Submissions are blocked when:
 
-- billing is not configured for the workspace
-- the workspace is delinquent
+- a workspace payment is overdue
 - a workspace without a usable payment method has exhausted included credits
-- the workspace reaches the paid-usage cap for the billing period
+- the workspace reaches its paid-usage limit for the billing period
 
 Open [Settings > Billing](/settings/billing) to add a card, manage billing
 details, inspect usage, or choose a prior billing cycle. See [Billing](billing.md).
 
-## Related Pages
+## Related pages
 
 - [Workspaces and API Keys](workspaces-and-api-keys.md)
-- [Secrets and Environment](secrets-and-environment.md)
+- [Secrets and environment](secrets-and-environment.md)
+- [Environment variables](environment-variables.md)
 - [Cloud Jobs and Files](cloud-jobs-and-files.md)
 - [CLI](../cli/index.md)

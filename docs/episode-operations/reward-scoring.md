@@ -1,9 +1,9 @@
 ---
-title: "Reward Scoring"
+title: "Reward scoring"
 description: "Score episode progress and success with a pooling model"
 ---
 
-# Reward Scoring
+# Reward scoring
 
 `reward_score` samples frames from an episode video and uses a Robometer-style
 pooling model to estimate progress and success.
@@ -30,7 +30,7 @@ pipeline = (
 )
 ```
 
-## Output Columns
+## Output columns
 
 By default, the operation writes:
 
@@ -42,7 +42,7 @@ By default, the operation writes:
 
 Customize names with `output_column`, `success_column`, and `frames_column`.
 
-## Task Text
+## Task text
 
 Beyond the video to score, you must provide a task description. This can be a
 string or a function that takes the row and returns the task description:
@@ -57,7 +57,7 @@ or from the row:
 mdr.robotics.reward_score(task=lambda row: row.task or "; ".join(row.tasks))
 ```
 
-## Inference Backend
+## Inference backend
 
 `reward_score` uses pooling inference through a vLLM provider. See
 [Pooling](../inference/pooling.md) and [Providers and vLLM](../inference/inference_providers.md).

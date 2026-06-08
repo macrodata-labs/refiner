@@ -14,7 +14,7 @@ uv add "macrodata-refiner[tfds]"
 Use `macrodata-refiner[tensorflow]` if you only need TFRecord files and do not
 need the TensorFlow Datasets catalog.
 
-## TFRecord Files
+## TFRecord files
 
 Use `read_tfrecords(...)` when you already have TFRecord files and know the
 `tf.io` feature spec:
@@ -64,7 +64,7 @@ By default, Refiner adds a `file_path` column with the source TFRecord path. Set
 `file_path_column=None` to omit it. If your parsed features already include the
 same column name, Refiner leaves the parsed value unchanged.
 
-### TFRecord Options
+### TFRecord options
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -81,7 +81,7 @@ same column name, Refiner leaves the parsed value unchanged.
 | `prefetch` | `1` | TensorFlow prefetch depth. Set to `None` to disable prefetching. |
 | `file_path_column` | `"file_path"` | Source file column name. Set to `None` to omit it. Existing parsed feature names are not overwritten. |
 
-## TensorFlow Datasets
+## TensorFlow datasets
 
 Use `read_tfds(...)` for datasets available through TensorFlow Datasets, a
 local TFDS `data_dir`, or prepared TFDS directories. Prepared TFDS directories
@@ -146,7 +146,7 @@ For RLDS-style datasets, `videos` lifts image sequences from nested `steps`
 datasets into lazy `VideoFrameSequence` values and removes those frame arrays
 from the per-step table.
 
-### TFDS Options
+### TFDS options
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -165,7 +165,7 @@ from the per-step table.
 | `videos` | `None` | Video-name to nested dataset frame path mapping, such as `{"front": "steps/observation/image"}`. |
 | `fps` | `30.0` | Frame rate used for `videos`. |
 
-## Performance Trade-Offs
+## Performance trade-offs
 
 - TFRecord files are read through `tf.data.TFRecordDataset`, batched, parsed, and
   converted to Arrow-backed `Tabular` blocks.
@@ -189,7 +189,7 @@ from the per-step table.
 - `num_parallel_calls` and `prefetch` apply to TFRecord parsing. Higher values
   can improve throughput when parsing is CPU-bound, at the cost of more memory.
 
-## Related Pages
+## Related pages
 
 - [Reader Model](reader-model.md)
 - [Sharding](sharding.md)

@@ -8,7 +8,7 @@ description: "How Refiner divides source data across workers"
 A shard is a unit of input work. In launched runs, workers claim shards and
 process them independently.
 
-## Why Shards Matter
+## Why shards matter
 
 Shard boundaries affect:
 
@@ -18,7 +18,7 @@ Shard boundaries affect:
 - progress reporting
 - reducer work after writer stages
 
-## Common Shard Strategies
+## Common shard strategies
 
 | Input type | Typical shard strategy |
 | --- | --- |
@@ -28,7 +28,7 @@ Shard boundaries affect:
 | HDF5 demos | Plan files, then emit matched groups. |
 | Zarr replay buffers | Plan row ranges from episode boundaries or leading-axis rows. |
 
-## Tuning Shards
+## Tuning shards
 
 Use `target_shard_bytes` when the reader can estimate byte size:
 
@@ -51,13 +51,13 @@ pipeline = mdr.read_lerobot(
 Do not overfit shard count before measuring. Too few shards leave workers idle;
 too many shards add scheduling and output overhead.
 
-## Shards And Writers
+## Shards and writers
 
 Writers usually write shard-local files first. Some writers add a reducer stage
 to merge or finalize metadata. For example, the LeRobot writer stages per-shard
 chunks and then reduces metadata; see [Writing LeRobot](../writing-data/lerobot.md).
 
-## Related Pages
+## Related pages
 
 - [Reader Model](reader-model.md)
 - [Local Launcher](../running-pipelines/local-launcher.md)

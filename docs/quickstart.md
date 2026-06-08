@@ -15,7 +15,7 @@ Refiner is an open-source library for building robotics data pipelines. A
 [inspect pipelines locally](running-pipelines/in-process-debugging.md) while you
 develop. When you do not want to manage infrastructure, run the same code with
 [local workers](running-pipelines/local-launcher.md) or submit it to
-[Macrodata Cloud](running-pipelines/cloud-launcher.md).
+the [Macrodata Cloud](running-pipelines/cloud-launcher.md).
 
 Readers and writers are [sharded](reading-data/sharding.md), so most pipelines
 do not need to download or materialize the entire dataset before doing useful
@@ -36,10 +36,10 @@ The `hf` and `video` extras are optional, but the example below uses them for
 [video data](episode-data/frames-and-videos.md). To install every optional
 dependency, use `pip install macrodata-refiner[all]`.
 
-Create an account from the [Get started](/auth/register) page, then
-authenticate once with the [Macrodata CLI](cli/auth-and-run.md). This is
-optional for local development, but it lets you keep track of local runs in your
-workspace. The same credentials will also be used to submit cloud runs:
+[Create an account](/auth/register), then authenticate once with the
+[Macrodata CLI](cli/auth-and-run.md). This is optional for local development,
+but it lets you keep track of local runs in your workspace. The same
+credentials will also be used to submit cloud runs:
 
 ```bash
 macrodata login
@@ -85,7 +85,7 @@ inspect rows with methods like `take()`, launch
 [local workers](running-pipelines/local-launcher.md), or submit a
 [cloud job](running-pipelines/cloud-launcher.md).
 
-## Inspect A Pipeline
+## Inspect a pipeline
 
 Start by inspecting a small amount of data
 [in process](running-pipelines/in-process-debugging.md). This block is
@@ -130,7 +130,7 @@ the fastest way to check [schemas](transforms/schemas-and-dtypes.md),
 [media references](episode-data/frames-and-videos.md), and transform outputs
 before launching a full job.
 
-## Run Locally
+## Run locally
 
 ```python
 import refiner as mdr
@@ -153,7 +153,7 @@ your machine. Use it when you want the same
 using cloud resources. If you are [logged in](cli/auth-and-run.md), local runs
 are also tracked in the platform interface.
 
-## Run On Macrodata Cloud
+## Run on the Macrodata Cloud
 
 This example converts the public LIBERO spatial HDF5 subset to LeRobot using
 cloud workers. It reads one demo group per row, derives the task label from the
@@ -217,7 +217,7 @@ output = "hf://buckets/macrodata/test_bucket/libero-spatial"
 The input dataset is public, but the cloud workers need `HF_TOKEN` to write back
 to your Hugging Face bucket. You can also safely store reusable secrets directly
 on the platform and reference them with `mdr.Secrets.env(...)`. See
-[Secrets and Environment](platform/secrets-and-environment.md).
+[Secrets and environment](platform/secrets-and-environment.md).
 
 After submission, follow the run from [Jobs](/jobs). Once scheduled, this
 example should only take a couple of minutes. The job page shows live status,
@@ -230,7 +230,7 @@ the compute they actually use; see [Billing](platform/billing.md) or
 For the full four-suite LIBERO conversion, see
 [Libero HDF5](examples/formats/libero-hdf5.md).
 
-## Where To Go Next
+## Where to go next
 
 - Learn the execution options in [Running Pipelines](running-pipelines/index.md).
 - Learn readers in [Reading Data](reading-data/index.md).

@@ -1,6 +1,6 @@
 ---
 title: "Platform"
-description: "Use Macrodata Cloud to run, track, share, and inspect Refiner work"
+description: "Use the Macrodata Cloud to run, track, share, and inspect Refiner work"
 ---
 
 # Platform
@@ -14,7 +14,7 @@ Use it when a laptop run becomes team infrastructure: converting robot episodes
 at scale, running GPU annotation, refreshing datasets, checking failed shards,
 or handing a run to another engineer without losing the execution context.
 
-## Platform Overview
+## Platform overview
 
 The platform keeps track of every job submitted to a workspace. Each job page
 keeps the run inspectable after submission:
@@ -59,7 +59,7 @@ Workspace-specific settings are under:
 | Secrets | [Settings > Secrets](/settings/secrets) |
 | Members | [Settings > Members](/settings/members) |
 
-## Submitting to the Platform
+## Submitting to the platform
 
 Cloud submission starts with an API key scoped to the workspace that should own
 the job. Create one from [Settings > API Keys](/settings/api-keys), copy it
@@ -108,11 +108,11 @@ runtime services both show up in the invoice breakdown, so a robotics
 annotation run can be traced from billing line item back to the job that
 started it.
 
-Payment state affects cloud execution. A workspace with remaining included
-credits can submit jobs. Adding a card raises monthly credits to $25 and allows
-paid usage after included credits run out. New paid jobs are blocked when a
-workspace needs a payment method, is delinquent, or hits the paid-usage cap for
-the billing period.
+Payment status affects cloud execution. A workspace with remaining included
+credits can submit Jobs. Adding a card raises monthly credits to $30 and allows
+paid usage after included credits run out. New paid Jobs are blocked when a
+workspace needs a payment method, has an overdue payment, or hits the paid-usage
+limit for the billing period.
 
 See [Billing](billing.md).
 
@@ -143,7 +143,7 @@ Hugging Face repos.
 
 See [Viewer](viewer.md).
 
-## Platform Docs
+## Platform docs
 
 | Page | Use it for |
 | --- | --- |
@@ -153,5 +153,6 @@ See [Viewer](viewer.md).
 | [Services](services.md) | Runtime service groups, instantiations, logs, and job links. |
 | [Viewer](viewer.md) | Inspecting Parquet, JSON, CSV, media cells, and private storage. |
 | [Manifests](manifests.md) | Reproducing exactly what a cloud job ran. |
-| [Secrets and Environment](secrets-and-environment.md) | Passing credentials and configuration to jobs and the viewer. |
+| [Secrets and environment](secrets-and-environment.md) | Passing credentials and configuration to jobs and the viewer. |
+| [Environment variables](environment-variables.md) | Predefined variables that affect Refiner, the CLI, and local workers. |
 | [Cloud Jobs and Files](cloud-jobs-and-files.md) | Job lifecycle and file staging behavior. |

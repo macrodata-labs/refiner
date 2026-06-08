@@ -1,14 +1,14 @@
 ---
-title: "Media Assets and Reducers"
+title: "Media assets and reducers"
 description: "How Refiner writers handle media files, assets, and reducer stages"
 ---
 
-# Media Assets And Reducers
+# Media assets and reducers
 
 Robotics datasets often contain large media values. Refiner distinguishes the
 row value from the asset storage behavior through dtypes and video source APIs.
 
-## Asset Columns
+## Asset columns
 
 Use dtypes to mark media columns:
 
@@ -21,7 +21,7 @@ pipeline = mdr.read_parquet(
 
 Writers can then copy or upload assets instead of treating them as plain strings.
 
-## Missing Asset Policy
+## Missing asset policy
 
 Parquet and JSONL writers support `missing_asset_policy`:
 

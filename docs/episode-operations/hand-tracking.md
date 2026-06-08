@@ -1,9 +1,9 @@
 ---
-title: "Hand Tracking"
+title: "Hand tracking"
 description: "Runs ego-centric hand tracking over inputed videos"
 ---
 
-# Hand Tracking
+# Hand tracking
 
 `track_hands` relies on the `ego-vision` package to run ego-centric hand
 tracking over episode videos, with settings optimized for the HOT3D
@@ -67,7 +67,7 @@ pip install macrodata-refiner[datasets,hand_tracking]
 Input rows must implement `RoboticsRow` and include the required `video_key` in
 `row.videos`. Pass `video_key` explicitly to `track_hands`.
 
-## How Ego-Vision Works
+## How Ego-Vision works
 
 The default ego-vision stack is:
 
@@ -205,7 +205,7 @@ In Refiner, configure the operation itself with:
 | `output_key` | Output column for the ego-vision payload. Defaults to `hand_tracking`. |
 | `config` | Optional `egovision.HandTrackingConfig`. Defaults to the HOT3D-tuned ego-vision stack above. |
 
-## Output Payload
+## Output payload
 
 By default, the operation writes one episode-level column:
 
@@ -250,7 +250,7 @@ Each hand entry contains:
 `hands_world` is the usual source for action labels because it includes head/camera
 motion through the VGGT world trajectory.
 
-## Action Conversion
+## Action conversion
 
 The raw payload can be converted into training actions with ego-vision helpers:
 
@@ -294,7 +294,7 @@ can increase throughput by setting `EgoVisionConfig.vggt.camera_sample_fps` to
 run VGGT on a lower frame rate and interpolate the camera trajectory back to the
 full timeline.
 
-## Related Pages
+## Related pages
 
 - [Async and Batch Transforms](../transforms/async-and-batch-transforms.md)
 - [Files and Videos](../reading-data/files-and-videos.md)

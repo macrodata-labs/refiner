@@ -1,9 +1,9 @@
 ---
-title: "Auth and Run"
+title: "Auth and run"
 description: "Authenticate and run Refiner scripts from the CLI"
 ---
 
-# Auth And Run
+# Auth and run
 
 ## Login
 
@@ -37,7 +37,7 @@ printf '%s' "$MACRODATA_API_KEY" | macrodata login --token-stdin --quiet
 | `--token-stdin` | Read the key from stdin |
 | `--quiet` | Suppress banner and key-creation prompt |
 
-## Check Identity
+## Check identity
 
 ```bash
 macrodata whoami
@@ -80,7 +80,7 @@ If no credentials exist, it prints:
 No local credentials found.
 ```
 
-## Run A Script
+## Run a script
 
 ```bash
 macrodata run train_data_pipeline.py
@@ -136,7 +136,7 @@ macrodata run --logs none train_data_pipeline.py
 | `--logs errors` | Show error lines only |
 | `--logs none` | Hide log lines and update only the header |
 
-## Related Pages
+## Related pages
 
 - [Workspaces and API Keys](../platform/workspaces-and-api-keys.md)
 - [Cloud Launcher](../running-pipelines/cloud-launcher.md)

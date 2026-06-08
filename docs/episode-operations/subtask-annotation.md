@@ -1,9 +1,9 @@
 ---
-title: "Subtask Annotation"
+title: "Subtask annotation"
 description: "Use vision-language models to segment robotics episodes into temporal subtasks"
 ---
 
-# Subtask Annotation
+# Subtask annotation
 
 Use `subtask_annotation` to add temporal subtask labels to robotics episodes.
 The annotator samples an episode video into timestamped contact sheets, sends
@@ -15,7 +15,7 @@ the episode-level task description. They can identify coarse manipulation events
 such as reaching, grasping, moving, opening, pouring, or placing objects without
 manual per-episode labeling.
 
-## Basic Usage
+## Basic usage
 
 Run the following pipeline locally or on Refiner Cloud:
 
@@ -36,7 +36,7 @@ By default, `subtask_annotation` uses Gemini through `GoogleEndpointProvider`.
 Set `GOOGLE_GENERATIVE_AI_API_KEY` before running the pipeline, or pass a
 different provider explicitly.
 
-## Other Readers
+## Other readers
 
 Input rows must implement `RoboticsRow` and expose the selected video through
 `row.videos`. If you start from another reader, convert rows with
@@ -60,7 +60,7 @@ pipeline = (
 )
 ```
 
-## Output Shape
+## Output shape
 
 The output column contains a list of segment dictionaries. Each segment has a
 start time, an end time, and a short action description:
@@ -72,7 +72,7 @@ start time, an end time, and a short action description:
 ]
 ```
 
-## Contact Sheets
+## Contact sheets
 
 Video input is sent as contact sheets: timestamped image grids that preserve
 temporal context without sending the full video. This keeps requests smaller
@@ -99,7 +99,7 @@ The default settings sample one frame every `0.5` seconds, resize each tile to
 | `on_blocked_prompt` | Behavior when the provider blocks an episode prompt. Defaults to `"empty"`, which logs the block and writes an empty segment list. Use `"raise"` to fail the row instead. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
-## Related Content
+## Related content
 
 For lower-level inference controls, see [Generate Text](../inference/generate-text.md)
 and [Multimodal and Structured Output](../inference/multimodal-and-structured-output.md).

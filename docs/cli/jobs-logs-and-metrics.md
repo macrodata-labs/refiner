@@ -1,9 +1,9 @@
 ---
-title: "Jobs, Logs, and Metrics"
+title: "Jobs, logs, and metrics"
 description: "Inspect cloud jobs from the Macrodata CLI"
 ---
 
-# Jobs, Logs, And Metrics
+# Jobs, logs, and metrics
 
 Job inspection commands default to terminal-friendly output. Add `--json` when
 an agent, script, or CI job needs structured data.
@@ -43,7 +43,7 @@ Next cursor: macrodata jobs list --limit 20 --cursor eyJwYWdlIjoyfQ
 | `--cursor <cursor>` | Continue a paginated listing |
 | `--json` | Print raw JSON |
 
-## Inspect One Job
+## Inspect one Job
 
 ```bash
 macrodata jobs get job_123
@@ -74,7 +74,7 @@ Stage  Step  Name          Type  Columns
 
 For local jobs, the summary also prints the run directory.
 
-## Attach To A Running Job
+## Attach to a running Job
 
 ```bash
 macrodata jobs attach job_123
@@ -162,7 +162,7 @@ Next cursor: macrodata jobs workers job_123 --stage 0 --limit 20 --cursor eyJwYW
 | `--cursor <cursor>` | Continue a paginated worker listing |
 | `--json` | Print raw JSON |
 
-## Follow Logs
+## Follow logs
 
 ```bash
 macrodata jobs logs job_123 --follow
@@ -210,7 +210,7 @@ search requires an explicit `--stage` and a time window with `--start-ms` and
 | `--follow` | Poll continuously for new entries |
 | `--json` | Print raw JSON |
 
-## Stage Metrics
+## Stage metrics
 
 ```bash
 macrodata jobs metrics job_123 0
@@ -270,7 +270,7 @@ Per Worker (lifetime): 30000
 `--metric`, `--worker`, and `--workers` require `--step`. `--worker` also
 requires `--metric`. `--asc` and `--desc` apply to worker rankings.
 
-## Resource Metrics
+## Resource metrics
 
 ```bash
 macrodata jobs resource-metrics job_123 0
@@ -327,7 +327,7 @@ Canceled: job_123
   Failed: 0
 ```
 
-## Related Pages
+## Related pages
 
 - [Observability](../running-pipelines/observability.md)
 - [Cloud Jobs and Files](../platform/cloud-jobs-and-files.md)

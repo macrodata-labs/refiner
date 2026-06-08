@@ -1,9 +1,9 @@
 ---
-title: "Zarr Writer"
+title: "Zarr writer"
 description: "Write episode arrays and replay-buffer-style outputs to Zarr"
 ---
 
-# Zarr Writer
+# Zarr writer
 
 Use `write_zarr` when you want array-oriented output.
 
@@ -34,7 +34,7 @@ pipeline.write_zarr(
 
 Disable this only when you intentionally want per-shard stores.
 
-## Related Pages
+## Related pages
 
 - [Zarr Reader](../reading-data/zarr.md)
 - [Media Assets and Reducers](media-assets-and-reducers.md)

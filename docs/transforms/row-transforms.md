@@ -1,9 +1,9 @@
 ---
-title: "Row Transforms"
+title: "Row transforms"
 description: "Use map, flat_map, and filters over episode rows"
 ---
 
-# Row Transforms
+# Row transforms
 
 Use row transforms when each episode can be handled independently in Python.
 
@@ -47,7 +47,7 @@ pipeline = pipeline.flat_map(split_by_camera)
 
 Use this when one episode naturally becomes several examples.
 
-## DType Hints
+## DType hints
 
 When a transform creates a column that a writer should treat as an asset or
 media value, pass `dtypes`:
@@ -61,7 +61,7 @@ pipeline = pipeline.map(
 
 See [Schemas and DTypes](schemas-and-dtypes.md).
 
-## Related Pages
+## Related pages
 
 - [Episode Rows](../episode-data/episode-rows.md)
 - [Motion Trimming](../episode-operations/motion-trimming.md)

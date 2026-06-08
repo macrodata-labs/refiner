@@ -1,9 +1,9 @@
 ---
-title: "Merge LeRobot Datasets"
+title: "Merge LeRobot datasets"
 description: "Combine multiple LeRobot roots into one output dataset"
 ---
 
-# Merge LeRobot Datasets
+# Merge LeRobot datasets
 
 Pass multiple LeRobot roots to `read_lerobot` and write one output dataset:
 
