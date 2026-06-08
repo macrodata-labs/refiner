@@ -412,8 +412,8 @@ def test_lerobot_reader_describe_uses_dataset_roots(tmp_path: Path) -> None:
     }
 
 
-def test_lerobot_reader_treats_lerobot_repo_shorthand_as_hf_dataset() -> None:
-    reader = LeRobotEpisodeReader("lerobot/aloha_mobile_cabinet")
+def test_lerobot_reader_accepts_hf_dataset_url() -> None:
+    reader = LeRobotEpisodeReader("hf://datasets/lerobot/aloha_mobile_cabinet")
 
     assert reader.describe() == {
         "path": "hf://datasets/lerobot/aloha_mobile_cabinet",

@@ -57,7 +57,7 @@ Use `launch_cloud()` on the same pipeline object you would launch locally:
 import refiner as mdr
 
 pipeline = (
-    mdr.read_lerobot("lerobot/aloha_mobile_cabinet")
+    mdr.read_lerobot("hf://datasets/lerobot/aloha_mobile_cabinet")
     .map(score_episode)
     .write_parquet("s3://acme-robotics/datasets/aloha-scored")
 )

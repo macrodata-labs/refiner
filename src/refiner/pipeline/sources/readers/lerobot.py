@@ -3,8 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from functools import cached_property
-from os import PathLike
-from typing import Any, cast
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -64,22 +63,8 @@ class LeRobotEpisodeReader(BaseSource):
         The shard-planning arguments apply to the episode parquet files under
         each dataset root's `meta/episodes` directory.
         """
-        root_inputs: DataFolderLike | Sequence[DataFolderLike] = inputs
-        if isinstance(inputs, str) and inputs.startswith("lerobot/"):
-            root_inputs = f"hf://datasets/{inputs}"
-        elif not isinstance(inputs, (str, PathLike, DataFolder)) and not (
-            isinstance(inputs, tuple)
-            and len(inputs) == 2
-            and isinstance(inputs[1], AbstractFileSystem)
-        ):
-            root_inputs = tuple(
-                f"hf://datasets/{item}"
-                if isinstance(item, str) and item.startswith("lerobot/")
-                else item
-                for item in cast(Sequence[DataFolderLike], inputs)
-            )
         self._root_fileset = DataFileSet.resolve(
-            root_inputs,
+            inputs,
             fs=fs,
             storage_options=storage_options,
             expect_type="folder",
