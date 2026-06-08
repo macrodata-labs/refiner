@@ -540,7 +540,12 @@ class CommonCrawlWarcIndexSource(BaseSource):
     ) -> tuple[Any, bool]:
         current_file = getattr(self._thread_local, "open_file", None)
         current_fh = getattr(self._thread_local, "open_fh", None)
-        if not force_reopen and current_file == file and current_fh is not None:
+        if (
+            not force_reopen
+            and current_file is not None
+            and current_file.abs_path() == file.abs_path()
+            and current_fh is not None
+        ):
             return current_fh, False
         if current_fh is not None:
             try:
