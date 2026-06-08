@@ -81,8 +81,6 @@ class TfdsReader(BaseSource):
             raise ValueError("examples_per_shard must be > 0")
         if num_shards is not None and num_shards <= 0:
             raise ValueError("num_shards must be > 0 when provided")
-        self._tf: Any | None = None
-        self._tfds: Any | None = None
         self.inputs = (input,) if isinstance(input, str) else tuple(input)
         if not self.inputs:
             raise ValueError("read_tfds input sequence cannot be empty")
@@ -129,8 +127,6 @@ class TfdsReader(BaseSource):
         state["_remote_folders"] = {}
         state["num_examples_by_input"] = [None] * len(self.inputs)
         state["dataset_names"] = [None] * len(self.inputs)
-        state["_tf"] = None
-        state["_tfds"] = None
         return state
 
     def _ensure_builder(self, input_index: int) -> Any:
@@ -138,7 +134,15 @@ class TfdsReader(BaseSource):
         if builder is not None:
             return builder
 
-        tfds = self._tensorflow_datasets()
+        check_required_dependencies(
+            "read_tfds",
+            [
+                ("tensorflow", "tensorflow"),
+                ("tensorflow_datasets", "tensorflow-datasets"),
+            ],
+            dist="tfds",
+        )
+        tfds = importlib.import_module("tensorflow_datasets")
         input = self._ensure_prepared_dir(input_index)
         input_path = Path(input)
         is_prepared_dir = (
@@ -177,25 +181,6 @@ class TfdsReader(BaseSource):
     def _ensure_builders(self) -> None:
         for input_index in range(len(self.inputs)):
             self._ensure_builder(input_index)
-
-    def _tensorflow(self) -> Any:
-        if self._tf is None:
-            check_required_dependencies(
-                "read_tfds",
-                [
-                    ("tensorflow", "tensorflow"),
-                    ("tensorflow_datasets", "tensorflow-datasets"),
-                ],
-                dist="tfds",
-            )
-            self._tf = importlib.import_module("tensorflow")
-        return self._tf
-
-    def _tensorflow_datasets(self) -> Any:
-        if self._tfds is None:
-            self._tensorflow()
-            self._tfds = importlib.import_module("tensorflow_datasets")
-        return self._tfds
 
     def _ensure_prepared_dir(self, input_index: int) -> str:
         if not self._remote_inputs[input_index]:
@@ -338,7 +323,7 @@ class TfdsReader(BaseSource):
             batch_size=None,
         )
         try:
-            tf = self._tensorflow()
+            tf = importlib.import_module("tensorflow")
             has_nested_datasets = any(
                 isinstance(spec, tf.data.DatasetSpec)
                 for spec in tf.nest.flatten(dataset.element_spec)
