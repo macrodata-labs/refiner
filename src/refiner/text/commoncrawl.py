@@ -226,9 +226,6 @@ class CommonCrawlReader(BaseReader):
             if base_url is not None
             else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
         )
-        if resolved_base_url.startswith("s3://"):
-            check_required_dependencies("read_commoncrawl", ["s3fs"], dist="s3")
-
         if format not in {"warc", "wet"}:
             raise ValueError("format must be 'warc' or 'wet'")
         if isinstance(dumps, str):
@@ -346,7 +343,7 @@ class CommonCrawlReader(BaseReader):
             self._archive_iterator = ArchiveIterator
         return self._archive_iterator
 
-    def _source_globs(self) -> tuple[tuple[str, Any], ...]:
+    def _source_globs(self) -> tuple[str, ...]:
         """Build the dump/segment-specific WARC or WET glob inputs for BaseReader."""
         rel_globs: list[str] = []
         suffix = "warc/*.warc.gz" if self.format == "warc" else "wet/*.warc.wet.gz"
@@ -356,9 +353,7 @@ class CommonCrawlReader(BaseReader):
             else:
                 for segment in self.segments:
                     rel_globs.append(f"crawl-data/{dump}/segments/{segment}/{suffix}")
-        return tuple(
-            (self.root.abs_path(rel_glob), self.root.fs) for rel_glob in rel_globs
-        )
+        return tuple(self.root.abs_path(rel_glob) for rel_glob in rel_globs)
 
 
 class CommonCrawlWarcIndexSource(BaseSource):
@@ -390,11 +385,6 @@ class CommonCrawlWarcIndexSource(BaseSource):
             if base_url is not None
             else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
         )
-        if resolved_base_url.startswith("s3://"):
-            check_required_dependencies(
-                "read_commoncrawl_from_index", ["s3fs"], dist="s3"
-            )
-
         if isinstance(dumps, str):
             self.dumps = (dumps,)
         else:

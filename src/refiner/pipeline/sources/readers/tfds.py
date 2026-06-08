@@ -81,16 +81,8 @@ class TfdsReader(BaseSource):
             raise ValueError("examples_per_shard must be > 0")
         if num_shards is not None and num_shards <= 0:
             raise ValueError("num_shards must be > 0 when provided")
-        check_required_dependencies(
-            "read_tfds",
-            [
-                ("tensorflow", "tensorflow"),
-                ("tensorflow_datasets", "tensorflow-datasets"),
-            ],
-            dist="tfds",
-        )
-        self.tf = importlib.import_module("tensorflow")
-        self.tfds = importlib.import_module("tensorflow_datasets")
+        self._tf: Any | None = None
+        self._tfds: Any | None = None
         self.inputs = (input,) if isinstance(input, str) else tuple(input)
         if not self.inputs:
             raise ValueError("read_tfds input sequence cannot be empty")
@@ -137,6 +129,8 @@ class TfdsReader(BaseSource):
         state["_remote_folders"] = {}
         state["num_examples_by_input"] = [None] * len(self.inputs)
         state["dataset_names"] = [None] * len(self.inputs)
+        state["_tf"] = None
+        state["_tfds"] = None
         return state
 
     def _ensure_builder(self, input_index: int) -> Any:
@@ -144,6 +138,7 @@ class TfdsReader(BaseSource):
         if builder is not None:
             return builder
 
+        tfds = self._tensorflow_datasets()
         input = self._ensure_prepared_dir(input_index)
         input_path = Path(input)
         is_prepared_dir = (
@@ -158,9 +153,9 @@ class TfdsReader(BaseSource):
         if is_prepared_dir and self.download:
             raise ValueError("download cannot be used with a prepared TFDS directory")
         if is_prepared_dir:
-            builder = self.tfds.builder_from_directory(input)
+            builder = tfds.builder_from_directory(input)
         else:
-            builder = self.tfds.builder(
+            builder = tfds.builder(
                 input,
                 config=self.config,
                 data_dir=self.data_dir,
@@ -182,6 +177,25 @@ class TfdsReader(BaseSource):
     def _ensure_builders(self) -> None:
         for input_index in range(len(self.inputs)):
             self._ensure_builder(input_index)
+
+    def _tensorflow(self) -> Any:
+        if self._tf is None:
+            check_required_dependencies(
+                "read_tfds",
+                [
+                    ("tensorflow", "tensorflow"),
+                    ("tensorflow_datasets", "tensorflow-datasets"),
+                ],
+                dist="tfds",
+            )
+            self._tf = importlib.import_module("tensorflow")
+        return self._tf
+
+    def _tensorflow_datasets(self) -> Any:
+        if self._tfds is None:
+            self._tensorflow()
+            self._tfds = importlib.import_module("tensorflow_datasets")
+        return self._tfds
 
     def _ensure_prepared_dir(self, input_index: int) -> str:
         if not self._remote_inputs[input_index]:
@@ -324,9 +338,10 @@ class TfdsReader(BaseSource):
             batch_size=None,
         )
         try:
+            tf = self._tensorflow()
             has_nested_datasets = any(
-                isinstance(spec, self.tf.data.DatasetSpec)
-                for spec in self.tf.nest.flatten(dataset.element_spec)
+                isinstance(spec, tf.data.DatasetSpec)
+                for spec in tf.nest.flatten(dataset.element_spec)
             )
             if not has_nested_datasets:
                 dataset = dataset.ragged_batch(self.batch_size)
@@ -336,7 +351,7 @@ class TfdsReader(BaseSource):
                 if has_nested_datasets:
                     row: dict[str, Any] = {}
                     for name, value in batch.items():
-                        if isinstance(value, self.tf.data.Dataset):
+                        if isinstance(value, tf.data.Dataset):
                             paths = self._excluded_video_paths.get(name, ())
                             if paths:
                                 value = value.map(
