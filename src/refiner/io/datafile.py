@@ -184,11 +184,3 @@ class DataFile:
 
     def __str__(self) -> str:
         return self.abs_path()
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, DataFile):
-            return NotImplemented
-        return self.fs == other.fs and self.path == other.path
-
-    def __hash__(self) -> int:
-        return hash((self.fs, self.path))

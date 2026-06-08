@@ -145,7 +145,12 @@ class BaseReader(BaseSource):
         Returns:
             (fh, opened_new): `opened_new` is True if a new file handle was opened.
         """
-        if not force_reopen and self._open_file == file and self._open_fh is not None:
+        if (
+            not force_reopen
+            and self._open_file is not None
+            and self._open_file.abs_path() == file.abs_path()
+            and self._open_fh is not None
+        ):
             return self._open_fh, False
 
         if self._open_fh is not None:

@@ -150,7 +150,11 @@ class ParquetReader(BaseReader):
 
     def _get_parquet_fragment(self, source_file: DataFile) -> ds.ParquetFileFragment:
         """Build a Parquet fragment for row-group-aware filter pushdown."""
-        if self._open_fragment is not None and self._open_fragment_file == source_file:
+        if (
+            self._open_fragment is not None
+            and self._open_fragment_file is not None
+            and self._open_fragment_file.abs_path() == source_file.abs_path()
+        ):
             return self._open_fragment
 
         pyfs = pafs.PyFileSystem(pafs.FSSpecHandler(source_file.fs))
