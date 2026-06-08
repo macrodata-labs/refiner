@@ -1,8 +1,10 @@
 from collections.abc import Iterable, Iterator, Mapping
+import os
 from os import PathLike
 from typing import IO, Any, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
+from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
@@ -41,15 +43,41 @@ class DataFolder(DirFileSystem):
             auto_mkdir: if True, when opening a file in write mode its parent directories will be automatically created
             **storage_options: will be passed to a new fsspec filesystem object, when it is created. Ignored if fs is given
         """
-        if fs is None:
-            fs, path = url_to_fs(path, **storage_options)
-            path = "/" if path is None else path
-        else:
-            path = fs._strip_protocol(path)
-        if path == "":
-            path = "/"
-        super().__init__(path=path, fs=fs)
+        AsyncFileSystem.__init__(self)
+        self._fs = fs
+        # Keep string paths unresolved so cloud submission can inspect manifests
+        # and infer extras without requiring local remote-storage credentials.
+        self._path = fs._strip_protocol(path) if fs is not None else path
+        if fs is not None and not self._path:
+            self._path = "/"
+        self._storage_options = dict(storage_options)
         self.auto_mkdir = auto_mkdir
+
+    def _resolve(self) -> tuple[AbstractFileSystem, str]:
+        if self._fs is None:
+            self._fs, self._path = url_to_fs(
+                self._path,
+                **_storage_options_for_path(self._path, self._storage_options),
+            )
+            if not self._path:
+                self._path = "/"
+        return self._fs, self._path
+
+    @property
+    def fs(self) -> AbstractFileSystem:
+        return self._resolve()[0]
+
+    @fs.setter
+    def fs(self, value: AbstractFileSystem | None) -> None:
+        self._fs = value
+
+    @property
+    def path(self) -> str:
+        return self._resolve()[1]
+
+    @path.setter
+    def path(self, value: str) -> None:
+        self._path = value
 
     @classmethod
     def resolve(
@@ -92,19 +120,29 @@ class DataFolder(DirFileSystem):
         # simple string path
         if isinstance(data, str):
             if fs is not None:
-                path = fs._strip_protocol(data)
-                return cls(path, fs=fs)
-            return cls(data, **_storage_options_for_path(data, storage_options))
+                return cls(data, fs=fs)
+            return cls(data, **dict(storage_options or {}))
         raise TypeError(
             "You must pass a DataFolder instance, str path, PathLike, or (path, fs)"
         )
 
     def abs_path(self, path: str = "") -> str:
+        if self._fs is None:
+            if "://" not in self._path and "::" not in self._path:
+                base = os.path.abspath(self._path).rstrip("/")
+            else:
+                base = self._path.removeprefix("file://").rstrip("/")
+            relpath = path.lstrip("/")
+            if not relpath:
+                return base
+            if not base:
+                return relpath
+            return f"{base}/{relpath}"
         # make sure we strip file:// and similar
         return self.fs.unstrip_protocol(self._join(path)).removeprefix("file://")
 
     def required_refiner_extras(self) -> tuple[str, ...]:
-        return required_refiner_extras(self.path, self.fs)
+        return required_refiner_extras(self._path, self._fs)
 
     def abs_paths(self, paths: str | Iterable[str]) -> str | list[str]:
         """

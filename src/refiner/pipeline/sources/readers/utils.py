@@ -6,8 +6,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 from typing import cast
 
-from fsspec import AbstractFileSystem
 import pyarrow as pa
+
+from refiner.io import DataFile
 
 DEFAULT_TARGET_SHARD_BYTES = 128 * 1024 * 1024
 PathSelection = Mapping[str, str] | Sequence[str] | str
@@ -141,14 +142,14 @@ def path_selection_map(
     return out
 
 
-def is_splittable_by_bytes(fs: AbstractFileSystem, path: str) -> bool:
+def is_splittable_by_bytes(file: DataFile) -> bool:
     """Return True if the input can be safely sharded by byte offsets."""
-    lp = path.lower()
+    lp = file.path.lower()
     if lp.endswith(NON_SPLITTABLE_WHOLEFILE_EXTS):
         return False
     # best-effort: if raw file object is not seekable, treat as non-splittable
     try:
-        with fs.open(path, mode="rb") as f:
+        with file.open(mode="rb") as f:
             if hasattr(f, "seekable") and callable(f.seekable):
                 return bool(f.seekable())
     except Exception:

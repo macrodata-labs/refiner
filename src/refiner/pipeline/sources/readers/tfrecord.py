@@ -95,12 +95,6 @@ class TfrecordReader(BaseReader):
             file_path_column=file_path_column,
             split_by_bytes=False,
         )
-        check_required_dependencies(
-            "read_tfrecords",
-            [("tensorflow", "tensorflow")],
-            dist="tensorflow",
-        )
-        self.tf = importlib.import_module("tensorflow")
         self.features = dict(features)
         self.batch_size = int(batch_size)
         if compression not in {None, "auto", "gzip", "zlib"}:
@@ -129,6 +123,20 @@ class TfrecordReader(BaseReader):
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read one file-granular shard as parsed TensorFlow batches."""
+        check_required_dependencies(
+            "read_tfrecords",
+            [("tensorflow", "tensorflow")],
+            dist="tensorflow",
+        )
+        tf = importlib.import_module("tensorflow")
+
+        def parse_batch(records, paths=None):
+            parsed = tf.io.parse_example(records, self.features)
+            if self._add_file_path:
+                assert self.file_path_column is not None
+                parsed[self.file_path_column] = paths
+            return parsed
+
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
         dataset = None
@@ -140,13 +148,13 @@ class TfrecordReader(BaseReader):
                     "paths. Custom fsspec filesystems are not supported."
                 )
             path = source.abs_path()
-            records = self.tf.data.TFRecordDataset(
+            records = tf.data.TFRecordDataset(
                 [path],
                 compression_type=self._compression_type(source),
             )
             if self._add_file_path:
-                paths = self.tf.data.Dataset.from_tensors(path).repeat()
-                records = self.tf.data.Dataset.zip(
+                paths = tf.data.Dataset.from_tensors(path).repeat()
+                records = tf.data.Dataset.zip(
                     (
                         records,
                         paths,
@@ -158,7 +166,7 @@ class TfrecordReader(BaseReader):
 
         dataset = dataset.batch(self.batch_size)
         dataset = dataset.map(
-            self._parse_batch,
+            parse_batch,
             num_parallel_calls=self.num_parallel_calls,
         )
         if self.prefetch is not None:
@@ -175,13 +183,6 @@ class TfrecordReader(BaseReader):
                 )
             if table.num_rows > 0:
                 yield Tabular(table)
-
-    def _parse_batch(self, records, paths=None):
-        parsed = self.tf.io.parse_example(records, self.features)
-        if self._add_file_path:
-            assert self.file_path_column is not None
-            parsed[self.file_path_column] = paths
-        return parsed
 
     def _compression_type(self, source: DataFile) -> str:
         if self.compression is None:

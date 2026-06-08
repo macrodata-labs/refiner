@@ -9,6 +9,7 @@ from fsspec import AbstractFileSystem
 import pyarrow as pa
 
 from refiner.io import DataFile, DataFileSet, DataFolder
+from refiner.io.datafile import _file_cache_key
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.datatype import DTypeMapping, schema_with_dtypes
 from refiner.pipeline.data.shard import FilePart, Shard
@@ -110,7 +111,7 @@ class BaseReader(BaseSource):
             elif isinstance(entry, DataFolder):
                 inputs.append(str(entry.abs_paths("")))
             else:
-                inputs.append(str(entry.fs.unstrip_protocol(entry.path)))
+                inputs.append(entry.abs_path())
         return {
             "path": ", ".join(inputs),
             "inputs": inputs,
@@ -145,7 +146,12 @@ class BaseReader(BaseSource):
         Returns:
             (fh, opened_new): `opened_new` is True if a new file handle was opened.
         """
-        if not force_reopen and self._open_file == file and self._open_fh is not None:
+        if (
+            not force_reopen
+            and self._open_file is not None
+            and _file_cache_key(self._open_file) == _file_cache_key(file)
+            and self._open_fh is not None
+        ):
             return self._open_fh, False
 
         if self._open_fh is not None:
@@ -248,9 +254,7 @@ class BaseReader(BaseSource):
                 path = file.abs_path()
                 size = self.fileset.size(source_index, path)
                 # Atomic files stay whole: `end=-1` means "reader decides how to read the full file".
-                if not self.split_by_bytes or not is_splittable_by_bytes(
-                    file.fs, file.path
-                ):
+                if not self.split_by_bytes or not is_splittable_by_bytes(file):
                     if (
                         current_parts
                         and current_size + size > target_bytes
