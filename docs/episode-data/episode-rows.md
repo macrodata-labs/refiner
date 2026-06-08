@@ -1,14 +1,14 @@
 ---
-title: "Episode Rows"
+title: "Episode rows"
 description: "The episode-level row model used by Refiner"
 ---
 
-# Episode Rows
+# Episode rows
 
 Refiner exposes robotics data as rows. A row may be a plain mapping, a
 `RoboticsRow` semantic view, or a `LeRobotRow`.
 
-## Plain Rows
+## Plain rows
 
 Generic readers emit regular rows:
 
@@ -55,7 +55,7 @@ print(row.metadata.info.fps)
 `LeRobotRow` is also a `RoboticsRow`, so episode operations such as
 [Motion Trimming](../episode-operations/motion-trimming.md) can use it directly.
 
-## Updating Rows
+## Updating rows
 
 Rows are immutable-style values: update methods return new rows.
 
@@ -71,7 +71,7 @@ def zero_actions(row):
     return row.with_actions([[0.0] for _ in range(row.num_frames)])
 ```
 
-## Selecting Frames
+## Selecting frames
 
 ```python
 def first_second(row):
@@ -82,7 +82,7 @@ def first_second(row):
 Selecting frames updates the frame table. For `LeRobotRow`, frame indices are
 renumbered when present.
 
-## Related Pages
+## Related pages
 
 - [Frames and Videos](frames-and-videos.md)
 - [Row Transforms](../transforms/row-transforms.md)

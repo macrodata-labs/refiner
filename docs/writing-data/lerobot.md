@@ -1,9 +1,9 @@
 ---
-title: "LeRobot Writer"
+title: "LeRobot writer"
 description: "Write Refiner episode rows as LeRobot datasets"
 ---
 
-# LeRobot Writer
+# LeRobot writer
 
 Use `write_lerobot` to write `LeRobotRow` or generic `RoboticsRow` values as a
 LeRobot dataset.
@@ -16,7 +16,7 @@ pipeline = (
 )
 ```
 
-## Input Requirements
+## Input requirements
 
 Rows must be one of:
 
@@ -30,7 +30,7 @@ Plain rows should be adapted before writing; see
 If a generic `RoboticsRow` has no episode id, the writer generates one from the
 shard id and row position.
 
-## Output Layout
+## Output layout
 
 The writer creates LeRobot-compatible data:
 
@@ -43,7 +43,7 @@ The writer creates LeRobot-compatible data:
 | `meta/info.json` | Dataset metadata. |
 | `meta/stats.json` | Feature statistics after reducer finalization. |
 
-## Video Behavior
+## Video behavior
 
 The writer can remux compatible clipped videos instead of decoding and
 re-encoding them. It transcodes when required by format, clipping, stale stats,
@@ -55,7 +55,7 @@ pipeline.write_lerobot(
 )
 ```
 
-## Performance Knobs
+## Performance knobs
 
 | Option | Use it for |
 | --- | --- |
@@ -67,7 +67,7 @@ pipeline.write_lerobot(
 | `quantile_bins` | Accuracy/cost tradeoff for video stats quantiles. |
 | `force_recompute_video_stats` | Recompute stats even when existing stats could be reused. |
 
-## Related Pages
+## Related pages
 
 - [Metadata, Tasks, and Stats](../episode-data/metadata-tasks-and-stats.md)
 - [Media Assets and Reducers](media-assets-and-reducers.md)

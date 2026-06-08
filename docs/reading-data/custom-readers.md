@@ -1,15 +1,15 @@
 ---
-title: "Custom Readers"
+title: "Custom readers"
 description: "Create custom Refiner sources for data systems not covered by built-in readers"
 ---
 
-# Custom Readers
+# Custom readers
 
 Use a custom source when your data cannot be described by a built-in reader.
 Custom sources are most useful for internal databases, generated tasks, or
 special storage layouts.
 
-## Minimal Source
+## Minimal source
 
 ```python
 from collections.abc import Iterator
@@ -36,12 +36,12 @@ pipeline = mdr.from_source(EpisodesSource())
 
 The exact shard descriptor you use depends on how your source can be divided.
 
-## Keep Planning Cheap
+## Keep planning cheap
 
 `list_shards()` should not download the dataset or decode media. It should do
 only the work needed to create units that workers can read independently.
 
-## Describe The Source
+## Describe the source
 
 If your source appears in cloud job plans, implement a useful `describe()`
 method:
@@ -53,7 +53,7 @@ def describe(self) -> dict[str, object]:
 
 Descriptions should help users understand the job. Do not include secrets.
 
-## Related Pages
+## Related pages
 
 - [Reader Model](reader-model.md)
 - [Sharding](sharding.md)

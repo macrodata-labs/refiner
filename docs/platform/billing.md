@@ -1,6 +1,6 @@
 ---
 title: "Billing"
-description: "Understand workspace credits, payment state, usage, and invoice breakdowns"
+description: "Understand workspace credits, payment methods, usage, and invoice breakdowns"
 ---
 
 # Billing
@@ -14,25 +14,25 @@ Only workspace owners and admins can manage payment details. Members can use
 billing visibility if they have access to the workspace settings page, but
 payment actions are restricted.
 
-## Billing Page
+## Billing page
 
 The billing page shows:
 
 | Area | What it means |
 | --- | --- |
-| Billing Period Spend | Current usage for the selected billing period. |
+| Billing period spend | Current usage for the selected billing period. |
 | Billing cycle selector | Prior and current billing periods when more than one is available. |
 | Included or remaining credits | Credits available in the billing period. |
 | Additional usage | Usage beyond included credits. |
-| Payment Information | Card/setup state and Stripe actions. |
-| Invoice Breakdown | Usage grouped by job, with worker and service rows. |
+| Payment information | Card status and Stripe actions. |
+| Invoice breakdown | Usage grouped by Job, with worker and service rows. |
 
 The invoice breakdown links each job line back to the job detail page when the
 job is known. Use that link to explain where spend came from: the job graph,
 worker count, service usage, logs, metrics, and manifest are all on the job
 detail page.
 
-## Credits And Additional Usage
+## Credits and additional usage
 
 The platform separates usage into included credits and additional usage.
 
@@ -43,25 +43,25 @@ The platform separates usage into included credits and additional usage.
 | Billing period spend | Total usage in the selected period. |
 | Additional usage | Spend above included credits. |
 
-Adding a card raises monthly credits to $25 and lets jobs keep running after
+Adding a card raises monthly credits to $30 and lets Jobs keep running after
 included credits run out. Without a usable card, cloud jobs can be blocked when
 credits are exhausted.
 
-## Payment States
+## Payment status
 
-Workspace cloud execution is gated by payment state and available credits.
+Workspace cloud execution depends on available credits and payment status.
 
-| State | What it means | What to do |
+| What you see | What it means | What to do |
 | --- | --- | --- |
-| `free_only` | No card is configured. The workspace can use included credits only. | Add a card before credits run out. |
-| `paid_allowed` | A card is configured and paid usage is allowed. | Monitor current-period spend. |
-| `payment_required` | The workspace needs a card to continue paid usage. | Click **Add Card** on the billing page. |
-| `delinquent` | A previous payment failed. New cloud jobs are blocked. | Click **Manage Billing Details** and resolve payment in Stripe. |
+| No card is configured | The workspace can use included credits only. | Add a card before credits run out. |
+| Card is configured | Jobs can continue into paid usage after included credits run out. | Monitor current-period spend. |
+| Payment method required | The workspace needs a card before it can continue paid usage. | Click **Add Card** on the billing page. |
+| Payment overdue | An overdue payment needs attention before new paid Jobs can run. | Click **Manage Billing Details** and resolve the issue in Stripe. |
 
-The payment panel explains the current state. Depending on state and role, it
+The payment panel explains the current status. Depending on status and role, it
 shows **Add Card** and/or **Manage Billing Details**.
 
-## Add Or Manage A Card
+## Add or manage a card
 
 1. Open [Settings > Billing](/settings/billing).
 2. In **Payment Information**, click **Add Card** if no card is configured.
@@ -70,25 +70,20 @@ shows **Add Card** and/or **Manage Billing Details**.
 5. Use **Manage Billing Details** later to update card, invoice, or billing
    information through Stripe.
 
-If the page says payment services are unavailable, billing provider setup is not
-configured for the deployment. Contact the Macrodata team.
+## Submission rules
 
-## Submission Rules
-
-Cloud job submission checks billing before work starts. Submission can be
+Cloud Job submission checks billing before work starts. Submission can be
 blocked when:
 
 - the workspace has no remaining included credits
 - the workspace needs a payment method for additional usage
-- the workspace is delinquent
-- billing is unavailable for the workspace
-- paid usage has reached the billing-period cap
+- a payment is overdue
+- workspace paid usage has reached its billing-period limit
 
-The current paid-usage cap is $200 of paid overage for the billing period. A
-workspace that reaches that cap cannot submit more paid jobs until the next
-period or until the account is adjusted.
+When a workspace reaches its billing-period limit, new paid Jobs wait until the
+next period or until the account is adjusted.
 
-## Invoice Breakdown
+## Invoice breakdown
 
 The invoice breakdown groups usage by job. Each job group can include:
 
@@ -102,7 +97,7 @@ Use the arrow on a job row to open the job detail page. If a service row is
 large, open the job and the [Services](services.md) page to see the service
 instantiations and logs.
 
-## Billing Cycles
+## Billing cycles
 
 When prior periods are available, the billing page shows a billing cycle
 selector. Pick a period to see spend and invoice breakdown for that period.
@@ -110,7 +105,7 @@ selector. Pick a period to see spend and invoice breakdown for that period.
 Active periods can change while jobs run. Closed periods reflect the finalized
 usage reported by the billing provider.
 
-## Services And Billing
+## Services and billing
 
 Runtime services are billed separately from worker compute but remain grouped
 under the job that started them when possible. This matters for inference-heavy
@@ -126,7 +121,7 @@ If jobs stop submitting:
 
 1. Open [Settings > Billing](/settings/billing).
 2. Check whether credits are exhausted.
-3. Check **Payment Information** for `payment_required` or `delinquent` copy.
+3. Check **Payment Information** for card setup or overdue payment copy.
 4. Add or update the card through Stripe.
 5. Retry the launch.
 
@@ -137,7 +132,7 @@ If spend looks surprising:
 3. Open that job.
 4. Check worker count, runtime services, duration, logs, metrics, and manifest.
 
-## Related Pages
+## Related pages
 
 - [Submitting to the Platform](submitting-to-the-platform.md)
 - [Cloud Jobs and Files](cloud-jobs-and-files.md)

@@ -1,9 +1,9 @@
 ---
-title: "Generate Text"
+title: "Generate text"
 description: "Use generate_text inside Refiner async transforms"
 ---
 
-# Generate Text
+# Generate text
 
 `generate_text` turns a function that receives a row and a model-call helper
 into an async transform.
@@ -40,7 +40,7 @@ pipeline = pipeline.map_async(
 )
 ```
 
-## Function Shape
+## Function shape
 
 Your function receives:
 
@@ -51,7 +51,7 @@ Your function receives:
 
 The function returns an updated row.
 
-## Generation Parameters
+## Generation parameters
 
 ```python
 await generate_text(
@@ -71,7 +71,7 @@ mdr.inference.generate_text(
 )
 ```
 
-## Related Pages
+## Related pages
 
 - [Multimodal and Structured Output](multimodal-and-structured-output.md)
 - [Providers and vLLM](inference_providers.md)

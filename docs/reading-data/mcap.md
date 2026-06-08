@@ -1,9 +1,9 @@
 ---
-title: "MCAP Reader"
+title: "MCAP reader"
 description: "Read MCAP robotics logs as episode rows"
 ---
 
-# MCAP Reader
+# MCAP reader
 
 Use `read_mcap` for robotics or autonomy logs stored as MCAP files.
 
@@ -36,7 +36,7 @@ Install `macrodata-refiner[mcap]` to use this reader.
 Directory inputs are filtered to paths ending in `.mcap`. Explicit file paths
 and glob patterns are honored as written.
 
-## Output Rows
+## Output rows
 
 `read_mcap` emits one row per episode. By default, each input file is one
 episode. Use `episode_splitting` to split a file into multiple episodes; the
@@ -52,7 +52,7 @@ Each row includes:
 | `videos` | Mapping of selected video names to video source values, when `videos` is set. |
 | `fps` | Explicit fps, or inferred fps when possible. |
 
-## Episode Splitting
+## Episode splitting
 
 `read_mcap` always emits episode rows. By default, each input MCAP file becomes
 one episode:
@@ -93,7 +93,7 @@ splitting and are not included as default record columns.
 If there are no messages, no time gaps, or no marker messages, the reader falls
 back to one episode for the file.
 
-## Selecting Fields
+## Selecting fields
 
 `fields` maps output records table columns to MCAP sources:
 
@@ -141,7 +141,7 @@ the same timestamps. `read_mcap` supports these synchronization choices:
 | Field sync-primary aligned | Set `sync_primary` to a selected field name, topic, or dotted source path. | One records table row for each sync-primary field timestamp. Other fields and videos are aligned with `sync_method`. | Robot state or action streams that define the trajectory clock. |
 | Video sync-primary aligned | Set `sync_primary` to a selected video name, video topic, or dotted video source path. | One records table row for each sync-primary video frame timestamp. Fields and other videos are aligned with `sync_method`. | Camera-driven datasets where image frames define the output rows. |
 
-### Unsynchronized Mode
+### Unsynchronized mode
 
 Use unsynchronized mode by leaving `sync_primary` unset:
 
@@ -174,7 +174,7 @@ rows so no message is dropped:
 | `1.0` | `[1, 2]` |
 | `1.0` | `[3, 4]` |
 
-### Sync-Primary-Aligned Mode
+### Sync-Primary-Aligned mode
 
 Use sync-primary-aligned mode by setting `sync_primary` to the source that
 should define the output frame rate:
@@ -325,7 +325,7 @@ For non-seekable streams without an MCAP summary, explicit dotted selections may
 still require scanning all topics because the reader cannot resolve source
 strings to exact MCAP topics before reading.
 
-## Conversion Examples
+## Conversion examples
 
 Convert the Franka MCAP sample from Hugging Face to LeRobot and Zarr. The
 camera topic is the sync primary, so each output row corresponds to one decoded
@@ -493,7 +493,7 @@ For non-robotics event logs, write the record fields directly:
 | `include_skew` | `True` | Add alignment timestamp/skew columns in sync-primary-aligned mode. |
 | `fps` | `None` | Positive explicit frame rate. Overrides inferred fps. |
 
-## Related Pages
+## Related pages
 
 - [Reader Model](reader-model.md)
 - [Files and Videos](files-and-videos.md)

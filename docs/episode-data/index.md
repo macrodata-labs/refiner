@@ -1,9 +1,9 @@
 ---
-title: "Episode Data"
+title: "Episode data"
 description: "How Refiner represents robotics episodes, frames, videos, metadata, tasks, and stats"
 ---
 
-# Episode Data
+# Episode data
 
 Refiner treats robotics data as episode data. An episode row can carry:
 

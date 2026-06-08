@@ -1,12 +1,12 @@
 ---
-title: "Cloud Launcher"
-description: "Submit Refiner pipelines to Macrodata Cloud"
+title: "Cloud launcher"
+description: "Submit Refiner pipelines to the Macrodata Cloud"
 ---
 
-# Cloud Launcher
+# Cloud launcher
 
-Cloud launch submits a pipeline to Macrodata Cloud, where workers claim shards,
-run transforms, write outputs, and report logs and metrics.
+Cloud launch submits a pipeline to the Macrodata Cloud, where workers claim
+shards, run transforms, write outputs, and report logs and metrics.
 
 ```python
 pipeline.launch_cloud(
@@ -18,7 +18,7 @@ pipeline.launch_cloud(
 )
 ```
 
-## What Gets Submitted
+## What gets submitted
 
 A cloud submission includes:
 
@@ -27,12 +27,12 @@ A cloud submission includes:
 | Pipeline plan | Describes the reader, transforms, writer, and stages. |
 | Code snapshot | Lets workers run the same code you submitted. |
 | Dependency manifest | Helps reproduce the Python environment. |
-| Secrets/env mapping | Supplies credentials without hard-coding them in code. |
+| Secrets/env mapping | Supplies credentials and runtime configuration without hard-coding them in code. |
 
 You can inspect submitted metadata through the platform and CLI. See
 [Manifests](../platform/manifests.md) and [CLI Jobs](../cli/jobs-logs-and-metrics.md).
 
-## Runtime Dependencies
+## Runtime dependencies
 
 Built-in Refiner readers, writers, and operations automatically declare the
 [optional dependency groups](../reference/optional-dependencies.md) they need.
@@ -65,7 +65,7 @@ pipeline.launch_cloud(
 ```
 
 Environment markers are not preserved. Do not include markers in
-`dependencies`; list the package as it should install on Macrodata Cloud.
+`dependencies`; list the package as it should install on the Macrodata Cloud.
 For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
 
 Finally, if you would like Refiner to try syncing the packages installed in
@@ -94,9 +94,9 @@ pipeline.launch_cloud(
 )
 ```
 
-See [Secrets and Environment](../platform/secrets-and-environment.md).
+See [Secrets and environment](../platform/secrets-and-environment.md).
 
-## Continue From A Prior Job
+## Continue from a prior Job
 
 Use continuation when earlier stages already produced reusable outputs:
 
@@ -110,7 +110,7 @@ pipeline.launch_cloud(
 `"infer"` asks Refiner to find a compatible prior job. Use explicit job IDs when
 you need deterministic behavior.
 
-## Related Pages
+## Related pages
 
 - [Resources, GPUs, and Services](resources-gpus-and-services.md)
 - [Observability](observability.md)

@@ -12,7 +12,7 @@ signals to answer three questions:
 2. Which stage or worker is slow or failing?
 3. Are custom pipeline metrics behaving as expected?
 
-## User Metrics
+## User metrics
 
 Transforms can emit counters, gauges, and histograms:
 
@@ -43,7 +43,7 @@ def transform(row):
     return row
 ```
 
-## CLI Inspection
+## CLI inspection
 
 ```bash
 macrodata jobs list
@@ -55,7 +55,7 @@ macrodata jobs resource-metrics job_123 0
 
 See [CLI Jobs, Logs, and Metrics](../cli/jobs-logs-and-metrics.md).
 
-## Related Pages
+## Related pages
 
 - [Cloud Launcher](cloud-launcher.md)
 - [Platform Jobs and Files](../platform/cloud-jobs-and-files.md)

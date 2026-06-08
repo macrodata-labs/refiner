@@ -11,7 +11,7 @@ resource settings, and secret references.
 
 Open a job from [Jobs](/jobs), then click the **Manifest** tab.
 
-## What A Manifest Answers
+## What a manifest answers
 
 Use a manifest to answer:
 
@@ -24,7 +24,7 @@ Use a manifest to answer:
 
 Manifest records should not contain secret values.
 
-## Inspect From The CLI
+## Inspect from the CLI
 
 ```bash
 macrodata jobs manifest job_123
@@ -36,7 +36,7 @@ macrodata jobs manifest job_123 --json
 Use `--deps` to show dependencies and `--code` to show captured script text.
 Use `--json` for an agent, notebook, or CI job.
 
-## Dependency Entries
+## Dependency entries
 
 Built-in Refiner blocks automatically add the
 [optional dependency groups](../reference/optional-dependencies.md) they need to
@@ -75,7 +75,7 @@ transformers>=4.55
 ```
 
 Environment markers are not preserved. Do not include markers in
-`dependencies`; list the package as it should install on Macrodata Cloud.
+`dependencies`; list the package as it should install on the Macrodata Cloud.
 For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
 
 Finally, if `sync_local_dependencies=True`, Refiner tries to sync packages from
@@ -84,7 +84,7 @@ pairs in the manifest. Explicit `dependencies` take precedence over synced
 packages with the same package name. If any synced package cannot be resolved
 from PyPI during cloud image setup, the job will fail.
 
-## What To Look For
+## What to look for
 
 | Field | Why it matters |
 | --- | --- |
@@ -95,7 +95,7 @@ from PyPI during cloud image setup, the job will fail.
 | Resources | Confirms worker count, CPU, memory, GPU, and services. |
 | Refiner version | Confirms which package version workers used. |
 
-## Debugging With Manifests
+## Debugging with manifests
 
 Use the manifest when:
 
@@ -109,7 +109,7 @@ Use the manifest when:
 For billing investigations, open the job from the invoice breakdown, then open
 the manifest to see worker count, GPU settings, and service configuration.
 
-## Related Pages
+## Related pages
 
 - [Submitting to the Platform](submitting-to-the-platform.md)
 - [Cloud Launcher](../running-pipelines/cloud-launcher.md)

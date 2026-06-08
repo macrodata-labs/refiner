@@ -10,7 +10,7 @@ open public files or private files resolved with workspace secrets.
 
 Open [Viewer](/viewer), which redirects to the active workspace.
 
-## What It Can Open
+## What it can open
 
 The viewer accepts:
 
@@ -25,7 +25,7 @@ Supported file types are **Auto**, **Parquet**, **JSON**, and **CSV**. Auto
 uses the file extension. Choose the type explicitly when the extension is
 ambiguous.
 
-## Load A File
+## Load a file
 
 1. Open [Viewer](/viewer).
 2. Pick a secrets environment from the **Environment** selector.
@@ -37,7 +37,7 @@ For public files, choose **Environment: None**. For private buckets or private
 Hugging Face repositories, choose the workspace secret environment that contains
 the credentials.
 
-## Private Storage
+## Private storage
 
 Secrets are managed in [Settings > Secrets](/settings/secrets).
 
@@ -52,7 +52,7 @@ Use these secret names:
 The viewer uses the selected workspace secret environment to resolve storage
 paths into browser-fetchable URLs. Secret values are not exposed in the UI.
 
-## How It Works
+## How it works
 
 For `http://` and `https://` paths, the viewer uses the URL directly.
 
@@ -64,7 +64,7 @@ browser-fetchable URL plus the canonical source path.
 The browser then queries the file with DuckDB-Wasm. The data file is fetched by
 the browser for preview, search, sort, and pagination.
 
-## Table Controls
+## Table controls
 
 After loading a file, the viewer shows:
 
@@ -81,7 +81,7 @@ String cells that look like media or file URLs are rendered as links or previews
 S3, GCS, and Hugging Face cell values can also resolve through the same
 workspace secret environment.
 
-## CORS And Browser Fetching
+## CORS and browser fetching
 
 The viewer fetches data client-side. For private files, the platform may return
 a signed URL, but the browser still needs permission to read it.
@@ -130,8 +130,8 @@ deployment or local preview.
 | CORS or browser access error | Configure bucket CORS for the app origin. |
 | Invalid file type | The selected file type does not match the file contents. |
 
-## Related Pages
+## Related pages
 
-- [Secrets and Environment](secrets-and-environment.md)
+- [Secrets and environment](secrets-and-environment.md)
 - [Path Formats](../reference/path-formats.md)
 - [Writing Data](../writing-data/index.md)

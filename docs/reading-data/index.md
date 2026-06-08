@@ -1,9 +1,9 @@
 ---
-title: "Reading Data"
+title: "Reading data"
 description: "Choose and configure Refiner readers for robotics data"
 ---
 
-# Reading Data
+# Reading data
 
 Readers create the source of a Refiner pipeline. A reader is responsible for
 finding input files, planning shards, and emitting rows or table blocks.
@@ -14,7 +14,7 @@ import refiner as mdr
 pipeline = mdr.read_lerobot("hf://datasets/lerobot/aloha_sim_transfer_cube_human")
 ```
 
-## Reader Selection
+## Reader selection
 
 | Your data looks like | Use | Read |
 | --- | --- | --- |
@@ -28,7 +28,7 @@ pipeline = mdr.read_lerobot("hf://datasets/lerobot/aloha_sim_transfer_cube_human
 | TFRecord files or TensorFlow Datasets | `read_tfrecords`, `read_tfds` | [TensorFlow](tensorflow.md) |
 | Your own source system | `from_source` | [Custom Readers](custom-readers.md) |
 
-## Core Ideas
+## Core ideas
 
 - Readers plan **shards**, the units workers execute.
 - Readers emit **rows** or **tabular blocks**.

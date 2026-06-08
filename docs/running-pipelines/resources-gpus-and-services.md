@@ -1,14 +1,14 @@
 ---
-title: "Resources, GPUs, and Services"
+title: "Resources, GPUs, and services"
 description: "CPU, memory, GPU, and runtime service configuration for launched Refiner jobs"
 ---
 
-# Resources, GPUs, and Services
+# Resources, GPUs, and services
 
 Resource settings belong on launch calls, not inside transform functions. This
 keeps the pipeline logic portable between local debugging and cloud execution.
 
-## CPU And Memory
+## CPU and memory
 
 ```python
 pipeline.launch_cloud(
@@ -36,7 +36,7 @@ GPU requests apply per worker. If your transform uses a model directly inside
 the worker, make sure the worker count and GPU count match the model loading
 pattern you want.
 
-## Runtime Services
+## Runtime services
 
 Some inference workloads are better served by a runtime service, such as vLLM,
 instead of loading a model inside every transform worker.
@@ -51,7 +51,7 @@ provider = mdr.inference.VLLMProvider(
 When a provider requires a service, Refiner can include that service in the
 cloud runtime plan. See [Providers and vLLM](../inference/inference_providers.md).
 
-## Choosing Worker Count
+## Choosing worker count
 
 | Workload | Worker count guidance |
 | --- | --- |
@@ -60,7 +60,7 @@ cloud runtime plan. See [Providers and vLLM](../inference/inference_providers.md
 | VLM/API calls | Match worker count to provider rate limits and `max_in_flight`. |
 | Local GPU inference | Avoid more workers than available GPUs unless the model can share. |
 
-## Related Pages
+## Related pages
 
 - [Async and Batch Transforms](../transforms/async-and-batch-transforms.md)
 - [Media Assets and Reducers](../writing-data/media-assets-and-reducers.md)

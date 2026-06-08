@@ -38,7 +38,7 @@ macrodata secrets list --env production --json
 - [`secrets remove`](secrets.md#remove-a-secret): Remove a workspace secret.
 - [`secrets delete`](secrets.md#remove-a-secret): Alias for `secrets remove`.
 
-## Agent-Friendly Output
+## Agent-friendly output
 
 Use `--json` on commands that return structured platform data:
 

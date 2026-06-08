@@ -67,7 +67,7 @@ output = f"{output_prefix}/{stamp}-full-eval"
 )
 ```
 
-## How It Works
+## How it works
 
 ### Inputs
 
@@ -75,7 +75,7 @@ output = f"{output_prefix}/{stamp}-full-eval"
 dataset root. Passing a list of folders to `read_hdf5(...)` lets Refiner shard
 the conversion across files from all four subsets.
 
-### HDF5 Layout
+### HDF5 layout
 
 Each LIBERO file stores demonstrations under `/data/demo_*`. The reader emits
 one row per matched demo group and loads the arrays needed for LeRobot:
@@ -93,13 +93,13 @@ on the row. `cache_remote_files=True` downloads each remote HDF5 file to worker
 local storage while it is being read, which avoids repeated random reads against
 the remote filesystem.
 
-### Task Labels
+### Task labels
 
 LIBERO task text is encoded in the HDF5 filename. The `.map(...)` step derives a
 readable task label by removing `.hdf5` and `_demo`, then replacing underscores
 with spaces.
 
-### Robot Rows
+### Robot rows
 
 `to_robot_rows(...)` turns each HDF5 demo row into one robotics episode:
 
@@ -112,7 +112,7 @@ with spaces.
 | `state_key=("ee_state", "gripper_state")` | Concatenates end-effector and gripper state into `observation.state`. |
 | `video_keys=...` | Treats the two RGB frame arrays as LeRobot video streams. |
 
-### Writing And Running
+### Writing and running
 
 `write_lerobot(...)` writes LeRobot parquet metadata plus encoded videos. The
 example bounds per-worker video preparation with `max_video_prepare_in_flight=2`

@@ -1,9 +1,9 @@
 ---
-title: "Cloud Jobs and Files"
+title: "Cloud Jobs and files"
 description: "Track cloud jobs and understand file staging from the user perspective"
 ---
 
-# Cloud Jobs And Files
+# Cloud Jobs and files
 
 A cloud job is a submitted Refiner run owned by a workspace. Jobs have stages,
 workers, logs, metrics, manifests, resource settings, optional services, and
@@ -11,7 +11,7 @@ output references.
 
 Open jobs from [Jobs](/jobs).
 
-## Job Lifecycle
+## Job lifecycle
 
 | State | Meaning |
 | --- | --- |
@@ -25,7 +25,7 @@ The jobs list shows status, progress, duration, starter, and an action to open
 the job. The job detail page shows the graph, selected-stage detail, worker
 observability, logs, metrics, manifest, and job metadata.
 
-## Stages, Workers, And Shards
+## Stages, workers, and shards
 
 Refiner breaks a cloud run into stages. Each stage can have workers. Workers
 claim shards, process rows or episodes, emit logs and metrics, and report
@@ -46,12 +46,12 @@ a user perspective, this matters because:
 - outputs should be written to durable paths you control, such as S3, GCS, or
   Hugging Face repositories
 - private input or output locations require credentials through
-  [Secrets and Environment](secrets-and-environment.md)
+  [Secrets and environment](secrets-and-environment.md)
 - manifests can show which code and file references were submitted with a job
 - the [Viewer](viewer.md) can inspect produced Parquet, JSON, and CSV outputs
   from workspace-accessible storage
 
-## Inspect Jobs In The CLI
+## Inspect Jobs in the CLI
 
 ```bash
 macrodata jobs list
@@ -69,7 +69,7 @@ macrodata jobs get job_123 --json
 
 See [CLI Jobs, Logs, and Metrics](../cli/jobs-logs-and-metrics.md).
 
-## Links To Other Platform Surfaces
+## Links to other platform surfaces
 
 | Surface | URL |
 | --- | --- |
@@ -79,7 +79,7 @@ See [CLI Jobs, Logs, and Metrics](../cli/jobs-logs-and-metrics.md).
 | Viewer | [Viewer](/viewer) |
 | Secrets | [Settings > Secrets](/settings/secrets) |
 
-## Related Pages
+## Related pages
 
 - [Submitting to the Platform](submitting-to-the-platform.md)
 - [Observability](../running-pipelines/observability.md)

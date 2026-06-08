@@ -1,14 +1,14 @@
 ---
-title: "Converting to Robot Rows"
+title: "Converting to robot rows"
 description: "Map generic rows into Refiner's robotics episode view"
 ---
 
-# Converting To Robot Rows
+# Converting to robot rows
 
 Use `to_robot_rows(...)` when a generic reader produces episode-shaped rows that
 should be treated as robotics episodes.
 
-## Basic Mapping
+## Basic mapping
 
 ```python
 pipeline = (
@@ -35,7 +35,7 @@ pipeline = (
 The input columns remain available by their original names. The robotics view
 adds semantic properties such as `row.actions`, `row.states`, and `row.videos`.
 
-## Key Mapping
+## Key mapping
 
 | Option | Use it for |
 | --- | --- |
@@ -49,7 +49,7 @@ adds semantic properties such as `row.actions`, `row.states`, and `row.videos`.
 | `extra_observation_keys` | Additional observations exposed by name. |
 | `video_keys` | Video columns exposed through `row.videos`. |
 
-## Multiple State Columns
+## Multiple state columns
 
 ```python
 pipeline = source.to_robot_rows(
@@ -61,7 +61,7 @@ pipeline = source.to_robot_rows(
 Tuple state keys are concatenated into `row.states` and exposed as
 `observation.state`.
 
-## Nested Frame Data
+## Nested frame data
 
 If a row contains a nested frame table, pass `nested_frames_key`:
 
@@ -77,7 +77,7 @@ This is useful for custom readers that already group frames per episode.
 For RLDS-style rows, `task_key` can point into the nested frame data, such as
 `task_key="steps/language_instruction"`.
 
-## Writing Converted Rows
+## Writing converted rows
 
 Converted rows can be written as LeRobot:
 

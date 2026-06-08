@@ -10,7 +10,7 @@ Refiner supports two common Hugging Face patterns:
 1. Dataset roots and files accessed through `hf://...` paths.
 2. Hugging Face datasets loaded through `read_hf_dataset`.
 
-## HF Paths
+## HF paths
 
 Most file-based readers can use `hf://` paths:
 
@@ -27,7 +27,7 @@ pipeline.launch_cloud(
 )
 ```
 
-## Dataset Tables
+## Dataset tables
 
 Use `read_hf_dataset` when you want the Hugging Face datasets library to load a
 split:
@@ -45,7 +45,7 @@ automatically when the pipeline uses `read_hf_dataset(...)`.
 Use this for table-style datasets. For LeRobot dataset roots, prefer
 [`read_lerobot`](lerobot.md).
 
-## Related Pages
+## Related pages
 
 - [Path Formats](../reference/path-formats.md)
-- [Secrets and Environment](../platform/secrets-and-environment.md)
+- [Secrets and environment](../platform/secrets-and-environment.md)
