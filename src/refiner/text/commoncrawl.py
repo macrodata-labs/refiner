@@ -10,6 +10,7 @@ from typing import Any, Literal
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io import DataFile, DataFolder
+from refiner.io.datafile import _file_cache_key
 from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.data.datatype import DTypeMapping
 from refiner.pipeline.expressions import Expr, col
@@ -543,7 +544,7 @@ class CommonCrawlWarcIndexSource(BaseSource):
         if (
             not force_reopen
             and current_file is not None
-            and current_file.abs_path() == file.abs_path()
+            and _file_cache_key(current_file) == _file_cache_key(file)
             and current_fh is not None
         ):
             return current_fh, False

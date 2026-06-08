@@ -9,6 +9,7 @@ from fsspec import AbstractFileSystem
 import pyarrow as pa
 
 from refiner.io import DataFile, DataFileSet, DataFolder
+from refiner.io.datafile import _file_cache_key
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.datatype import DTypeMapping, schema_with_dtypes
 from refiner.pipeline.data.shard import FilePart, Shard
@@ -148,7 +149,7 @@ class BaseReader(BaseSource):
         if (
             not force_reopen
             and self._open_file is not None
-            and self._open_file.abs_path() == file.abs_path()
+            and _file_cache_key(self._open_file) == _file_cache_key(file)
             and self._open_fh is not None
         ):
             return self._open_fh, False

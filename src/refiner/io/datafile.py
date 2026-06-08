@@ -31,6 +31,15 @@ def _storage_options_for_path(
     return options
 
 
+def _file_cache_key(file: "DataFile") -> tuple[object, str]:
+    fs = file.fs
+    fs_token = getattr(fs, "_fs_token", None)
+    if fs_token is None:
+        tokenize = getattr(fs, "__dask_tokenize__", None)
+        fs_token = tokenize() if callable(tokenize) else id(fs)
+    return (type(fs), fs_token), file.abs_path()
+
+
 class DataFile:
     """A minimal (fs, path) file abstraction with a small normalization factory.
 

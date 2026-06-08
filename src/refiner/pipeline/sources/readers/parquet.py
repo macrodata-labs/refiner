@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 from fsspec import AbstractFileSystem
 
 from refiner.io import DataFile
+from refiner.io.datafile import _file_cache_key
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.datatype import (
     DTypeMapping,
@@ -153,7 +154,8 @@ class ParquetReader(BaseReader):
         if (
             self._open_fragment is not None
             and self._open_fragment_file is not None
-            and self._open_fragment_file.abs_path() == source_file.abs_path()
+            and _file_cache_key(self._open_fragment_file)
+            == _file_cache_key(source_file)
         ):
             return self._open_fragment
 

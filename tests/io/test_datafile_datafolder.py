@@ -1,8 +1,9 @@
 from fsspec.implementations.memory import MemoryFileSystem
 from fsspec.implementations.local import LocalFileSystem
+from fsspec.implementations.http import HTTPFileSystem
 from typing import Any, cast
 
-from refiner.io.datafile import DataFile
+from refiner.io.datafile import DataFile, _file_cache_key
 from refiner.io.datafolder import DataFolder
 from refiner.io.fileset import DataFileSet
 
@@ -35,6 +36,31 @@ def test_datafile_resolve_with_path_fs_tuple(tmp_path):
     df = DataFile.resolve((p, fs))
     assert df.exists()
     assert df.is_local
+
+
+def test_datafile_cache_key_tracks_backing_filesystem_configuration():
+    left = DataFile(
+        fs=LocalFileSystem(skip_instance_cache=True),
+        path="bucket/file.txt",
+    )
+    right = DataFile(
+        fs=LocalFileSystem(skip_instance_cache=True),
+        path="bucket/file.txt",
+    )
+
+    assert left.fs is not right.fs
+    assert _file_cache_key(left) == _file_cache_key(right)
+
+    first_auth = DataFile(
+        fs=HTTPFileSystem(headers={"Authorization": "first"}),
+        path="https://example.com/file.txt",
+    )
+    second_auth = DataFile(
+        fs=HTTPFileSystem(headers={"Authorization": "second"}),
+        path="https://example.com/file.txt",
+    )
+
+    assert _file_cache_key(first_auth) != _file_cache_key(second_auth)
 
 
 def test_datafile_copy_skips_same_source_and_destination(tmp_path):
