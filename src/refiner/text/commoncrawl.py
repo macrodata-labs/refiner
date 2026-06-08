@@ -281,26 +281,7 @@ class CommonCrawlReader(BaseReader):
         if self.num_files is not None and not self._num_files_applied:
             from refiner.io import DataFileSet
 
-            files: list[DataFile] = []
-            remaining = self.num_files
-            for entry in self.fileset.entries:
-                if remaining <= 0:
-                    break
-                if isinstance(entry, DataFile):
-                    files.append(entry)
-                    remaining -= 1
-                    continue
-                matched = entry.fs.glob(entry.path, detail=True)
-                for expanded_path, info in sorted(matched.items()):
-                    if remaining <= 0:
-                        break
-                    if not isinstance(expanded_path, str) or not isinstance(info, dict):
-                        continue
-                    if info.get("type") != "file":
-                        continue
-                    files.append(DataFile(fs=entry.fs, path=expanded_path))
-                    remaining -= 1
-            self.fileset = DataFileSet.resolve(tuple(files))
+            self.fileset = DataFileSet.resolve(self.fileset.first_files(self.num_files))
             self._num_files_applied = True
         return super().list_shards()
 
@@ -346,7 +327,7 @@ class CommonCrawlReader(BaseReader):
             self._archive_iterator = ArchiveIterator
         return self._archive_iterator
 
-    def _source_globs(self) -> tuple[tuple[str, Any], ...]:
+    def _source_globs(self) -> tuple[str, ...]:
         """Build the dump/segment-specific WARC or WET glob inputs for BaseReader."""
         rel_globs: list[str] = []
         suffix = "warc/*.warc.gz" if self.format == "warc" else "wet/*.warc.wet.gz"
@@ -356,9 +337,7 @@ class CommonCrawlReader(BaseReader):
             else:
                 for segment in self.segments:
                     rel_globs.append(f"crawl-data/{dump}/segments/{segment}/{suffix}")
-        return tuple(
-            (self.root.abs_path(rel_glob), self.root.fs) for rel_glob in rel_globs
-        )
+        return tuple(self.root.abs_path(rel_glob) for rel_glob in rel_globs)
 
 
 class CommonCrawlWarcIndexSource(BaseSource):

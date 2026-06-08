@@ -41,7 +41,7 @@ class DataFile:
         - If `fs` is provided to `resolve()`, it wins and `storage_options` is ignored.
     """
 
-    __slots__ = ("_fs", "_path", "_storage_options")
+    __slots__ = ("_fs", "_path", "_storage_options", "_abs_path")
 
     def __init__(
         self,
@@ -56,6 +56,13 @@ class DataFile:
             fs._strip_protocol(path) if fs is not None and "://" in path else path
         )
         self._storage_options = dict(storage_options or {})
+        if fs is None:
+            if "://" not in path and "::" not in path:
+                self._abs_path = os.path.abspath(path)
+            else:
+                self._abs_path = path.removeprefix("file://")
+        else:
+            self._abs_path = fs.unstrip_protocol(self._path).removeprefix("file://")
 
     def _resolve(self) -> tuple[AbstractFileSystem, str]:
         if self._fs is None:
@@ -166,11 +173,7 @@ class DataFile:
         return self.fs.exists(self.path)
 
     def abs_path(self) -> str:
-        if self._fs is None:
-            if "://" not in self._path and "::" not in self._path:
-                return os.path.abspath(self._path)
-            return self._path.removeprefix("file://")
-        return self.fs.unstrip_protocol(self.path).removeprefix("file://")
+        return self._abs_path
 
     def required_refiner_extras(self) -> tuple[str, ...]:
         return required_refiner_extras(self._path, self._fs)
@@ -180,12 +183,7 @@ class DataFile:
         return isinstance(self.fs, LocalFileSystem)
 
     def __str__(self) -> str:
-        if self._fs is None:
-            return self.abs_path()
-        try:
-            return self.fs.unstrip_protocol(self.path)
-        except Exception:
-            return self.path
+        return self.abs_path()
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, DataFile):

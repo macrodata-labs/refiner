@@ -198,7 +198,7 @@ class LeRobotEpisodeReader(BaseSource):
         if self._episode_reader is None:
             self._episode_reader = ParquetReader(
                 inputs=tuple(
-                    (str(root.abs_paths(_DEFAULT_EPISODES_GLOB_ROOT)), root.fs)
+                    str(root.abs_paths(_DEFAULT_EPISODES_GLOB_ROOT))
                     for root in self.roots
                 ),
                 recursive=True,

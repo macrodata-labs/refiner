@@ -137,7 +137,7 @@ class MediaLocalCache:
         return _CachedFileContext(cache=self, file=file)
 
     async def acquire_file_lease(self, file: DataFile) -> _CacheFileLease:
-        key = _FileCacheKey(resolved=file.fs.unstrip_protocol(file.path), file=file)
+        key = _FileCacheKey(resolved=file.abs_path(), file=file)
         lease = await self._cache.acquire(key)
         return _CacheFileLease(lease, path=lease.resource.path)
 

@@ -139,7 +139,7 @@ class ZarrReader(BaseSource):
                 resolved_inputs.append((entry, entry.abs_path()))
                 continue
             if entry.path.endswith(".zip"):
-                zip_file = DataFile(fs=entry.fs, path=entry.path)
+                zip_file = entry.file("")
                 resolved_inputs.append((zip_file, zip_file.abs_path()))
             else:
                 resolved_inputs.append((entry, entry.abs_path()))

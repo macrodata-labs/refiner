@@ -22,6 +22,24 @@ DataFileSetInput: TypeAlias = Union[
 DataFileSetLike: TypeAlias = Union[DataFileSetInput, Sequence[DataFileSetInput]]
 
 
+def _glob_files(
+    fs: AbstractFileSystem,
+    path: str,
+    *,
+    limit: int | None = None,
+) -> tuple[DataFile, ...]:
+    files: list[DataFile] = []
+    matched = fs.glob(path, detail=True)
+    for expanded_path, info in sorted(matched.items()):
+        if limit is not None and len(files) >= limit:
+            break
+        if not isinstance(expanded_path, str) or not isinstance(info, Mapping):
+            continue
+        if info.get("type") == "file":
+            files.append(DataFile(fs=fs, path=expanded_path))
+    return tuple(files)
+
+
 @dataclass(slots=True)
 class _PathSource:
     _path: str
@@ -126,25 +144,14 @@ class DataFileSet:
                 normalized_entries.append(item)
                 continue
 
-            if (
-                isinstance(item, tuple)
-                and len(item) == 2
-                and isinstance(item[1], AbstractFileSystem)
-            ):
-                path, item_fs = cast(DataFileSpec | DataFolderSpec, item)
-                if isinstance(path, PathLike):
-                    path = str(path)
-                if not isinstance(path, str):
+            item_fs = fs
+            if isinstance(item, tuple):
+                if not (len(item) == 2 and isinstance(item[1], AbstractFileSystem)):
                     raise TypeError(
                         "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                     )
-                if expect_type == "folder":
-                    normalized_entries.append(_PathSource(_path=path, _fs=item_fs))
-                elif expect_type == "file":
-                    normalized_entries.append(DataFile(path=path, fs=item_fs))
-                else:
-                    normalized_entries.append(_PathSource(_path=path, _fs=item_fs))
-                continue
+                path, item_fs = cast(DataFileSpec | DataFolderSpec, item)
+                item = path
 
             if isinstance(item, PathLike):
                 item = str(item)
@@ -154,32 +161,22 @@ class DataFileSet:
                     "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                 )
 
-            if fs is not None:
-                if expect_type == "folder":
-                    normalized_entries.append(_PathSource(_path=item, _fs=fs))
-                elif expect_type == "file":
-                    normalized_entries.append(DataFile.resolve(item, fs=fs))
+            if item_fs is not None:
+                if expect_type == "file":
+                    normalized_entries.append(DataFile.resolve(item, fs=item_fs))
                 else:
-                    normalized_entries.append(_PathSource(_path=item, _fs=fs))
+                    normalized_entries.append(_PathSource(_path=item, _fs=item_fs))
+            elif expect_type == "file":
+                normalized_entries.append(
+                    DataFile.resolve(item, storage_options=storage_options)
+                )
             else:
-                if expect_type == "folder":
-                    normalized_entries.append(
-                        _PathSource(
-                            _path=item,
-                            _storage_options=source_storage_options,
-                        )
+                normalized_entries.append(
+                    _PathSource(
+                        _path=item,
+                        _storage_options=source_storage_options,
                     )
-                elif expect_type == "file":
-                    normalized_entries.append(
-                        DataFile.resolve(item, storage_options=storage_options)
-                    )
-                else:
-                    normalized_entries.append(
-                        _PathSource(
-                            _path=item,
-                            _storage_options=source_storage_options,
-                        )
-                    )
+                )
 
         return cls(
             entries=tuple(normalized_entries),
@@ -216,6 +213,59 @@ class DataFileSet:
                 }
             )
         )
+
+    def first_files(self, limit: int) -> tuple[DataFile, ...]:
+        if limit <= 0:
+            return ()
+
+        exts = tuple(e.lower() for e in self.extensions)
+        include_file = self.include_file
+        files: list[DataFile] = []
+
+        def append(file: DataFile) -> None:
+            if exts and not file.path.lower().endswith(exts):
+                return
+            if include_file is not None and not include_file(file.path):
+                return
+            files.append(file)
+
+        for entry in self.entries:
+            remaining = limit - len(files)
+            if remaining <= 0:
+                break
+            if isinstance(entry, DataFile):
+                append(entry)
+            elif isinstance(entry, DataFolder):
+                for file in entry.iter_files(recursive=self.recursive):
+                    append(file)
+                    if len(files) >= limit:
+                        break
+            elif glob.has_magic(entry.path):
+                for file in _glob_files(entry.fs, entry.path, limit=remaining):
+                    append(file)
+            else:
+                try:
+                    info = entry.fs.info(entry.path)
+                except FileNotFoundError:
+                    raise FileNotFoundError(
+                        f"Could not resolve input: {entry.fs.unstrip_protocol(entry.path)!r}"
+                    )
+                item_type = info.get("type")
+                if item_type == "directory":
+                    folder = DataFolder(path=entry.path, fs=entry.fs)
+                    for file in folder.iter_files(recursive=self.recursive):
+                        append(file)
+                        if len(files) >= limit:
+                            break
+                elif item_type == "file":
+                    append(DataFile(fs=entry.fs, path=entry.path))
+                else:
+                    raise TypeError(
+                        f"Unsupported file type {item_type!r} for input: "
+                        f"{entry.fs.unstrip_protocol(entry.path)!r}"
+                    )
+
+        return tuple(files[:limit])
 
     @property
     def resolved_entries(self) -> tuple[DataFile | DataFolder, ...]:

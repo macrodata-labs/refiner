@@ -80,8 +80,6 @@ class RemuxWriter:
         probe: VideoSourceProbe,
     ) -> "RemuxWriter":
         check_required_dependencies("video remuxing", ["av"], dist="video")
-        output_abs = folder._join(output_rel)
-        folder.fs.makedirs(folder.fs._parent(output_abs), exist_ok=True)
         output_file = folder.open(output_rel, mode="wb")
         return cls.open_file(
             output_file=output_file,

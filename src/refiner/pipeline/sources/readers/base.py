@@ -248,9 +248,7 @@ class BaseReader(BaseSource):
                 path = file.abs_path()
                 size = self.fileset.size(source_index, path)
                 # Atomic files stay whole: `end=-1` means "reader decides how to read the full file".
-                if not self.split_by_bytes or not is_splittable_by_bytes(
-                    file.fs, file.path
-                ):
+                if not self.split_by_bytes or not is_splittable_by_bytes(file):
                     if (
                         current_parts
                         and current_size + size > target_bytes
