@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from os import PathLike
@@ -50,6 +51,8 @@ class _PathSource:
 
     def abs_path(self) -> str:
         if self._fs is None:
+            if "://" not in self._path and "::" not in self._path:
+                return os.path.abspath(self._path)
             return self._path.removeprefix("file://")
         return self.fs.unstrip_protocol(self.path).removeprefix("file://")
 
