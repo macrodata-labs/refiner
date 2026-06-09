@@ -67,7 +67,7 @@ provider = mdr.inference.AnthropicEndpointProvider(
 Use `VLLMProvider` with cloud launch when a pipeline should run against a
 managed vLLM service for an open-weight model. Refiner provisions the vLLM
 service as part of the cloud job and routes worker requests to it. You do not
-need to assign GPUs to the pipeline workers for the model server; Refiner Cloud
+need to assign GPUs to the pipeline workers for the model server; the Macrodata Cloud
 manages service resources separately from worker resources.
 
 ```python

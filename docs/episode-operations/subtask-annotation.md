@@ -17,7 +17,7 @@ manual per-episode labeling.
 
 ## Basic usage
 
-Run the following pipeline locally or on Refiner Cloud:
+Run the following pipeline locally or on the Macrodata Cloud:
 
 ```python
 pipeline = (

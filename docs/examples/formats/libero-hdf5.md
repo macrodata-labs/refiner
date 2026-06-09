@@ -1,5 +1,5 @@
 ---
-title: "Libero HDF5"
+title: "LIBERO HDF5"
 description: "Convert the LIBERO HDF5 eval datasets to LeRobot"
 ---
 

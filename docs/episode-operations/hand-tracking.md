@@ -1,6 +1,6 @@
 ---
 title: "Hand tracking"
-description: "Runs ego-centric hand tracking over inputed videos"
+description: "Runs ego-centric hand tracking over input videos"
 ---
 
 # Hand tracking

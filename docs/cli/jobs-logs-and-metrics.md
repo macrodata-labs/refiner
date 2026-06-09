@@ -27,11 +27,9 @@ macrodata jobs list --cursor <next_cursor> --json
 Example output:
 
 ```text
-ID       Name                 Status    Kind   Created                  Started By
-job_123  aloha preprocessing  running   cloud  2026-05-28 12:40:10 UTC ada@example.com
-job_122  local smoke test     done      local  2026-05-28 11:58:31 UTC ada@example.com
-
-Next cursor: macrodata jobs list --limit 20 --cursor eyJwYWdlIjoyfQ
+ID       Status     Kind   Name                 Stages  Created                  Created By
+job_123  ● running  cloud  aloha preprocessing  1/2     2026-05-28 12:40:10 UTC  ada@example.com
+job_122  ● done     local  local smoke test     2/2     2026-05-28 11:58:31 UTC  ada@example.com
 ```
 
 | Option | Use |
@@ -57,7 +55,7 @@ metrics.
 Example output:
 
 ```text
-Job: aloha preprocessing  ID: job_123  URL: https://app.macrodata.ai/jobs/job_123
+Job: aloha preprocessing  ID: job_123  URL: https://macrodata.co/jobs/acme-robotics/job_123
 Status: running  Kind: cloud  Cost: $1.25
 Created: 2026-05-28 12:40:10 UTC  Started: 2026-05-28 12:40:22 UTC
 Created By: ada@example.com
