@@ -19,44 +19,10 @@ Install:
 pip install macrodata-refiner
 ```
 
-Create a Macrodata API key:
+This gives you:
 
-- https://macrodata.co/settings/api-keys
-
-Log in:
-
-```bash
-macrodata login
-```
-
-### Cloud example
-
-Launch a robotics pipeline on Macrodata Cloud.
-
-This requires a valid API key.
-
-```python
-import refiner as mdr
-
-(
-    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
-    .map(
-        mdr.robotics.motion_trim(
-            threshold=0.001,
-            pad_frames=5,
-        )
-    )
-    .write_lerobot("hf://buckets/acme-robotics/aloha_motion")
-    .launch_cloud(
-        name="motion_trim",
-        num_workers=4,
-    )
-)
-```
-
-Need cloud GPUs? See [Resources, GPUs, and Services](docs/running-pipelines/resources-gpus-and-services.md).
-
-### Local example
+- the Python package as `refiner`
+- the CLI as `macrodata`
 
 Launch a local pipeline:
 
@@ -84,10 +50,37 @@ def add_preview(row):
 )
 ```
 
-`pip install` gives you:
+### Cloud example
 
-- the Python package as `refiner`
-- the CLI as `macrodata`
+Create a Macrodata API key: https://macrodata.co/settings/api-keys  
+And authenticate the CLI:
+
+```bash
+macrodata login
+```
+
+Launch a robotics pipeline on Macrodata Cloud.
+
+```python
+import refiner as mdr
+
+(
+    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
+    .map(
+        mdr.robotics.motion_trim(
+            threshold=0.001,
+            pad_frames=5,
+        )
+    )
+    .write_lerobot("hf://buckets/acme-robotics/aloha_motion")
+    .launch_cloud(
+        name="motion_trim",
+        num_workers=4,
+    )
+)
+```
+
+Need cloud GPUs? See [Resources, GPUs, and Services](docs/running-pipelines/resources-gpus-and-services.md).
 
 ## Batteries included
 

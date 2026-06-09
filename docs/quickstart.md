@@ -196,12 +196,6 @@ pipeline = (
 pipeline.launch_cloud(name="quickstart-aloha-summary")
 ```
 
-This example converts the public LIBERO spatial HDF5 subset to LeRobot using
-cloud workers. It reads one demo group per row, derives the task label from the
-filename, turns action/state/image arrays into robotics episodes, encodes the
-two camera streams as videos, and writes a LeRobot dataset to your output
-bucket.
-
 ## Advanced example
 
 Here is a more elaborate example, reading from and writing to Hugging Face buckets.
@@ -258,6 +252,12 @@ output = "hf://buckets/macrodata/test_bucket/libero-spatial"
     )
 )
 ```
+
+This example converts the public LIBERO spatial HDF5 subset to LeRobot using
+cloud workers. It reads one demo group per row, derives the task label from the
+filename, turns action/state/image arrays into robotics episodes, encodes the
+two camera streams as videos, and writes a LeRobot dataset to your output
+bucket.
 
 The input dataset is public, but the cloud workers need `HF_TOKEN` to write back
 to your Hugging Face bucket. You can also safely store reusable secrets directly
