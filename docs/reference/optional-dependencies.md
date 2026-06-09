@@ -20,6 +20,8 @@ Install extras based on the data and operations you use.
 | `text` | Common Crawl text readers. |
 | `s3` | S3 filesystem support. |
 | `gcs` | Google Cloud Storage filesystem support. |
+| `tensorflow` | Tensorflow support. |
+| `tfds` | Tensorflow datasets support. |
 
 Examples:
 

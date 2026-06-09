@@ -43,7 +43,7 @@ instead of loading a model inside every transform worker.
 
 ```python
 provider = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen2.5-VL-7B-Instruct",
+    model="Qwen/Qwen3.5-9B",
     config="throughput",
 )
 ```
