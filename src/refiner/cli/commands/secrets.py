@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 
-from refiner.cli.secrets import cmd_secrets_list, cmd_secrets_remove, cmd_secrets_set
-
 
 def register_secrets_command(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
@@ -25,7 +23,9 @@ def register_secrets_command(
     secrets_list.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    secrets_list.set_defaults(handler=cmd_secrets_list)
+    secrets_list.set_defaults(
+        handler_module="refiner.cli.secrets", handler="cmd_secrets_list"
+    )
 
     secrets_set = secrets_subparsers.add_parser(
         "set", help="Add or replace a workspace secret"
@@ -40,7 +40,9 @@ def register_secrets_command(
     secrets_set.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    secrets_set.set_defaults(handler=cmd_secrets_set)
+    secrets_set.set_defaults(
+        handler_module="refiner.cli.secrets", handler="cmd_secrets_set"
+    )
 
     secrets_remove = secrets_subparsers.add_parser(
         "remove", aliases=["delete"], help="Remove a workspace secret"
@@ -50,4 +52,6 @@ def register_secrets_command(
     secrets_remove.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    secrets_remove.set_defaults(handler=cmd_secrets_remove)
+    secrets_remove.set_defaults(
+        handler_module="refiner.cli.secrets", handler="cmd_secrets_remove"
+    )

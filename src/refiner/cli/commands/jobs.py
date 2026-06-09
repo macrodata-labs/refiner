@@ -1,14 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from refiner.cli.jobs.attach import cmd_jobs_attach
-from refiner.cli.jobs.control import cmd_jobs_cancel
-from refiner.cli.jobs.get import cmd_jobs_get
-from refiner.cli.jobs.list import cmd_jobs_list
-from refiner.cli.jobs.logs import cmd_jobs_logs
-from refiner.cli.jobs.manifest import cmd_jobs_manifest
-from refiner.cli.jobs.metrics import cmd_jobs_metrics, cmd_jobs_resource_metrics
-from refiner.cli.jobs.workers import cmd_jobs_workers
 
 
 def register_jobs_command(
@@ -45,18 +37,22 @@ def register_jobs_command(
     jobs_list.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    jobs_list.set_defaults(handler=cmd_jobs_list)
+    jobs_list.set_defaults(
+        handler_module="refiner.cli.jobs.list", handler="cmd_jobs_list"
+    )
 
     jobs_get = jobs_subparsers.add_parser("get", help="Get job summary")
     jobs_get.add_argument("job_id", help="Job identifier")
     jobs_get.add_argument("--json", action="store_true", help="Print job JSON")
-    jobs_get.set_defaults(handler=cmd_jobs_get)
+    jobs_get.set_defaults(handler_module="refiner.cli.jobs.get", handler="cmd_jobs_get")
 
     jobs_attach = jobs_subparsers.add_parser(
         "attach", help="Attach to a running cloud job"
     )
     jobs_attach.add_argument("job_id", help="Job identifier")
-    jobs_attach.set_defaults(handler=cmd_jobs_attach)
+    jobs_attach.set_defaults(
+        handler_module="refiner.cli.jobs.attach", handler="cmd_jobs_attach"
+    )
 
     jobs_manifest = jobs_subparsers.add_parser("manifest", help="Get job manifest")
     jobs_manifest.add_argument("job_id", help="Job identifier")
@@ -73,7 +69,9 @@ def register_jobs_command(
     jobs_manifest.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    jobs_manifest.set_defaults(handler=cmd_jobs_manifest)
+    jobs_manifest.set_defaults(
+        handler_module="refiner.cli.jobs.manifest", handler="cmd_jobs_manifest"
+    )
 
     jobs_workers = jobs_subparsers.add_parser("workers", help="List job workers")
     jobs_workers.add_argument("job_id", help="Job identifier")
@@ -87,7 +85,9 @@ def register_jobs_command(
     jobs_workers.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    jobs_workers.set_defaults(handler=cmd_jobs_workers)
+    jobs_workers.set_defaults(
+        handler_module="refiner.cli.jobs.workers", handler="cmd_jobs_workers"
+    )
 
     jobs_logs = jobs_subparsers.add_parser("logs", help="Fetch cloud job logs")
     jobs_logs.add_argument("job_id", help="Job identifier")
@@ -115,7 +115,9 @@ def register_jobs_command(
     jobs_logs.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    jobs_logs.set_defaults(handler=cmd_jobs_logs)
+    jobs_logs.set_defaults(
+        handler_module="refiner.cli.jobs.logs", handler="cmd_jobs_logs"
+    )
 
     jobs_metrics = jobs_subparsers.add_parser(
         "metrics", help="Fetch cloud step metrics for a stage"
@@ -153,7 +155,9 @@ def register_jobs_command(
     jobs_metrics.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    jobs_metrics.set_defaults(handler=cmd_jobs_metrics)
+    jobs_metrics.set_defaults(
+        handler_module="refiner.cli.jobs.metrics", handler="cmd_jobs_metrics"
+    )
 
     jobs_resource_metrics = jobs_subparsers.add_parser(
         "resource-metrics", help="Fetch cloud resource metrics for a stage"
@@ -184,11 +188,15 @@ def register_jobs_command(
     jobs_resource_metrics.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    jobs_resource_metrics.set_defaults(handler=cmd_jobs_resource_metrics)
+    jobs_resource_metrics.set_defaults(
+        handler_module="refiner.cli.jobs.metrics", handler="cmd_jobs_resource_metrics"
+    )
 
     jobs_cancel = jobs_subparsers.add_parser("cancel", help="Cancel a cloud job")
     jobs_cancel.add_argument("job_id", help="Job identifier")
     jobs_cancel.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
-    jobs_cancel.set_defaults(handler=cmd_jobs_cancel)
+    jobs_cancel.set_defaults(
+        handler_module="refiner.cli.jobs.control", handler="cmd_jobs_cancel"
+    )

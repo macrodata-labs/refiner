@@ -295,7 +295,9 @@ class Worker:
                     execution_error = e
                     logger.warning(
                         "worker interrupted worker_id={} claimed={} completed={}",
-                        self.worker_id, claimed, completed,
+                        self.worker_id,
+                        claimed,
+                        completed,
                     )
                     self.user_metrics_emitter.force_flush_logs()
                     failed += _fail_inflight_shards("Interrupted.")
@@ -307,7 +309,11 @@ class Worker:
                         in_flight_count = len(inflight_by_id)
                     logger.exception(
                         "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
-                        self.worker_id, claimed, completed, in_flight_count, failed_error,
+                        self.worker_id,
+                        claimed,
+                        completed,
+                        in_flight_count,
+                        failed_error,
                     )
                     self.user_metrics_emitter.force_flush_logs()
                     failed += _fail_inflight_shards(failed_error)

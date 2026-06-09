@@ -1,4 +1,5 @@
 from __future__ import annotations
+import importlib
 
 import argparse
 import sys
@@ -28,8 +29,16 @@ def main(argv: list[str] | None = None) -> int:
         if handler is None:
             parser.print_help()
             return 0
+
+        if isinstance(handler, str):
+            try:
+                handler_module = importlib.import_module(args.handler_module)
+                handler = getattr(handler_module, args.handler)
+            except (ImportError, AttributeError) as e:
+                raise RuntimeError("Could not load that command.") from e
+
         return int(handler(args))
-    except KeyboardInterrupt as err:  # catch-all
+    except KeyboardInterrupt as err:  # Ctrl+C/SIGINT catch-all
         message = str(err).strip()
         print(message or "Interrupted.", file=sys.stderr)
         return 130
