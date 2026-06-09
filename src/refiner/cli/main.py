@@ -21,13 +21,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    handler = getattr(args, "handler", None)
-    if handler is None:
-        parser.print_help()
-        return 0
-    return int(handler(args))
+    try:
+        parser = build_parser()
+        args = parser.parse_args(argv)
+        handler = getattr(args, "handler", None)
+        if handler is None:
+            parser.print_help()
+            return 0
+        return int(handler(args))
+    except KeyboardInterrupt as err:  # catch-all
+        message = str(err).strip()
+        print(message or "Interrupted.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

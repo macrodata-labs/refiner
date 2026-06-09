@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from refiner.worker import entrypoint
 from refiner.worker.context import _base_logger
 from refiner.worker.metrics.emitter import LocalLogEmitter
@@ -202,3 +204,61 @@ def test_entrypoint_passes_local_log_emitter_to_worker(tmp_path, monkeypatch) ->
 
     assert entrypoint.main() == 0
     assert isinstance(captured["user_metrics_emitter"], LocalLogEmitter)
+
+
+def test_entrypoint_reports_keyboard_interrupt_without_traceback(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    payload_path = tmp_path / "pipeline.cloudpickle"
+    payload_path.write_bytes(b"placeholder")
+    assignments_dir = tmp_path / "stage-0" / "assignments"
+    assignments_dir.mkdir(parents=True, exist_ok=True)
+    (assignments_dir / "worker-worker-1.json").write_text("[]")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "entrypoint.py",
+            "--pipeline-payload",
+            str(payload_path),
+            "--job-id",
+            "job-1",
+            "--stage-index",
+            "0",
+            "--worker-name",
+            "worker-name",
+            "--worker-id",
+            "worker-1",
+            "--rundir",
+            str(tmp_path),
+        ],
+    )
+    monkeypatch.setattr(entrypoint.cloudpickle, "load", lambda handle: object())
+    monkeypatch.setattr(
+        _base_logger,
+        "add",
+        lambda path, enqueue=False, catch=False: 123,
+    )
+    monkeypatch.setattr(_base_logger, "remove", lambda sink_id: None)
+    monkeypatch.setattr(_base_logger, "complete", lambda: None)
+
+    def fake_worker(**kwargs):
+        del kwargs
+
+        class _FakeWorker:
+            @staticmethod
+            def run():
+                raise KeyboardInterrupt
+
+        return _FakeWorker()
+
+    monkeypatch.setattr(entrypoint, "Worker", fake_worker)
+
+    assert entrypoint.main() == 1
+
+    out = capsys.readouterr()
+    payload = json.loads(out.out)
+    assert payload["failed"] == 1
+    assert payload["error"] == "Interrupted."
+    assert "Traceback" not in out.err
+    assert "KeyboardInterrupt" not in out.err

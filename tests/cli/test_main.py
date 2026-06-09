@@ -171,6 +171,38 @@ def test_main_dispatches(monkeypatch) -> None:
     assert rc == 7
 
 
+def test_main_returns_interrupt_exit_for_unhandled_keyboard_interrupt(
+    monkeypatch, capsys
+) -> None:
+    def interrupt(args):
+        del args
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("refiner.cli.commands.auth.cmd_whoami", interrupt)
+
+    rc = main(["whoami"])
+
+    out = capsys.readouterr()
+    assert rc == 130
+    assert out.err == "Interrupted.\n"
+    assert "Traceback" not in out.err
+
+
+def test_main_prints_keyboard_interrupt_message(monkeypatch, capsys) -> None:
+    def interrupt(args):
+        del args
+        raise KeyboardInterrupt("Local job interrupted.")
+
+    monkeypatch.setattr("refiner.cli.commands.auth.cmd_whoami", interrupt)
+
+    rc = main(["whoami"])
+
+    out = capsys.readouterr()
+    assert rc == 130
+    assert out.err == "Local job interrupted.\n"
+    assert "Traceback" not in out.err
+
+
 def test_main_no_args_shows_help(capsys) -> None:
     rc = main([])
     out = capsys.readouterr()
