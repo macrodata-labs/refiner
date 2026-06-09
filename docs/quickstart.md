@@ -204,7 +204,7 @@ bucket.
 
 ## Advanced example
 
-Here is a more elaborate example, reading form and writing to Hugging Face buckets.
+Here is a more elaborate example, reading from and writing to Hugging Face buckets.
 
 ```python
 import refiner as mdr

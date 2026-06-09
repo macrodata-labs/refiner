@@ -1,9 +1,9 @@
 ---
-title: "Score rewards"
+title: "Reward scores"
 description: "Add progress and success scores to episode videos"
 ---
 
-# Score rewards
+# Reward scores
 
 This example uses [Robometer](https://arxiv.org/abs/2603.02115) to compute reward scores over episodes in Libero.
 Each episode will be annotated with `reward_score`, `robometer_success`, and `reward_frames` columns, signaling the reward, tasks completion state for each frame in
