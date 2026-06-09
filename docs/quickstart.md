@@ -132,19 +132,31 @@ before launching a full job.
 
 ## Run locally
 
+Consider this pipeline:
+
 ```python
 import refiner as mdr
 
+def log_stats(row):
+    row.log_histogram("frames", row.num_frames, unit="frames", per="episode")
+
+    mdr.logger.info(
+        "episode={} task={!r} frames={} cameras={}",
+        row.episode_id,
+        row.task,
+        row.num_frames,
+        sorted(row.videos),
+    )
+
+    return row
+
+
 pipeline = (
     mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
-    .map(lambda row: row.update(task="battery insertion"))
-    .write_lerobot("./aloha_static_with_task", max_video_prepare_in_flight=4)
+    .map(log_stats)
 )
 
-pipeline.launch_local(
-    name="aloha-task-local",
-    num_workers=1,
-)
+pipeline.launch_local(name="quickstart-aloha-summary")
 ```
 
 [Local launch](running-pipelines/local-launcher.md) runs worker processes on
@@ -155,11 +167,44 @@ are also tracked in the platform interface.
 
 ## Run on the Macrodata Cloud
 
+Running the same pipeline on the Macrodata Cloud is as simple as swapping out
+`launch_local` with `launch_cloud`.
+
+```python
+import refiner as mdr
+
+def log_stats(row):
+    row.log_histogram("frames", row.num_frames, unit="frames", per="episode")
+
+    mdr.logger.info(
+        "episode={} task={!r} frames={} cameras={}",
+        row.episode_id,
+        row.task,
+        row.num_frames,
+        sorted(row.videos),
+    )
+
+    return row
+
+
+pipeline = (
+    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
+    .map(log_stats)
+)
+
+# Using launch_cloud now
+pipeline.launch_cloud(name="quickstart-aloha-summary")
+```
+
 This example converts the public LIBERO spatial HDF5 subset to LeRobot using
 cloud workers. It reads one demo group per row, derives the task label from the
 filename, turns action/state/image arrays into robotics episodes, encodes the
 two camera streams as videos, and writes a LeRobot dataset to your output
 bucket.
+
+## Advanced example
+
+Here is a more elaborate example, reading form and writing to Hugging Face buckets.
 
 ```python
 import refiner as mdr
