@@ -23,6 +23,7 @@ from refiner.pipeline.steps import (
     FnRowStep,
     FnTableStep,
     MapFn,
+    MapResult,
     RenameStep,
     RefinerStep,
     SelectStep,
@@ -1483,10 +1484,33 @@ def task(
     integer rank in ``range(num_tasks)``. This is useful for jobs that perform
     side effects or generate work without reading an input dataset.
     """
+
+    def apply_task(row: Row) -> Iterator[MapResult]:
+        result = fn(row["task_rank"], num_tasks)
+
+        if result is None:
+            return
+        if isinstance(result, Row):
+            yield result
+            return
+        if isinstance(result, Mapping):
+            yield dict(result)
+            return
+        if isinstance(result, Iterable) and not isinstance(result, (str, bytes)):
+            for item in result:
+                if isinstance(item, Row):
+                    yield item
+                elif isinstance(item, Mapping):
+                    yield dict(item)
+                else:
+                    yield {"result": item}
+            return
+        yield {"result": result}
+
     source = TaskSource(num_tasks=num_tasks)
     return RefinerPipeline(source=source).add_step(
-        FnRowStep(
-            fn=lambda row: fn(row["task_rank"], num_tasks),
+        FnFlatMapStep(
+            fn=apply_task,
             index=1,
             op_name="task",
         )

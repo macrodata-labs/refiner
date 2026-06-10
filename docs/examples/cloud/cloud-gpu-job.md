@@ -29,6 +29,7 @@ pipeline.launch_cloud(
 ```
 
 This example requests one H100 GPU for a single cloud worker and logs the raw output of `nvidia-smi` to the worker logs.
+The scalar return value is emitted as the task row's `result` field.
 
 For real GPU workloads, use `gpu=mdr.GPU(...)` to specify the required GPU type and count based on your model's needs. Increase the number of tasks if you need to improve parallelization.
 

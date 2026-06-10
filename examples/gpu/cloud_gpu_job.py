@@ -8,7 +8,7 @@ from refiner.worker.context import logger
 
 def log_nvidia_smi(task_rank: int, num_tasks: int) -> int:
     logger.info("{}", subprocess.check_output(["nvidia-smi"], text=True).rstrip())
-    # Some gpu heavy job (running BERT, ViT or anything you need)
+    # Some GPU heavy job (running BERT, ViT or anything you need)
     return task_rank
 
 
