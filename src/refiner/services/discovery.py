@@ -49,9 +49,12 @@ def collect_pipeline_services(
     for step in pipeline.pipeline_steps:
         candidates: list[Any] = []
         if isinstance(
-            step, FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep
+            step,
+            FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep,
         ):
             candidates.append(step.fn)
+        elif (fn := getattr(step, "fn", None)) is not None:
+            candidates.append(fn)
 
         for candidate in candidates:
             builtin = _builtin_description(candidate)

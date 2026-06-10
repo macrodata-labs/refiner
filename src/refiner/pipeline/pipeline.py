@@ -49,7 +49,7 @@ from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
-from refiner.pipeline.sources.task import TaskSource
+from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
@@ -1485,9 +1485,5 @@ def task(
     """
     source = TaskSource(num_tasks=num_tasks)
     return RefinerPipeline(source=source).add_step(
-        FnRowStep(
-            fn=lambda row: fn(row["task_rank"], num_tasks),
-            index=1,
-            op_name="task",
-        )
+        TaskStep(fn=fn, num_tasks=num_tasks, index=1)
     )
