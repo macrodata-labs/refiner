@@ -53,7 +53,7 @@ async def describe_image(row, generate_text):
 if __name__ == "__main__":
     (
         mdr.read_hf_dataset(
-            "food101",
+            "ethz/food101",
             split="train",
             columns_to_read=["image", "label"],
             num_shards=1,
