@@ -101,6 +101,14 @@ def _http_error_message(resp: httpx.Response) -> str:
     return sanitize_terminal_text(resp.reason_phrase or "HTTP error")
 
 
+def _request_error_message(
+    err: httpx.RequestError, *, method: str, path: str, timeout_s: float
+) -> str:
+    action = "timed out" if isinstance(err, httpx.TimeoutException) else "failed"
+    detail = sanitize_terminal_text(str(err).strip() or type(err).__name__)
+    return f"{method.upper()} {path} {action} after {timeout_s:g}s: {detail}"
+
+
 def request_json(
     *,
     method: str,
@@ -133,7 +141,12 @@ def request_json(
                 timeout=timeout_s,
             )
     except httpx.RequestError as err:
-        raise MacrodataApiError(status=0, message=str(err)) from err
+        raise MacrodataApiError(
+            status=0,
+            message=_request_error_message(
+                err, method=method, path=path, timeout_s=timeout_s
+            ),
+        ) from err
 
     if resp.is_error:
         if resp.status_code == 401:
@@ -350,7 +363,15 @@ class MacrodataClient:
                 timeout=timeout_s,
             )
         except httpx.RequestError as err:
-            raise MacrodataApiError(status=0, message=str(err)) from err
+            raise MacrodataApiError(
+                status=0,
+                message=_request_error_message(
+                    err,
+                    method="PUT",
+                    path="/cloud-file-upload",
+                    timeout_s=timeout_s,
+                ),
+            ) from err
         if response.status_code < 200 or response.status_code >= 300:
             raise MacrodataApiError(
                 status=response.status_code,

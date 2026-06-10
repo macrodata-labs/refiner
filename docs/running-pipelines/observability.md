@@ -43,6 +43,12 @@ def transform(row):
     return row
 ```
 
+Worker failure logs include the operation that failed when a shard is being
+finalized. For example, finalization errors distinguish sink completion, user
+metrics flush, and shard lifecycle completion. Platform request timeouts include
+the HTTP method, API path, and timeout duration so you can tell which API call
+did not return.
+
 ## CLI Inspection
 
 ```bash
@@ -60,4 +66,3 @@ See [CLI Jobs, Logs, and Metrics](../cli/jobs-logs-and-metrics.md).
 - [Cloud Launcher](cloud-launcher.md)
 - [Platform Jobs and Files](../platform/cloud-jobs-and-files.md)
 - [Resources, GPUs, and Services](resources-gpus-and-services.md)
-

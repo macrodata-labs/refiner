@@ -126,10 +126,31 @@ class Worker:
                 shard = inflight_by_id.get(shard_id)
                 if shard is None:
                     return
-            with set_active_step_index(sink_step_index):
-                sink.on_shard_complete(shard_id)
-            self.user_metrics_emitter.force_flush_user_metrics()
-            self.runtime_lifecycle.complete(shard)
+            try:
+                with set_active_step_index(sink_step_index):
+                    sink.on_shard_complete(shard_id)
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError(
+                    "shard finalization failed during sink completion "
+                    f"for shard_id={shard.id}: {type(e).__name__}: "
+                    f"{str(e).strip() or type(e).__name__}"
+                ) from e
+            try:
+                self.user_metrics_emitter.force_flush_user_metrics()
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError(
+                    "shard finalization failed during user metrics flush "
+                    f"for shard_id={shard.id}: {type(e).__name__}: "
+                    f"{str(e).strip() or type(e).__name__}"
+                ) from e
+            try:
+                self.runtime_lifecycle.complete(shard)
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError(
+                    "shard finalization failed during lifecycle completion "
+                    f"for shard_id={shard.id}: {type(e).__name__}: "
+                    f"{str(e).strip() or type(e).__name__}"
+                ) from e
             try:
                 with set_active_step_index(sink_step_index):
                     sink.on_shard_finalized(shard_id)
@@ -169,6 +190,28 @@ class Worker:
                     touched.append(shard_id)
             for shard_id in touched:
                 _maybe_complete_shard(shard_id)
+
+        def _try_flush_logs(context: str) -> None:
+            try:
+                self.user_metrics_emitter.force_flush_logs()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "log flush failed during {}: {}: {}",
+                    context,
+                    type(e).__name__,
+                    e,
+                )
+
+        def _try_flush_user_metrics(context: str) -> None:
+            try:
+                self.user_metrics_emitter.force_flush_user_metrics()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "user metrics flush failed during {}: {}: {}",
+                    context,
+                    type(e).__name__,
+                    e,
+                )
 
         heartbeat_thread: threading.Thread | None = None
         if self.heartbeat_interval_seconds > 0:
@@ -288,7 +331,7 @@ class Worker:
                         len(failed_shards),
                         failed_error,
                     )
-                    self.user_metrics_emitter.force_flush_logs()
+                    _try_flush_logs("worker failure handling")
                     for shard in failed_shards:
                         logger.warning(
                             "shard failed shard_id={} global_ordinal={} error={}",
@@ -296,9 +339,9 @@ class Worker:
                             shard.global_ordinal,
                             failed_error,
                         )
-                        self.user_metrics_emitter.force_flush_logs()
+                        _try_flush_logs("shard failure reporting")
                         self.runtime_lifecycle.fail(shard, failed_error)
-                        self.user_metrics_emitter.force_flush_user_metrics()
+                        _try_flush_user_metrics("shard failure reporting")
                         failed += 1
                 else:
                     _heartbeat_once()

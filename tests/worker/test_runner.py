@@ -19,6 +19,7 @@ from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
+from refiner.worker.metrics.emitter import UserMetricsEmitter
 from refiner.worker.lifecycle import FinalizedShardWorker, sort_finalized_workers
 
 
@@ -85,7 +86,7 @@ def test_sort_finalized_workers_uses_legacy_order_when_any_ordinal_is_missing() 
     ]
 
 
-class _NoopTelemetryEmitter:
+class _NoopTelemetryEmitter(UserMetricsEmitter):
     def emit_user_counter(self, **kwargs) -> None:
         del kwargs
 
@@ -167,6 +168,11 @@ class _MetricRecordingTelemetryEmitter(_NoopTelemetryEmitter):
 class _ShutdownFailingTelemetryEmitter(_NoopTelemetryEmitter):
     def shutdown(self) -> None:
         raise RuntimeError("telemetry shutdown failed")
+
+
+class _UserMetricsFlushFailingTelemetryEmitter(_NoopTelemetryEmitter):
+    def force_flush_user_metrics(self) -> None:
+        raise RuntimeError("metrics flush timed out")
 
 
 def _run_local_worker(
@@ -440,7 +446,35 @@ def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> Non
     assert stats.failed == 1
     assert runtime_lifecycle.completed_ids == []
     assert runtime_lifecycle.failed_ids == [shard.id]
-    assert runtime_lifecycle.failed_errors == ["complete failed"]
+    assert runtime_lifecycle.failed_errors == [
+        "shard finalization failed during lifecycle completion "
+        f"for shard_id={shard.id}: RuntimeError: complete failed"
+    ]
+
+
+def test_worker_metrics_flush_errors_identify_finalization_operation() -> None:
+    shard = _shard("p", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader({shard.id: [DictRow({"x": 1})]})),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+        user_metrics_emitter=_UserMetricsFlushFailingTelemetryEmitter(),
+    )
+
+    stats = worker.run()
+
+    assert stats.claimed == 1
+    assert stats.completed == 0
+    assert stats.failed == 1
+    assert runtime_lifecycle.completed_ids == []
+    assert runtime_lifecycle.failed_ids == [shard.id]
+    assert runtime_lifecycle.failed_errors == [
+        "shard finalization failed during user metrics flush "
+        f"for shard_id={shard.id}: RuntimeError: metrics flush timed out"
+    ]
 
 
 def test_worker_completes_shards_only_after_sink_drain() -> None:
