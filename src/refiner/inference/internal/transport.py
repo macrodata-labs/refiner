@@ -18,6 +18,17 @@ _MAX_REASONABLE_RETRY_DELAY_SECONDS = 60.0
 _MAX_ERROR_BODY_CHARS = 4096
 _MAX_ERROR_STRING_CHARS = 256
 _MAX_ERROR_SEQUENCE_ITEMS = 8
+_RETRYABLE_TRANSPORT_ERRORS = (
+    ConnectionError,
+    OSError,
+    asyncio.TimeoutError,
+    httpx.ConnectError,
+    httpx.PoolTimeout,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+    httpx.NetworkError,
+    httpx.TimeoutException,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,13 +113,7 @@ async def post_json_to_api(
             if extra_headers:
                 kwargs["headers"] = dict(extra_headers)
             response = await client.post(endpoint_path, **kwargs)
-        except (
-            ConnectionError,
-            OSError,
-            asyncio.TimeoutError,
-            httpx.NetworkError,
-            httpx.TimeoutException,
-        ) as err:
+        except _RETRYABLE_TRANSPORT_ERRORS as err:
             raise InferenceAPICallError(
                 message=f"Cannot connect to API: {type(err).__name__}: {err}",
                 url=_request_url(client, endpoint_path),

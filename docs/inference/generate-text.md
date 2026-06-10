@@ -71,6 +71,25 @@ mdr.inference.generate_text(
 )
 ```
 
+## Retry Behavior
+
+Provider calls retry transient transport failures and retryable HTTP responses
+before failing the row. By default, Refiner retries twice after the first failed
+attempt with exponential backoff.
+
+Retried transport failures include remote disconnects, read timeouts, connect
+errors, and connection-pool timeouts. Retryable HTTP responses include `408`,
+`409`, `429`, and `5xx`.
+
+Override retries for a specific call with `__refiner_max_retries`:
+
+```python
+await generate_text(
+    messages=[{"role": "user", "content": "Summarize the episode."}],
+    __refiner_max_retries=0,
+)
+```
+
 ## Related Pages
 
 - [Multimodal and Structured Output](multimodal-and-structured-output.md)

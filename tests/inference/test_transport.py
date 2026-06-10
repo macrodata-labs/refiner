@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import cast
 
 import httpx
@@ -224,6 +224,76 @@ def test_openai_endpoint_retries_on_connect_error(monkeypatch) -> None:
 
     assert response.text == "ok"
     assert seen == {"calls": 2, "sleeps": 1}
+
+
+@pytest.mark.parametrize(
+    "error_factory",
+    [
+        lambda: httpx.RemoteProtocolError(
+            "Server disconnected without sending a response."
+        ),
+        lambda: httpx.ReadTimeout("The read operation timed out"),
+        lambda: httpx.ConnectError("connect failed"),
+        lambda: httpx.PoolTimeout("connection pool exhausted"),
+    ],
+    ids=[
+        "remote-protocol-error",
+        "read-timeout",
+        "connect-error",
+        "pool-timeout",
+    ],
+)
+def test_openai_endpoint_retries_on_retryable_transport_errors(
+    monkeypatch,
+    error_factory: Callable[[], httpx.HTTPError],
+) -> None:
+    seen: dict[str, object] = {"calls": 0, "sleeps": []}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {"content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {},
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *, base_url, headers, timeout):
+            del base_url, headers, timeout
+
+        async def post(self, path, *, json):
+            del path, json
+            seen["calls"] = cast(int, seen["calls"]) + 1
+            if seen["calls"] == 1:
+                raise error_factory()
+            return _FakeResponse()
+
+    async def _fake_sleep(delay: float) -> None:
+        cast(list[float], seen["sleeps"]).append(delay)
+
+    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(transport_module.asyncio, "sleep", _fake_sleep)
+
+    response = asyncio.run(
+        openai_provider._OpenAIEndpointClient(
+            base_url="https://api.example.com",
+        ).generate(
+            {
+                "model": "gpt-test",
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        )
+    )
+
+    assert response.text == "ok"
+    assert seen == {"calls": 2, "sleeps": [2.0]}
 
 
 def test_openai_endpoint_warns_on_null_chat_content(caplog) -> None:
