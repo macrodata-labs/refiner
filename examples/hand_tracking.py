@@ -7,8 +7,23 @@ import refiner as mdr
 
 INPUT_DATASET = "toloka/HomER"
 OUTPUT_ROOT = "hf://buckets/macrodata/test_bucket/homer-hand-tracking"
+MAX_EXAMPLES = 2
 RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 OUTPUT_DATASET = f"{OUTPUT_ROOT}/{RUN_ID}"
+
+
+def first_examples(limit: int):
+    seen = 0
+
+    def keep(row: Any) -> bool:
+        nonlocal seen
+        del row
+        if seen >= limit:
+            return False
+        seen += 1
+        return True
+
+    return keep
 
 
 def hand_tracking_annotation(row: Any) -> dict[str, Any]:
@@ -31,6 +46,7 @@ def hand_tracking_annotation(row: Any) -> dict[str, Any]:
         columns_to_read=("video_id", "video_url", "description"),
         dtypes={"video_url": mdr.datatype.video_path()},
     )
+    .filter(first_examples(MAX_EXAMPLES))
     .to_robot_rows(
         episode_id_key="video_id",
         task_key="description",
