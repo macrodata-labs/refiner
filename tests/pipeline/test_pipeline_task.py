@@ -28,6 +28,16 @@ def test_task_wraps_scalar_return_as_result() -> None:
     assert [int(row["result"]) for row in out] == [0, 1, 2]
 
 
+def test_task_treats_binary_buffers_as_scalar_results() -> None:
+    for value in (bytearray(b"ok"), memoryview(b"ok")):
+        pipeline = task(lambda _rank, _world_size, value=value: value, num_tasks=1)
+
+        out = list(pipeline.iter_rows())
+
+        assert len(out) == 1
+        assert out[0]["result"] == value
+
+
 def test_task_allows_no_return_for_side_effect_only_work() -> None:
     seen: list[int] = []
 

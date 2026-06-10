@@ -1496,7 +1496,9 @@ def task(
         if isinstance(result, Mapping):
             yield dict(result)
             return
-        if isinstance(result, Iterable) and not isinstance(result, (str, bytes)):
+        if isinstance(result, Iterable) and not isinstance(
+            result, (str, bytes, bytearray, memoryview)
+        ):
             for item in result:
                 if isinstance(item, Row):
                     yield item
