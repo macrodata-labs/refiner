@@ -114,10 +114,6 @@ def _http_error_message(resp: httpx.Response) -> str:
     return sanitize_terminal_text(resp.reason_phrase or "HTTP error")
 
 
-def _is_retryable_api_error(err: MacrodataApiError) -> bool:
-    return err.status == 0 or err.status in {408, 425, 429} or err.status >= 500
-
-
 def request_json(
     *,
     method: str,
@@ -229,7 +225,11 @@ class MacrodataClient:
                     timeout_s=timeout_s,
                 )
             except MacrodataApiError as err:
-                if attempt_index == attempts - 1 or not _is_retryable_api_error(err):
+                if attempt_index == attempts - 1 or not (
+                    err.status == 0
+                    or err.status in {408, 425, 429}
+                    or err.status >= 500
+                ):
                     raise
                 time.sleep(retry_initial_delay_s * (2**attempt_index))
         raise AssertionError("unreachable lifecycle request retry state")
