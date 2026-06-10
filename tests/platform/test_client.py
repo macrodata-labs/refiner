@@ -81,9 +81,7 @@ def test_lifecycle_request_retries_transient_errors_with_backoff(monkeypatch) ->
     def fake_request_json(**kwargs: object) -> dict[str, object]:
         calls.append(str(kwargs["path"]))
         if len(calls) < 4:
-            raise MacrodataApiError(
-                0, "POST /api/jobs/job-1/stages/2/heartbeat timed out"
-            )
+            raise MacrodataApiError(0, "The read operation timed out")
         return {"stage": {"job_id": "job-1", "index": 2, "status": "running"}}
 
     monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)

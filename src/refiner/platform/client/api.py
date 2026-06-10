@@ -4,7 +4,7 @@ import importlib.metadata
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 from urllib.parse import quote, urlencode
 
 import httpx
@@ -104,14 +104,6 @@ def _http_error_message(resp: httpx.Response) -> str:
     return sanitize_terminal_text(resp.reason_phrase or "HTTP error")
 
 
-def _request_error_message(
-    err: httpx.RequestError, *, method: str, path: str, timeout_s: float
-) -> str:
-    action = "timed out" if isinstance(err, httpx.TimeoutException) else "failed"
-    detail = sanitize_terminal_text(str(err).strip() or type(err).__name__)
-    return f"{method.upper()} {path} {action} after {timeout_s:g}s: {detail}"
-
-
 def _is_retryable_api_error(err: MacrodataApiError) -> bool:
     return err.status == 0 or err.status in {408, 425, 429} or err.status >= 500
 
@@ -148,12 +140,7 @@ def request_json(
                 timeout=timeout_s,
             )
     except httpx.RequestError as err:
-        raise MacrodataApiError(
-            status=0,
-            message=_request_error_message(
-                err, method=method, path=path, timeout_s=timeout_s
-            ),
-        ) from err
+        raise MacrodataApiError(status=0, message=str(err)) from err
 
     if resp.is_error:
         if resp.status_code == 401:
@@ -207,7 +194,6 @@ class MacrodataClient:
         timeout_s: float = 10.0,
         retry_attempts: int = 1,
         retry_initial_delay_s: float = LIFECYCLE_RETRY_INITIAL_DELAY_S,
-        sleep_fn: Callable[[float], None] | None = None,
     ) -> dict[str, Any]:
         resolved_path = path
         if query_params:
@@ -220,7 +206,6 @@ class MacrodataClient:
                 encoded = urlencode(filtered_params, doseq=True)
                 resolved_path = f"{path}?{encoded}"
         attempts = max(1, retry_attempts)
-        resolved_sleep = time.sleep if sleep_fn is None else sleep_fn
         for attempt_index in range(attempts):
             try:
                 return request_json(
@@ -234,7 +219,7 @@ class MacrodataClient:
             except MacrodataApiError as err:
                 if attempt_index == attempts - 1 or not _is_retryable_api_error(err):
                     raise
-                resolved_sleep(retry_initial_delay_s * (2**attempt_index))
+                time.sleep(retry_initial_delay_s * (2**attempt_index))
         raise AssertionError("unreachable lifecycle request retry state")
 
     def _request(
@@ -248,7 +233,6 @@ class MacrodataClient:
         timeout_s: float = 10.0,
         retry_attempts: int = 1,
         retry_initial_delay_s: float = LIFECYCLE_RETRY_INITIAL_DELAY_S,
-        sleep_fn: Callable[[float], None] | None = None,
     ) -> T:
         response_data = self._request_raw(
             method=method,
@@ -258,7 +242,6 @@ class MacrodataClient:
             timeout_s=timeout_s,
             retry_attempts=retry_attempts,
             retry_initial_delay_s=retry_initial_delay_s,
-            sleep_fn=sleep_fn,
         )
         try:
             return msgspec.convert(response_data, type=response_type, strict=True)
@@ -391,15 +374,7 @@ class MacrodataClient:
                 timeout=timeout_s,
             )
         except httpx.RequestError as err:
-            raise MacrodataApiError(
-                status=0,
-                message=_request_error_message(
-                    err,
-                    method="PUT",
-                    path="/cloud-file-upload",
-                    timeout_s=timeout_s,
-                ),
-            ) from err
+            raise MacrodataApiError(status=0, message=str(err)) from err
         if response.status_code < 200 or response.status_code >= 300:
             raise MacrodataApiError(
                 status=response.status_code,
