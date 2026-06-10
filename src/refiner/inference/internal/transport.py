@@ -18,12 +18,6 @@ _MAX_REASONABLE_RETRY_DELAY_SECONDS = 60.0
 _MAX_ERROR_BODY_CHARS = 4096
 _MAX_ERROR_STRING_CHARS = 256
 _MAX_ERROR_SEQUENCE_ITEMS = 8
-_RETRYABLE_TRANSPORT_ERRORS = (
-    aiohttp.ClientError,
-    ConnectionError,
-    OSError,
-    asyncio.TimeoutError,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,7 +163,12 @@ async def post_json_to_api(
                 request_body=dict(payload),
                 operation=operation,
             )
-        except _RETRYABLE_TRANSPORT_ERRORS as err:
+        except (
+            aiohttp.ClientError,
+            ConnectionError,
+            OSError,
+            asyncio.TimeoutError,
+        ) as err:
             raise InferenceAPICallError(
                 message=f"Cannot connect to API: {type(err).__name__}: {err}",
                 url=request_url,
