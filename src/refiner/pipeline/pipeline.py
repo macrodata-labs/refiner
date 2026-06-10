@@ -23,7 +23,6 @@ from refiner.pipeline.steps import (
     FnRowStep,
     FnTableStep,
     MapFn,
-    MapResult,
     RenameStep,
     RefinerStep,
     SelectStep,
@@ -50,7 +49,7 @@ from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
-from refiner.pipeline.sources.task import TaskSource
+from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
@@ -1484,36 +1483,7 @@ def task(
     integer rank in ``range(num_tasks)``. This is useful for jobs that perform
     side effects or generate work without reading an input dataset.
     """
-
-    def apply_task(row: Row) -> Iterator[MapResult]:
-        result = fn(row["task_rank"], num_tasks)
-
-        if result is None:
-            return
-        if isinstance(result, Row):
-            yield result
-            return
-        if isinstance(result, Mapping):
-            yield dict(result)
-            return
-        if isinstance(result, Iterable) and not isinstance(
-            result, (str, bytes, bytearray, memoryview)
-        ):
-            for item in result:
-                if isinstance(item, Row):
-                    yield item
-                elif isinstance(item, Mapping):
-                    yield dict(item)
-                else:
-                    yield {"result": item}
-            return
-        yield {"result": result}
-
     source = TaskSource(num_tasks=num_tasks)
     return RefinerPipeline(source=source).add_step(
-        FnFlatMapStep(
-            fn=apply_task,
-            index=1,
-            op_name="task",
-        )
+        TaskStep(fn=fn, num_tasks=num_tasks, index=1)
     )

@@ -22,6 +22,7 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
+from refiner.pipeline.sources.task import TaskStep
 from refiner.pipeline.data.datatype import dtype_to_plan
 from refiner.pipeline.resources import GPU
 from refiner.platform.manifest import _redact_captured_text
@@ -156,7 +157,7 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             "filter",
             _callable_step_args(step.predicate),
         )
-    if isinstance(step, FnFlatMapStep):
+    if isinstance(step, FnFlatMapStep | TaskStep):
         inferred_name = (
             explicit_name
             if explicit_name and explicit_name != "flat_map"

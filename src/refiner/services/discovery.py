@@ -11,6 +11,7 @@ from refiner.pipeline.steps import (
     FnRowStep,
     FnTableStep,
 )
+from refiner.pipeline.sources.task import TaskStep
 from refiner.services.base import RuntimeServiceSpec
 
 if TYPE_CHECKING:
@@ -49,7 +50,13 @@ def collect_pipeline_services(
     for step in pipeline.pipeline_steps:
         candidates: list[Any] = []
         if isinstance(
-            step, FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep
+            step,
+            FnRowStep
+            | FnAsyncRowStep
+            | FnBatchStep
+            | FnFlatMapStep
+            | TaskStep
+            | FnTableStep,
         ):
             candidates.append(step.fn)
 
