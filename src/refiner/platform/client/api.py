@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, TypeVar
 from urllib.parse import quote, urlencode
@@ -36,6 +37,8 @@ except importlib.metadata.PackageNotFoundError:
 _USER_AGENT = (
     f"macrodata-refiner/{_REFINER_VERSION}" if _REFINER_VERSION else "macrodata-refiner"
 )
+LIFECYCLE_REQUEST_ATTEMPTS = 4
+LIFECYCLE_RETRY_INITIAL_DELAY_S = 0.25
 
 
 def sanitize_terminal_text(value: str) -> str:
@@ -61,21 +64,31 @@ def resolve_platform_base_url() -> str:
 class MacrodataApiError(Exception):
     status: int
     message: str
+    url: str | None = None
 
     def __str__(self) -> str:
-        return f"HTTP {self.status}: {self.message}"
+        error = f"HTTP {self.status}: {self.message}"
+        return (
+            f"{error} (url: {sanitize_terminal_text(self.url)})" if self.url else error
+        )
 
 
-def _decode_json_object(resp: httpx.Response, *, context: str) -> dict[str, Any]:
+def _decode_json_object(
+    resp: httpx.Response, *, context: str, url: str | None = None
+) -> dict[str, Any]:
     try:
         payload = resp.json()
     except ValueError as err:
         raise MacrodataApiError(
-            status=resp.status_code, message=f"Invalid JSON from {context}"
+            status=resp.status_code,
+            message=f"Invalid JSON from {context}",
+            url=url,
         ) from err
     if not isinstance(payload, dict):
         raise MacrodataApiError(
-            status=resp.status_code, message=f"Unexpected response from {context}"
+            status=resp.status_code,
+            message=f"Unexpected response from {context}",
+            url=url,
         )
     return payload
 
@@ -133,7 +146,7 @@ def request_json(
                 timeout=timeout_s,
             )
     except httpx.RequestError as err:
-        raise MacrodataApiError(status=0, message=str(err)) from err
+        raise MacrodataApiError(status=0, message=str(err), url=url) from err
 
     if resp.is_error:
         if resp.status_code == 401:
@@ -142,10 +155,12 @@ def request_json(
                 missing=False,
             )
         raise MacrodataApiError(
-            status=resp.status_code, message=_http_error_message(resp)
+            status=resp.status_code,
+            message=_http_error_message(resp),
+            url=url,
         )
 
-    return _decode_json_object(resp, context=path)
+    return _decode_json_object(resp, context=path, url=url)
 
 
 def verify_api_key(
@@ -185,6 +200,8 @@ class MacrodataClient:
         query_params: dict[str, Any] | None = None,
         json_payload: dict[str, Any] | None = None,
         timeout_s: float = 10.0,
+        retry_attempts: int = LIFECYCLE_REQUEST_ATTEMPTS,
+        retry_initial_delay_s: float = LIFECYCLE_RETRY_INITIAL_DELAY_S,
     ) -> dict[str, Any]:
         resolved_path = path
         if query_params:
@@ -196,14 +213,26 @@ class MacrodataClient:
             if filtered_params:
                 encoded = urlencode(filtered_params, doseq=True)
                 resolved_path = f"{path}?{encoded}"
-        return request_json(
-            method=method,
-            path=resolved_path,
-            base_url=self.base_url,
-            http_client=self._http_client,
-            json_payload=json_payload,
-            timeout_s=timeout_s,
-        )
+        attempts = max(1, retry_attempts)
+        for attempt_index in range(attempts):
+            try:
+                return request_json(
+                    method=method,
+                    path=resolved_path,
+                    base_url=self.base_url,
+                    http_client=self._http_client,
+                    json_payload=json_payload,
+                    timeout_s=timeout_s,
+                )
+            except MacrodataApiError as err:
+                if attempt_index == attempts - 1 or not (
+                    err.status == 0
+                    or err.status in {408, 425, 429}
+                    or err.status >= 500
+                ):
+                    raise
+                time.sleep(retry_initial_delay_s * (2**attempt_index))
+        raise AssertionError("unreachable lifecycle request retry state")
 
     def _request(
         self,
@@ -214,6 +243,8 @@ class MacrodataClient:
         query_params: dict[str, Any] | None = None,
         json_payload: dict[str, Any] | None = None,
         timeout_s: float = 10.0,
+        retry_attempts: int = LIFECYCLE_REQUEST_ATTEMPTS,
+        retry_initial_delay_s: float = LIFECYCLE_RETRY_INITIAL_DELAY_S,
     ) -> T:
         response_data = self._request_raw(
             method=method,
@@ -221,6 +252,8 @@ class MacrodataClient:
             query_params=query_params,
             json_payload=json_payload,
             timeout_s=timeout_s,
+            retry_attempts=retry_attempts,
+            retry_initial_delay_s=retry_initial_delay_s,
         )
         try:
             return msgspec.convert(response_data, type=response_type, strict=True)
