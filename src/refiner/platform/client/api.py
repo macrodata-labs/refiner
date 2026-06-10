@@ -64,21 +64,31 @@ def resolve_platform_base_url() -> str:
 class MacrodataApiError(Exception):
     status: int
     message: str
+    url: str | None = None
 
     def __str__(self) -> str:
-        return f"HTTP {self.status}: {self.message}"
+        error = f"HTTP {self.status}: {self.message}"
+        return (
+            f"{error} (url: {sanitize_terminal_text(self.url)})" if self.url else error
+        )
 
 
-def _decode_json_object(resp: httpx.Response, *, context: str) -> dict[str, Any]:
+def _decode_json_object(
+    resp: httpx.Response, *, context: str, url: str | None = None
+) -> dict[str, Any]:
     try:
         payload = resp.json()
     except ValueError as err:
         raise MacrodataApiError(
-            status=resp.status_code, message=f"Invalid JSON from {context}"
+            status=resp.status_code,
+            message=f"Invalid JSON from {context}",
+            url=url,
         ) from err
     if not isinstance(payload, dict):
         raise MacrodataApiError(
-            status=resp.status_code, message=f"Unexpected response from {context}"
+            status=resp.status_code,
+            message=f"Unexpected response from {context}",
+            url=url,
         )
     return payload
 
@@ -140,7 +150,7 @@ def request_json(
                 timeout=timeout_s,
             )
     except httpx.RequestError as err:
-        raise MacrodataApiError(status=0, message=str(err)) from err
+        raise MacrodataApiError(status=0, message=str(err), url=url) from err
 
     if resp.is_error:
         if resp.status_code == 401:
@@ -149,10 +159,12 @@ def request_json(
                 missing=False,
             )
         raise MacrodataApiError(
-            status=resp.status_code, message=_http_error_message(resp)
+            status=resp.status_code,
+            message=_http_error_message(resp),
+            url=url,
         )
 
-    return _decode_json_object(resp, context=path)
+    return _decode_json_object(resp, context=path, url=url)
 
 
 def verify_api_key(

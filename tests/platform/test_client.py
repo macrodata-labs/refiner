@@ -128,6 +128,30 @@ def test_lifecycle_request_retries_httpx_timeouts(monkeypatch) -> None:
     assert sleeps == [0.25, 0.5, 1.0]
 
 
+def test_lifecycle_request_timeout_error_reports_url(monkeypatch) -> None:
+    sleeps: list[float] = []
+
+    def fake_http_request(method: str, url: str, **kwargs: object) -> httpx.Response:
+        del method, url, kwargs
+        raise httpx.ReadTimeout("The read operation timed out")
+
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", sleeps.append)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    monkeypatch.setattr(client._http_client, "request", fake_http_request)
+
+    with pytest.raises(MacrodataApiError) as exc:
+        client.report_stage_heartbeat(job_id="job-1", stage_index=2)
+
+    assert exc.value.status == 0
+    assert exc.value.url == "https://example.com/api/jobs/job-1/stages/2/heartbeat"
+    assert (
+        str(exc.value) == "HTTP 0: The read operation timed out "
+        "(url: https://example.com/api/jobs/job-1/stages/2/heartbeat)"
+    )
+    assert sleeps == [0.25, 0.5, 1.0]
+
+
 def test_lifecycle_request_does_not_retry_conflicts(monkeypatch) -> None:
     calls = 0
     sleeps: list[float] = []
