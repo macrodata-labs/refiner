@@ -28,11 +28,6 @@ pipeline = pipeline.map_async(
 Use `max_in_flight` to match provider rate limits, memory limits, or open file
 limits.
 
-The `rows_processed` counter for a `map_async` step increments when an async
-call finishes successfully and its output row leaves the async window. Rows that
-are only queued in the window, still in flight, or failed are not counted as
-processed.
-
 ## Inference helpers
 
 Most model calls should use Refiner's inference helpers instead of calling an
