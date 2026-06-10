@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from refiner.platform.auth import MacrodataCredentialsError
-from refiner.platform.client import MacrodataClient
+from refiner.platform.client import MacrodataApiError, MacrodataClient
 
 
 def test_create_job_treats_whitespace_workspace_slug_as_none(
@@ -71,6 +72,83 @@ def test_report_stage_heartbeat_posts_to_stage_heartbeat_route(monkeypatch) -> N
     assert captured["path"] == "/api/jobs/job-1/stages/2/heartbeat"
     assert captured["json_payload"] == {}
     assert response.stage.status == "running"
+
+
+def test_lifecycle_request_retries_transient_errors_with_backoff(monkeypatch) -> None:
+    calls: list[str] = []
+    sleeps: list[float] = []
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        calls.append(str(kwargs["path"]))
+        if len(calls) < 4:
+            raise MacrodataApiError(
+                0, "POST /api/jobs/job-1/stages/2/heartbeat timed out"
+            )
+        return {"stage": {"job_id": "job-1", "index": 2, "status": "running"}}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", sleeps.append)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    response = client.report_stage_heartbeat(job_id="job-1", stage_index=2)
+
+    assert response.stage.status == "running"
+    assert calls == [
+        "/api/jobs/job-1/stages/2/heartbeat",
+        "/api/jobs/job-1/stages/2/heartbeat",
+        "/api/jobs/job-1/stages/2/heartbeat",
+        "/api/jobs/job-1/stages/2/heartbeat",
+    ]
+    assert sleeps == [0.25, 0.5, 1.0]
+
+
+def test_lifecycle_request_retries_httpx_timeouts(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_http_request(method: str, url: str, **kwargs: object) -> httpx.Response:
+        nonlocal calls
+        del kwargs
+        calls += 1
+        if calls < 4:
+            raise httpx.ReadTimeout("The read operation timed out")
+        return httpx.Response(
+            200,
+            json={"stage": {"job_id": "job-1", "index": 2, "status": "running"}},
+            request=httpx.Request(method, url),
+        )
+
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", sleeps.append)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    monkeypatch.setattr(client._http_client, "request", fake_http_request)
+
+    response = client.report_stage_heartbeat(job_id="job-1", stage_index=2)
+
+    assert response.stage.status == "running"
+    assert calls == 4
+    assert sleeps == [0.25, 0.5, 1.0]
+
+
+def test_lifecycle_request_does_not_retry_conflicts(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        del kwargs
+        calls += 1
+        raise MacrodataApiError(409, "Worker already finished")
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", sleeps.append)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    with pytest.raises(MacrodataApiError, match="Worker already finished"):
+        client.report_stage_finished(job_id="job-1", stage_index=2, status="failed")
+
+    assert calls == 1
+    assert sleeps == []
 
 
 def test_cli_list_jobs_omits_me_when_false(monkeypatch) -> None:

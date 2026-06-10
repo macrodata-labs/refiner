@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
+import time
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, Callable, TypeVar
 from urllib.parse import quote, urlencode
 
 import httpx
@@ -36,6 +37,8 @@ except importlib.metadata.PackageNotFoundError:
 _USER_AGENT = (
     f"macrodata-refiner/{_REFINER_VERSION}" if _REFINER_VERSION else "macrodata-refiner"
 )
+LIFECYCLE_REQUEST_ATTEMPTS = 4
+LIFECYCLE_RETRY_INITIAL_DELAY_S = 0.25
 
 
 def sanitize_terminal_text(value: str) -> str:
@@ -107,6 +110,10 @@ def _request_error_message(
     action = "timed out" if isinstance(err, httpx.TimeoutException) else "failed"
     detail = sanitize_terminal_text(str(err).strip() or type(err).__name__)
     return f"{method.upper()} {path} {action} after {timeout_s:g}s: {detail}"
+
+
+def _is_retryable_api_error(err: MacrodataApiError) -> bool:
+    return err.status == 0 or err.status in {408, 425, 429} or err.status >= 500
 
 
 def request_json(
@@ -198,6 +205,9 @@ class MacrodataClient:
         query_params: dict[str, Any] | None = None,
         json_payload: dict[str, Any] | None = None,
         timeout_s: float = 10.0,
+        retry_attempts: int = 1,
+        retry_initial_delay_s: float = LIFECYCLE_RETRY_INITIAL_DELAY_S,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> dict[str, Any]:
         resolved_path = path
         if query_params:
@@ -209,14 +219,23 @@ class MacrodataClient:
             if filtered_params:
                 encoded = urlencode(filtered_params, doseq=True)
                 resolved_path = f"{path}?{encoded}"
-        return request_json(
-            method=method,
-            path=resolved_path,
-            base_url=self.base_url,
-            http_client=self._http_client,
-            json_payload=json_payload,
-            timeout_s=timeout_s,
-        )
+        attempts = max(1, retry_attempts)
+        resolved_sleep = time.sleep if sleep_fn is None else sleep_fn
+        for attempt_index in range(attempts):
+            try:
+                return request_json(
+                    method=method,
+                    path=resolved_path,
+                    base_url=self.base_url,
+                    http_client=self._http_client,
+                    json_payload=json_payload,
+                    timeout_s=timeout_s,
+                )
+            except MacrodataApiError as err:
+                if attempt_index == attempts - 1 or not _is_retryable_api_error(err):
+                    raise
+                resolved_sleep(retry_initial_delay_s * (2**attempt_index))
+        raise AssertionError("unreachable lifecycle request retry state")
 
     def _request(
         self,
@@ -227,6 +246,9 @@ class MacrodataClient:
         query_params: dict[str, Any] | None = None,
         json_payload: dict[str, Any] | None = None,
         timeout_s: float = 10.0,
+        retry_attempts: int = 1,
+        retry_initial_delay_s: float = LIFECYCLE_RETRY_INITIAL_DELAY_S,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> T:
         response_data = self._request_raw(
             method=method,
@@ -234,6 +256,9 @@ class MacrodataClient:
             query_params=query_params,
             json_payload=json_payload,
             timeout_s=timeout_s,
+            retry_attempts=retry_attempts,
+            retry_initial_delay_s=retry_initial_delay_s,
+            sleep_fn=sleep_fn,
         )
         try:
             return msgspec.convert(response_data, type=response_type, strict=True)
@@ -279,6 +304,7 @@ class MacrodataClient:
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/start",
             response_type=StageLifecycleResponse,
+            retry_attempts=LIFECYCLE_REQUEST_ATTEMPTS,
         )
 
     def report_stage_finished(
@@ -297,6 +323,7 @@ class MacrodataClient:
             path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
             response_type=StageLifecycleResponse,
             json_payload=payload,
+            retry_attempts=LIFECYCLE_REQUEST_ATTEMPTS,
         )
 
     def report_stage_heartbeat(
@@ -310,6 +337,7 @@ class MacrodataClient:
             path=f"/api/jobs/{job_id}/stages/{stage_index}/heartbeat",
             response_type=StageLifecycleResponse,
             json_payload={},
+            retry_attempts=LIFECYCLE_REQUEST_ATTEMPTS,
         )
 
     def cloud_submit_job(

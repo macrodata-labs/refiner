@@ -47,7 +47,9 @@ Worker failure logs include the operation that failed when a shard is being
 finalized. For example, finalization errors distinguish sink completion, user
 metrics flush, and shard lifecycle completion. Platform request timeouts include
 the HTTP method, API path, and timeout duration so you can tell which API call
-did not return.
+did not return. Stage, worker, and shard lifecycle reports retry transient
+platform errors up to three times with exponential backoff before the worker
+treats the report as failed.
 
 ## CLI Inspection
 
