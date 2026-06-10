@@ -204,7 +204,7 @@ class MacrodataClient:
         query_params: dict[str, Any] | None = None,
         json_payload: dict[str, Any] | None = None,
         timeout_s: float = 10.0,
-        retry_attempts: int = 1,
+        retry_attempts: int = LIFECYCLE_REQUEST_ATTEMPTS,
         retry_initial_delay_s: float = LIFECYCLE_RETRY_INITIAL_DELAY_S,
     ) -> dict[str, Any]:
         resolved_path = path
@@ -243,7 +243,7 @@ class MacrodataClient:
         query_params: dict[str, Any] | None = None,
         json_payload: dict[str, Any] | None = None,
         timeout_s: float = 10.0,
-        retry_attempts: int = 1,
+        retry_attempts: int = LIFECYCLE_REQUEST_ATTEMPTS,
         retry_initial_delay_s: float = LIFECYCLE_RETRY_INITIAL_DELAY_S,
     ) -> T:
         response_data = self._request_raw(
@@ -299,7 +299,6 @@ class MacrodataClient:
             method="POST",
             path=f"/api/jobs/{job_id}/stages/{stage_index}/start",
             response_type=StageLifecycleResponse,
-            retry_attempts=LIFECYCLE_REQUEST_ATTEMPTS,
         )
 
     def report_stage_finished(
@@ -318,7 +317,6 @@ class MacrodataClient:
             path=f"/api/jobs/{job_id}/stages/{stage_index}/finish",
             response_type=StageLifecycleResponse,
             json_payload=payload,
-            retry_attempts=LIFECYCLE_REQUEST_ATTEMPTS,
         )
 
     def report_stage_heartbeat(
@@ -332,7 +330,6 @@ class MacrodataClient:
             path=f"/api/jobs/{job_id}/stages/{stage_index}/heartbeat",
             response_type=StageLifecycleResponse,
             json_payload={},
-            retry_attempts=LIFECYCLE_REQUEST_ATTEMPTS,
         )
 
     def cloud_submit_job(
