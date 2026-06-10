@@ -1,14 +1,14 @@
 ---
-title: "HDF5 Reader"
+title: "HDF5 reader"
 description: "Read HDF5 robotics datasets and convert them into episode rows"
 ---
 
-# HDF5 Reader
+# HDF5 reader
 
 Use `read_hdf5` for robotics datasets stored as HDF5 files, including ALOHA-like
 files and robomimic-style grouped demonstrations.
 
-## One File Per Episode
+## One file per episode
 
 ALOHA-style data often stores one episode per HDF5 file:
 
@@ -40,7 +40,7 @@ pipeline = (
 `datasets` maps output column names to HDF5 dataset paths relative to the
 matched group.
 
-## Grouped Demonstrations
+## Grouped demonstrations
 
 robomimic-style files often store many demos in one file:
 
@@ -68,7 +68,7 @@ pipeline = (
 
 `groups` can be a single glob string or exact group paths.
 
-## Missing Data Policy
+## Missing data policy
 
 ```python
 pipeline = mdr.read_hdf5(
@@ -84,9 +84,9 @@ pipeline = mdr.read_hdf5(
 | `"drop_row"` | Skip rows with missing selected values. |
 | `"set_null"` | Emit `None` for missing selected values. |
 
-## Related Pages
+## Related pages
 
 - [Converting to Robot Rows](../episode-data/converting-to-robot-rows.md)
-- [HDF5 Conversion Example](../examples/aloha-hdf5.md)
+- [HDF5 Conversion Example](../examples/formats/aloha-hdf5.md)
 - [Zarr Reader](zarr.md)
 

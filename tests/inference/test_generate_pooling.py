@@ -14,7 +14,7 @@ def test_generate_pooling_calls_vllm_pooling_endpoint(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
     async def _fake_pooling(self, payload):
-        del self
+        seen["max_connections"] = self.max_connections
         seen["payload"] = dict(payload)
         return {"data": [[1.0, 2.0, 3.0]]}
 
@@ -44,6 +44,7 @@ def test_generate_pooling_calls_vllm_pooling_endpoint(monkeypatch) -> None:
     infer = mdr.inference.generate_pooling(
         fn=_map,
         provider=mdr.inference.VLLMProvider(model="robometer-test"),
+        max_concurrent_requests=512,
     )
 
     result = asyncio.run(cast(Any, infer(DictRow({"text": "open the drawer"}))))
@@ -54,3 +55,4 @@ def test_generate_pooling_calls_vllm_pooling_endpoint(monkeypatch) -> None:
         "task": "token_classify",
         "messages": [{"role": "user", "content": "open the drawer"}],
     }
+    assert seen["max_connections"] == 512

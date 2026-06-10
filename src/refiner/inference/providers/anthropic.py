@@ -6,8 +6,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-import httpx
-
 from refiner.inference.internal.media import (
     base64_data,
     is_url,
@@ -25,6 +23,7 @@ from refiner.inference.internal.response import (
     _text_from_content,
 )
 from refiner.inference.internal.transport import (
+    AiohttpAPIClient,
     post_json_to_api,
     provider_request_options,
 )
@@ -64,7 +63,8 @@ class _AnthropicEndpointClient:
     api_key: str | None = None
     anthropic_version: str = "2023-06-01"
     headers: Mapping[str, str] | None = None
-    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    max_connections: int | None = None
+    _client: AiohttpAPIClient | None = field(default=None, init=False, repr=False)
     _resolved_headers: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -79,16 +79,23 @@ class _AnthropicEndpointClient:
         headers["anthropic-version"] = self.anthropic_version
         self._resolved_headers = headers
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    def _ensure_client(self) -> AiohttpAPIClient:
         client = self._client
         if client is None:
-            client = httpx.AsyncClient(
+            client = AiohttpAPIClient(
                 base_url=self.base_url.rstrip("/"),
                 headers=self._resolved_headers,
-                timeout=_ENDPOINT_TIMEOUT_SECONDS,
+                timeout_s=_ENDPOINT_TIMEOUT_SECONDS,
+                max_connections=self.max_connections,
             )
             self._client = client
         return client
+
+    async def close(self) -> None:
+        client = self._client
+        if client is not None:
+            self._client = None
+            await client.close()
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
         request_payload, max_retries, extra_headers = provider_request_options(payload)
@@ -150,7 +157,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"AnthropicEndpointProvider model {model!r} is not known to support "
                 "adaptive thinking.",
-                setting="providerOptions.anthropic.thinking",
+                setting="provider_options.anthropic.thinking",
                 details="AI SDK only enables adaptive thinking for Claude 4.6+ model families.",
             )
         )
@@ -160,7 +167,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"AnthropicEndpointProvider model {model!r} is not known to support "
                 "xhigh effort.",
-                setting="providerOptions.anthropic.effort",
+                setting="provider_options.anthropic.effort",
                 details="AI SDK only enables xhigh effort for Claude Opus 4.7+.",
             )
         )
@@ -438,7 +445,7 @@ def _convert_anthropic_user_part(part: Mapping[str, Any], index: int) -> dict[st
         }
     else:
         raise ValueError(f"anthropic file part media type {media_type} is unsupported")
-    anthropic_options = _provider_options(part.get("providerOptions"), "anthropic")
+    anthropic_options = _provider_options(part.get("provider_options"), "anthropic")
     if isinstance(anthropic_options.get("context"), str):
         payload["context"] = anthropic_options["context"]
     citations = anthropic_options.get("citations")
@@ -466,7 +473,7 @@ def _convert_anthropic_assistant_content(content: object) -> list[dict[str, Any]
         elif part_type == "reasoning" and isinstance(part_text, str):
             thinking_part = {"type": "thinking", "thinking": part_text}
             anthropic_options = _provider_options(
-                part.get("providerOptions"),
+                part.get("provider_options"),
                 "anthropic",
             )
             signature = anthropic_options.get("signature")
@@ -510,7 +517,7 @@ def _anthropic_text_source(data: object) -> dict[str, Any]:
 
 
 def _anthropic_file_title(part: Mapping[str, Any], index: int) -> str | None:
-    anthropic_options = _provider_options(part.get("providerOptions"), "anthropic")
+    anthropic_options = _provider_options(part.get("provider_options"), "anthropic")
     title = anthropic_options.get("title")
     if isinstance(title, str):
         return title
@@ -521,7 +528,7 @@ def _anthropic_file_title(part: Mapping[str, Any], index: int) -> str | None:
 
 
 def _anthropic_cache_control(part: Mapping[str, Any]) -> object:
-    anthropic_options = _provider_options(part.get("providerOptions"), "anthropic")
+    anthropic_options = _provider_options(part.get("provider_options"), "anthropic")
     return anthropic_options.get("cacheControl")
 
 

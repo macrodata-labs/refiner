@@ -180,7 +180,7 @@ def test_inference_generate_text_converts_google_assistant_multimodal_history(
                             "type": "file",
                             "mediaType": "image",
                             "data": row["image"],
-                            "providerOptions": {
+                            "provider_options": {
                                 "google": {"thoughtSignature": "image-sig"}
                             },
                         },
@@ -226,10 +226,15 @@ def test_google_endpoint_client_posts_generate_content(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+        headers: Mapping[str, str] = {}
+
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, *args, **kwargs) -> Mapping[str, object]:
+            del args, kwargs
             return {
                 "candidates": [
                     {
@@ -254,17 +259,19 @@ def test_google_endpoint_client_posts_generate_content(monkeypatch) -> None:
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
+        def __init__(self, *, base_url, headers, timeout_s, max_connections):
+            del max_connections
+            self.base_url = str(base_url)
             seen["base_url"] = str(base_url)
             seen["headers"] = dict(headers)
-            seen["timeout"] = timeout
+            seen["timeout"] = timeout_s
 
         async def post(self, path, *, json):
             seen["path"] = path
             seen["payload"] = dict(json)
             return _FakeResponse()
 
-    monkeypatch.setattr(google_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(google_provider, "AiohttpAPIClient", _FakeAsyncClient)
     monkeypatch.setenv("GOOGLE_GENERATIVE_AI_API_KEY", "secret")
 
     response = asyncio.run(
@@ -289,10 +296,15 @@ def test_google_endpoint_client_passes_vertex_request_headers(monkeypatch) -> No
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+        headers: Mapping[str, str] = {}
+
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, *args, **kwargs) -> Mapping[str, object]:
+            del args, kwargs
             return {
                 "candidates": [
                     {
@@ -313,10 +325,12 @@ def test_google_endpoint_client_passes_vertex_request_headers(monkeypatch) -> No
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
+        def __init__(self, *, base_url, headers, timeout_s, max_connections):
+            del max_connections
+            self.base_url = str(base_url)
             seen["base_url"] = str(base_url)
             seen["client_headers"] = dict(headers)
-            seen["timeout"] = timeout
+            seen["timeout"] = timeout_s
 
         async def post(self, path, *, json, headers):
             seen["path"] = path
@@ -324,7 +338,7 @@ def test_google_endpoint_client_passes_vertex_request_headers(monkeypatch) -> No
             seen["headers"] = dict(headers)
             return _FakeResponse()
 
-    monkeypatch.setattr(google_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(google_provider, "AiohttpAPIClient", _FakeAsyncClient)
 
     payload = google_provider.build_payload(
         messages=[{"role": "user", "content": "hello"}],
@@ -373,7 +387,7 @@ def test_google_vertex_payload_reads_vertex_thought_signatures() -> None:
                     {
                         "type": "reasoning",
                         "text": "Previous thinking.",
-                        "providerOptions": {
+                        "provider_options": {
                             "googleVertex": {"thoughtSignature": "vertex-sig"}
                         },
                     }
@@ -426,7 +440,7 @@ def test_inference_generate_text_applies_google_provider_options(monkeypatch) ->
                     messages=[
                         {"role": "user", "content": "Generate an image caption."}
                     ],
-                    providerOptions={
+                    provider_options={
                         "google": {
                             "thinkingConfig": {"thinkingBudget": 128},
                             "responseModalities": ["TEXT"],

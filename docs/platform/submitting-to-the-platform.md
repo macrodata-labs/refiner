@@ -1,16 +1,16 @@
 ---
-title: "Submitting to the Platform"
+title: "Submitting to the platform"
 description: "Authenticate, launch cloud jobs, and inspect submitted Refiner runs"
 ---
 
-# Submitting To The Platform
+# Submitting to the platform
 
-Submitting a Refiner pipeline to Macrodata Cloud creates a workspace-owned job
-record. The platform stores the run metadata, starts workers, tracks progress,
-collects logs and metrics, preserves the manifest, and exposes the job in the
-browser and CLI.
+Submitting a Refiner pipeline to the Macrodata Cloud creates a workspace-owned
+job record. The platform stores the run metadata, starts workers, tracks
+progress, collects logs and metrics, preserves the manifest, and exposes the
+job in the browser and CLI.
 
-## Before You Submit
+## Before you submit
 
 You need:
 
@@ -49,7 +49,7 @@ export MACRODATA_API_KEY="md_..."
 macrodata whoami
 ```
 
-## Launch A Cloud Job
+## Launch a Cloud Job
 
 Use `launch_cloud()` on the same pipeline object you would launch locally:
 
@@ -57,7 +57,7 @@ Use `launch_cloud()` on the same pipeline object you would launch locally:
 import refiner as mdr
 
 pipeline = (
-    mdr.read_lerobot("lerobot/aloha_mobile_cabinet")
+    mdr.read_lerobot("hf://datasets/lerobot/aloha_mobile_cabinet")
     .map(score_episode)
     .write_parquet("s3://acme-robotics/datasets/aloha-scored")
 )
@@ -80,46 +80,57 @@ Common launch settings:
 | `cpus_per_worker` | CPU allocation per worker. |
 | `mem_mb_per_worker` | Memory allocation per worker. |
 | `gpu` | GPU type/count per worker. |
-| `sync_local_dependencies` | Include detected packages from the submitting environment. Defaults to `True`. |
-| `extra_dependencies` | Additional pip requirement strings to install on workers. These override captured packages with the same package name. |
+| `refiner_extras` | Extra Refiner [optional dependency groups](../reference/optional-dependencies.md) to install on workers. Built-in blocks declare their own required extras automatically. |
+| `dependencies` | Additional pip requirement strings to install on workers. |
+| `sync_local_dependencies` | Ask Refiner to try syncing packages from the submitting environment. Defaults to `False`. |
 | `secrets` | Secret values or workspace secret references passed to workers. |
-| `env` | Non-secret environment variables. |
+| `env` | Non-secret [environment variables](environment-variables.md). |
 | `continue_from_job` | Reuse compatible outputs from a prior cloud job. |
 
 See [Cloud Launcher](../running-pipelines/cloud-launcher.md) and
 [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md).
 
-### Dependency Overrides
+### Dependency overrides
 
-Most cloud launches use the locally captured package list. Use
-`extra_dependencies` when the worker needs a package that is not installed
-locally, or when a cloud run should pin a different version:
+Built-in Refiner readers, writers, and operations automatically declare the
+extras they require. For example, `read_hf_dataset(...)` adds `datasets`, Hugging
+Face paths add `hf`, HDF5 readers add `hdf5`, LeRobot/Zarr writers add their
+encoding extras, and `mdr.robotics.track_hands(...)` adds `hand_tracking`.
+
+You can still pass `refiner_extras` explicitly when code outside the built-in
+pipeline blocks needs a specific Refiner extra. See the
+[optional dependency groups](../reference/optional-dependencies.md):
 
 ```python
 pipeline.launch_cloud(
-    name="hand-tracking-smoke",
-    gpu=mdr.GPU(count=1, type="h100", cuda_version="12.8"),
-    extra_dependencies=[
-        "ego-vision[models,detection]==0.1.6",
-        "opencv-python-headless",
-        "torch",
-    ],
+    name="custom-datasets-helper",
+    refiner_extras=["datasets"],
 )
 ```
 
-Entries are pip requirement strings. Exact pins, versionless requirements,
-ranges, and extras are supported. Extra dependencies are merged into the
-dependency manifest by package name and take precedence over locally captured
-packages with the same name.
+If your code needs other packages, pass them with `dependencies`:
+
+```python
+pipeline.launch_cloud(
+    name="custom-model-job",
+    dependencies=["torch", "transformers>=4.55"],
+)
+```
+
+Dependency entries are pip requirement strings. Exact pins, versionless
+requirements, ranges, and package extras are supported.
 
 Environment markers are not preserved. Do not include markers in
-`extra_dependencies`; list the package as it should install on Macrodata Cloud.
+`dependencies`; list the package as it should install on the Macrodata Cloud.
 For example, write `uvloop`, not `uvloop; sys_platform != "win32"`.
 
-Set `sync_local_dependencies=False` to skip local package capture while still
-installing explicitly listed `extra_dependencies`.
+Finally, if you would like Refiner to try syncing the packages installed in
+your current Python environment, set `sync_local_dependencies=True`. Explicit
+`dependencies` take precedence over synced packages with the same package name.
+If one of those packages cannot be resolved from PyPI during cloud image setup,
+the job will fail.
 
-## What Gets Submitted
+## What gets submitted
 
 A cloud submission includes:
 
@@ -139,7 +150,7 @@ macrodata jobs manifest job_123 --deps --code
 
 See [Manifests](manifests.md).
 
-## Find The Job
+## Find the Job
 
 After submission, open [Jobs](/jobs). The jobs list shows name, status,
 progress, duration, starter, and an action to open the job. Use **Load more**
@@ -158,7 +169,7 @@ Use `--json` when another program needs to parse the result:
 macrodata jobs get job_123 --json
 ```
 
-## Inspect A Job
+## Inspect a Job
 
 Open the job from [Jobs](/jobs). The job detail page has:
 
@@ -174,7 +185,7 @@ Open the job from [Jobs](/jobs). The job detail page has:
 Cloud jobs stream progress and observability while they run. Local jobs can
 appear in the platform, but advanced real-time observability is for cloud jobs.
 
-## Logs And Metrics
+## Logs and metrics
 
 Use the job page for interactive debugging. Use the CLI for terminal workflows:
 
@@ -189,7 +200,7 @@ macrodata jobs resource-metrics job_123 0 --range 15m
 See [Observability](../running-pipelines/observability.md) and
 [CLI Jobs, Logs, and Metrics](../cli/jobs-logs-and-metrics.md).
 
-## Cancel A Job
+## Cancel a Job
 
 Cancel from the job detail page when the header exposes cancellation, or use:
 
@@ -200,7 +211,7 @@ macrodata jobs cancel job_123
 Cancellation requests stop active work for that job. Use `jobs get` afterward
 to confirm the terminal state.
 
-## Billing And Submission Gates
+## Billing and submission gates
 
 Cloud submission checks workspace billing state. A workspace can submit while
 it has available included credits, or after a payment method is configured for
@@ -208,17 +219,17 @@ paid usage.
 
 Submissions are blocked when:
 
-- billing is not configured for the workspace
-- the workspace is delinquent
+- a workspace payment is overdue
 - a workspace without a usable payment method has exhausted included credits
-- the workspace reaches the paid-usage cap for the billing period
+- the workspace reaches its paid-usage limit for the billing period
 
 Open [Settings > Billing](/settings/billing) to add a card, manage billing
 details, inspect usage, or choose a prior billing cycle. See [Billing](billing.md).
 
-## Related Pages
+## Related pages
 
 - [Workspaces and API Keys](workspaces-and-api-keys.md)
-- [Secrets and Environment](secrets-and-environment.md)
+- [Secrets and environment](secrets-and-environment.md)
+- [Environment variables](environment-variables.md)
 - [Cloud Jobs and Files](cloud-jobs-and-files.md)
 - [CLI](../cli/index.md)

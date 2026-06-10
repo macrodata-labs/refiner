@@ -89,7 +89,7 @@ def test_inference_generate_text_converts_messages_for_openai_responses(
                     ],
                 }
             ],
-            providerOptions={
+            provider_options={
                 "openai": {
                     "reasoningEffort": "low",
                     "textVerbosity": "low",
@@ -154,7 +154,7 @@ def test_inference_generate_text_maps_openai_responses_options_to_wire_names(
         del row
         await generate_text(
             messages=[{"role": "user", "content": "hello"}],
-            providerOptions={
+            provider_options={
                 "openai": {
                     "logprobs": True,
                     "maxToolCalls": 4,
@@ -353,25 +353,38 @@ def test_openai_chat_reasoning_models_strip_unsupported_settings(monkeypatch) ->
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+        headers: Mapping[str, str] = {}
+
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, *args, **kwargs) -> Mapping[str, object]:
+            del args, kwargs
             return {
                 "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                 "usage": {},
             }
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, headers, timeout
+        def __init__(
+            self,
+            *,
+            base_url,
+            headers,
+            timeout_s,
+            max_connections,
+        ):
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             seen["path"] = path
             seen["payload"] = dict(json)
             return _FakeResponse()
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "AiohttpAPIClient", _FakeAsyncClient)
 
     response = asyncio.run(
         openai_provider._OpenAIEndpointClient(
@@ -414,22 +427,35 @@ def test_openai_gpt_51_reasoning_none_keeps_compatible_settings(
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        status = 200
+        reason = ""
+        headers: Mapping[str, str] = {}
+
         def raise_for_status(self) -> None:
             return None
 
-        def json(self) -> Mapping[str, object]:
+        async def json(self, *args, **kwargs) -> Mapping[str, object]:
+            del args, kwargs
             return {"output_text": "ok", "usage": {}}
 
     class _FakeAsyncClient:
-        def __init__(self, *, base_url, headers, timeout):
-            del base_url, headers, timeout
+        def __init__(
+            self,
+            *,
+            base_url,
+            headers,
+            timeout_s,
+            max_connections,
+        ):
+            self.base_url = str(base_url)
+            del headers, timeout_s, max_connections
 
         async def post(self, path, *, json):
             seen["path"] = path
             seen["payload"] = dict(json)
             return _FakeResponse()
 
-    monkeypatch.setattr(openai_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(openai_provider, "AiohttpAPIClient", _FakeAsyncClient)
 
     response = asyncio.run(
         openai_provider._OpenAIResponsesClient(

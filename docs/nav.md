@@ -2,102 +2,108 @@
 
 - [Quickstart](quickstart.md)
 
-## Running Pipelines
+## Running pipelines
 
 - [Overview](running-pipelines/index.md)
-- [In-Process Debugging](running-pipelines/in-process-debugging.md)
-- [Local Launcher](running-pipelines/local-launcher.md)
-- [Cloud Launcher](running-pipelines/cloud-launcher.md)
-- [Resources, GPUs, and Services](running-pipelines/resources-gpus-and-services.md)
+- [In-process debugging](running-pipelines/in-process-debugging.md)
+- [Local launcher](running-pipelines/local-launcher.md)
+- [Cloud launcher](running-pipelines/cloud-launcher.md)
+- [Resources, GPUs, and services](running-pipelines/resources-gpus-and-services.md)
 - [Observability](running-pipelines/observability.md)
 
-## Reading Data
+## Reading data
 
 - [Overview](reading-data/index.md)
-- [Reader Model](reading-data/reader-model.md)
+- [Reader model](reading-data/reader-model.md)
 - [Sharding](reading-data/sharding.md)
 - [LeRobot](reading-data/lerobot.md)
 - [HDF5](reading-data/hdf5.md)
 - [Zarr](reading-data/zarr.md)
-- [Tabular Files](reading-data/tabular-files.md)
-- [Files and Videos](reading-data/files-and-videos.md)
+- [MCAP](reading-data/mcap.md)
+- [Tabular files](reading-data/tabular-files.md)
+- [Files and videos](reading-data/files-and-videos.md)
 - [Hugging Face](reading-data/hugging-face.md)
-- [Custom Readers](reading-data/custom-readers.md)
+- [TensorFlow](reading-data/tensorflow.md)
+- [Custom readers](reading-data/custom-readers.md)
 
-## Episode Data
+## Episode data
 
 - [Overview](episode-data/index.md)
-- [Episode Rows](episode-data/episode-rows.md)
-- [Frames and Videos](episode-data/frames-and-videos.md)
-- [Metadata, Tasks, and Stats](episode-data/metadata-tasks-and-stats.md)
-- [Converting to Robot Rows](episode-data/converting-to-robot-rows.md)
+- [Episode rows](episode-data/episode-rows.md)
+- [Frames and videos](episode-data/frames-and-videos.md)
+- [Metadata, tasks, and stats](episode-data/metadata-tasks-and-stats.md)
+- [Converting to robot rows](episode-data/converting-to-robot-rows.md)
 
 ## Transforms
 
 - [Overview](transforms/index.md)
-- [Row Transforms](transforms/row-transforms.md)
-- [Async and Batch Transforms](transforms/async-and-batch-transforms.md)
-- [Vectorized Transforms](transforms/vectorized-transforms.md)
+- [Row transforms](transforms/row-transforms.md)
+- [Async and batch transforms](transforms/async-and-batch-transforms.md)
+- [Vectorized transforms](transforms/vectorized-transforms.md)
 - [Expressions](transforms/expressions.md)
 - [Schemas and DTypes](transforms/schemas-and-dtypes.md)
 
-## Episode Operations
+## Episode operations
 
 - [Overview](episode-operations/index.md)
-- [Motion Trimming](episode-operations/motion-trimming.md)
-- [Subtask Annotation](episode-operations/subtask-annotation.md)
-- [Reward Scoring](episode-operations/reward-scoring.md)
-- [Egocentric Hand Tracking](episode-operations/egocentric-hand-tracking.md)
+- [Motion trimming](episode-operations/motion-trimming.md)
+- [Subtask annotation](episode-operations/subtask-annotation.md)
+- [Reward scoring](episode-operations/reward-scoring.md)
+- [Hand tracking](episode-operations/hand-tracking.md)
 
 ## Inference
 
 - [Overview](inference/index.md)
-- [Generate Text](inference/generate-text.md)
-- [Multimodal and Structured Output](inference/multimodal-and-structured-output.md)
-- [Providers and VLLM](inference/providers-and-vllm.md)
+- [Generate text](inference/generate-text.md)
+- [Multimodal and structured output](inference/multimodal-and-structured-output.md)
+- [Providers and vLLM](inference/inference_providers.md)
 - [Pooling](inference/pooling.md)
 
-## Writing Data
+## Writing data
 
 - [Overview](writing-data/index.md)
-- [Writer Model](writing-data/writer-model.md)
+- [Writer model](writing-data/writer-model.md)
 - [LeRobot](writing-data/lerobot.md)
 - [Zarr](writing-data/zarr.md)
 - [Parquet and JSONL](writing-data/parquet-and-jsonl.md)
-- [Media Assets and Reducers](writing-data/media-assets-and-reducers.md)
+- [Media assets and reducers](writing-data/media-assets-and-reducers.md)
 
 ## Examples
 
 - [Overview](examples/index.md)
-- [ALOHA HDF5](examples/aloha-hdf5.md)
-- [robomimic HDF5](examples/robomimic-hdf5.md)
-- [Zarr Replay Buffer](examples/zarr-replay-buffer.md)
-- [Merge LeRobot Datasets](examples/merge-lerobot-datasets.md)
-- [Annotate Subtasks](examples/annotate-subtasks.md)
-- [Score Rewards](examples/score-rewards.md)
-- [Cloud GPU Job](examples/cloud-gpu-job.md)
+- [ALOHA HDF5](examples/formats/aloha-hdf5.md)
+- [robomimic HDF5](examples/formats/robomimic-hdf5.md)
+- [Zarr replay buffer](examples/formats/zarr-replay-buffer.md)
+- [MCAP Franka](examples/formats/mcap-franka.md)
+- [Libero HDF5](examples/formats/libero-hdf5.md)
+- [Merge LeRobot datasets](examples/datasets/merge-lerobot-datasets.md)
+- [Video subtask annotations](examples/annotations/subtask-annotations.md)
+- [Running reward models](examples/annotations/reward-models.md)
+- [Hand tracking](examples/annotations/hand-tracking.md)
+- [Cloud GPU Job](examples/cloud/cloud-gpu-job.md)
 
 ## Platform
 
 - [Overview](platform/index.md)
 - [Workspaces and API Keys](platform/workspaces-and-api-keys.md)
-- [Submitting to the Platform](platform/submitting-to-the-platform.md)
+- [Submitting to the platform](platform/submitting-to-the-platform.md)
 - [Billing](platform/billing.md)
 - [Services](platform/services.md)
 - [Viewer](platform/viewer.md)
 - [Manifests](platform/manifests.md)
-- [Secrets and Environment](platform/secrets-and-environment.md)
-- [Cloud Jobs and Files](platform/cloud-jobs-and-files.md)
+- [Secrets and environment](platform/secrets-and-environment.md)
+- [Environment variables](platform/environment-variables.md)
+- [Cloud Jobs and files](platform/cloud-jobs-and-files.md)
 
 ## CLI
 
 - [Overview](cli/index.md)
-- [Auth and Run](cli/auth-and-run.md)
-- [Jobs, Logs, and Metrics](cli/jobs-logs-and-metrics.md)
+- [Auth and run](cli/auth-and-run.md)
+- [Jobs, logs, and metrics](cli/jobs-logs-and-metrics.md)
 - [Secrets](cli/secrets.md)
 
 ## Reference
 
 - [Overview](reference/index.md)
-- [Path Formats](reference/path-formats.md)
-- [Optional Dependencies](reference/optional-dependencies.md)
+- [Path formats](reference/path-formats.md)
+- [Optional dependencies](reference/optional-dependencies.md)

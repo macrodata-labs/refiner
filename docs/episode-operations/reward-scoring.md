@@ -1,28 +1,36 @@
 ---
-title: "Reward Scoring"
+title: "Reward scoring"
 description: "Score episode progress and success with a pooling model"
 ---
 
-# Reward Scoring
+# Reward scoring
 
 `reward_score` samples frames from an episode video and uses a Robometer-style
 pooling model to estimate progress and success.
 
+As of right now, Refiner supports the state-of-the-art Robometer reward model
+([paper](https://arxiv.org/abs/2603.02115)) for dense progress and success
+signals on robot episodes.
+
 ```python
 pipeline = (
-    mdr.read_lerobot("hf://datasets/acme/demos")
+    mdr.read_lerobot("hf://datasets/nvidia/LIBERO_LeRobot_v3/libero_90")
     .map_async(
         mdr.robotics.reward_score(
-            video_key="observation.images.top",
-            task=lambda row: "; ".join(row.tasks),
+            model="robometer/Robometer-4B",
+            video_key="observation.images.image",
+            task="complete the robot manipulation task",
             max_frames=8,
+            max_concurrent_requests=256,
         ),
-        max_in_flight=32,
+        max_in_flight=256,
+        preserve_order=False,
     )
+    .write_lerobot("hf://buckets/acme-robotics/libero-robometer-reward")
 )
 ```
 
-## Output Columns
+## Output columns
 
 By default, the operation writes:
 
@@ -30,12 +38,14 @@ By default, the operation writes:
 | --- | --- |
 | `reward_score` | Expected progress for sampled frames. |
 | `robometer_success` | Success probability for sampled frames. |
+| `reward_frames` | Sampled frame metadata. Each item contains the video frame `index` and `timestamp_s` used for the matching score. |
 
-Customize names with `output_column` and `success_column`.
+Customize names with `output_column`, `success_column`, and `frames_column`.
 
-## Task Text
+## Task text
 
-Task text can come from:
+Beyond the video to score, you must provide a task description. This can be a
+string or a function that takes the row and returns the task description:
 
 ```python
 mdr.robotics.reward_score(task="open the drawer")
@@ -47,8 +57,10 @@ or from the row:
 mdr.robotics.reward_score(task=lambda row: row.task or "; ".join(row.tasks))
 ```
 
-## Inference Backend
+## Inference backend
 
-`reward_score` uses pooling inference through a VLLM provider. See
-[Pooling](../inference/pooling.md) and [Providers and VLLM](../inference/providers-and-vllm.md).
+`reward_score` uses pooling inference through a vLLM provider. See
+[Pooling](../inference/pooling.md) and [Providers and vLLM](../inference/inference_providers.md).
 
+For a complete cloud example, see
+[Reward modeling example](../examples/annotations/reward-models.md).

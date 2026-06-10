@@ -18,6 +18,7 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import RowRangeDescriptor
 from refiner.pipeline.sinks.reducer.zarr import ZarrReducerSink
 from refiner.pipeline.sinks.zarr import ZarrSink
+from refiner.pipeline.sources.readers.zarr import ZarrReader
 from refiner.worker.context import set_active_run_context, worker_token_for
 from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 
@@ -53,6 +54,18 @@ class _EmptyVideoSource:
         raise NotImplementedError
 
 
+class _S3MemoryFileSystem(MemoryFileSystem):
+    protocol = "s3"
+
+
+class _HFMemoryFileSystem(MemoryFileSystem):
+    protocol = "hf"
+
+
+class _GCSMemoryFileSystem(MemoryFileSystem):
+    protocol = "gcs"
+
+
 def _open_test_zarr(path: Path, *, mode: Literal["r", "r+", "a", "w", "w-"]):
     kwargs: dict[str, Any] = {"mode": mode, "zarr_format": 2}
     try:
@@ -66,6 +79,77 @@ def _create_array(root, name: str, data, **kwargs):
         kwargs.pop("shape", None)
         return root.create_array(name, data=data, **kwargs)
     return root.create_dataset(name, data=data, **kwargs)
+
+
+def test_read_zarr_constructor_defers_dependency_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise AssertionError("dependency check should be deferred")
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sources.readers.zarr.check_required_dependencies",
+        fail,
+    )
+
+    path = tmp_path / "episodes.zarr"
+    path.mkdir()
+    mdr.read_zarr(str(path))
+
+
+def test_write_zarr_constructor_defers_dependency_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise AssertionError("dependency check should be deferred")
+
+    monkeypatch.setattr("refiner.pipeline.sinks.zarr.check_required_dependencies", fail)
+
+    mdr.from_items([]).write_zarr(str(tmp_path / "out.zarr"))
+
+
+@pytest.mark.parametrize(
+    ("url", "fs", "extra"),
+    [
+        ("s3://bucket/out.zarr", _S3MemoryFileSystem(), "s3"),
+        ("hf://datasets/org/repo/out.zarr", _HFMemoryFileSystem(), "hf"),
+        ("gs://bucket/out.zarr", _GCSMemoryFileSystem(), "gcs"),
+    ],
+)
+def test_write_zarr_remote_output_declares_storage_extra(
+    url: str,
+    fs: MemoryFileSystem,
+    extra: str,
+) -> None:
+    output = (url, fs)
+
+    assert ZarrSink(output).required_refiner_extras() == (extra, "zarr")
+    assert ZarrReducerSink(
+        output,
+        store_template="{shard_id}__w{worker_id}.zarr",
+    ).required_refiner_extras() == (extra, "zarr")
+
+
+@pytest.mark.parametrize(
+    ("url", "fs", "extra"),
+    [
+        ("s3://bucket/input.zarr", _S3MemoryFileSystem(), "s3"),
+        ("hf://datasets/org/repo/input.zarr", _HFMemoryFileSystem(), "hf"),
+        ("gs://bucket/input.zarr", _GCSMemoryFileSystem(), "gcs"),
+    ],
+)
+def test_read_zarr_remote_input_declares_storage_extra(
+    url: str,
+    fs: MemoryFileSystem,
+    extra: str,
+) -> None:
+    fs.mkdir(url)
+
+    reader = ZarrReader((url, fs))
+
+    assert reader.required_refiner_extras() == (extra, "zarr")
 
 
 def _write_policy_zarr(path: Path) -> None:
@@ -2023,6 +2107,167 @@ def test_write_zarr_materializes_frame_array_videos(tmp_path: Path) -> None:
     ).take(1)[0]
     np.testing.assert_array_equal(row["rgb"], frames)
     np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
+
+
+def test_write_zarr_streams_frame_sequence_videos(tmp_path: Path) -> None:
+    output = tmp_path / "video-sequence.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    calls = 0
+
+    def iter_frames():
+        nonlocal calls
+        calls += 1
+        yield from frames
+
+    rows = list(
+        mdr.from_items(
+            [
+                {
+                    "episode_id": "episode-1",
+                    "video": mdr.video.VideoFrameSequence(
+                        iter_frames, fps=10, frame_count=2
+                    ),
+                    "action": [[0.0], [0.1]],
+                }
+            ]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"observation.images.front": "video"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(
+        str(output),
+        arrays={
+            "data/action": "action",
+            "data/rgb": "observation.images.front",
+        },
+        reduce_to_single_store=False,
+    ).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    row = mdr.read_zarr(
+        zarr_store,
+        arrays={"action": "data/action", "rgb": "data/rgb"},
+        file_path_column=None,
+    ).take(1)[0]
+    np.testing.assert_array_equal(row["rgb"], frames)
+    np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
+    assert calls == 1
+
+
+def test_write_zarr_defaults_include_robotics_videos(tmp_path: Path) -> None:
+    output = tmp_path / "default-video.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "frames": frames, "action": [[0.0], [0.1]]}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"observation.images.front": "frames"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(str(output), reduce_to_single_store=False).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    row = mdr.read_zarr(
+        zarr_store,
+        arrays={
+            "action": "data/action",
+            "front": "data/observation.images.front",
+        },
+        file_path_column=None,
+    ).take(1)[0]
+    np.testing.assert_array_equal(row["front"], frames)
+    np.testing.assert_allclose(row["action"], [[0.0], [0.1]])
+
+
+def test_write_zarr_defaults_include_non_observation_robotics_videos(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "default-video-short-key.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "frames": frames, "action": [[0.0], [0.1]]}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key="action",
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"front": "frames"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(str(output), reduce_to_single_store=False).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    row = mdr.read_zarr(
+        zarr_store,
+        arrays={"front": "data/front"},
+        file_path_column=None,
+    ).take(1)[0]
+    np.testing.assert_array_equal(row["front"], frames)
+
+
+def test_write_zarr_defaults_normalize_leading_slash_video_keys(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "default-video-topic.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    rows = list(
+        mdr.from_items(
+            [
+                {"episode_id": "episode-1", "frames": frames},
+                {"episode_id": "episode-2", "frames": frames + 1},
+            ]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key=None,
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"/cam": "frames"},
+            fps=10,
+        )
+    )
+
+    ZarrSink(str(output), reduce_to_single_store=False).write_block(rows)
+
+    zarr_store = next(output.glob("*.zarr"))
+    root = _open_test_zarr(zarr_store, mode="r")
+    np.testing.assert_array_equal(np.asarray(root["data/cam"])[:2], frames)
+
+
+def test_write_zarr_defaults_reject_duplicate_normalized_video_paths(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "duplicate-video-topic.zarr"
+    frames = np.arange(2 * 4 * 4 * 3, dtype=np.uint8).reshape(2, 4, 4, 3)
+    rows = list(
+        mdr.from_items(
+            [{"episode_id": "episode-1", "cam": frames, "slash_cam": frames + 1}]
+        ).to_robot_rows(
+            episode_id_key="episode_id",
+            action_key=None,
+            state_key=None,
+            timestamp_key=None,
+            video_keys={"cam": "cam", "/cam": "slash_cam"},
+            fps=10,
+        )
+    )
+
+    with pytest.raises(ValueError, match="Duplicate Zarr array path: data/cam"):
+        ZarrSink(str(output), reduce_to_single_store=False).write_block(rows)
 
 
 def test_write_zarr_rejects_empty_frame_array_videos(tmp_path: Path) -> None:

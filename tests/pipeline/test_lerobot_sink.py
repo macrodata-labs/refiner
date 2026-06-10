@@ -9,10 +9,12 @@ from typing import Any, Iterator, cast
 
 import av
 import fsspec
+from fsspec.implementations.memory import MemoryFileSystem
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from huggingface_hub.errors import HfHubHTTPError
 
 import refiner as mdr
 from refiner.io import DataFile, DataFolder
@@ -42,6 +44,18 @@ _ALOHA_REPO_IDS = (
 )
 
 
+class _S3MemoryFileSystem(MemoryFileSystem):
+    protocol = "s3"
+
+
+class _HFMemoryFileSystem(MemoryFileSystem):
+    protocol = "hf"
+
+
+class _GCSMemoryFileSystem(MemoryFileSystem):
+    protocol = "gcs"
+
+
 class _FakeRoboticsRow(Row, RoboticsRow):
     def __init__(
         self,
@@ -49,13 +63,14 @@ class _FakeRoboticsRow(Row, RoboticsRow):
         episode_id: str,
         frame_table: Tabular,
         task: str | None = None,
+        tasks: Sequence[str] | None = None,
         fps: float | None = None,
         robot_type: str | None = None,
         videos: Mapping[str, VideoSource] | None = None,
     ) -> None:
         self._data = {"episode_id": episode_id}
         self._frame_table = frame_table
-        self._task = task
+        self._tasks = list(tasks) if tasks is not None else ([task] if task else [])
         self._fps = fps
         self._robot_type = robot_type
         self._videos = dict(videos or {})
@@ -78,8 +93,12 @@ class _FakeRoboticsRow(Row, RoboticsRow):
         return self._frame_table.num_rows
 
     @property
+    def tasks(self) -> list[str]:
+        return self._tasks
+
+    @property
     def task(self) -> str | None:
-        return self._task
+        return next(iter(self.tasks), None)
 
     @property
     def fps(self) -> float | None:
@@ -224,6 +243,25 @@ def test_lerobot_sink_defaults_encoder_options_to_none(tmp_path: Path) -> None:
     writer = LeRobotWriterSink(str(tmp_path / "out"))
 
     assert writer.video_transcode_config.encoder_options is None
+
+
+@pytest.mark.parametrize(
+    ("url", "fs", "extra"),
+    [
+        ("s3://bucket/out", _S3MemoryFileSystem(), "s3"),
+        ("hf://buckets/org/out", _HFMemoryFileSystem(), "hf"),
+        ("gs://bucket/out", _GCSMemoryFileSystem(), "gcs"),
+    ],
+)
+def test_write_lerobot_remote_output_declares_storage_extra(
+    url: str,
+    fs: MemoryFileSystem,
+    extra: str,
+) -> None:
+    output = (url, fs)
+
+    assert LeRobotWriterSink(output).required_refiner_extras() == (extra, "video")
+    assert LeRobotMetaReduceSink(output).required_refiner_extras() == (extra,)
 
 
 def test_write_lerobot_defaults_gop_to_two(tmp_path: Path) -> None:
@@ -544,7 +582,7 @@ def test_write_lerobot_is_deferred_and_roundtrips(tmp_path: Path) -> None:
     assert stats_json["observation.images.main"]["count"] == [expected_video_count]
 
     out_rows = mdr.read_lerobot(str(out_root)).materialize()
-    assert sorted(row["task"] for row in out_rows) == ["pick", "place"]
+    assert sorted(cast(LeRobotRow, row).task for row in out_rows) == ["pick", "place"]
 
 
 def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> None:
@@ -668,6 +706,102 @@ def test_write_lerobot_accepts_generic_robotics_rows(tmp_path: Path) -> None:
         "pick",
         "place",
     ]
+
+
+def test_write_lerobot_keeps_unassigned_generic_tasks(tmp_path: Path) -> None:
+    out_root = tmp_path / "generic-unassigned-tasks"
+    row = _FakeRoboticsRow(
+        episode_id="demo",
+        tasks=["pick", "place"],
+        fps=10,
+        robot_type="mockbot",
+        frame_table=Tabular.from_rows(
+            [
+                DictRow({"timestamp": 0.0, "observation.state": [1.0]}),
+                DictRow({"timestamp": 0.1, "observation.state": [2.0]}),
+            ]
+        ),
+    )
+    writer = LeRobotWriterSink(str(out_root))
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
+    ):
+        writer.write_shard_block("shard-1", [row])
+        writer.on_shard_complete("shard-1")
+
+    data_file = next((out_root / "data").glob("chunk-*/file-000.parquet"))
+    episode_file = next((out_root / "meta").glob("chunk-*/episodes/file-000.parquet"))
+    frames = pq.read_table(data_file)
+    episodes = pq.read_table(episode_file)
+
+    assert "task_index" not in frames.column_names
+    assert episodes.column("tasks").to_pylist() == [["pick", "place"]]
+
+
+def test_write_lerobot_generates_missing_generic_episode_ids(tmp_path: Path) -> None:
+    out_root = tmp_path / "generated-episode-ids"
+    writer = LeRobotWriterSink(str(out_root))
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
+    ):
+        writer.write_shard_block(
+            "shard-a",
+            [
+                _FakeRoboticsRow(
+                    episode_id="-1",
+                    fps=10,
+                    robot_type="mockbot",
+                    frame_table=Tabular.from_rows(
+                        [
+                            DictRow(
+                                {
+                                    "timestamp": 0.0,
+                                    "observation.state": [1.0],
+                                }
+                            )
+                        ]
+                    ),
+                ),
+                _FakeRoboticsRow(
+                    episode_id="-1",
+                    fps=10,
+                    robot_type="mockbot",
+                    frame_table=Tabular.from_rows(
+                        [
+                            DictRow(
+                                {
+                                    "timestamp": 0.0,
+                                    "observation.state": [2.0],
+                                }
+                            )
+                        ]
+                    ),
+                ),
+            ],
+        )
+        writer.on_shard_complete("shard-a")
+
+    chunk = f"shard-a__w{worker_token_for('worker-1')}"
+    episodes = pq.read_table(
+        out_root / "meta" / f"chunk-{chunk}" / "episodes" / "file-000.parquet"
+    )
+
+    assert episodes.column("episode_id").to_pylist() == ["shard-a/0", "shard-a/1"]
+    frames = pq.read_table(out_root / "data" / f"chunk-{chunk}" / "file-000.parquet")
+    assert (
+        frames.column("episode_index").to_pylist()
+        == episodes.column("episode_index").to_pylist()
+    )
 
 
 def test_write_lerobot_accepts_to_robot_rows_after_vectorized_filter(
@@ -960,7 +1094,6 @@ def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> No
         out_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
     )
     assert episodes.column("tasks").to_pylist() == [["pick"], ["place"]]
-    assert episodes.column("task").to_pylist() == ["pick", "place"]
 
 
 def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> None:
@@ -987,6 +1120,40 @@ def test_write_lerobot_raises_on_unmapped_frame_task_index(tmp_path: Path) -> No
                         shard_id="shard-1",
                     )
                 ]
+            )
+            writer.close()
+
+
+def test_write_lerobot_rejects_fractional_fps(tmp_path: Path) -> None:
+    writer = LeRobotWriterSink(str(tmp_path / "out"))
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
+    ):
+        with pytest.raises(ValueError, match="LeRobot output requires integer fps"):
+            writer.write_shard_block(
+                "shard-1",
+                [
+                    _FakeRoboticsRow(
+                        episode_id="fractional",
+                        fps=29.97,
+                        robot_type="mockbot",
+                        frame_table=Tabular.from_rows(
+                            [
+                                DictRow(
+                                    {
+                                        "frame_index": 0,
+                                        "timestamp": 0.0,
+                                        "observation.state": [1.0],
+                                    }
+                                )
+                            ]
+                        ),
+                    )
+                ],
             )
             writer.close()
 
@@ -1055,15 +1222,20 @@ def test_write_lerobot_stage2_keeps_only_finalized_worker_outputs(
 def test_hub_aloha_merge_uses_remux_and_preserves_episode_count(tmp_path: Path) -> None:
     out_root = tmp_path / "hub-aloha-merge"
     source_roots = [f"hf://datasets/{repo_id}" for repo_id in _ALOHA_REPO_IDS]
-    stats = (
-        mdr.read_lerobot(source_roots)
-        .write_lerobot(str(out_root))
-        .launch_local(
-            name="lerobot-hub-aloha-merge",
-            num_workers=1,
-            rundir=str(tmp_path / "workdir-hub-aloha-merge"),
+    try:
+        stats = (
+            mdr.read_lerobot(source_roots)
+            .write_lerobot(str(out_root))
+            .launch_local(
+                name="lerobot-hub-aloha-merge",
+                num_workers=1,
+                rundir=str(tmp_path / "workdir-hub-aloha-merge"),
+            )
         )
-    )
+    except HfHubHTTPError as exc:
+        if getattr(getattr(exc, "response", None), "status_code", None) == 429:
+            pytest.skip("Hugging Face rate-limited the live ALOHA dataset request")
+        raise
     assert stats.failed == 0
 
     with (out_root / "meta" / "info.json").open("r", encoding="utf-8") as fh:

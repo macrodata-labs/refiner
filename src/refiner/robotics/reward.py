@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from refiner.pipeline.data.row import Row
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 else:
     GeneratePoolingFn = Callable[[Mapping[str, Any]], Any]
 
-_DEFAULT_ROBOMETER_MODEL = "aliangdw/Robometer-4B"
+_DEFAULT_ROBOMETER_MODEL = "robometer/Robometer-4B"
 _PROGRESS_TOKEN = "<|prog_token|>"
 
 
@@ -31,9 +31,17 @@ def reward_score(
     max_frames: int = 8,
     output_column: str = "reward_score",
     success_column: str = "robometer_success",
+    frames_column: str = "reward_frames",
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
-    """Return an async map function that scores LeRobot episodes with Robometer."""
+    """Return an async map function that scores LeRobot episodes with Robometer.
+
+    The mapper samples up to `max_frames` frames from each LeRobot episode,
+    sends them to a vLLM-hosted Robometer pooling model, and adds list columns
+    to the row: per-frame task progress, per-frame success probability, and the
+    sampled frame indexes/timestamps used for scoring. When `task` is omitted,
+    the episode's LeRobot task metadata is used as the Robometer instruction.
+    """
 
     if not model.strip():
         raise ValueError("model must be non-empty")
@@ -43,6 +51,8 @@ def reward_score(
         raise ValueError("output_column must be non-empty")
     if not success_column.strip():
         raise ValueError("success_column must be non-empty")
+    if not frames_column.strip():
+        raise ValueError("frames_column must be non-empty")
 
     from refiner.inference import generate_pooling
     from refiner.inference.providers import VLLMProvider
@@ -57,36 +67,52 @@ def reward_score(
             raise TypeError("reward_score expects rows from read_lerobot(...)")
 
         selected_video_key = _resolve_video_key(row, video_key)
-        frames = await _sample_video_frames(
+        task_text = _resolve_task_text(row, task)
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": _robometer_progress_prompt(task_text)}
+        ]
+        sampled_frames: list[dict[str, Any]] = []
+        frame_count = 0
+        async for decoded_frame in _sample_video_frames(
             row,
             video_key=selected_video_key,
             max_frames=max_frames,
-        )
-        task_text = _resolve_task_text(row, task)
-        content: list[dict[str, Any]] = [{"type": "text", "text": task_text}]
-        for frame in frames:
+        ):
+            sampled_frames.append(
+                {
+                    "index": decoded_frame.index,
+                    "timestamp_s": decoded_frame.timestamp_s,
+                }
+            )
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": _frame_data_url(frame)},
+                    "image_url": {"url": _frame_data_url(decoded_frame)},
                 }
             )
             content.append({"type": "text", "text": _PROGRESS_TOKEN})
+            frame_count += 1
 
-        response = await generate_pooling_request(
-            {
-                "task": "token_classify",
-                "use_activation": False,
-                "messages": [{"role": "user", "content": content}],
-            }
-        )
-        token_logits = _extract_progress_token_logits(response, len(frames))
+        payload = {
+            "task": "token_classify",
+            "use_activation": False,
+            "chat_template_kwargs": {
+                "add_vision_id": True,
+                "enable_thinking": False,
+                "fps": 1,
+            },
+            "mm_processor_kwargs": {"do_resize": False},
+            "messages": [{"role": "user", "content": content}],
+        }
+        response = await generate_pooling_request(payload)
+        token_logits = _extract_progress_token_logits(response, frame_count)
         progress = [expected_progress(row) for row in token_logits]
         success = [sigmoid(float(row[10])) for row in token_logits]
         return row.update(
             {
                 output_column: progress,
                 success_column: success,
+                frames_column: sampled_frames,
             }
         )
 
@@ -183,24 +209,36 @@ def _resolve_task_text(row: LeRobotRow, task: TaskSource | None) -> str:
     return value.strip().removesuffix(".")
 
 
+def _robometer_progress_prompt(task_text: str) -> str:
+    return (
+        f"The task for the robot is '{task_text}'. Given the trajectory video, "
+        "predict the task progress at each frame, how far along the robot is "
+        "towards completing the task, a float between 0 and 1, where 0 is the "
+        "starting state and 1 is when the task is completed. If the robot is "
+        "not performing the same task, predict 0 progress."
+    )
+
+
 async def _sample_video_frames(
     row: LeRobotRow,
     *,
     video_key: str,
     max_frames: int,
-) -> list[DecodedVideoFrame]:
+) -> AsyncIterator[DecodedVideoFrame]:
+    # Deriving video length from frame rows is not reliable yet; use the episode
+    # length until https://github.com/macrodata-labs/refiner/issues/192 lands.
     target_indexes = set(_sample_indexes(row.length, max_frames=max_frames))
-    frames: list[DecodedVideoFrame] = []
+    yielded = 0
     async for frame in row.videos[video_key].iter_frames():
         if frame.index in target_indexes:
-            frames.append(frame)
-        if len(frames) == len(target_indexes):
+            yielded += 1
+            yield frame
+        if yielded == len(target_indexes):
             break
-    if not frames:
+    if yielded == 0:
         raise ValueError(
             f"episode {row.episode_index} video {video_key!r} has no frames"
         )
-    return frames
 
 
 def _sample_indexes(length: int, *, max_frames: int) -> tuple[int, ...]:
@@ -227,19 +265,18 @@ def _frame_data_url(frame: DecodedVideoFrame) -> str:
 
 
 def _encode_png(frame: DecodedVideoFrame) -> bytes:
-    import av
+    from PIL import Image
 
     output = io.BytesIO()
-    with av.open(output, mode="w", format="image2pipe") as container:
-        stream = container.add_stream("png", rate=1)
-        stream.width = frame.width
-        stream.height = frame.height
-        stream.pix_fmt = "rgb24"
-        video_frame = frame.frame.reformat(format="rgb24")
-        for packet in stream.encode(video_frame):
-            container.mux(packet)
-        for packet in stream.encode(None):
-            container.mux(packet)
+    image = (
+        frame.frame.to_image()
+        .convert("RGB")
+        .resize(
+            (256, 256),
+            Image.Resampling.BICUBIC,
+        )
+    )
+    image.save(output, format="PNG")
     return output.getvalue()
 
 

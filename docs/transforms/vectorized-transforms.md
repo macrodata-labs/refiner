@@ -1,14 +1,14 @@
 ---
-title: "Vectorized Transforms"
+title: "Vectorized transforms"
 description: "Use Arrow-backed columnar transforms in Refiner"
 ---
 
-# Vectorized Transforms
+# Vectorized transforms
 
 Vectorized transforms operate on columns instead of Python row objects. Refiner
 fuses adjacent vectorized operations so data can stay in Arrow tables longer.
 
-## Select, Drop, Rename
+## Select, drop, rename
 
 ```python
 pipeline = (
@@ -19,7 +19,7 @@ pipeline = (
 )
 ```
 
-## Computed Columns
+## Computed columns
 
 ```python
 pipeline = pipeline.with_columns(
@@ -27,7 +27,7 @@ pipeline = pipeline.with_columns(
 )
 ```
 
-## Vectorized Filter
+## Vectorized filter
 
 ```python
 pipeline = pipeline.filter(mdr.col("num_frames") > 30)
@@ -46,7 +46,7 @@ pipeline = pipeline.cast(
 
 Use casts when the storage format cannot fully represent asset/media semantics.
 
-## When Not To Use Vectorized Transforms
+## When not to use vectorized transforms
 
 Use row transforms when you need:
 
@@ -59,7 +59,7 @@ Use row transforms when you need:
 Use vectorized transforms for simple column-level changes before or after row
 operations.
 
-## Related Pages
+## Related pages
 
 - [Expressions](expressions.md)
 - [Schemas and DTypes](schemas-and-dtypes.md)

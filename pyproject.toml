@@ -1,6 +1,6 @@
 [project]
 name = "macrodata-refiner"
-version = "0.2.2"
+version = "0.3.2"
 description = "Refiner by Macrodata Labs, a data processing framework for Machine Learning large scale datasets"
 readme = "README.md"
 license = "Apache-2.0"
@@ -16,6 +16,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "aiohttp",
     "cloudpickle==3.1.2",
     "fsspec[http]",
     "httpx",
@@ -34,14 +35,17 @@ video = [
     "pillow",
 ]
 hf = [
-    "datasets>=3.0.0",
     "huggingface-hub>=1.4.1",
     "hf>=1.7.1",
 ]
-egocentric = [
+datasets = [
+    "macrodata-refiner[hf]",
+    "datasets>=3.0.0",
+]
+hand_tracking = [
     "macrodata-refiner[hf]",
     "macrodata-refiner[video]",
-    "ego-vision[models]>=0.1.8",
+    "ego-vision[models]>=0.1.25",
 ]
 text = [
     "warcio",
@@ -53,21 +57,42 @@ zarr = [
     "zarr>=2.18,<3",
     "numcodecs<0.16",
 ]
+mcap = [
+    "av",
+    "mcap",
+    "mcap-protobuf-support",
+    "mcap-ros2-support",
+    "pillow",
+]
 s3 = [
     "s3fs",
 ]
+gcs = [
+    "gcsfs",
+]
+tensorflow = [
+    "tensorflow",
+]
+tfds = [
+    "macrodata-refiner[tensorflow]",
+    "tensorflow-datasets",
+]
 testing = [
-    "macrodata-refiner[hdf5]",
-    "macrodata-refiner[hf]",
-    "macrodata-refiner[video]",
-    "macrodata-refiner[zarr]",
-    "macrodata-refiner[text]",
-    "macrodata-refiner[s3]",
+    "macrodata-refiner[all]",
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
 ]
 all = [
-    "macrodata-refiner[testing]",
+    "macrodata-refiner[datasets]",
+    "macrodata-refiner[hdf5]",
+    "macrodata-refiner[hf]",
+    "macrodata-refiner[mcap]",
+    "macrodata-refiner[video]",
+    "macrodata-refiner[zarr]",
+    "macrodata-refiner[text]",
+    "macrodata-refiner[s3]",
+    "macrodata-refiner[gcs]",
+    "macrodata-refiner[tfds]",
 ]
 
 [project.scripts]
@@ -86,7 +111,7 @@ refiner = ["py.typed"]
 
 [dependency-groups]
 dev = [
-    "macrodata-refiner[all]",
+    "macrodata-refiner[testing]",
     "pre-commit>=4.0.0",
     "ruff>=0.14.10",
     "ty>=0.0.7",

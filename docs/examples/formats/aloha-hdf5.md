@@ -51,6 +51,5 @@ pipeline.launch_cloud(
 )
 ```
 
-Related: [HDF5 Reader](../reading-data/hdf5.md),
-[Converting to Robot Rows](../episode-data/converting-to-robot-rows.md).
-
+Related: [HDF5 Reader](../../reading-data/hdf5.md),
+[Converting to Robot Rows](../../episode-data/converting-to-robot-rows.md).

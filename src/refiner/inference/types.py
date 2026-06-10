@@ -4,9 +4,24 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, TypedDict
 
+from refiner.inference.providers import (
+    AnthropicEndpointProvider,
+    GoogleEndpointProvider,
+    OpenAIEndpointProvider,
+    OpenAIResponsesProvider,
+    VLLMProvider,
+)
+
 JSONValue: TypeAlias = Any
 ProviderOptions: TypeAlias = Mapping[str, Mapping[str, JSONValue]]
 DataContent: TypeAlias = str | bytes | bytearray | memoryview
+InferenceProvider: TypeAlias = (
+    AnthropicEndpointProvider
+    | GoogleEndpointProvider
+    | OpenAIEndpointProvider
+    | OpenAIResponsesProvider
+    | VLLMProvider
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +47,7 @@ class ModelCapabilities:
 
 
 class _ProviderOptionsPart(TypedDict, total=False):
-    providerOptions: ProviderOptions
+    provider_options: ProviderOptions
 
 
 class _MediaTypePart(TypedDict, total=False):

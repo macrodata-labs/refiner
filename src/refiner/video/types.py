@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import io
 import math
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import IO, TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import IO, TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import numpy as np
 
@@ -213,13 +220,172 @@ class VideoBytes:
 
 
 @dataclass(frozen=True, slots=True, eq=False)
+class VideoFrameSequence:
+    """Video source backed by an iterable of RGB frame arrays."""
+
+    frames: Callable[[], Iterable[Any]] | Iterable[Any] = field(
+        repr=False, compare=False
+    )
+    fps: float = 30.0
+    frame_count: int | None = None
+    from_timestamp_s: float | None = None
+    to_timestamp_s: float | None = None
+
+    def __post_init__(self) -> None:
+        fps = float(self.fps)
+        if not math.isfinite(fps) or fps <= 0:
+            raise ValueError("fps must be > 0")
+        if self.frame_count is not None and self.frame_count < 0:
+            raise ValueError("frame_count must be >= 0")
+        source = self.frames
+        if not callable(source) and iter(source) is source:
+            raise ValueError(
+                "frames must be repeatable; pass a callable that returns a fresh iterator"
+            )
+        object.__setattr__(self, "fps", fps)
+
+    @property
+    def duration_s(self) -> float | None:
+        if self.frame_count is None:
+            return None
+        return self.frame_count / float(self.fps)
+
+    def iter_frame_arrays(self) -> Iterator[np.ndarray]:
+        start_idx = (
+            0
+            if self.from_timestamp_s is None
+            else max(0, int(math.floor(float(self.from_timestamp_s) * self.fps)))
+        )
+        if self.to_timestamp_s is not None:
+            end_idx = max(
+                start_idx, int(math.ceil(float(self.to_timestamp_s) * self.fps))
+            )
+        elif self.frame_count is not None:
+            end_idx = start_idx + self.frame_count
+        else:
+            end_idx = None
+        source = self.frames
+        frames = (
+            cast(Callable[[], Iterable[Any]], source)() if callable(source) else source
+        )
+        for index, frame in enumerate(frames):
+            if index < start_idx:
+                continue
+            if end_idx is not None and index >= end_idx:
+                break
+            array = np.asarray(frame)
+            if array.ndim != 3 or int(array.shape[2]) != 3:
+                raise ValueError(
+                    "video frames must have shape [height, width, channels=3]"
+                )
+            if array.dtype != np.uint8:
+                array = np.clip(array, 0, 255).astype(np.uint8)
+            if not array.flags.c_contiguous:
+                array = np.ascontiguousarray(array)
+            yield array
+
+    async def iter_numpy_frames(self) -> AsyncIterator[np.ndarray]:
+        for frame in self.iter_frame_arrays():
+            yield frame
+
+    def clipped(
+        self,
+        *,
+        from_timestamp_s: float | None = None,
+        to_timestamp_s: float | None = None,
+    ) -> "VideoFrameSequence":
+        next_from, next_to = _compose_clip_bounds(
+            current_from=self.from_timestamp_s,
+            current_to=self.to_timestamp_s,
+            from_timestamp_s=from_timestamp_s,
+            to_timestamp_s=to_timestamp_s,
+        )
+        frame_count = self.frame_count
+        if frame_count is not None:
+            next_from_s = float(next_from or 0.0)
+            view_from = float(self.from_timestamp_s or 0.0)
+            view_to = (
+                float(self.to_timestamp_s)
+                if self.to_timestamp_s is not None
+                else view_from + frame_count / float(self.fps)
+            )
+            if next_from_s > view_to or (
+                next_to is not None and next_to > view_to + 1e-6
+            ):
+                raise ValueError("clip bounds are beyond the current video view")
+            effective_to = view_to if next_to is None else next_to
+            start_idx = max(0, int(math.floor(next_from_s * self.fps)))
+            end_idx = max(start_idx, int(math.ceil(float(effective_to) * self.fps)))
+            frame_count = end_idx - start_idx
+        return VideoFrameSequence(
+            self.frames,
+            fps=self.fps,
+            frame_count=frame_count,
+            from_timestamp_s=next_from,
+            to_timestamp_s=next_to,
+        )
+
+    async def iter_frames(self) -> AsyncIterator[DecodedVideoFrame]:
+        import av
+        from refiner.video.decode import DecodedVideoFrame
+
+        start_idx = (
+            0
+            if self.from_timestamp_s is None
+            else max(0, int(math.floor(float(self.from_timestamp_s) * self.fps)))
+        )
+        rate = Fraction(self.fps).limit_denominator(100000)
+        for offset, frame_array in enumerate(self.iter_frame_arrays()):
+            frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
+            frame.pts = start_idx + offset
+            frame.time_base = Fraction(rate.denominator, rate.numerator)
+            yield DecodedVideoFrame(
+                index=offset,
+                pts=offset,
+                timestamp_s=offset / float(self.fps),
+                width=int(frame.width),
+                height=int(frame.height),
+                frame=frame,
+            )
+
+    def iter_frame_windows(
+        self,
+        *,
+        offsets: Sequence[int],
+        stride: int = 1,
+        drop_incomplete: bool = True,
+    ) -> AsyncIterator[DecodedFrameWindow]:
+        from refiner.video.decode import iter_frame_windows
+
+        return iter_frame_windows(
+            self,
+            offsets=offsets,
+            stride=stride,
+            drop_incomplete=drop_incomplete,
+        )
+
+    async def write_to(
+        self,
+        writer: VideoStreamWriter,
+        *,
+        frame_observer: FrameObserver | None = None,
+        force_transcode: bool = False,
+    ) -> WrittenVideo:
+        return await writer.write_frame_array_video(
+            self,
+            frame_observer=frame_observer,
+        )
+
+
+@dataclass(frozen=True, slots=True, eq=False)
 class VideoFrameArray:
     frames: Any = field(repr=False, compare=False)
-    fps: int = 30
+    fps: float = 30.0
     _array: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if int(self.fps) <= 0:
+        fps = float(self.fps)
+        if not math.isfinite(fps) or fps <= 0:
             raise ValueError("fps must be > 0")
         array = np.asarray(self.frames)
         if array.ndim != 4:
@@ -232,7 +398,7 @@ class VideoFrameArray:
             array = np.clip(array, 0, 255).astype(np.uint8)
         if not array.flags.c_contiguous:
             array = np.ascontiguousarray(array)
-        object.__setattr__(self, "fps", int(self.fps))
+        object.__setattr__(self, "fps", fps)
         object.__setattr__(self, "_array", array)
 
     @property
@@ -277,7 +443,8 @@ class VideoFrameArray:
         for index, frame_array in enumerate(self._array):
             frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
             frame.pts = index
-            frame.time_base = Fraction(1, self.fps)
+            rate = Fraction(self.fps).limit_denominator(100000)
+            frame.time_base = Fraction(rate.denominator, rate.numerator)
             yield DecodedVideoFrame(
                 index=index,
                 pts=index,
@@ -320,7 +487,7 @@ def video_from_storage_value(
     storage: str | None,
     value: Any,
     *,
-    fps: int = 30,
+    fps: float = 30.0,
 ) -> VideoSource | None:
     if value is None:
         return None
@@ -347,6 +514,7 @@ __all__ = [
     "VideoBytes",
     "VideoFile",
     "VideoFrameArray",
+    "VideoFrameSequence",
     "VideoSource",
     "video_from_storage_value",
 ]

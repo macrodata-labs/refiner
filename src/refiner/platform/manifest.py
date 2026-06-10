@@ -12,12 +12,16 @@ from urllib import request as urllib_request
 from collections.abc import Sequence
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from refiner.pipeline.planning import PlannedStage
 
 from packaging.requirements import InvalidRequirement, Requirement
 
 _REDACTION_PLACEHOLDER = "REDACTED_SECRET"
 _NORMALIZED_DEPENDENCY_SEPARATOR_PATTERN = re.compile(r"[-_.]+")
+_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 
 def _redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
@@ -102,25 +106,25 @@ def _dependency_key(name: str) -> str:
     return _NORMALIZED_DEPENDENCY_SEPARATOR_PATTERN.sub("-", package_name).lower()
 
 
-def _merge_extra_dependencies(
-    dependencies: list[dict[str, str]],
-    extra_dependencies: Sequence[str] | None,
+def _merge_dependencies(
+    captured_dependencies: list[dict[str, str]],
+    dependencies: Sequence[str] | None,
 ) -> list[dict[str, str]]:
-    if not extra_dependencies:
-        return dependencies
-    if isinstance(extra_dependencies, str):
-        raise ValueError("extra_dependencies must be a sequence of requirement strings")
+    if not dependencies:
+        return captured_dependencies
+    if isinstance(dependencies, str):
+        raise ValueError("dependencies must be a sequence of requirement strings")
 
-    merged = {_dependency_key(dep["name"]): dict(dep) for dep in dependencies}
-    for dependency in extra_dependencies:
+    merged = {_dependency_key(dep["name"]): dict(dep) for dep in captured_dependencies}
+    for dependency in dependencies:
         text = str(dependency).strip()
         if not text:
-            raise ValueError("extra_dependencies contains an empty dependency name")
+            raise ValueError("dependencies contains an empty dependency name")
         try:
             requirement = Requirement(text)
         except InvalidRequirement as err:
             raise ValueError(
-                f"extra_dependencies contains invalid requirement {text!r}"
+                f"dependencies contains invalid requirement {text!r}"
             ) from err
 
         specifiers = list(requirement.specifier)
@@ -135,6 +139,35 @@ def _merge_extra_dependencies(
         else:
             merged[_dependency_key(requirement.name)] = {"name": text}
     return list(merged.values())
+
+
+def _normalize_refiner_extras(refiner_extras: Sequence[str] | None) -> list[str]:
+    if not refiner_extras:
+        return []
+    if isinstance(refiner_extras, str):
+        raise ValueError("refiner_extras must be a sequence of extra names")
+
+    extras: set[str] = set()
+    for extra in refiner_extras:
+        text = str(extra).strip()
+        if text:
+            extras.add(_NORMALIZED_DEPENDENCY_SEPARATOR_PATTERN.sub("-", text).lower())
+    try:
+        metadata = importlib_metadata.metadata("macrodata-refiner")
+    except importlib_metadata.PackageNotFoundError:
+        available: set[str] = set()
+    else:
+        available = {
+            _NORMALIZED_DEPENDENCY_SEPARATOR_PATTERN.sub("-", extra).lower()
+            for extra in metadata.get_all("Provides-Extra") or []
+        }
+    invalid = sorted(extras.difference(available)) if available else []
+    if invalid:
+        valid = ", ".join(sorted(available)) or "<none>"
+        raise ValueError(
+            f"refiner_extras contains unknown extra {invalid[0]!r}; valid extras: {valid}"
+        )
+    return sorted(extras)
 
 
 def _resolve_installed_version() -> str | None:
@@ -207,12 +240,37 @@ def build_run_manifest(
     *,
     secret_values: Sequence[str] = (),
     capture_dependencies: bool = True,
-    extra_dependencies: Sequence[str] | None = None,
+    dependencies: Sequence[str] | None = None,
+    refiner_extras: Sequence[str] | None = None,
+    pipeline_stages: Sequence["PlannedStage"] | None = None,
 ) -> dict[str, Any]:
     script_path = _detect_script_path()
     path, text, sha256 = _read_script(script_path)
     refiner_version = _resolve_installed_version()
     refiner_ref = _resolve_direct_url_git_sha() or _resolve_local_repo_git_sha()
+    pipeline_refiner_extras: set[str] = set()
+    for stage in pipeline_stages or ():
+        pipeline = stage.pipeline
+        pipeline_refiner_extras.update(pipeline.source.required_refiner_extras())
+        for step in pipeline.pipeline_steps:
+            for candidate in getattr(step, "ops", (step,)):
+                for attr in ("fn", "predicate"):
+                    spec = getattr(
+                        getattr(candidate, attr, None), _REFINER_BUILTIN_CALL_ATTR, None
+                    )
+                    if isinstance(spec, dict):
+                        declared = spec.get("refiner_extras", ())
+                        if isinstance(declared, tuple):
+                            pipeline_refiner_extras.update(declared)
+        if pipeline.sink is not None:
+            pipeline_refiner_extras.update(pipeline.sink.required_refiner_extras())
+    if isinstance(refiner_extras, str):
+        merged_refiner_extras: Sequence[str] | None = refiner_extras
+    else:
+        merged_refiner_extras = [
+            *(refiner_extras or ()),
+            *sorted(pipeline_refiner_extras),
+        ]
 
     manifest: dict[str, Any] = {
         "version": 1,
@@ -227,14 +285,15 @@ def build_run_manifest(
             "python_version": platform.python_version(),
             "refiner_version": refiner_version,
             "refiner_ref": refiner_ref,
+            "refiner_extras": _normalize_refiner_extras(merged_refiner_extras),
             "platform": f"{platform.system().lower()}-{platform.machine().lower()}",
         },
     }
-    dependencies = _collect_dependencies() if capture_dependencies else []
-    if capture_dependencies or extra_dependencies:
-        manifest["dependencies"] = _merge_extra_dependencies(
+    captured_dependencies = _collect_dependencies() if capture_dependencies else []
+    if capture_dependencies or dependencies:
+        manifest["dependencies"] = _merge_dependencies(
+            captured_dependencies,
             dependencies,
-            extra_dependencies,
         )
     return manifest
 

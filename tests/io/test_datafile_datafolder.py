@@ -1,8 +1,9 @@
 from fsspec.implementations.memory import MemoryFileSystem
 from fsspec.implementations.local import LocalFileSystem
+from fsspec.implementations.http import HTTPFileSystem
 from typing import Any, cast
 
-from refiner.io.datafile import DataFile
+from refiner.io.datafile import DataFile, _file_cache_key
 from refiner.io.datafolder import DataFolder
 from refiner.io.fileset import DataFileSet
 
@@ -35,6 +36,31 @@ def test_datafile_resolve_with_path_fs_tuple(tmp_path):
     df = DataFile.resolve((p, fs))
     assert df.exists()
     assert df.is_local
+
+
+def test_datafile_cache_key_tracks_backing_filesystem_configuration():
+    left = DataFile(
+        fs=LocalFileSystem(skip_instance_cache=True),
+        path="bucket/file.txt",
+    )
+    right = DataFile(
+        fs=LocalFileSystem(skip_instance_cache=True),
+        path="bucket/file.txt",
+    )
+
+    assert left.fs is not right.fs
+    assert _file_cache_key(left) == _file_cache_key(right)
+
+    first_auth = DataFile(
+        fs=HTTPFileSystem(headers={"Authorization": "first"}),
+        path="https://example.com/file.txt",
+    )
+    second_auth = DataFile(
+        fs=HTTPFileSystem(headers={"Authorization": "second"}),
+        path="https://example.com/file.txt",
+    )
+
+    assert _file_cache_key(first_auth) != _file_cache_key(second_auth)
 
 
 def test_datafile_copy_skips_same_source_and_destination(tmp_path):
@@ -70,7 +96,9 @@ def test_datafile_resolve_adds_hf_token_for_huggingface_http_urls(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_test")
     monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
 
-    DataFile.resolve("https://huggingface.co/datasets/org/repo/resolve/main/file.mp4")
+    _ = DataFile.resolve(
+        "https://huggingface.co/datasets/org/repo/resolve/main/file.mp4"
+    ).fs
 
     assert captured["kwargs"]["headers"] == {"Authorization": "Bearer hf_test"}
 
@@ -85,7 +113,7 @@ def test_datafile_resolve_adds_hf_token_for_hf_short_urls(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_test")
     monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
 
-    DataFile.resolve("https://hf.co/datasets/org/repo/resolve/main/file.mp4")
+    _ = DataFile.resolve("https://hf.co/datasets/org/repo/resolve/main/file.mp4").fs
 
     assert captured["kwargs"]["headers"] == {"Authorization": "Bearer hf_test"}
 
@@ -102,10 +130,10 @@ def test_datafile_resolve_preserves_explicit_headers_for_huggingface_http_urls(
     monkeypatch.setenv("HF_TOKEN", "hf_test")
     monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
 
-    DataFile.resolve(
+    _ = DataFile.resolve(
         "https://huggingface.co/datasets/org/repo/resolve/main/file.mp4",
         storage_options={"headers": {"Authorization": "Bearer explicit"}},
-    )
+    ).fs
 
     assert captured["kwargs"]["headers"] == {"Authorization": "Bearer explicit"}
 
@@ -120,10 +148,10 @@ def test_datafile_resolve_merges_hf_token_with_existing_headers(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_test")
     monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
 
-    DataFile.resolve(
+    _ = DataFile.resolve(
         "https://huggingface.co/datasets/org/repo/resolve/main/file.mp4",
         storage_options={"headers": {"User-Agent": "refiner-test"}},
-    )
+    ).fs
 
     assert captured["kwargs"]["headers"] == {
         "User-Agent": "refiner-test",
@@ -141,10 +169,10 @@ def test_datafile_resolve_preserves_lowercase_authorization_header(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_test")
     monkeypatch.setattr("refiner.io.datafile.url_to_fs", fake_url_to_fs)
 
-    DataFile.resolve(
+    _ = DataFile.resolve(
         "https://huggingface.co/datasets/org/repo/resolve/main/file.mp4",
         storage_options={"headers": {"authorization": "Bearer explicit"}},
-    )
+    ).fs
 
     assert captured["kwargs"]["headers"] == {"authorization": "Bearer explicit"}
 
@@ -160,7 +188,9 @@ def test_datafolder_resolve_adds_hf_token_for_huggingface_http_urls(monkeypatch)
     monkeypatch.setenv("HF_TOKEN", "hf_test")
     monkeypatch.setattr("refiner.io.datafolder.url_to_fs", fake_url_to_fs)
 
-    DataFolder.resolve("https://huggingface.co/datasets/org/repo/tree/main/assets")
+    _ = DataFolder.resolve(
+        "https://huggingface.co/datasets/org/repo/tree/main/assets"
+    ).fs
 
     assert captured["kwargs"]["headers"] == {"Authorization": "Bearer hf_test"}
 
@@ -175,7 +205,10 @@ def test_datafileset_resolve_adds_hf_token_for_generic_hf_http_urls(monkeypatch)
     monkeypatch.setenv("HF_TOKEN", "hf_test")
     monkeypatch.setattr("refiner.io.fileset.url_to_fs", fake_url_to_fs)
 
-    DataFileSet.resolve("https://huggingface.co/datasets/org/repo/resolve/main/file")
+    entry = DataFileSet.resolve(
+        "https://huggingface.co/datasets/org/repo/resolve/main/file"
+    ).entries[0]
+    _ = getattr(entry, "fs")
 
     assert captured["kwargs"]["headers"] == {"Authorization": "Bearer hf_test"}
 

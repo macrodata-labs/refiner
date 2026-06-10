@@ -689,6 +689,28 @@ def test_worker_suppresses_sink_close_errors_after_run_failure() -> None:
         worker.run()
 
 
+def test_worker_marks_inflight_shards_failed_on_keyboard_interrupt() -> None:
+    shard = _shard("interrupt", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": 1})]}
+
+    def interrupt(row: Row) -> Row:
+        del row
+        raise KeyboardInterrupt
+
+    worker = _run_local_worker(
+        rows_by_shard=rows_by_shard,
+        runtime_lifecycle=runtime_lifecycle,
+        transform=interrupt,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        worker.run()
+
+    assert runtime_lifecycle.failed_ids == [shard.id]
+    assert runtime_lifecycle.failed_errors == ["Interrupted."]
+
+
 def test_worker_raises_sink_close_errors_after_success() -> None:
     shard = _shard("p", 0, 1)
     runtime_lifecycle = _FakeRuntimeLifecycle([shard])

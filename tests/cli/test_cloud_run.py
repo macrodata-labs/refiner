@@ -33,33 +33,31 @@ class _FakeConsole:
 
 def _job_payload(*, stage_index: int, status: str) -> dict[str, object]:
     return {
-        "job": {
-            "id": "job-1",
-            "name": "cloud pipeline",
-            "status": status,
-            "executorKind": "cloud",
-            "createdAt": 1_700_000_000_000,
-            "startedAt": 1_700_000_001_000,
-            "runningWorkers": 1,
-            "totalWorkers": 1,
-            "logsAvailable": True,
-            "stages": [
-                {
-                    "index": 0,
-                    "status": "completed" if stage_index > 0 else status,
-                    "completedWorkers": 1 if stage_index > 0 else 0,
-                    "runningWorkers": 0 if stage_index > 0 else 1,
-                    "totalWorkers": 1,
-                },
-                {
-                    "index": 1,
-                    "status": status if stage_index > 0 else "queued",
-                    "completedWorkers": 0,
-                    "runningWorkers": 1 if stage_index > 0 else 0,
-                    "totalWorkers": 1,
-                },
-            ],
-        }
+        "id": "job-1",
+        "name": "cloud pipeline",
+        "status": status,
+        "executorKind": "cloud",
+        "createdAt": 1_700_000_000_000,
+        "startedAt": 1_700_000_001_000,
+        "runningWorkers": 1,
+        "totalWorkers": 1,
+        "logsAvailable": True,
+        "stages": [
+            {
+                "index": 0,
+                "status": "completed" if stage_index > 0 else status,
+                "completedWorkers": 1 if stage_index > 0 else 0,
+                "runningWorkers": 0 if stage_index > 0 else 1,
+                "totalWorkers": 1,
+            },
+            {
+                "index": 1,
+                "status": status if stage_index > 0 else "queued",
+                "completedWorkers": 0,
+                "runningWorkers": 1 if stage_index > 0 else 0,
+                "totalWorkers": 1,
+            },
+        ],
     }
 
 
@@ -90,32 +88,30 @@ def test_build_snapshot_preserves_stage_zero_progress() -> None:
     snapshot = cloud_run._build_snapshot(
         context=context,
         job_payload={
-            "job": {
-                "id": "job-1",
-                "name": "cloud pipeline",
-                "status": "running",
-                "createdAt": 1_700_000_000_000,
-                "startedAt": 1_700_000_001_000,
-                "runningWorkers": 2,
-                "totalWorkers": 4,
-                "stages": [
-                    {
-                        "index": 0,
-                        "status": "running",
-                        "completedWorkers": 3,
-                        "totalWorkers": 5,
-                        "shardDone": 4,
-                        "shardTotal": 9,
-                        "shardRunning": 2,
-                    },
-                    {
-                        "index": 1,
-                        "status": "queued",
-                        "completedWorkers": 0,
-                        "totalWorkers": 7,
-                    },
-                ],
-            }
+            "id": "job-1",
+            "name": "cloud pipeline",
+            "status": "running",
+            "createdAt": 1_700_000_000_000,
+            "startedAt": 1_700_000_001_000,
+            "runningWorkers": 2,
+            "totalWorkers": 4,
+            "stages": [
+                {
+                    "index": 0,
+                    "status": "running",
+                    "completedWorkers": 3,
+                    "totalWorkers": 5,
+                    "shardDone": 4,
+                    "shardTotal": 9,
+                    "shardRunning": 2,
+                },
+                {
+                    "index": 1,
+                    "status": "queued",
+                    "completedWorkers": 0,
+                    "totalWorkers": 7,
+                },
+            ],
         },
     )
 
@@ -138,26 +134,24 @@ def test_build_snapshot_reads_stage_shard_running() -> None:
     snapshot = cloud_run._build_snapshot(
         context=context,
         job_payload={
-            "job": {
-                "id": "job-1",
-                "name": "cloud pipeline",
-                "status": "running",
-                "createdAt": 1_700_000_000_000,
-                "startedAt": 1_700_000_001_000,
-                "runningWorkers": 2,
-                "totalWorkers": 4,
-                "stages": [
-                    {
-                        "index": 0,
-                        "status": "running",
-                        "completedWorkers": 3,
-                        "totalWorkers": 5,
-                        "shardDone": 4,
-                        "shardTotal": 9,
-                        "shardRunning": 2,
-                    }
-                ],
-            }
+            "id": "job-1",
+            "name": "cloud pipeline",
+            "status": "running",
+            "createdAt": 1_700_000_000_000,
+            "startedAt": 1_700_000_001_000,
+            "runningWorkers": 2,
+            "totalWorkers": 4,
+            "stages": [
+                {
+                    "index": 0,
+                    "status": "running",
+                    "completedWorkers": 3,
+                    "totalWorkers": 5,
+                    "shardDone": 4,
+                    "shardTotal": 9,
+                    "shardRunning": 2,
+                }
+            ],
         },
     )
 
@@ -177,29 +171,27 @@ def test_build_snapshot_tolerates_null_stage_indexes() -> None:
     snapshot = cloud_run._build_snapshot(
         context=context,
         job_payload={
-            "job": {
-                "id": "job-1",
-                "name": "cloud pipeline",
-                "status": "running",
-                "createdAt": 1_700_000_000_000,
-                "startedAt": 1_700_000_001_000,
-                "runningWorkers": 2,
-                "totalWorkers": 4,
-                "stages": [
-                    {
-                        "index": None,
-                        "status": "running",
-                        "completedWorkers": 3,
-                        "totalWorkers": 5,
-                    },
-                    {
-                        "index": 1,
-                        "status": "queued",
-                        "completedWorkers": 0,
-                        "totalWorkers": 7,
-                    },
-                ],
-            }
+            "id": "job-1",
+            "name": "cloud pipeline",
+            "status": "running",
+            "createdAt": 1_700_000_000_000,
+            "startedAt": 1_700_000_001_000,
+            "runningWorkers": 2,
+            "totalWorkers": 4,
+            "stages": [
+                {
+                    "index": None,
+                    "status": "running",
+                    "completedWorkers": 3,
+                    "totalWorkers": 5,
+                },
+                {
+                    "index": 1,
+                    "status": "queued",
+                    "completedWorkers": 0,
+                    "totalWorkers": 7,
+                },
+            ],
         },
     )
 
@@ -219,25 +211,23 @@ def test_build_snapshot_keeps_pending_runtime_at_zero_without_start_time() -> No
     snapshot = cloud_run._build_snapshot(
         context=context,
         job_payload={
-            "job": {
-                "id": "job-1",
-                "name": "cloud pipeline",
-                "status": "queued",
-                "createdAt": 1_700_000_000_000,
-                "startedAt": None,
-                "runningWorkers": 0,
-                "totalWorkers": 4,
-                "stages": [
-                    {
-                        "index": 0,
-                        "status": "queued",
-                        "completedWorkers": 0,
-                        "totalWorkers": 4,
-                        "shardDone": 0,
-                        "shardTotal": 9,
-                    }
-                ],
-            }
+            "id": "job-1",
+            "name": "cloud pipeline",
+            "status": "queued",
+            "createdAt": 1_700_000_000_000,
+            "startedAt": None,
+            "runningWorkers": 0,
+            "totalWorkers": 4,
+            "stages": [
+                {
+                    "index": 0,
+                    "status": "queued",
+                    "completedWorkers": 0,
+                    "totalWorkers": 4,
+                    "shardDone": 0,
+                    "shardTotal": 9,
+                }
+            ],
         },
     )
 
@@ -256,24 +246,22 @@ def test_build_snapshot_prefers_active_stage_status_over_job_status() -> None:
     snapshot = cloud_run._build_snapshot(
         context=context,
         job_payload={
-            "job": {
-                "id": "job-1",
-                "name": "cloud pipeline",
-                "status": "running",
-                "createdAt": 1_700_000_000_000,
-                "startedAt": None,
-                "runningWorkers": 0,
-                "totalWorkers": 4,
-                "stages": [
-                    {
-                        "index": 0,
-                        "status": "queued",
-                        "completedWorkers": 0,
-                        "runningWorkers": 0,
-                        "totalWorkers": 4,
-                    }
-                ],
-            }
+            "id": "job-1",
+            "name": "cloud pipeline",
+            "status": "running",
+            "createdAt": 1_700_000_000_000,
+            "startedAt": None,
+            "runningWorkers": 0,
+            "totalWorkers": 4,
+            "stages": [
+                {
+                    "index": 0,
+                    "status": "queued",
+                    "completedWorkers": 0,
+                    "runningWorkers": 0,
+                    "totalWorkers": 4,
+                }
+            ],
         },
     )
 
@@ -442,7 +430,7 @@ def test_attach_to_cloud_job_returns_nonzero_for_unsuccessful_terminal_status(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             del job_id
             payload = _job_payload(stage_index=0, status=status)
-            job = cast(dict[str, object], payload["job"])
+            job = payload
             job["logsAvailable"] = False
             return payload
 
@@ -453,7 +441,7 @@ def test_attach_to_cloud_job_returns_nonzero_for_unsuccessful_terminal_status(
     monkeypatch.setattr(cloud_run.time, "sleep", lambda _: None)
 
     payload = _job_payload(stage_index=0, status=status)
-    job = cast(dict[str, object], payload["job"])
+    job = payload
     job["logsAvailable"] = False
 
     rc = cloud_run.attach_to_cloud_job(
@@ -552,7 +540,7 @@ def test_attach_to_cloud_job_without_logs_does_not_busy_loop(monkeypatch) -> Non
     monkeypatch.setattr(cloud_run.time, "sleep", _fake_sleep)
 
     payload = _job_payload(stage_index=0, status="running")
-    job = cast(dict[str, object], payload["job"])
+    job = payload
     job["logsAvailable"] = False
 
     try:
@@ -660,7 +648,7 @@ def test_attach_to_cloud_job_limits_to_one_worker_in_one_mode(monkeypatch) -> No
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             del job_id
             payload = _job_payload(stage_index=0, status="completed")
-            job = cast(dict[str, object], payload["job"])
+            job = payload
             job["runningWorkers"] = 2
             job["totalWorkers"] = 2
             stage = cast(list[dict[str, object]], job["stages"])[0]
@@ -873,7 +861,7 @@ def test_attach_to_cloud_job_errors_mode_does_not_spend_worker_cap_on_info_only_
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             del job_id
             payload = _job_payload(stage_index=0, status="completed")
-            job = cast(dict[str, object], payload["job"])
+            job = payload
             job["runningWorkers"] = 6
             job["totalWorkers"] = 6
             stage = cast(list[dict[str, object]], job["stages"])[0]
@@ -952,7 +940,7 @@ def test_attach_to_cloud_job_all_mode_suppresses_workers_beyond_cap(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             del job_id
             payload = _job_payload(stage_index=0, status="completed")
-            job = cast(dict[str, object], payload["job"])
+            job = payload
             worker_count = cloud_run._ATTACH_MAX_LOGGED_WORKERS + 1
             job["runningWorkers"] = worker_count
             job["totalWorkers"] = worker_count

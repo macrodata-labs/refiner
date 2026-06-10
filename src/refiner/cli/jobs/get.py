@@ -118,8 +118,8 @@ def _stage_gpu_text(runtime_config: Any) -> str:
 
 
 def _render_job(payload: dict[str, Any]) -> int:
-    job = payload.get("job")
-    if not isinstance(job, dict):
+    job = payload
+    if not isinstance(job.get("id"), str):
         print("Job details unavailable.", file=sys.stderr)
         return 1
 

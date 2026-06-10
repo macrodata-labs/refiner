@@ -1,15 +1,15 @@
 ---
-title: "CLI Secrets"
+title: "CLI secrets"
 description: "Manage workspace secrets from the Macrodata CLI"
 ---
 
-# CLI Secrets
+# CLI secrets
 
 Use CLI secrets for values that cloud jobs need but source code should not
 contain. Secret values are stored in a workspace environment and are injected
 into launched jobs only when the pipeline requests them.
 
-## List Secrets
+## List secrets
 
 ```bash
 macrodata secrets list --env production
@@ -38,7 +38,7 @@ No secrets found.
 | `--env <name>` | Secret environment to list |
 | `--json` | Print raw JSON |
 
-## Set A Secret
+## Set a secret
 
 ```bash
 printf '%s' "$HF_TOKEN" | macrodata secrets set HF_TOKEN --env production --value-stdin
@@ -67,7 +67,7 @@ printf '%s' "$OPENAI_API_KEY" | macrodata secrets set OPENAI_API_KEY --value-std
 | `--value-stdin` | Read the secret value from stdin |
 | `--json` | Print raw JSON |
 
-## Remove A Secret
+## Remove a secret
 
 ```bash
 macrodata secrets remove HF_TOKEN --env production
@@ -88,7 +88,7 @@ Removed secret production/HF_TOKEN.
 | `--env <name>` | Secret environment; defaults to `default` |
 | `--json` | Print raw JSON |
 
-## Use In A Pipeline
+## Use in a pipeline
 
 After storing a secret, request it from the cloud launcher by environment name
 and key. Refiner makes the value available to the job without writing it into
@@ -101,4 +101,4 @@ pipeline.launch_cloud(
 )
 ```
 
-See [Secrets and Environment](../platform/secrets-and-environment.md).
+See [Secrets and environment](../platform/secrets-and-environment.md).

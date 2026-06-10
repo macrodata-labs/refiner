@@ -38,5 +38,4 @@ pipeline = (
 ```
 
 If some demos are missing optional fields, choose a `missing_policy` in
-[`read_hdf5`](../reading-data/hdf5.md).
-
+[`read_hdf5`](../../reading-data/hdf5.md).

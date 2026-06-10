@@ -1,9 +1,9 @@
 ---
-title: "Jobs, Logs, and Metrics"
+title: "Jobs, logs, and metrics"
 description: "Inspect cloud jobs from the Macrodata CLI"
 ---
 
-# Jobs, Logs, And Metrics
+# Jobs, logs, and metrics
 
 Job inspection commands default to terminal-friendly output. Add `--json` when
 an agent, script, or CI job needs structured data.
@@ -27,11 +27,9 @@ macrodata jobs list --cursor <next_cursor> --json
 Example output:
 
 ```text
-ID       Name                 Status    Kind   Created                  Started By
-job_123  aloha preprocessing  running   cloud  2026-05-28 12:40:10 UTC ada@example.com
-job_122  local smoke test     done      local  2026-05-28 11:58:31 UTC ada@example.com
-
-Next cursor: macrodata jobs list --limit 20 --cursor eyJwYWdlIjoyfQ
+ID       Status     Kind   Name                 Stages  Created                  Created By
+job_123  ● running  cloud  aloha preprocessing  1/2     2026-05-28 12:40:10 UTC  ada@example.com
+job_122  ● done     local  local smoke test     2/2     2026-05-28 11:58:31 UTC  ada@example.com
 ```
 
 | Option | Use |
@@ -43,7 +41,7 @@ Next cursor: macrodata jobs list --limit 20 --cursor eyJwYWdlIjoyfQ
 | `--cursor <cursor>` | Continue a paginated listing |
 | `--json` | Print raw JSON |
 
-## Inspect One Job
+## Inspect one Job
 
 ```bash
 macrodata jobs get job_123
@@ -57,7 +55,7 @@ metrics.
 Example output:
 
 ```text
-Job: aloha preprocessing  ID: job_123  URL: https://app.macrodata.ai/jobs/job_123
+Job: aloha preprocessing  ID: job_123  URL: https://macrodata.co/jobs/acme-robotics/job_123
 Status: running  Kind: cloud  Cost: $1.25
 Created: 2026-05-28 12:40:10 UTC  Started: 2026-05-28 12:40:22 UTC
 Created By: ada@example.com
@@ -74,7 +72,7 @@ Stage  Step  Name          Type  Columns
 
 For local jobs, the summary also prints the run directory.
 
-## Attach To A Running Job
+## Attach to a running Job
 
 ```bash
 macrodata jobs attach job_123
@@ -162,7 +160,7 @@ Next cursor: macrodata jobs workers job_123 --stage 0 --limit 20 --cursor eyJwYW
 | `--cursor <cursor>` | Continue a paginated worker listing |
 | `--json` | Print raw JSON |
 
-## Follow Logs
+## Follow logs
 
 ```bash
 macrodata jobs logs job_123 --follow
@@ -210,7 +208,7 @@ search requires an explicit `--stage` and a time window with `--start-ms` and
 | `--follow` | Poll continuously for new entries |
 | `--json` | Print raw JSON |
 
-## Stage Metrics
+## Stage metrics
 
 ```bash
 macrodata jobs metrics job_123 0
@@ -270,7 +268,7 @@ Per Worker (lifetime): 30000
 `--metric`, `--worker`, and `--workers` require `--step`. `--worker` also
 requires `--metric`. `--asc` and `--desc` apply to worker rankings.
 
-## Resource Metrics
+## Resource metrics
 
 ```bash
 macrodata jobs resource-metrics job_123 0
@@ -327,7 +325,7 @@ Canceled: job_123
   Failed: 0
 ```
 
-## Related Pages
+## Related pages
 
 - [Observability](../running-pipelines/observability.md)
 - [Cloud Jobs and Files](../platform/cloud-jobs-and-files.md)

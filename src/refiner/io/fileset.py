@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import glob
-from collections.abc import Mapping, Sequence
+import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from os import PathLike
 from typing import Any, Literal, TypeAlias, Union, cast
 
 from fsspec import AbstractFileSystem, url_to_fs
 
-from refiner.io.datafile import DataFile, DataFileSpec, _storage_options_for_path
+from refiner.io.datafile import (
+    DataFile,
+    DataFileSpec,
+    _storage_options_for_path,
+)
 from refiner.io.datafolder import DataFolder, DataFolderSpec
+from refiner.io.utils import required_refiner_extras
 
 DataFileSetInput: TypeAlias = Union[
     str, PathLike[str], DataFileSpec, DataFolderSpec, DataFile, DataFolder
@@ -17,10 +23,41 @@ DataFileSetInput: TypeAlias = Union[
 DataFileSetLike: TypeAlias = Union[DataFileSetInput, Sequence[DataFileSetInput]]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _PathSource:
-    path: str
-    fs: AbstractFileSystem
+    _path: str
+    _fs: AbstractFileSystem | None = None
+    _storage_options: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self._fs is not None:
+            self._path = self._fs._strip_protocol(self._path)
+
+    def _resolve(self) -> tuple[AbstractFileSystem, str]:
+        if self._fs is None:
+            self._fs, self._path = url_to_fs(
+                self._path,
+                **_storage_options_for_path(self._path, self._storage_options),
+            )
+        return self._fs, self._path
+
+    @property
+    def fs(self) -> AbstractFileSystem:
+        return self._resolve()[0]
+
+    @property
+    def path(self) -> str:
+        return self._resolve()[1]
+
+    def abs_path(self) -> str:
+        if self._fs is None:
+            if "://" not in self._path and "::" not in self._path:
+                return os.path.abspath(self._path)
+            return self._path.removeprefix("file://")
+        return self.fs.unstrip_protocol(self.path).removeprefix("file://")
+
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        return required_refiner_extras(self._path, self._fs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +75,7 @@ class DataFileSet:
     entries: tuple[DataFile | DataFolder | _PathSource, ...]
     recursive: bool = False
     extensions: tuple[str, ...] = ()
+    include_file: Callable[[str], bool] | None = None
     _expanded_sources: tuple[tuple[DataFile, ...], ...] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -54,9 +92,13 @@ class DataFileSet:
         storage_options: Mapping[str, Any] | None = None,
         recursive: bool = False,
         extensions: Sequence[str] | None = None,
+        include_file: Callable[[str], bool] | None = None,
         expect_type: Literal["file", "folder"] | None = None,
     ) -> "DataFileSet":
-        """Normalize input specs into a lazy file set without listing them yet."""
+        """Normalize input specs into a lazy file set without listing them yet.
+
+        `include_file` filters files discovered from directory inputs only.
+        """
         if isinstance(data, cls):
             return data
 
@@ -72,11 +114,7 @@ class DataFileSet:
             inputs = tuple(data)
 
         normalized_entries: list[DataFile | DataFolder | _PathSource] = []
-
-        def append_path_source(path: str, path_fs: AbstractFileSystem) -> None:
-            normalized_entries.append(
-                _PathSource(path=path_fs._strip_protocol(path), fs=path_fs)
-            )
+        source_storage_options = dict(storage_options or {})
 
         for item in inputs:
             if isinstance(item, DataFile):
@@ -91,25 +129,14 @@ class DataFileSet:
                 normalized_entries.append(item)
                 continue
 
-            if (
-                isinstance(item, tuple)
-                and len(item) == 2
-                and isinstance(item[1], AbstractFileSystem)
-            ):
-                path, item_fs = cast(DataFileSpec | DataFolderSpec, item)
-                if isinstance(path, PathLike):
-                    path = str(path)
-                if not isinstance(path, str):
+            item_fs = fs
+            if isinstance(item, tuple):
+                if not (len(item) == 2 and isinstance(item[1], AbstractFileSystem)):
                     raise TypeError(
                         "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                     )
-                if expect_type == "folder":
-                    append_path_source(path, item_fs)
-                elif expect_type == "file":
-                    normalized_entries.append(DataFile(path=path, fs=item_fs))
-                else:
-                    append_path_source(path, item_fs)
-                continue
+                path, item_fs = cast(DataFileSpec | DataFolderSpec, item)
+                item = path
 
             if isinstance(item, PathLike):
                 item = str(item)
@@ -119,35 +146,28 @@ class DataFileSet:
                     "DataFileSet inputs must be str | PathLike | (path, fs) | DataFile | DataFolder"
                 )
 
-            if fs is not None:
-                if expect_type == "folder":
-                    append_path_source(item, fs)
-                elif expect_type == "file":
-                    normalized_entries.append(DataFile.resolve(item, fs=fs))
+            if item_fs is not None:
+                if expect_type == "file":
+                    normalized_entries.append(DataFile.resolve(item, fs=item_fs))
                 else:
-                    append_path_source(item, fs)
+                    normalized_entries.append(_PathSource(_path=item, _fs=item_fs))
+            elif expect_type == "file":
+                normalized_entries.append(
+                    DataFile.resolve(item, storage_options=storage_options)
+                )
             else:
-                if expect_type == "folder":
-                    item_fs, path = url_to_fs(
-                        item,
-                        **_storage_options_for_path(item, storage_options),
+                normalized_entries.append(
+                    _PathSource(
+                        _path=item,
+                        _storage_options=source_storage_options,
                     )
-                    append_path_source(path, item_fs)
-                elif expect_type == "file":
-                    normalized_entries.append(
-                        DataFile.resolve(item, storage_options=storage_options)
-                    )
-                else:
-                    item_fs, path = url_to_fs(
-                        item,
-                        **_storage_options_for_path(item, storage_options),
-                    )
-                    append_path_source(path, item_fs)
+                )
 
         return cls(
             entries=tuple(normalized_entries),
             recursive=recursive,
             extensions=tuple(extensions or ()),
+            include_file=include_file,
         )
 
     @property
@@ -167,6 +187,17 @@ class DataFileSet:
         if not all(isinstance(entry, DataFolder) for entry in entries):
             raise TypeError("DataFileSet entries are not all folders")
         return cast(tuple[DataFolder, ...], entries)
+
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    extra
+                    for entry in self.entries
+                    for extra in entry.required_refiner_extras()
+                }
+            )
+        )
 
     @property
     def resolved_entries(self) -> tuple[DataFile | DataFolder, ...]:
@@ -223,6 +254,7 @@ class DataFileSet:
             return cached
 
         exts = tuple(e.lower() for e in self.extensions)
+        include_file = self.include_file
         seen: set[tuple[int, str]] = set()
         expanded: list[tuple[DataFile, ...]] = []
         sizes = dict(self._sizes)
@@ -235,6 +267,12 @@ class DataFileSet:
             apply_extensions: bool = True,
         ) -> None:
             if apply_extensions and exts and not file.path.lower().endswith(exts):
+                return
+            if (
+                apply_extensions
+                and include_file is not None
+                and not include_file(file.path)
+            ):
                 return
             key = (id(file.fs), file.path)
             if key in seen:
@@ -286,6 +324,7 @@ class DataFileSet:
                             files,
                             DataFile(fs=next_fs, path=expanded_path),
                             size=size if isinstance(size, int) else None,
+                            apply_extensions=False,
                         )
                 else:
                     raise AssertionError(

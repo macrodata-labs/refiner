@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import json
 from argparse import Namespace
 from datetime import datetime
 from types import SimpleNamespace
@@ -58,54 +59,52 @@ class _FakeClient:
 
     def cli_get_job(self, *, job_id: str) -> dict[str, object]:
         return {
-            "job": {
-                "id": job_id,
-                "name": "cloud pipeline",
-                "attemptNumber": 2,
-                "continuedFromJobId": "job-0",
-                "rootJobId": "job-root",
-                "status": "running",
-                "executorKind": "cloud",
-                "startedByUsername": "alex",
-                "startedByEmail": "alex@example.com",
-                "progress": {"done": 3, "total": 7},
-                "createdAt": 1_700_000_000_000,
-                "startedAt": 1_700_000_001_000,
-                "endedAt": None,
-                "runningWorkers": 2,
-                "totalWorkers": 4,
-                "currentCostUsd": "1.25",
-                "manifestAvailable": True,
-                "logsAvailable": True,
-                "metricsAvailable": True,
-                "stages": [
-                    {
-                        "index": 0,
-                        "status": "running",
-                        "shardDone": 3,
-                        "shardTotal": 10,
-                        "runningWorkers": 2,
-                        "completedWorkers": 1,
-                        "totalWorkers": 4,
-                        "name": "stage-0",
-                        "runtimeConfig": {
-                            "requestedNumWorkers": 4,
-                            "cpuCores": 8,
-                            "memoryMb": 16384,
-                            "gpuCount": 1,
-                            "gpuType": "a10g",
-                        },
-                        "steps": [
-                            {
-                                "index": 0,
-                                "name": "normalize_rows",
-                                "type": "map",
-                                "args": {"columns": 18},
-                            }
-                        ],
-                    }
-                ],
-            }
+            "id": job_id,
+            "name": "cloud pipeline",
+            "attemptNumber": 2,
+            "continuedFromJobId": "job-0",
+            "rootJobId": "job-root",
+            "status": "running",
+            "executorKind": "cloud",
+            "startedByUsername": "alex",
+            "startedByEmail": "alex@example.com",
+            "progress": {"done": 3, "total": 7},
+            "createdAt": 1_700_000_000_000,
+            "startedAt": 1_700_000_001_000,
+            "endedAt": None,
+            "runningWorkers": 2,
+            "totalWorkers": 4,
+            "currentCostUsd": "1.25",
+            "manifestAvailable": True,
+            "logsAvailable": True,
+            "metricsAvailable": True,
+            "stages": [
+                {
+                    "index": 0,
+                    "status": "running",
+                    "shardDone": 3,
+                    "shardTotal": 10,
+                    "runningWorkers": 2,
+                    "completedWorkers": 1,
+                    "totalWorkers": 4,
+                    "name": "stage-0",
+                    "runtimeConfig": {
+                        "requestedNumWorkers": 4,
+                        "cpuCores": 8,
+                        "memoryMb": 16384,
+                        "gpuCount": 1,
+                        "gpuType": "a10g",
+                    },
+                    "steps": [
+                        {
+                            "index": 0,
+                            "name": "normalize_rows",
+                            "type": "map",
+                            "args": {"columns": 18},
+                        }
+                    ],
+                }
+            ],
         }
 
     def cli_get_job_manifest(self, *, job_id: str) -> dict[str, object]:
@@ -314,11 +313,24 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "\x1b[" not in out.out
 
 
+def test_jobs_get_json_output_prints_job_object(monkeypatch, capsys) -> None:
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_get(Namespace(job_id="job-1", json=True))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    payload = json.loads(out.out)
+    assert payload["id"] == "job-1"
+    assert payload["name"] == "cloud pipeline"
+    assert "job" not in payload
+
+
 def test_jobs_get_plain_output_shows_rundir_for_local_jobs(monkeypatch, capsys) -> None:
     class _LocalClient(_FakeClient):
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
-            job = cast(dict[str, object], payload["job"])
+            job = payload
             job["executorKind"] = "local"
             job["rundir"] = "/tmp/refiner/runs/job-1"
             return payload
@@ -339,7 +351,7 @@ def test_jobs_get_plain_output_hides_lineage_for_standalone_jobs(
     class _StandaloneClient(_FakeClient):
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
-            job = cast(dict[str, object], payload["job"])
+            job = payload
             job["attemptNumber"] = 1
             job["continuedFromJobId"] = None
             return payload
@@ -376,9 +388,7 @@ def test_jobs_get_colors_error_for_interactive_terminals(monkeypatch, capsys) ->
     class _ErrorClient(_FakeClient):
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
-            cast(dict[str, object], payload["job"])["error"] = (
-                "Local launcher interrupted"
-            )
+            payload["error"] = "Local launcher interrupted"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _ErrorClient())
@@ -411,7 +421,7 @@ def test_jobs_attach_calls_cloud_attach(monkeypatch) -> None:
     assert captured["job_id"] == "job-1"
     assert captured.get("force_attach", False) is True
     payload = cast(dict[str, object], captured["initial_job_payload"])
-    job = cast(dict[str, object], payload["job"])
+    job = payload
     assert job["executorKind"] == "cloud"
 
 
@@ -419,7 +429,7 @@ def test_jobs_attach_rejects_non_cloud_job(monkeypatch, capsys) -> None:
     class _LocalClient(_FakeClient):
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
-            cast(dict[str, object], payload["job"])["executorKind"] = "local"
+            payload["executorKind"] = "local"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _LocalClient())
@@ -653,7 +663,7 @@ def test_jobs_logs_follow_requests_latest_anchor(monkeypatch, capsys) -> None:
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 1:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _FollowClient())
@@ -792,7 +802,7 @@ def test_jobs_logs_follow_returns_when_job_is_terminal(monkeypatch, capsys) -> N
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 1:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     client = _TerminalClient()
@@ -839,7 +849,7 @@ def test_jobs_logs_follow_degrades_to_one_shot_when_job_already_terminal(
 
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
-            cast(dict[str, object], payload["job"])["status"] = "completed"
+            payload["status"] = "completed"
             return payload
 
         def cli_get_job_logs(self, **_: object) -> dict[str, object]:
@@ -941,7 +951,7 @@ def test_jobs_logs_follow_fetches_one_final_window_after_terminal_status(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 1:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     client = _TerminalClient()
@@ -991,7 +1001,7 @@ def test_jobs_logs_follow_skips_terminal_drain_when_logs_unavailable(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 1:
-                job = cast(dict[str, object], payload["job"])
+                job = payload
                 job["status"] = "completed"
                 job["logsAvailable"] = False
             return payload
@@ -1060,7 +1070,7 @@ def test_jobs_logs_follow_retries_terminal_window_fetch_errors(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 1:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _TerminalClient())
@@ -1145,7 +1155,7 @@ def test_jobs_logs_follow_resets_terminal_retry_counter_after_success(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 1:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _TerminalClient())
@@ -1219,7 +1229,7 @@ def test_jobs_logs_follow_drains_backlog_before_terminal_exit(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 2:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     client = _BacklogClient()
@@ -1294,7 +1304,7 @@ def test_jobs_logs_follow_terminal_drain_breaks_repeated_cursor(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 1:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     client = _StickyCursorClient()
@@ -1385,7 +1395,7 @@ def test_jobs_logs_follow_terminal_drain_dedupes_bootstrap_entries(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 1:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _TerminalOrderingClient())
@@ -1456,7 +1466,7 @@ def test_jobs_logs_follow_skips_sleep_while_draining_full_batches(
             self.job_calls += 1
             payload = super().cli_get_job(job_id=job_id)
             if self.job_calls >= 3:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     client = _BusyClient()
@@ -1540,7 +1550,7 @@ def test_jobs_logs_follow_skips_backlog_to_stay_live(monkeypatch, capsys) -> Non
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls > jobs_logs._FOLLOW_LOG_MAX_DRAIN_POLLS + 2:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _SkippingClient())
@@ -1616,7 +1626,7 @@ def test_jobs_logs_follow_sleeps_after_bounded_drain_polls(monkeypatch, capsys) 
             self.job_calls += 1
             payload = super().cli_get_job(job_id=job_id)
             if self.job_calls >= jobs_logs._FOLLOW_LOG_MAX_DRAIN_POLLS + 1:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     client = _HotClient()
@@ -1689,7 +1699,7 @@ def test_jobs_logs_follow_ignores_transient_status_probe_errors(
                 raise MacrodataApiError(status=503, message="temporary")
             payload = super().cli_get_job(job_id=job_id)
             if self.job_calls >= 2:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _FlakyStatusClient())
@@ -1738,7 +1748,7 @@ def test_jobs_logs_follow_advances_window_after_transient_status_probe_error(
                 raise MacrodataApiError(status=503, message="temporary")
             payload = super().cli_get_job(job_id=job_id)
             if self.job_calls >= 2:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     client = _FlakyStatusClient()
@@ -1805,7 +1815,7 @@ def test_jobs_logs_follow_retries_transient_log_fetch_errors(
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 2:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _FlakyLogsClient())
@@ -1860,7 +1870,7 @@ def test_jobs_logs_follow_flushes_stream_output(monkeypatch) -> None:
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
             if self.log_calls >= 1:
-                cast(dict[str, object], payload["job"])["status"] = "completed"
+                payload["status"] = "completed"
             return payload
 
     client = _TerminalClient()
@@ -1970,7 +1980,7 @@ def test_jobs_logs_follow_uses_larger_default_limit(monkeypatch, capsys) -> None
 
         def cli_get_job(self, *, job_id: str) -> dict[str, object]:
             payload = super().cli_get_job(job_id=job_id)
-            cast(dict[str, object], payload["job"])["status"] = "completed"
+            payload["status"] = "completed"
             return payload
 
     _patch_job_client(monkeypatch, lambda: _LimitClient())

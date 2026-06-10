@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 import fnmatch
 from glob import has_magic
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
 from fsspec import AbstractFileSystem
@@ -49,6 +51,7 @@ class Hdf5Reader(BaseReader):
         file_path_column: str | None = "file_path",
         group_path_column: str | None = "hdf5_group",
         missing_policy: MissingPolicy = "error",
+        cache_remote_files: bool = False,
         dtypes: DTypeMapping | None = None,
     ):
         super().__init__(
@@ -88,6 +91,7 @@ class Hdf5Reader(BaseReader):
         self.attrs = path_selection_map(attrs, format_name="HDF5")
         self.group_path_column = group_path_column
         self.missing_policy = missing_policy
+        self.cache_remote_files = cache_remote_files
         if missing_policy not in ("error", "drop_row", "set_null"):
             raise ValueError(
                 "missing_policy must be one of 'error', 'drop_row', or 'set_null'"
@@ -105,6 +109,7 @@ class Hdf5Reader(BaseReader):
                 "attrs": dict(self.attrs),
                 "group_path_column": self.group_path_column,
                 "missing_policy": self.missing_policy,
+                "cache_remote_files": self.cache_remote_files,
                 "dtypes": (
                     {key: dtype_to_plan(dtype) for key, dtype in self.dtypes.items()}
                     if self.dtypes
@@ -113,6 +118,9 @@ class Hdf5Reader(BaseReader):
             }
         )
         return description
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("hdf5",)
 
     def _validate_column_names(self) -> None:
         for name, path in self.datasets.items():
@@ -158,13 +166,25 @@ class Hdf5Reader(BaseReader):
         check_required_dependencies("read_hdf5", ["h5py"], dist="hdf5")
         import h5py
 
-        for part in descriptor.parts:
-            source = self.fileset.resolve_file(part.source_index, part.path)
-            with source.open(mode="rb") as raw, h5py.File(raw, "r") as h5:
-                for group_path, group in self._iter_groups(h5, h5py):
-                    row = self._read_group(source, group, group_path, h5py)
-                    if row is not None:
-                        yield DictRow(row)
+        with TemporaryDirectory(prefix="refiner-hdf5-") as tempdir:
+            for part_index, part in enumerate(descriptor.parts):
+                source = self.fileset.resolve_file(part.source_index, part.path)
+                open_source = source
+                local_path: Path | None = None
+                if self.cache_remote_files and not source.is_local:
+                    suffix = Path(source.path).suffix or ".hdf5"
+                    local_path = Path(tempdir) / f"source-{part_index:06d}{suffix}"
+                    source.copy(str(local_path))
+                    open_source = DataFile.resolve(str(local_path))
+                try:
+                    with open_source.open(mode="rb") as raw, h5py.File(raw, "r") as h5:
+                        for group_path, group in self._iter_groups(h5, h5py):
+                            row = self._read_group(source, group, group_path, h5py)
+                            if row is not None:
+                                yield DictRow(row)
+                finally:
+                    if local_path is not None:
+                        local_path.unlink(missing_ok=True)
 
     def _iter_groups(self, h5, h5py) -> Iterator[tuple[str, Any]]:
         if isinstance(self.groups, str):

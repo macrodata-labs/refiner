@@ -1,9 +1,9 @@
 ---
-title: "Motion Trimming"
+title: "Motion trimming"
 description: "Trim inactive frames from robotics episodes"
 ---
 
-# Motion Trimming
+# Motion trimming
 
 `motion_trim` removes inactive frames before and after the motion window of an
 episode. It uses action and state deltas to infer activity.
@@ -16,7 +16,7 @@ pipeline = (
 )
 ```
 
-## What It Updates
+## What it updates
 
 | Data | Behavior |
 | --- | --- |
@@ -43,7 +43,7 @@ timestamps, actions, and state values. `read_lerobot(...)` rows satisfy this
 when the dataset contains those fields. Generic rows should be converted with
 [`to_robot_rows`](../episode-data/converting-to-robot-rows.md).
 
-## Related Pages
+## Related pages
 
 - [Frames and Videos](../episode-data/frames-and-videos.md)
 - [Writing LeRobot](../writing-data/lerobot.md)

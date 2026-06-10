@@ -1,13 +1,13 @@
 ---
-title: "Zarr Reader"
+title: "Zarr reader"
 description: "Read Zarr replay buffers and episode ranges"
 ---
 
-# Zarr Reader
+# Zarr reader
 
 Use `read_zarr` for replay buffers stored as Zarr groups or zipped Zarr stores.
 
-## Episode Ranges
+## Episode ranges
 
 Many robotics replay buffers store frame-aligned arrays and cumulative episode
 ends:
@@ -39,7 +39,7 @@ pipeline = (
 With `row_ends`, each emitted row contains one episode range. Refiner never
 splits a row across episode boundaries.
 
-## Leading-Axis Rows
+## Leading-axis rows
 
 For arrays where each leading-axis item is one row:
 
@@ -53,7 +53,7 @@ pipeline = mdr.read_zarr(
 
 Use this for non-episode arrays or precomputed feature tables.
 
-## Selected Arrays And Attributes
+## Selected arrays and attributes
 
 `arrays` and `attrs` can be mappings from output column name to Zarr path:
 
@@ -65,9 +65,8 @@ pipeline = mdr.read_zarr(
 )
 ```
 
-## Related Pages
+## Related pages
 
 - [Converting to Robot Rows](../episode-data/converting-to-robot-rows.md)
-- [Zarr Replay Buffer Example](../examples/zarr-replay-buffer.md)
+- [Zarr Replay Buffer Example](../examples/formats/zarr-replay-buffer.md)
 - [Writing Zarr](../writing-data/zarr.md)
-

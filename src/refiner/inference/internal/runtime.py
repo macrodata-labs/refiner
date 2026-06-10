@@ -10,7 +10,6 @@ from refiner.inference.providers import (
     GoogleEndpointProvider,
     OpenAIEndpointProvider,
     OpenAIResponsesProvider,
-    VLLMProvider,
 )
 from refiner.inference.providers.anthropic import _AnthropicEndpointClient
 from refiner.inference.providers.google import _GoogleEndpointClient
@@ -18,6 +17,7 @@ from refiner.inference.providers.openai import (
     _OpenAIEndpointClient,
     _OpenAIResponsesClient,
 )
+from refiner.inference.types import InferenceProvider
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.services import VLLMRuntimeServiceBinding
@@ -26,23 +26,22 @@ from refiner.worker.metrics.api import register_gauge
 
 _REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
-Provider: TypeAlias = (
-    AnthropicEndpointProvider
-    | GoogleEndpointProvider
-    | OpenAIEndpointProvider
-    | OpenAIResponsesProvider
-    | VLLMProvider
-)
 RequestFn: TypeAlias = Callable[[Mapping[str, Any]], Awaitable[Any]]
 MapFn: TypeAlias = Callable[[Row, RequestFn], Awaitable[MapResult] | MapResult]
 ClientCall: TypeAlias = Callable[[Any, Mapping[str, Any]], Awaitable[Any]]
+InferenceClient: TypeAlias = (
+    _AnthropicEndpointClient
+    | _GoogleEndpointClient
+    | _OpenAIEndpointClient
+    | _OpenAIResponsesClient
+)
 
 
 def inference_map(
     *,
     name: str,
     fn: MapFn,
-    provider: Provider,
+    provider: InferenceProvider,
     defaults: Mapping[str, Any] | None,
     defaults_key: str | None = None,
     merge_defaults: bool = True,
@@ -52,13 +51,7 @@ def inference_map(
 ) -> Callable[[Row], Awaitable[MapResult]]:
     if max_concurrent_requests <= 0:
         raise ValueError("max_concurrent_requests must be > 0")
-    client: (
-        _AnthropicEndpointClient
-        | _GoogleEndpointClient
-        | _OpenAIEndpointClient
-        | _OpenAIResponsesClient
-        | None
-    ) = None
+    client: InferenceClient | None = None
     client_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(max_concurrent_requests)
     gauges_registered = False
@@ -73,12 +66,7 @@ def inference_map(
         register_gauge("running_requests", lambda: running_requests, unit="requests")
         gauges_registered = True
 
-    async def _client() -> (
-        _AnthropicEndpointClient
-        | _GoogleEndpointClient
-        | _OpenAIEndpointClient
-        | _OpenAIResponsesClient
-    ):
+    async def _client() -> InferenceClient:
         nonlocal client
         if client is not None:
             return client
@@ -88,20 +76,24 @@ def inference_map(
             if isinstance(provider, OpenAIEndpointProvider):
                 client = _OpenAIEndpointClient(
                     base_url=provider.base_url,
+                    max_connections=max_concurrent_requests,
                 )
             elif isinstance(provider, OpenAIResponsesProvider):
                 client = _OpenAIResponsesClient(
                     base_url=provider.base_url,
+                    max_connections=max_concurrent_requests,
                 )
             elif isinstance(provider, GoogleEndpointProvider):
                 client = _GoogleEndpointClient(
                     base_url=provider.base_url,
                     model=provider.model,
+                    max_connections=max_concurrent_requests,
                 )
             elif isinstance(provider, AnthropicEndpointProvider):
                 client = _AnthropicEndpointClient(
                     base_url=provider.base_url,
                     anthropic_version=provider.anthropic_version,
+                    max_connections=max_concurrent_requests,
                 )
             else:
                 service_name = provider.service_definition().name
@@ -118,6 +110,7 @@ def inference_map(
                 client = _OpenAIEndpointClient(
                     base_url=binding.endpoint,
                     api_key=binding.api_key,
+                    max_connections=max_concurrent_requests,
                 )
             _register_metrics()
             return client
@@ -131,9 +124,13 @@ def inference_map(
         if not isinstance(provider, GoogleEndpointProvider):
             request_payload = {"model": provider.model, **request_payload}
         resolved_client = await _client()
+        acquired = False
         waiting_requests += 1
-        await semaphore.acquire()
-        waiting_requests -= 1
+        try:
+            await semaphore.acquire()
+            acquired = True
+        finally:
+            waiting_requests -= 1
         running_requests += 1
         try:
             response = await call(resolved_client, request_payload)
@@ -142,7 +139,8 @@ def inference_map(
             raise
         finally:
             running_requests -= 1
-            semaphore.release()
+            if acquired:
+                semaphore.release()
         row.log_throughput("successful_requests", 1, unit="requests")
         if record is not None:
             record(row, response)
@@ -154,6 +152,14 @@ def inference_map(
             return cast(MapResult, await result)
         return cast(MapResult, result)
 
+    async def _close() -> None:
+        nonlocal client
+        resolved_client = client
+        if resolved_client is None:
+            return
+        client = None
+        await resolved_client.close()
+
     service = provider.service_definition()
     args: dict[str, Any] = {
         "fn": fn,
@@ -162,15 +168,26 @@ def inference_map(
     }
     if defaults_key is not None:
         args[defaults_key] = dict(defaults or {})
+    builtin = getattr(fn, _REFINER_BUILTIN_CALL_ATTR, None)
+    builtin_name = name
+    builtin_args = args
+    if isinstance(builtin, dict):
+        candidate_name = builtin.get("name")
+        candidate_args = builtin.get("args")
+        if isinstance(candidate_name, str) and candidate_name:
+            builtin_name = candidate_name
+        if isinstance(candidate_args, dict):
+            builtin_args = candidate_args
     setattr(
         _wrapped,
         _REFINER_BUILTIN_CALL_ATTR,
         {
-            "name": name,
-            "args": args,
+            "name": builtin_name,
+            "args": builtin_args,
             "services": [] if service is None else [service.to_spec()],
         },
     )
+    setattr(_wrapped, "aclose", _close)
     return _wrapped
 
 

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
 from refiner.cli.main import build_parser, main
 
 
@@ -29,6 +35,37 @@ def test_parser_has_run_command() -> None:
     assert args.logs == "one"
     assert args.script == "script.py"
     assert args.script_args == ["--rows", "10"]
+
+
+def test_run_help_does_not_import_pipeline_package() -> None:
+    src_path = Path(__file__).resolve().parents[2] / "src"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(src_path), env.get("PYTHONPATH", "")) if part
+    )
+    code = """
+import sys
+from refiner.cli.main import build_parser
+
+parser = build_parser()
+try:
+    parser.parse_args(["run", "--help"])
+except SystemExit as exc:
+    if exc.code != 0:
+        raise
+
+print("IMPORTED_PIPELINE", "refiner.pipeline" in sys.modules)
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        check=True,
+        env=env,
+        text=True,
+    )
+
+    assert "IMPORTED_PIPELINE False" in result.stdout
 
 
 def test_parser_has_run_detach_flag() -> None:
@@ -166,9 +203,50 @@ def test_parser_has_resource_metrics_command() -> None:
 
 
 def test_main_dispatches(monkeypatch) -> None:
-    monkeypatch.setattr("refiner.cli.commands.auth.cmd_whoami", lambda args: 7)
+    monkeypatch.setattr(
+        "refiner.cli.main.importlib.import_module",
+        lambda module_name: SimpleNamespace(cmd_whoami=lambda args: 7),
+    )
     rc = main(["whoami"])
     assert rc == 7
+
+
+def test_main_returns_interrupt_exit_for_unhandled_keyboard_interrupt(
+    monkeypatch, capsys
+) -> None:
+    def interrupt(args):
+        del args
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        "refiner.cli.main.importlib.import_module",
+        lambda module_name: SimpleNamespace(cmd_whoami=interrupt),
+    )
+
+    rc = main(["whoami"])
+
+    out = capsys.readouterr()
+    assert rc == 130
+    assert out.err == "Interrupted.\n"
+    assert "Traceback" not in out.err
+
+
+def test_main_prints_keyboard_interrupt_message(monkeypatch, capsys) -> None:
+    def interrupt(args):
+        del args
+        raise KeyboardInterrupt("Local job interrupted.")
+
+    monkeypatch.setattr(
+        "refiner.cli.main.importlib.import_module",
+        lambda module_name: SimpleNamespace(cmd_whoami=interrupt),
+    )
+
+    rc = main(["whoami"])
+
+    out = capsys.readouterr()
+    assert rc == 130
+    assert out.err == "Local job interrupted.\n"
+    assert "Traceback" not in out.err
 
 
 def test_main_no_args_shows_help(capsys) -> None:

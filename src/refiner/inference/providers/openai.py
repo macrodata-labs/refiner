@@ -6,8 +6,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-import httpx
-
 from refiner.inference.internal.media import (
     base64_data,
     data_or_url,
@@ -27,6 +25,7 @@ from refiner.inference.internal.response import (
     _text_from_content,
 )
 from refiner.inference.internal.transport import (
+    AiohttpAPIClient,
     post_json_to_api,
     provider_request_options,
 )
@@ -84,7 +83,8 @@ class _OpenAIEndpointClient:
     base_url: str
     api_key: str | None = None
     headers: Mapping[str, str] | None = None
-    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    max_connections: int | None = None
+    _client: AiohttpAPIClient | None = field(default=None, init=False, repr=False)
     _resolved_headers: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -98,16 +98,23 @@ class _OpenAIEndpointClient:
             headers["Authorization"] = f"Bearer {resolved_api_key}"
         self._resolved_headers = headers
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    def _ensure_client(self) -> AiohttpAPIClient:
         client = self._client
         if client is None:
-            client = httpx.AsyncClient(
+            client = AiohttpAPIClient(
                 base_url=_normalize_base_url(self.base_url),
                 headers=self._resolved_headers,
-                timeout=_ENDPOINT_TIMEOUT_SECONDS,
+                timeout_s=_ENDPOINT_TIMEOUT_SECONDS,
+                max_connections=self.max_connections,
             )
             self._client = client
         return client
+
+    async def close(self) -> None:
+        client = self._client
+        if client is not None:
+            self._client = None
+            await client.close()
 
     async def generate(self, payload: Mapping[str, Any]) -> InferenceResponse:
         use_chat = "messages" in payload
@@ -153,7 +160,8 @@ class _OpenAIResponsesClient:
     base_url: str
     api_key: str | None = None
     headers: Mapping[str, str] | None = None
-    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    max_connections: int | None = None
+    _client: AiohttpAPIClient | None = field(default=None, init=False, repr=False)
     _resolved_headers: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -167,16 +175,23 @@ class _OpenAIResponsesClient:
             headers["Authorization"] = f"Bearer {resolved_api_key}"
         self._resolved_headers = headers
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    def _ensure_client(self) -> AiohttpAPIClient:
         client = self._client
         if client is None:
-            client = httpx.AsyncClient(
+            client = AiohttpAPIClient(
                 base_url=_normalize_base_url(self.base_url),
                 headers=self._resolved_headers,
-                timeout=_ENDPOINT_TIMEOUT_SECONDS,
+                timeout_s=_ENDPOINT_TIMEOUT_SECONDS,
+                max_connections=self.max_connections,
             )
             self._client = client
         return client
+
+    async def close(self) -> None:
+        client = self._client
+        if client is not None:
+            self._client = None
+            await client.close()
 
     async def generate_text(self, payload: Mapping[str, Any]) -> InferenceResponse:
         request_payload, max_retries, extra_headers = provider_request_options(payload)
@@ -265,7 +280,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"{provider_name} model {model!r} is not known to support "
                 "reasoningEffort.",
-                setting="providerOptions.openai.reasoningEffort",
+                setting="provider_options.openai.reasoningEffort",
                 details="AI SDK only enables reasoning effort for known reasoning models.",
             )
         )
@@ -278,7 +293,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"{provider_name} model {model!r} is not known to support "
                 "reasoningSummary.",
-                setting="providerOptions.openai.reasoningSummary",
+                setting="provider_options.openai.reasoningSummary",
                 details="AI SDK only enables reasoning summaries for known reasoning models.",
             )
         )
@@ -287,7 +302,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 "OpenAI chat-completions provider options do not support "
                 "reasoningSummary; use OpenAIResponsesProvider for reasoning summaries.",
-                setting="providerOptions.openai.reasoningSummary",
+                setting="provider_options.openai.reasoningSummary",
             )
         )
 
@@ -297,7 +312,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"{provider_name} model {model!r} is not known to support "
                 "flex service tier.",
-                setting="providerOptions.openai.serviceTier",
+                setting="provider_options.openai.serviceTier",
                 details="AI SDK enables flex processing for o3, o4-mini, and GPT-5 non-chat models.",
             )
         )
@@ -306,7 +321,7 @@ def model_setting_warnings(
             _unsupported_setting(
                 f"{provider_name} model {model!r} is not known to support "
                 "priority service tier.",
-                setting="providerOptions.openai.serviceTier",
+                setting="provider_options.openai.serviceTier",
                 details=(
                     "AI SDK enables priority processing for GPT-4, selected GPT-5, "
                     "o3, and o4-mini models."
@@ -337,7 +352,7 @@ def model_setting_warnings(
                         "on GPT-5.1+ models.",
                         setting=setting
                         if setting in params
-                        else f"providerOptions.openai.{setting}",
+                        else f"provider_options.openai.{setting}",
                     )
                 )
     return warnings

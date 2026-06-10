@@ -15,7 +15,6 @@ from refiner.pipeline.sinks.zarr import (
     _render_store_relpath,
     _zarr_store,
 )
-from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_stage_index, get_finalized_workers
 from refiner.worker.lifecycle import sort_finalized_workers
 
@@ -30,7 +29,6 @@ class ZarrReducerSink(FileCleanupReducerSink):
         array_chunk_bytes: int = _DEFAULT_ARRAY_CHUNK_BYTES,
         reduce_to_single_store: bool = True,
     ) -> None:
-        check_required_dependencies("write_zarr", ["zarr"], dist="zarr")
         super().__init__(
             output=output,
             filename_template=(
@@ -42,6 +40,9 @@ class ZarrReducerSink(FileCleanupReducerSink):
         self.episode_ends_path = episode_ends_path
         self.array_chunk_bytes = array_chunk_bytes
         self.reduce_to_single_store = reduce_to_single_store
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("zarr",)
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
         self._run_cleanup()

@@ -5,91 +5,277 @@ description: "Run a complete robotics data pipeline with Refiner"
 
 # Quickstart
 
-This quickstart reads a LeRobot dataset, trims inactive frames, writes a new
-LeRobot dataset, and shows how to run the same pipeline locally or on Macrodata
-Cloud.
+Refiner is an open-source library for building robotics data pipelines. A
+[pipeline](running-pipelines/index.md) describes how to
+[read data](reading-data/index.md),
+[transform rows and episodes](transforms/index.md), and
+[write the result](writing-data/index.md). You can
+[process a wide range of formats](reading-data/index.md) out of the box, use
+[models](inference/index.md) for labeling and scoring, and
+[inspect pipelines locally](running-pipelines/in-process-debugging.md) while you
+develop. When you do not want to manage infrastructure, run the same code with
+[local workers](running-pipelines/local-launcher.md) or submit it to
+the [Macrodata Cloud](running-pipelines/cloud-launcher.md).
+
+Readers and writers are [sharded](reading-data/sharding.md), so most pipelines
+do not need to download or materialize the entire dataset before doing useful
+work. Refiner streams shards through the pipeline and writes outputs as they are
+produced.
 
 ## Install
+
+Install the Refiner package in the Python environment where you want to build or
+run the pipeline:
 
 ```bash
 pip install macrodata-refiner[hf,video]
 ```
 
-For cloud runs, authenticate once:
+The `hf` and `video` extras are optional, but the example below uses them for
+[Hugging Face paths](reading-data/hugging-face.md) and
+[video data](episode-data/frames-and-videos.md). To install every optional
+dependency, use `pip install macrodata-refiner[all]`.
+
+[Create an account](/auth/register), then authenticate once with the
+[Macrodata CLI](cli/auth-and-run.md). This is optional for local development,
+but it lets you keep track of local runs in your workspace. The same
+credentials will also be used to submit cloud runs:
 
 ```bash
 macrodata login
 ```
 
-You can also create an API key in Macrodata and set `MACRODATA_API_KEY`; see
-[API Keys and Auth](platform/workspaces-and-api-keys.md).
+The CLI stores an [API key](platform/workspaces-and-api-keys.md) for you. You
+can also set one directly with the `MACRODATA_API_KEY` environment variable.
 
-## A Small Pipeline
+## Example
+
+Most Refiner pipelines follow the same shape:
+
+```text
+read data  →  transform  →  write result
+```
+
+For example:
 
 ```python
 import refiner as mdr
 
 pipeline = (
     mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
-    .map(mdr.robotics.motion_trim(threshold=0.001))
-    .write_lerobot("hf://buckets/acme-robotics/aloha_static_trimmed")
+    .map(lambda row: row.update(task="battery insertion"))
+    .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_static_with_task")
 )
 ```
 
-This pipeline has three parts:
+This example reads a small
+[Hugging Face dataset](reading-data/hugging-face.md), adds a task label to each
+episode, and writes the result back to a Hugging Face bucket.
 
-| Part | What it does |
+Each step returns a new pipeline value:
+
+| Step | What it does |
 | --- | --- |
-| `read_lerobot(...)` | Reads one episode row at a time, with frame data and video references attached. |
-| `.map(...)` | Applies a Python function to each episode. |
-| `.write_lerobot(...)` | Writes episodes, frame parquet files, videos, metadata, tasks, and stats. |
+| `read_lerobot(...)` | Reads robotics episodes with the [LeRobot reader](reading-data/lerobot.md). |
+| `.map(...)` | Updates each [row or episode](episode-data/episode-rows.md) with a task label. |
+| `.write_lerobot(...)` | Writes the transformed dataset with the [LeRobot writer](writing-data/lerobot.md). |
 
-Refiner pipelines are immutable. Every method returns a new pipeline value, so
-you can build variants without mutating the original.
+Nothing runs when you create the pipeline. Refiner executes it only when you
+inspect rows with methods like `take()`, launch
+[local workers](running-pipelines/local-launcher.md), or submit a
+[cloud job](running-pipelines/cloud-launcher.md).
 
-## Inspect Locally
+## Inspect a pipeline
 
-Before launching a job, inspect a few rows in process:
+Start by inspecting a small amount of data
+[in process](running-pipelines/in-process-debugging.md). This block is
+self-contained and inspects the pipeline before the writer:
 
 ```python
-row = pipeline.take(1)[0]
+import refiner as mdr
 
-print(row.episode_id)
-print(row.num_frames)
-print(list(row.videos))
+pipeline = (
+    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
+    .map(lambda row: row.update(task="battery insertion"))
+)
+
+row = pipeline.take(1)
+
+print(row[0])
 ```
 
-`take()` executes lazily and stops after the requested number of rows. See
-[In-Process Debugging](running-pipelines/in-process-debugging.md) for more
-inspection patterns.
+Output:
 
-## Run Locally
+```text
+LeRobotRow
+  episode_id: '0'
+  num_frames: 600
+  task: 'battery insertion'
+  fps: 50
+  robot_type: 'unknown'
+  frame_data (row.to_frame_table()):
+    actions (row.actions): float[600, 14]
+    states (row.states): float[600, 14]
+    timestamps (row.timestamps): float[600]
+  videos (row.videos):
+    observation.images.cam_high: video[480, 640, 3]@50fps
+    observation.images.cam_left_wrist: video[480, 640, 3]@50fps
+    observation.images.cam_low: video[480, 640, 3]@50fps
+    observation.images.cam_right_wrist: video[480, 640, 3]@50fps
+  stats: ['action', 'episode_index', 'frame_index', 'index', 'next.done', 'observation.images.cam_high', 'observation.images.cam_left_wrist', 'observation.images.cam_low', '... +4 more']
+```
+
+`take()` executes lazily and stops after the requested number of rows, so it is
+the fastest way to check [schemas](transforms/schemas-and-dtypes.md),
+[media references](episode-data/frames-and-videos.md), and transform outputs
+before launching a full job.
+
+## Run locally
+
+Consider this pipeline:
 
 ```python
-pipeline.launch_local(
-    name="aloha-trim-local",
-    num_workers=2,
+import refiner as mdr
+
+def log_stats(row):
+    row.log_histogram("frames", row.num_frames, unit="frames", per="episode")
+
+    mdr.logger.info(
+        "episode={} task={!r} frames={} cameras={}",
+        row.episode_id,
+        row.task,
+        row.num_frames,
+        sorted(row.videos),
+    )
+
+    return row
+
+
+pipeline = (
+    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
+    .map(log_stats)
+)
+
+pipeline.launch_local(name="quickstart-aloha-summary")
+```
+
+[Local launch](running-pipelines/local-launcher.md) runs worker processes on
+your machine. Use it when you want the same
+[shard](reading-data/sharding.md) and worker behavior as a launched job without
+using cloud resources. If you are [logged in](cli/auth-and-run.md), local runs
+are also tracked in the platform interface.
+
+## Run on the Macrodata Cloud
+
+Running the same pipeline on the Macrodata Cloud is as simple as swapping out
+`launch_local` with `launch_cloud`.
+
+```python
+import refiner as mdr
+
+def log_stats(row):
+    row.log_histogram("frames", row.num_frames, unit="frames", per="episode")
+
+    mdr.logger.info(
+        "episode={} task={!r} frames={} cameras={}",
+        row.episode_id,
+        row.task,
+        row.num_frames,
+        sorted(row.videos),
+    )
+
+    return row
+
+
+pipeline = (
+    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
+    .map(log_stats)
+)
+
+# Using launch_cloud now
+pipeline.launch_cloud(name="quickstart-aloha-summary")
+```
+
+## Advanced example
+
+Here is a more elaborate example, reading from and writing to Hugging Face buckets.
+
+```python
+import refiner as mdr
+
+dataset = "hf://datasets/yifengzhu-hf/LIBERO-datasets/libero_spatial"
+# Replace this with your output bucket (HF, S3, GCP, etc).
+output = "hf://buckets/macrodata/test_bucket/libero-spatial"
+
+(
+    mdr.read_hdf5(
+        dataset,
+        groups="/data/demo_*",
+        datasets={
+            "raw_action": "actions",
+            "observation.images.image": "obs/agentview_rgb",
+            "observation.images.wrist_image": "obs/eye_in_hand_rgb",
+            "ee_state": "obs/ee_states",
+            "gripper_state": "obs/gripper_states",
+        },
+        file_path_column="file_path",
+        cache_remote_files=True,
+    )
+    .map(
+        lambda row: row.update(
+            task=str(row["file_path"])
+            .rsplit("/", 1)[-1]
+            .removesuffix(".hdf5")
+            .removesuffix("_demo")
+            .replace("_", " ")
+        )
+    )
+    .to_robot_rows(
+        task_key="task",
+        fps=10.0,
+        robot_type="libero",
+        action_key="raw_action",
+        state_key=("ee_state", "gripper_state"),
+        video_keys={
+            "observation.images.image": "observation.images.image",
+            "observation.images.wrist_image": "observation.images.wrist_image",
+        },
+    )
+    .write_lerobot(output, max_video_prepare_in_flight=2)
+    .launch_cloud(
+        name="libero-spatial-subset",
+        num_workers=10,
+        cpus_per_worker=1,
+        mem_mb_per_worker=1024,
+        # Replace this with a token that can write the output.
+        secrets=mdr.Secrets.dict({"HF_TOKEN": "---"}),
+    )
 )
 ```
 
-Local launch runs worker processes on your machine. Use it when you want the
-same shard and worker behavior as a launched job without using cloud resources.
+This example converts the public LIBERO spatial HDF5 subset to LeRobot using
+cloud workers. It reads one demo group per row, derives the task label from the
+filename, turns action/state/image arrays into robotics episodes, encodes the
+two camera streams as videos, and writes a LeRobot dataset to your output
+bucket.
 
-## Run On Macrodata Cloud
+The input dataset is public, but the cloud workers need `HF_TOKEN` to write back
+to your Hugging Face bucket. You can also safely store reusable secrets directly
+on the platform and reference them with `mdr.Secrets.env(...)`. See
+[Secrets and environment](platform/secrets-and-environment.md).
 
-```python
-pipeline.launch_cloud(
-    name="aloha-trim",
-    num_workers=8,
-    secrets={"HF_TOKEN": None},
-)
-```
+After submission, follow the run from [Jobs](/jobs). Once scheduled, this
+example should only take a couple of minutes. The job page shows live status,
+worker progress, logs, metrics, resource usage, and output links while the
+conversion runs. You can inspect the same run from the terminal with the
+[`macrodata jobs` CLI](cli/jobs-logs-and-metrics.md). Cloud jobs are billed for
+the compute they actually use; see [Billing](platform/billing.md) or
+[pricing](/pricing).
 
-`None` means "read this value from my local environment at submission time".
-If you store secrets in the platform, use `mdr.Secrets.env(...)`; see
-[Secrets and Environment](platform/secrets-and-environment.md).
+For the full four-suite LIBERO conversion, see
+[Libero HDF5](examples/formats/libero-hdf5.md).
 
-## Where To Go Next
+## Where to go next
 
 - Learn the execution options in [Running Pipelines](running-pipelines/index.md).
 - Learn readers in [Reading Data](reading-data/index.md).

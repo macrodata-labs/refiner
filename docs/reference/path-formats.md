@@ -1,9 +1,9 @@
 ---
-title: "Path Formats"
+title: "Path formats"
 description: "Path and URL formats accepted by Refiner readers and writers"
 ---
 
-# Path Formats
+# Path formats
 
 Refiner uses fsspec-backed paths for many readers and writers.
 
@@ -16,5 +16,4 @@ Refiner uses fsspec-backed paths for many readers and writers.
 | Other fsspec filesystems | Depends on the installed filesystem package. |
 
 Private remote paths usually require secrets such as `HF_TOKEN` or cloud
-provider credentials. See [Secrets and Environment](../platform/secrets-and-environment.md).
-
+provider credentials. See [Secrets and environment](../platform/secrets-and-environment.md).

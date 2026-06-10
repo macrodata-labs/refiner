@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
-from typing import Any, Protocol, TypeAlias, cast
+from typing import Any, Protocol, cast
 
 from pydantic import BaseModel
 
@@ -33,17 +33,15 @@ from refiner.inference.providers.openai import (
     _OpenAIEndpointClient,
     _OpenAIResponsesClient,
 )
-from refiner.inference.types import InferenceWarning, Message, ProviderOptions
-from refiner.pipeline.data.row import Row
-from refiner.pipeline.steps import MapResult
-
-_InferenceProvider: TypeAlias = (
-    AnthropicEndpointProvider
-    | GoogleEndpointProvider
-    | OpenAIEndpointProvider
-    | OpenAIResponsesProvider
-    | VLLMProvider
+from refiner.inference.types import (
+    InferenceProvider,
+    InferenceWarning,
+    Message,
+    ProviderOptions,
 )
+from refiner.pipeline.data.row import Row
+from refiner.pipeline.planning import describe_builtin
+from refiner.pipeline.steps import MapResult
 
 
 class GenerateTextFn(Protocol):
@@ -52,7 +50,7 @@ class GenerateTextFn(Protocol):
         *,
         messages: Sequence[Message] | None = None,
         raw_payload: Mapping[str, Any] | None = None,
-        providerOptions: ProviderOptions | None = None,
+        provider_options: ProviderOptions | None = None,
         maxRetries: int | None = None,
         schema: type[BaseModel] | None = None,
         schemaStrict: bool = True,
@@ -66,16 +64,36 @@ GenerateTextMapFn = Callable[[Row, GenerateTextFn], Awaitable[MapResult] | MapRe
 def generate_text(
     *,
     fn: GenerateTextMapFn,
-    provider: _InferenceProvider,
+    provider: InferenceProvider,
     default_generation_params: Mapping[str, Any] | None = None,
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Awaitable[MapResult]]:
+    """Return an async row mapper that issues text-generation requests.
+
+    Args:
+        fn: Row-level function that receives the input row and a request function.
+            The request function accepts either typed messages or a raw provider
+            payload and returns an ``InferenceResponse``.
+        provider: Endpoint or runtime-service provider used to execute requests.
+        default_generation_params: Parameters merged into each typed message or
+            raw payload request unless overridden by that individual request.
+        max_concurrent_requests: Maximum number of provider requests allowed to
+            run at once per worker.
+    """
+
+    @describe_builtin(
+        "inference.generate_text",
+        fn=fn,
+        provider=provider.to_builtin_args(),
+        max_concurrent_requests=max_concurrent_requests,
+        default_generation_params=dict(default_generation_params or {}),
+    )
     async def _map(row: Row, request: RequestFn) -> MapResult:
         async def _generate_text(
             *,
             messages: Sequence[Message] | None = None,
             raw_payload: Mapping[str, Any] | None = None,
-            providerOptions: ProviderOptions | None = None,
+            provider_options: ProviderOptions | None = None,
             maxRetries: int | None = None,
             schema: type[BaseModel] | None = None,
             schemaStrict: bool = True,
@@ -83,7 +101,6 @@ def generate_text(
         ) -> InferenceResponse:
             if (messages is None) == (raw_payload is None):
                 raise ValueError("pass exactly one of messages or raw_payload")
-            provider_options = providerOptions
             max_retries = maxRetries
             schema_strict = schemaStrict
             schema_info = normalize_schema(
@@ -95,7 +112,7 @@ def generate_text(
             if raw_payload is not None:
                 if provider_options is not None:
                     raise ValueError(
-                        "providerOptions are not supported with raw_payload"
+                        "provider_options are not supported with raw_payload"
                     )
                 if schema is not None:
                     raise ValueError("schema is not supported with raw_payload")
@@ -174,7 +191,7 @@ async def _generate(
 
 def _build_payload(
     *,
-    provider: _InferenceProvider,
+    provider: InferenceProvider,
     messages: Sequence[Message],
     params: Mapping[str, Any],
     provider_options: ProviderOptions | None,
@@ -211,7 +228,7 @@ def _build_payload(
 
 
 def _provider_warnings(
-    provider: _InferenceProvider,
+    provider: InferenceProvider,
     provider_options: ProviderOptions | None,
 ) -> list[InferenceWarning]:
     if isinstance(provider, OpenAIResponsesProvider):

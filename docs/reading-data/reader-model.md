@@ -1,9 +1,9 @@
 ---
-title: "Reader Model"
+title: "Reader model"
 description: "How Refiner readers plan shards and emit rows"
 ---
 
-# Reader Model
+# Reader model
 
 A Refiner reader has two jobs:
 
@@ -13,7 +13,7 @@ A Refiner reader has two jobs:
 That separation is important. Planning should be lightweight enough to run at
 submission time. Reading can do the expensive I/O inside workers.
 
-## Rows And Blocks
+## Rows and blocks
 
 Most user code sees rows:
 
@@ -33,7 +33,7 @@ You usually do not need to choose. Refiner converts blocks to rows when a row
 transform needs them and keeps Arrow tables when vectorized transforms can run
 directly.
 
-## Reader Arguments You See Often
+## Reader arguments you see often
 
 | Argument | Meaning |
 | --- | --- |
@@ -45,7 +45,7 @@ directly.
 
 See [Sharding](sharding.md) for how these options affect worker work.
 
-## Path Inputs
+## Path inputs
 
 Readers accept local paths and fsspec-backed URLs. Refiner commonly uses:
 
@@ -58,7 +58,7 @@ Readers accept local paths and fsspec-backed URLs. Refiner commonly uses:
 
 See [Path Formats](../reference/path-formats.md).
 
-## Related Pages
+## Related pages
 
 - [Sharding](sharding.md)
 - [Episode Rows](../episode-data/episode-rows.md)

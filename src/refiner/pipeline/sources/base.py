@@ -47,6 +47,25 @@ class BaseSource(ABC):
         """Optional source metadata for planning/observability."""
         return {}
 
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        """macrodata-refiner extras required by this source."""
+        return tuple(
+            sorted(
+                {
+                    *self._declared_refiner_extras(),
+                    *self._io_refiner_extras(),
+                }
+            )
+        )
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        """Feature extras declared by this source."""
+        return ()
+
+    def _io_refiner_extras(self) -> tuple[str, ...]:
+        """Storage extras required by this source's normalized IO handles."""
+        return ()
+
 
 __all__ = ["BaseSource"]
 

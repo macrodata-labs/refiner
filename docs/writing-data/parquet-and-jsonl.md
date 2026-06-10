@@ -1,9 +1,9 @@
 ---
-title: "Parquet and JSONL Writers"
+title: "Parquet and JSONL writers"
 description: "Write tabular and line-delimited Refiner outputs"
 ---
 
-# Parquet And JSONL Writers
+# Parquet and JSONL writers
 
 Use Parquet for typed tabular output and JSONL for simple line-delimited rows.
 
@@ -26,7 +26,7 @@ pipeline.write_jsonl("/tmp/output-jsonl")
 
 JSONL is useful for logs, model responses, or lightweight inspection output.
 
-## Asset Columns
+## Asset columns
 
 Both writers can upload asset columns:
 

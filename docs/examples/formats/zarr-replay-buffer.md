@@ -1,9 +1,9 @@
 ---
-title: "Zarr Replay Buffer"
+title: "Zarr replay buffer"
 description: "Convert Zarr replay buffers into robot episode rows"
 ---
 
-# Zarr Replay Buffer
+# Zarr replay buffer
 
 Replay buffers often store frame arrays and cumulative episode boundaries.
 
@@ -33,6 +33,5 @@ pipeline = (
 )
 ```
 
-Related: [Zarr Reader](../reading-data/zarr.md),
-[Frames and Videos](../episode-data/frames-and-videos.md).
-
+Related: [Zarr Reader](../../reading-data/zarr.md),
+[Frames and Videos](../../episode-data/frames-and-videos.md).

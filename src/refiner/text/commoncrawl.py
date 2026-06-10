@@ -10,6 +10,7 @@ from typing import Any, Literal
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io import DataFile, DataFolder
+from refiner.io.datafile import _file_cache_key
 from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.data.datatype import DTypeMapping
 from refiner.pipeline.expressions import Expr, col
@@ -221,11 +222,11 @@ class CommonCrawlReader(BaseReader):
         file_path_column: object = _DEFAULT_FILE_PATH_COLUMN,
         dtypes: DTypeMapping | None = None,
     ) -> None:
-        check_required_dependencies("read_commoncrawl", ["warcio"], dist="text")
-        if not use_https:
-            check_required_dependencies("read_commoncrawl", ["s3fs"], dist="s3")
-        from warcio.archiveiterator import ArchiveIterator
-
+        resolved_base_url = (
+            str(base_url)
+            if base_url is not None
+            else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
+        )
         if format not in {"warc", "wet"}:
             raise ValueError("format must be 'warc' or 'wet'")
         if isinstance(dumps, str):
@@ -246,12 +247,9 @@ class CommonCrawlReader(BaseReader):
             )
             if not self.output_fields:
                 raise ValueError("output_fields must contain at least one field")
-        self.base_url = (
-            str(base_url)
-            if base_url is not None
-            else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
-        )
-        self._archive_iterator = ArchiveIterator
+        self.base_url = resolved_base_url
+        self.use_https = use_https
+        self._archive_iterator: Any | None = None
         self.root = DataFolder.resolve(self.base_url)
         self.num_files = None if num_files is None else int(num_files)
         self._num_files_applied = False
@@ -273,6 +271,9 @@ class CommonCrawlReader(BaseReader):
             split_by_bytes=False,
             dtypes=dtypes,
         )
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("text",)
 
     def list_shards(self) -> list[Shard]:
         if self.num_files is not None and not self._num_files_applied:
@@ -327,7 +328,7 @@ class CommonCrawlReader(BaseReader):
                 raise ValueError("Common Crawl files are expected to be atomic")
             source = self.fileset.resolve_file(part.source_index, part.path)
             with source.open(mode="rb") as raw:
-                for record in self._archive_iterator(raw):
+                for record in self._get_archive_iterator()(raw):
                     payload = _warc_record_to_row(
                         record, output_fields=self.output_fields
                     )
@@ -335,7 +336,15 @@ class CommonCrawlReader(BaseReader):
                         continue
                     yield DictRow(self._with_file_path(payload, source))
 
-    def _source_globs(self) -> tuple[tuple[str, Any], ...]:
+    def _get_archive_iterator(self) -> Any:
+        if self._archive_iterator is None:
+            check_required_dependencies("read_commoncrawl", ["warcio"], dist="text")
+            from warcio.archiveiterator import ArchiveIterator
+
+            self._archive_iterator = ArchiveIterator
+        return self._archive_iterator
+
+    def _source_globs(self) -> tuple[str, ...]:
         """Build the dump/segment-specific WARC or WET glob inputs for BaseReader."""
         rel_globs: list[str] = []
         suffix = "warc/*.warc.gz" if self.format == "warc" else "wet/*.warc.wet.gz"
@@ -345,9 +354,7 @@ class CommonCrawlReader(BaseReader):
             else:
                 for segment in self.segments:
                     rel_globs.append(f"crawl-data/{dump}/segments/{segment}/{suffix}")
-        return tuple(
-            (self.root.abs_path(rel_glob), self.root.fs) for rel_glob in rel_globs
-        )
+        return tuple(self.root.abs_path(rel_glob) for rel_glob in rel_globs)
 
 
 class CommonCrawlWarcIndexSource(BaseSource):
@@ -374,15 +381,11 @@ class CommonCrawlWarcIndexSource(BaseSource):
         file_path_column: str | None = "warc_path",
         max_inflight: int = 4,
     ) -> None:
-        check_required_dependencies(
-            "read_commoncrawl_from_index", ["warcio"], dist="text"
+        resolved_base_url = (
+            str(base_url)
+            if base_url is not None
+            else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
         )
-        if not use_https:
-            check_required_dependencies(
-                "read_commoncrawl_from_index", ["s3fs"], dist="s3"
-            )
-        from warcio.archiveiterator import ArchiveIterator
-
         if isinstance(dumps, str):
             self.dumps = (dumps,)
         else:
@@ -402,12 +405,9 @@ class CommonCrawlWarcIndexSource(BaseSource):
             )
             if not self.output_fields:
                 raise ValueError("output_fields must contain at least one field")
-        self.base_url = (
-            str(base_url)
-            if base_url is not None
-            else (_DEFAULT_HTTPS_BASE_URL if use_https else _DEFAULT_S3_BASE_URL)
-        )
-        self._archive_iterator = ArchiveIterator
+        self.base_url = resolved_base_url
+        self.use_https = use_https
+        self._archive_iterator: Any | None = None
         self.root = DataFolder.resolve(self.base_url)
         self.target_shard_bytes = target_shard_bytes
         self.num_shards = num_shards
@@ -417,6 +417,12 @@ class CommonCrawlWarcIndexSource(BaseSource):
             raise ValueError("max_inflight must be positive")
         self._index_reader: ParquetReader | None = None
         self._thread_local = threading.local()
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("text",)
+
+    def _io_refiner_extras(self) -> tuple[str, ...]:
+        return self.root.required_refiner_extras()
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -535,7 +541,12 @@ class CommonCrawlWarcIndexSource(BaseSource):
     ) -> tuple[Any, bool]:
         current_file = getattr(self._thread_local, "open_file", None)
         current_fh = getattr(self._thread_local, "open_fh", None)
-        if not force_reopen and current_file == file and current_fh is not None:
+        if (
+            not force_reopen
+            and current_file is not None
+            and _file_cache_key(current_file) == _file_cache_key(file)
+            and current_fh is not None
+        ):
             return current_fh, False
         if current_fh is not None:
             try:
@@ -557,8 +568,18 @@ class CommonCrawlWarcIndexSource(BaseSource):
             fh, _ = self._get_thread_file_handle(source, mode="rb", force_reopen=True)
             fh.seek(offset)
         member = fh.read(length)
-        iterator = self._archive_iterator(io.BytesIO(member))
+        iterator = self._get_archive_iterator()(io.BytesIO(member))
         return next(iterator)
+
+    def _get_archive_iterator(self) -> Any:
+        if self._archive_iterator is None:
+            check_required_dependencies(
+                "read_commoncrawl_from_index", ["warcio"], dist="text"
+            )
+            from warcio.archiveiterator import ArchiveIterator
+
+            self._archive_iterator = ArchiveIterator
+        return self._archive_iterator
 
     def _fetch_index_row_payload(self, row: Row) -> dict[str, Any] | None:
         warc_filename = str(row["warc_filename"])

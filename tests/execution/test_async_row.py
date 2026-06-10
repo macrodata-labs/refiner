@@ -7,8 +7,8 @@ import pytest
 
 from refiner.execution.operators.row import execute_row_steps
 from refiner.pipeline import from_items
-from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.data.row import DictRow, Row
+from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.steps import FnAsyncRowStep
 from refiner.worker.context import set_active_run_context
 from refiner.worker.lifecycle import FinalizedShardWorker
@@ -152,3 +152,23 @@ def test_map_async_counts_rows_processed_only_after_completion() -> None:
     assert [
         metric for metric in emitter.counters if metric["label"] == "rows_processed"
     ] == []
+
+
+def test_map_async_closes_async_callable_after_iteration() -> None:
+    class AsyncCallable:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def __call__(self, row: Row) -> dict[str, int]:
+            return {"x": int(row["item"])}
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    fn = AsyncCallable()
+    pipeline = from_items([1, 2, 3]).map_async(fn)
+
+    out = list(pipeline.iter_rows())
+
+    assert [int(row["x"]) for row in out] == [1, 2, 3]
+    assert fn.closed is True

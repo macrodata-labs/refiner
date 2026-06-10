@@ -38,6 +38,7 @@ from refiner.inference.types import (
     AnthropicFilePartProviderOptions,
     AnthropicProviderOptions,
     GoogleProviderOptions,
+    InferenceProvider,
     InferenceWarning,
     OpenAIProviderOptions,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "GeneratePoolingMapFn",
     "GeneratePoolingPayload",
     "InferenceResponse",
+    "InferenceProvider",
     "InferenceAPICallError",
     "InferenceRetryError",
     "InferenceSchemaValidationError",

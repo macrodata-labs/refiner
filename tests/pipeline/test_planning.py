@@ -180,11 +180,25 @@ def test_compile_pipeline_plan_includes_runtime_services_for_builtin_steps() -> 
         rf.inference.generate_text(
             fn=_noop_inference,
             provider=rf.inference.VLLMProvider(model="Qwen/Qwen3.5-9B"),
+            default_generation_params={"temperature": 0},
+            max_concurrent_requests=7,
         )
     )
 
     stage = compile_pipeline_plan(pipeline)["stages"][0]
+    step = stage["steps"][1]
 
+    assert step["name"] == "inference.generate_text"
+    assert step["args"]["fn"] == (
+        "async def _noop_inference(row, generate):\n    del generate\n    return row"
+    )
+    assert step["args"]["provider"] == {
+        "type": "vllm",
+        "model_name_or_path": "Qwen/Qwen3.5-9B",
+        "config": "throughput",
+    }
+    assert step["args"]["max_concurrent_requests"] == 7
+    assert step["args"]["default_generation_params"] == {"temperature": 0}
     assert stage["runtime_services"] == [
         {
             "name": stage["runtime_services"][0]["name"],

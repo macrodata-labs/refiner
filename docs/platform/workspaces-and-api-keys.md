@@ -1,9 +1,9 @@
 ---
-title: "Workspaces and API Keys"
+title: "Workspaces and API keys"
 description: "Organize platform resources and authenticate Refiner jobs"
 ---
 
-# Workspaces And API Keys
+# Workspaces and API keys
 
 A workspace owns the platform resources created by Refiner: jobs, logs, metrics,
 manifests, files, secrets, API keys, services, viewer access, billing, and
@@ -13,7 +13,7 @@ Everyone starts with a personal workspace. Create shared workspaces for team
 datasets, production workflows, lab projects, or anything where other users
 need access to the same jobs and secrets.
 
-## Manage Workspaces
+## Manage workspaces
 
 Open [Settings > Workspaces](/settings/workspaces). The page shows your
 workspaces, the active workspace, pending invitations, and actions for shared
@@ -42,7 +42,7 @@ redirect to the active workspace:
 
 You can create up to 3 workspaces by default. Contact the team if you need more.
 
-## Personal And Shared Workspaces
+## Personal and shared workspaces
 
 Personal workspaces are private to your user. They are the default place for
 first runs and individual experiments.
@@ -77,7 +77,7 @@ Role changes to elevated permissions require confirmation in the UI. Member
 management is not available for personal workspaces; create a shared workspace
 first.
 
-## Workspace Settings
+## Workspace settings
 
 Open [Settings](/settings) to see account and workspace controls. The sidebar
 has a workspace selector and these workspace tabs:
@@ -90,7 +90,7 @@ has a workspace selector and these workspace tabs:
 | Secrets | [Settings > Secrets](/settings/secrets) | Store encrypted environment secrets for jobs and the viewer. |
 | Members | [Settings > Members](/settings/members) | Invite users, change roles, revoke invitations, and remove members. |
 
-## Create An API Key
+## Create an API key
 
 API keys authenticate the CLI and Python cloud launcher. They are scoped to the
 workspace where they are created.
@@ -104,7 +104,7 @@ workspace where they are created.
 The API key table shows name, masked value, last-used time, created time, and a
 delete action. Workspace owners and admins can also see member API keys.
 
-## Log In Locally
+## Log in locally
 
 Use the copied key with the CLI:
 
@@ -122,7 +122,7 @@ macrodata whoami
 
 Environment credentials take precedence over locally saved credentials.
 
-## Delete Or Rotate Keys
+## Delete or rotate keys
 
 Delete old keys from [Settings > API Keys](/settings/api-keys). Deleting a key
 immediately prevents future CLI and cloud-launch requests with that key.
@@ -130,9 +130,9 @@ immediately prevents future CLI and cloud-launch requests with that key.
 Rotate keys by creating a new key, updating local machines or CI secrets, then
 deleting the old key after the new one has been used successfully.
 
-## Related Pages
+## Related pages
 
 - [Submitting to the Platform](submitting-to-the-platform.md)
 - [CLI Auth and Run](../cli/auth-and-run.md)
 - [Cloud Launcher](../running-pipelines/cloud-launcher.md)
-- [Secrets and Environment](secrets-and-environment.md)
+- [Secrets and environment](secrets-and-environment.md)

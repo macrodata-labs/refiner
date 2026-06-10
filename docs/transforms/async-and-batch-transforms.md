@@ -1,9 +1,9 @@
 ---
-title: "Async and Batch Transforms"
+title: "Async and batch transforms"
 description: "Use map_async and batch_map for concurrent I/O and batched model work"
 ---
 
-# Async And Batch Transforms
+# Async and batch transforms
 
 Use async and batch transforms when a row transform would be too slow one row at
 a time.
@@ -33,7 +33,7 @@ call finishes successfully and its output row leaves the async window. Rows that
 are only queued in the window, still in flight, or failed are not counted as
 processed.
 
-## Inference Helpers
+## Inference helpers
 
 Most model calls should use Refiner's inference helpers instead of calling an
 API directly:
@@ -66,7 +66,7 @@ pipeline = pipeline.batch_map(add_batch_rank, batch_size=32)
 
 Use this for perception pipelines or model APIs that naturally process batches.
 
-## Order And Backpressure
+## Order and backpressure
 
 | Setting | Effect |
 | --- | --- |
@@ -75,8 +75,8 @@ Use this for perception pipelines or model APIs that naturally process batches.
 | Smaller `max_in_flight` | Lower memory and lower external pressure. |
 | Larger `max_in_flight` | More concurrency, but easier to hit rate limits. |
 
-## Related Pages
+## Related pages
 
 - [Subtask Annotation](../episode-operations/subtask-annotation.md)
-- [Egocentric Hand Tracking](../episode-operations/egocentric-hand-tracking.md)
+- [Hand Tracking](../episode-operations/hand-tracking.md)
 - [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)

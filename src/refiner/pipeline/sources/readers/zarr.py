@@ -75,22 +75,10 @@ class ZarrReader(BaseSource):
                 or None to omit it.
             dtypes: Optional dtype overrides for output columns.
         """
-        resolved_inputs: list[tuple[DataFolder | DataFile, str]] = []
-        for entry in DataFileSet.resolve(input).resolved_entries:
-            if isinstance(entry, DataFile):
-                if not entry.path.endswith(".zip"):
-                    raise TypeError("read_zarr file inputs must be .zip Zarr stores")
-                resolved_inputs.append((entry, entry.abs_path()))
-                continue
-            if entry.path.endswith(".zip"):
-                zip_file = DataFile(fs=entry.fs, path=entry.path)
-                resolved_inputs.append((zip_file, zip_file.abs_path()))
-            else:
-                resolved_inputs.append((entry, entry.abs_path()))
-        if not resolved_inputs:
+        self.fileset = DataFileSet.resolve(input)
+        if not self.fileset.entries:
             raise ValueError("read_zarr requires at least one input")
-        self.inputs = resolved_inputs
-        check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
+        self._inputs: list[tuple[DataFolder | DataFile, str]] | None = None
         if row_ends is not None and split_leading_axis:
             raise ValueError("row_ends and split_leading_axis are mutually exclusive")
         if leading_axis_row_size <= 0:
@@ -139,16 +127,35 @@ class ZarrReader(BaseSource):
             raise ValueError("file_path_column and index_column must be distinct")
 
     @property
+    def inputs(self) -> list[tuple[DataFolder | DataFile, str]]:
+        if self._inputs is not None:
+            return self._inputs
+
+        resolved_inputs: list[tuple[DataFolder | DataFile, str]] = []
+        for entry in self.fileset.resolved_entries:
+            if isinstance(entry, DataFile):
+                if not entry.path.endswith(".zip"):
+                    raise TypeError("read_zarr file inputs must be .zip Zarr stores")
+                resolved_inputs.append((entry, entry.abs_path()))
+                continue
+            if entry.path.endswith(".zip"):
+                zip_file = entry.file("")
+                resolved_inputs.append((zip_file, zip_file.abs_path()))
+            else:
+                resolved_inputs.append((entry, entry.abs_path()))
+        if not resolved_inputs:
+            raise ValueError("read_zarr requires at least one input")
+        self._inputs = resolved_inputs
+        return resolved_inputs
+
+    @property
     def schema(self) -> pa.Schema | None:
         return schema_with_dtypes(None, self.dtypes)
 
     def describe(self) -> dict[str, Any]:
+        input_paths = [entry.abs_path() for entry in self.fileset.entries]
         return {
-            "path": (
-                self.inputs[0][1]
-                if len(self.inputs) == 1
-                else [source_path for _input, source_path in self.inputs]
-            ),
+            "path": (input_paths[0] if len(input_paths) == 1 else input_paths),
             "arrays": dict(self.arrays) if self.arrays is not None else None,
             "attrs": dict(self.attrs) if self.attrs is not None else None,
             "row_ends": self.row_ends,
@@ -165,6 +172,12 @@ class ZarrReader(BaseSource):
                 else None
             ),
         }
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("zarr",)
+
+    def _io_refiner_extras(self) -> tuple[str, ...]:
+        return self.fileset.required_refiner_extras()
 
     def list_shards(self) -> list[Shard]:
         shards: list[Shard] = []
@@ -263,6 +276,7 @@ class ZarrReader(BaseSource):
 
     @contextmanager
     def _open_group(self, input: DataFolder | DataFile) -> Any:
+        check_required_dependencies("read_zarr", ["zarr"], dist="zarr")
         import zarr
         import zarr.storage
 

@@ -54,11 +54,45 @@ def test_to_robot_rows_does_not_treat_video_uri_frames_as_frame_table() -> None:
     )
 
     assert robotics_row.episode_id == "episode-1"
+    assert robotics_row.tasks == ["pick the cup"]
     assert robotics_row.task == "pick the cup"
     assert robotics_row.num_frames == -1
     video = robotics_row.videos["observation.images.main"]
     assert isinstance(video, VideoFile)
     assert video.uri.endswith("/clips/episode-1.mp4")
+
+
+def test_robotics_row_repr_summarizes_episode() -> None:
+    row = DictRow(
+        {
+            "id": "episode-1",
+            "task": "pick the cup",
+            "action": [[0.0], [1.0]],
+            "camera": "clips/episode-1.mp4",
+            "payload": "kept",
+        }
+    )
+
+    robotics_row = _robot_row(
+        row,
+        episode_id_key="id",
+        task_key="task",
+        fps=12,
+        robot_type="mockbot",
+        video_keys={"observation.images.main": "camera"},
+    )
+
+    text = repr(robotics_row)
+
+    assert text.startswith("RoboticsRow(")
+    assert "episode_id='episode-1'" in text
+    assert "num_frames=2" in text
+    assert "task='pick the cup'" in text
+    assert "fps=12" in text
+    assert "robot_type='mockbot'" in text
+    assert "videos=['observation.images.main']" in text
+    assert "actions (row.actions): double[2, 1]" in text
+    assert "source_fields=['id', 'payload']" in text
 
 
 def test_to_robot_rows_exposes_stats_and_embedded_video_bytes() -> None:
@@ -218,6 +252,48 @@ def test_to_robot_rows_defaults_to_no_episode_id_source() -> None:
     assert dict(cast(Row, robotics_row).items())["episode_id"] == "source-value"
 
 
+def test_to_robot_rows_reads_nested_episode_task() -> None:
+    row = DictRow(
+        {
+            "steps": [
+                {
+                    "language_instruction": None,
+                    "action": [0.0],
+                    "observation": {"state": [1.0]},
+                },
+                {
+                    "language_instruction": "",
+                    "action": [0.0],
+                    "observation": {"state": [1.0]},
+                },
+                {
+                    "language_instruction": "pick up the cup",
+                    "action": [0.0],
+                    "observation": {"state": [1.0]},
+                },
+            ]
+        }
+    )
+
+    robotics_row = _robot_row(
+        row,
+        nested_frames_key="steps",
+        task_key="steps/language_instruction",
+    )
+
+    assert robotics_row.tasks == ["pick up the cup"]
+    assert robotics_row.task == "pick up the cup"
+
+
+def test_to_robot_rows_normalizes_task_values() -> None:
+    row = DictRow({"task": ["pick", "place"]})
+    robotics_row = _robot_row(row, task_key="task")
+
+    assert robotics_row.tasks == ["pick", "place"]
+    assert robotics_row.task == "pick"
+    assert robotics_row.update({"task": "reset"}).tasks == ["reset"]
+
+
 def test_to_robot_rows_accepts_literal_fps_and_robot_type() -> None:
     row = DictRow({"episode_id": "episode-1"})
 
@@ -225,6 +301,48 @@ def test_to_robot_rows_accepts_literal_fps_and_robot_type() -> None:
 
     assert robotics_row.fps == 20.0
     assert robotics_row.robot_type == "koch"
+
+
+def test_to_robot_rows_infers_timestamps_from_literal_fps() -> None:
+    row = DictRow({"episode_id": "episode-1", "action": [[0.0], [0.1], [0.2]]})
+
+    robotics_row = _robot_row(row, fps=10.0, state_key=None)
+
+    assert robotics_row.to_frame_table().column(
+        "timestamp"
+    ).to_pylist() == pytest.approx(
+        [
+            0.0,
+            0.1,
+            0.2,
+        ]
+    )
+
+
+def test_to_robot_rows_infers_nested_frame_timestamps_from_literal_fps() -> None:
+    row = DictRow(
+        {
+            "episode_id": "episode-1",
+            "frames": [
+                {"action": [0.0], "observation.state": [1.0]},
+                {"action": [0.1], "observation.state": [1.1]},
+            ],
+        }
+    )
+
+    robotics_row = _robot_row(
+        row,
+        nested_frames_key="frames",
+        fps=10.0,
+    )
+
+    frame_table = robotics_row.to_frame_table()
+    assert frame_table.table.column_names == [
+        "timestamp",
+        "action",
+        "observation.state",
+    ]
+    assert frame_table.column("timestamp").to_pylist() == pytest.approx([0.0, 0.1])
 
 
 def test_to_robot_rows_preserves_explicit_fps_and_robot_type_keys() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from contextlib import nullcontext
 from email.message import Message
 from importlib import metadata as importlib_metadata
@@ -9,7 +10,39 @@ from urllib import error as urllib_error
 
 import pytest
 
+from refiner.pipeline import RefinerPipeline
+from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.planning import (
+    PlannedStage,
+    StageComputeRequirements,
+    describe_builtin,
+)
+from refiner.pipeline.sinks.base import BaseSink
+from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.platform.manifest import build_run_manifest, refiner_ref_exists_on_remote
+
+
+class _RefinerExtrasSource(BaseSource):
+    name = "extra_source"
+
+    def list_shards(self) -> list[Shard]:
+        return []
+
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
+        del shard
+        return iter(())
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("hf",)
+
+
+class _RefinerExtrasSink(BaseSink):
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        del shard_id, block
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("zarr",)
 
 
 def test_build_run_manifest_captures_script_from_argv(
@@ -41,6 +74,7 @@ def test_build_run_manifest_captures_script_from_argv(
     assert manifest["environment"]["python_version"]
     assert manifest["environment"]["refiner_version"] == "0.2.0"
     assert manifest["environment"]["refiner_ref"] == "abc123def456"
+    assert manifest["environment"]["refiner_extras"] == []
     assert isinstance(manifest["dependencies"], list)
 
 
@@ -70,9 +104,7 @@ def test_build_run_manifest_can_skip_dependency_capture(
     assert "dependencies" not in manifest
 
 
-def test_build_run_manifest_merges_extra_dependencies(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_build_run_manifest_merges_dependencies(monkeypatch, tmp_path: Path) -> None:
     script_path = tmp_path / "demo_job.py"
     script_path.write_text("print('hello')\n", encoding="utf-8")
 
@@ -100,7 +132,7 @@ def test_build_run_manifest_merges_extra_dependencies(
     )
 
     manifest = build_run_manifest(
-        extra_dependencies=[
+        dependencies=[
             "torch==2.6.0",
             "ego-vision[models]==0.1.2",
             "new-package",
@@ -118,7 +150,7 @@ def test_build_run_manifest_merges_extra_dependencies(
     ]
 
 
-def test_build_run_manifest_adds_extra_dependencies_without_capture(
+def test_build_run_manifest_adds_dependencies_without_capture(
     monkeypatch, tmp_path: Path
 ) -> None:
     script_path = tmp_path / "demo_job.py"
@@ -140,13 +172,13 @@ def test_build_run_manifest_adds_extra_dependencies_without_capture(
 
     manifest = build_run_manifest(
         capture_dependencies=False,
-        extra_dependencies=["torch==2.6.0"],
+        dependencies=["torch==2.6.0"],
     )
 
     assert manifest["dependencies"] == [{"name": "torch", "version": "2.6.0"}]
 
 
-def test_build_run_manifest_rejects_invalid_extra_dependency(
+def test_build_run_manifest_rejects_invalid_dependency(
     monkeypatch, tmp_path: Path
 ) -> None:
     script_path = tmp_path / "demo_job.py"
@@ -154,10 +186,164 @@ def test_build_run_manifest_rejects_invalid_extra_dependency(
 
     monkeypatch.setattr(sys, "argv", [str(script_path)])
 
-    with pytest.raises(
-        ValueError, match="extra_dependencies contains invalid requirement"
-    ):
-        build_run_manifest(extra_dependencies=["not a requirement"])
+    with pytest.raises(ValueError, match="dependencies contains invalid requirement"):
+        build_run_manifest(dependencies=["not a requirement"])
+
+
+def test_build_run_manifest_records_refiner_extras(monkeypatch, tmp_path: Path) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+
+    manifest = build_run_manifest(
+        capture_dependencies=False,
+        refiner_extras=["video", "hf", "hf"],
+    )
+
+    assert manifest["environment"]["refiner_extras"] == ["hf", "video"]
+    assert "dependencies" not in manifest
+
+
+def test_build_run_manifest_adds_refiner_extras_declared_by_pipeline(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+
+    @describe_builtin("test:filter_needs_video", refiner_extras=("video",))
+    def keep_row(row) -> bool:
+        del row
+        return True
+
+    @describe_builtin(
+        "test:table_needs_hand_tracking", refiner_extras=("hand_tracking",)
+    )
+    def passthrough_table(table):
+        return table
+
+    pipeline = (
+        RefinerPipeline(_RefinerExtrasSource())
+        .filter(keep_row)
+        .select("value")
+        .map_table(passthrough_table)
+        .with_sink(_RefinerExtrasSink())
+    )
+    stages = [
+        PlannedStage(
+            index=0,
+            name="stage_0",
+            pipeline=pipeline,
+            compute=StageComputeRequirements(num_workers=1),
+        )
+    ]
+
+    manifest = build_run_manifest(
+        capture_dependencies=False,
+        refiner_extras=["text"],
+        pipeline_stages=stages,
+    )
+
+    assert manifest["environment"]["refiner_extras"] == [
+        "hand-tracking",
+        "hf",
+        "text",
+        "video",
+        "zarr",
+    ]
+
+
+def test_build_run_manifest_normalizes_refiner_extra_names(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+
+    manifest = build_run_manifest(
+        capture_dependencies=False,
+        refiner_extras=["HAND_tracking", "hand-tracking", "hf"],
+    )
+
+    assert manifest["environment"]["refiner_extras"] == ["hand-tracking", "hf"]
+    assert "dependencies" not in manifest
+
+
+def test_build_run_manifest_validates_refiner_extras_from_package_metadata(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+    metadata = Message()
+    metadata["Provides-Extra"] = "hf"
+    metadata["Provides-Extra"] = "hand_tracking"
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest.importlib_metadata.metadata",
+        lambda name: metadata,
+    )
+
+    manifest = build_run_manifest(
+        capture_dependencies=False,
+        refiner_extras=["HAND-tracking"],
+    )
+
+    assert manifest["environment"]["refiner_extras"] == ["hand-tracking"]
+    with pytest.raises(ValueError, match="unknown extra 'hand-trakcing'"):
+        build_run_manifest(capture_dependencies=False, refiner_extras=["hand_trakcing"])
+
+
+def test_build_run_manifest_rejects_string_refiner_extras(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+
+    with pytest.raises(ValueError, match="refiner_extras must be a sequence"):
+        build_run_manifest(capture_dependencies=False, refiner_extras="hf")
+
+
+def test_build_run_manifest_skips_refiner_extra_validation_without_metadata_extras(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest.importlib_metadata.metadata",
+        lambda _name: Message(),
+    )
+
+    manifest = build_run_manifest(capture_dependencies=False, refiner_extras=["bad"])
+
+    assert manifest["environment"]["refiner_extras"] == ["bad"]
+
+
+def test_build_run_manifest_rejects_unknown_refiner_extra(
+    monkeypatch, tmp_path: Path
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+    metadata = Message()
+    metadata["Provides-Extra"] = "hf"
+    metadata["Provides-Extra"] = "video"
+
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+    monkeypatch.setattr(
+        "refiner.platform.manifest.importlib_metadata.metadata",
+        lambda _name: metadata,
+    )
+
+    with pytest.raises(ValueError, match="unknown extra 'not-real'"):
+        build_run_manifest(capture_dependencies=False, refiner_extras=["not-real"])
 
 
 def test_build_run_manifest_redacts_secret_values(monkeypatch, tmp_path: Path) -> None:

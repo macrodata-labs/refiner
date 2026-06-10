@@ -1,9 +1,9 @@
 ---
-title: "LeRobot Reader"
+title: "LeRobot reader"
 description: "Read LeRobot datasets as episode rows"
 ---
 
-# LeRobot Reader
+# LeRobot reader
 
 Use `read_lerobot` when your input is already a LeRobot dataset root.
 
@@ -18,7 +18,7 @@ pipeline = mdr.read_lerobot(
 Each output row is a `LeRobotRow`: one episode with metadata, frame data, and
 video references attached.
 
-## What Gets Loaded
+## What gets loaded
 
 `read_lerobot` reads:
 
@@ -34,7 +34,7 @@ video references attached.
 Videos are not decoded when the dataset is read. They are decoded or
 copied when a transform or writer needs frames.
 
-## Multiple Inputs
+## Multiple inputs
 
 Pass multiple roots to combine datasets:
 
@@ -48,9 +48,16 @@ pipeline = mdr.read_lerobot(
 ```
 
 The reader merges metadata and remaps task indices so row tasks stay consistent.
-For a full recipe, see [Merge LeRobot Datasets](../examples/merge-lerobot-datasets.md).
+For a full recipe, see [Merge LeRobot Datasets](../examples/datasets/merge-lerobot-datasets.md).
 
-## Inspecting Rows
+## Malformed episodes
+
+`read_lerobot` validates that each episode's declared frame count matches the
+frames loaded from its frame parquet. Mismatches raise by default. To drop those
+episodes instead, pass `skip_malformed_rows=True`; the reader warns once and
+records `malformed_lerobot_episodes_skipped`.
+
+## Inspecting rows
 
 ```python
 row = pipeline.take(1)[0]
@@ -64,7 +71,7 @@ print(list(row.videos))
 Read [Episode Rows](../episode-data/episode-rows.md) and
 [Frames and Videos](../episode-data/frames-and-videos.md) for the row API.
 
-## Sharding Options
+## Sharding options
 
 ```python
 pipeline = mdr.read_lerobot(
@@ -76,7 +83,7 @@ pipeline = mdr.read_lerobot(
 
 The shard options apply to episode parquet files under `meta/episodes`.
 
-## Related Pages
+## Related pages
 
 - [Writing LeRobot](../writing-data/lerobot.md)
 - [Motion Trimming](../episode-operations/motion-trimming.md)

@@ -20,7 +20,7 @@ def _custom_provider_data(
 
 
 def _provider_option(part: Mapping[str, Any], provider: str, key: str) -> object:
-    provider_options = part.get("providerOptions")
+    provider_options = part.get("provider_options")
     if not isinstance(provider_options, Mapping):
         return None
     options = cast(Mapping[str, Any], provider_options).get(provider)

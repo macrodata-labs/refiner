@@ -109,7 +109,7 @@ def test_inference_generate_text_accepts_typed_multimodal_messages(
                 },
             ],
             temperature=0,
-            providerOptions={"openai": {"reasoningEffort": "low"}},
+            provider_options={"openai": {"reasoningEffort": "low"}},
         )
         return {"output": response.text}
 
@@ -178,7 +178,7 @@ def test_inference_generate_text_maps_openai_options_to_wire_names(
         del row
         await generate_text(
             messages=[{"role": "user", "content": "hello"}],
-            providerOptions={
+            provider_options={
                 "openai": {
                     "logitBias": {"42": -1},
                     "logprobs": 3,
@@ -214,7 +214,7 @@ def test_inference_generate_text_maps_openai_options_to_wire_names(
     assert payload["prompt_cache_retention"] == "24h"
     assert payload["safety_identifier"] == "safe-id"
     assert payload["verbosity"] == "low"
-    assert "providerOptions" not in payload
+    assert "provider_options" not in payload
     assert "logitBias" not in payload
 
 
@@ -279,7 +279,7 @@ def test_inference_generate_text_returns_provider_option_warnings(
         del row
         response = await generate_text(
             messages=[{"role": "user", "content": "hello"}],
-            providerOptions={
+            provider_options={
                 "google": {"thinkingConfig": {"thinkingBudget": 128}},
                 "openai": {"strictJsonSchema": True},
             },
@@ -297,14 +297,14 @@ def test_inference_generate_text_returns_provider_option_warnings(
         "warnings": [
             {
                 "type": "unsupported-provider-option",
-                "setting": "providerOptions.google",
+                "setting": "provider_options.google",
                 "message": (
                     "'google' provider options are not used by OpenAIEndpointProvider."
                 ),
             },
             {
                 "type": "unsupported-setting",
-                "setting": "providerOptions.openai.strictJsonSchema",
+                "setting": "provider_options.openai.strictJsonSchema",
                 "message": (
                     "'strictJsonSchema' is not currently mapped by "
                     "OpenAIEndpointProvider."
@@ -334,7 +334,7 @@ def test_inference_generate_text_warns_for_openai_model_capabilities(
         del row
         response = await generate_text(
             messages=[{"role": "user", "content": "hello"}],
-            providerOptions={
+            provider_options={
                 "openai": {
                     "reasoningEffort": "high",
                     "serviceTier": "flex",
@@ -357,7 +357,7 @@ def test_inference_generate_text_warns_for_openai_model_capabilities(
         "warnings": [
             {
                 "type": "unsupported-setting",
-                "setting": "providerOptions.openai.reasoningEffort",
+                "setting": "provider_options.openai.reasoningEffort",
                 "message": (
                     "OpenAIEndpointProvider model 'gpt-3.5-turbo' is not known "
                     "to support reasoningEffort."
@@ -368,7 +368,7 @@ def test_inference_generate_text_warns_for_openai_model_capabilities(
             },
             {
                 "type": "unsupported-setting",
-                "setting": "providerOptions.openai.serviceTier",
+                "setting": "provider_options.openai.serviceTier",
                 "message": (
                     "OpenAIEndpointProvider model 'gpt-3.5-turbo' is not known "
                     "to support flex service tier."
@@ -405,7 +405,7 @@ def test_inference_generate_text_warns_for_anthropic_model_capabilities(
         response = await generate_text(
             messages=[{"role": "user", "content": "hello"}],
             max_tokens=8192,
-            providerOptions={
+            provider_options={
                 "anthropic": {
                     "thinking": {"type": "adaptive"},
                     "effort": "xhigh",
@@ -427,7 +427,7 @@ def test_inference_generate_text_warns_for_anthropic_model_capabilities(
         "warnings": [
             {
                 "type": "unsupported-setting",
-                "setting": "providerOptions.anthropic.thinking",
+                "setting": "provider_options.anthropic.thinking",
                 "message": (
                     "AnthropicEndpointProvider model 'claude-3-haiku-20240307' "
                     "is not known to support adaptive thinking."
@@ -439,7 +439,7 @@ def test_inference_generate_text_warns_for_anthropic_model_capabilities(
             },
             {
                 "type": "unsupported-setting",
-                "setting": "providerOptions.anthropic.effort",
+                "setting": "provider_options.anthropic.effort",
                 "message": (
                     "AnthropicEndpointProvider model 'claude-3-haiku-20240307' "
                     "is not known to support xhigh effort."
@@ -484,7 +484,7 @@ def test_inference_generate_text_rejects_raw_payload_with_typed_options() -> Non
         del row
         await generate_text(
             raw_payload={"messages": [{"role": "user", "content": "hello"}]},
-            providerOptions={"openai": {"serviceTier": "flex"}},
+            provider_options={"openai": {"serviceTier": "flex"}},
         )
         return {}
 
@@ -499,7 +499,7 @@ def test_inference_generate_text_rejects_raw_payload_with_typed_options() -> Non
         return await infer(DictRow({}))
 
     with pytest.raises(
-        ValueError, match="providerOptions are not supported with raw_payload"
+        ValueError, match="provider_options are not supported with raw_payload"
     ):
         asyncio.run(_invoke())
 

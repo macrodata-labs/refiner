@@ -14,7 +14,7 @@ mdr.col("episode_id")
 mdr.lit("train")
 ```
 
-## Boolean Logic
+## Boolean logic
 
 Use `&`, `|`, and `~`. Do not use Python `and` or `or`.
 
@@ -24,7 +24,7 @@ pipeline = pipeline.filter(
 )
 ```
 
-## Conditional Values
+## Conditional values
 
 ```python
 pipeline = pipeline.with_columns(
@@ -32,7 +32,7 @@ pipeline = pipeline.with_columns(
 )
 ```
 
-## Null Handling
+## Null handling
 
 ```python
 pipeline = pipeline.with_columns(
@@ -40,7 +40,7 @@ pipeline = pipeline.with_columns(
 )
 ```
 
-## String And Datetime Helpers
+## String and datetime helpers
 
 Expression objects include namespaces for common string and datetime operations
 when supported by the underlying Arrow execution.
@@ -49,7 +49,7 @@ when supported by the underlying Arrow execution.
 pipeline = pipeline.filter(mdr.col("episode_id").str.contains("pick"))
 ```
 
-## Related Pages
+## Related pages
 
 - [Vectorized Transforms](vectorized-transforms.md)
 - [Schemas and DTypes](schemas-and-dtypes.md)

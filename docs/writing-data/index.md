@@ -1,9 +1,9 @@
 ---
-title: "Writing Data"
+title: "Writing data"
 description: "Write robotics datasets and pipeline outputs from Refiner"
 ---
 
-# Writing Data
+# Writing data
 
 Writers attach a sink to the end of a pipeline. Launched execution runs the
 reader, transforms, and writer stages.
@@ -15,7 +15,7 @@ reader, transforms, and writer stages.
 | [Parquet and JSONL](parquet-and-jsonl.md) | Tabular outputs and logs. |
 | [Media Assets and Reducers](media-assets-and-reducers.md) | Asset uploads, video handling, and reducer stages. |
 
-## Writer Pattern
+## Writer pattern
 
 ```python
 pipeline = (
