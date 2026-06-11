@@ -5,10 +5,10 @@ description: "Understand workspace credits, payment methods, usage, and auto-rec
 
 # Billing
 
-Macrodata Cloud uses credit-based pricing. Credits are the balance a workspace
-uses to pay for cloud execution. When a job runs, Macrodata measures the
-resources used by that job, converts the usage to credits using the published
-pricing rates, and subtracts those credits from the workspace balance.
+Macrodata Cloud runs on credits. Cloud jobs spend workspace credits as they
+run, based on the CPU, memory, GPU time, and runtime services they use.
+Macrodata measures that usage, applies the published pricing rates, and
+subtracts the result from the workspace credit balance.
 
 If a workspace runs out of credits, running cloud jobs are canceled and new
 cloud jobs cannot be submitted until credits are restored. To help avoid
