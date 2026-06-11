@@ -225,8 +225,8 @@ Submissions are blocked when:
   credits or enable auto-recharge
 
 Open [Settings > Billing](/settings/billing) to add a card, buy credits,
-configure auto-recharge, manage billing details, inspect usage, or choose a
-prior billing cycle. See [Billing](billing.md).
+configure auto-recharge, manage billing & invoices, and inspect usage. See
+[Billing](billing.md).
 
 ## Related pages
 

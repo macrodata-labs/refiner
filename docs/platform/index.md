@@ -114,7 +114,7 @@ workspace has no available credit balance or needs payment attention.
 
 Open [Settings > Billing](/settings/billing) to see credit balance, monthly
 credits, credit purchases, auto-recharge settings, payment method actions,
-prior billing cycles, and a usage breakdown grouped by job.
+and a usage breakdown grouped by job.
 
 See [Billing](billing.md).
 
