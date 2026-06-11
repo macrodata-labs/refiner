@@ -98,21 +98,23 @@ See [Submitting to the Platform](submitting-to-the-platform.md),
 
 ## Billing
 
-Billing is workspace-scoped. Open [Settings > Billing](/settings/billing) to
-see current billing-period spend, included or remaining credits, additional
-usage, payment method actions, prior billing cycles, and an invoice breakdown
-grouped by job.
+Macrodata Cloud uses workspace credits for cloud execution. Each cloud job
+spends credits from the workspace that submitted it. Worker CPU, memory, GPU
+time, and runtime services are measured while the job runs, converted to
+credits using the published pricing rates, and shown in the workspace usage
+breakdown.
 
-Usage is attributed to the workspace that owns the job. Worker compute and
-runtime services both show up in the invoice breakdown, so a robotics
-annotation run can be traced from billing line item back to the job that
-started it.
+Every workspace receives $10 in monthly included credits by default. Saving a
+payment method unlocks an additional $20 monthly card bonus, for $30 total
+monthly included credits. Owners and admins can also buy prepaid credits or
+enable auto-recharge to restore the balance automatically.
 
-Payment status affects cloud execution. A workspace with remaining included
-credits can submit Jobs. Adding a card raises monthly credits to $30 and allows
-paid usage after included credits run out. New paid Jobs are blocked when a
-workspace needs a payment method, has an overdue payment, or hits the paid-usage
-limit for the billing period.
+Cloud submission requires available credits. New cloud Jobs are blocked when a
+workspace has no available credit balance or needs payment attention.
+
+Open [Settings > Billing](/settings/billing) to see credit balance, monthly
+credits, credit purchases, auto-recharge settings, payment method actions,
+and a usage breakdown grouped by job.
 
 See [Billing](billing.md).
 
@@ -149,7 +151,7 @@ See [Viewer](viewer.md).
 | --- | --- |
 | [Workspaces and API Keys](workspaces-and-api-keys.md) | Workspace organization, members, roles, and API key setup. |
 | [Submitting to the Platform](submitting-to-the-platform.md) | Cloud launch, API-key auth, job ownership, and where submitted jobs appear. |
-| [Billing](billing.md) | Credits, payment state, invoice breakdown, caps, and Stripe actions. |
+| [Billing](billing.md) | Credits, payment state, usage breakdown, auto-recharge, and Stripe actions. |
 | [Services](services.md) | Runtime service groups, instantiations, logs, and job links. |
 | [Viewer](viewer.md) | Inspecting Parquet, JSON, CSV, media cells, and private storage. |
 | [Manifests](manifests.md) | Reproducing exactly what a cloud job ran. |

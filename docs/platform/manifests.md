@@ -106,7 +106,7 @@ Use the manifest when:
 - resource settings were too small or too expensive
 - a resumed job should be compared to the original job
 
-For billing investigations, open the job from the invoice breakdown, then open
+For billing investigations, open the job from the usage breakdown, then open
 the manifest to see worker count, GPU settings, and service configuration.
 
 ## Related pages
