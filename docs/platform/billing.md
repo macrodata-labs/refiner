@@ -1,12 +1,19 @@
 ---
 title: "Billing"
-description: "Understand workspace credits, payment methods, usage, and invoice breakdowns"
+description: "Understand workspace credits, payment methods, usage, and auto-recharge"
 ---
 
 # Billing
 
-Billing is workspace-scoped. Jobs, worker compute, and runtime services are
-attributed to the workspace that owns the submitted job.
+Macrodata Cloud uses credit-based pricing. Credits are the balance a workspace
+uses to pay for cloud execution. When a job runs, Macrodata measures the
+resources used by that job, converts the usage to credits using the published
+pricing rates, and subtracts those credits from the workspace balance.
+
+If a workspace runs out of credits, running cloud jobs are canceled and new
+cloud jobs cannot be submitted until credits are restored. To help avoid
+interruptions, workspace owners and admins can enable auto-recharge after
+saving a payment method.
 
 Open [Settings > Billing](/settings/billing).
 
@@ -14,52 +21,58 @@ Only workspace owners and admins can manage payment details. Members can use
 billing visibility if they have access to the workspace settings page, but
 payment actions are restricted.
 
-## Billing page
+## How credits work
 
-The billing page shows:
+Every workspace gets **$10 in free credits each month**. After you save a
+payment method, the monthly free credit amount increases to **$30**.
 
-| Area | What it means |
-| --- | --- |
-| Billing period spend | Current usage for the selected billing period. |
-| Billing cycle selector | Prior and current billing periods when more than one is available. |
-| Included or remaining credits | Credits available in the billing period. |
-| Additional usage | Usage beyond included credits. |
-| Payment information | Card status and Stripe actions. |
-| Invoice breakdown | Usage grouped by Job, with worker and service rows. |
+If you run out of free credits, you can either buy more credits manually or
+enable auto-recharge to add credits automatically before the balance reaches
+zero.
 
-The invoice breakdown links each job line back to the job detail page when the
-job is known. Use that link to explain where spend came from: the job graph,
-worker count, service usage, logs, metrics, and manifest are all on the job
-detail page.
+Cloud usage spends credits as it runs. Worker CPU, memory, GPU time, and
+runtime services are measured per second, converted to credits using the
+published resource rates, and subtracted from the workspace balance. See
+[pricing](/pricing) for the current rates.
 
-## Credits and additional usage
+Purchased credits become available after payment succeeds.
 
-The platform separates usage into included credits and additional usage.
+Local jobs do not spend workspace credits.
 
-| Term | Meaning |
-| --- | --- |
-| Included credits | Monthly workspace credits included before paid overage. |
-| Remaining credits | Unused credits left in the active billing period. |
-| Billing period spend | Total usage in the selected period. |
-| Additional usage | Spend above included credits. |
+## What happens when credits run out
 
-Adding a card raises monthly credits to $30 and lets Jobs keep running after
-included credits run out. Without a usable card, cloud jobs can be blocked when
-credits are exhausted.
+Macrodata Cloud checks the workspace credit balance before starting new cloud
+work. If the workspace has no available credits, new cloud jobs are rejected
+until credits are restored.
 
-## Payment status
+Running cloud jobs are canceled when the workspace credit balance reaches zero.
+New cloud jobs remain blocked until the balance is restored with monthly
+credits, purchased credits, or auto-recharge. Local jobs are not canceled by
+cloud billing limits.
 
-Workspace cloud execution depends on available credits and payment status.
+To avoid interruptions, workspace owners and admins can add prepaid credits
+manually or configure auto-recharge after saving a payment method. Auto-recharge
+automatically buys credits when the workspace balance falls below the threshold
+you choose.
 
-| What you see | What it means | What to do |
-| --- | --- | --- |
-| No card is configured | The workspace can use included credits only. | Add a card before credits run out. |
-| Card is configured | Jobs can continue into paid usage after included credits run out. | Monitor current-period spend. |
-| Payment method required | The workspace needs a card before it can continue paid usage. | Click **Add Card** on the billing page. |
-| Payment overdue | An overdue payment needs attention before new paid Jobs can run. | Click **Manage Billing Details** and resolve the issue in Stripe. |
+## Buy credits and auto-recharge
 
-The payment panel explains the current status. Depending on status and role, it
-shows **Add Card** and/or **Manage Billing Details**.
+Use **Add to credit balance** to add a custom prepaid amount between $5 and
+$85. The billing page shows the estimated total before payment confirmation,
+and credits become available after the payment succeeds.
+
+Auto-recharge can add prepaid credits automatically when a workspace balance
+falls below a threshold:
+
+1. Open **Setup auto recharge** or **Auto recharge settings**.
+2. Turn on **Auto-Recharge**.
+3. Set **When balance drops to**.
+4. Set **Restore balance to**.
+5. Click **Save**.
+
+When the balance reaches the threshold, Macrodata charges the saved payment
+method through Stripe and adds enough prepaid credits to restore the target
+balance.
 
 ## Add or manage a card
 
@@ -67,70 +80,21 @@ shows **Add Card** and/or **Manage Billing Details**.
 2. In **Payment Information**, click **Add Card** if no card is configured.
 3. Complete the Stripe setup flow.
 4. Return to the billing page.
-5. Use **Manage Billing Details** later to update card, invoice, or billing
+5. Use **Manage Billing & Invoices** later to update card, invoice, or billing
    information through Stripe.
 
-## Submission rules
+## Usage breakdown
 
-Cloud Job submission checks billing before work starts. Submission can be
-blocked when:
-
-- the workspace has no remaining included credits
-- the workspace needs a payment method for additional usage
-- a payment is overdue
-- workspace paid usage has reached its billing-period limit
-
-When a workspace reaches its billing-period limit, new paid Jobs wait until the
-next period or until the account is adjusted.
-
-## Invoice breakdown
-
-The invoice breakdown groups usage by job. Each job group can include:
+The usage breakdown groups credit usage by job. Each job group can include:
 
 | Row kind | Meaning |
 | --- | --- |
 | Jobs / Compute Usage | Worker compute usage for the job. |
 | Services | Runtime service usage, such as model-serving processes started for the job. |
-| Unattributed usage | Usage that cannot be matched to a known job record. |
 
 Use the arrow on a job row to open the job detail page. If a service row is
 large, open the job and the [Services](services.md) page to see the service
 instantiations and logs.
-
-## Billing cycles
-
-When prior periods are available, the billing page shows a billing cycle
-selector. Pick a period to see spend and invoice breakdown for that period.
-
-Active periods can change while jobs run. Closed periods reflect the finalized
-usage reported by the billing provider.
-
-## Services and billing
-
-Runtime services are billed separately from worker compute but remain grouped
-under the job that started them when possible. This matters for inference-heavy
-robotics pipelines where workers call a shared vLLM service: the job line shows
-compute usage and service usage together.
-
-Open [Services](/services) to inspect running and stopped service groups. See
-[Services](services.md).
-
-## Troubleshooting
-
-If jobs stop submitting:
-
-1. Open [Settings > Billing](/settings/billing).
-2. Check whether credits are exhausted.
-3. Check **Payment Information** for card setup or overdue payment copy.
-4. Add or update the card through Stripe.
-5. Retry the launch.
-
-If spend looks surprising:
-
-1. Open the invoice breakdown.
-2. Expand the highest-cost job.
-3. Open that job.
-4. Check worker count, runtime services, duration, logs, metrics, and manifest.
 
 ## Related pages
 

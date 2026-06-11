@@ -85,7 +85,7 @@ has a workspace selector and these workspace tabs:
 | Tab | Direct URL | Use it for |
 | --- | --- | --- |
 | General | [Settings > General](/settings/general) | Rename the workspace and view its slug. |
-| Billing | [Settings > Billing](/settings/billing) | Credits, payment method, current spend, and invoice breakdown. |
+| Billing | [Settings > Billing](/settings/billing) | Credits, payment method, auto-recharge, and usage breakdown. |
 | API Keys | [Settings > API Keys](/settings/api-keys) | Create and delete API keys for CLI and cloud submission. |
 | Secrets | [Settings > Secrets](/settings/secrets) | Store encrypted environment secrets for jobs and the viewer. |
 | Members | [Settings > Members](/settings/members) | Invite users, change roles, revoke invitations, and remove members. |

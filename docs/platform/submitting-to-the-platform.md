@@ -214,17 +214,19 @@ to confirm the terminal state.
 ## Billing and submission gates
 
 Cloud submission checks workspace billing state. A workspace can submit while
-it has available included credits, or after a payment method is configured for
-paid usage.
+it has an available credit balance. Worker compute and runtime services spend
+credits from the workspace that owns the submitted job.
 
 Submissions are blocked when:
 
+- the workspace has no available credits
 - a workspace payment is overdue
-- a workspace without a usable payment method has exhausted included credits
-- the workspace reaches its paid-usage limit for the billing period
+- the workspace needs a payment method before owners or admins can buy more
+  credits or enable auto-recharge
 
-Open [Settings > Billing](/settings/billing) to add a card, manage billing
-details, inspect usage, or choose a prior billing cycle. See [Billing](billing.md).
+Open [Settings > Billing](/settings/billing) to add a card, buy credits,
+configure auto-recharge, manage billing details, inspect usage, or choose a
+prior billing cycle. See [Billing](billing.md).
 
 ## Related pages
 

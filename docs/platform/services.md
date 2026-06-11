@@ -69,15 +69,15 @@ the job page, use the logs controls to include or hide service sources.
 
 ## Billing
 
-Runtime service usage appears in the workspace billing breakdown as **Services**
+Runtime service usage appears in the workspace usage breakdown as **Services**
 rows under the job that started them when attribution is available.
 
-To investigate service spend:
+To investigate service credit usage:
 
 1. Open [Settings > Billing](/settings/billing).
-2. Expand the job in **Invoice Breakdown**.
+2. Expand the job in **Usage Breakdown**.
 3. Look for **Services** rows.
-4. Open the job from the invoice breakdown.
+4. Open the job from the usage breakdown.
 5. Open the service from [Services](/services) for service instantiations and
    logs.
 

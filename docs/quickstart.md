@@ -269,8 +269,8 @@ example should only take a couple of minutes. The job page shows live status,
 worker progress, logs, metrics, resource usage, and output links while the
 conversion runs. You can inspect the same run from the terminal with the
 [`macrodata jobs` CLI](cli/jobs-logs-and-metrics.md). Cloud jobs are billed for
-the compute they actually use; see [Billing](platform/billing.md) or
-[pricing](/pricing).
+the compute they actually use and draw down workspace credits; see
+[Billing](platform/billing.md) or [pricing](/pricing).
 
 For the full four-suite LIBERO conversion, see
 [Libero HDF5](examples/formats/libero-hdf5.md).
