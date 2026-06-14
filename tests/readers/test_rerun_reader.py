@@ -151,6 +151,29 @@ def test_read_rerun_robotics_mode_converts_to_robot_row(tmp_path: Path) -> None:
     assert row.states.to_pylist() == [[4.0], [5.0], [6.0]]
 
 
+def test_read_rerun_robotics_mode_without_recording_skips_recording_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    _tiny_rrd(rrd)
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sources.readers.rerun._recording_entries",
+        lambda *args, **kwargs: pytest.fail(
+            "robotics rows without recording payload do not need store metadata"
+        ),
+    )
+
+    row = cast(
+        Any,
+        mdr.read_rerun(str(rrd), output="robotics", fps=30.0).take(1)[0],
+    )
+
+    assert "rerun" not in row
+    assert row["frames"].num_rows == 3
+
+
 def test_read_rerun_robotics_mode_respects_explicit_selections(
     tmp_path: Path,
 ) -> None:

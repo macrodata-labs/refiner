@@ -208,7 +208,11 @@ class RerunReader(BaseReader):
         local_path: Path,
         dataset: Any,
     ) -> Iterator[SourceUnit]:
-        store_entries = _recording_entries(local_path)
+        store_entries = (
+            _recording_entries(local_path)
+            if self.output == "recording" or self.include_recording
+            else []
+        )
         entries_by_recording_id = {entry.recording_id: entry for entry in store_entries}
         schema = dataset.schema()
         timelines = self._timelines(schema)
