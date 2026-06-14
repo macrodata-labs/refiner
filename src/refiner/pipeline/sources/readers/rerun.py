@@ -30,8 +30,6 @@ from refiner.video import VideoFrameSequence
 
 RerunOutputMode = Literal["recording", "robotics"]
 
-_INDEX_METADATA_KEY = b"rerun:kind"
-_INDEX_METADATA_VALUE = b"index"
 _RERUN_SEGMENT_ID = "rerun_segment_id"
 _ROBOTICS_ROW_COLUMNS = frozenset(
     {"episode_id", "rerun", "frames", "fps", "robot_type"}
@@ -219,7 +217,6 @@ class RerunReader(BaseReader):
             application_id = store.application_id if store is not None else None
             recording_id = store.recording_id if store is not None else segment_id
             view = dataset.filter_segments([segment_id])
-            content_view = self._view_for_contents(view)
             if self.output == "robotics":
                 yield self._robotics_row(
                     view,
@@ -232,6 +229,7 @@ class RerunReader(BaseReader):
                     timelines=timelines,
                 )
             else:
+                content_view = self._view_for_contents(view)
                 static = (
                     _collect_table(content_view.reader(index=None))
                     if self.include_static
@@ -581,7 +579,20 @@ def _singleton_scalar_matrix(
 
 
 def _list_column(values: np.ndarray) -> pa.Array:
-    return pa.array(values.tolist())
+    if values.ndim != 2:
+        raise ValueError("Rerun vector columns must be 2D")
+    width = int(values.shape[1])
+    if width <= 0:
+        offsets = pa.array(np.zeros(values.shape[0] + 1, dtype=np.int32))
+        return pa.ListArray.from_arrays(offsets, pa.array([], type=pa.float64()))
+    flat_values = pa.array(
+        np.ascontiguousarray(values).reshape(-1),
+        type=pa.float64(),
+    )
+    offsets = pa.array(
+        np.arange(0, len(flat_values) + width, width, dtype=np.int32),
+    )
+    return pa.ListArray.from_arrays(offsets, flat_values)
 
 
 def _singleton_list_array(array: pa.Array) -> np.ndarray:

@@ -44,7 +44,9 @@ Python.
 
 If a `RerunRecording` has no source file, the writer falls back to table
 emission with `send_dataframe`. Static Rerun component columns are sent as
-static data, and dynamic timeline tables are sent separately.
+static data, and dynamic timeline tables are sent separately. The same fallback
+is used when `write_footer=False`, because Rerun's raw chunk writer always
+writes footer metadata.
 
 ## Reducer
 

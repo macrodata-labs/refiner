@@ -234,6 +234,33 @@ def test_write_rerun_roundtrips_recording_row(tmp_path: Path) -> None:
     assert recording.tables["frame"].num_rows == 3
 
 
+def test_write_rerun_without_footer_uses_table_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    output = tmp_path / "out-no-footer"
+    _tiny_rrd(source)
+
+    unit = next(mdr.read_rerun(str(source), timelines=("frame",)).source.read())
+    assert isinstance(unit, Row)
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun._write_source_chunks",
+        lambda *args, **kwargs: pytest.fail("raw chunk writer cannot disable footers"),
+    )
+    sink = RerunSink(str(output), write_footer=False)
+    sink.write_shard_block("shard-a", [unit])
+    sink.on_shard_complete("shard-a")
+
+    written = sorted(output.glob("**/*.rrd"))
+    assert len(written) == 1
+    row = next(mdr.read_rerun(str(written[0]), timelines=("frame",)).source.read())
+
+    assert isinstance(row, Row)
+    assert row["rerun"].tables["frame"].num_rows == 3
+
+
 def test_write_rerun_table_fallback_separates_static_columns(tmp_path: Path) -> None:
     source = tmp_path / "sparse.rrd"
     _sparse_rrd(source)

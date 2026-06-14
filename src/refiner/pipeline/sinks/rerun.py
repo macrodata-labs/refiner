@@ -67,7 +67,11 @@ class RerunSink(BaseSink):
         )
 
         def write_local(path: Path) -> None:
-            if recording.use_source_chunks and recording.source_file is not None:
+            if (
+                self.write_footer
+                and recording.use_source_chunks
+                and recording.source_file is not None
+            ):
                 _write_source_chunks(recording, path, application_id=self.app_id)
                 return
             _write_recording_tables(
