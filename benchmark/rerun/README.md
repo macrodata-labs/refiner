@@ -37,12 +37,12 @@ look better.
 - Workspace secrets in the selected environment must include AWS credentials
   for the source/output S3 bucket. The default environment is `researcher`.
 
-If local AWS SSO credentials are valid, refresh the cloud secret environment
-without printing credential values:
+If local AWS credentials are valid, refresh the cloud secret environment without
+printing credential values:
 
 ```bash
 uv run python benchmark/rerun/refresh_aws_secrets.py \
-  --aws-profile default \
+  --aws-profile 210049840512_Researcher \
   --secret-env researcher
 ```
 
