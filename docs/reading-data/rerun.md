@@ -112,4 +112,3 @@ Rerun SDK queries require a complete local RRD file. For that reason,
 HDF5 and MCAP. `target_shard_bytes` groups whole RRD files into shard buckets,
 and `num_shards` can request a target number of file buckets when there are
 enough files.
-
