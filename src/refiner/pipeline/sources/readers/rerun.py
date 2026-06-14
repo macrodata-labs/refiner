@@ -617,50 +617,37 @@ def _iter_encoded_images(values: pa.Array) -> Iterator[np.ndarray]:
 
     from PIL import Image
 
-    encoded = _EncodedImageColumn(values)
     for index in range(len(values)):
-        data = encoded.bytes_at(index)
+        data = _encoded_image_bytes(values, index)
         if data is None:
             continue
         with Image.open(BytesIO(data)) as image:
             yield np.asarray(image.convert("RGB"), dtype=np.uint8)
 
 
-class _EncodedImageColumn:
-    def __init__(self, values: pa.Array) -> None:
-        if not pa.types.is_list(values.type) and not pa.types.is_large_list(
-            values.type
-        ):
-            raise TypeError(
-                f"Expected a Rerun encoded image list column, got {values.type}"
-            )
-        self.values = values
-        self.outer_offsets = np.asarray(values.offsets)
-        self.valid = np.asarray(_is_valid(values), dtype=bool)
-        self.inner = values.values
-        self.inner_offsets = (
-            np.asarray(self.inner.offsets)
-            if pa.types.is_list(self.inner.type)
-            or pa.types.is_large_list(self.inner.type)
-            else None
+def _encoded_image_bytes(values: pa.Array, index: int) -> bytes | None:
+    if not pa.types.is_list(values.type) and not pa.types.is_large_list(values.type):
+        raise TypeError(
+            f"Expected a Rerun encoded image list column, got {values.type}"
         )
-
-    def bytes_at(self, index: int) -> bytes | None:
-        if not self.valid[index]:
+    if not values[index].is_valid:
+        return None
+    outer_offsets = np.asarray(values.offsets)
+    outer_start = int(outer_offsets[index])
+    outer_end = int(outer_offsets[index + 1])
+    if outer_end <= outer_start:
+        return None
+    inner = values.values
+    if not pa.types.is_list(inner.type) and not pa.types.is_large_list(inner.type):
+        value = values[index].as_py()
+        if not value:
             return None
-        outer_start = int(self.outer_offsets[index])
-        outer_end = int(self.outer_offsets[index + 1])
-        if outer_end <= outer_start:
-            return None
-        if self.inner_offsets is None:
-            value = self.values[index].as_py()
-            if not value:
-                return None
-            return bytes(cast(bytes | bytearray | list[int], value[0]))
-        byte_start = int(self.inner_offsets[outer_start])
-        byte_end = int(self.inner_offsets[outer_start + 1])
-        payload = self.inner.values.slice(byte_start, byte_end - byte_start)
-        return np.asarray(payload).tobytes()
+        return bytes(cast(bytes | bytearray | list[int], value[0]))
+    inner_offsets = np.asarray(inner.offsets)
+    byte_start = int(inner_offsets[outer_start])
+    byte_end = int(inner_offsets[outer_start + 1])
+    payload = inner.values.slice(byte_start, byte_end - byte_start)
+    return np.asarray(payload).tobytes()
 
 
 def _is_valid(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
