@@ -133,8 +133,6 @@ def main() -> int:
     payload = _secret_payload(args)
     for name in SECRET_NAMES:
         _set_secret(env=args.secret_env, name=name, value=payload[name])
-    updated = ", ".join(f"{name}=set" for name in SECRET_NAMES)
-    print(f"Updated Macrodata secrets in env {args.secret_env!r}: {updated}")
     return 0
 
 
