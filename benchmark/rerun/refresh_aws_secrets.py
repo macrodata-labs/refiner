@@ -4,8 +4,6 @@ import argparse
 import json
 import os
 import subprocess
-from collections.abc import Mapping
-from typing import Any
 
 
 DEFAULT_S3_CHECK = (
@@ -129,23 +127,14 @@ def _secret_payload(args: argparse.Namespace) -> dict[str, str]:
     return payload
 
 
-def _redacted_summary(payload: Mapping[str, Any]) -> str:
-    return ", ".join(
-        f"{name}={'set' if isinstance(payload.get(name), str) and payload.get(name) else 'missing'}"
-        for name in SECRET_NAMES
-    )
-
-
 def main() -> int:
     args = _parse_args()
     _check_aws_access(args)
     payload = _secret_payload(args)
     for name in SECRET_NAMES:
         _set_secret(env=args.secret_env, name=name, value=payload[name])
-    print(
-        f"Updated Macrodata secrets in env {args.secret_env!r}: "
-        f"{_redacted_summary(payload)}"
-    )
+    updated = ", ".join(f"{name}=set" for name in SECRET_NAMES)
+    print(f"Updated Macrodata secrets in env {args.secret_env!r}: {updated}")
     return 0
 
 
