@@ -7,6 +7,8 @@ This folder contains cloud benchmark harnesses for Rerun RRD workloads.
   job ids, stage timings, metrics, and output inspection.
 - `compare_results.py`: compares two benchmark `summary.json` artifacts and
   prints case-level and stage-level timing deltas.
+- `refresh_aws_secrets.py`: copies short-lived credentials from an AWS CLI
+  profile into the Macrodata workspace secret environment used by cloud jobs.
 
 The default inputs are the ten base RRD files from:
 
@@ -34,6 +36,15 @@ look better.
 - Macrodata CLI auth must be configured.
 - Workspace secrets in the selected environment must include AWS credentials
   for the source/output S3 bucket. The default environment is `researcher`.
+
+If local AWS SSO credentials are valid, refresh the cloud secret environment
+without printing credential values:
+
+```bash
+uv run python benchmark/rerun/refresh_aws_secrets.py \
+  --aws-profile default \
+  --secret-env researcher
+```
 
 ## Run
 
