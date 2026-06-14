@@ -354,10 +354,8 @@ class RerunReader(BaseReader):
         if self.robot_type is not None:
             row["robot_type"] = self.robot_type
 
-        scalar_columns = _component_columns(
-            table=table,
-            component="Scalars:scalars",
-        )
+        component_columns = _component_column_maps(table)
+        scalar_columns = component_columns.get("Scalars:scalars", {})
         action_columns = (
             _selected_columns(
                 scalar_columns,
@@ -388,10 +386,11 @@ class RerunReader(BaseReader):
             )
         row["frames"] = Tabular(frames)
 
+        image_columns = component_columns.get("EncodedImage:blob", {})
         camera_columns = (
-            _selected_camera_columns(table, self.videos)
+            _selected_camera_columns(image_columns, self.videos)
             if self.videos_explicit
-            else _camera_columns(table, self.camera_prefix)
+            else _camera_columns(image_columns, self.camera_prefix)
         )
         for name, column in camera_columns.items():
             values = table.column(column).combine_chunks()
@@ -490,15 +489,20 @@ def _component_columns(
     *,
     component: str,
 ) -> dict[str, str]:
-    out: dict[str, str] = {}
+    return _component_column_maps(table).get(component, {})
+
+
+def _component_column_maps(table: pa.Table) -> dict[str, dict[str, str]]:
+    by_component: dict[str, dict[str, str]] = {}
     for field in table.schema:
         metadata = field.metadata or {}
-        if _metadata_text(metadata, _RERUN_COMPONENT_METADATA) != component:
+        field_component = _metadata_text(metadata, _RERUN_COMPONENT_METADATA)
+        if field_component is None:
             continue
         entity_path = _metadata_text(metadata, _RERUN_ENTITY_PATH_METADATA)
         if entity_path is not None:
-            out[entity_path] = field.name
-    return out
+            by_component.setdefault(field_component, {})[entity_path] = field.name
+    return by_component
 
 
 def _prefixed_columns(columns: Mapping[str, str], prefix: str) -> list[tuple[str, str]]:
@@ -533,12 +537,9 @@ def _matches_entity_prefix(entity_path: str, prefix: str) -> bool:
     return entity_path == prefix or entity_path.startswith(f"{prefix}/")
 
 
-def _camera_columns(table: pa.Table, prefix: str) -> dict[str, str]:
+def _camera_columns(columns: Mapping[str, str], prefix: str) -> dict[str, str]:
     out: dict[str, str] = {}
-    for entity_path, column in _component_columns(
-        table,
-        component="EncodedImage:blob",
-    ).items():
+    for entity_path, column in columns.items():
         if not _matches_entity_prefix(entity_path, prefix):
             continue
         out[entity_path.strip("/").replace("/", ".")] = column
@@ -546,10 +547,9 @@ def _camera_columns(table: pa.Table, prefix: str) -> dict[str, str]:
 
 
 def _selected_camera_columns(
-    table: pa.Table,
+    by_entity_path: Mapping[str, str],
     selected: Mapping[str, str],
 ) -> dict[str, str]:
-    by_entity_path = _component_columns(table, component="EncodedImage:blob")
     out: dict[str, str] = {}
     for name, path in selected.items():
         column = by_entity_path.get(path)
