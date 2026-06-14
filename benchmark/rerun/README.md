@@ -71,6 +71,10 @@ Artifacts are written under `benchmark/rerun/artifacts/` by default:
 - one per-case result JSON
 - one summary JSON for the benchmark session
 
+Each case records `planned_shards`. RRD files are file-atomic, so runs where
+`planned_shards < --num-workers` can underutilize workers and should not be used
+as scaling evidence.
+
 ## Compare
 
 After running a baseline and candidate benchmark, compare their summaries:

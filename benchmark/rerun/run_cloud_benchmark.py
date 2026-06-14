@@ -61,6 +61,8 @@ class CaseResult:
     started_at_utc: str
     finished_at_utc: str
     input_count: int
+    planned_shards: int | None
+    planning_warning: str | None
     output_root: str
     cloud_wall_time_s: float | None
     queue_time_s: float | None
@@ -422,6 +424,24 @@ def _inspect_output(path: str) -> tuple[int | None, int | None, str | None]:
         return None, None, str(err)
 
 
+def _planned_shard_count(
+    pipeline: mdr.RefinerPipeline,
+    *,
+    requested_workers: int,
+) -> tuple[int | None, str | None]:
+    try:
+        planned_shards = len(pipeline.list_shards())
+    except Exception as err:
+        return None, f"could not inspect planned shards before launch: {err}"
+    if planned_shards < requested_workers:
+        return (
+            planned_shards,
+            "planned Rerun shards are fewer than requested workers; file-atomic "
+            "RRD sharding may underutilize cloud workers",
+        )
+    return planned_shards, None
+
+
 def _run_case(
     *,
     args: argparse.Namespace,
@@ -445,6 +465,12 @@ def _run_case(
         timeline=args.timeline,
         fps=args.fps,
     )
+    planned_shards, planning_warning = _planned_shard_count(
+        pipeline,
+        requested_workers=args.num_workers,
+    )
+    if planning_warning is not None:
+        print(f"Warning: {case}: {planning_warning}", file=sys.stderr, flush=True)
     started_at = _utc_now()
     os.environ.setdefault("REFINER_ATTACH", "detach")
     launch = pipeline.launch_cloud(
@@ -476,6 +502,8 @@ def _run_case(
         started_at_utc=started_at,
         finished_at_utc=finished_at,
         input_count=len(inputs),
+        planned_shards=planned_shards,
+        planning_warning=planning_warning,
         output_root=output,
         cloud_wall_time_s=_duration_s(job.get("startedAt"), job.get("endedAt")),
         queue_time_s=_duration_s(job.get("createdAt"), job.get("startedAt")),

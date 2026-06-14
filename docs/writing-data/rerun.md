@@ -33,7 +33,9 @@ template is:
 
 The template must include `{shard_id}` and `{worker_id}` so retry cleanup can
 distinguish finalized worker outputs from abandoned attempt outputs. You can
-also use `{row_index}` and `{segment_id}`.
+also use `{row_index}` and `{segment_id}`. When `{segment_id}` is present, the
+recording segment id must be a single path segment; ids containing `/`, `\`,
+`.`, or `..` are rejected before writing.
 
 ## Writer strategy
 
