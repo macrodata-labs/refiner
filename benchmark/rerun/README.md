@@ -5,6 +5,8 @@ This folder contains cloud benchmark harnesses for Rerun RRD workloads.
 - `run_cloud_benchmark.py`: submits Macrodata Cloud jobs for Rerun read,
   robotics conversion, and Rerun write paths, then writes JSON artifacts with
   job ids, stage timings, metrics, and output inspection.
+- `compare_results.py`: compares two benchmark `summary.json` artifacts and
+  prints case-level and stage-level timing deltas.
 
 The default inputs are the ten base RRD files from:
 
@@ -56,3 +58,16 @@ Artifacts are written under `benchmark/rerun/artifacts/` by default:
 
 - one per-case result JSON
 - one summary JSON for the benchmark session
+
+## Compare
+
+After running a baseline and candidate benchmark, compare their summaries:
+
+```bash
+uv run python benchmark/rerun/compare_results.py \
+  benchmark/rerun/artifacts/baseline/summary.json \
+  benchmark/rerun/artifacts/candidate/summary.json
+```
+
+Only completed jobs are used for timing deltas. Failed jobs still appear in the
+run-count columns so setup problems are visible instead of silently averaged in.
