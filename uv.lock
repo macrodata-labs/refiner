@@ -868,6 +868,23 @@ nvtx = [
 ]
 
 [[package]]
+name = "datafusion"
+version = "52.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyarrow" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/db/d4/a5ad7b665a80008901892fde61dc667318db0652a955d706ddca3a224b5a/datafusion-52.3.0.tar.gz", hash = "sha256:2e8b02ad142b1a0d673f035d96a0944a640ac78275003d7e453cee4afe4a20a4", size = 205026, upload-time = "2026-03-16T10:54:07.739Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/55/63/1bb0737988cefa77274b459d64fa4b57ba4cf755639a39733e9581b5d599/datafusion-52.3.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:a73f02406b2985b9145dd97f8221a929c9ef3289a8ba64c6b52043e240938528", size = 31503230, upload-time = "2026-03-16T10:53:50.312Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/e3/ea3b79239953c3044d19d8e9581015da025b6640796db03799e435b17910/datafusion-52.3.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:118a1f0add6a3f91fcbc90c71819fe08750e2981637d5e7b346e099e94a20b8b", size = 28159497, upload-time = "2026-03-16T10:53:54.032Z" },
+    { url = "https://files.pythonhosted.org/packages/24/c8/7d325feb4b7509ae03857fd7e164e95ec72e8c9f3dfd3178ec7f80d53977/datafusion-52.3.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:253ce7aee5fe84bd6ee290c20608114114bdb5115852617f97d3855d36ad9341", size = 30769154, upload-time = "2026-03-16T10:53:57.835Z" },
+    { url = "https://files.pythonhosted.org/packages/37/ee/478689c69b3cb1ccabb2d52feac0c181f6cdf20b51a81df35344b1dab9a6/datafusion-52.3.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:2af3469d2f06959bec88579ab107a72f965de18b32e607069bbdd0b859ed8dbb", size = 33060335, upload-time = "2026-03-16T10:54:01.715Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/48/01906ab5c1a70373c6874ac5192d03646fa7b94d9ff06e3f676cb6b0f43f/datafusion-52.3.0-cp310-abi3-win_amd64.whl", hash = "sha256:9fb35738cf4dbff672dbcfffc7332813024cb0ad2ab8cda1fb90b9054277ab0c", size = 33765807, upload-time = "2026-03-16T10:54:05.728Z" },
+]
+
+[[package]]
 name = "datasets"
 version = "4.8.5"
 source = { registry = "https://pypi.org/simple" }
@@ -2085,6 +2102,7 @@ all = [
     { name = "mcap-ros2-support" },
     { name = "numcodecs" },
     { name = "pillow" },
+    { name = "rerun-sdk", extra = ["datafusion"] },
     { name = "s3fs" },
     { name = "tensorflow" },
     { name = "tensorflow-datasets" },
@@ -2120,6 +2138,10 @@ mcap = [
     { name = "mcap-ros2-support" },
     { name = "pillow" },
 ]
+rerun = [
+    { name = "pillow" },
+    { name = "rerun-sdk", extra = ["datafusion"] },
+]
 s3 = [
     { name = "s3fs" },
 ]
@@ -2140,6 +2162,7 @@ testing = [
     { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "rerun-sdk", extra = ["datafusion"] },
     { name = "s3fs" },
     { name = "tensorflow" },
     { name = "tensorflow-datasets" },
@@ -2193,6 +2216,7 @@ requires-dist = [
     { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'datasets'" },
     { name = "macrodata-refiner", extras = ["hf"], marker = "extra == 'hand-tracking'" },
     { name = "macrodata-refiner", extras = ["mcap"], marker = "extra == 'all'" },
+    { name = "macrodata-refiner", extras = ["rerun"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["s3"], marker = "extra == 'all'" },
     { name = "macrodata-refiner", extras = ["tensorflow"], marker = "extra == 'tfds'" },
     { name = "macrodata-refiner", extras = ["text"], marker = "extra == 'all'" },
@@ -2209,18 +2233,20 @@ requires-dist = [
     { name = "orjson" },
     { name = "packaging" },
     { name = "pillow", marker = "extra == 'mcap'" },
+    { name = "pillow", marker = "extra == 'rerun'" },
     { name = "pillow", marker = "extra == 'video'" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'testing'", specifier = ">=8.0.0" },
     { name = "pytest-cov", marker = "extra == 'testing'", specifier = ">=5.0.0" },
+    { name = "rerun-sdk", extras = ["datafusion"], marker = "extra == 'rerun'", specifier = ">=0.33,<0.34" },
     { name = "s3fs", marker = "extra == 's3'" },
     { name = "tensorflow", marker = "extra == 'tensorflow'" },
     { name = "tensorflow-datasets", marker = "extra == 'tfds'" },
     { name = "warcio", marker = "extra == 'text'" },
     { name = "zarr", marker = "extra == 'zarr'", specifier = ">=2.18,<3" },
 ]
-provides-extras = ["video", "hf", "datasets", "hand-tracking", "text", "hdf5", "zarr", "mcap", "s3", "gcs", "tensorflow", "tfds", "testing", "all"]
+provides-extras = ["video", "hf", "datasets", "hand-tracking", "text", "hdf5", "zarr", "mcap", "rerun", "s3", "gcs", "tensorflow", "tfds", "testing", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -4148,6 +4174,33 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650, upload-time = "2024-03-22T20:32:29.939Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36", size = 24179, upload-time = "2024-03-22T20:32:28.055Z" },
+]
+
+[[package]]
+name = "rerun-sdk"
+version = "0.33.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pillow" },
+    { name = "psutil" },
+    { name = "pyarrow" },
+    { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/17/5a521e86ac0064bd0f452e3e98e2422433511b54110423c0217d2cc1234f/rerun_sdk-0.33.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:97f123e3ef6aa69b60194bc566e5435c7d4040757ed4f58297ea46c8ef320c5c", size = 125707606, upload-time = "2026-05-29T09:42:53.584Z" },
+    { url = "https://files.pythonhosted.org/packages/34/2f/2ca2599aca03b69fbcac7c8391ef50376968edd7c58b96de53a4b7f20624/rerun_sdk-0.33.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:8f734cf59419dcfbc46915bea6cec030224f16e96c3a597f0ccf7cb7b058dd43", size = 135271020, upload-time = "2026-05-29T09:43:00.106Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/ba/d70997b43e6db4f58c4326c29c6a6a384ddc6c2fe125f231c885ad9b3b1f/rerun_sdk-0.33.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:53d95609f8b330026bcd041bf6d11b46ee1c18b6fbde155135f291fe86328eeb", size = 139552018, upload-time = "2026-05-29T09:43:06.275Z" },
+    { url = "https://files.pythonhosted.org/packages/14/a5/0cac294d16aff6c9a2f183f838428a0380b4d2fd9e053bb37b3041999ad5/rerun_sdk-0.33.0-cp310-abi3-win_amd64.whl", hash = "sha256:b152992a72ec240062c8c285bd30ab681b464a25efbe1464c66fdac82320de1f", size = 120418186, upload-time = "2026-05-29T09:43:13.733Z" },
+]
+
+[package.optional-dependencies]
+datafusion = [
+    { name = "datafusion" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [[package]]

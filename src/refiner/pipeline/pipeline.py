@@ -41,6 +41,7 @@ from refiner.pipeline.sources import (
     JsonReader,
     McapReader,
     ParquetReader,
+    RerunReader,
     TfdsReader,
     TfrecordReader,
     ZarrReader,
@@ -48,6 +49,7 @@ from refiner.pipeline.sources import (
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.mcap import SyncMethod
+from refiner.pipeline.sources.readers.rerun import RerunOutputMode
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
@@ -1213,6 +1215,62 @@ def read_mcap(
             sync_method=sync_method,
             include_skew=include_skew,
             fps=fps,
+        )
+    )
+
+
+def read_rerun(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    file_path_column: str | None = "file_path",
+    output: RerunOutputMode = "recording",
+    contents: str | Sequence[str] | None = None,
+    timelines: Sequence[str] | None = None,
+    primary_timeline: str | None = None,
+    include_static: bool = True,
+    include_recording: bool | None = None,
+    fill_latest_at: bool = False,
+    action_prefix: str = "/action",
+    state_prefix: str = "/observation/state",
+    camera_prefix: str = "/cam",
+    fps: float | None = None,
+    robot_type: str | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline with a Rerun RRD reader source.
+
+    RRD files are planned as atomic input shards. With ``output="recording"``,
+    each emitted row preserves the selected Rerun data as Arrow-backed
+    ``Tabular`` tables grouped by timeline under the ``rerun`` field. With
+    ``output="robotics"``, the reader additionally derives common robotics
+    episode fields from configurable Rerun entity prefixes so the rows can be
+    passed through ``to_robot_rows(...)`` and robotics writers.
+    """
+    return RefinerPipeline(
+        source=RerunReader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            file_path_column=file_path_column,
+            output=output,
+            contents=contents,
+            timelines=timelines,
+            primary_timeline=primary_timeline,
+            include_static=include_static,
+            include_recording=include_recording,
+            fill_latest_at=fill_latest_at,
+            action_prefix=action_prefix,
+            state_prefix=state_prefix,
+            camera_prefix=camera_prefix,
+            fps=fps,
+            robot_type=robot_type,
         )
     )
 
