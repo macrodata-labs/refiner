@@ -48,7 +48,6 @@ class RerunRecording:
     tables: Mapping[str, Tabular]
     static: Tabular | None = None
     source_file: DataFile | None = None
-    local_source_path: Path | None = None
     application_id: str | None = None
     recording_id: str | None = None
     contents: tuple[str, ...] | None = None
@@ -91,6 +90,14 @@ class RerunReader(BaseReader):
     ) -> None:
         if output not in ("recording", "robotics"):
             raise ValueError("output must be 'recording' or 'robotics'")
+        if output == "robotics" and not materialize_tables:
+            raise ValueError(
+                "materialize_tables=False is only supported for recording output"
+            )
+        if output == "recording" and include_recording is False:
+            raise ValueError(
+                "include_recording=False is only supported for robotics output"
+            )
         if fps is not None:
             fps = float(fps)
             if not np.isfinite(fps) or fps <= 0:
@@ -263,7 +270,6 @@ class RerunReader(BaseReader):
                     segment_id=segment_id,
                     source_path=source.abs_path(),
                     source_file=source,
-                    local_source_path=local_path,
                     application_id=application_id,
                     recording_id=recording_id,
                     timelines=timelines,
@@ -339,7 +345,6 @@ class RerunReader(BaseReader):
                 tables=tables,
                 static=static,
                 source_file=source,
-                local_source_path=local_path,
                 application_id=application_id,
                 recording_id=recording_id,
                 contents=self.contents,
@@ -395,7 +400,6 @@ class RerunReader(BaseReader):
         segment_id: str,
         source_path: str,
         source_file: DataFile,
-        local_source_path: Path,
         application_id: str | None,
         recording_id: str,
         timelines: Sequence[str],
@@ -425,7 +429,6 @@ class RerunReader(BaseReader):
                 tables={timeline: Tabular(table)},
                 static=Tabular(static) if static is not None else None,
                 source_file=source_file,
-                local_source_path=local_source_path,
                 application_id=application_id,
                 recording_id=recording_id,
                 contents=tuple(contents),

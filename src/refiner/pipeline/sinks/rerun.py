@@ -39,6 +39,7 @@ class RerunSink(BaseSink):
         self.app_id = app_id
         self.write_footer = write_footer
         self._row_indices: dict[str, int] = {}
+        self._written_relpaths: set[str] = set()
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("rerun",)
@@ -56,7 +57,13 @@ class RerunSink(BaseSink):
                 row_index=row_index,
                 segment_id=recording.segment_id,
             )
+            if relpath in self._written_relpaths:
+                raise ValueError(
+                    "write_rerun filename_template rendered duplicate output path "
+                    f"{relpath!r}; include {{row_index}} or another unique row field"
+                )
             self._write_recording(recording, relpath)
+            self._written_relpaths.add(relpath)
             log_throughput("files_written", 1, shard_id=shard_id, unit="files")
             count += 1
         return count
@@ -134,15 +141,6 @@ def _write_source_chunks(
     source = recording.source_file
     if source is None:
         raise ValueError("Rerun source chunk write requires source_file")
-    local_source_path = recording.local_source_path
-    if local_source_path is not None and local_source_path.exists():
-        _write_source_chunks_from_path(
-            recording,
-            path,
-            local_path=local_source_path,
-            application_id=application_id,
-        )
-        return
     with _local_rrd(source) as local_path:
         _write_source_chunks_from_path(
             recording,
@@ -241,19 +239,32 @@ def _write_recording_tables(
 ) -> None:
     import rerun as rr
 
+    static = (
+        _sendable_static_table(recording.static.table)
+        if recording.static is not None
+        else None
+    )
+    dynamic_tables = [
+        dynamic
+        for table in recording.tables.values()
+        if (dynamic := _sendable_dynamic_table(table.table)).num_columns > 0
+    ]
+    if (static is None or static.num_columns == 0) and not dynamic_tables:
+        raise ValueError(
+            "write_rerun cannot write a RerunRecording without materialized "
+            "Rerun table columns; use write_footer=True for raw source chunk "
+            "writes or read_rerun(..., materialize_tables=True)"
+        )
+
     with rr.RecordingStream(
         recording.application_id or application_id,
         recording_id=recording.recording_id or recording.segment_id,
     ) as rec:
         rec.save(path, write_footer=write_footer)
-        if recording.static is not None:
-            static = _sendable_static_table(recording.static.table)
-            if static.num_columns > 0:
-                rec.send_dataframe(static)
-        for table in recording.tables.values():
-            dynamic = _sendable_dynamic_table(table.table)
-            if dynamic.num_columns > 0:
-                rec.send_dataframe(dynamic)
+        if static is not None and static.num_columns > 0:
+            rec.send_dataframe(static)
+        for dynamic in dynamic_tables:
+            rec.send_dataframe(dynamic)
 
 
 def _sendable_static_table(table: pa.Table) -> pa.Table:
@@ -303,6 +314,11 @@ def _validate_filename_template(filename_template: str) -> None:
         raise ValueError(
             "filename_template requires fields: "
             + ", ".join(f"{{{field}}}" for field in sorted(missing))
+        )
+    if not fields.intersection({"row_index", "segment_id"}):
+        raise ValueError(
+            "filename_template requires {row_index} or {segment_id} so each "
+            "Rerun row writes a distinct file"
         )
     _normalize_relpath(
         filename_template.format(

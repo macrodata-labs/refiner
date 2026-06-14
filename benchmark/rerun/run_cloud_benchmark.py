@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import platform
+import platform as platform_module
 import re
 import subprocess
 import sys
@@ -70,10 +70,10 @@ class CaseResult:
     output_file_count: int | None
     output_size_bytes: int | None
     output_inspection_error: str | None
-    python_version: str
-    platform: str
+    submitter_python_version: str
+    submitter_platform: str
     git_ref: str
-    package_versions: dict[str, str]
+    submitter_package_versions: dict[str, str]
 
 
 def summarize_recording(row: Row) -> DictRow:
@@ -413,8 +413,12 @@ def _inspect_output(path: str) -> tuple[int | None, int | None, str | None]:
             return 0, 0, None
         total_size = 0
         total_files = 0
-        for child in fs.find(fs_path):
-            info = fs.info(child)
+        found = fs.find(fs_path, detail=True)
+        if isinstance(found, dict):
+            infos = found.values()
+        else:
+            infos = (fs.info(child) for child in fs.find(fs_path))
+        for info in infos:
             if info.get("type") == "directory":
                 continue
             total_files += 1
@@ -511,10 +515,10 @@ def _run_case(
         output_file_count=output_file_count,
         output_size_bytes=output_size_bytes,
         output_inspection_error=output_error,
-        python_version=sys.version.replace("\n", " "),
-        platform=platform.platform(),
+        submitter_python_version=sys.version.replace("\n", " "),
+        submitter_platform=platform_module.platform(),
         git_ref=git_ref,
-        package_versions=_package_versions(),
+        submitter_package_versions=_package_versions(),
     )
 
 

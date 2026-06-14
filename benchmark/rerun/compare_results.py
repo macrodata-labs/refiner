@@ -56,6 +56,24 @@ def _group_results(summary: Mapping[str, Any]) -> dict[str, list[Mapping[str, An
     return dict(grouped)
 
 
+def _unique_values(results: Sequence[Mapping[str, Any]], key: str) -> list[Any]:
+    values = []
+    for result in results:
+        value = result.get(key)
+        if value is not None and value not in values:
+            values.append(value)
+    return values
+
+
+def _warnings(results: Sequence[Mapping[str, Any]], key: str) -> list[str]:
+    values = []
+    for result in results:
+        value = result.get(key)
+        if isinstance(value, str) and value and value not in values:
+            values.append(value)
+    return values
+
+
 def _stage_key(stage: Mapping[str, Any]) -> str:
     name = stage.get("name")
     if isinstance(name, str) and name:
@@ -130,6 +148,18 @@ def _comparison(
                 "candidate_completed": len(candidate_completed),
                 "baseline_total": len(baseline_all),
                 "candidate_total": len(candidate_all),
+                "baseline_planned_shards": _unique_values(
+                    baseline_all, "planned_shards"
+                ),
+                "candidate_planned_shards": _unique_values(
+                    candidate_all, "planned_shards"
+                ),
+                "baseline_planning_warnings": _warnings(
+                    baseline_all, "planning_warning"
+                ),
+                "candidate_planning_warnings": _warnings(
+                    candidate_all, "planning_warning"
+                ),
                 "baseline_wall_time_s": baseline_wall,
                 "candidate_wall_time_s": candidate_wall,
                 "delta_s": wall_delta_s,
@@ -150,6 +180,12 @@ def _format_number(value: Any, *, suffix: str = "") -> str:
     if not isinstance(value, (int, float)):
         return "-"
     return f"{value:.2f}{suffix}"
+
+
+def _format_values(values: Sequence[Any]) -> str:
+    if not values:
+        return "-"
+    return ",".join(str(value) for value in values)
 
 
 def _print_table(rows: Sequence[Sequence[str]]) -> None:
@@ -177,6 +213,7 @@ def _print_human(comparison: Mapping[str, Any]) -> None:
         (
             "case",
             "runs",
+            "shards",
             "baseline_s",
             "candidate_s",
             "delta_s",
@@ -189,6 +226,8 @@ def _print_human(comparison: Mapping[str, Any]) -> None:
                 str(case["case"]),
                 f"{case['baseline_completed']}/{case['baseline_total']} -> "
                 f"{case['candidate_completed']}/{case['candidate_total']}",
+                f"{_format_values(case['baseline_planned_shards'])} -> "
+                f"{_format_values(case['candidate_planned_shards'])}",
                 _format_number(case["baseline_wall_time_s"]),
                 _format_number(case["candidate_wall_time_s"]),
                 _format_number(case["delta_s"]),
@@ -215,6 +254,23 @@ def _print_human(comparison: Mapping[str, Any]) -> None:
                 )
             )
         _print_table(stage_rows)
+
+    warning_rows = [("case", "side", "planned_shards", "warning")]
+    for case in comparison["cases"]:
+        for side in ("baseline", "candidate"):
+            for warning in case[f"{side}_planning_warnings"]:
+                warning_rows.append(
+                    (
+                        str(case["case"]),
+                        side,
+                        _format_values(case[f"{side}_planned_shards"]),
+                        warning,
+                    )
+                )
+    if len(warning_rows) > 1:
+        print()
+        print("Planning warnings")
+        _print_table(warning_rows)
 
 
 def main() -> int:

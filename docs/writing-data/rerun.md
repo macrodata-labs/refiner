@@ -32,10 +32,11 @@ template is:
 ```
 
 The template must include `{shard_id}` and `{worker_id}` so retry cleanup can
-distinguish finalized worker outputs from abandoned attempt outputs. You can
-also use `{row_index}` and `{segment_id}`. When `{segment_id}` is present, the
-recording segment id must be a single path segment; ids containing `/`, `\`,
-`.`, or `..` are rejected before writing.
+distinguish finalized worker outputs from abandoned attempt outputs. It must
+also include `{row_index}` or `{segment_id}` so each input row writes a distinct
+RRD file. When `{segment_id}` is present, the recording segment id must be a
+single path segment; ids containing `/`, `\`, `.`, or `..` are rejected before
+writing.
 
 ## Writer strategy
 
@@ -52,7 +53,9 @@ If a `RerunRecording` has no source file, the writer falls back to table
 emission with `send_dataframe`. Static Rerun component columns are sent as
 static data, and dynamic timeline tables are sent separately. The same fallback
 is used when `write_footer=False`, because Rerun's raw chunk writer always
-writes footer metadata.
+writes footer metadata. No-footer writes require materialized Rerun table data;
+metadata-only rows from `materialize_tables=False` should use the default
+`write_footer=True` raw chunk path.
 
 ## Reducer
 

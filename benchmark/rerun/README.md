@@ -87,3 +87,5 @@ uv run python benchmark/rerun/compare_results.py \
 
 Only completed jobs are used for timing deltas. Failed jobs still appear in the
 run-count columns so setup problems are visible instead of silently averaged in.
+Planned shard counts and shard-planning warnings are printed with the timing
+table.

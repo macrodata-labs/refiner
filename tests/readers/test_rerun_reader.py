@@ -202,8 +202,24 @@ def test_read_rerun_recording_can_skip_table_materialization(tmp_path: Path) -> 
     assert recording.tables == {}
     assert recording.static is None
     assert recording.source_file is not None
-    assert recording.local_source_path == rrd
     assert recording.timelines == ("frame",)
+
+
+def test_read_rerun_rejects_ignored_mode_options(tmp_path: Path) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    _tiny_rrd(rrd)
+
+    with pytest.raises(
+        ValueError,
+        match="materialize_tables=False is only supported for recording output",
+    ):
+        mdr.read_rerun(str(rrd), output="robotics", materialize_tables=False)
+
+    with pytest.raises(
+        ValueError,
+        match="include_recording=False is only supported for robotics output",
+    ):
+        mdr.read_rerun(str(rrd), output="recording", include_recording=False)
 
 
 def test_read_rerun_recording_without_materialized_tables_skips_server(
@@ -481,7 +497,6 @@ def test_write_rerun_roundtrips_recording_row(tmp_path: Path) -> None:
 
 def test_write_rerun_uses_source_chunks_without_materialized_tables(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "tiny.rrd"
     output = tmp_path / "out-raw-copy"
@@ -495,12 +510,6 @@ def test_write_rerun_uses_source_chunks_without_materialized_tables(
                 timelines=("frame",),
                 materialize_tables=False,
             ).source.read()
-        ),
-    )
-    monkeypatch.setattr(
-        "refiner.pipeline.sinks.rerun._local_rrd",
-        lambda *args, **kwargs: pytest.fail(
-            "writer should reuse the reader-local RRD path while it is available"
         ),
     )
     sink = RerunSink(str(output))
@@ -534,6 +543,35 @@ def test_write_rerun_rejects_segment_id_path_separator_in_filename(
         sink.write_shard_block("shard-a", [DictRow({"rerun": recording})])
 
 
+def test_write_rerun_rejects_non_row_varying_filename_template(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        ValueError, match="requires \\{row_index\\} or \\{segment_id\\}"
+    ):
+        RerunSink(
+            str(tmp_path / "out-overwrite"),
+            filename_template="{shard_id}__w{worker_id}.rrd",
+        )
+
+
+def test_write_rerun_rejects_duplicate_rendered_filename(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    output = tmp_path / "out-duplicate"
+    _tiny_rrd(source)
+    unit = next(mdr.read_rerun(str(source), timelines=("frame",)).source.read())
+    assert isinstance(unit, Row)
+
+    sink = RerunSink(
+        str(output),
+        filename_template="{shard_id}__w{worker_id}/{segment_id}.rrd",
+    )
+    with pytest.raises(ValueError, match="rendered duplicate output path"):
+        sink.write_shard_block("shard-a", [unit, unit])
+
+
 def test_write_rerun_without_footer_uses_table_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -559,6 +597,29 @@ def test_write_rerun_without_footer_uses_table_fallback(
 
     assert isinstance(row, Row)
     assert row["rerun"].tables["frame"].num_rows == 3
+
+
+def test_write_rerun_without_footer_rejects_metadata_only_recording(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    output = tmp_path / "out-no-footer-metadata-only"
+    _tiny_rrd(source)
+
+    row = cast(
+        Any,
+        next(
+            mdr.read_rerun(
+                str(source),
+                timelines=("frame",),
+                materialize_tables=False,
+            ).source.read()
+        ),
+    )
+    sink = RerunSink(str(output), write_footer=False)
+
+    with pytest.raises(ValueError, match="without materialized Rerun table columns"):
+        sink.write_shard_block("shard-a", [row])
 
 
 def test_write_rerun_table_fallback_separates_static_columns(tmp_path: Path) -> None:
