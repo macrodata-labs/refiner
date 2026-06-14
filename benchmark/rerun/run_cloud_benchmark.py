@@ -57,6 +57,7 @@ class CaseResult:
     iteration: int
     job_id: str
     status: str
+    job_error: str | None
     started_at_utc: str
     finished_at_utc: str
     input_count: int
@@ -180,6 +181,11 @@ def _parse_args() -> argparse.Namespace:
         "--skip-output-inspection",
         action="store_true",
         help="Do not inspect output object counts/sizes from the submitting machine.",
+    )
+    parser.add_argument(
+        "--continue-on-failure",
+        action="store_true",
+        help="Continue running later cases after a cloud job fails.",
     )
     return parser.parse_args()
 
@@ -462,6 +468,7 @@ def _run_case(
         iteration=iteration,
         job_id=launch.job_id,
         status=str(job.get("status") or ""),
+        job_error=job.get("error") if isinstance(job.get("error"), str) else None,
         started_at_utc=started_at,
         finished_at_utc=finished_at,
         input_count=len(inputs),
@@ -484,6 +491,28 @@ def _write_result(path: Path, payload: Any) -> None:
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def _write_summary(
+    *,
+    args: argparse.Namespace,
+    run_token: str,
+    git_ref: str,
+    inputs: Sequence[str],
+    cases: Sequence[str],
+    results: Sequence[CaseResult],
+) -> Path:
+    summary = {
+        "run_token": run_token,
+        "git_ref": git_ref,
+        "inputs": list(inputs),
+        "cases": list(cases),
+        "iterations": args.iterations,
+        "results": [asdict(result) for result in results],
+    }
+    summary_path = args.artifacts_dir / run_token / "summary.json"
+    _write_result(summary_path, summary)
+    return summary_path
 
 
 def main() -> int:
@@ -525,17 +554,26 @@ def main() -> int:
                 f"cloud_wall_time_s={result.cloud_wall_time_s}",
                 flush=True,
             )
+            if result.status != "completed" and not args.continue_on_failure:
+                summary_path = _write_summary(
+                    args=args,
+                    run_token=run_token,
+                    git_ref=git_ref,
+                    inputs=inputs,
+                    cases=cases,
+                    results=results,
+                )
+                print(f"Summary written to {summary_path}")
+                return 1
 
-    summary = {
-        "run_token": run_token,
-        "git_ref": git_ref,
-        "inputs": list(inputs),
-        "cases": list(cases),
-        "iterations": args.iterations,
-        "results": [asdict(result) for result in results],
-    }
-    summary_path = args.artifacts_dir / run_token / "summary.json"
-    _write_result(summary_path, summary)
+    summary_path = _write_summary(
+        args=args,
+        run_token=run_token,
+        git_ref=git_ref,
+        inputs=inputs,
+        cases=cases,
+        results=results,
+    )
     print(f"Summary written to {summary_path}")
     return 0
 

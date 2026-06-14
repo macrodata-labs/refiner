@@ -48,6 +48,9 @@ Useful options:
 - `--num-workers 4` to vary cloud parallelism.
 - `--aws-profile 210049840512_Researcher` to inspect S3 outputs locally with a
   specific profile after cloud completion.
+- `--continue-on-failure` to keep launching later cases after one case fails.
+  By default the harness records the failed case and stops, so bad credentials or
+  setup failures do not create a misleading benchmark session.
 
 Artifacts are written under `benchmark/rerun/artifacts/` by default:
 
