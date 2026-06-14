@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from contextlib import ExitStack
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any, Literal, cast
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 from fsspec import AbstractFileSystem
 
 from refiner.io import DataFile
@@ -38,6 +40,13 @@ class RerunRecording:
     source_path: str
     tables: Mapping[str, Tabular]
     static: Tabular | None = None
+    source_file: DataFile | None = None
+    application_id: str | None = None
+    recording_id: str | None = None
+    contents: tuple[str, ...] | None = None
+    timelines: tuple[str, ...] | None = None
+    include_static: bool = True
+    use_source_chunks: bool = True
 
 
 class RerunReader(BaseReader):
@@ -121,12 +130,17 @@ class RerunReader(BaseReader):
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
-        for part in descriptor.parts:
-            source = self.fileset.resolve_file(part.source_index, part.path)
-            with _local_rrd(source) as local_path:
-                yield from self._read_file(source, local_path)
+        with ExitStack() as stack:
+            local_files = []
+            for part in descriptor.parts:
+                source = self.fileset.resolve_file(part.source_index, part.path)
+                local_files.append((source, stack.enter_context(_local_rrd(source))))
+            yield from self._read_files(local_files)
 
-    def _read_file(self, source: DataFile, local_path: Path) -> Iterator[SourceUnit]:
+    def _read_files(
+        self,
+        local_files: Sequence[tuple[DataFile, Path]],
+    ) -> Iterator[SourceUnit]:
         check_required_dependencies(
             "read_rerun",
             [("rerun", "rerun-sdk"), "datafusion"],
@@ -134,49 +148,80 @@ class RerunReader(BaseReader):
         )
         import rerun as rr
 
-        with rr.server.Server(datasets={"recording": [local_path]}) as server:
-            dataset = server.client().get_dataset("recording")
-            schema = dataset.schema()
-            timelines = self._timelines(schema)
+        datasets = {
+            f"recording_{index}": (str(local_path),)
+            for index, (_source, local_path) in enumerate(local_files)
+        }
+        with rr.server.Server(datasets=cast(Any, datasets)) as server:
+            client = server.client()
+            for dataset_name, (source, local_path) in zip(
+                datasets, local_files, strict=True
+            ):
+                dataset = client.get_dataset(dataset_name)
+                yield from self._read_dataset(source, local_path, dataset)
+
+    def _read_dataset(
+        self,
+        source: DataFile,
+        local_path: Path,
+        dataset: Any,
+    ) -> Iterator[SourceUnit]:
+        store_entries = _recording_entries(local_path)
+        entries_by_recording_id = {entry.recording_id: entry for entry in store_entries}
+        schema = dataset.schema()
+        timelines = self._timelines(schema)
+        for segment_id in dataset.segment_ids():
+            store = entries_by_recording_id.get(segment_id)
+            application_id = store.application_id if store is not None else None
+            recording_id = store.recording_id if store is not None else segment_id
+            view = dataset.filter_segments([segment_id])
+            content_view = self._view_for_contents(view)
             static = (
-                _collect_table(dataset.reader(index=None))
+                _collect_table(content_view.reader(index=None))
                 if self.include_static
                 else None
             )
-            for segment_id in dataset.segment_ids():
-                view = dataset.filter_segments([segment_id])
-                if self.output == "robotics":
-                    yield self._robotics_row(
-                        view,
-                        segment_id=segment_id,
-                        source_path=source.abs_path(),
-                        schema=schema,
-                        timelines=timelines,
-                        static=static,
-                    )
-                else:
-                    tables = {
-                        timeline: Tabular(
-                            _collect_table(
-                                self._view_for_contents(view).reader(
-                                    index=timeline,
-                                    fill_latest_at=self.fill_latest_at,
-                                )
+            if self.output == "robotics":
+                yield self._robotics_row(
+                    view,
+                    segment_id=segment_id,
+                    source_path=source.abs_path(),
+                    source_file=source,
+                    application_id=application_id,
+                    recording_id=recording_id,
+                    schema=schema,
+                    timelines=timelines,
+                    static=static,
+                )
+            else:
+                tables = {
+                    timeline: Tabular(
+                        _collect_table(
+                            content_view.reader(
+                                index=timeline,
+                                fill_latest_at=self.fill_latest_at,
                             )
                         )
-                        for timeline in timelines
-                    }
-                    data: dict[str, Any] = {
-                        "episode_id": segment_id,
-                        "rerun": RerunRecording(
-                            segment_id=segment_id,
-                            source_path=source.abs_path(),
-                            tables=tables,
-                            static=Tabular(static) if static is not None else None,
-                        ),
-                    }
-                    self._with_file_path(data, source)
-                    yield DictRow(data)
+                    )
+                    for timeline in timelines
+                }
+                data: dict[str, Any] = {
+                    "episode_id": segment_id,
+                    "rerun": RerunRecording(
+                        segment_id=segment_id,
+                        source_path=source.abs_path(),
+                        tables=tables,
+                        static=Tabular(static) if static is not None else None,
+                        source_file=source,
+                        application_id=application_id,
+                        recording_id=recording_id,
+                        contents=self.contents,
+                        timelines=self.timelines,
+                        include_static=self.include_static,
+                    ),
+                }
+                self._with_file_path(data, source)
+                yield DictRow(data)
 
     def _timelines(self, schema: Any) -> tuple[str, ...]:
         if self.timelines is not None:
@@ -204,6 +249,9 @@ class RerunReader(BaseReader):
         *,
         segment_id: str,
         source_path: str,
+        source_file: DataFile,
+        application_id: str | None,
+        recording_id: str,
         schema: Any,
         timelines: Sequence[str],
         static: pa.Table | None,
@@ -226,6 +274,12 @@ class RerunReader(BaseReader):
                 source_path=source_path,
                 tables={timeline: Tabular(table)},
                 static=Tabular(static) if static is not None else None,
+                source_file=source_file,
+                application_id=application_id,
+                recording_id=recording_id,
+                contents=tuple(contents),
+                timelines=(timeline,),
+                include_static=self.include_static,
             )
         if self.fps is not None:
             row["fps"] = self.fps
@@ -282,8 +336,17 @@ def _normalize_entity_prefix(value: str) -> str:
 def _collect_table(df: Any) -> pa.Table:
     table = df.to_arrow_table()
     if _RERUN_SEGMENT_ID in table.column_names and table.num_rows > 0:
-        table = table.drop_null()
+        table = table.filter(_is_valid(table.column(_RERUN_SEGMENT_ID)))
     return table
+
+
+def _recording_entries(local_path: Path) -> list[Any]:
+    import rerun as rr
+
+    try:
+        return list(rr.experimental.RrdReader(local_path).recordings())
+    except Exception:
+        return []
 
 
 class _local_rrd:
@@ -369,10 +432,18 @@ def _list_column(values: np.ndarray) -> pa.Array:
 
 def _singleton_list_array(array: pa.Array) -> np.ndarray:
     out = np.full(len(array), np.nan, dtype=np.float64)
-    for index, scalar in enumerate(array):
-        value = scalar.as_py()
-        if value:
-            out[index] = float(value[0])
+    if len(array) == 0:
+        return out
+    if not pa.types.is_list(array.type) and not pa.types.is_large_list(array.type):
+        raise TypeError(f"Expected a Rerun list component column, got {array.type}")
+    offsets = np.asarray(array.offsets)
+    starts = offsets[:-1]
+    ends = offsets[1:]
+    valid = np.asarray(_is_valid(array), dtype=bool) & (ends > starts)
+    if not valid.any():
+        return out
+    values = np.asarray(array.values)
+    out[valid] = values[starts[valid]]
     return out
 
 
@@ -381,13 +452,41 @@ def _iter_encoded_images(values: pa.Array) -> Iterator[np.ndarray]:
 
     from PIL import Image
 
-    for scalar in values:
-        value = scalar.as_py()
-        if not value:
+    for index in range(len(values)):
+        data = _encoded_image_bytes(values, index)
+        if data is None:
             continue
-        data = cast(bytes | bytearray | list[int], value[0])
-        with Image.open(BytesIO(bytes(data))) as image:
+        with Image.open(BytesIO(data)) as image:
             yield np.asarray(image.convert("RGB"), dtype=np.uint8)
+
+
+def _encoded_image_bytes(values: pa.Array, index: int) -> bytes | None:
+    if not pa.types.is_list(values.type) and not pa.types.is_large_list(values.type):
+        raise TypeError(
+            f"Expected a Rerun encoded image list column, got {values.type}"
+        )
+    if not values[index].is_valid:
+        return None
+    outer_offsets = np.asarray(values.offsets)
+    outer_start = int(outer_offsets[index])
+    outer_end = int(outer_offsets[index + 1])
+    if outer_end <= outer_start:
+        return None
+    inner = values.values
+    if not pa.types.is_list(inner.type) and not pa.types.is_large_list(inner.type):
+        value = values[index].as_py()
+        if not value:
+            return None
+        return bytes(cast(bytes | bytearray | list[int], value[0]))
+    inner_offsets = np.asarray(inner.offsets)
+    byte_start = int(inner_offsets[outer_start])
+    byte_end = int(inner_offsets[outer_start + 1])
+    payload = inner.values.slice(byte_start, byte_end - byte_start)
+    return np.asarray(payload).tobytes()
+
+
+def _is_valid(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
+    return pc.call_function("is_valid", [values])
 
 
 __all__ = ["RerunReader", "RerunRecording", "RerunOutputMode"]

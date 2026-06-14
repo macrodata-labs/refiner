@@ -4,6 +4,7 @@ import os
 import tempfile
 from pathlib import Path
 from string import Formatter
+from typing import Any
 
 import pyarrow as pa
 
@@ -64,20 +65,17 @@ class RerunSink(BaseSink):
             [("rerun", "rerun-sdk")],
             dist="rerun",
         )
-        import rerun as rr
 
         def write_local(path: Path) -> None:
-            with rr.RecordingStream(
-                self.app_id,
-                recording_id=recording.segment_id,
-            ) as rec:
-                rec.save(path, write_footer=self.write_footer)
-                if recording.static is not None:
-                    static = _sendable_table(recording.static.table)
-                    if static.num_rows > 0 or static.num_columns > 0:
-                        rec.send_dataframe(static)
-                for table in recording.tables.values():
-                    rec.send_dataframe(_sendable_table(table.table))
+            if recording.use_source_chunks and recording.source_file is not None:
+                _write_source_chunks(recording, path, application_id=self.app_id)
+                return
+            _write_recording_tables(
+                recording,
+                path,
+                application_id=self.app_id,
+                write_footer=self.write_footer,
+            )
 
         target = self.output.file(relpath)
         if target.is_local:
@@ -121,10 +119,158 @@ def _recording_from_row(row: Row) -> RerunRecording:
     return value
 
 
-def _sendable_table(table: pa.Table) -> pa.Table:
-    if "rerun_segment_id" in table.column_names:
-        return table.drop(["rerun_segment_id"])
-    return table
+def _write_source_chunks(
+    recording: RerunRecording,
+    path: Path,
+    *,
+    application_id: str,
+) -> None:
+    import rerun as rr
+
+    source = recording.source_file
+    if source is None:
+        raise ValueError("Rerun source chunk write requires source_file")
+    with _local_rrd(source) as local_path:
+        reader = rr.experimental.RrdReader(local_path)
+        store = _matching_store(reader, recording)
+        stream = reader.stream(store=store)
+        if recording.contents is not None:
+            stream = stream.filter(content=recording.contents)
+        if not recording.include_static:
+            stream = stream.drop(is_static=True)
+        stream = _filter_timelines(
+            stream,
+            reader=reader,
+            store=store,
+            recording=recording,
+        )
+        stream.write_rrd(
+            path,
+            application_id=recording.application_id or application_id,
+            recording_id=recording.recording_id or recording.segment_id,
+        )
+
+
+def _filter_timelines(
+    stream: Any,
+    *,
+    reader: Any,
+    store: Any,
+    recording: RerunRecording,
+) -> Any:
+    timelines = recording.timelines
+    if timelines is None:
+        return stream
+    if len(timelines) == 1:
+        dynamic = stream.filter(has_timeline=timelines[0])
+        if not recording.include_static:
+            return dynamic
+        static = reader.stream(store=store).filter(is_static=True)
+        if recording.contents is not None:
+            static = static.filter(content=recording.contents)
+        import rerun as rr
+
+        return rr.experimental.LazyChunkStream.merge(static, dynamic)
+
+    selected = set(timelines)
+
+    def keep_selected(chunk: Any) -> tuple[Any, ...]:
+        if chunk.is_static:
+            return (chunk,) if recording.include_static else ()
+        return (chunk,) if selected.intersection(chunk.timeline_names) else ()
+
+    return stream.flat_map(keep_selected)
+
+
+def _matching_store(reader: Any, recording: RerunRecording) -> Any:
+    stores = list(reader.recordings())
+    if not stores:
+        return None
+    for store in stores:
+        if (
+            recording.recording_id is not None
+            and store.recording_id == recording.recording_id
+            and (
+                recording.application_id is None
+                or store.application_id == recording.application_id
+            )
+        ):
+            return store
+    for store in stores:
+        if store.recording_id == recording.segment_id:
+            return store
+    return stores[0]
+
+
+def _write_recording_tables(
+    recording: RerunRecording,
+    path: Path,
+    *,
+    application_id: str,
+    write_footer: bool,
+) -> None:
+    import rerun as rr
+
+    with rr.RecordingStream(
+        recording.application_id or application_id,
+        recording_id=recording.recording_id or recording.segment_id,
+    ) as rec:
+        rec.save(path, write_footer=write_footer)
+        if recording.static is not None:
+            static = _sendable_static_table(recording.static.table)
+            if static.num_columns > 0:
+                rec.send_dataframe(static)
+        for table in recording.tables.values():
+            dynamic = _sendable_dynamic_table(table.table)
+            if dynamic.num_columns > 0:
+                rec.send_dataframe(dynamic)
+
+
+def _sendable_static_table(table: pa.Table) -> pa.Table:
+    keep = [
+        field.name
+        for field in table.schema
+        if _is_data_column(field) and _is_static_column(field)
+    ]
+    return table.select(keep) if keep else pa.table({})
+
+
+def _sendable_dynamic_table(table: pa.Table) -> pa.Table:
+    keep = [
+        field.name
+        for field in table.schema
+        if field.name != "rerun_segment_id" and not _is_static_column(field)
+    ]
+    return table.select(keep) if keep else pa.table({})
+
+
+def _is_data_column(field: pa.Field) -> bool:
+    metadata = field.metadata or {}
+    return metadata.get(b"rerun:kind") == b"data" or b"rerun:entity_path" in metadata
+
+
+def _is_static_column(field: pa.Field) -> bool:
+    return (field.metadata or {}).get(b"rerun:is_static") == b"true"
+
+
+class _local_rrd:
+    def __init__(self, source: DataFile) -> None:
+        self.source = source
+        self.tmpdir: tempfile.TemporaryDirectory[str] | None = None
+        self.path: Path | None = None
+
+    def __enter__(self) -> Path:
+        if self.source.is_local:
+            return Path(self.source.abs_path())
+        self.tmpdir = tempfile.TemporaryDirectory(prefix="refiner-rerun-source-")
+        name = os.path.basename(self.source.path) or "recording.rrd"
+        self.path = Path(self.tmpdir.name) / name
+        self.source.copy(str(self.path))
+        return self.path
+
+    def __exit__(self, *args: object) -> None:
+        if self.tmpdir is not None:
+            self.tmpdir.cleanup()
 
 
 def _validate_filename_template(filename_template: str) -> None:

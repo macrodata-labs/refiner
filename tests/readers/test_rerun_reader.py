@@ -9,6 +9,7 @@ import pytest
 import refiner as mdr
 from refiner.pipeline import Row
 from refiner.pipeline.sinks.rerun import RerunSink
+from refiner.pipeline.sinks.rerun import _sendable_dynamic_table, _sendable_static_table
 
 pytest.importorskip("rerun")
 
@@ -31,6 +32,28 @@ def _tiny_rrd(path: Path) -> None:
     )
 
 
+def _sparse_rrd(path: Path) -> None:
+    import rerun as rr
+
+    rr.init("refiner_rerun_sparse_test", recording_id="episode-sparse")
+    rr.save(path)
+    rr.send_columns(
+        "/action/x",
+        indexes=[],
+        columns=rr.SeriesLines.columns(names=["x"]),
+    )
+    rr.send_columns(
+        "/action/x",
+        indexes=[rr.TimeColumn("frame", sequence=np.asarray([0, 1, 2]))],
+        columns=rr.Scalars.columns(scalars=np.asarray([1.0, 2.0, 3.0])),
+    )
+    rr.send_columns(
+        "/action/y",
+        indexes=[rr.TimeColumn("frame", sequence=np.asarray([1]))],
+        columns=rr.Scalars.columns(scalars=np.asarray([9.0])),
+    )
+
+
 def test_read_rerun_recording_preserves_timeline_table(tmp_path: Path) -> None:
     rrd = tmp_path / "tiny.rrd"
     _tiny_rrd(rrd)
@@ -44,6 +67,17 @@ def test_read_rerun_recording_preserves_timeline_table(tmp_path: Path) -> None:
     assert list(recording.tables) == ["frame"]
     assert recording.tables["frame"].num_rows == 3
     assert row["file_path"] == str(rrd)
+
+
+def test_read_rerun_recording_preserves_sparse_rows(tmp_path: Path) -> None:
+    rrd = tmp_path / "sparse.rrd"
+    _sparse_rrd(rrd)
+
+    row = cast(Any, next(mdr.read_rerun(str(rrd), timelines=("frame",)).source.read()))
+    table = row["rerun"].tables["frame"].table
+
+    assert table.num_rows == 3
+    assert table.column("frame").to_pylist() == [0, 1, 2]
 
 
 def test_read_rerun_robotics_mode_converts_to_robot_row(tmp_path: Path) -> None:
@@ -62,6 +96,34 @@ def test_read_rerun_robotics_mode_converts_to_robot_row(tmp_path: Path) -> None:
     )
 
     assert "rerun" not in row
+    assert row.episode_id == "episode-a"
+    assert row.num_frames == 3
+    assert row.actions.to_pylist() == [[1.0], [2.0], [3.0]]
+    assert row.states.to_pylist() == [[4.0], [5.0], [6.0]]
+
+
+def test_read_rerun_robotics_mode_writes_lerobot(tmp_path: Path) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    out = tmp_path / "lerobot"
+    _tiny_rrd(rrd)
+
+    (
+        mdr.read_rerun(str(rrd), output="robotics", fps=30.0, robot_type="testbot")
+        .to_robot_rows(
+            episode_id_key="episode_id",
+            nested_frames_key="frames",
+            fps=30.0,
+            robot_type="testbot",
+        )
+        .write_lerobot(str(out), max_video_prepare_in_flight=1)
+        .launch_local(
+            name="rerun-to-lerobot-test",
+            num_workers=1,
+            rundir=str(tmp_path / "run"),
+        )
+    )
+
+    row = cast(Any, mdr.read_lerobot(str(out)).take(1)[0])
     assert row.episode_id == "episode-a"
     assert row.num_frames == 3
     assert row.actions.to_pylist() == [[1.0], [2.0], [3.0]]
@@ -87,3 +149,20 @@ def test_write_rerun_roundtrips_recording_row(tmp_path: Path) -> None:
     recording = row["rerun"]
     assert row["episode_id"] == "episode-a"
     assert recording.tables["frame"].num_rows == 3
+
+
+def test_write_rerun_table_fallback_separates_static_columns(tmp_path: Path) -> None:
+    source = tmp_path / "sparse.rrd"
+    _sparse_rrd(source)
+
+    row = cast(
+        Any, next(mdr.read_rerun(str(source), timelines=("frame",)).source.read())
+    )
+    recording = row["rerun"]
+
+    static = _sendable_static_table(recording.static.table)
+    dynamic = _sendable_dynamic_table(recording.tables["frame"].table)
+
+    assert "/action/x:SeriesLines:names" in static.column_names
+    assert "/action/x:SeriesLines:names" not in dynamic.column_names
+    assert "frame" in dynamic.column_names
