@@ -167,6 +167,8 @@ class RerunReader(BaseReader):
                 "actions": dict(self.actions) if self.actions_explicit else None,
                 "states": dict(self.states) if self.states_explicit else None,
                 "videos": dict(self.videos) if self.videos_explicit else None,
+                "fps": self.fps,
+                "robot_type": self.robot_type,
             }
         )
         return description

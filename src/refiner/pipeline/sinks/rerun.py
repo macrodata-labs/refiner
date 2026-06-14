@@ -17,6 +17,7 @@ from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.pipeline.sources.readers.rerun import RerunRecording
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
+from refiner.worker.metrics.api import log_throughput
 
 _DEFAULT_FILENAME_TEMPLATE = "{shard_id}__w{worker_id}/{row_index}.rrd"
 
@@ -56,6 +57,7 @@ class RerunSink(BaseSink):
                 segment_id=recording.segment_id,
             )
             self._write_recording(recording, relpath)
+            log_throughput("files_written", 1, shard_id=shard_id, unit="files")
             count += 1
         return count
 
