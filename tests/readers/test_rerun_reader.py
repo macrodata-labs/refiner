@@ -9,8 +9,10 @@ import pytest
 
 import refiner as mdr
 from refiner.pipeline import Row
+from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.sinks.rerun import RerunSink
 from refiner.pipeline.sinks.rerun import _sendable_dynamic_table, _sendable_static_table
+from refiner.pipeline.sources.readers.rerun import RerunRecording
 
 pytest.importorskip("rerun")
 
@@ -103,6 +105,29 @@ def _custom_robotics_rrd(path: Path) -> None:
     )
 
 
+def _sparse_camera_rrd(path: Path) -> None:
+    import rerun as rr
+    from PIL import Image
+
+    rr.init("refiner_rerun_sparse_camera_test", recording_id="episode-sparse-camera")
+    rr.save(path)
+    rr.send_columns(
+        "/robot/actions/x",
+        indexes=[rr.TimeColumn("frame", sequence=np.asarray([0, 1]))],
+        columns=rr.Scalars.columns(scalars=np.asarray([1.0, 2.0])),
+    )
+    out = BytesIO()
+    Image.new("RGB", (1, 1), color=(1, 2, 3)).save(out, format="PNG")
+    rr.send_columns(
+        "/robot/cameras/top",
+        indexes=[rr.TimeColumn("frame", sequence=np.asarray([0]))],
+        columns=rr.EncodedImage.columns(
+            blob=[out.getvalue()],
+            media_type=["image/png"],
+        ),
+    )
+
+
 def _reserved_video_name_rrd(path: Path) -> None:
     import rerun as rr
     from PIL import Image
@@ -177,7 +202,37 @@ def test_read_rerun_recording_can_skip_table_materialization(tmp_path: Path) -> 
     assert recording.tables == {}
     assert recording.static is None
     assert recording.source_file is not None
+    assert recording.local_source_path == rrd
     assert recording.timelines == ("frame",)
+
+
+def test_read_rerun_recording_without_materialized_tables_skips_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    _tiny_rrd(rrd)
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sources.readers.rerun.RerunReader._read_files_with_server",
+        lambda *args, **kwargs: pytest.fail(
+            "metadata-only recording rows do not need the Rerun server"
+        ),
+    )
+
+    row = cast(
+        Any,
+        next(
+            mdr.read_rerun(
+                str(rrd),
+                timelines=("frame",),
+                materialize_tables=False,
+            ).source.read()
+        ),
+    )
+
+    assert row["episode_id"] == "episode-a"
+    assert row["rerun"].tables == {}
 
 
 def test_read_rerun_robotics_mode_converts_to_robot_row(tmp_path: Path) -> None:
@@ -316,6 +371,26 @@ def test_read_rerun_robotics_mode_respects_explicit_selections(
     ]
 
 
+def test_read_rerun_robotics_mode_rejects_sparse_video_stream(
+    tmp_path: Path,
+) -> None:
+    rrd = tmp_path / "sparse-camera.rrd"
+    _sparse_camera_rrd(rrd)
+
+    with pytest.raises(
+        ValueError,
+        match="missing frames on the primary timeline",
+    ):
+        mdr.read_rerun(
+            str(rrd),
+            output="robotics",
+            timelines=("frame",),
+            actions=("/robot/actions/x",),
+            videos={"observation.images.top": "/robot/cameras/top"},
+            fps=5.0,
+        ).take(1)
+
+
 def test_read_rerun_robotics_mode_with_explicit_timeline_uses_table_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -406,6 +481,7 @@ def test_write_rerun_roundtrips_recording_row(tmp_path: Path) -> None:
 
 def test_write_rerun_uses_source_chunks_without_materialized_tables(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "tiny.rrd"
     output = tmp_path / "out-raw-copy"
@@ -421,6 +497,12 @@ def test_write_rerun_uses_source_chunks_without_materialized_tables(
             ).source.read()
         ),
     )
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun._local_rrd",
+        lambda *args, **kwargs: pytest.fail(
+            "writer should reuse the reader-local RRD path while it is available"
+        ),
+    )
     sink = RerunSink(str(output))
     sink.write_shard_block("shard-a", [row])
     sink.on_shard_complete("shard-a")
@@ -433,6 +515,23 @@ def test_write_rerun_uses_source_chunks_without_materialized_tables(
 
     assert copied["episode_id"] == "episode-a"
     assert copied["rerun"].tables["frame"].num_rows == 3
+
+
+def test_write_rerun_rejects_segment_id_path_separator_in_filename(
+    tmp_path: Path,
+) -> None:
+    recording = RerunRecording(
+        segment_id="episode/5",
+        source_path="memory://episode.rrd",
+        tables={},
+    )
+    sink = RerunSink(
+        str(tmp_path / "out-segment-id"),
+        filename_template="{shard_id}__w{worker_id}/{segment_id}.rrd",
+    )
+
+    with pytest.raises(ValueError, match="segment_id must be a single"):
+        sink.write_shard_block("shard-a", [DictRow({"rerun": recording})])
 
 
 def test_write_rerun_without_footer_uses_table_fallback(

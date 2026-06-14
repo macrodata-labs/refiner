@@ -48,6 +48,7 @@ class RerunRecording:
     tables: Mapping[str, Tabular]
     static: Tabular | None = None
     source_file: DataFile | None = None
+    local_source_path: Path | None = None
     application_id: str | None = None
     recording_id: str | None = None
     contents: tuple[str, ...] | None = None
@@ -194,6 +195,29 @@ class RerunReader(BaseReader):
         self,
         local_files: Sequence[tuple[DataFile, Path]],
     ) -> Iterator[SourceUnit]:
+        if self.output == "recording" and not self.materialize_tables:
+            check_required_dependencies(
+                "read_rerun",
+                [("rerun", "rerun-sdk")],
+                dist="rerun",
+            )
+            server_fallback: list[tuple[DataFile, Path]] = []
+            for source, local_path in local_files:
+                rows = self._read_metadata_only_recording_rows(source, local_path)
+                if rows:
+                    yield from rows
+                else:
+                    server_fallback.append((source, local_path))
+            if server_fallback:
+                yield from self._read_files_with_server(server_fallback)
+            return
+
+        yield from self._read_files_with_server(local_files)
+
+    def _read_files_with_server(
+        self,
+        local_files: Sequence[tuple[DataFile, Path]],
+    ) -> Iterator[SourceUnit]:
         check_required_dependencies(
             "read_rerun",
             [("rerun", "rerun-sdk"), "datafusion"],
@@ -239,6 +263,7 @@ class RerunReader(BaseReader):
                     segment_id=segment_id,
                     source_path=source.abs_path(),
                     source_file=source,
+                    local_source_path=local_path,
                     application_id=application_id,
                     recording_id=recording_id,
                     timelines=timelines,
@@ -264,23 +289,66 @@ class RerunReader(BaseReader):
                         )
                         for timeline in timelines
                     }
-                data: dict[str, Any] = {
-                    "episode_id": segment_id,
-                    "rerun": RerunRecording(
-                        segment_id=segment_id,
-                        source_path=source.abs_path(),
-                        tables=tables,
-                        static=Tabular(static) if static is not None else None,
-                        source_file=source,
-                        application_id=application_id,
-                        recording_id=recording_id,
-                        contents=self.contents,
-                        timelines=self.timelines,
-                        include_static=self.include_static,
-                    ),
-                }
-                self._with_file_path(data, source)
-                yield DictRow(data)
+                yield self._recording_row(
+                    segment_id=segment_id,
+                    source=source,
+                    local_path=local_path,
+                    tables=tables,
+                    static=Tabular(static) if static is not None else None,
+                    application_id=application_id,
+                    recording_id=recording_id,
+                )
+
+    def _read_metadata_only_recording_rows(
+        self,
+        source: DataFile,
+        local_path: Path,
+    ) -> list[DictRow]:
+        rows = []
+        for store in _recording_entries(local_path):
+            recording_id = str(store.recording_id)
+            rows.append(
+                self._recording_row(
+                    segment_id=recording_id,
+                    source=source,
+                    local_path=local_path,
+                    tables={},
+                    static=None,
+                    application_id=store.application_id,
+                    recording_id=recording_id,
+                )
+            )
+        return rows
+
+    def _recording_row(
+        self,
+        *,
+        segment_id: str,
+        source: DataFile,
+        local_path: Path,
+        tables: Mapping[str, Tabular],
+        static: Tabular | None,
+        application_id: str | None,
+        recording_id: str | None,
+    ) -> DictRow:
+        data: dict[str, Any] = {
+            "episode_id": segment_id,
+            "rerun": RerunRecording(
+                segment_id=segment_id,
+                source_path=source.abs_path(),
+                tables=tables,
+                static=static,
+                source_file=source,
+                local_source_path=local_path,
+                application_id=application_id,
+                recording_id=recording_id,
+                contents=self.contents,
+                timelines=self.timelines,
+                include_static=self.include_static,
+            ),
+        }
+        self._with_file_path(data, source)
+        return DictRow(data)
 
     def _timelines(self, schema: Any) -> tuple[str, ...]:
         if self.timelines is not None:
@@ -327,14 +395,16 @@ class RerunReader(BaseReader):
         segment_id: str,
         source_path: str,
         source_file: DataFile,
+        local_source_path: Path,
         application_id: str | None,
         recording_id: str,
         timelines: Sequence[str],
     ) -> DictRow:
         timeline = self._primary_timeline(timelines)
         contents = self._robotics_contents()
+        content_view = view.filter_contents(contents)
         table = _collect_table(
-            view.filter_contents(contents).reader(
+            content_view.reader(
                 index=timeline,
                 fill_latest_at=self.fill_latest_at,
             )
@@ -345,7 +415,7 @@ class RerunReader(BaseReader):
         }
         if self.include_recording:
             static = (
-                _collect_table(view.filter_contents(contents).reader(index=None))
+                _collect_table(content_view.reader(index=None))
                 if self.include_static
                 else None
             )
@@ -355,6 +425,7 @@ class RerunReader(BaseReader):
                 tables={timeline: Tabular(table)},
                 static=Tabular(static) if static is not None else None,
                 source_file=source_file,
+                local_source_path=local_source_path,
                 application_id=application_id,
                 recording_id=recording_id,
                 contents=tuple(contents),
@@ -410,6 +481,7 @@ class RerunReader(BaseReader):
         _validate_video_output_names(camera_columns, reserved=reserved_video_names)
         for name, column in camera_columns.items():
             values = table.column(column).combine_chunks()
+            _require_dense_encoded_images(values, video_name=name)
             row[name] = VideoFrameSequence(
                 lambda values=values: _iter_encoded_images(values),
                 fps=self.fps or 30.0,
@@ -631,6 +703,22 @@ def _fill_singleton_list_array(array: pa.Array, out: np.ndarray) -> None:
         return
     values = np.asarray(array.values)
     out[valid] = values[starts[valid]]
+
+
+def _require_dense_encoded_images(values: pa.Array, *, video_name: str) -> None:
+    if not pa.types.is_list(values.type) and not pa.types.is_large_list(values.type):
+        raise TypeError(
+            f"Expected a Rerun encoded image list column, got {values.type}"
+        )
+    offsets = np.asarray(values.offsets)
+    missing = np.asarray(_is_valid(values), dtype=bool) == 0
+    if len(offsets) > 1:
+        missing |= offsets[1:] <= offsets[:-1]
+    if missing.any():
+        raise ValueError(
+            f"Rerun video {video_name!r} has missing frames on the primary timeline; "
+            "use fill_latest_at=True or select a denser timeline"
+        )
 
 
 def _iter_encoded_images(values: pa.Array) -> Iterator[np.ndarray]:

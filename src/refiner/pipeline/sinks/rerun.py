@@ -14,7 +14,7 @@ from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
-from refiner.pipeline.sources.readers.rerun import RerunRecording
+from refiner.pipeline.sources.readers.rerun import RerunRecording, _local_rrd
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
@@ -131,30 +131,54 @@ def _write_source_chunks(
     *,
     application_id: str,
 ) -> None:
-    import rerun as rr
-
     source = recording.source_file
     if source is None:
         raise ValueError("Rerun source chunk write requires source_file")
-    with _local_rrd(source) as local_path:
-        reader = rr.experimental.RrdReader(local_path)
-        store = _matching_store(reader, recording)
-        stream = reader.stream(store=store)
-        if recording.contents is not None:
-            stream = stream.filter(content=recording.contents)
-        if not recording.include_static:
-            stream = stream.drop(is_static=True)
-        stream = _filter_timelines(
-            stream,
-            reader=reader,
-            store=store,
-            recording=recording,
-        )
-        stream.write_rrd(
+    local_source_path = recording.local_source_path
+    if local_source_path is not None and local_source_path.exists():
+        _write_source_chunks_from_path(
+            recording,
             path,
-            application_id=recording.application_id or application_id,
-            recording_id=recording.recording_id or recording.segment_id,
+            local_path=local_source_path,
+            application_id=application_id,
         )
+        return
+    with _local_rrd(source) as local_path:
+        _write_source_chunks_from_path(
+            recording,
+            path,
+            local_path=local_path,
+            application_id=application_id,
+        )
+
+
+def _write_source_chunks_from_path(
+    recording: RerunRecording,
+    path: Path,
+    *,
+    local_path: Path,
+    application_id: str,
+) -> None:
+    import rerun as rr
+
+    reader = rr.experimental.RrdReader(local_path)
+    store = _matching_store(reader, recording)
+    stream = reader.stream(store=store)
+    if recording.contents is not None:
+        stream = stream.filter(content=recording.contents)
+    if not recording.include_static:
+        stream = stream.drop(is_static=True)
+    stream = _filter_timelines(
+        stream,
+        reader=reader,
+        store=store,
+        recording=recording,
+    )
+    stream.write_rrd(
+        path,
+        application_id=recording.application_id or application_id,
+        recording_id=recording.recording_id or recording.segment_id,
+    )
 
 
 def _filter_timelines(
@@ -259,26 +283,6 @@ def _is_static_column(field: pa.Field) -> bool:
     return (field.metadata or {}).get(b"rerun:is_static") == b"true"
 
 
-class _local_rrd:
-    def __init__(self, source: DataFile) -> None:
-        self.source = source
-        self.tmpdir: tempfile.TemporaryDirectory[str] | None = None
-        self.path: Path | None = None
-
-    def __enter__(self) -> Path:
-        if self.source.is_local:
-            return Path(self.source.abs_path())
-        self.tmpdir = tempfile.TemporaryDirectory(prefix="refiner-rerun-source-")
-        name = os.path.basename(self.source.path) or "recording.rrd"
-        self.path = Path(self.tmpdir.name) / name
-        self.source.copy(str(self.path))
-        return self.path
-
-    def __exit__(self, *args: object) -> None:
-        if self.tmpdir is not None:
-            self.tmpdir.cleanup()
-
-
 def _validate_filename_template(filename_template: str) -> None:
     fields: set[str] = set()
     for _literal_text, field_name, format_spec, conversion in Formatter().parse(
@@ -319,15 +323,34 @@ def _render_relpath(
     row_index: int,
     segment_id: str,
 ) -> str:
+    field_values: dict[str, object] = {
+        "shard_id": shard_id,
+        "worker_id": worker_id,
+        "row_index": row_index,
+        "segment_id": segment_id,
+    }
+    if "segment_id" in _template_fields(filename_template):
+        field_values["segment_id"] = _normalize_path_segment(segment_id, "segment_id")
     return _normalize_relpath(
-        filename_template.format(
-            shard_id=shard_id,
-            worker_id=worker_id,
-            row_index=row_index,
-            segment_id=segment_id,
-        ),
+        filename_template.format(**field_values),
         "rendered filename",
     )
+
+
+def _template_fields(filename_template: str) -> set[str]:
+    return {
+        field_name
+        for _literal_text, field_name, _format_spec, _conversion in Formatter().parse(
+            filename_template
+        )
+        if field_name is not None
+    }
+
+
+def _normalize_path_segment(value: str, label: str) -> str:
+    if not value or value in {".", ".."} or "/" in value or "\\" in value:
+        raise ValueError(f"{label} must be a single relative path segment")
+    return value
 
 
 def _normalize_relpath(path: str, label: str) -> str:
