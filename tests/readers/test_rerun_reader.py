@@ -174,6 +174,30 @@ def test_read_rerun_robotics_mode_without_recording_skips_recording_entries(
     assert row["frames"].num_rows == 3
 
 
+def test_read_rerun_robotics_mode_with_recording_includes_recording_payload(
+    tmp_path: Path,
+) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    _tiny_rrd(rrd)
+
+    row = cast(
+        Any,
+        mdr.read_rerun(
+            str(rrd),
+            output="robotics",
+            include_recording=True,
+            timelines=("frame",),
+            fps=30.0,
+        ).take(1)[0],
+    )
+
+    recording = row["rerun"]
+    assert recording.recording_id == "episode-a"
+    assert list(recording.tables) == ["frame"]
+    assert recording.tables["frame"].num_rows == 3
+    assert row["frames"].num_rows == 3
+
+
 def test_read_rerun_robotics_mode_respects_explicit_selections(
     tmp_path: Path,
 ) -> None:
