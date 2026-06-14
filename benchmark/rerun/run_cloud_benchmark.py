@@ -277,7 +277,11 @@ def _build_pipeline(
             .write_jsonl(output)
         )
     if case == "rrd-copy":
-        return mdr.read_rerun(inputs, output="recording").write_rerun(output)
+        return mdr.read_rerun(
+            inputs,
+            output="recording",
+            materialize_tables=False,
+        ).write_rerun(output)
     raise ValueError(f"Unsupported benchmark case: {case}")
 
 

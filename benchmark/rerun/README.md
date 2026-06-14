@@ -22,8 +22,9 @@ The default cases are:
   and static tables, write JSONL.
 - `robotics-summary`: `read_rerun(output="robotics")` for action/state paths,
   summarize frame rows and vector widths, write JSONL.
-- `rrd-copy`: `read_rerun(output="recording").write_rerun(...)` to exercise the
-  distributed RRD writer's raw chunk path.
+- `rrd-copy`: `read_rerun(output="recording", materialize_tables=False)`
+  followed by `write_rerun(...)` to exercise the distributed RRD writer's raw
+  chunk path without timing unused Arrow table materialization.
 
 These cases intentionally cover both the high-fidelity recording path and the
 robotics convenience path. Do not remove a case just to make a performance run

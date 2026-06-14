@@ -1257,6 +1257,7 @@ def read_rerun(
     timelines: Sequence[str] | None = None,
     primary_timeline: str | None = None,
     include_static: bool = True,
+    materialize_tables: bool = True,
     include_recording: bool | None = None,
     fill_latest_at: bool = False,
     action_prefix: str = "/action",
@@ -1272,12 +1273,13 @@ def read_rerun(
 
     RRD files are planned as atomic input shards. With ``output="recording"``,
     each emitted row preserves the selected Rerun data as Arrow-backed
-    ``Tabular`` tables grouped by timeline under the ``rerun`` field. With
-    ``output="robotics"``, the reader additionally derives common robotics
-    episode fields from configurable Rerun entity prefixes so the rows can be
-    passed through ``to_robot_rows(...)`` and robotics writers. Pass ``actions``,
-    ``states``, or ``videos`` to pin exact entity paths and output order instead
-    of using prefix-derived defaults.
+    ``Tabular`` tables grouped by timeline under the ``rerun`` field. Set
+    ``materialize_tables=False`` for raw ``write_rerun`` copy workflows that
+    only need source chunk metadata. With ``output="robotics"``, the reader
+    additionally derives common robotics episode fields from configurable Rerun
+    entity prefixes so the rows can be passed through ``to_robot_rows(...)`` and
+    robotics writers. Pass ``actions``, ``states``, or ``videos`` to pin exact
+    entity paths and output order instead of using prefix-derived defaults.
     """
     return RefinerPipeline(
         source=RerunReader(
@@ -1293,6 +1295,7 @@ def read_rerun(
             timelines=timelines,
             primary_timeline=primary_timeline,
             include_static=include_static,
+            materialize_tables=materialize_tables,
             include_recording=include_recording,
             fill_latest_at=fill_latest_at,
             action_prefix=action_prefix,

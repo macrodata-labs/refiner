@@ -157,6 +157,29 @@ def test_read_rerun_recording_preserves_sparse_rows(tmp_path: Path) -> None:
     assert table.column("frame").to_pylist() == [0, 1, 2]
 
 
+def test_read_rerun_recording_can_skip_table_materialization(tmp_path: Path) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    _tiny_rrd(rrd)
+
+    row = cast(
+        Any,
+        next(
+            mdr.read_rerun(
+                str(rrd),
+                timelines=("frame",),
+                materialize_tables=False,
+            ).source.read()
+        ),
+    )
+    recording = row["rerun"]
+
+    assert recording.recording_id == "episode-a"
+    assert recording.tables == {}
+    assert recording.static is None
+    assert recording.source_file is not None
+    assert recording.timelines == ("frame",)
+
+
 def test_read_rerun_robotics_mode_converts_to_robot_row(tmp_path: Path) -> None:
     rrd = tmp_path / "tiny.rrd"
     _tiny_rrd(rrd)
@@ -379,6 +402,37 @@ def test_write_rerun_roundtrips_recording_row(tmp_path: Path) -> None:
     recording = row["rerun"]
     assert row["episode_id"] == "episode-a"
     assert recording.tables["frame"].num_rows == 3
+
+
+def test_write_rerun_uses_source_chunks_without_materialized_tables(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    output = tmp_path / "out-raw-copy"
+    _tiny_rrd(source)
+
+    row = cast(
+        Any,
+        next(
+            mdr.read_rerun(
+                str(source),
+                timelines=("frame",),
+                materialize_tables=False,
+            ).source.read()
+        ),
+    )
+    sink = RerunSink(str(output))
+    sink.write_shard_block("shard-a", [row])
+    sink.on_shard_complete("shard-a")
+
+    written = sorted(output.glob("**/*.rrd"))
+    assert len(written) == 1
+    copied = cast(
+        Any, next(mdr.read_rerun(str(written[0]), timelines=("frame",)).source.read())
+    )
+
+    assert copied["episode_id"] == "episode-a"
+    assert copied["rerun"].tables["frame"].num_rows == 3
 
 
 def test_write_rerun_without_footer_uses_table_fallback(

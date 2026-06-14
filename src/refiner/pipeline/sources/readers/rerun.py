@@ -76,6 +76,7 @@ class RerunReader(BaseReader):
         timelines: Sequence[str] | None = None,
         primary_timeline: str | None = None,
         include_static: bool = True,
+        materialize_tables: bool = True,
         include_recording: bool | None = None,
         fill_latest_at: bool = False,
         action_prefix: str = "/action",
@@ -109,6 +110,7 @@ class RerunReader(BaseReader):
         self.timelines = tuple(timelines) if timelines is not None else None
         self.primary_timeline = primary_timeline
         self.include_static = include_static
+        self.materialize_tables = materialize_tables
         self.include_recording = (
             output == "recording" if include_recording is None else include_recording
         )
@@ -163,6 +165,7 @@ class RerunReader(BaseReader):
                 "timelines": self.timelines,
                 "primary_timeline": self.primary_timeline,
                 "include_static": self.include_static,
+                "materialize_tables": self.materialize_tables,
                 "include_recording": self.include_recording,
                 "fill_latest_at": self.fill_latest_at,
                 "action_prefix": self.action_prefix,
@@ -241,23 +244,26 @@ class RerunReader(BaseReader):
                     timelines=timelines,
                 )
             else:
-                content_view = self._view_for_contents(view)
-                static = (
-                    _collect_table(content_view.reader(index=None))
-                    if self.include_static
-                    else None
-                )
-                tables = {
-                    timeline: Tabular(
-                        _collect_table(
-                            content_view.reader(
-                                index=timeline,
-                                fill_latest_at=self.fill_latest_at,
+                tables: dict[str, Tabular] = {}
+                static = None
+                if self.materialize_tables:
+                    content_view = self._view_for_contents(view)
+                    static = (
+                        _collect_table(content_view.reader(index=None))
+                        if self.include_static
+                        else None
+                    )
+                    tables = {
+                        timeline: Tabular(
+                            _collect_table(
+                                content_view.reader(
+                                    index=timeline,
+                                    fill_latest_at=self.fill_latest_at,
+                                )
                             )
                         )
-                    )
-                    for timeline in timelines
-                }
+                        for timeline in timelines
+                    }
                 data: dict[str, Any] = {
                     "episode_id": segment_id,
                     "rerun": RerunRecording(
