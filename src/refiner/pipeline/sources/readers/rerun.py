@@ -220,11 +220,6 @@ class RerunReader(BaseReader):
             recording_id = store.recording_id if store is not None else segment_id
             view = dataset.filter_segments([segment_id])
             content_view = self._view_for_contents(view)
-            static = (
-                _collect_table(content_view.reader(index=None))
-                if self.include_static
-                else None
-            )
             if self.output == "robotics":
                 yield self._robotics_row(
                     view,
@@ -235,9 +230,13 @@ class RerunReader(BaseReader):
                     recording_id=recording_id,
                     schema=schema,
                     timelines=timelines,
-                    static=static,
                 )
             else:
+                static = (
+                    _collect_table(content_view.reader(index=None))
+                    if self.include_static
+                    else None
+                )
                 tables = {
                     timeline: Tabular(
                         _collect_table(
@@ -316,7 +315,6 @@ class RerunReader(BaseReader):
         recording_id: str,
         schema: Any,
         timelines: Sequence[str],
-        static: pa.Table | None,
     ) -> DictRow:
         timeline = self._primary_timeline(timelines)
         contents = self._robotics_contents()
@@ -331,6 +329,11 @@ class RerunReader(BaseReader):
             "episode_id": segment_id,
         }
         if self.include_recording:
+            static = (
+                _collect_table(view.filter_contents(contents).reader(index=None))
+                if self.include_static
+                else None
+            )
             row["rerun"] = RerunRecording(
                 segment_id=segment_id,
                 source_path=source_path,
