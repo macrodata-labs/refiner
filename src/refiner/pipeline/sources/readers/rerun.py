@@ -36,6 +36,7 @@ _RERUN_ENTITY_PATH_METADATA = b"rerun:entity_path"
 _ROBOTICS_ROW_COLUMNS = frozenset(
     {"episode_id", "rerun", "frames", "fps", "robot_type"}
 )
+_RECORDING_ROW_COLUMNS = frozenset({"episode_id", "rerun"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,13 +130,16 @@ class RerunReader(BaseReader):
             derive_names_from_paths=False,
         )
         self.videos = _selection_map(videos, format_name="Rerun videos")
+        reserved_row_columns = (
+            _ROBOTICS_ROW_COLUMNS if output == "robotics" else _RECORDING_ROW_COLUMNS
+        )
+        if file_path_column in reserved_row_columns:
+            raise ValueError(
+                f"file_path_column cannot use reserved Rerun {output} row "
+                f"column {file_path_column!r}"
+            )
         if output == "robotics":
-            if file_path_column in _ROBOTICS_ROW_COLUMNS:
-                raise ValueError(
-                    f"file_path_column cannot use reserved Rerun robotics row "
-                    f"column {file_path_column!r}"
-                )
-            reserved_video_names = set(_ROBOTICS_ROW_COLUMNS)
+            reserved_video_names = set(reserved_row_columns)
             if file_path_column is not None:
                 reserved_video_names.add(file_path_column)
             video_collisions = set(self.videos).intersection(reserved_video_names)
@@ -394,6 +398,10 @@ class RerunReader(BaseReader):
             if self.videos_explicit
             else _camera_columns(image_columns, self.camera_prefix)
         )
+        reserved_video_names = set(_ROBOTICS_ROW_COLUMNS)
+        if self.file_path_column is not None:
+            reserved_video_names.add(self.file_path_column)
+        _validate_video_output_names(camera_columns, reserved=reserved_video_names)
         for name, column in camera_columns.items():
             values = table.column(column).combine_chunks()
             row[name] = VideoFrameSequence(
@@ -486,14 +494,6 @@ def _metadata_text(metadata: Mapping[bytes, bytes], key: bytes) -> str | None:
     return value.decode("utf-8") if value is not None else None
 
 
-def _component_columns(
-    table: pa.Table,
-    *,
-    component: str,
-) -> dict[str, str]:
-    return _component_column_maps(table).get(component, {})
-
-
 def _component_column_maps(table: pa.Table) -> dict[str, dict[str, str]]:
     by_component: dict[str, dict[str, str]] = {}
     for field in table.schema:
@@ -559,6 +559,19 @@ def _selected_camera_columns(
             raise KeyError(f"Rerun video entity path not found: {path}")
         out[name] = column
     return out
+
+
+def _validate_video_output_names(
+    selected: Mapping[str, str],
+    *,
+    reserved: set[str],
+) -> None:
+    collisions = set(selected).intersection(reserved)
+    if collisions:
+        raise ValueError(
+            "Rerun video output names cannot use reserved robotics row columns: "
+            + ", ".join(sorted(collisions))
+        )
 
 
 def _robotics_frame_table(table: pa.Table, *, timeline: str) -> pa.Table:

@@ -103,6 +103,24 @@ def _custom_robotics_rrd(path: Path) -> None:
     )
 
 
+def _reserved_video_name_rrd(path: Path) -> None:
+    import rerun as rr
+    from PIL import Image
+
+    rr.init("refiner_rerun_reserved_video_name_test", recording_id="episode-reserved")
+    rr.save(path)
+    out = BytesIO()
+    Image.new("RGB", (1, 1), color=(1, 2, 3)).save(out, format="PNG")
+    rr.send_columns(
+        "/frames",
+        indexes=[rr.TimeColumn("frame", sequence=np.asarray([0]))],
+        columns=rr.EncodedImage.columns(
+            blob=[out.getvalue()],
+            media_type=["image/png"],
+        ),
+    )
+
+
 def test_read_rerun_recording_preserves_timeline_table(tmp_path: Path) -> None:
     rrd = tmp_path / "tiny.rrd"
     _tiny_rrd(rrd)
@@ -116,6 +134,16 @@ def test_read_rerun_recording_preserves_timeline_table(tmp_path: Path) -> None:
     assert list(recording.tables) == ["frame"]
     assert recording.tables["frame"].num_rows == 3
     assert row["file_path"] == str(rrd)
+
+
+def test_read_rerun_recording_rejects_reserved_file_path_column(
+    tmp_path: Path,
+) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    _tiny_rrd(rrd)
+
+    with pytest.raises(ValueError, match="reserved Rerun recording row column 'rerun'"):
+        mdr.read_rerun(str(rrd), file_path_column="rerun")
 
 
 def test_read_rerun_recording_preserves_sparse_rows(tmp_path: Path) -> None:
@@ -211,6 +239,24 @@ def test_read_rerun_describe_includes_robotics_metadata(tmp_path: Path) -> None:
 
     assert description["fps"] == 12.5
     assert description["robot_type"] == "testbot"
+
+
+def test_read_rerun_robotics_rejects_reserved_implicit_video_name(
+    tmp_path: Path,
+) -> None:
+    rrd = tmp_path / "reserved-video.rrd"
+    _reserved_video_name_rrd(rrd)
+
+    with pytest.raises(
+        ValueError,
+        match="Rerun video output names cannot use reserved robotics row columns: frames",
+    ):
+        mdr.read_rerun(
+            str(rrd),
+            output="robotics",
+            camera_prefix="/",
+            fps=30.0,
+        ).take(1)
 
 
 def test_read_rerun_robotics_mode_respects_explicit_selections(
