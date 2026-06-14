@@ -208,6 +208,45 @@ def test_read_rerun_robotics_mode_respects_explicit_selections(
     ]
 
 
+def test_read_rerun_robotics_mode_with_explicit_timeline_uses_table_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rrd = tmp_path / "custom.rrd"
+    _custom_robotics_rrd(rrd)
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sources.readers.rerun.RerunReader._timelines",
+        lambda *args, **kwargs: pytest.fail(
+            "explicit timelines should not require schema timeline discovery"
+        ),
+    )
+
+    row = cast(
+        Any,
+        mdr.read_rerun(
+            str(rrd),
+            output="robotics",
+            timelines=("frame",),
+            actions=("/robot/actions/z", "/robot/actions/a"),
+            states={
+                "first": "/robot/state/a",
+                "second": "/robot/state/b",
+            },
+            videos={"observation.images.top": "/robot/cameras/top"},
+            fps=5.0,
+        ).take(1)[0],
+    )
+
+    assert row["frames"].column("action").to_pylist() == [[30.0, 10.0], [40.0, 20.0]]
+    assert row["frames"].column("observation.state").to_pylist() == [
+        [3.0, 1.0],
+        [4.0, 2.0],
+    ]
+    video = row["observation.images.top"]
+    assert video.frame_count == 2
+
+
 def test_read_rerun_robotics_mode_writes_lerobot(tmp_path: Path) -> None:
     rrd = tmp_path / "tiny.rrd"
     out = tmp_path / "lerobot"

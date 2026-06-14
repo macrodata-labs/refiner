@@ -31,6 +31,8 @@ from refiner.video import VideoFrameSequence
 RerunOutputMode = Literal["recording", "robotics"]
 
 _RERUN_SEGMENT_ID = "rerun_segment_id"
+_RERUN_COMPONENT_METADATA = b"rerun:component"
+_RERUN_ENTITY_PATH_METADATA = b"rerun:entity_path"
 _ROBOTICS_ROW_COLUMNS = frozenset(
     {"episode_id", "rerun", "frames", "fps", "robot_type"}
 )
@@ -214,8 +216,9 @@ class RerunReader(BaseReader):
             else []
         )
         entries_by_recording_id = {entry.recording_id: entry for entry in store_entries}
-        schema = dataset.schema()
-        timelines = self._timelines(schema)
+        timelines = self.timelines
+        if timelines is None:
+            timelines = self._timelines(dataset.schema())
         for segment_id in dataset.segment_ids():
             store = entries_by_recording_id.get(segment_id)
             application_id = store.application_id if store is not None else None
@@ -229,7 +232,6 @@ class RerunReader(BaseReader):
                     source_file=source,
                     application_id=application_id,
                     recording_id=recording_id,
-                    schema=schema,
                     timelines=timelines,
                 )
             else:
@@ -315,7 +317,6 @@ class RerunReader(BaseReader):
         source_file: DataFile,
         application_id: str | None,
         recording_id: str,
-        schema: Any,
         timelines: Sequence[str],
     ) -> DictRow:
         timeline = self._primary_timeline(timelines)
@@ -354,9 +355,8 @@ class RerunReader(BaseReader):
             row["robot_type"] = self.robot_type
 
         scalar_columns = _component_columns(
-            schema,
-            component="Scalars:scalars",
             table=table,
+            component="Scalars:scalars",
         )
         action_columns = (
             _selected_columns(
@@ -389,9 +389,9 @@ class RerunReader(BaseReader):
         row["frames"] = Tabular(frames)
 
         camera_columns = (
-            _selected_camera_columns(schema, table, self.videos)
+            _selected_camera_columns(table, self.videos)
             if self.videos_explicit
-            else _camera_columns(schema, table, self.camera_prefix)
+            else _camera_columns(table, self.camera_prefix)
         )
         for name, column in camera_columns.items():
             values = table.column(column).combine_chunks()
@@ -445,7 +445,9 @@ def _selection_map(
 def _collect_table(df: Any) -> pa.Table:
     table = df.to_arrow_table()
     if _RERUN_SEGMENT_ID in table.column_names and table.num_rows > 0:
-        table = table.filter(_is_valid(table.column(_RERUN_SEGMENT_ID)))
+        segment_ids = table.column(_RERUN_SEGMENT_ID)
+        if segment_ids.null_count:
+            table = table.filter(_is_valid(segment_ids))
     return table
 
 
@@ -478,20 +480,24 @@ class _local_rrd:
             self.tmpdir.cleanup()
 
 
+def _metadata_text(metadata: Mapping[bytes, bytes], key: bytes) -> str | None:
+    value = metadata.get(key)
+    return value.decode("utf-8") if value is not None else None
+
+
 def _component_columns(
-    schema: Any,
+    table: pa.Table,
     *,
     component: str,
-    table: pa.Table,
 ) -> dict[str, str]:
     out: dict[str, str] = {}
-    names = set(table.column_names)
-    for column in schema.component_columns():
-        if str(column.component) != component:
+    for field in table.schema:
+        metadata = field.metadata or {}
+        if _metadata_text(metadata, _RERUN_COMPONENT_METADATA) != component:
             continue
-        name = str(column.name)
-        if name in names:
-            out[str(column.entity_path)] = name
+        entity_path = _metadata_text(metadata, _RERUN_ENTITY_PATH_METADATA)
+        if entity_path is not None:
+            out[entity_path] = field.name
     return out
 
 
@@ -527,33 +533,23 @@ def _matches_entity_prefix(entity_path: str, prefix: str) -> bool:
     return entity_path == prefix or entity_path.startswith(f"{prefix}/")
 
 
-def _camera_columns(schema: Any, table: pa.Table, prefix: str) -> dict[str, str]:
-    names = set(table.column_names)
+def _camera_columns(table: pa.Table, prefix: str) -> dict[str, str]:
     out: dict[str, str] = {}
-    for column in schema.component_columns():
-        if str(column.component) != "EncodedImage:blob":
+    for entity_path, column in _component_columns(
+        table,
+        component="EncodedImage:blob",
+    ).items():
+        if not _matches_entity_prefix(entity_path, prefix):
             continue
-        entity_path = str(column.entity_path)
-        name = str(column.name)
-        if not _matches_entity_prefix(entity_path, prefix) or name not in names:
-            continue
-        out[entity_path.strip("/").replace("/", ".")] = name
+        out[entity_path.strip("/").replace("/", ".")] = column
     return out
 
 
 def _selected_camera_columns(
-    schema: Any,
     table: pa.Table,
     selected: Mapping[str, str],
 ) -> dict[str, str]:
-    names = set(table.column_names)
-    by_entity_path: dict[str, str] = {}
-    for column in schema.component_columns():
-        if str(column.component) != "EncodedImage:blob":
-            continue
-        name = str(column.name)
-        if name in names:
-            by_entity_path[str(column.entity_path)] = name
+    by_entity_path = _component_columns(table, component="EncodedImage:blob")
     out: dict[str, str] = {}
     for name, path in selected.items():
         column = by_entity_path.get(path)
