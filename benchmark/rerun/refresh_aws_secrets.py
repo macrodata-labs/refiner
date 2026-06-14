@@ -90,7 +90,7 @@ def _export_credentials(profile: str) -> dict[str, str]:
             "export-credentials",
             *_aws_profile_arg(profile),
             "--format",
-            "json",
+            "process",
         ]
     )
     payload = json.loads(result.stdout)
