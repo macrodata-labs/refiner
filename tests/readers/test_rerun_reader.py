@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,6 +25,11 @@ def _tiny_rrd(path: Path) -> None:
         "/action/x",
         indexes=[rr.TimeColumn("frame", sequence=frames)],
         columns=rr.Scalars.columns(scalars=np.asarray([1.0, 2.0, 3.0])),
+    )
+    rr.send_columns(
+        "/action_extra/y",
+        indexes=[rr.TimeColumn("frame", sequence=frames)],
+        columns=rr.Scalars.columns(scalars=np.asarray([10.0, 20.0, 30.0])),
     )
     rr.send_columns(
         "/observation/state/y",
@@ -51,6 +57,49 @@ def _sparse_rrd(path: Path) -> None:
         "/action/y",
         indexes=[rr.TimeColumn("frame", sequence=np.asarray([1]))],
         columns=rr.Scalars.columns(scalars=np.asarray([9.0])),
+    )
+
+
+def _custom_robotics_rrd(path: Path) -> None:
+    import rerun as rr
+    from PIL import Image
+
+    rr.init("refiner_rerun_custom_robotics_test", recording_id="episode-custom")
+    rr.save(path)
+    frames = np.arange(2)
+    rr.send_columns(
+        "/robot/actions/z",
+        indexes=[rr.TimeColumn("frame", sequence=frames)],
+        columns=rr.Scalars.columns(scalars=np.asarray([30.0, 40.0])),
+    )
+    rr.send_columns(
+        "/robot/actions/a",
+        indexes=[rr.TimeColumn("frame", sequence=frames)],
+        columns=rr.Scalars.columns(scalars=np.asarray([10.0, 20.0])),
+    )
+    rr.send_columns(
+        "/robot/state/b",
+        indexes=[rr.TimeColumn("frame", sequence=frames)],
+        columns=rr.Scalars.columns(scalars=np.asarray([1.0, 2.0])),
+    )
+    rr.send_columns(
+        "/robot/state/a",
+        indexes=[rr.TimeColumn("frame", sequence=frames)],
+        columns=rr.Scalars.columns(scalars=np.asarray([3.0, 4.0])),
+    )
+    blobs: list[bytes] = []
+    for color in ((1, 2, 3), (4, 5, 6)):
+        image = Image.new("RGB", (1, 1), color=color)
+        out = BytesIO()
+        image.save(out, format="PNG")
+        blobs.append(out.getvalue())
+    rr.send_columns(
+        "/robot/cameras/top",
+        indexes=[rr.TimeColumn("frame", sequence=frames)],
+        columns=rr.EncodedImage.columns(
+            blob=blobs,
+            media_type=["image/png", "image/png"],
+        ),
     )
 
 
@@ -100,6 +149,40 @@ def test_read_rerun_robotics_mode_converts_to_robot_row(tmp_path: Path) -> None:
     assert row.num_frames == 3
     assert row.actions.to_pylist() == [[1.0], [2.0], [3.0]]
     assert row.states.to_pylist() == [[4.0], [5.0], [6.0]]
+
+
+def test_read_rerun_robotics_mode_respects_explicit_selections(
+    tmp_path: Path,
+) -> None:
+    rrd = tmp_path / "custom.rrd"
+    _custom_robotics_rrd(rrd)
+
+    row = cast(
+        Any,
+        mdr.read_rerun(
+            str(rrd),
+            output="robotics",
+            actions=("/robot/actions/z", "/robot/actions/a"),
+            states={
+                "first": "/robot/state/a",
+                "second": "/robot/state/b",
+            },
+            videos={"observation.images.top": "/robot/cameras/top"},
+            fps=5.0,
+        ).take(1)[0],
+    )
+
+    assert row["frames"].column("action").to_pylist() == [[30.0, 10.0], [40.0, 20.0]]
+    assert row["frames"].column("observation.state").to_pylist() == [
+        [3.0, 1.0],
+        [4.0, 2.0],
+    ]
+    video = row["observation.images.top"]
+    assert video.frame_count == 2
+    assert [frame[0, 0].tolist() for frame in video.iter_frame_arrays()] == [
+        [1, 2, 3],
+        [4, 5, 6],
+    ]
 
 
 def test_read_rerun_robotics_mode_writes_lerobot(tmp_path: Path) -> None:

@@ -1262,6 +1262,9 @@ def read_rerun(
     action_prefix: str = "/action",
     state_prefix: str = "/observation/state",
     camera_prefix: str = "/cam",
+    actions: PathSelection | None = None,
+    states: PathSelection | None = None,
+    videos: PathSelection | None = None,
     fps: float | None = None,
     robot_type: str | None = None,
 ) -> RefinerPipeline:
@@ -1272,7 +1275,9 @@ def read_rerun(
     ``Tabular`` tables grouped by timeline under the ``rerun`` field. With
     ``output="robotics"``, the reader additionally derives common robotics
     episode fields from configurable Rerun entity prefixes so the rows can be
-    passed through ``to_robot_rows(...)`` and robotics writers.
+    passed through ``to_robot_rows(...)`` and robotics writers. Pass ``actions``,
+    ``states``, or ``videos`` to pin exact entity paths and output order instead
+    of using prefix-derived defaults.
     """
     return RefinerPipeline(
         source=RerunReader(
@@ -1293,6 +1298,9 @@ def read_rerun(
             action_prefix=action_prefix,
             state_prefix=state_prefix,
             camera_prefix=camera_prefix,
+            actions=actions,
+            states=states,
+            videos=videos,
             fps=fps,
             robot_type=robot_type,
         )

@@ -20,7 +20,11 @@ from refiner.pipeline.data.shard import FilePartsDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.base import BaseReader
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    PathSelection,
+    path_selection_map,
+)
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameSequence
 
@@ -29,7 +33,9 @@ RerunOutputMode = Literal["recording", "robotics"]
 _INDEX_METADATA_KEY = b"rerun:kind"
 _INDEX_METADATA_VALUE = b"index"
 _RERUN_SEGMENT_ID = "rerun_segment_id"
-_DEFAULT_ROBOTICS_CONTENTS = ("/action/**", "/observation/**", "/cam/**")
+_ROBOTICS_ROW_COLUMNS = frozenset(
+    {"episode_id", "rerun", "frames", "fps", "robot_type"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +80,9 @@ class RerunReader(BaseReader):
         action_prefix: str = "/action",
         state_prefix: str = "/observation/state",
         camera_prefix: str = "/cam",
+        actions: PathSelection | None = None,
+        states: PathSelection | None = None,
+        videos: PathSelection | None = None,
         fps: float | None = None,
         robot_type: str | None = None,
     ) -> None:
@@ -106,6 +115,35 @@ class RerunReader(BaseReader):
         self.action_prefix = _normalize_entity_prefix(action_prefix)
         self.state_prefix = _normalize_entity_prefix(state_prefix)
         self.camera_prefix = _normalize_entity_prefix(camera_prefix)
+        self.actions_explicit = actions is not None
+        self.states_explicit = states is not None
+        self.videos_explicit = videos is not None
+        self.actions = _selection_map(
+            actions,
+            format_name="Rerun actions",
+            derive_names_from_paths=False,
+        )
+        self.states = _selection_map(
+            states,
+            format_name="Rerun states",
+            derive_names_from_paths=False,
+        )
+        self.videos = _selection_map(videos, format_name="Rerun videos")
+        if output == "robotics":
+            if file_path_column in _ROBOTICS_ROW_COLUMNS:
+                raise ValueError(
+                    f"file_path_column cannot use reserved Rerun robotics row "
+                    f"column {file_path_column!r}"
+                )
+            reserved_video_names = set(_ROBOTICS_ROW_COLUMNS)
+            if file_path_column is not None:
+                reserved_video_names.add(file_path_column)
+            video_collisions = set(self.videos).intersection(reserved_video_names)
+            if video_collisions:
+                raise ValueError(
+                    "Rerun video output names cannot use reserved robotics row "
+                    "columns: " + ", ".join(sorted(video_collisions))
+                )
         self.fps = fps
         self.robot_type = robot_type
 
@@ -123,6 +161,12 @@ class RerunReader(BaseReader):
                 "include_static": self.include_static,
                 "include_recording": self.include_recording,
                 "fill_latest_at": self.fill_latest_at,
+                "action_prefix": self.action_prefix,
+                "state_prefix": self.state_prefix,
+                "camera_prefix": self.camera_prefix,
+                "actions": dict(self.actions) if self.actions_explicit else None,
+                "states": dict(self.states) if self.states_explicit else None,
+                "videos": dict(self.videos) if self.videos_explicit else None,
             }
         )
         return description
@@ -243,6 +287,24 @@ class RerunReader(BaseReader):
             return dataset_or_view
         return dataset_or_view.filter_contents(self.contents)
 
+    def _robotics_contents(self) -> tuple[str, ...]:
+        if self.contents is not None:
+            return self.contents
+        contents: list[str] = []
+        if self.actions_explicit:
+            contents.extend(self.actions.values())
+        else:
+            contents.append(_prefix_contents(self.action_prefix))
+        if self.states_explicit:
+            contents.extend(self.states.values())
+        else:
+            contents.append(_prefix_contents(self.state_prefix))
+        if self.videos_explicit:
+            contents.extend(self.videos.values())
+        else:
+            contents.append(_prefix_contents(self.camera_prefix))
+        return tuple(dict.fromkeys(contents))
+
     def _robotics_row(
         self,
         view: Any,
@@ -257,7 +319,7 @@ class RerunReader(BaseReader):
         static: pa.Table | None,
     ) -> DictRow:
         timeline = self._primary_timeline(timelines)
-        contents = self.contents or _DEFAULT_ROBOTICS_CONTENTS
+        contents = self._robotics_contents()
         table = _collect_table(
             view.filter_contents(contents).reader(
                 index=timeline,
@@ -291,8 +353,24 @@ class RerunReader(BaseReader):
             component="Scalars:scalars",
             table=table,
         )
-        action_columns = _prefixed_columns(scalar_columns, self.action_prefix)
-        state_columns = _prefixed_columns(scalar_columns, self.state_prefix)
+        action_columns = (
+            _selected_columns(
+                scalar_columns,
+                self.actions,
+                format_name="Rerun action",
+            )
+            if self.actions_explicit
+            else _prefixed_columns(scalar_columns, self.action_prefix)
+        )
+        state_columns = (
+            _selected_columns(
+                scalar_columns,
+                self.states,
+                format_name="Rerun state",
+            )
+            if self.states_explicit
+            else _prefixed_columns(scalar_columns, self.state_prefix)
+        )
         if action_columns:
             frames = frames.append_column(
                 "action",
@@ -305,7 +383,12 @@ class RerunReader(BaseReader):
             )
         row["frames"] = Tabular(frames)
 
-        for name, column in _camera_columns(schema, table, self.camera_prefix).items():
+        camera_columns = (
+            _selected_camera_columns(schema, table, self.videos)
+            if self.videos_explicit
+            else _camera_columns(schema, table, self.camera_prefix)
+        )
+        for name, column in camera_columns.items():
             values = table.column(column).combine_chunks()
             row[name] = VideoFrameSequence(
                 lambda values=values: _iter_encoded_images(values),
@@ -330,7 +413,28 @@ def _normalize_entity_prefix(value: str) -> str:
     value = value.strip()
     if not value:
         raise ValueError("Rerun entity prefixes must be non-empty")
-    return "/" + value.strip("/")
+    stripped = value.strip("/")
+    return "/" if not stripped else "/" + stripped
+
+
+def _prefix_contents(prefix: str) -> str:
+    return "/**" if prefix == "/" else f"{prefix}/**"
+
+
+def _selection_map(
+    value: PathSelection | None,
+    *,
+    format_name: str,
+    derive_names_from_paths: bool = True,
+) -> dict[str, str]:
+    return {
+        name: _normalize_entity_prefix(path)
+        for name, path in path_selection_map(
+            value,
+            format_name=format_name,
+            derive_names_from_paths=derive_names_from_paths,
+        ).items()
+    }
 
 
 def _collect_table(df: Any) -> pa.Table:
@@ -388,9 +492,34 @@ def _component_columns(
 
 def _prefixed_columns(columns: Mapping[str, str], prefix: str) -> list[tuple[str, str]]:
     return sorted(
-        ((path, column) for path, column in columns.items() if path.startswith(prefix)),
+        (
+            (path, column)
+            for path, column in columns.items()
+            if _matches_entity_prefix(path, prefix)
+        ),
         key=lambda item: item[0],
     )
+
+
+def _selected_columns(
+    columns: Mapping[str, str],
+    selected: Mapping[str, str],
+    *,
+    format_name: str,
+) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for _name, path in selected.items():
+        column = columns.get(path)
+        if column is None:
+            raise KeyError(f"{format_name} entity path not found: {path}")
+        out.append((path, column))
+    return out
+
+
+def _matches_entity_prefix(entity_path: str, prefix: str) -> bool:
+    if prefix == "/":
+        return entity_path.startswith("/")
+    return entity_path == prefix or entity_path.startswith(f"{prefix}/")
 
 
 def _camera_columns(schema: Any, table: pa.Table, prefix: str) -> dict[str, str]:
@@ -401,9 +530,31 @@ def _camera_columns(schema: Any, table: pa.Table, prefix: str) -> dict[str, str]
             continue
         entity_path = str(column.entity_path)
         name = str(column.name)
-        if not entity_path.startswith(prefix) or name not in names:
+        if not _matches_entity_prefix(entity_path, prefix) or name not in names:
             continue
         out[entity_path.strip("/").replace("/", ".")] = name
+    return out
+
+
+def _selected_camera_columns(
+    schema: Any,
+    table: pa.Table,
+    selected: Mapping[str, str],
+) -> dict[str, str]:
+    names = set(table.column_names)
+    by_entity_path: dict[str, str] = {}
+    for column in schema.component_columns():
+        if str(column.component) != "EncodedImage:blob":
+            continue
+        name = str(column.name)
+        if name in names:
+            by_entity_path[str(column.entity_path)] = name
+    out: dict[str, str] = {}
+    for name, path in selected.items():
+        column = by_entity_path.get(path)
+        if column is None:
+            raise KeyError(f"Rerun video entity path not found: {path}")
+        out[name] = column
     return out
 
 
