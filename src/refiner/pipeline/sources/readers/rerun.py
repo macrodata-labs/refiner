@@ -570,12 +570,12 @@ def _singleton_scalar_matrix(
     table: pa.Table,
     columns: Sequence[tuple[str, str]],
 ) -> np.ndarray:
-    values = []
-    for _, column in columns:
-        values.append(_singleton_list_array(table.column(column).combine_chunks()))
-    if not values:
-        return np.empty((table.num_rows, 0), dtype=np.float64)
-    return np.stack(values, axis=1)
+    values = np.full((table.num_rows, len(columns)), np.nan, dtype=np.float64)
+    for index, (_, column) in enumerate(columns):
+        _fill_singleton_list_array(
+            table.column(column).combine_chunks(), values[:, index]
+        )
+    return values
 
 
 def _list_column(values: np.ndarray) -> pa.Array:
@@ -595,10 +595,11 @@ def _list_column(values: np.ndarray) -> pa.Array:
     return pa.ListArray.from_arrays(offsets, flat_values)
 
 
-def _singleton_list_array(array: pa.Array) -> np.ndarray:
-    out = np.full(len(array), np.nan, dtype=np.float64)
+def _fill_singleton_list_array(array: pa.Array, out: np.ndarray) -> None:
+    if len(array) != len(out):
+        raise ValueError("Rerun vector column length mismatch")
     if len(array) == 0:
-        return out
+        return
     if not pa.types.is_list(array.type) and not pa.types.is_large_list(array.type):
         raise TypeError(f"Expected a Rerun list component column, got {array.type}")
     offsets = np.asarray(array.offsets)
@@ -606,10 +607,9 @@ def _singleton_list_array(array: pa.Array) -> np.ndarray:
     ends = offsets[1:]
     valid = np.asarray(_is_valid(array), dtype=bool) & (ends > starts)
     if not valid.any():
-        return out
+        return
     values = np.asarray(array.values)
     out[valid] = values[starts[valid]]
-    return out
 
 
 def _iter_encoded_images(values: pa.Array) -> Iterator[np.ndarray]:
