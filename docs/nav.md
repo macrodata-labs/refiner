@@ -20,6 +20,7 @@
 - [HDF5](reading-data/hdf5.md)
 - [Zarr](reading-data/zarr.md)
 - [MCAP](reading-data/mcap.md)
+- [Rerun](reading-data/rerun.md)
 - [Tabular files](reading-data/tabular-files.md)
 - [Files and videos](reading-data/files-and-videos.md)
 - [Hugging Face](reading-data/hugging-face.md)
@@ -65,6 +66,7 @@
 - [Writer model](writing-data/writer-model.md)
 - [LeRobot](writing-data/lerobot.md)
 - [Zarr](writing-data/zarr.md)
+- [Rerun](writing-data/rerun.md)
 - [Parquet and JSONL](writing-data/parquet-and-jsonl.md)
 - [Media assets and reducers](writing-data/media-assets-and-reducers.md)
 
