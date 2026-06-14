@@ -30,7 +30,7 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
-from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink, ZarrSink
+from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink, RerunSink, ZarrSink
 from refiner.pipeline.sinks.assets import MissingAssetPolicy
 from refiner.pipeline.sources import (
     BaseSource,
@@ -616,6 +616,30 @@ class RefinerPipeline:
                 max_asset_uploads_in_flight=max_asset_uploads_in_flight,
                 missing_asset_policy=missing_asset_policy,
                 dtypes=dtypes,
+            )
+        )
+
+    def write_rerun(
+        self,
+        output: DataFolderLike,
+        *,
+        filename_template: str = "{shard_id}__w{worker_id}/{row_index}.rrd",
+        app_id: str = "refiner",
+        write_footer: bool = True,
+    ) -> "RefinerPipeline":
+        """Attach a distributed Rerun RRD writer sink.
+
+        Rows must contain a ``RerunRecording`` value in the ``rerun`` field,
+        as emitted by ``read_rerun(output="recording")``. Each row is written
+        as one RRD file under ``output`` using a deterministic shard/worker
+        filename template.
+        """
+        return self.with_sink(
+            RerunSink(
+                output=output,
+                filename_template=filename_template,
+                app_id=app_id,
+                write_footer=write_footer,
             )
         )
 
