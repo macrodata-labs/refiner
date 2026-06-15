@@ -38,7 +38,7 @@ class RerunSink(BaseSink):
         template_fields = _validate_filename_template(filename_template)
         self.output = DataFolder.resolve(output)
         self._local_output_root = (
-            Path(self.output.abs_path()) if self.output.is_local else None
+            self.output.abs_path() if self.output.is_local else None
         )
         self.filename_template = filename_template
         self._uses_row_index = "row_index" in template_fields
@@ -51,7 +51,7 @@ class RerunSink(BaseSink):
         self.write_footer = write_footer
         self._row_indices: dict[str, int] = {}
         self._written_relpaths: dict[str, set[str]] = {}
-        self._created_local_parents: set[Path] = set()
+        self._created_local_parents: set[str] = set()
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("rerun",)
@@ -89,7 +89,7 @@ class RerunSink(BaseSink):
         return count
 
     def _write_recording(self, recording: RerunRecording, relpath: str) -> None:
-        def write_local(path: Path) -> None:
+        def write_local(path: Path | str) -> None:
             if (
                 self.write_footer
                 and recording.use_source_chunks
@@ -106,8 +106,8 @@ class RerunSink(BaseSink):
 
         local_output_root = self._local_output_root
         if local_output_root is not None:
-            local_path = local_output_root / relpath
-            self._ensure_local_parent(local_path.parent)
+            local_path = f"{local_output_root}/{relpath}"
+            self._ensure_local_parent(os.path.dirname(local_path))
             write_local(local_path)
             return
 
@@ -141,9 +141,9 @@ class RerunSink(BaseSink):
             reducer_name="write_rerun_reduce",
         )
 
-    def _ensure_local_parent(self, parent: Path) -> None:
+    def _ensure_local_parent(self, parent: str) -> None:
         if parent not in self._created_local_parents:
-            parent.mkdir(parents=True, exist_ok=True)
+            Path(parent).mkdir(parents=True, exist_ok=True)
             self._created_local_parents.add(parent)
 
 
@@ -156,7 +156,7 @@ def _recording_from_row(row: Row) -> RerunRecording:
 
 def _write_source_chunks(
     recording: RerunRecording,
-    path: Path,
+    path: Path | str,
     *,
     application_id: str,
 ) -> None:
@@ -184,7 +184,7 @@ def _write_source_chunks(
 
 def _write_source_chunks_from_path(
     recording: RerunRecording,
-    path: Path,
+    path: Path | str,
     *,
     local_path: Path,
     application_id: str,
@@ -290,7 +290,7 @@ def _matching_store(reader: Any, recording: RerunRecording) -> Any:
 
 def _write_recording_tables(
     recording: RerunRecording,
-    path: Path,
+    path: Path | str,
     *,
     application_id: str,
     write_footer: bool,
