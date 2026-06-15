@@ -728,7 +728,15 @@ def _recording_entries(local_path: Path) -> list[Any]:
                 "ignore",
                 message="RRD file has no footer/manifest:.*",
             )
-            return list(rr.experimental.RrdReader(local_path).recordings())
+            reader = rr.experimental.RrdReader(local_path)
+            internal = getattr(reader, "_internal", None)
+            store_entries = (
+                internal.store_entries()
+                if internal is not None
+                and callable(getattr(internal, "store_entries", None))
+                else reader.recordings()
+            )
+            return [entry for entry in store_entries if entry.kind == "recording"]
     except Exception as err:
         logger.warning(
             "Rerun recording metadata unavailable; falling back to server scan: {}",
