@@ -149,7 +149,11 @@ class DataFile:
         if self.is_local and callable(getattr(target.fs, "put_file", None)):
             target.fs.makedirs(target.fs._parent(target.path), exist_ok=True)
             try:
-                target.fs.put_file(self.abs_path(), target.path)
+                target.fs.put_file(
+                    self.abs_path(),
+                    target.path,
+                    block_size=8 * 1024 * 1024,
+                )
                 return
             except Exception:
                 try:
