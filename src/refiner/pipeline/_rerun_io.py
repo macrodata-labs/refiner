@@ -26,7 +26,7 @@ class LocalRrd:
         self.tmpdir = tempfile.TemporaryDirectory(prefix="refiner-rerun-")
         name = os.path.basename(self.source.path) or "recording.rrd"
         self.path = Path(self.tmpdir.name) / name
-        self.source.copy(str(self.path), buffer_size=8 * 1024 * 1024)
+        self.source.copy(str(self.path))
         return self.path
 
     def close(self) -> None:
