@@ -78,7 +78,8 @@ uv run python benchmark/rerun/run_local_benchmark.py
 
 The local benchmark generates a synthetic single-recording RRD, then measures
 the direct-copy branch against the chunk-selection fallback on the same source
-file.
+file. Use `--writes-per-iteration` to repeat the same shard write within one
+timed run when you want to amplify per-row writer overhead.
 
 Artifacts are written under `benchmark/rerun/artifacts/` by default:
 

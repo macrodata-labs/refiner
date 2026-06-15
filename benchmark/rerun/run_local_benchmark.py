@@ -23,6 +23,7 @@ class CaseResult:
     mode: str
     wall_time_s: float
     output_size_bytes: int
+    output_file_count: int
     output_matches_input: bool
 
 
@@ -36,6 +37,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=3)
     parser.add_argument("--chunks", type=int, default=100)
     parser.add_argument("--rows-per-chunk", type=int, default=1000)
+    parser.add_argument("--writes-per-iteration", type=int, default=1)
     parser.add_argument("--artifacts-dir", type=Path, default=DEFAULT_ARTIFACTS_DIR)
     parser.add_argument("--run-token")
     return parser.parse_args()
@@ -103,7 +105,13 @@ def _force_chunk_fallback() -> Iterator[None]:
         rerun_sink._can_copy_source_rrd = original
 
 
-def _run_copy_case(source: Path, output: Path, *, force_fallback: bool) -> CaseResult:
+def _run_copy_case(
+    source: Path,
+    output: Path,
+    *,
+    force_fallback: bool,
+    writes_per_iteration: int,
+) -> CaseResult:
     source_row = next(
         mdr.read_rerun(str(source), materialize_tables=False).source.read()
     )
@@ -112,20 +120,26 @@ def _run_copy_case(source: Path, output: Path, *, force_fallback: bool) -> CaseR
     start = perf_counter()
     if force_fallback:
         with _force_chunk_fallback():
-            sink.write_shard_block("shard-a", block)
+            for _ in range(writes_per_iteration):
+                sink.write_shard_block("shard-a", block)
     else:
-        sink.write_shard_block("shard-a", block)
+        for _ in range(writes_per_iteration):
+            sink.write_shard_block("shard-a", block)
     sink.on_shard_complete("shard-a")
     wall_time_s = perf_counter() - start
     written = sorted(output.glob("**/*.rrd"))
-    if len(written) != 1:
-        raise RuntimeError(f"expected one output RRD, got {len(written)}")
-    output_path = written[0]
+    if len(written) != writes_per_iteration:
+        raise RuntimeError(
+            f"expected {writes_per_iteration} output RRDs, got {len(written)}"
+        )
     return CaseResult(
         mode="chunk-fallback" if force_fallback else "direct-copy",
         wall_time_s=wall_time_s,
-        output_size_bytes=output_path.stat().st_size,
-        output_matches_input=output_path.read_bytes() == source.read_bytes(),
+        output_size_bytes=sum(path.stat().st_size for path in written),
+        output_file_count=len(written),
+        output_matches_input=all(
+            path.read_bytes() == source.read_bytes() for path in written
+        ),
     )
 
 
@@ -149,7 +163,10 @@ def main() -> int:
             output_dir = artifacts_dir / f"{mode_name}-{iteration:02d}"
             output_dir.mkdir(parents=True, exist_ok=True)
             result = _run_copy_case(
-                input_path, output_dir, force_fallback=force_fallback
+                input_path,
+                output_dir,
+                force_fallback=force_fallback,
+                writes_per_iteration=args.writes_per_iteration,
             )
             results.append(result)
             print(

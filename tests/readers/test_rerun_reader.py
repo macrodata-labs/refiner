@@ -818,6 +818,41 @@ def test_write_rerun_prefers_hardlink_for_local_single_recording_copy(
     assert link_calls[0][0] == str(staged_path)
 
 
+def test_write_rerun_direct_copy_does_not_require_rerun_sdk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    output = tmp_path / "out-no-rerun-sdk"
+    _tiny_rrd(source)
+
+    source_iter = mdr.read_rerun(
+        str(source),
+        materialize_tables=False,
+    ).source.read()
+    block = cast(list[Row], next(source_iter))
+    row = block[0]
+    recording = row["rerun"]
+    assert recording.use_source_chunks is True
+    assert recording.source_recording_count == 1
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun.check_required_dependencies",
+        lambda *args, **kwargs: pytest.fail(
+            "direct-copy raw writes should not require rerun-sdk"
+        ),
+    )
+
+    sink = RerunSink(str(output))
+    sink.write_shard_block("shard-a", block)
+    sink.on_shard_complete("shard-a")
+    with pytest.raises(StopIteration):
+        next(source_iter)
+
+    written = sorted(output.glob("**/*.rrd"))
+    assert len(written) == 1
+
+
 def test_write_rerun_rejects_timeline_filtered_metadata_only_recording(
     tmp_path: Path,
 ) -> None:

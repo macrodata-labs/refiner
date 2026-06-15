@@ -75,12 +75,6 @@ class RerunSink(BaseSink):
         return count
 
     def _write_recording(self, recording: RerunRecording, relpath: str) -> None:
-        check_required_dependencies(
-            "write_rerun",
-            [("rerun", "rerun-sdk")],
-            dist="rerun",
-        )
-
         def write_local(path: Path) -> None:
             if (
                 self.write_footer
@@ -181,6 +175,11 @@ def _write_source_chunks_from_path(
             shutil.copyfile(local_path, path)
         return
 
+    check_required_dependencies(
+        "write_rerun",
+        [("rerun", "rerun-sdk")],
+        dist="rerun",
+    )
     import rerun as rr
 
     with warnings.catch_warnings():
