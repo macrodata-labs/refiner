@@ -60,29 +60,45 @@ class RerunSink(BaseSink):
         count = 0
         worker_id = get_active_worker_token()
         row_index = self._row_indices.get(shard_id, 0)
-        written_relpaths = (
-            None
-            if self._uses_row_index
-            else self._written_relpaths.setdefault(shard_id, set())
-        )
-        for row in block:
-            recording = _recording_from_row(row)
-            relpath = self._render_relpath(
-                shard_id=shard_id,
-                worker_id=worker_id,
-                row_index=row_index,
-                segment_id=recording.segment_id,
+        local_output_root = self._local_output_root
+        if (
+            local_output_root is not None
+            and self.filename_template == _DEFAULT_FILENAME_TEMPLATE
+        ):
+            parent = f"{local_output_root}/{shard_id}__w{worker_id}"
+            self._ensure_local_parent(parent)
+            for row in block:
+                recording = _recording_from_row(row)
+                self._write_recording(
+                    recording,
+                    f"{parent}/{row_index}.rrd",
+                )
+                row_index += 1
+                count += 1
+        else:
+            written_relpaths = (
+                None
+                if self._uses_row_index
+                else self._written_relpaths.setdefault(shard_id, set())
             )
-            if written_relpaths is not None:
-                if relpath in written_relpaths:
-                    raise ValueError(
-                        "write_rerun filename_template rendered duplicate output path "
-                        f"{relpath!r}; include {{row_index}} or another unique row field"
-                    )
-                written_relpaths.add(relpath)
-            self._write_recording(recording, relpath)
-            row_index += 1
-            count += 1
+            for row in block:
+                recording = _recording_from_row(row)
+                relpath = self._render_relpath(
+                    shard_id=shard_id,
+                    worker_id=worker_id,
+                    row_index=row_index,
+                    segment_id=recording.segment_id,
+                )
+                if written_relpaths is not None:
+                    if relpath in written_relpaths:
+                        raise ValueError(
+                            "write_rerun filename_template rendered duplicate output path "
+                            f"{relpath!r}; include {{row_index}} or another unique row field"
+                        )
+                    written_relpaths.add(relpath)
+                self._write_recording(recording, relpath)
+                row_index += 1
+                count += 1
         self._row_indices[shard_id] = row_index
         if count:
             log_throughput("files_written", count, shard_id=shard_id, unit="files")
