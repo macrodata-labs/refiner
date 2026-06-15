@@ -106,14 +106,6 @@ class RerunSink(BaseSink):
 
     def _write_recording(self, recording: RerunRecording, relpath: str) -> None:
         target = self.output.file(relpath)
-        if (
-            self.write_footer
-            and recording.use_source_chunks
-            and recording.source_file is not None
-        ):
-            if _can_copy_source_rrd(recording):
-                recording.source_file.copy(target)
-                return
 
         def write_local(path: Path | str) -> None:
             if (

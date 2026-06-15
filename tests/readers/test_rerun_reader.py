@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 
 import refiner as mdr
+from refiner.io.datafile import DataFile
 from refiner.pipeline import Row
+from refiner.pipeline._rerun_io import LocalRrd
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.sinks.rerun import RerunSink
 from refiner.pipeline.sinks.rerun import _sendable_dynamic_table, _sendable_static_table
@@ -741,48 +743,35 @@ def test_write_rerun_reuses_reader_staged_remote_source(
     assert copied["rerun"].tables["frame"].num_rows == 3
 
 
-def test_write_rerun_copies_source_file_directly_for_raw_copy(
+def test_local_rrd_prefers_get_file_for_remote_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "tiny.rrd"
-    _tiny_rrd(source)
+    source = tmp_path / "remote.rrd"
+    source.write_bytes(b"rrd")
 
-    source_iter = mdr.read_rerun(
-        str(source),
-        materialize_tables=False,
-    ).source.read()
-    block = cast(list[Row], next(source_iter))
+    remote_fs = fsspec.filesystem("memory")
+    remote_path = "/refiner-rerun-test/remote.rrd"
+    remote_fs.pipe_file(remote_path, source.read_bytes())
 
-    output_fs = fsspec.filesystem("memory")
-    output = ("bucket/out-raw-copy-direct", output_fs)
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+    original_get_file = remote_fs.get_file
 
+    def fake_get_file(src: str, dst: str, **kwargs: Any):
+        calls.append((src, dst, dict(kwargs)))
+        return original_get_file(src, dst, **kwargs)
+
+    monkeypatch.setattr(remote_fs, "get_file", fake_get_file)
     monkeypatch.setattr(
-        "refiner.pipeline.sinks.rerun.LocalRrd",
-        lambda *args, **kwargs: pytest.fail(
-            "raw source chunks should not stage a local RRD copy"
-        ),
-    )
-    monkeypatch.setattr(
-        "refiner.pipeline.sinks.rerun.tempfile.TemporaryDirectory",
-        lambda *args, **kwargs: pytest.fail(
-            "raw source chunks should copy straight to the final target"
-        ),
+        "refiner.io.datafile.DataFile.copy",
+        lambda *args, **kwargs: pytest.fail("get_file should be preferred"),
     )
 
-    sink = RerunSink(output)
-    sink.write_shard_block("shard-a", block)
-    sink.on_shard_complete("shard-a")
-    with pytest.raises(StopIteration):
-        next(source_iter)
+    local_rrd = LocalRrd(DataFile.resolve((remote_path, remote_fs)))
+    path = local_rrd.open()
 
-    written = [
-        path
-        for path in output_fs.find("bucket/out-raw-copy-direct")
-        if path.endswith(".rrd")
-    ]
-    assert len(written) == 1
-    assert output_fs.cat(written[0]) == source.read_bytes()
+    assert path.exists()
+    assert calls == [(remote_path, str(path), {})]
 
 
 def test_write_rerun_does_not_direct_copy_when_source_may_have_multiple_recordings(
