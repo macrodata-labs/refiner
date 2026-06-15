@@ -6,7 +6,7 @@ import tempfile
 import warnings
 from pathlib import Path
 from string import Formatter
-from typing import Any
+from typing import Any, Callable
 
 import pyarrow as pa
 
@@ -39,29 +39,32 @@ class RerunSink(BaseSink):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
         self._uses_segment_id = "segment_id" in template_fields
+        self._render_relpath = _compile_relpath_renderer(
+            filename_template,
+            uses_segment_id=self._uses_segment_id,
+        )
         self.app_id = app_id
         self.write_footer = write_footer
         self._row_indices: dict[str, int] = {}
         self._written_relpaths: dict[str, set[str]] = {}
+        self._created_local_parents: set[Path] = set()
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("rerun",)
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
         count = 0
+        worker_id = get_active_worker_token()
+        row_index = self._row_indices.get(shard_id, 0)
+        written_relpaths = self._written_relpaths.setdefault(shard_id, set())
         for row in block:
             recording = _recording_from_row(row)
-            row_index = self._row_indices.get(shard_id, 0)
-            self._row_indices[shard_id] = row_index + 1
-            relpath = _render_relpath(
-                self.filename_template,
+            relpath = self._render_relpath(
                 shard_id=shard_id,
-                worker_id=get_active_worker_token(),
+                worker_id=worker_id,
                 row_index=row_index,
                 segment_id=recording.segment_id,
-                uses_segment_id=self._uses_segment_id,
             )
-            written_relpaths = self._written_relpaths.setdefault(shard_id, set())
             if relpath in written_relpaths:
                 raise ValueError(
                     "write_rerun filename_template rendered duplicate output path "
@@ -69,6 +72,8 @@ class RerunSink(BaseSink):
                 )
             self._write_recording(recording, relpath)
             written_relpaths.add(relpath)
+            row_index += 1
+            self._row_indices[shard_id] = row_index
             count += 1
         if count:
             log_throughput("files_written", count, shard_id=shard_id, unit="files")
@@ -93,7 +98,7 @@ class RerunSink(BaseSink):
         target = self.output.file(relpath)
         if target.is_local:
             local_path = Path(target.abs_path())
-            local_path.parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_local_parent(local_path.parent)
             write_local(local_path)
             return
 
@@ -124,6 +129,11 @@ class RerunSink(BaseSink):
             filename_template=self.filename_template,
             reducer_name="write_rerun_reduce",
         )
+
+    def _ensure_local_parent(self, parent: Path) -> None:
+        if parent not in self._created_local_parents:
+            parent.mkdir(parents=True, exist_ok=True)
+            self._created_local_parents.add(parent)
 
 
 def _recording_from_row(row: Row) -> RerunRecording:
@@ -369,6 +379,51 @@ def _validate_filename_template(filename_template: str) -> set[str]:
     return fields
 
 
+def _compile_relpath_renderer(
+    filename_template: str,
+    *,
+    uses_segment_id: bool,
+) -> Callable[..., str]:
+    parts: list[tuple[str, str | None]] = []
+    for literal_text, field_name, format_spec, conversion in Formatter().parse(
+        filename_template
+    ):
+        if conversion is not None or format_spec:
+            raise ValueError("filename_template only supports plain named fields")
+        parts.append((literal_text, field_name))
+
+    def render(
+        *,
+        shard_id: str,
+        worker_id: str,
+        row_index: int,
+        segment_id: str,
+    ) -> str:
+        normalized_segment_id = (
+            _normalize_path_segment(segment_id, "segment_id")
+            if uses_segment_id
+            else segment_id
+        )
+        pieces: list[str] = []
+        for literal_text, field_name in parts:
+            pieces.append(literal_text)
+            if field_name is None:
+                continue
+            if field_name == "shard_id":
+                pieces.append(shard_id)
+            elif field_name == "worker_id":
+                pieces.append(worker_id)
+            elif field_name == "row_index":
+                pieces.append(str(row_index))
+            elif field_name == "segment_id":
+                pieces.append(normalized_segment_id)
+            else:
+                raise AssertionError(f"unexpected filename field {field_name!r}")
+        return _normalize_relpath("".join(pieces), "rendered filename")
+
+    return render
+
+
 def _render_relpath(
     filename_template: str,
     *,
@@ -378,17 +433,14 @@ def _render_relpath(
     segment_id: str,
     uses_segment_id: bool,
 ) -> str:
-    field_values: dict[str, object] = {
-        "shard_id": shard_id,
-        "worker_id": worker_id,
-        "row_index": row_index,
-        "segment_id": segment_id,
-    }
-    if uses_segment_id:
-        field_values["segment_id"] = _normalize_path_segment(segment_id, "segment_id")
-    return _normalize_relpath(
-        filename_template.format(**field_values),
-        "rendered filename",
+    return _compile_relpath_renderer(
+        filename_template,
+        uses_segment_id=uses_segment_id,
+    )(
+        shard_id=shard_id,
+        worker_id=worker_id,
+        row_index=row_index,
+        segment_id=segment_id,
     )
 
 
