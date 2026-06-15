@@ -661,6 +661,10 @@ def test_write_rerun_uses_source_chunks_without_materialized_tables(
     assert recording.source_recording_count == 1
 
     monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun.Path.exists",
+        lambda *args, **kwargs: pytest.fail("raw source chunks should not stat path"),
+    )
+    monkeypatch.setattr(
         "refiner.pipeline.sinks.rerun.LocalRrd",
         lambda *args, **kwargs: pytest.fail(
             "writer should reuse a live reader-staged RRD path"

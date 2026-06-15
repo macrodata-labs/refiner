@@ -141,7 +141,7 @@ def _write_source_chunks(
 ) -> None:
     local_source = recording.local_source
     local_source_path = local_source.path if local_source is not None else None
-    if local_source_path is not None and local_source_path.exists():
+    if local_source_path is not None:
         _write_source_chunks_from_path(
             recording,
             path,
