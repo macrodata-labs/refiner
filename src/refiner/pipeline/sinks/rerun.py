@@ -175,7 +175,10 @@ def _write_source_chunks_from_path(
     application_id: str,
 ) -> None:
     if _can_copy_source_rrd(recording):
-        shutil.copyfile(local_path, path)
+        try:
+            os.link(local_path, path)
+        except OSError:
+            shutil.copyfile(local_path, path)
         return
 
     import rerun as rr

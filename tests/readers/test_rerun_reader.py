@@ -775,6 +775,49 @@ def test_write_rerun_does_not_direct_copy_when_source_may_have_multiple_recordin
     assert copied["rerun"].tables["frame"].num_rows == 3
 
 
+def test_write_rerun_prefers_hardlink_for_local_single_recording_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    output = tmp_path / "out-hardlink-copy"
+    _tiny_rrd(source)
+
+    source_iter = mdr.read_rerun(
+        str(source),
+        materialize_tables=False,
+    ).source.read()
+    block = cast(list[Row], next(source_iter))
+    row = block[0]
+    recording = row["rerun"]
+    assert recording.local_source is not None
+    assert recording.local_source.path is not None
+    staged_path = recording.local_source.path
+
+    link_calls: list[tuple[str, str]] = []
+
+    def fake_link(src: str | Path, dst: str | Path) -> None:
+        link_calls.append((str(src), str(dst)))
+        Path(dst).write_bytes(Path(src).read_bytes())
+
+    monkeypatch.setattr("refiner.pipeline.sinks.rerun.os.link", fake_link)
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun.shutil.copyfile",
+        lambda *args, **kwargs: pytest.fail("hardlink path should not copy bytes"),
+    )
+
+    sink = RerunSink(str(output))
+    sink.write_shard_block("shard-a", block)
+    sink.on_shard_complete("shard-a")
+    with pytest.raises(StopIteration):
+        next(source_iter)
+
+    written = sorted(output.glob("**/*.rrd"))
+    assert len(written) == 1
+    assert link_calls
+    assert link_calls[0][0] == str(staged_path)
+
+
 def test_write_rerun_rejects_timeline_filtered_metadata_only_recording(
     tmp_path: Path,
 ) -> None:
