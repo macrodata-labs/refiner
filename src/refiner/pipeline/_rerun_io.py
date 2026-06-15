@@ -26,13 +26,6 @@ class LocalRrd:
         self.tmpdir = tempfile.TemporaryDirectory(prefix="refiner-rerun-")
         name = os.path.basename(self.source.path) or "recording.rrd"
         self.path = Path(self.tmpdir.name) / name
-        get_file = getattr(self.source.fs, "get_file", None)
-        if callable(get_file):
-            try:
-                get_file(self.source.path, str(self.path))
-                return self.path
-            except Exception:
-                pass
         self.source.copy(str(self.path))
         return self.path
 
