@@ -9,6 +9,8 @@ This folder contains cloud benchmark harnesses for Rerun RRD workloads.
   prints case-level and stage-level timing deltas.
 - `refresh_aws_secrets.py`: copies short-lived credentials from an AWS CLI
   profile into the Macrodata workspace secret environment used by cloud jobs.
+- `run_local_benchmark.py`: runs a local single-recording RRD copy benchmark
+  that compares the direct byte-copy path with the chunk-selection fallback.
 
 The default inputs are the ten base RRD files from:
 
@@ -67,6 +69,16 @@ Useful options:
 - `--continue-on-failure` to keep launching later cases after one case fails.
   By default the harness records the failed case and stops, so bad credentials or
   setup failures do not create a misleading benchmark session.
+
+For a local smoke benchmark that does not require cloud credentials:
+
+```bash
+uv run python benchmark/rerun/run_local_benchmark.py
+```
+
+The local benchmark generates a synthetic single-recording RRD, then measures
+the direct-copy branch against the chunk-selection fallback on the same source
+file.
 
 Artifacts are written under `benchmark/rerun/artifacts/` by default:
 
