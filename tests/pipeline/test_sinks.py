@@ -1018,9 +1018,9 @@ def test_cleanup_default_root_entries_returns_only_losers() -> None:
         "0123456789ab__w222222222222",
         "not-a-match",
     ]
-    keep_pairs = {("0123456789ab", "111111111111")}
+    keep_keys = {"0123456789ab__w111111111111"}
 
-    assert _cleanup_default_root_entries(root_entries, keep_pairs) == {
+    assert _cleanup_default_root_entries(root_entries, keep_keys) == {
         "0123456789ab__w222222222222"
     }
 

@@ -115,6 +115,7 @@ class FileCleanupReducerSink(BaseSink):
             (row.shard_id, row.worker_token)
             for row in get_finalized_workers(stage_index=stage_index - 1)
         }
+        keep_keys = {f"{shard_id}__w{worker_id}" for shard_id, worker_id in keep_pairs}
 
         literal_prefix = ""
         for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
@@ -135,7 +136,7 @@ class FileCleanupReducerSink(BaseSink):
                 root_entries = self.output.ls(listing_prefix, detail=False)
             except (FileNotFoundError, NotADirectoryError):
                 root_entries = []
-            paths_to_delete = _cleanup_default_root_entries(root_entries, keep_pairs)
+            paths_to_delete = _cleanup_default_root_entries(root_entries, keep_keys)
             for path in sorted(paths_to_delete):
                 try:
                     self.output.rm(path, recursive=True)
@@ -198,9 +199,8 @@ __all__ = ["FileCleanupReducerSink"]
 
 def _cleanup_default_root_entries(
     root_entries: list[str],
-    keep_pairs: set[tuple[str, str]],
+    keep_keys: set[str],
 ) -> set[str]:
-    keep_keys = {f"{shard_id}__w{worker_id}" for shard_id, worker_id in keep_pairs}
     paths_to_delete: set[str] = set()
     for rel_path in root_entries:
         if len(rel_path) != 27 or rel_path[12:15] != "__w":

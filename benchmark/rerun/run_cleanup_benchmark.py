@@ -54,14 +54,14 @@ def _generate_entries(entries: int) -> tuple[list[str], set[tuple[str, str]]]:
 
 def _regex_cleanup(
     root_entries: list[str],
-    keep_pairs: set[tuple[str, str]],
+    keep_keys: set[str],
 ) -> set[str]:
     paths_to_delete: set[str] = set()
     for rel_path in root_entries:
         match = _REGEX_PATTERN.fullmatch(rel_path)
         if match is None:
             continue
-        if (match.group("shard_id"), match.group("worker_id")) not in keep_pairs:
+        if f"{match.group('shard_id')}__w{match.group('worker_id')}" not in keep_keys:
             paths_to_delete.add(rel_path)
     return paths_to_delete
 
@@ -69,15 +69,15 @@ def _regex_cleanup(
 def _benchmark(
     *,
     mode: str,
-    fn: Callable[[list[str], set[tuple[str, str]]], set[str]],
+    fn: Callable[[list[str], set[str]], set[str]],
     root_entries: list[str],
-    keep_pairs: set[tuple[str, str]],
+    keep_keys: set[str],
     iterations: int,
 ) -> CaseResult:
     start = perf_counter_ns()
     deleted_entries = 0
     for _ in range(iterations):
-        deleted_entries = len(fn(root_entries, keep_pairs))
+        deleted_entries = len(fn(root_entries, keep_keys))
     return CaseResult(
         mode=mode,
         wall_time_ns=perf_counter_ns() - start,
@@ -101,19 +101,20 @@ def main() -> int:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     root_entries, keep_pairs = _generate_entries(args.entries)
+    keep_keys = {f"{shard_id}__w{worker_id}" for shard_id, worker_id in keep_pairs}
     results = [
         _benchmark(
             mode="regex",
             fn=_regex_cleanup,
             root_entries=root_entries,
-            keep_pairs=keep_pairs,
+            keep_keys=keep_keys,
             iterations=args.iterations,
         ),
         _benchmark(
             mode="fixed-slice",
             fn=_cleanup_default_root_entries,
             root_entries=root_entries,
-            keep_pairs=keep_pairs,
+            keep_keys=keep_keys,
             iterations=args.iterations,
         ),
     ]
