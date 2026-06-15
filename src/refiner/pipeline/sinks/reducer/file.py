@@ -135,14 +135,7 @@ class FileCleanupReducerSink(BaseSink):
                 root_entries = self.output.ls(listing_prefix, detail=False)
             except (FileNotFoundError, NotADirectoryError):
                 root_entries = []
-            paths_to_delete: set[str] = set()
-            for rel_path in root_entries:
-                if len(rel_path) != 27 or rel_path[12:15] != "__w":
-                    continue
-                shard_id = rel_path[:12]
-                worker_id = rel_path[15:]
-                if (shard_id, worker_id) not in keep_pairs:
-                    paths_to_delete.add(rel_path)
+            paths_to_delete = _cleanup_default_root_entries(root_entries, keep_pairs)
             for path in sorted(paths_to_delete):
                 try:
                     self.output.rm(path, recursive=True)
@@ -201,3 +194,18 @@ class FileCleanupReducerSink(BaseSink):
 
 
 __all__ = ["FileCleanupReducerSink"]
+
+
+def _cleanup_default_root_entries(
+    root_entries: list[str],
+    keep_pairs: set[tuple[str, str]],
+) -> set[str]:
+    paths_to_delete: set[str] = set()
+    for rel_path in root_entries:
+        if len(rel_path) != 27 or rel_path[12:15] != "__w":
+            continue
+        shard_id = rel_path[:12]
+        worker_id = rel_path[15:]
+        if (shard_id, worker_id) not in keep_pairs:
+            paths_to_delete.add(rel_path)
+    return paths_to_delete

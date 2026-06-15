@@ -16,6 +16,7 @@ from refiner.pipeline import from_items
 from refiner.pipeline.sinks import JsonlSink
 from refiner.pipeline.sinks.parquet import ParquetSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
+from refiner.pipeline.sinks.reducer.file import _cleanup_default_root_entries
 from refiner.worker.context import set_active_run_context
 from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 from refiner.worker.context import worker_token_for
@@ -1009,6 +1010,19 @@ def test_file_cleanup_reducer_lists_root_once_for_default_rrd_layout(
     assert len(ls_calls) == 1
     assert winner_dir.exists()
     assert not loser_dir.exists()
+
+
+def test_cleanup_default_root_entries_returns_only_losers() -> None:
+    root_entries = [
+        "0123456789ab__w111111111111",
+        "0123456789ab__w222222222222",
+        "not-a-match",
+    ]
+    keep_pairs = {("0123456789ab", "111111111111")}
+
+    assert _cleanup_default_root_entries(root_entries, keep_pairs) == {
+        "0123456789ab__w222222222222"
+    }
 
 
 def test_file_cleanup_reducer_removes_non_finalized_nested_directories(

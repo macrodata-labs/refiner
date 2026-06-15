@@ -11,6 +11,8 @@ This folder contains cloud benchmark harnesses for Rerun RRD workloads.
   profile into the Macrodata workspace secret environment used by cloud jobs.
 - `run_local_benchmark.py`: runs a local single-recording RRD copy benchmark
   that compares the direct byte-copy path with the chunk-selection fallback.
+- `run_cleanup_benchmark.py`: runs a local benchmark for the default-root RRD
+  cleanup matcher used by `FileCleanupReducerSink`.
 
 The default inputs are the ten base RRD files from:
 
@@ -74,6 +76,12 @@ For a local smoke benchmark that does not require cloud credentials:
 
 ```bash
 uv run python benchmark/rerun/run_local_benchmark.py
+```
+
+For the reducer cleanup matcher benchmark:
+
+```bash
+uv run python benchmark/rerun/run_cleanup_benchmark.py
 ```
 
 The local benchmark generates a synthetic single-recording RRD, then measures
