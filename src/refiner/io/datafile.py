@@ -146,6 +146,17 @@ class DataFile:
         ):
             return
 
+        if self.is_local and callable(getattr(target.fs, "put_file", None)):
+            target.fs.makedirs(target.fs._parent(target.path), exist_ok=True)
+            try:
+                target.fs.put_file(self.abs_path(), target.path)
+                return
+            except Exception:
+                try:
+                    target.fs.rm(target.path)
+                except FileNotFoundError:
+                    pass
+
         # Same-filesystem copies are usually server-side for object stores; fall back to
         # streaming only when the backend cannot copy directly.
         if self.fs is target.fs and callable(getattr(target.fs, "copy", None)):
