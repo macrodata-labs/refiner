@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -235,7 +236,7 @@ class RerunReader(BaseReader):
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
-        batch: list[tuple[DataFile, Path, LocalRrd]] = []
+        batch: list[tuple[DataFile, LocalRrd]] = []
         batch_bytes = 0
         for part in descriptor.parts:
             source = self.fileset.resolve_file(part.source_index, part.path)
@@ -248,38 +249,35 @@ class RerunReader(BaseReader):
                 batch = []
                 batch_bytes = 0
             local_source = LocalRrd(source)
-            try:
-                batch.append((source, local_source.open(), local_source))
-            except BaseException:
-                local_source.close()
-                raise
+            batch.append((source, local_source))
             batch_bytes += part_size
         if batch:
             yield from self._read_staged_batch(batch)
 
     def _read_staged_batch(
         self,
-        local_files: Sequence[tuple[DataFile, Path, LocalRrd]],
+        local_files: Sequence[tuple[DataFile, LocalRrd]],
     ) -> Iterator[SourceUnit]:
+        opened_files = _open_local_sources(local_files)
         if self._retain_batch_local_sources():
             try:
-                units = list(self._read_files(local_files))
+                units = list(self._read_files(opened_files))
             except BaseException:
-                _close_local_sources(local_files)
+                _close_local_sources(opened_files)
                 raise
             if not units:
-                _close_local_sources(local_files)
+                _close_local_sources(opened_files)
                 return
             try:
                 yield cast(list[Row], units)
             finally:
-                _close_local_sources(local_files)
+                _close_local_sources(opened_files)
             return
 
         try:
-            yield from self._read_files(local_files)
+            yield from self._read_files(opened_files)
         finally:
-            _close_local_sources(local_files)
+            _close_local_sources(opened_files)
 
     def _read_files(
         self,
@@ -664,6 +662,36 @@ def _close_local_sources(
 ) -> None:
     for _source, _local_path, local_source in local_files:
         local_source.close()
+
+
+def _open_local_sources(
+    local_files: Sequence[tuple[DataFile, LocalRrd]],
+) -> list[tuple[DataFile, Path, LocalRrd]]:
+    if len(local_files) <= 1:
+        return [
+            (source, local_source.open(), local_source)
+            for source, local_source in local_files
+        ]
+
+    local_sources = [local_source for _source, local_source in local_files]
+    max_workers = min(8, len(local_files))
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            local_paths = list(pool.map(_open_local_source, local_sources))
+    except BaseException:
+        for local_source in local_sources:
+            local_source.close()
+        raise
+    return [
+        (source, local_path, local_source)
+        for (source, local_source), local_path in zip(
+            local_files, local_paths, strict=True
+        )
+    ]
+
+
+def _open_local_source(local_source: LocalRrd) -> Path:
+    return local_source.open()
 
 
 def _recording_entries(local_path: Path) -> list[Any]:
