@@ -37,7 +37,11 @@ class RerunSink(BaseSink):
     ) -> None:
         template_fields = _validate_filename_template(filename_template)
         self.output = DataFolder.resolve(output)
+        self._local_output_root = (
+            Path(self.output.abs_path()) if self.output.is_local else None
+        )
         self.filename_template = filename_template
+        self._uses_row_index = "row_index" in template_fields
         self._uses_segment_id = "segment_id" in template_fields
         self._render_relpath = _compile_relpath_renderer(
             filename_template,
@@ -56,7 +60,11 @@ class RerunSink(BaseSink):
         count = 0
         worker_id = get_active_worker_token()
         row_index = self._row_indices.get(shard_id, 0)
-        written_relpaths = self._written_relpaths.setdefault(shard_id, set())
+        written_relpaths = (
+            None
+            if self._uses_row_index
+            else self._written_relpaths.setdefault(shard_id, set())
+        )
         for row in block:
             recording = _recording_from_row(row)
             relpath = self._render_relpath(
@@ -65,16 +73,17 @@ class RerunSink(BaseSink):
                 row_index=row_index,
                 segment_id=recording.segment_id,
             )
-            if relpath in written_relpaths:
-                raise ValueError(
-                    "write_rerun filename_template rendered duplicate output path "
-                    f"{relpath!r}; include {{row_index}} or another unique row field"
-                )
+            if written_relpaths is not None:
+                if relpath in written_relpaths:
+                    raise ValueError(
+                        "write_rerun filename_template rendered duplicate output path "
+                        f"{relpath!r}; include {{row_index}} or another unique row field"
+                    )
+                written_relpaths.add(relpath)
             self._write_recording(recording, relpath)
-            written_relpaths.add(relpath)
             row_index += 1
-            self._row_indices[shard_id] = row_index
             count += 1
+        self._row_indices[shard_id] = row_index
         if count:
             log_throughput("files_written", count, shard_id=shard_id, unit="files")
         return count
@@ -95,13 +104,14 @@ class RerunSink(BaseSink):
                 write_footer=self.write_footer,
             )
 
-        target = self.output.file(relpath)
-        if target.is_local:
-            local_path = Path(target.abs_path())
+        local_output_root = self._local_output_root
+        if local_output_root is not None:
+            local_path = local_output_root / relpath
             self._ensure_local_parent(local_path.parent)
             write_local(local_path)
             return
 
+        target = self.output.file(relpath)
         with tempfile.TemporaryDirectory(prefix="refiner-rerun-write-") as tmpdir:
             local_path = Path(tmpdir) / os.path.basename(relpath)
             write_local(local_path)
@@ -109,7 +119,8 @@ class RerunSink(BaseSink):
 
     def on_shard_complete(self, shard_id: str) -> None:
         self._row_indices.pop(shard_id, None)
-        self._written_relpaths.pop(shard_id, None)
+        if not self._uses_row_index:
+            self._written_relpaths.pop(shard_id, None)
 
     def describe(self) -> tuple[str, str, dict[str, object]]:
         return (

@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter_ns
 from typing import Iterator, cast
 
 import numpy as np
@@ -21,10 +21,14 @@ DEFAULT_ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
 @dataclass(slots=True)
 class CaseResult:
     mode: str
-    wall_time_s: float
+    wall_time_ns: int
     output_size_bytes: int
     output_file_count: int
     output_matches_input: bool
+
+    @property
+    def wall_time_s(self) -> float:
+        return self.wall_time_ns / 1_000_000_000
 
 
 def _parse_args() -> argparse.Namespace:
@@ -117,7 +121,7 @@ def _run_copy_case(
     )
     block = cast(list[Row], source_row)
     sink = rerun_sink.RerunSink(str(output))
-    start = perf_counter()
+    start = perf_counter_ns()
     if force_fallback:
         with _force_chunk_fallback():
             for _ in range(writes_per_iteration):
@@ -126,7 +130,7 @@ def _run_copy_case(
         for _ in range(writes_per_iteration):
             sink.write_shard_block("shard-a", block)
     sink.on_shard_complete("shard-a")
-    wall_time_s = perf_counter() - start
+    wall_time_ns = perf_counter_ns() - start
     written = sorted(output.glob("**/*.rrd"))
     if len(written) != writes_per_iteration:
         raise RuntimeError(
@@ -134,7 +138,7 @@ def _run_copy_case(
         )
     return CaseResult(
         mode="chunk-fallback" if force_fallback else "direct-copy",
-        wall_time_s=wall_time_s,
+        wall_time_ns=wall_time_ns,
         output_size_bytes=sum(path.stat().st_size for path in written),
         output_file_count=len(written),
         output_matches_input=all(
@@ -171,7 +175,7 @@ def main() -> int:
             results.append(result)
             print(
                 f"{mode_name} iteration {iteration}: "
-                f"{result.wall_time_s:.3f}s output={result.output_size_bytes}"
+                f"{result.wall_time_s:.6f}s output={result.output_size_bytes}"
             )
 
     summary = {
@@ -201,9 +205,9 @@ def main() -> int:
     if direct and fallback:
         print(
             "direct-copy avg="
-            f"{sum(direct) / len(direct):.3f}s "
+            f"{sum(direct) / len(direct):.6f}s "
             "chunk-fallback avg="
-            f"{sum(fallback) / len(fallback):.3f}s"
+            f"{sum(fallback) / len(fallback):.6f}s"
         )
     return 0
 
