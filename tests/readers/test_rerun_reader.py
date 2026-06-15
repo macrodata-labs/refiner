@@ -741,6 +741,50 @@ def test_write_rerun_reuses_reader_staged_remote_source(
     assert copied["rerun"].tables["frame"].num_rows == 3
 
 
+def test_write_rerun_copies_source_file_directly_for_raw_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    _tiny_rrd(source)
+
+    source_iter = mdr.read_rerun(
+        str(source),
+        materialize_tables=False,
+    ).source.read()
+    block = cast(list[Row], next(source_iter))
+
+    output_fs = fsspec.filesystem("memory")
+    output = ("bucket/out-raw-copy-direct", output_fs)
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun.LocalRrd",
+        lambda *args, **kwargs: pytest.fail(
+            "raw source chunks should not stage a local RRD copy"
+        ),
+    )
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun.tempfile.TemporaryDirectory",
+        lambda *args, **kwargs: pytest.fail(
+            "raw source chunks should copy straight to the final target"
+        ),
+    )
+
+    sink = RerunSink(output)
+    sink.write_shard_block("shard-a", block)
+    sink.on_shard_complete("shard-a")
+    with pytest.raises(StopIteration):
+        next(source_iter)
+
+    written = [
+        path
+        for path in output_fs.find("bucket/out-raw-copy-direct")
+        if path.endswith(".rrd")
+    ]
+    assert len(written) == 1
+    assert output_fs.cat(written[0]) == source.read_bytes()
+
+
 def test_write_rerun_does_not_direct_copy_when_source_may_have_multiple_recordings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

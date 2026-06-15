@@ -81,6 +81,10 @@ the direct-copy branch against the chunk-selection fallback on the same source
 file. Use `--writes-per-iteration` to repeat the same shard write within one
 timed run when you want to amplify per-row writer overhead.
 
+For cloud runs, the summary also records `stage_duration_s`, the sum of stage
+durations. That is often a better performance signal than wall time because it
+excludes queueing noise from the cloud scheduler.
+
 Artifacts are written under `benchmark/rerun/artifacts/` by default:
 
 - one per-case result JSON

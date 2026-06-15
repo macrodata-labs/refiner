@@ -94,6 +94,27 @@ def _stage_means(results: Sequence[Mapping[str, Any]]) -> dict[str, float | None
     return {stage: _mean(values) for stage, values in durations.items()}
 
 
+def _stage_total(results: Sequence[Mapping[str, Any]]) -> float | None:
+    values = []
+    for result in results:
+        total = result.get("stage_duration_s")
+        if isinstance(total, (int, float)):
+            values.append(float(total))
+            continue
+        stages = result.get("stage_results")
+        if not isinstance(stages, list):
+            continue
+        durations = [
+            float(stage["duration_s"])
+            for stage in stages
+            if isinstance(stage, dict)
+            and isinstance(stage.get("duration_s"), (int, float))
+        ]
+        if durations:
+            values.append(sum(durations))
+    return _mean(values)
+
+
 def _delta(
     baseline: float | None,
     candidate: float | None,
@@ -124,7 +145,12 @@ def _comparison(
         candidate_wall = _mean(
             result.get("cloud_wall_time_s") for result in candidate_completed
         )
+        baseline_stage_total = _stage_total(baseline_completed)
+        candidate_stage_total = _stage_total(candidate_completed)
         wall_delta_s, wall_delta_pct = _delta(baseline_wall, candidate_wall)
+        stage_total_delta_s, stage_total_delta_pct = _delta(
+            baseline_stage_total, candidate_stage_total
+        )
         baseline_stages = _stage_means(baseline_completed)
         candidate_stages = _stage_means(candidate_completed)
         stage_rows = []
@@ -164,6 +190,10 @@ def _comparison(
                 "candidate_wall_time_s": candidate_wall,
                 "delta_s": wall_delta_s,
                 "delta_pct": wall_delta_pct,
+                "baseline_stage_total_s": baseline_stage_total,
+                "candidate_stage_total_s": candidate_stage_total,
+                "stage_total_delta_s": stage_total_delta_s,
+                "stage_total_delta_pct": stage_total_delta_pct,
                 "stages": stage_rows,
             }
         )
@@ -218,6 +248,7 @@ def _print_human(comparison: Mapping[str, Any]) -> None:
             "candidate_s",
             "delta_s",
             "delta_pct",
+            "stage_total_s",
         )
     ]
     for case in comparison["cases"]:
@@ -232,9 +263,13 @@ def _print_human(comparison: Mapping[str, Any]) -> None:
                 _format_number(case["candidate_wall_time_s"]),
                 _format_number(case["delta_s"]),
                 _format_number(case["delta_pct"], suffix="%"),
+                f"{_format_number(case['baseline_stage_total_s'])} -> "
+                f"{_format_number(case['candidate_stage_total_s'])}",
             )
         )
     _print_table(rows)
+    print()
+    print("stage_total = sum of stage durations; wall_time = cloud job elapsed time")
 
     for case in comparison["cases"]:
         stages = case["stages"]

@@ -66,6 +66,7 @@ class CaseResult:
     output_root: str
     cloud_wall_time_s: float | None
     queue_time_s: float | None
+    stage_duration_s: float | None
     stage_results: list[StageResult]
     output_file_count: int | None
     output_size_bytes: int | None
@@ -402,6 +403,17 @@ def _stage_results(client: MacrodataClient, job: dict[str, Any]) -> list[StageRe
     return out
 
 
+def _stage_duration_s(stage_results: Sequence[StageResult]) -> float | None:
+    durations = [
+        stage.duration_s
+        for stage in stage_results
+        if isinstance(stage.duration_s, (int, float))
+    ]
+    if not durations:
+        return None
+    return float(sum(durations))
+
+
 def _optional_int(value: Any) -> int | None:
     return int(value) if isinstance(value, (int, float)) else None
 
@@ -502,6 +514,7 @@ def _run_case(
     output_error: str | None = None
     if not args.skip_output_inspection:
         output_file_count, output_size_bytes, output_error = _inspect_output(output)
+    stage_results = _stage_results(client, job)
 
     return CaseResult(
         case=case,
@@ -517,7 +530,8 @@ def _run_case(
         output_root=output,
         cloud_wall_time_s=_duration_s(job.get("startedAt"), job.get("endedAt")),
         queue_time_s=_duration_s(job.get("createdAt"), job.get("startedAt")),
-        stage_results=_stage_results(client, job),
+        stage_duration_s=_stage_duration_s(stage_results),
+        stage_results=stage_results,
         output_file_count=output_file_count,
         output_size_bytes=output_size_bytes,
         output_inspection_error=output_error,

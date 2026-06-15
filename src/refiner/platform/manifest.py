@@ -226,6 +226,22 @@ def _resolve_local_repo_git_sha() -> str | None:
 
 
 def refiner_ref_exists_on_remote(ref: str) -> bool:
+    try:
+        subprocess.run(
+            [
+                "gh",
+                "api",
+                f"repos/macrodata-labs/refiner/commits/{ref}",
+                "--silent",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
     request = urllib_request.Request(
         f"https://api.github.com/repos/macrodata-labs/refiner/commits/{ref}"
     )

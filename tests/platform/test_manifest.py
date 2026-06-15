@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from email.message import Message
 from importlib import metadata as importlib_metadata
 from pathlib import Path
+from typing import cast
 from urllib import error as urllib_error
 
 import pytest
@@ -461,6 +462,10 @@ def test_build_run_manifest_environment_does_not_include_rundir_by_default(
 
 
 def test_refiner_ref_exists_on_remote_returns_true_on_success(monkeypatch) -> None:
+    def _raise_no_gh(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("refiner.platform.manifest.subprocess.run", _raise_no_gh)
     monkeypatch.setattr(
         "refiner.platform.manifest.urllib_request.urlopen",
         lambda request: nullcontext(object()),
@@ -470,6 +475,11 @@ def test_refiner_ref_exists_on_remote_returns_true_on_success(monkeypatch) -> No
 
 
 def test_refiner_ref_exists_on_remote_returns_false_on_404(monkeypatch) -> None:
+    def _raise_no_gh(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("refiner.platform.manifest.subprocess.run", _raise_no_gh)
+
     def _raise_404(request):
         raise urllib_error.HTTPError(
             request.full_url,
@@ -485,6 +495,29 @@ def test_refiner_ref_exists_on_remote_returns_false_on_404(monkeypatch) -> None:
     )
 
     assert refiner_ref_exists_on_remote("abc123") is False
+
+
+def test_refiner_ref_exists_on_remote_prefers_gh_api(monkeypatch) -> None:
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def _fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return None
+
+    monkeypatch.setattr("refiner.platform.manifest.subprocess.run", _fake_run)
+    monkeypatch.setattr(
+        "refiner.platform.manifest.urllib_request.urlopen",
+        lambda request: pytest.fail("urllib fallback should not be used when gh works"),
+    )
+
+    assert refiner_ref_exists_on_remote("abc123") is True
+    assert calls
+    command = cast(list[str], calls[0][0][0])
+    assert command[:3] == [
+        "gh",
+        "api",
+        "repos/macrodata-labs/refiner/commits/abc123",
+    ]
 
 
 def test_manifest_prefers_macrodata_refiner_distribution(monkeypatch) -> None:
