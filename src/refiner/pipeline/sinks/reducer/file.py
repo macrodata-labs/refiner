@@ -137,13 +137,11 @@ class FileCleanupReducerSink(BaseSink):
                 root_entries = []
             paths_to_delete: set[str] = set()
             for rel_path in root_entries:
-                match = self._output_path_patterns[0].fullmatch(rel_path)
-                if match is None:
+                name = rel_path.rstrip("/")
+                shard_id, sep, worker_id = name.partition("__w")
+                if not sep or len(shard_id) != 12 or len(worker_id) != 12:
                     continue
-                if (
-                    match.group("shard_id"),
-                    match.group("worker_id"),
-                ) not in keep_pairs:
+                if (shard_id, worker_id) not in keep_pairs:
                     paths_to_delete.add(rel_path)
             for path in sorted(paths_to_delete):
                 try:
