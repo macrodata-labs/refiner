@@ -290,8 +290,12 @@ class RerunReader(BaseReader):
                 dist="rerun",
             )
             server_fallback: list[tuple[DataFile, Path, LocalRrd]] = []
-            for source, local_path, local_source in local_files:
-                store_entries = _recording_entries(local_path)
+            for (
+                source,
+                local_path,
+                local_source,
+                store_entries,
+            ) in _scan_recording_entries(local_files):
                 rows = self._read_metadata_only_recording_rows(
                     source,
                     local_source,
@@ -692,6 +696,27 @@ def _open_local_sources(
 
 def _open_local_source(local_source: LocalRrd) -> Path:
     return local_source.open()
+
+
+def _scan_recording_entries(
+    local_files: Sequence[tuple[DataFile, Path, LocalRrd]],
+) -> list[tuple[DataFile, Path, LocalRrd, list[Any]]]:
+    if len(local_files) <= 1:
+        return [
+            (source, local_path, local_source, _recording_entries(local_path))
+            for source, local_path, local_source in local_files
+        ]
+
+    local_paths = [local_path for _source, local_path, _local_source in local_files]
+    max_workers = min(8, len(local_files))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        store_entries = list(pool.map(_recording_entries, local_paths))
+    return [
+        (source, local_path, local_source, store_entry)
+        for (source, local_path, local_source), store_entry in zip(
+            local_files, store_entries, strict=True
+        )
+    ]
 
 
 def _recording_entries(local_path: Path) -> list[Any]:
