@@ -248,6 +248,46 @@ def test_read_rerun_recording_can_skip_table_materialization(tmp_path: Path) -> 
     assert recording.use_source_chunks is False
 
 
+def test_read_rerun_recording_without_materialized_tables_scans_metadata_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    _tiny_rrd(rrd)
+    calls = 0
+
+    def fake_recording_entries(*args: Any, **kwargs: Any) -> list[Any]:
+        nonlocal calls
+        del args, kwargs
+        calls += 1
+        return [
+            type(
+                "Store",
+                (),
+                {"recording_id": "episode-a", "application_id": "refiner"},
+            )()
+        ]
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sources.readers.rerun._recording_entries",
+        fake_recording_entries,
+    )
+
+    row = cast(
+        Any,
+        next(
+            mdr.read_rerun(
+                str(rrd),
+                materialize_tables=False,
+            ).source.read()
+        ),
+    )
+
+    assert isinstance(row, list)
+    assert row[0]["episode_id"] == "episode-a"
+    assert calls == 1
+
+
 def test_read_rerun_rejects_ignored_mode_options(tmp_path: Path) -> None:
     rrd = tmp_path / "tiny.rrd"
     _tiny_rrd(rrd)

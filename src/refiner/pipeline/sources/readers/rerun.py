@@ -293,10 +293,11 @@ class RerunReader(BaseReader):
             )
             server_fallback: list[tuple[DataFile, Path, LocalRrd]] = []
             for source, local_path, local_source in local_files:
+                store_entries = _recording_entries(local_path)
                 rows = self._read_metadata_only_recording_rows(
                     source,
-                    local_path,
                     local_source,
+                    store_entries,
                 )
                 if rows:
                     yield from rows
@@ -342,12 +343,14 @@ class RerunReader(BaseReader):
         local_path: Path,
         local_source: LocalRrd,
         dataset: Any,
+        store_entries: Sequence[Any] | None = None,
     ) -> Iterator[SourceUnit]:
-        store_entries = (
-            _recording_entries(local_path)
-            if self.output == "recording" or self.include_recording
-            else []
-        )
+        if store_entries is None:
+            store_entries = (
+                _recording_entries(local_path)
+                if self.output == "recording" or self.include_recording
+                else []
+            )
         source_recording_count = len(store_entries) if store_entries else None
         entries_by_recording_id = {entry.recording_id: entry for entry in store_entries}
         timelines = self.timelines
@@ -404,11 +407,10 @@ class RerunReader(BaseReader):
     def _read_metadata_only_recording_rows(
         self,
         source: DataFile,
-        local_path: Path,
         local_source: LocalRrd,
+        store_entries: Sequence[Any],
     ) -> list[DictRow]:
         rows = []
-        store_entries = _recording_entries(local_path)
         source_recording_count = len(store_entries)
         for store in store_entries:
             recording_id = str(store.recording_id)
