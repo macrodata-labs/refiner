@@ -54,6 +54,9 @@ For raw RRD copy workflows that immediately call `write_rerun`, set
 `materialize_tables=False` with `output="recording"`. The row still carries the
 source recording metadata needed by the writer's chunk-copy path, but skips the
 Arrow timeline/static tables that downstream code will not inspect.
+Use this for pure copies; timeline-filtered writes should keep
+`materialize_tables=True` so the writer can emit exactly the selected timeline
+tables.
 
 ## Robotics rows
 

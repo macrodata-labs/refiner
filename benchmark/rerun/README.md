@@ -37,6 +37,8 @@ look better.
 - Macrodata CLI auth must be configured.
 - Workspace secrets in the selected environment must include AWS credentials
   for the source/output S3 bucket. The default environment is `researcher`.
+  Pass `--aws-profile` explicitly when refreshing those credentials; the helper
+  intentionally does not fall back to the AWS default profile.
 
 If local AWS credentials are valid, refresh the cloud secret environment without
 printing credential values:

@@ -18,13 +18,12 @@ from refiner.inference.providers.openai import (
     _OpenAIResponsesClient,
 )
 from refiner.inference.types import InferenceProvider
+from refiner.pipeline.builtins import REFINER_BUILTIN_CALL_ATTR, builtin_call_spec
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.services import VLLMRuntimeServiceBinding
 from refiner.worker.context import get_active_service_manager
 from refiner.worker.metrics.api import register_gauge
-
-_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 RequestFn: TypeAlias = Callable[[Mapping[str, Any]], Awaitable[Any]]
 MapFn: TypeAlias = Callable[[Row, RequestFn], Awaitable[MapResult] | MapResult]
@@ -168,27 +167,30 @@ def inference_map(
     }
     if defaults_key is not None:
         args[defaults_key] = dict(defaults or {})
-    builtin = getattr(fn, _REFINER_BUILTIN_CALL_ATTR, None)
+    builtin = builtin_call_spec(fn)
     builtin_name = name
     builtin_args = args
-    if isinstance(builtin, dict):
-        candidate_name = builtin.get("name")
-        candidate_args = builtin.get("args")
-        if isinstance(candidate_name, str) and candidate_name:
-            builtin_name = candidate_name
-        if isinstance(candidate_args, dict):
-            builtin_args = candidate_args
+    builtin_services = []
+    builtin_refiner_extras: tuple[str, ...] = ()
+    if builtin is not None:
+        builtin_name = builtin.name
+        builtin_args = builtin.args
+        builtin_services.extend(builtin.services)
+        builtin_refiner_extras = builtin.refiner_extras
+    if service is not None:
+        builtin_services.append(service.to_spec())
     setattr(
         _wrapped,
-        _REFINER_BUILTIN_CALL_ATTR,
+        REFINER_BUILTIN_CALL_ATTR,
         {
             "name": builtin_name,
             "args": builtin_args,
-            "services": [] if service is None else [service.to_spec()],
+            "services": builtin_services,
+            "refiner_extras": builtin_refiner_extras,
         },
     )
     setattr(_wrapped, "aclose", _close)
     return _wrapped
 
 
-__all__ = ["_REFINER_BUILTIN_CALL_ATTR", "inference_map"]
+__all__ = ["REFINER_BUILTIN_CALL_ATTR", "inference_map"]

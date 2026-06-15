@@ -14,14 +14,14 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from packaging.requirements import InvalidRequirement, Requirement
+from refiner.pipeline.builtins import iter_pipeline_builtin_specs
+
 if TYPE_CHECKING:
     from refiner.pipeline.planning import PlannedStage
 
-from packaging.requirements import InvalidRequirement, Requirement
-
 _REDACTION_PLACEHOLDER = "REDACTED_SECRET"
 _NORMALIZED_DEPENDENCY_SEPARATOR_PATTERN = re.compile(r"[-_.]+")
-_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 
 def _redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:
@@ -252,16 +252,8 @@ def build_run_manifest(
     for stage in pipeline_stages or ():
         pipeline = stage.pipeline
         pipeline_refiner_extras.update(pipeline.source.required_refiner_extras())
-        for step in pipeline.pipeline_steps:
-            for candidate in getattr(step, "ops", (step,)):
-                for attr in ("fn", "predicate"):
-                    spec = getattr(
-                        getattr(candidate, attr, None), _REFINER_BUILTIN_CALL_ATTR, None
-                    )
-                    if isinstance(spec, dict):
-                        declared = spec.get("refiner_extras", ())
-                        if isinstance(declared, tuple):
-                            pipeline_refiner_extras.update(declared)
+        for spec in iter_pipeline_builtin_specs(pipeline):
+            pipeline_refiner_extras.update(spec.refiner_extras)
         if pipeline.sink is not None:
             pipeline_refiner_extras.update(pipeline.sink.required_refiner_extras())
     if isinstance(refiner_extras, str):

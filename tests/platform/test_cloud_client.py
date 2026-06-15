@@ -5,6 +5,7 @@ from typing import cast
 
 import httpx
 import msgspec
+import pytest
 
 from refiner.pipeline.resources import GPU
 from refiner.platform.client import (
@@ -135,6 +136,29 @@ def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -
         raise AssertionError("expected MacrodataApiError")
 
 
+def test_cloud_client_cloud_submit_job_does_not_retry_request_timeout(
+    monkeypatch,
+) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        del kwargs
+        calls += 1
+        raise MacrodataApiError(0, "read timed out")
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", sleeps.append)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    with pytest.raises(MacrodataApiError, match="read timed out"):
+        client.cloud_submit_job(request=_request())
+
+    assert calls == 1
+    assert sleeps == []
+
+
 def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -246,6 +270,29 @@ def test_cloud_client_creates_file_upload_urls(monkeypatch) -> None:
     assert response.files[0].expires_at is None
     assert response.files[0].required_headers is not None
     assert response.files[0].required_headers["x-amz-checksum-sha256"] == "checksum"
+
+
+def test_cloud_client_retries_file_upload_url_creation(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        del kwargs
+        calls += 1
+        if calls == 1:
+            raise MacrodataApiError(503, "try again")
+        return {"files": []}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", sleeps.append)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    response = client.cloud_create_file_upload_urls(files=[])
+
+    assert response.files == []
+    assert calls == 2
+    assert sleeps == [0.25]
 
 
 def test_cloud_file_upload_status_serializes_as_wire_literal() -> None:
@@ -381,3 +428,26 @@ def test_cloud_client_completes_cloud_files(monkeypatch) -> None:
     assert response.files[0].file_id == "00000000-0000-7000-8000-000000000123"
     assert response.files[0].uploaded_at == _TEST_TIMESTAMP
     assert response.files[0].expires_at is None
+
+
+def test_cloud_client_retries_cloud_file_completion(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        del kwargs
+        calls += 1
+        if calls == 1:
+            raise MacrodataApiError(429, "rate limited")
+        return {"files": []}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", sleeps.append)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    response = client.cloud_complete_files(files=[])
+
+    assert response.files == []
+    assert calls == 2
+    assert sleeps == [0.25]

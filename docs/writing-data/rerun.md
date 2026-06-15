@@ -47,7 +47,9 @@ Python.
 
 For pure copy jobs, use `read_rerun(..., materialize_tables=False)` before
 `write_rerun(...)` to skip timeline/static table materialization while keeping
-the raw source chunks available to the writer.
+the raw source chunks available to the writer. If the read applies explicit
+timeline filters, keep `materialize_tables=True`; metadata-only rows cannot
+project timelines exactly during raw chunk copying.
 
 If a `RerunRecording` has no source file, the writer falls back to table
 emission with `send_dataframe`. Static Rerun component columns are sent as

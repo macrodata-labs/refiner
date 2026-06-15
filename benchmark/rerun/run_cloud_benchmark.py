@@ -411,18 +411,24 @@ def _inspect_output(path: str) -> tuple[int | None, int | None, str | None]:
         fs, fs_path = url_to_fs(path)
         if not fs.exists(fs_path):
             return 0, 0, None
+        root_info = fs.info(fs_path)
+        if root_info.get("type") != "directory":
+            return 1, int(root_info.get("size", 0)), None
         total_size = 0
         total_files = 0
-        found = fs.find(fs_path, detail=True)
-        if isinstance(found, dict):
-            infos = found.values()
-        else:
-            infos = (fs.info(child) for child in fs.find(fs_path))
-        for info in infos:
-            if info.get("type") == "directory":
-                continue
-            total_files += 1
-            total_size += int(info.get("size", 0))
+        pending = [fs_path]
+        while pending:
+            current = pending.pop()
+            for info in fs.ls(current, detail=True):
+                child_type = info.get("type")
+                child_name = info.get("name") or info.get("Key")
+                if not isinstance(child_name, str):
+                    continue
+                if child_type == "directory":
+                    pending.append(child_name)
+                else:
+                    total_files += 1
+                    total_size += int(info.get("size", 0))
         return total_files, total_size, None
     except Exception as err:
         return None, None, str(err)

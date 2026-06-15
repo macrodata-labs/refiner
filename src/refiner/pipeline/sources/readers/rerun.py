@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import os
-import tempfile
-from contextlib import ExitStack
-from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
+import warnings
 
 import numpy as np
 import pyarrow as pa
@@ -15,7 +12,8 @@ from fsspec import AbstractFileSystem
 
 from refiner.io import DataFile
 from refiner.io.fileset import DataFileSetLike
-from refiner.pipeline.data.row import DictRow
+from refiner.pipeline._rerun_io import LocalRrd, RerunRecording
+from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.shard import FilePartsDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.base import SourceUnit
@@ -27,6 +25,7 @@ from refiner.pipeline.sources.readers.utils import (
 )
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameSequence
+from refiner.worker.context import logger
 
 RerunOutputMode = Literal["recording", "robotics"]
 
@@ -37,23 +36,50 @@ _ROBOTICS_ROW_COLUMNS = frozenset(
     {"episode_id", "rerun", "frames", "fps", "robot_type"}
 )
 _RECORDING_ROW_COLUMNS = frozenset({"episode_id", "rerun"})
+DEFAULT_RERUN_ACTION_PREFIX = "/action"
+DEFAULT_RERUN_STATE_PREFIX = "/observation/state"
+DEFAULT_RERUN_CAMERA_PREFIX = "/cam"
+# Amortize Rerun server startup for small files without staging an unbounded shard.
+_MAX_STAGED_RRD_BATCH_BYTES = 512 * 1024 * 1024
+_MAX_STAGED_RRD_BATCH_FILES = 16
 
 
-@dataclass(frozen=True, slots=True)
-class RerunRecording:
-    """Columnar Rerun recording data loaded from one RRD segment."""
-
-    segment_id: str
-    source_path: str
-    tables: Mapping[str, Tabular]
-    static: Tabular | None = None
-    source_file: DataFile | None = None
-    application_id: str | None = None
-    recording_id: str | None = None
-    contents: tuple[str, ...] | None = None
-    timelines: tuple[str, ...] | None = None
-    include_static: bool = True
-    use_source_chunks: bool = True
+def _reject_recording_robotics_options(
+    *,
+    primary_timeline: str | None,
+    action_prefix: str,
+    state_prefix: str,
+    camera_prefix: str,
+    actions: PathSelection | None,
+    states: PathSelection | None,
+    videos: PathSelection | None,
+    fps: float | None,
+    robot_type: str | None,
+) -> None:
+    invalid = []
+    if primary_timeline is not None:
+        invalid.append("primary_timeline")
+    if action_prefix != DEFAULT_RERUN_ACTION_PREFIX:
+        invalid.append("action_prefix")
+    if state_prefix != DEFAULT_RERUN_STATE_PREFIX:
+        invalid.append("state_prefix")
+    if camera_prefix != DEFAULT_RERUN_CAMERA_PREFIX:
+        invalid.append("camera_prefix")
+    if actions is not None:
+        invalid.append("actions")
+    if states is not None:
+        invalid.append("states")
+    if videos is not None:
+        invalid.append("videos")
+    if fps is not None:
+        invalid.append("fps")
+    if robot_type is not None:
+        invalid.append("robot_type")
+    if invalid:
+        raise ValueError(
+            "Rerun recording output does not use robotics options: "
+            + ", ".join(invalid)
+        )
 
 
 class RerunReader(BaseReader):
@@ -79,9 +105,9 @@ class RerunReader(BaseReader):
         materialize_tables: bool = True,
         include_recording: bool | None = None,
         fill_latest_at: bool = False,
-        action_prefix: str = "/action",
-        state_prefix: str = "/observation/state",
-        camera_prefix: str = "/cam",
+        action_prefix: str = DEFAULT_RERUN_ACTION_PREFIX,
+        state_prefix: str = DEFAULT_RERUN_STATE_PREFIX,
+        camera_prefix: str = DEFAULT_RERUN_CAMERA_PREFIX,
         actions: PathSelection | None = None,
         states: PathSelection | None = None,
         videos: PathSelection | None = None,
@@ -97,6 +123,18 @@ class RerunReader(BaseReader):
         if output == "recording" and include_recording is False:
             raise ValueError(
                 "include_recording=False is only supported for robotics output"
+            )
+        if output == "recording":
+            _reject_recording_robotics_options(
+                primary_timeline=primary_timeline,
+                action_prefix=action_prefix,
+                state_prefix=state_prefix,
+                camera_prefix=camera_prefix,
+                actions=actions,
+                states=states,
+                videos=videos,
+                fps=fps,
+                robot_type=robot_type,
             )
         if fps is not None:
             fps = float(fps)
@@ -119,6 +157,7 @@ class RerunReader(BaseReader):
         self.primary_timeline = primary_timeline
         self.include_static = include_static
         self.materialize_tables = materialize_tables
+        self.use_source_chunks = self.timelines is None
         self.include_recording = (
             output == "recording" if include_recording is None else include_recording
         )
@@ -171,36 +210,80 @@ class RerunReader(BaseReader):
                 "output": self.output,
                 "contents": self.contents,
                 "timelines": self.timelines,
-                "primary_timeline": self.primary_timeline,
                 "include_static": self.include_static,
                 "materialize_tables": self.materialize_tables,
                 "include_recording": self.include_recording,
                 "fill_latest_at": self.fill_latest_at,
-                "action_prefix": self.action_prefix,
-                "state_prefix": self.state_prefix,
-                "camera_prefix": self.camera_prefix,
-                "actions": dict(self.actions) if self.actions_explicit else None,
-                "states": dict(self.states) if self.states_explicit else None,
-                "videos": dict(self.videos) if self.videos_explicit else None,
-                "fps": self.fps,
-                "robot_type": self.robot_type,
             }
         )
+        if self.output == "robotics":
+            description.update(
+                {
+                    "primary_timeline": self.primary_timeline,
+                    "action_prefix": self.action_prefix,
+                    "state_prefix": self.state_prefix,
+                    "camera_prefix": self.camera_prefix,
+                    "actions": dict(self.actions) if self.actions_explicit else None,
+                    "states": dict(self.states) if self.states_explicit else None,
+                    "videos": dict(self.videos) if self.videos_explicit else None,
+                    "fps": self.fps,
+                    "robot_type": self.robot_type,
+                }
+            )
         return description
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
-        with ExitStack() as stack:
-            local_files = []
-            for part in descriptor.parts:
-                source = self.fileset.resolve_file(part.source_index, part.path)
-                local_files.append((source, stack.enter_context(_local_rrd(source))))
+        batch: list[tuple[DataFile, Path, LocalRrd]] = []
+        batch_bytes = 0
+        for part in descriptor.parts:
+            source = self.fileset.resolve_file(part.source_index, part.path)
+            part_size = max(0, self.fileset.size(part.source_index, part.path))
+            if batch and (
+                len(batch) >= _MAX_STAGED_RRD_BATCH_FILES
+                or batch_bytes + part_size > _MAX_STAGED_RRD_BATCH_BYTES
+            ):
+                yield from self._read_staged_batch(batch)
+                batch = []
+                batch_bytes = 0
+            local_source = LocalRrd(source)
+            try:
+                batch.append((source, local_source.open(), local_source))
+            except BaseException:
+                local_source.close()
+                raise
+            batch_bytes += part_size
+        if batch:
+            yield from self._read_staged_batch(batch)
+
+    def _read_staged_batch(
+        self,
+        local_files: Sequence[tuple[DataFile, Path, LocalRrd]],
+    ) -> Iterator[SourceUnit]:
+        if self._retain_batch_local_sources():
+            try:
+                units = list(self._read_files(local_files))
+            except BaseException:
+                _close_local_sources(local_files)
+                raise
+            if not units:
+                _close_local_sources(local_files)
+                return
+            try:
+                yield cast(list[Row], units)
+            finally:
+                _close_local_sources(local_files)
+            return
+
+        try:
             yield from self._read_files(local_files)
+        finally:
+            _close_local_sources(local_files)
 
     def _read_files(
         self,
-        local_files: Sequence[tuple[DataFile, Path]],
+        local_files: Sequence[tuple[DataFile, Path, LocalRrd]],
     ) -> Iterator[SourceUnit]:
         if self.output == "recording" and not self.materialize_tables:
             check_required_dependencies(
@@ -208,13 +291,17 @@ class RerunReader(BaseReader):
                 [("rerun", "rerun-sdk")],
                 dist="rerun",
             )
-            server_fallback: list[tuple[DataFile, Path]] = []
-            for source, local_path in local_files:
-                rows = self._read_metadata_only_recording_rows(source, local_path)
+            server_fallback: list[tuple[DataFile, Path, LocalRrd]] = []
+            for source, local_path, local_source in local_files:
+                rows = self._read_metadata_only_recording_rows(
+                    source,
+                    local_path,
+                    local_source,
+                )
                 if rows:
                     yield from rows
                 else:
-                    server_fallback.append((source, local_path))
+                    server_fallback.append((source, local_path, local_source))
             if server_fallback:
                 yield from self._read_files_with_server(server_fallback)
             return
@@ -223,7 +310,7 @@ class RerunReader(BaseReader):
 
     def _read_files_with_server(
         self,
-        local_files: Sequence[tuple[DataFile, Path]],
+        local_files: Sequence[tuple[DataFile, Path, LocalRrd]],
     ) -> Iterator[SourceUnit]:
         check_required_dependencies(
             "read_rerun",
@@ -234,20 +321,26 @@ class RerunReader(BaseReader):
 
         datasets = {
             f"recording_{index}": (str(local_path),)
-            for index, (_source, local_path) in enumerate(local_files)
+            for index, (_source, local_path, _local_rrd) in enumerate(local_files)
         }
         with rr.server.Server(datasets=cast(Any, datasets)) as server:
             client = server.client()
-            for dataset_name, (source, local_path) in zip(
+            for dataset_name, (source, local_path, local_source) in zip(
                 datasets, local_files, strict=True
             ):
                 dataset = client.get_dataset(dataset_name)
-                yield from self._read_dataset(source, local_path, dataset)
+                yield from self._read_dataset(
+                    source,
+                    local_path,
+                    local_source,
+                    dataset,
+                )
 
     def _read_dataset(
         self,
         source: DataFile,
         local_path: Path,
+        local_source: LocalRrd,
         dataset: Any,
     ) -> Iterator[SourceUnit]:
         store_entries = (
@@ -270,6 +363,7 @@ class RerunReader(BaseReader):
                     segment_id=segment_id,
                     source_path=source.abs_path(),
                     source_file=source,
+                    local_source=local_source,
                     application_id=application_id,
                     recording_id=recording_id,
                     timelines=timelines,
@@ -298,7 +392,7 @@ class RerunReader(BaseReader):
                 yield self._recording_row(
                     segment_id=segment_id,
                     source=source,
-                    local_path=local_path,
+                    local_source=local_source,
                     tables=tables,
                     static=Tabular(static) if static is not None else None,
                     application_id=application_id,
@@ -309,6 +403,7 @@ class RerunReader(BaseReader):
         self,
         source: DataFile,
         local_path: Path,
+        local_source: LocalRrd,
     ) -> list[DictRow]:
         rows = []
         for store in _recording_entries(local_path):
@@ -317,7 +412,7 @@ class RerunReader(BaseReader):
                 self._recording_row(
                     segment_id=recording_id,
                     source=source,
-                    local_path=local_path,
+                    local_source=local_source,
                     tables={},
                     static=None,
                     application_id=store.application_id,
@@ -331,7 +426,7 @@ class RerunReader(BaseReader):
         *,
         segment_id: str,
         source: DataFile,
-        local_path: Path,
+        local_source: LocalRrd,
         tables: Mapping[str, Tabular],
         static: Tabular | None,
         application_id: str | None,
@@ -345,19 +440,21 @@ class RerunReader(BaseReader):
                 tables=tables,
                 static=static,
                 source_file=source,
+                local_source=(
+                    local_source if self._retain_batch_local_sources() else None
+                ),
                 application_id=application_id,
                 recording_id=recording_id,
                 contents=self.contents,
                 timelines=self.timelines,
                 include_static=self.include_static,
+                use_source_chunks=self.use_source_chunks,
             ),
         }
         self._with_file_path(data, source)
         return DictRow(data)
 
     def _timelines(self, schema: Any) -> tuple[str, ...]:
-        if self.timelines is not None:
-            return self.timelines
         return tuple(str(index.name) for index in schema.index_columns())
 
     def _primary_timeline(self, timelines: Sequence[str]) -> str:
@@ -400,6 +497,7 @@ class RerunReader(BaseReader):
         segment_id: str,
         source_path: str,
         source_file: DataFile,
+        local_source: LocalRrd,
         application_id: str | None,
         recording_id: str,
         timelines: Sequence[str],
@@ -429,11 +527,15 @@ class RerunReader(BaseReader):
                 tables={timeline: Tabular(table)},
                 static=Tabular(static) if static is not None else None,
                 source_file=source_file,
+                local_source=(
+                    local_source if self._retain_batch_local_sources() else None
+                ),
                 application_id=application_id,
                 recording_id=recording_id,
                 contents=tuple(contents),
                 timelines=(timeline,),
                 include_static=self.include_static,
+                use_source_chunks=False,
             )
         if self.fps is not None:
             row["fps"] = self.fps
@@ -495,6 +597,13 @@ class RerunReader(BaseReader):
             row[self.file_path_column] = source_path
         return DictRow(row)
 
+    def _retain_batch_local_sources(self) -> bool:
+        return (
+            self.output == "recording"
+            and not self.materialize_tables
+            and self.use_source_chunks
+        )
+
 
 def _contents(contents: str | Sequence[str] | None) -> tuple[str, ...] | None:
     if contents is None:
@@ -541,33 +650,29 @@ def _collect_table(df: Any) -> pa.Table:
     return table
 
 
+def _close_local_sources(
+    local_files: Iterable[tuple[DataFile, Path, LocalRrd]],
+) -> None:
+    for _source, _local_path, local_source in local_files:
+        local_source.close()
+
+
 def _recording_entries(local_path: Path) -> list[Any]:
     import rerun as rr
 
     try:
-        return list(rr.experimental.RrdReader(local_path).recordings())
-    except Exception:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="RRD file has no footer/manifest:.*",
+            )
+            return list(rr.experimental.RrdReader(local_path).recordings())
+    except Exception as err:
+        logger.warning(
+            "Rerun recording metadata unavailable; falling back to server scan: {}",
+            type(err).__name__,
+        )
         return []
-
-
-class _local_rrd:
-    def __init__(self, source: DataFile) -> None:
-        self.source = source
-        self.tmpdir: tempfile.TemporaryDirectory[str] | None = None
-        self.path: Path | None = None
-
-    def __enter__(self) -> Path:
-        if self.source.is_local:
-            return Path(self.source.abs_path())
-        self.tmpdir = tempfile.TemporaryDirectory(prefix="refiner-rerun-")
-        name = os.path.basename(self.source.path) or "recording.rrd"
-        self.path = Path(self.tmpdir.name) / name
-        self.source.copy(str(self.path))
-        return self.path
-
-    def __exit__(self, *args: object) -> None:
-        if self.tmpdir is not None:
-            self.tmpdir.cleanup()
 
 
 def _metadata_text(metadata: Mapping[bytes, bytes], key: bytes) -> str | None:
@@ -622,10 +727,20 @@ def _matches_entity_prefix(entity_path: str, prefix: str) -> bool:
 
 def _camera_columns(columns: Mapping[str, str], prefix: str) -> dict[str, str]:
     out: dict[str, str] = {}
+    output_paths: dict[str, str] = {}
     for entity_path, column in columns.items():
         if not _matches_entity_prefix(entity_path, prefix):
             continue
-        out[entity_path.strip("/").replace("/", ".")] = column
+        name = entity_path.strip("/").replace("/", ".")
+        existing = output_paths.get(name)
+        if existing is not None:
+            raise ValueError(
+                "Rerun camera paths derive the same output video name "
+                f"{name!r}: {existing!r} and {entity_path!r}; pass explicit "
+                "videos={...} to choose unique names"
+            )
+        output_paths[name] = entity_path
+        out[name] = column
     return out
 
 
@@ -729,41 +844,56 @@ def _iter_encoded_images(values: pa.Array) -> Iterator[np.ndarray]:
 
     from PIL import Image
 
-    for index in range(len(values)):
-        data = _encoded_image_bytes(values, index)
-        if data is None:
-            continue
-        with Image.open(BytesIO(data)) as image:
-            yield np.asarray(image.convert("RGB"), dtype=np.uint8)
-
-
-def _encoded_image_bytes(values: pa.Array, index: int) -> bytes | None:
     if not pa.types.is_list(values.type) and not pa.types.is_large_list(values.type):
         raise TypeError(
             f"Expected a Rerun encoded image list column, got {values.type}"
         )
-    if not values[index].is_valid:
-        return None
     outer_offsets = np.asarray(values.offsets)
-    outer_start = int(outer_offsets[index])
-    outer_end = int(outer_offsets[index + 1])
-    if outer_end <= outer_start:
-        return None
+    valid = np.asarray(_is_valid(values), dtype=bool)
     inner = values.values
-    if not pa.types.is_list(inner.type) and not pa.types.is_large_list(inner.type):
+    if pa.types.is_list(inner.type) or pa.types.is_large_list(inner.type):
+        inner_offsets = np.asarray(inner.offsets)
+        inner_values = inner.values
+        for index in range(len(values)):
+            if not valid[index]:
+                continue
+            outer_start = int(outer_offsets[index])
+            outer_end = int(outer_offsets[index + 1])
+            if outer_end <= outer_start:
+                continue
+            byte_start = int(inner_offsets[outer_start])
+            byte_end = int(inner_offsets[outer_start + 1])
+            data = np.asarray(
+                inner_values.slice(byte_start, byte_end - byte_start)
+            ).tobytes()
+            with Image.open(BytesIO(data)) as image:
+                yield np.asarray(image.convert("RGB"), dtype=np.uint8)
+        return
+
+    for index in range(len(values)):
+        if not valid[index]:
+            continue
+        outer_start = int(outer_offsets[index])
+        outer_end = int(outer_offsets[index + 1])
+        if outer_end <= outer_start:
+            continue
         value = values[index].as_py()
         if not value:
-            return None
-        return bytes(cast(bytes | bytearray | list[int], value[0]))
-    inner_offsets = np.asarray(inner.offsets)
-    byte_start = int(inner_offsets[outer_start])
-    byte_end = int(inner_offsets[outer_start + 1])
-    payload = inner.values.slice(byte_start, byte_end - byte_start)
-    return np.asarray(payload).tobytes()
+            continue
+        data = bytes(cast(bytes | bytearray | list[int], value[0]))
+        with Image.open(BytesIO(data)) as image:
+            yield np.asarray(image.convert("RGB"), dtype=np.uint8)
 
 
 def _is_valid(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
     return pc.call_function("is_valid", [values])
 
 
-__all__ = ["RerunReader", "RerunRecording", "RerunOutputMode"]
+__all__ = [
+    "DEFAULT_RERUN_ACTION_PREFIX",
+    "DEFAULT_RERUN_CAMERA_PREFIX",
+    "DEFAULT_RERUN_STATE_PREFIX",
+    "RerunReader",
+    "RerunRecording",
+    "RerunOutputMode",
+]

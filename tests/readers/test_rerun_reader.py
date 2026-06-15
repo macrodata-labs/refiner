@@ -4,6 +4,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 
+import fsspec
 import numpy as np
 import pytest
 
@@ -12,7 +13,7 @@ from refiner.pipeline import Row
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.sinks.rerun import RerunSink
 from refiner.pipeline.sinks.rerun import _sendable_dynamic_table, _sendable_static_table
-from refiner.pipeline.sources.readers.rerun import RerunRecording
+from refiner.pipeline.sources.readers.rerun import RerunReader, RerunRecording
 
 pytest.importorskip("rerun")
 
@@ -146,6 +147,29 @@ def _reserved_video_name_rrd(path: Path) -> None:
     )
 
 
+def _colliding_camera_names_rrd(path: Path) -> None:
+    import rerun as rr
+    from PIL import Image
+
+    rr.init("refiner_rerun_colliding_camera_names_test", recording_id="episode-cameras")
+    rr.save(path)
+    frames = np.arange(1)
+    blobs: list[bytes] = []
+    for color in ((1, 2, 3), (4, 5, 6)):
+        out = BytesIO()
+        Image.new("RGB", (1, 1), color=color).save(out, format="PNG")
+        blobs.append(out.getvalue())
+    for entity_path, blob in zip(("/cam/a.b", "/cam/a/b"), blobs, strict=True):
+        rr.send_columns(
+            entity_path,
+            indexes=[rr.TimeColumn("frame", sequence=frames)],
+            columns=rr.EncodedImage.columns(
+                blob=[blob],
+                media_type=["image/png"],
+            ),
+        )
+
+
 def test_read_rerun_recording_preserves_timeline_table(tmp_path: Path) -> None:
     rrd = tmp_path / "tiny.rrd"
     _tiny_rrd(rrd)
@@ -158,7 +182,24 @@ def test_read_rerun_recording_preserves_timeline_table(tmp_path: Path) -> None:
     assert row["episode_id"] == "episode-a"
     assert list(recording.tables) == ["frame"]
     assert recording.tables["frame"].num_rows == 3
+    assert recording.source_path == str(rrd)
     assert row["file_path"] == str(rrd)
+
+
+def test_read_rerun_recording_can_project_before_arrow_conversion(
+    tmp_path: Path,
+) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    _tiny_rrd(rrd)
+
+    selected = (
+        mdr.read_rerun(str(rrd), timelines=("frame",)).select("episode_id").take(1)[0]
+    )
+    dropped = mdr.read_rerun(str(rrd), timelines=("frame",)).drop("rerun").take(1)[0]
+
+    assert selected.to_dict() == {"episode_id": "episode-a"}
+    assert dropped["episode_id"] == "episode-a"
+    assert "rerun" not in dropped
 
 
 def test_read_rerun_recording_rejects_reserved_file_path_column(
@@ -203,6 +244,7 @@ def test_read_rerun_recording_can_skip_table_materialization(tmp_path: Path) -> 
     assert recording.static is None
     assert recording.source_file is not None
     assert recording.timelines == ("frame",)
+    assert recording.use_source_chunks is False
 
 
 def test_read_rerun_rejects_ignored_mode_options(tmp_path: Path) -> None:
@@ -220,6 +262,21 @@ def test_read_rerun_rejects_ignored_mode_options(tmp_path: Path) -> None:
         match="include_recording=False is only supported for robotics output",
     ):
         mdr.read_rerun(str(rrd), output="recording", include_recording=False)
+    with pytest.raises(
+        ValueError,
+        match="Rerun recording output does not use robotics options: primary_timeline",
+    ):
+        mdr.read_rerun(str(rrd), output="recording", primary_timeline="frame")
+    with pytest.raises(
+        ValueError,
+        match="Rerun recording output does not use robotics options: actions, fps",
+    ):
+        mdr.read_rerun(
+            str(rrd),
+            output="recording",
+            actions=("/action/x",),
+            fps=30.0,
+        )
 
 
 def test_read_rerun_recording_without_materialized_tables_skips_server(
@@ -249,6 +306,36 @@ def test_read_rerun_recording_without_materialized_tables_skips_server(
 
     assert row["episode_id"] == "episode-a"
     assert row["rerun"].tables == {}
+
+
+def test_read_rerun_batches_small_files_in_one_staged_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "first.rrd"
+    second = tmp_path / "second.rrd"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    reader = RerunReader(
+        [str(first), str(second)],
+        target_shard_bytes=1024 * 1024,
+    )
+    batch_sizes: list[int] = []
+
+    def fake_read_files(self: RerunReader, local_files: Any) -> Any:
+        del self
+        local_files = tuple(local_files)
+        batch_sizes.append(len(local_files))
+        for source, local_path, _local_rrd in local_files:
+            assert local_path.exists()
+            yield DictRow({"source": source.abs_path()})
+
+    monkeypatch.setattr(RerunReader, "_read_files", fake_read_files)
+
+    rows = cast(list[Row], list(reader.read_shard(reader.list_shards()[0])))
+
+    assert batch_sizes == [2]
+    assert [row["source"] for row in rows] == [str(first), str(second)]
 
 
 def test_read_rerun_robotics_mode_converts_to_robot_row(tmp_path: Path) -> None:
@@ -349,6 +436,24 @@ def test_read_rerun_robotics_rejects_reserved_implicit_video_name(
             str(rrd),
             output="robotics",
             camera_prefix="/",
+            fps=30.0,
+        ).take(1)
+
+
+def test_read_rerun_robotics_rejects_derived_video_name_collision(
+    tmp_path: Path,
+) -> None:
+    rrd = tmp_path / "colliding-cameras.rrd"
+    _colliding_camera_names_rrd(rrd)
+
+    with pytest.raises(
+        ValueError,
+        match="derive the same output video name",
+    ):
+        mdr.read_rerun(
+            str(rrd),
+            output="robotics",
+            camera_prefix="/cam",
             fps=30.0,
         ).take(1)
 
@@ -497,9 +602,96 @@ def test_write_rerun_roundtrips_recording_row(tmp_path: Path) -> None:
 
 def test_write_rerun_uses_source_chunks_without_materialized_tables(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "tiny.rrd"
     output = tmp_path / "out-raw-copy"
+    _tiny_rrd(source)
+
+    source_iter = mdr.read_rerun(
+        str(source),
+        materialize_tables=False,
+    ).source.read()
+    block = cast(list[Row], next(source_iter))
+    row = block[0]
+    recording = row["rerun"]
+    assert recording.use_source_chunks is True
+    assert recording.local_source is not None
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun.LocalRrd",
+        lambda *args, **kwargs: pytest.fail(
+            "writer should reuse a live reader-staged RRD path"
+        ),
+    )
+    sink = RerunSink(str(output))
+    sink.write_shard_block("shard-a", block)
+    sink.on_shard_complete("shard-a")
+    with pytest.raises(StopIteration):
+        next(source_iter)
+
+    written = sorted(output.glob("**/*.rrd"))
+    assert len(written) == 1
+    copied = cast(
+        Any, next(mdr.read_rerun(str(written[0]), timelines=("frame",)).source.read())
+    )
+
+    assert copied["episode_id"] == "episode-a"
+    assert copied["rerun"].tables["frame"].num_rows == 3
+
+
+def test_write_rerun_reuses_reader_staged_remote_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    output = tmp_path / "out-remote-raw-copy"
+    _tiny_rrd(source)
+
+    remote_fs = fsspec.filesystem("memory")
+    remote_path = f"/refiner-rerun-test/{tmp_path.name}/tiny.rrd"
+    remote_fs.pipe_file(remote_path, source.read_bytes())
+
+    source_iter = mdr.read_rerun(
+        (remote_path, remote_fs),
+        materialize_tables=False,
+    ).source.read()
+    block = cast(list[Row], next(source_iter))
+    row = block[0]
+    recording = row["rerun"]
+    assert not recording.source_file.is_local
+    assert recording.local_source is not None
+    assert recording.local_source.path is not None
+    assert recording.local_source.path.exists()
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun.LocalRrd",
+        lambda *args, **kwargs: pytest.fail(
+            "writer should reuse the reader-staged remote RRD path"
+        ),
+    )
+    sink = RerunSink(str(output))
+    sink.write_shard_block("shard-a", block)
+    sink.on_shard_complete("shard-a")
+    with pytest.raises(StopIteration):
+        next(source_iter)
+    assert recording.local_source.path is None
+
+    written = sorted(output.glob("**/*.rrd"))
+    assert len(written) == 1
+    copied = cast(
+        Any, next(mdr.read_rerun(str(written[0]), timelines=("frame",)).source.read())
+    )
+
+    assert copied["episode_id"] == "episode-a"
+    assert copied["rerun"].tables["frame"].num_rows == 3
+
+
+def test_write_rerun_rejects_timeline_filtered_metadata_only_recording(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    output = tmp_path / "out-timeline-filtered-metadata-only"
     _tiny_rrd(source)
 
     row = cast(
@@ -513,17 +705,9 @@ def test_write_rerun_uses_source_chunks_without_materialized_tables(
         ),
     )
     sink = RerunSink(str(output))
-    sink.write_shard_block("shard-a", [row])
-    sink.on_shard_complete("shard-a")
 
-    written = sorted(output.glob("**/*.rrd"))
-    assert len(written) == 1
-    copied = cast(
-        Any, next(mdr.read_rerun(str(written[0]), timelines=("frame",)).source.read())
-    )
-
-    assert copied["episode_id"] == "episode-a"
-    assert copied["rerun"].tables["frame"].num_rows == 3
+    with pytest.raises(ValueError, match="without materialized Rerun table columns"):
+        sink.write_shard_block("shard-a", [row])
 
 
 def test_write_rerun_rejects_segment_id_path_separator_in_filename(

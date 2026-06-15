@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import warnings
 from pathlib import Path
 from string import Formatter
 from typing import Any
@@ -10,11 +11,11 @@ import pyarrow as pa
 
 from refiner.io.datafile import DataFile
 from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.pipeline._rerun_io import LocalRrd, RerunRecording
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
-from refiner.pipeline.sources.readers.rerun import RerunRecording, _local_rrd
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
@@ -33,13 +34,14 @@ class RerunSink(BaseSink):
         app_id: str = "refiner",
         write_footer: bool = True,
     ) -> None:
-        _validate_filename_template(filename_template)
+        template_fields = _validate_filename_template(filename_template)
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
+        self._uses_segment_id = "segment_id" in template_fields
         self.app_id = app_id
         self.write_footer = write_footer
         self._row_indices: dict[str, int] = {}
-        self._written_relpaths: set[str] = set()
+        self._written_relpaths: dict[str, set[str]] = {}
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("rerun",)
@@ -56,16 +58,19 @@ class RerunSink(BaseSink):
                 worker_id=get_active_worker_token(),
                 row_index=row_index,
                 segment_id=recording.segment_id,
+                uses_segment_id=self._uses_segment_id,
             )
-            if relpath in self._written_relpaths:
+            written_relpaths = self._written_relpaths.setdefault(shard_id, set())
+            if relpath in written_relpaths:
                 raise ValueError(
                     "write_rerun filename_template rendered duplicate output path "
                     f"{relpath!r}; include {{row_index}} or another unique row field"
                 )
             self._write_recording(recording, relpath)
-            self._written_relpaths.add(relpath)
-            log_throughput("files_written", 1, shard_id=shard_id, unit="files")
+            written_relpaths.add(relpath)
             count += 1
+        if count:
+            log_throughput("files_written", count, shard_id=shard_id, unit="files")
         return count
 
     def _write_recording(self, recording: RerunRecording, relpath: str) -> None:
@@ -104,6 +109,7 @@ class RerunSink(BaseSink):
 
     def on_shard_complete(self, shard_id: str) -> None:
         self._row_indices.pop(shard_id, None)
+        self._written_relpaths.pop(shard_id, None)
 
     def describe(self) -> tuple[str, str, dict[str, object]]:
         return (
@@ -138,10 +144,20 @@ def _write_source_chunks(
     *,
     application_id: str,
 ) -> None:
+    local_source = recording.local_source
+    local_source_path = local_source.path if local_source is not None else None
+    if local_source_path is not None and local_source_path.exists():
+        _write_source_chunks_from_path(
+            recording,
+            path,
+            local_path=local_source_path,
+            application_id=application_id,
+        )
+        return
     source = recording.source_file
     if source is None:
         raise ValueError("Rerun source chunk write requires source_file")
-    with _local_rrd(source) as local_path:
+    with LocalRrd(source) as local_path:
         _write_source_chunks_from_path(
             recording,
             path,
@@ -159,7 +175,12 @@ def _write_source_chunks_from_path(
 ) -> None:
     import rerun as rr
 
-    reader = rr.experimental.RrdReader(local_path)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="RRD file has no footer/manifest:.*",
+        )
+        reader = rr.experimental.RrdReader(local_path)
     store = _matching_store(reader, recording)
     stream = reader.stream(store=store)
     if recording.contents is not None:
@@ -294,7 +315,7 @@ def _is_static_column(field: pa.Field) -> bool:
     return (field.metadata or {}).get(b"rerun:is_static") == b"true"
 
 
-def _validate_filename_template(filename_template: str) -> None:
+def _validate_filename_template(filename_template: str) -> set[str]:
     fields: set[str] = set()
     for _literal_text, field_name, format_spec, conversion in Formatter().parse(
         filename_template
@@ -329,6 +350,7 @@ def _validate_filename_template(filename_template: str) -> None:
         ),
         "filename_template",
     )
+    return fields
 
 
 def _render_relpath(
@@ -338,6 +360,7 @@ def _render_relpath(
     worker_id: str,
     row_index: int,
     segment_id: str,
+    uses_segment_id: bool,
 ) -> str:
     field_values: dict[str, object] = {
         "shard_id": shard_id,
@@ -345,22 +368,12 @@ def _render_relpath(
         "row_index": row_index,
         "segment_id": segment_id,
     }
-    if "segment_id" in _template_fields(filename_template):
+    if uses_segment_id:
         field_values["segment_id"] = _normalize_path_segment(segment_id, "segment_id")
     return _normalize_relpath(
         filename_template.format(**field_values),
         "rendered filename",
     )
-
-
-def _template_fields(filename_template: str) -> set[str]:
-    return {
-        field_name
-        for _literal_text, field_name, _format_spec, _conversion in Formatter().parse(
-            filename_template
-        )
-        if field_name is not None
-    }
 
 
 def _normalize_path_segment(value: str, label: str) -> str:

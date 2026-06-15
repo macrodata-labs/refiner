@@ -45,6 +45,18 @@ class _RefinerExtrasSink(BaseSink):
         return ("zarr",)
 
 
+class _OutputExtras:
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        return ("s3",)
+
+
+class _OutputExtrasSink(BaseSink):
+    output = _OutputExtras()
+
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        del shard_id, block
+
+
 def test_build_run_manifest_captures_script_from_argv(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -254,6 +266,29 @@ def test_build_run_manifest_adds_refiner_extras_declared_by_pipeline(
         "video",
         "zarr",
     ]
+
+
+def test_build_run_manifest_preserves_custom_sink_output_extras(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+
+    pipeline = RefinerPipeline(_RefinerExtrasSource()).with_sink(_OutputExtrasSink())
+    stages = [
+        PlannedStage(
+            index=0,
+            name="stage_0",
+            pipeline=pipeline,
+            compute=StageComputeRequirements(num_workers=1),
+        )
+    ]
+
+    manifest = build_run_manifest(capture_dependencies=False, pipeline_stages=stages)
+
+    assert manifest["environment"]["refiner_extras"] == ["hf", "s3"]
 
 
 def test_build_run_manifest_normalizes_refiner_extra_names(

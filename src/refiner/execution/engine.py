@@ -9,6 +9,7 @@ import pyarrow as pa
 
 from refiner.pipeline.data.block import Block, StreamItem
 from refiner.pipeline.data.datatype import schema_with_dtypes
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.steps import (
     CastStep,
@@ -31,7 +32,7 @@ from refiner.execution.operators.row import ShardDeltaFn, execute_row_steps
 from refiner.execution.operators.vectorized import (
     apply_vectorized_ops,
 )
-from refiner.pipeline.data.row import Row
+from refiner.pipeline.data.row import DictRow, Row
 
 _DEFAULT_VECTORIZED_CHUNK_ROWS = 2048
 
@@ -301,26 +302,49 @@ def _execute_vector_segment(
     pending_rows = RowBuffer()
     current_chunk_rows = max(1, int(vectorized_chunk_rows))
     estimated_row_bytes: float | None = None
-    segment_changes_rows = any(
-        isinstance(op, (FilterExprStep, FnTableStep)) for op in ops
+    row_projection_ops, row_remaining_ops = _split_row_projection_ops(ops)
+    row_projected_schema = (
+        _vector_segment_schema(input_schema, row_projection_ops)
+        if row_projection_ops
+        else input_schema
     )
 
-    def _run_block(block: Tabular) -> Tabular:
-        return_row_indices = block.needs_row_indices and segment_changes_rows
+    def _run_block(block: Tabular, block_ops: Sequence[VectorizedOp]) -> Tabular:
+        block_changes_rows = any(
+            isinstance(op, (FilterExprStep, FnTableStep)) for op in block_ops
+        )
+        return_row_indices = block.needs_row_indices and block_changes_rows
         if not return_row_indices:
             table = apply_vectorized_ops(
                 block.table,
-                ops,
+                block_ops,
                 on_shard_delta=on_shard_delta,
             )
             return block.with_table(table)
         table, row_indices = apply_vectorized_ops(
             block.table,
-            ops,
+            block_ops,
             on_shard_delta=on_shard_delta,
             return_row_indices=True,
         )
         return block.with_table(table, row_indices=row_indices)
+
+    def _rows_to_block(batch: list[Row]) -> tuple[Tabular, Sequence[VectorizedOp]]:
+        try:
+            return _tabular_from_rows(batch, schema=input_schema), ops
+        except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError) as err:
+            if not row_projection_ops:
+                raise
+            projected = [
+                _apply_row_projection_ops(row, row_projection_ops) for row in batch
+            ]
+            try:
+                return (
+                    _tabular_from_rows(projected, schema=row_projected_schema),
+                    row_remaining_ops,
+                )
+            except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError) as fallback_err:
+                raise err from fallback_err
 
     def _chunk_rows_for_budget() -> int:
         if (
@@ -338,11 +362,7 @@ def _execute_vector_segment(
         while True:
             batch = pending_rows.peek(rows_for_try)
             try:
-                block = (
-                    Tabular.from_rows(batch, schema=input_schema)
-                    if not batch
-                    else batch[0].tabular_type.from_rows(batch, schema=input_schema)
-                )
+                block, block_ops = _rows_to_block(batch)
             except pa.ArrowMemoryError:
                 if rows_for_try <= 1:
                     raise
@@ -368,7 +388,7 @@ def _execute_vector_segment(
                 continue
 
             try:
-                out = _run_block(block)
+                out = _run_block(block, block_ops)
             except pa.ArrowMemoryError:
                 if rows_for_try <= 1:
                     raise
@@ -420,7 +440,7 @@ def _execute_vector_segment(
                 continue
 
             try:
-                out = _run_block(chunk)
+                out = _run_block(chunk, ops)
             except pa.ArrowMemoryError:
                 if chunk_rows <= 1:
                     raise
@@ -455,6 +475,49 @@ def _execute_vector_segment(
         yield from _yield_tabular_chunks(item)
 
     yield from _drain_rows(force=True)
+
+
+def _tabular_from_rows(
+    rows: list[Row],
+    *,
+    schema: pa.Schema | None,
+) -> Tabular:
+    return (
+        Tabular.from_rows(rows, schema=schema)
+        if not rows
+        else rows[0].tabular_type.from_rows(rows, schema=schema)
+    )
+
+
+def _split_row_projection_ops(
+    ops: Sequence[VectorizedOp],
+) -> tuple[tuple[SelectStep | DropStep, ...], Sequence[VectorizedOp]]:
+    projection: list[SelectStep | DropStep] = []
+    for index, op in enumerate(ops):
+        if not isinstance(op, (SelectStep, DropStep)):
+            return tuple(projection), ops[index:]
+        projection.append(op)
+    return tuple(projection), ()
+
+
+def _apply_row_projection_ops(
+    row: Row,
+    ops: Sequence[SelectStep | DropStep],
+) -> Row:
+    out = row
+    for op in ops:
+        if isinstance(op, SelectStep):
+            out = DictRow(
+                {
+                    column: out[column]
+                    for column in op.columns
+                    if column != SHARD_ID_COLUMN
+                },
+                shard_id=out.shard_id,
+            )
+            continue
+        out = out.drop(*(column for column in op.columns if column != SHARD_ID_COLUMN))
+    return out
 
 
 def _chunk_output_rows(rows: Iterable[Row], block_rows: int) -> Iterator[list[Row]]:

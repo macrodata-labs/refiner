@@ -9,7 +9,6 @@ import subprocess
 DEFAULT_S3_CHECK = (
     "s3://macrodata-rerun-format-tests/dominique-sample/episode-5__base.rrd"
 )
-DEFAULT_AWS_PROFILE = "210049840512_Researcher"
 SECRET_NAMES = (
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -25,7 +24,7 @@ def _parse_args() -> argparse.Namespace:
             "workspace secret environment for Rerun cloud benchmarks."
         )
     )
-    parser.add_argument("--aws-profile", default=DEFAULT_AWS_PROFILE)
+    parser.add_argument("--aws-profile", required=True)
     parser.add_argument("--secret-env", default="researcher")
     parser.add_argument(
         "--region",
