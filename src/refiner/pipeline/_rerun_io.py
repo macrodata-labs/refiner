@@ -76,6 +76,7 @@ class RerunRecording:
     timelines: tuple[str, ...] | None = None
     include_static: bool = True
     use_source_chunks: bool = True
+    source_recording_count: int | None = None
 
 
 __all__ = ["LocalRrd", "RerunRecording"]

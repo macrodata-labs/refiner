@@ -348,6 +348,7 @@ class RerunReader(BaseReader):
             if self.output == "recording" or self.include_recording
             else []
         )
+        source_recording_count = len(store_entries) if store_entries else None
         entries_by_recording_id = {entry.recording_id: entry for entry in store_entries}
         timelines = self.timelines
         if timelines is None:
@@ -397,6 +398,7 @@ class RerunReader(BaseReader):
                     static=Tabular(static) if static is not None else None,
                     application_id=application_id,
                     recording_id=recording_id,
+                    source_recording_count=source_recording_count,
                 )
 
     def _read_metadata_only_recording_rows(
@@ -406,7 +408,9 @@ class RerunReader(BaseReader):
         local_source: LocalRrd,
     ) -> list[DictRow]:
         rows = []
-        for store in _recording_entries(local_path):
+        store_entries = _recording_entries(local_path)
+        source_recording_count = len(store_entries)
+        for store in store_entries:
             recording_id = str(store.recording_id)
             rows.append(
                 self._recording_row(
@@ -417,6 +421,7 @@ class RerunReader(BaseReader):
                     static=None,
                     application_id=store.application_id,
                     recording_id=recording_id,
+                    source_recording_count=source_recording_count,
                 )
             )
         return rows
@@ -431,6 +436,7 @@ class RerunReader(BaseReader):
         static: Tabular | None,
         application_id: str | None,
         recording_id: str | None,
+        source_recording_count: int | None,
     ) -> DictRow:
         data: dict[str, Any] = {
             "episode_id": segment_id,
@@ -445,6 +451,7 @@ class RerunReader(BaseReader):
                 ),
                 application_id=application_id,
                 recording_id=recording_id,
+                source_recording_count=source_recording_count,
                 contents=self.contents,
                 timelines=self.timelines,
                 include_static=self.include_static,

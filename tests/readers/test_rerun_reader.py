@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
@@ -617,11 +618,18 @@ def test_write_rerun_uses_source_chunks_without_materialized_tables(
     recording = row["rerun"]
     assert recording.use_source_chunks is True
     assert recording.local_source is not None
+    assert recording.source_recording_count == 1
 
     monkeypatch.setattr(
         "refiner.pipeline.sinks.rerun.LocalRrd",
         lambda *args, **kwargs: pytest.fail(
             "writer should reuse a live reader-staged RRD path"
+        ),
+    )
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun._matching_store",
+        lambda *args, **kwargs: pytest.fail(
+            "unfiltered single-recording copies should not rewrite RRD chunks"
         ),
     )
     sink = RerunSink(str(output))
@@ -663,6 +671,7 @@ def test_write_rerun_reuses_reader_staged_remote_source(
     assert recording.local_source is not None
     assert recording.local_source.path is not None
     assert recording.local_source.path.exists()
+    assert recording.source_recording_count == 1
 
     monkeypatch.setattr(
         "refiner.pipeline.sinks.rerun.LocalRrd",
@@ -676,6 +685,45 @@ def test_write_rerun_reuses_reader_staged_remote_source(
     with pytest.raises(StopIteration):
         next(source_iter)
     assert recording.local_source.path is None
+
+    written = sorted(output.glob("**/*.rrd"))
+    assert len(written) == 1
+    assert written[0].read_bytes() == remote_fs.cat(remote_path)
+    copied = cast(
+        Any, next(mdr.read_rerun(str(written[0]), timelines=("frame",)).source.read())
+    )
+
+    assert copied["episode_id"] == "episode-a"
+    assert copied["rerun"].tables["frame"].num_rows == 3
+
+
+def test_write_rerun_does_not_direct_copy_when_source_may_have_multiple_recordings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "tiny.rrd"
+    output = tmp_path / "out-not-direct-copy"
+    _tiny_rrd(source)
+
+    source_iter = mdr.read_rerun(
+        str(source),
+        materialize_tables=False,
+    ).source.read()
+    block = cast(list[Row], next(source_iter))
+    row = block[0]
+    recording = replace(row["rerun"], source_recording_count=2)
+
+    monkeypatch.setattr(
+        "refiner.pipeline.sinks.rerun.shutil.copyfile",
+        lambda *args, **kwargs: pytest.fail(
+            "multi-recording source rows must use the chunk-selection path"
+        ),
+    )
+    sink = RerunSink(str(output))
+    sink.write_shard_block("shard-a", [row.update({"rerun": recording})])
+    sink.on_shard_complete("shard-a")
+    with pytest.raises(StopIteration):
+        next(source_iter)
 
     written = sorted(output.glob("**/*.rrd"))
     assert len(written) == 1

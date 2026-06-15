@@ -40,10 +40,11 @@ writing.
 
 ## Writer strategy
 
-When the input row came from `read_rerun`, the writer uses Rerun's raw
-`LazyChunkStream` path and writes the selected source chunks directly. This
-preserves Rerun chunk metadata and avoids re-emitting large Arrow tables through
-Python.
+When the input row came from `read_rerun`, the writer uses the source RRD
+instead of re-emitting large Arrow tables through Python. Unfiltered
+single-recording copies are written as a byte-for-byte copy. Filtered writes and
+multi-recording sources use Rerun's raw `LazyChunkStream` path to write the
+selected source chunks directly.
 
 For pure copy jobs, use `read_rerun(..., materialize_tables=False)` before
 `write_rerun(...)` to skip timeline/static table materialization while keeping

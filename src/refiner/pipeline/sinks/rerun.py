@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import warnings
 from pathlib import Path
@@ -173,6 +174,10 @@ def _write_source_chunks_from_path(
     local_path: Path,
     application_id: str,
 ) -> None:
+    if _can_copy_source_rrd(recording):
+        shutil.copyfile(local_path, path)
+        return
+
     import rerun as rr
 
     with warnings.catch_warnings():
@@ -197,6 +202,15 @@ def _write_source_chunks_from_path(
         path,
         application_id=recording.application_id or application_id,
         recording_id=recording.recording_id or recording.segment_id,
+    )
+
+
+def _can_copy_source_rrd(recording: RerunRecording) -> bool:
+    return (
+        recording.source_recording_count == 1
+        and recording.contents is None
+        and recording.timelines is None
+        and recording.include_static
     )
 
 
