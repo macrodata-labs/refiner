@@ -354,27 +354,12 @@ class RerunReader(BaseReader):
                 else []
             )
         source_recording_count = len(store_entries) if store_entries else None
-        if len(store_entries) == 1:
-            only_store_entry = store_entries[0]
-            entries_by_recording_id = None
-        else:
-            only_store_entry = None
-            entries_by_recording_id = {
-                entry.recording_id: entry for entry in store_entries
-            }
+        entries_by_recording_id = {entry.recording_id: entry for entry in store_entries}
         timelines = self.timelines
         if timelines is None:
             timelines = self._timelines(dataset.schema())
         for segment_id in dataset.segment_ids():
-            if only_store_entry is not None:
-                store = (
-                    only_store_entry
-                    if only_store_entry.recording_id == segment_id
-                    else None
-                )
-            else:
-                assert entries_by_recording_id is not None
-                store = entries_by_recording_id.get(segment_id)
+            store = entries_by_recording_id.get(segment_id)
             application_id = store.application_id if store is not None else None
             recording_id = store.recording_id if store is not None else segment_id
             view = dataset.filter_segments([segment_id])
