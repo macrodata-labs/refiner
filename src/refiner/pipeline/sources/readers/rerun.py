@@ -258,29 +258,6 @@ class RerunReader(BaseReader):
         self,
         local_files: Sequence[tuple[DataFile, LocalRrd]],
     ) -> Iterator[SourceUnit]:
-        if self.output == "recording" and not self.materialize_tables:
-            prepared_files = _prepare_local_metadata_only_sources(local_files)
-            if self._retain_batch_local_sources():
-                try:
-                    units = list(self._read_metadata_only_files(prepared_files))
-                except BaseException:
-                    _close_prepared_local_sources(prepared_files)
-                    raise
-                if not units:
-                    _close_prepared_local_sources(prepared_files)
-                    return
-                try:
-                    yield cast(list[Row], units)
-                finally:
-                    _close_prepared_local_sources(prepared_files)
-                return
-
-            try:
-                yield from self._read_metadata_only_files(prepared_files)
-            finally:
-                _close_prepared_local_sources(prepared_files)
-            return
-
         opened_files = _open_local_sources(local_files)
         if self._retain_batch_local_sources():
             try:
@@ -306,30 +283,33 @@ class RerunReader(BaseReader):
         self,
         local_files: Sequence[tuple[DataFile, Path, LocalRrd]],
     ) -> Iterator[SourceUnit]:
-        yield from self._read_files_with_server(local_files)
-
-    def _read_metadata_only_files(
-        self,
-        local_files: Sequence[tuple[DataFile, Path, LocalRrd, list[Any]]],
-    ) -> Iterator[SourceUnit]:
-        check_required_dependencies(
-            "read_rerun",
-            [("rerun", "rerun-sdk")],
-            dist="rerun",
-        )
-        server_fallback: list[tuple[DataFile, Path, LocalRrd]] = []
-        for source, local_path, local_source, store_entries in local_files:
-            rows = self._read_metadata_only_recording_rows(
+        if self.output == "recording" and not self.materialize_tables:
+            check_required_dependencies(
+                "read_rerun",
+                [("rerun", "rerun-sdk")],
+                dist="rerun",
+            )
+            server_fallback: list[tuple[DataFile, Path, LocalRrd]] = []
+            for (
                 source,
+                local_path,
                 local_source,
                 store_entries,
-            )
-            if rows:
-                yield from rows
-            else:
-                server_fallback.append((source, local_path, local_source))
-        if server_fallback:
-            yield from self._read_files_with_server(server_fallback)
+            ) in _scan_recording_entries(local_files):
+                rows = self._read_metadata_only_recording_rows(
+                    source,
+                    local_source,
+                    store_entries,
+                )
+                if rows:
+                    yield from rows
+                else:
+                    server_fallback.append((source, local_path, local_source))
+            if server_fallback:
+                yield from self._read_files_with_server(server_fallback)
+            return
+
+        yield from self._read_files_with_server(local_files)
 
     def _read_files_with_server(
         self,
@@ -688,13 +668,6 @@ def _close_local_sources(
         local_source.close()
 
 
-def _close_prepared_local_sources(
-    local_files: Iterable[tuple[DataFile, Path, LocalRrd, list[Any]]],
-) -> None:
-    for _source, _local_path, local_source, _store_entries in local_files:
-        local_source.close()
-
-
 def _open_local_sources(
     local_files: Sequence[tuple[DataFile, LocalRrd]],
 ) -> list[tuple[DataFile, Path, LocalRrd]]:
@@ -725,30 +698,25 @@ def _open_local_source(local_source: LocalRrd) -> Path:
     return local_source.open()
 
 
-def _prepare_local_metadata_only_sources(
-    local_files: Sequence[tuple[DataFile, LocalRrd]],
+def _scan_recording_entries(
+    local_files: Sequence[tuple[DataFile, Path, LocalRrd]],
 ) -> list[tuple[DataFile, Path, LocalRrd, list[Any]]]:
     if len(local_files) <= 1:
-        prepared = []
-        for source, local_source in local_files:
-            local_path = local_source.open()
-            prepared.append(
-                (source, local_path, local_source, _recording_entries(local_path))
-            )
-        return prepared
+        return [
+            (source, local_path, local_source, _recording_entries(local_path))
+            for source, local_path, local_source in local_files
+        ]
 
+    local_paths = [local_path for _source, local_path, _local_source in local_files]
     max_workers = min(8, len(local_files))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        prepared = list(pool.map(_prepare_local_metadata_only_source, local_files))
-    return prepared
-
-
-def _prepare_local_metadata_only_source(
-    item: tuple[DataFile, LocalRrd],
-) -> tuple[DataFile, Path, LocalRrd, list[Any]]:
-    source, local_source = item
-    local_path = local_source.open()
-    return source, local_path, local_source, _recording_entries(local_path)
+        store_entries = list(pool.map(_recording_entries, local_paths))
+    return [
+        (source, local_path, local_source, store_entry)
+        for (source, local_path, local_source), store_entry in zip(
+            local_files, store_entries, strict=True
+        )
+    ]
 
 
 def _recording_entries(local_path: Path) -> list[Any]:
