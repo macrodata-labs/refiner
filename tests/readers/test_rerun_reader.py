@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 
 import refiner as mdr
+from refiner.io.datafile import DataFile
 from refiner.pipeline import Row
+from refiner.pipeline._rerun_io import LocalRrd
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.sinks.rerun import RerunSink
 from refiner.pipeline.sinks.rerun import _sendable_dynamic_table, _sendable_static_table
@@ -739,6 +741,33 @@ def test_write_rerun_reuses_reader_staged_remote_source(
 
     assert copied["episode_id"] == "episode-a"
     assert copied["rerun"].tables["frame"].num_rows == 3
+
+
+def test_local_rrd_uses_larger_buffer_for_remote_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "remote.rrd"
+    source.write_bytes(b"rrd")
+
+    remote_fs = fsspec.filesystem("memory")
+    remote_path = "/refiner-rerun-test/remote.rrd"
+    remote_fs.pipe_file(remote_path, source.read_bytes())
+
+    buffer_sizes: list[int] = []
+    original_copy = DataFile.copy
+
+    def fake_copy(self, dest, *, buffer_size: int = 2 * 1024 * 1024):
+        buffer_sizes.append(buffer_size)
+        return original_copy(self, dest, buffer_size=buffer_size)
+
+    monkeypatch.setattr(DataFile, "copy", fake_copy)
+
+    local_rrd = LocalRrd(DataFile.resolve((remote_path, remote_fs)))
+    path = local_rrd.open()
+
+    assert path.exists()
+    assert buffer_sizes == [8 * 1024 * 1024]
 
 
 def test_write_rerun_does_not_direct_copy_when_source_may_have_multiple_recordings(
