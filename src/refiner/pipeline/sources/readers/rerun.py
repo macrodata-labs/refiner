@@ -678,7 +678,7 @@ def _open_local_sources(
         ]
 
     local_sources = [local_source for _source, local_source in local_files]
-    max_workers = min(12, len(local_files))
+    max_workers = min(8, len(local_files))
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
             local_paths = list(pool.map(_open_local_source, local_sources))
