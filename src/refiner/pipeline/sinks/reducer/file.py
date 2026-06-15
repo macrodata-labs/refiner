@@ -126,6 +126,31 @@ class FileCleanupReducerSink(BaseSink):
         listing_prefix = (
             "" if "/" not in literal_prefix else literal_prefix.rsplit("/", 1)[0]
         )
+        if (
+            self.assets_subdir is None
+            and listing_prefix == ""
+            and len(self._output_path_patterns) == 2
+        ):
+            try:
+                root_entries = self.output.ls(listing_prefix, detail=False)
+            except (FileNotFoundError, NotADirectoryError):
+                root_entries = []
+            paths_to_delete: set[str] = set()
+            for rel_path in root_entries:
+                match = self._output_path_patterns[0].fullmatch(rel_path)
+                if match is None:
+                    continue
+                if (
+                    match.group("shard_id"),
+                    match.group("worker_id"),
+                ) not in keep_pairs:
+                    paths_to_delete.add(rel_path)
+            for path in sorted(paths_to_delete):
+                try:
+                    self.output.rm(path, recursive=True)
+                except FileNotFoundError:
+                    continue
+            return
         paths = [listing_prefix]
         prefix_parts = [part for part in listing_prefix.split("/") if part]
         for pattern in self._output_path_patterns[len(prefix_parts) :]:
