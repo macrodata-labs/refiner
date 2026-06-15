@@ -200,12 +200,11 @@ def _cleanup_default_root_entries(
     root_entries: list[str],
     keep_pairs: set[tuple[str, str]],
 ) -> set[str]:
+    keep_keys = {f"{shard_id}__w{worker_id}" for shard_id, worker_id in keep_pairs}
     paths_to_delete: set[str] = set()
     for rel_path in root_entries:
         if len(rel_path) != 27 or rel_path[12:15] != "__w":
             continue
-        shard_id = rel_path[:12]
-        worker_id = rel_path[15:]
-        if (shard_id, worker_id) not in keep_pairs:
+        if rel_path not in keep_keys:
             paths_to_delete.add(rel_path)
     return paths_to_delete
