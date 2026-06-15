@@ -77,6 +77,21 @@ class FileCleanupReducerSink(BaseSink):
         self.reducer_name = reducer_name
         self.assets_subdir = assets_subdir
         self._output_path_patterns = _compile_output_path_patterns(filename_template)
+        literal_prefix = ""
+        for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
+            self.filename_template
+        ):
+            literal_prefix += literal_text
+            if field_name is not None:
+                break
+        self._listing_prefix = (
+            "" if "/" not in literal_prefix else literal_prefix.rsplit("/", 1)[0]
+        )
+        self._cleanup_uses_default_root = (
+            self.assets_subdir is None
+            and self._listing_prefix == ""
+            and len(self._output_path_patterns) == 2
+        )
         self._cleanup_ran = False
 
     def write_shard_block(self, shard_id, block) -> None:
@@ -111,40 +126,31 @@ class FileCleanupReducerSink(BaseSink):
                 f"{self.reducer_name} requires an active reducer stage with a prior writer stage"
             )
 
-        keep_pairs = {
-            (row.shard_id, row.worker_token)
-            for row in get_finalized_workers(stage_index=stage_index - 1)
-        }
-        keep_keys = {f"{shard_id}__w{worker_id}" for shard_id, worker_id in keep_pairs}
+        finalized_workers = get_finalized_workers(stage_index=stage_index - 1)
 
-        literal_prefix = ""
-        for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
-            self.filename_template
-        ):
-            literal_prefix += literal_text
-            if field_name is not None:
-                break
-        listing_prefix = (
-            "" if "/" not in literal_prefix else literal_prefix.rsplit("/", 1)[0]
-        )
-        if (
-            self.assets_subdir is None
-            and listing_prefix == ""
-            and len(self._output_path_patterns) == 2
-        ):
+        if self._cleanup_uses_default_root:
+            keep_keys = {
+                f"{row.shard_id}__w{row.worker_token}" for row in finalized_workers
+            }
+            rm = self.output.rm
+            keep_key_contains = keep_keys.__contains__
             try:
-                root_entries = self.output.ls(listing_prefix, detail=False)
+                root_entries = self.output.ls(self._listing_prefix, detail=False)
             except (FileNotFoundError, NotADirectoryError):
                 root_entries = []
-            paths_to_delete = _cleanup_default_root_entries(root_entries, keep_keys)
-            for path in sorted(paths_to_delete):
+            for rel_path in root_entries:
+                if len(rel_path) != 27 or rel_path[12:15] != "__w":
+                    continue
+                if keep_key_contains(rel_path):
+                    continue
                 try:
-                    self.output.rm(path, recursive=True)
+                    rm(rel_path, recursive=True)
                 except FileNotFoundError:
                     continue
             return
-        paths = [listing_prefix]
-        prefix_parts = [part for part in listing_prefix.split("/") if part]
+        keep_pairs = {(row.shard_id, row.worker_token) for row in finalized_workers}
+        paths = [self._listing_prefix]
+        prefix_parts = [part for part in self._listing_prefix.split("/") if part]
         for pattern in self._output_path_patterns[len(prefix_parts) :]:
             next_paths: list[str] = []
             for path in paths:
