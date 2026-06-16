@@ -41,6 +41,7 @@ from refiner.pipeline.sources import (
     JsonReader,
     McapReader,
     ParquetReader,
+    RerunReader,
     TfdsReader,
     TfrecordReader,
     ZarrReader,
@@ -48,6 +49,12 @@ from refiner.pipeline.sources import (
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.mcap import SyncMethod
+from refiner.pipeline.sources.readers.rerun import (
+    DEFAULT_RERUN_ACTION_PREFIX,
+    DEFAULT_RERUN_CAMERA_PREFIX,
+    DEFAULT_RERUN_STATE_PREFIX,
+    RerunOutputMode,
+)
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
@@ -710,6 +717,7 @@ class RefinerPipeline:
         gpu: GPU | None = None,
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
+        extra_dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
         secrets: SecretInput | None = None,
         env: Mapping[str, object | None] | None = None,
@@ -729,6 +737,7 @@ class RefinerPipeline:
             dependencies: Additional packages to install in the cloud runtime.
                 Entries are requirement strings such as `"torch"` or
                 `"ego-vision[models]==0.1.2"`.
+            extra_dependencies: Compatibility alias for ``dependencies``.
             refiner_extras: Additional macrodata-refiner extras to install in
                 the cloud runtime. Built-in blocks automatically declare the
                 extras they require; pass this for extras used outside those
@@ -745,6 +754,11 @@ class RefinerPipeline:
                 fully compatible with the current pipeline.
         """
         from refiner.launchers.cloud import CloudLauncher
+
+        if dependencies is not None and extra_dependencies is not None:
+            raise ValueError("Pass only one of dependencies or extra_dependencies")
+        if dependencies is None:
+            dependencies = extra_dependencies
 
         launcher = CloudLauncher(
             pipeline=self,
@@ -1213,6 +1227,73 @@ def read_mcap(
             sync_method=sync_method,
             include_skew=include_skew,
             fps=fps,
+        )
+    )
+
+
+def read_rerun(
+    inputs: DataFileSetLike,
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    recursive: bool = False,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    file_path_column: str | None = "file_path",
+    output: RerunOutputMode = "recording",
+    contents: str | Sequence[str] | None = None,
+    timelines: Sequence[str] | None = None,
+    primary_timeline: str | None = None,
+    include_static: bool = True,
+    materialize_tables: bool = True,
+    include_recording: bool | None = None,
+    fill_latest_at: bool = False,
+    action_prefix: str = DEFAULT_RERUN_ACTION_PREFIX,
+    state_prefix: str = DEFAULT_RERUN_STATE_PREFIX,
+    camera_prefix: str = DEFAULT_RERUN_CAMERA_PREFIX,
+    actions: PathSelection | None = None,
+    states: PathSelection | None = None,
+    videos: PathSelection | None = None,
+    fps: float | None = None,
+    robot_type: str | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline with a Rerun RRD reader source.
+
+    RRD files are planned as atomic input shards. With ``output="recording"``,
+    each emitted row preserves the selected Rerun data as Arrow-backed
+    ``Tabular`` tables grouped by timeline under the ``rerun`` field. Set
+    ``materialize_tables=False`` when you only need source chunk metadata.
+    With ``output="robotics"``, the reader additionally derives common
+    robotics episode fields from configurable Rerun entity prefixes so the
+    rows can be passed through ``to_robot_rows(...)``. Pass ``actions``,
+    ``states``, or ``videos`` to pin exact entity paths and output order
+    instead of using prefix-derived defaults.
+    """
+    return RefinerPipeline(
+        source=RerunReader(
+            inputs,
+            fs=fs,
+            storage_options=storage_options,
+            recursive=recursive,
+            target_shard_bytes=target_shard_bytes,
+            num_shards=num_shards,
+            file_path_column=file_path_column,
+            output=output,
+            contents=contents,
+            timelines=timelines,
+            primary_timeline=primary_timeline,
+            include_static=include_static,
+            materialize_tables=materialize_tables,
+            include_recording=include_recording,
+            fill_latest_at=fill_latest_at,
+            action_prefix=action_prefix,
+            state_prefix=state_prefix,
+            camera_prefix=camera_prefix,
+            actions=actions,
+            states=states,
+            videos=videos,
+            fps=fps,
+            robot_type=robot_type,
         )
     )
 
