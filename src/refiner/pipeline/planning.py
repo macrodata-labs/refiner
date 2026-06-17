@@ -22,10 +22,14 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
+from refiner.pipeline.builtins import (
+    _REFINER_BUILTIN_CALL_ATTR,
+    _builtin_description,
+    describe_builtin,
+)
 from refiner.pipeline.data.datatype import dtype_to_plan
 from refiner.pipeline.resources import GPU
 from refiner.platform.manifest import _redact_captured_text
-from refiner.services import RuntimeServiceSpec
 from refiner.services.discovery import (
     collect_pipeline_services,
     runtime_service_specs_to_dicts,
@@ -33,9 +37,6 @@ from refiner.services.discovery import (
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
-
-
-_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,46 +311,6 @@ def _callable_source(fn: Any) -> str:
     return repr(fn)
 
 
-def _builtin_description(fn: Any) -> dict[str, Any] | None:
-    spec = getattr(fn, _REFINER_BUILTIN_CALL_ATTR, None)
-    if not isinstance(spec, dict):
-        return None
-    name = spec.get("name")
-    if not isinstance(name, str) or not name:
-        return None
-    args = spec.get("args")
-    if not isinstance(args, dict):
-        return None
-    services = spec.get("services", ())
-    if not isinstance(services, (list, tuple)):
-        return None
-    parsed_services: list[RuntimeServiceSpec] = []
-    for service in services:
-        if not isinstance(service, RuntimeServiceSpec):
-            return None
-        parsed_services.append(service)
-    return {"name": name, "args": args, "services": tuple(parsed_services)}
-
-
-def describe_builtin(
-    name: str, *, refiner_extras: tuple[str, ...] = (), **args: Any
-) -> Any:
-    def _decorate(fn: Any) -> Any:
-        setattr(
-            fn,
-            _REFINER_BUILTIN_CALL_ATTR,
-            {
-                "name": name,
-                "args": args,
-                "services": (),
-                "refiner_extras": refiner_extras,
-            },
-        )
-        return fn
-
-    return _decorate
-
-
 def _step_payload(
     *,
     name: str,
@@ -551,9 +512,11 @@ def compile_pipeline_plan(
 
 
 __all__ = [
+    "_REFINER_BUILTIN_CALL_ATTR",
     "PlannedStage",
     "StageComputeRequirements",
     "compile_pipeline_plan",
     "compile_planned_stages",
+    "describe_builtin",
     "plan_pipeline_stages",
 ]

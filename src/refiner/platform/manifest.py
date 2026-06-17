@@ -18,10 +18,10 @@ if TYPE_CHECKING:
     from refiner.pipeline.planning import PlannedStage
 
 from packaging.requirements import InvalidRequirement, Requirement
+from refiner.pipeline.builtins import _REFINER_BUILTIN_CALL_ATTR
 
 _REDACTION_PLACEHOLDER = "REDACTED_SECRET"
 _NORMALIZED_DEPENDENCY_SEPARATOR_PATTERN = re.compile(r"[-_.]+")
-_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 
 def _redact_captured_text(text: str, *, secret_values: Sequence[str]) -> str:

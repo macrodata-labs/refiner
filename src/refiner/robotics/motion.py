@@ -8,7 +8,7 @@ import pyarrow as pa
 
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
-from refiner.pipeline.planning import describe_builtin
+from refiner.pipeline.builtins import describe_builtin
 from refiner.robotics.row import RoboticsRow
 
 

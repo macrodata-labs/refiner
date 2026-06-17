@@ -18,13 +18,12 @@ from refiner.inference.providers.openai import (
     _OpenAIResponsesClient,
 )
 from refiner.inference.types import InferenceProvider
+from refiner.pipeline.builtins import _REFINER_BUILTIN_CALL_ATTR
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.services import VLLMRuntimeServiceBinding
 from refiner.worker.context import get_active_service_manager
 from refiner.worker.metrics.api import register_gauge
-
-_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 RequestFn: TypeAlias = Callable[[Mapping[str, Any]], Awaitable[Any]]
 MapFn: TypeAlias = Callable[[Row, RequestFn], Awaitable[MapResult] | MapResult]

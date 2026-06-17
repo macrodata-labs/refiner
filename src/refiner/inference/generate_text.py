@@ -40,7 +40,7 @@ from refiner.inference.types import (
     ProviderOptions,
 )
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.planning import describe_builtin
+from refiner.pipeline.builtins import describe_builtin
 from refiner.pipeline.steps import MapResult
 
 

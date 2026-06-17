@@ -1,17 +1,26 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections.abc import Iterator
 
 import refiner as rf
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner import col
+from refiner.pipeline.builtins import (
+    _REFINER_BUILTIN_CALL_ATTR,
+    _builtin_description,
+    describe_builtin,
+)
 from refiner.pipeline import RefinerPipeline, from_items
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.planning import (
+    _REFINER_BUILTIN_CALL_ATTR as PLANNING_REFINER_BUILTIN_CALL_ATTR,
     _extract_lambda_source,
     compile_pipeline_plan,
+    describe_builtin as planning_describe_builtin,
     plan_pipeline_stages,
 )
 from refiner.robotics import motion_trim
@@ -39,6 +48,45 @@ class UndescribedSink(BaseSink):
     def write_block(self, block):
         del block
         return {}, 0
+
+
+def test_import_refiner_inference_in_fresh_interpreter() -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", "import refiner as mdr; mdr.inference"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_describe_builtin_records_centralized_metadata() -> None:
+    @describe_builtin(
+        "unit.test",
+        refiner_extras=("hand_tracking",),
+        value=42,
+    )
+    def _fn(row: Row) -> Row:
+        return row
+
+    assert getattr(_fn, _REFINER_BUILTIN_CALL_ATTR) == {
+        "name": "unit.test",
+        "args": {"value": 42},
+        "services": (),
+        "refiner_extras": ("hand_tracking",),
+    }
+    assert _builtin_description(_fn) == {
+        "name": "unit.test",
+        "args": {"value": 42},
+        "services": (),
+    }
+
+
+def test_planning_reexports_builtin_metadata_helpers() -> None:
+    assert planning_describe_builtin is describe_builtin
+    assert PLANNING_REFINER_BUILTIN_CALL_ATTR == _REFINER_BUILTIN_CALL_ATTR
+    assert _REFINER_BUILTIN_CALL_ATTR == "__refiner_builtin_call__"
 
 
 def _score_filter_lambda():

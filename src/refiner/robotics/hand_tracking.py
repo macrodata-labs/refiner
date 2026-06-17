@@ -7,7 +7,7 @@ from typing import Any
 
 from refiner.execution.asyncio.runtime import submit
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.planning import describe_builtin
+from refiner.pipeline.builtins import describe_builtin
 from refiner.pipeline.steps import BatchFn
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
