@@ -113,7 +113,6 @@ class RerunReader(BaseReader):
         primary_timeline: str | None = None,
         include_static: bool = True,
         materialize_tables: bool = True,
-        include_recording: bool | None = None,
         fill_latest_at: bool = False,
         action_prefix: str = DEFAULT_RERUN_ACTION_PREFIX,
         state_prefix: str = DEFAULT_RERUN_STATE_PREFIX,
@@ -129,10 +128,6 @@ class RerunReader(BaseReader):
         if output == "robotics" and not materialize_tables:
             raise ValueError(
                 "materialize_tables=False is only supported for recording output"
-            )
-        if output == "recording" and include_recording is False:
-            raise ValueError(
-                "include_recording=False is only supported for robotics output"
             )
         if output == "recording":
             _reject_recording_robotics_options(
@@ -168,9 +163,6 @@ class RerunReader(BaseReader):
         self.include_static = include_static
         self.materialize_tables = materialize_tables
         self.use_source_chunks = self.timelines is None
-        self.include_recording = (
-            True if include_recording is None else include_recording
-        )
         self.fill_latest_at = fill_latest_at
         self.action_prefix = _normalize_entity_prefix(action_prefix)
         self.state_prefix = _normalize_entity_prefix(state_prefix)
@@ -222,7 +214,6 @@ class RerunReader(BaseReader):
                 "timelines": self.timelines,
                 "include_static": self.include_static,
                 "materialize_tables": self.materialize_tables,
-                "include_recording": self.include_recording,
                 "fill_latest_at": self.fill_latest_at,
             }
         )
@@ -357,11 +348,7 @@ class RerunReader(BaseReader):
         store_entries: Sequence[Any] | None = None,
     ) -> Iterator[SourceUnit]:
         if store_entries is None:
-            store_entries = (
-                _recording_entries(local_path)
-                if self.output == "recording" or self.include_recording
-                else []
-            )
+            store_entries = _recording_entries(local_path)
         source_recording_count = len(store_entries) if store_entries else None
         entries_by_recording_id = {entry.recording_id: entry for entry in store_entries}
         timelines = self.timelines
@@ -492,24 +479,6 @@ class RerunReader(BaseReader):
             return dataset_or_view
         return dataset_or_view.filter_contents(self.contents)
 
-    def _robotics_contents(self) -> tuple[str, ...]:
-        if self.contents is not None:
-            return self.contents
-        contents: list[str] = []
-        if self.actions_explicit:
-            contents.extend(self.actions.values())
-        else:
-            contents.append(_prefix_contents(self.action_prefix))
-        if self.states_explicit:
-            contents.extend(self.states.values())
-        else:
-            contents.append(_prefix_contents(self.state_prefix))
-        if self.videos_explicit:
-            contents.extend(self.videos.values())
-        else:
-            contents.append(_prefix_contents(self.camera_prefix))
-        return tuple(dict.fromkeys(contents))
-
     def _robotics_row(
         self,
         view: Any,
@@ -523,10 +492,7 @@ class RerunReader(BaseReader):
         timelines: Sequence[str],
     ) -> Row:
         timeline = self._primary_timeline(timelines)
-        if self.include_recording:
-            content_view = self._view_for_contents(view)
-        else:
-            content_view = view.filter_contents(self._robotics_contents())
+        content_view = self._view_for_contents(view)
         table = _collect_table(
             content_view.reader(
                 index=timeline,
@@ -536,28 +502,25 @@ class RerunReader(BaseReader):
         row: dict[str, Any] = {
             "episode_id": segment_id,
         }
-        if self.include_recording:
-            static = (
-                _collect_table(content_view.reader(index=None))
-                if self.include_static
-                else None
-            )
-            row["rerun"] = RerunRecording(
-                segment_id=segment_id,
-                source_path=source_path,
-                tables={timeline: Tabular(table)},
-                static=Tabular(static) if static is not None else None,
-                source_file=source_file,
-                local_source=(
-                    local_source if self._retain_batch_local_sources() else None
-                ),
-                application_id=application_id,
-                recording_id=recording_id,
-                contents=self.contents,
-                timelines=(timeline,),
-                include_static=self.include_static,
-                use_source_chunks=False,
-            )
+        static = (
+            _collect_table(content_view.reader(index=None))
+            if self.include_static
+            else None
+        )
+        row["rerun"] = RerunRecording(
+            segment_id=segment_id,
+            source_path=source_path,
+            tables={timeline: Tabular(table)},
+            static=Tabular(static) if static is not None else None,
+            source_file=source_file,
+            local_source=local_source if self._retain_batch_local_sources() else None,
+            application_id=application_id,
+            recording_id=recording_id,
+            contents=self.contents,
+            timelines=(timeline,),
+            include_static=self.include_static,
+            use_source_chunks=False,
+        )
         if self.fps is not None:
             row["fps"] = self.fps
         if self.robot_type is not None:
@@ -583,14 +546,6 @@ class RerunReader(BaseReader):
             if self.states_explicit
             else _prefixed_columns(scalar_columns, self.state_prefix)
         )
-        if action_columns:
-            row["action"] = _list_column(
-                _singleton_scalar_matrix(table, action_columns)
-            )
-        if state_columns:
-            row["observation.state"] = _list_column(
-                _singleton_scalar_matrix(table, state_columns)
-            )
 
         image_columns = component_columns.get("EncodedImage:blob", {})
         camera_columns = (
@@ -605,11 +560,6 @@ class RerunReader(BaseReader):
         for name, column in camera_columns.items():
             values = table.column(column).combine_chunks()
             _require_dense_encoded_images(values, video_name=name)
-            row[name] = VideoFrameSequence(
-                lambda values=values: _iter_encoded_images(values),
-                fps=self.fps or 30.0,
-                frame_count=len(values),
-            )
 
         if self.file_path_column is not None:
             row[self.file_path_column] = source_path
@@ -620,13 +570,96 @@ class RerunReader(BaseReader):
             action_key="action",
             state_key="observation.state",
             video_keys={name: name for name in camera_columns},
-        )(DictRow(row))
+        )(
+            _RerunRoboticsSourceRow(
+                row,
+                timeline=timeline,
+                action_columns=action_columns,
+                state_columns=state_columns,
+                camera_columns=camera_columns,
+                fps=self.fps or 30.0,
+            )
+        )
 
     def _retain_batch_local_sources(self) -> bool:
         return (
             self.output == "recording"
             and not self.materialize_tables
             and self.use_source_chunks
+        )
+
+
+class _RerunRoboticsSourceRow(Row):
+    def __init__(
+        self,
+        data: Mapping[str, Any],
+        *,
+        timeline: str,
+        action_columns: Sequence[tuple[str, str]],
+        state_columns: Sequence[tuple[str, str]],
+        camera_columns: Mapping[str, str],
+        fps: float,
+    ) -> None:
+        self._data = dict(data)
+        self._timeline = timeline
+        self._action_columns = tuple(action_columns)
+        self._state_columns = tuple(state_columns)
+        self._camera_columns = dict(camera_columns)
+        self._fps = float(fps)
+        self._cache: dict[str, Any] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "action" and self._action_columns:
+            return self._cached(
+                key,
+                lambda: _list_column(
+                    _singleton_scalar_matrix(self._table(), self._action_columns)
+                ),
+            )
+        if key == "observation.state" and self._state_columns:
+            return self._cached(
+                key,
+                lambda: _list_column(
+                    _singleton_scalar_matrix(self._table(), self._state_columns)
+                ),
+            )
+        if key in self._camera_columns:
+            return self._cached(
+                key, lambda: self._video(key, self._camera_columns[key])
+            )
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        yield from self._data
+        if self._action_columns and "action" not in self._data:
+            yield "action"
+        if self._state_columns and "observation.state" not in self._data:
+            yield "observation.state"
+        for name in self._camera_columns:
+            if name not in self._data:
+                yield name
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def _recording(self) -> RerunRecording:
+        return cast(RerunRecording, self._data["rerun"])
+
+    def _table(self) -> pa.Table:
+        return self._recording().tables[self._timeline].table
+
+    def _cached(self, key: str, factory: Any) -> Any:
+        if key not in self._cache:
+            self._cache[key] = factory()
+        return self._cache[key]
+
+    def _video(self, name: str, column: str) -> VideoFrameSequence:
+        values = self._table().column(column).combine_chunks()
+        _require_dense_encoded_images(values, video_name=name)
+        return VideoFrameSequence(
+            lambda values=values: _iter_encoded_images(values),
+            fps=self._fps,
+            frame_count=len(values),
         )
 
 
@@ -644,10 +677,6 @@ def _normalize_entity_prefix(value: str) -> str:
         raise ValueError("Rerun entity prefixes must be non-empty")
     stripped = value.strip("/")
     return "/" if not stripped else "/" + stripped
-
-
-def _prefix_contents(prefix: str) -> str:
-    return "/**" if prefix == "/" else f"{prefix}/**"
 
 
 def _selection_map(

@@ -1246,7 +1246,6 @@ def read_rerun(
     primary_timeline: str | None = None,
     include_static: bool = True,
     materialize_tables: bool = True,
-    include_recording: bool | None = None,
     fill_latest_at: bool = False,
     action_prefix: str = DEFAULT_RERUN_ACTION_PREFIX,
     state_prefix: str = DEFAULT_RERUN_STATE_PREFIX,
@@ -1268,9 +1267,8 @@ def read_rerun(
     from configurable Rerun entity prefixes. A ``rerun`` recording sidecar for
     the primary timeline is included by default; when ``contents`` is omitted,
     that sidecar uses the full recording view rather than only the robotics
-    prefixes. Pass ``include_recording=False`` for a lightweight projection.
-    Pass ``actions``, ``states``, or ``videos`` to pin exact entity paths and
-    output order instead of using prefix-derived defaults.
+    prefixes. Pass ``actions``, ``states``, or ``videos`` to pin exact entity
+    paths and output order instead of using prefix-derived defaults.
     """
     return RefinerPipeline(
         source=RerunReader(
@@ -1287,7 +1285,6 @@ def read_rerun(
             primary_timeline=primary_timeline,
             include_static=include_static,
             materialize_tables=materialize_tables,
-            include_recording=include_recording,
             fill_latest_at=fill_latest_at,
             action_prefix=action_prefix,
             state_prefix=state_prefix,

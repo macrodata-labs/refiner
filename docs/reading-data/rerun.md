@@ -75,9 +75,8 @@ under `/cam/**` into top-level video sources such as `cam.top`.
 
 Rows also include a `rerun` recording sidecar by default. If `contents` is
 omitted, that sidecar is built from the full recording view for the primary
-timeline, not just the robotics prefixes. Set `include_recording=False` only
-when you want a lightweight robotics projection and do not need the source
-Rerun structure later.
+timeline, not just the robotics prefixes. Project it away with `.drop("rerun")`
+when downstream stages do not need the source Rerun structure.
 
 Use explicit selections when vector order or camera names matter:
 

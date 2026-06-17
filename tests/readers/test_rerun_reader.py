@@ -11,6 +11,7 @@ import refiner as mdr
 from refiner.pipeline import Row
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.expressions import col
+from refiner.pipeline.sources.readers import rerun as rerun_reader_module
 from refiner.pipeline.sources.readers.rerun import RerunReader
 from refiner.robotics.row import RoboticsRow
 
@@ -308,11 +309,6 @@ def test_read_rerun_rejects_ignored_mode_options(tmp_path: Path) -> None:
 
     with pytest.raises(
         ValueError,
-        match="include_recording=False is only supported for robotics output",
-    ):
-        mdr.read_rerun(str(rrd), output="recording", include_recording=False)
-    with pytest.raises(
-        ValueError,
         match="Rerun recording output does not use robotics options: primary_timeline",
     ):
         mdr.read_rerun(str(rrd), output="recording", primary_timeline="frame")
@@ -410,33 +406,35 @@ def test_read_rerun_robotics_mode_converts_to_robot_row(tmp_path: Path) -> None:
     ]
 
 
-def test_read_rerun_robotics_mode_without_recording_skips_recording_entries(
+def test_read_rerun_robotics_mode_derives_vectors_lazily_from_recording(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rrd = tmp_path / "tiny.rrd"
     _tiny_rrd(rrd)
+    calls = 0
+    real_matrix = rerun_reader_module._singleton_scalar_matrix
+
+    def wrapped_matrix(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return real_matrix(*args, **kwargs)
 
     monkeypatch.setattr(
-        "refiner.pipeline.sources.readers.rerun._recording_entries",
-        lambda *args, **kwargs: pytest.fail(
-            "robotics rows without recording payload do not need store metadata"
-        ),
+        rerun_reader_module,
+        "_singleton_scalar_matrix",
+        wrapped_matrix,
     )
 
     row = cast(
         Any,
-        mdr.read_rerun(
-            str(rrd),
-            output="robotics",
-            include_recording=False,
-            fps=30.0,
-        ).take(1)[0],
+        mdr.read_rerun(str(rrd), output="robotics", fps=30.0).take(1)[0],
     )
 
-    assert "rerun" not in row
-    assert "frames" not in row
+    assert calls == 0
     assert row.actions.to_pylist() == [[1.0], [2.0], [3.0]]
+    assert row.actions.to_pylist() == [[1.0], [2.0], [3.0]]
+    assert calls == 1
 
 
 def test_read_rerun_robotics_mode_exposes_top_level_fields_to_primitives(
