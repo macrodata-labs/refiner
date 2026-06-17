@@ -10,7 +10,9 @@ import pytest
 import refiner as mdr
 from refiner.pipeline import Row
 from refiner.pipeline.data.row import DictRow
+from refiner.pipeline.expressions import col
 from refiner.pipeline.sources.readers.rerun import RerunReader
+from refiner.robotics.row import RoboticsRow
 
 pytest.importorskip("rerun")
 
@@ -381,20 +383,21 @@ def test_read_rerun_robotics_mode_converts_to_robot_row(tmp_path: Path) -> None:
 
     row = cast(
         Any,
-        mdr.read_rerun(str(rrd), output="robotics", fps=30.0)
-        .to_robot_rows(
-            episode_id_key="episode_id",
-            nested_frames_key="frames",
-            fps=30.0,
-        )
-        .take(1)[0],
+        mdr.read_rerun(str(rrd), output="robotics", fps=30.0).take(1)[0],
     )
 
-    assert "rerun" not in row
+    assert isinstance(row, RoboticsRow)
+    assert "rerun" in row
+    assert "frames" not in row
     assert row.episode_id == "episode-a"
     assert row.num_frames == 3
     assert row.actions.to_pylist() == [[1.0], [2.0], [3.0]]
     assert row.states.to_pylist() == [[4.0], [5.0], [6.0]]
+    assert row.to_frame_table().column("action").to_pylist() == [
+        [1.0],
+        [2.0],
+        [3.0],
+    ]
 
 
 def test_read_rerun_robotics_mode_without_recording_skips_recording_entries(
@@ -413,11 +416,66 @@ def test_read_rerun_robotics_mode_without_recording_skips_recording_entries(
 
     row = cast(
         Any,
-        mdr.read_rerun(str(rrd), output="robotics", fps=30.0).take(1)[0],
+        mdr.read_rerun(
+            str(rrd),
+            output="robotics",
+            include_recording=False,
+            fps=30.0,
+        ).take(1)[0],
     )
 
     assert "rerun" not in row
-    assert row["frames"].num_rows == 3
+    assert "frames" not in row
+    assert row.actions.to_pylist() == [[1.0], [2.0], [3.0]]
+
+
+def test_read_rerun_robotics_mode_exposes_top_level_fields_to_primitives(
+    tmp_path: Path,
+) -> None:
+    rrd = tmp_path / "tiny.rrd"
+    _tiny_rrd(rrd)
+
+    selected = cast(
+        Any,
+        mdr.read_rerun(str(rrd), output="robotics", fps=30.0)
+        .select("action")
+        .take(1)[0],
+    )
+    dropped = cast(
+        Any,
+        mdr.read_rerun(str(rrd), output="robotics", fps=30.0)
+        .drop("observation.state")
+        .take(1)[0],
+    )
+    without_recording = cast(
+        Any,
+        mdr.read_rerun(str(rrd), output="robotics", fps=30.0).drop("rerun").take(1)[0],
+    )
+    filtered = cast(
+        Any,
+        mdr.read_rerun(str(rrd), output="robotics", fps=30.0)
+        .filter(col("episode_id") == "episode-a")
+        .take(1)[0],
+    )
+    projected_filtered = cast(
+        Any,
+        mdr.read_rerun(str(rrd), output="robotics", fps=30.0)
+        .drop("rerun")
+        .filter(col("episode_id") == "episode-a")
+        .take(1)[0],
+    )
+
+    assert selected["action"].to_pylist() == [[1.0], [2.0], [3.0]]
+    assert "rerun" not in selected
+    assert "observation.state" not in dropped
+    assert dropped.states is None
+    assert dropped["action"].to_pylist() == [[1.0], [2.0], [3.0]]
+    assert "rerun" not in without_recording
+    assert without_recording.actions.to_pylist() == [[1.0], [2.0], [3.0]]
+    assert "rerun" in filtered
+    assert filtered.actions.to_pylist() == [[1.0], [2.0], [3.0]]
+    assert "rerun" not in projected_filtered
+    assert projected_filtered.actions.to_pylist() == [[1.0], [2.0], [3.0]]
 
 
 def test_read_rerun_robotics_mode_with_recording_includes_recording_payload(
@@ -431,7 +489,6 @@ def test_read_rerun_robotics_mode_with_recording_includes_recording_payload(
         mdr.read_rerun(
             str(rrd),
             output="robotics",
-            include_recording=True,
             timelines=("frame",),
             fps=30.0,
         ).take(1)[0],
@@ -441,7 +498,8 @@ def test_read_rerun_robotics_mode_with_recording_includes_recording_payload(
     assert recording.recording_id == "episode-a"
     assert list(recording.tables) == ["frame"]
     assert recording.tables["frame"].num_rows == 3
-    assert row["frames"].num_rows == 3
+    assert "frames" not in row
+    assert row.actions.to_pylist() == [[1.0], [2.0], [3.0]]
 
 
 def test_read_rerun_describe_includes_robotics_metadata(tmp_path: Path) -> None:
@@ -516,8 +574,8 @@ def test_read_rerun_robotics_mode_respects_explicit_selections(
         ).take(1)[0],
     )
 
-    assert row["frames"].column("action").to_pylist() == [[30.0, 10.0], [40.0, 20.0]]
-    assert row["frames"].column("observation.state").to_pylist() == [
+    assert row.actions.to_pylist() == [[30.0, 10.0], [40.0, 20.0]]
+    assert row.states.to_pylist() == [
         [3.0, 1.0],
         [4.0, 2.0],
     ]
@@ -579,8 +637,8 @@ def test_read_rerun_robotics_mode_with_explicit_timeline_uses_table_metadata(
         ).take(1)[0],
     )
 
-    assert row["frames"].column("action").to_pylist() == [[30.0, 10.0], [40.0, 20.0]]
-    assert row["frames"].column("observation.state").to_pylist() == [
+    assert row.actions.to_pylist() == [[30.0, 10.0], [40.0, 20.0]]
+    assert row.states.to_pylist() == [
         [3.0, 1.0],
         [4.0, 2.0],
     ]

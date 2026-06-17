@@ -298,7 +298,7 @@ def _execute_vector_segment(
     max_vectorized_block_bytes: int | None,
     on_shard_delta: ShardDeltaFn | None,
     input_schema: pa.Schema | None,
-) -> Iterator[Tabular]:
+) -> Iterator[Block]:
     pending_rows = RowBuffer()
     current_chunk_rows = max(1, int(vectorized_chunk_rows))
     estimated_row_bytes: float | None = None
@@ -329,12 +329,8 @@ def _execute_vector_segment(
         )
         return block.with_table(table, row_indices=row_indices)
 
-    def _rows_to_block(batch: list[Row]) -> tuple[Tabular, Sequence[VectorizedOp]]:
-        try:
-            return _tabular_from_rows(batch, schema=input_schema), ops
-        except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError) as err:
-            if not row_projection_ops:
-                raise
+    def _rows_to_block(batch: list[Row]) -> tuple[Block, Sequence[VectorizedOp]]:
+        if row_projection_ops:
             projected = [
                 _apply_row_projection_ops(row, row_projection_ops) for row in batch
             ]
@@ -343,8 +339,11 @@ def _execute_vector_segment(
                     _tabular_from_rows(projected, schema=row_projected_schema),
                     row_remaining_ops,
                 )
-            except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError) as fallback_err:
-                raise err from fallback_err
+            except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError):
+                if not row_remaining_ops:
+                    return projected, ()
+                raise
+        return _tabular_from_rows(batch, schema=input_schema), ops
 
     def _chunk_rows_for_budget() -> int:
         if (
@@ -356,7 +355,7 @@ def _execute_vector_segment(
         budget_rows = int(max_vectorized_block_bytes / estimated_row_bytes)
         return max(1, min(current_chunk_rows, budget_rows))
 
-    def _run_pending_chunk(target_rows: int) -> Iterator[Tabular]:
+    def _run_pending_chunk(target_rows: int) -> Iterator[Block]:
         nonlocal current_chunk_rows, estimated_row_bytes
         rows_for_try = max(1, target_rows)
         while True:
@@ -369,6 +368,11 @@ def _execute_vector_segment(
                 rows_for_try = max(1, rows_for_try // 2)
                 current_chunk_rows = min(current_chunk_rows, rows_for_try)
                 continue
+            if not isinstance(block, Tabular):
+                pending_rows.discard(rows_for_try)
+                if block:
+                    yield block
+                return
             table = block.table
 
             if table.num_rows > 0:
@@ -401,7 +405,7 @@ def _execute_vector_segment(
                 yield out
             return
 
-    def _drain_rows(*, force: bool) -> Iterator[Tabular]:
+    def _drain_rows(*, force: bool) -> Iterator[Block]:
         while len(pending_rows) > 0:
             desired_rows = _chunk_rows_for_budget()
             if not force and len(pending_rows) < desired_rows:

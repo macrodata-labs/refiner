@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import is_dataclass
 from typing import Any, cast
 
 import pyarrow as pa
@@ -165,7 +166,8 @@ def _row_index_key(rows: Sequence[Row]) -> str:
 
 def _is_side_data_value(value: Any) -> bool:
     return value is not _MISSING and (
-        isinstance(value, Tabular) or isinstance(value, VideoSource)
+        isinstance(value, Tabular | VideoSource | pa.Array | pa.ChunkedArray)
+        or (not isinstance(value, type) and is_dataclass(value))
     )
 
 

@@ -24,6 +24,7 @@ from refiner.pipeline.sources.readers.utils import (
     PathSelection,
     path_selection_map,
 )
+from refiner.robotics.row import _robot_row_converter
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameSequence
 from refiner.worker.context import logger
@@ -34,7 +35,15 @@ _RERUN_SEGMENT_ID = "rerun_segment_id"
 _RERUN_COMPONENT_METADATA = b"rerun:component"
 _RERUN_ENTITY_PATH_METADATA = b"rerun:entity_path"
 _ROBOTICS_ROW_COLUMNS = frozenset(
-    {"episode_id", "rerun", "frames", "fps", "robot_type"}
+    {
+        "episode_id",
+        "rerun",
+        "frames",
+        "action",
+        "observation.state",
+        "fps",
+        "robot_type",
+    }
 )
 _RECORDING_ROW_COLUMNS = frozenset({"episode_id", "rerun"})
 DEFAULT_RERUN_ACTION_PREFIX = "/action"
@@ -160,7 +169,7 @@ class RerunReader(BaseReader):
         self.materialize_tables = materialize_tables
         self.use_source_chunks = self.timelines is None
         self.include_recording = (
-            output == "recording" if include_recording is None else include_recording
+            True if include_recording is None else include_recording
         )
         self.fill_latest_at = fill_latest_at
         self.action_prefix = _normalize_entity_prefix(action_prefix)
@@ -512,7 +521,7 @@ class RerunReader(BaseReader):
         application_id: str | None,
         recording_id: str,
         timelines: Sequence[str],
-    ) -> DictRow:
+    ) -> Row:
         timeline = self._primary_timeline(timelines)
         contents = self._robotics_contents()
         content_view = view.filter_contents(contents)
@@ -522,7 +531,6 @@ class RerunReader(BaseReader):
                 fill_latest_at=self.fill_latest_at,
             )
         )
-        frames = _robotics_frame_table(table, timeline=timeline)
         row: dict[str, Any] = {
             "episode_id": segment_id,
         }
@@ -574,16 +582,13 @@ class RerunReader(BaseReader):
             else _prefixed_columns(scalar_columns, self.state_prefix)
         )
         if action_columns:
-            frames = frames.append_column(
-                "action",
-                _list_column(_singleton_scalar_matrix(table, action_columns)),
+            row["action"] = _list_column(
+                _singleton_scalar_matrix(table, action_columns)
             )
         if state_columns:
-            frames = frames.append_column(
-                "observation.state",
-                _list_column(_singleton_scalar_matrix(table, state_columns)),
+            row["observation.state"] = _list_column(
+                _singleton_scalar_matrix(table, state_columns)
             )
-        row["frames"] = Tabular(frames)
 
         image_columns = component_columns.get("EncodedImage:blob", {})
         camera_columns = (
@@ -606,7 +611,14 @@ class RerunReader(BaseReader):
 
         if self.file_path_column is not None:
             row[self.file_path_column] = source_path
-        return DictRow(row)
+        return _robot_row_converter(
+            episode_id_key="episode_id",
+            fps_key="fps",
+            robot_type_key="robot_type",
+            action_key="action",
+            state_key="observation.state",
+            video_keys={name: name for name in camera_columns},
+        )(DictRow(row))
 
     def _retain_batch_local_sources(self) -> bool:
         return (
@@ -838,13 +850,6 @@ def _validate_video_output_names(
             "Rerun video output names cannot use reserved robotics row columns: "
             + ", ".join(sorted(collisions))
         )
-
-
-def _robotics_frame_table(table: pa.Table, *, timeline: str) -> pa.Table:
-    columns: dict[str, pa.ChunkedArray] = {}
-    if timeline in table.column_names:
-        columns["frame_index"] = table.column(timeline)
-    return pa.table(columns)
 
 
 def _singleton_scalar_matrix(

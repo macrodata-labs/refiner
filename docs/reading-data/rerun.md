@@ -57,34 +57,25 @@ identity and chunk metadata.
 
 ## Robotics rows
 
-With `output="robotics"`, the reader creates rows that can be passed to
-`to_robot_rows(...)` and robotics writers:
+With `output="robotics"`, the reader creates robotics episode rows directly:
 
 ```python
-robot_rows = (
-    mdr.read_rerun(
-        "/data/episodes/*.rrd",
-        output="robotics",
-        fps=30,
-        robot_type="unknown",
-    )
-    .to_robot_rows(
-        episode_id_key="episode_id",
-        nested_frames_key="frames",
-        fps_key="fps",
-        robot_type_key="robot_type",
-        video_keys={
-            "observation.images.top": "cam.top",
-            "observation.images.left_wrist": "cam.left_wrist",
-        },
-    )
+robot_rows = mdr.read_rerun(
+    "/data/episodes/*.rrd",
+    output="robotics",
+    fps=30,
+    robot_type="unknown",
 )
 ```
 
 The default robotics mapping reads scalar components under `/action/**` into
-the frame `action` vector, scalar components under `/observation/state/**` into
-`observation.state`, and encoded images under `/cam/**` into top-level video
-sources such as `cam.top`.
+the top-level `action` vector, scalar components under
+`/observation/state/**` into top-level `observation.state`, and encoded images
+under `/cam/**` into top-level video sources such as `cam.top`.
+
+Rows also include the original `rerun` recording sidecar by default. Set
+`include_recording=False` only when you want a lightweight robotics projection
+and do not need the source Rerun structure later.
 
 Use explicit selections when vector order or camera names matter:
 
@@ -105,10 +96,10 @@ also define the minimal Rerun content filter for those categories.
 
 ## Decoding
 
-Scalar action and state columns are read from Arrow list arrays and converted
-to frame vectors. Encoded images remain lazy `VideoFrameSequence` values; JPEG
-or PNG bytes are decoded frame-by-frame only when a downstream video writer or
-consumer iterates the sequence.
+Scalar action and state columns are read from Arrow list arrays and exposed as
+top-level Arrow list arrays. Encoded images remain lazy `VideoFrameSequence`
+values; JPEG or PNG bytes are decoded frame-by-frame only when a downstream
+video writer or consumer iterates the sequence.
 
 ## Sharding
 

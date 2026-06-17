@@ -1263,11 +1263,12 @@ def read_rerun(
     each emitted row preserves the selected Rerun data as Arrow-backed
     ``Tabular`` tables grouped by timeline under the ``rerun`` field. Set
     ``materialize_tables=False`` when you only need source chunk metadata.
-    With ``output="robotics"``, the reader additionally derives common
-    robotics episode fields from configurable Rerun entity prefixes so the
-    rows can be passed through ``to_robot_rows(...)``. Pass ``actions``,
-    ``states``, or ``videos`` to pin exact entity paths and output order
-    instead of using prefix-derived defaults.
+    With ``output="robotics"``, the reader emits robotics episode rows directly,
+    with top-level ``action``, ``observation.state``, and video fields derived
+    from configurable Rerun entity prefixes. The original ``rerun`` sidecar is
+    included by default; pass ``include_recording=False`` for a lightweight
+    projection. Pass ``actions``, ``states``, or ``videos`` to pin exact entity
+    paths and output order instead of using prefix-derived defaults.
     """
     return RefinerPipeline(
         source=RerunReader(
