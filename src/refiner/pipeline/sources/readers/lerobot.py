@@ -57,12 +57,15 @@ class LeRobotEpisodeReader(BaseSource):
         arrow_batch_size: int = 65536,
         split_row_groups: bool = True,
         skip_malformed_rows: bool = False,
+        limit: int | None = None,
     ) -> None:
         """Create a LeRobot episode reader over one or more dataset roots.
 
         The shard-planning arguments apply to the episode parquet files under
         each dataset root's `meta/episodes` directory.
         """
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be >= 0")
         self._root_fileset = DataFileSet.resolve(
             inputs,
             fs=fs,
@@ -81,26 +84,50 @@ class LeRobotEpisodeReader(BaseSource):
         self._last_frame_table: tuple[tuple[int, Any, Any], pa.Table] | None = None
         self.skip_malformed_rows = skip_malformed_rows
         self._warned_malformed_row = False
+        self._limit = limit
+        self._emitted_rows = 0
 
     def describe(self) -> dict[str, Any]:
         inputs = [entry.abs_path() for entry in self._root_fileset.entries]
-        return {"path": ", ".join(inputs), "inputs": inputs}
+        description: dict[str, Any] = {"path": ", ".join(inputs), "inputs": inputs}
+        if self._limit is not None:
+            description["limit"] = self._limit
+        return description
 
     def list_shards(self) -> list[Shard]:
+        if self._limit == 0:
+            return []
         return self._parquet_reader().list_shards()
+
+    def read(self) -> Iterator[SourceUnit]:
+        self._emitted_rows = 0
+        yield from super().read()
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         """Read one planned episode shard and emit `LeRobotTabular` blocks."""
+        if self._remaining_limit() == 0:
+            return
         descriptor = shard.descriptor
         assert isinstance(descriptor, FilePartsDescriptor)
         metadata, remaps = self._metadata_bundle
         for part in descriptor.parts:
+            if self._remaining_limit() == 0:
+                return
             part_shard = Shard.from_file_parts((part,))
             for batch in self._parquet_reader().read_shard(part_shard):
+                remaining = self._remaining_limit()
+                if remaining == 0:
+                    return
                 if not isinstance(batch, Tabular):
                     raise TypeError(
                         "LeRobotEpisodeReader requires Tabular batches from ParquetReader"
                     )
+                if (
+                    remaining is not None
+                    and not self.skip_malformed_rows
+                    and batch.num_rows > remaining
+                ):
+                    batch = batch.with_table(batch.table.slice(0, remaining))
 
                 root = self.roots[part.source_index]
                 metadata_for_source = metadata[part.source_index]
@@ -163,6 +190,14 @@ class LeRobotEpisodeReader(BaseSource):
                     if batch.num_rows == 0:
                         continue
 
+                remaining = self._remaining_limit()
+                if remaining == 0:
+                    return
+                if remaining is not None and batch.num_rows > remaining:
+                    batch = batch.with_table(batch.table.slice(0, remaining))
+                    frames_by_row = frames_by_row[:remaining]
+
+                self._emitted_rows += batch.num_rows
                 yield LeRobotTabular(
                     batch,
                     metadata_by_row=(metadata_for_source,) * batch.num_rows,
@@ -197,6 +232,11 @@ class LeRobotEpisodeReader(BaseSource):
 
     def _io_refiner_extras(self) -> tuple[str, ...]:
         return self._root_fileset.required_refiner_extras()
+
+    def _remaining_limit(self) -> int | None:
+        if self._limit is None:
+            return None
+        return max(0, self._limit - self._emitted_rows)
 
     @cached_property
     def _metadata_bundle(

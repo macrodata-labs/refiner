@@ -12,7 +12,7 @@ from typing import cast
 import refiner as mdr
 from refiner.io import DataFolder
 from refiner.pipeline.data.row import DictRow
-from refiner.video import VideoFile
+from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.robotics.lerobot_format import (
@@ -25,6 +25,7 @@ from refiner.robotics.lerobot_format import (
     LeRobotVideoInfo,
     remap_task_index_table,
 )
+from refiner.video import VideoFile
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -156,6 +157,67 @@ def _build_sample_dataset(
     )
 
 
+def _build_multi_part_sample_dataset(root: Path) -> None:
+    _build_sample_dataset(root)
+    _write_parquet(
+        root / "meta" / "episodes" / "part-000.parquet",
+        [
+            {
+                "episode_index": episode_index,
+                "length": 2,
+                "dataset_from_index": episode_index * 2,
+                "dataset_to_index": episode_index * 2 + 2,
+                "data/chunk_index": 0,
+                "data/file_index": 0,
+                "meta/episodes/chunk_index": 0,
+                "meta/episodes/file_index": 0,
+                "stats/observation.state/min": [-999.0],
+                "tasks": ["pick" if episode_index % 2 == 0 else "place"],
+                "videos/observation.images.main/chunk_index": 0,
+                "videos/observation.images.main/file_index": episode_index,
+                "videos/observation.images.main/from_timestamp": float(episode_index),
+                "videos/observation.images.main/to_timestamp": float(episode_index + 1),
+            }
+            for episode_index in range(2)
+        ],
+    )
+    _write_parquet(
+        root / "meta" / "episodes" / "part-001.parquet",
+        [
+            {
+                "episode_index": episode_index,
+                "length": 2,
+                "dataset_from_index": episode_index * 2,
+                "dataset_to_index": episode_index * 2 + 2,
+                "data/chunk_index": 0,
+                "data/file_index": 0,
+                "meta/episodes/chunk_index": 0,
+                "meta/episodes/file_index": 1,
+                "stats/observation.state/min": [-999.0],
+                "tasks": ["pick" if episode_index % 2 == 0 else "place"],
+                "videos/observation.images.main/chunk_index": 0,
+                "videos/observation.images.main/file_index": episode_index,
+                "videos/observation.images.main/from_timestamp": float(episode_index),
+                "videos/observation.images.main/to_timestamp": float(episode_index + 1),
+            }
+            for episode_index in range(2, 4)
+        ],
+    )
+    _write_parquet(
+        root / "data" / "chunk-000" / "file-000.parquet",
+        [
+            {
+                "index": index,
+                "episode_index": index // 2,
+                "frame_index": index % 2,
+                "timestamp": float(index) / 10.0,
+                "task_index": (index // 2) % 2,
+            }
+            for index in range(8)
+        ],
+    )
+
+
 def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     root = tmp_path / "lerobot"
     _build_sample_dataset(root)
@@ -188,6 +250,86 @@ def test_lerobot_reader_emits_episode_rows(tmp_path: Path) -> None:
     assert video.uri.endswith("/videos/observation.images.main/chunk-000/file-000.mp4")
     assert video.from_timestamp_s == 0.0
     assert video.to_timestamp_s == 1.0
+
+
+def test_read_lerobot_limit_emits_first_row_with_aligned_frames(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    rows = mdr.read_lerobot(str(root), limit=1).materialize()
+
+    assert len(rows) == 1
+    row = cast(LeRobotRow, rows[0])
+    assert int(row["episode_index"]) == 0
+    frame_rows = row["frames"].to_rows()
+    assert [int(frame["episode_index"]) for frame in frame_rows] == [0, 0]
+    assert [int(frame["index"]) for frame in frame_rows] == [0, 1]
+
+
+def test_read_lerobot_limit_larger_than_dataset_returns_all_rows(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    rows = mdr.read_lerobot(str(root), limit=10).materialize()
+
+    assert [int(row["episode_index"]) for row in rows] == [0, 1]
+
+
+def test_read_lerobot_limit_none_preserves_full_scan(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    rows = mdr.read_lerobot(str(root), limit=None).materialize()
+
+    assert [int(row["episode_index"]) for row in rows] == [0, 1]
+
+
+def test_read_lerobot_limit_zero_yields_no_rows(tmp_path: Path) -> None:
+    root = tmp_path / "lerobot"
+    _build_sample_dataset(root)
+
+    assert mdr.read_lerobot(str(root), limit=0).materialize() == []
+
+
+def test_lerobot_reader_limit_spans_parts_and_truncates_partial_block(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lerobot"
+    _build_multi_part_sample_dataset(root)
+
+    reader = LeRobotEpisodeReader(str(root), limit=3, arrow_batch_size=2)
+    shards = [
+        Shard.from_file_parts(
+            (
+                FilePart(
+                    path=str(root / "meta" / "episodes" / filename),
+                    start=0,
+                    end=-1,
+                ),
+            ),
+            global_ordinal=idx,
+        )
+        for idx, filename in enumerate(("part-000.parquet", "part-001.parquet"))
+    ]
+    blocks = [
+        block
+        for shard in shards
+        for block in reader.read_shard(shard)
+        if isinstance(block, Tabular)
+    ]
+
+    assert [block.num_rows for block in blocks] == [2, 1]
+    rows = [cast(LeRobotRow, row) for block in blocks for row in block.to_rows()]
+    assert [int(row["episode_index"]) for row in rows] == [0, 1, 2]
+    assert [int(frame["episode_index"]) for frame in rows[2]["frames"].to_rows()] == [
+        2,
+        2,
+    ]
+    assert [int(frame["index"]) for frame in rows[2]["frames"].to_rows()] == [4, 5]
 
 
 def test_lerobot_reader_raises_on_malformed_frame_count(tmp_path: Path) -> None:

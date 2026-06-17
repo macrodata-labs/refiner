@@ -1306,6 +1306,7 @@ def read_lerobot(
     num_shards: int | None = None,
     split_row_groups: bool = True,
     skip_malformed_rows: bool = False,
+    limit: int | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline with an episode-granular LeRobot reader source.
 
@@ -1316,6 +1317,9 @@ def read_lerobot(
     unchanged. By default, malformed episode rows whose declared frame count
     does not match loaded frames raise an error; `skip_malformed_rows=True`
     skips them with a warning and metric.
+
+    For smoke jobs, use `mdr.read_lerobot(path, limit=1)` to emit only the
+    first episode before downstream transforms run.
     """
     return RefinerPipeline(
         source=LeRobotEpisodeReader(
@@ -1326,6 +1330,7 @@ def read_lerobot(
             num_shards=num_shards,
             split_row_groups=split_row_groups,
             skip_malformed_rows=skip_malformed_rows,
+            limit=limit,
         )
     )
 
