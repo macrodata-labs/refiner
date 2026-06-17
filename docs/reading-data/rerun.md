@@ -73,9 +73,11 @@ the top-level `action` vector, scalar components under
 `/observation/state/**` into top-level `observation.state`, and encoded images
 under `/cam/**` into top-level video sources such as `cam.top`.
 
-Rows also include the original `rerun` recording sidecar by default. Set
-`include_recording=False` only when you want a lightweight robotics projection
-and do not need the source Rerun structure later.
+Rows also include a `rerun` recording sidecar by default. If `contents` is
+omitted, that sidecar is built from the full recording view for the primary
+timeline, not just the robotics prefixes. Set `include_recording=False` only
+when you want a lightweight robotics projection and do not need the source
+Rerun structure later.
 
 Use explicit selections when vector order or camera names matter:
 

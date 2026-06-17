@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import os
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 from typing import cast
 
 from refiner.io import DataFile
@@ -63,6 +64,8 @@ class LocalRrd:
 @dataclass(frozen=True, slots=True)
 class RerunRecording:
     """Columnar Rerun recording data loaded from one RRD segment."""
+
+    __refiner_side_data__: ClassVar[bool] = True
 
     segment_id: str
     source_path: str

@@ -523,8 +523,10 @@ class RerunReader(BaseReader):
         timelines: Sequence[str],
     ) -> Row:
         timeline = self._primary_timeline(timelines)
-        contents = self._robotics_contents()
-        content_view = view.filter_contents(contents)
+        if self.include_recording:
+            content_view = self._view_for_contents(view)
+        else:
+            content_view = view.filter_contents(self._robotics_contents())
         table = _collect_table(
             content_view.reader(
                 index=timeline,
@@ -551,7 +553,7 @@ class RerunReader(BaseReader):
                 ),
                 application_id=application_id,
                 recording_id=recording_id,
-                contents=tuple(contents),
+                contents=self.contents,
                 timelines=(timeline,),
                 include_static=self.include_static,
                 use_source_chunks=False,

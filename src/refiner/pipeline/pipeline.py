@@ -1265,10 +1265,12 @@ def read_rerun(
     ``materialize_tables=False`` when you only need source chunk metadata.
     With ``output="robotics"``, the reader emits robotics episode rows directly,
     with top-level ``action``, ``observation.state``, and video fields derived
-    from configurable Rerun entity prefixes. The original ``rerun`` sidecar is
-    included by default; pass ``include_recording=False`` for a lightweight
-    projection. Pass ``actions``, ``states``, or ``videos`` to pin exact entity
-    paths and output order instead of using prefix-derived defaults.
+    from configurable Rerun entity prefixes. A ``rerun`` recording sidecar for
+    the primary timeline is included by default; when ``contents`` is omitted,
+    that sidecar uses the full recording view rather than only the robotics
+    prefixes. Pass ``include_recording=False`` for a lightweight projection.
+    Pass ``actions``, ``states``, or ``videos`` to pin exact entity paths and
+    output order instead of using prefix-derived defaults.
     """
     return RefinerPipeline(
         source=RerunReader(

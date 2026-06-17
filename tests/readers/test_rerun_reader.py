@@ -40,6 +40,16 @@ def _tiny_rrd(path: Path) -> None:
     )
 
 
+def _rerun_entity_paths(table: Any) -> set[str]:
+    paths: set[str] = set()
+    for field in table.schema:
+        metadata = field.metadata or {}
+        value = metadata.get(b"rerun:entity_path")
+        if value is not None:
+            paths.add(value.decode("utf-8"))
+    return paths
+
+
 def _sparse_rrd(path: Path) -> None:
     import rerun as rr
 
@@ -498,6 +508,8 @@ def test_read_rerun_robotics_mode_with_recording_includes_recording_payload(
     assert recording.recording_id == "episode-a"
     assert list(recording.tables) == ["frame"]
     assert recording.tables["frame"].num_rows == 3
+    assert "/action_extra/y" in _rerun_entity_paths(recording.tables["frame"].table)
+    assert recording.contents is None
     assert "frames" not in row
     assert row.actions.to_pylist() == [[1.0], [2.0], [3.0]]
 
