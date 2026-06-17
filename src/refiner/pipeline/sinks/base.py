@@ -29,14 +29,45 @@ class BaseSink(ABC):
         for shard_id, shard_block in blocks_by_shard.items():
             actual_count = self.write_shard_block(shard_id, shard_block)
             output_count = counts[shard_id] if actual_count is None else actual_count
-            log_throughput(
-                "rows_written",
-                output_count,
-                shard_id=shard_id,
-                unit="rows",
-            )
+            self._record_rows_written(shard_id, output_count)
             output_rows += output_count
         return counts, output_rows
+
+    def _record_rows_written(self, shard_id: str, row_count: int) -> None:
+        """Record rows written by a shard-local write.
+
+        Immediate sinks can emit as soon as `write_shard_block(...)` returns.
+        Buffered sinks should override this to defer emission until the data is
+        durably finalized.
+        """
+        self._emit_rows_written(shard_id, row_count)
+
+    def _buffer_rows_written(self, shard_id: str, row_count: int) -> None:
+        pending = cast(
+            dict[str, int] | None,
+            getattr(self, "_pending_rows_written_by_shard", None),
+        )
+        if pending is None:
+            pending = {}
+            self._pending_rows_written_by_shard = pending
+        pending[shard_id] = pending.get(shard_id, 0) + row_count
+
+    def _emit_pending_rows_written(self, shard_id: str) -> None:
+        pending = cast(
+            dict[str, int] | None,
+            getattr(self, "_pending_rows_written_by_shard", None),
+        )
+        if pending is None or shard_id not in pending:
+            return
+        self._emit_rows_written(shard_id, pending.pop(shard_id))
+
+    def _emit_rows_written(self, shard_id: str, row_count: int) -> None:
+        log_throughput(
+            "rows_written",
+            row_count,
+            shard_id=shard_id,
+            unit="rows",
+        )
 
     def write_shard_block(self, shard_id: str, block: Block) -> int | None:
         """Write one already shard-local block.

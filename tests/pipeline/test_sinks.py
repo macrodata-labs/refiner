@@ -9,16 +9,19 @@ import pyarrow.parquet as pq
 import pytest
 
 from refiner import col
+from refiner.pipeline import from_items
 from refiner.pipeline.data import datatype
+from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline import from_items
 from refiner.pipeline.sinks import JsonlSink
+from refiner.pipeline.sinks import base as sink_base_module
+from refiner.pipeline.sinks import parquet as parquet_module
 from refiner.pipeline.sinks.parquet import ParquetSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import set_active_run_context
-from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 from refiner.worker.context import worker_token_for
+from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 
 
 class _FinalizedWorkersRuntime:
@@ -32,11 +35,81 @@ class _FinalizedWorkersRuntime:
         return self._rows
 
 
+def _capture_sink_throughput(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, int | float, str, str | None]]:
+    metrics: list[tuple[str, int | float, str, str | None]] = []
+
+    def record(
+        label: str,
+        value: int | float,
+        shard_id: str,
+        *,
+        unit: str | None = None,
+        step_index: int | None = None,
+    ) -> None:
+        del step_index
+        metrics.append((label, value, shard_id, unit))
+
+    monkeypatch.setattr(sink_base_module, "log_throughput", record)
+    monkeypatch.setattr(parquet_module, "log_throughput", record)
+    return metrics
+
+
+class _ImmediateSink(sink_base_module.BaseSink):
+    def write_shard_block(self, shard_id: str, block: Block) -> int | None:
+        del shard_id, block
+        return None
+
+
+class _CloseFailingWriter:
+    def __init__(self) -> None:
+        self.tables: list[pa.Table] = []
+
+    def write_table(self, table: pa.Table) -> None:
+        self.tables.append(table)
+
+    def close(self) -> None:
+        raise RuntimeError("close failed")
+
+
+class _CloseFailingParquetSink(ParquetSink):
+    def _writer(self, shard_id: str, schema: pa.Schema) -> pq.ParquetWriter:
+        del schema
+        writer = self._writers.get(shard_id)
+        if writer is None:
+            writer = cast(pq.ParquetWriter, _CloseFailingWriter())
+            self._writers[shard_id] = writer
+        return writer
+
+
 def test_iter_rows_ignores_sink(tmp_path) -> None:
     pipeline = from_items([{"x": 1}, {"x": 2}], items_per_shard=1).write_jsonl(tmp_path)
     out = list(pipeline.iter_rows())
     assert [int(row["x"]) for row in out] == [1, 2]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_base_sink_emits_rows_written_immediately_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _capture_sink_throughput(monkeypatch)
+    sink = _ImmediateSink()
+
+    counts, output_rows = sink.write_block(
+        [
+            DictRow({"x": 1}, shard_id="a"),
+            DictRow({"x": 2}, shard_id="b"),
+            DictRow({"x": 3}, shard_id="a"),
+        ]
+    )
+
+    assert counts == {"a": 2, "b": 1}
+    assert output_rows == 3
+    assert metrics == [
+        ("rows_written", 2, "a", "rows"),
+        ("rows_written", 1, "b", "rows"),
+    ]
 
 
 def test_launch_local_writes_jsonl_per_shard(tmp_path) -> None:
@@ -83,6 +156,85 @@ def test_launch_local_writes_parquet_per_shard(tmp_path) -> None:
         table = pq.read_table(path)
         values.extend(int(value) for value in table.column("x").to_pylist())
     assert sorted(values) == [10, 20, 30]
+
+
+def test_parquet_sink_defers_rows_written_until_shard_complete(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _capture_sink_throughput(monkeypatch)
+    output_dir = tmp_path / "parquet-deferred-rows"
+    sink = ParquetSink(output_dir)
+
+    counts, output_rows = sink.write_block(
+        [
+            DictRow({"x": 1}, shard_id="abc"),
+            DictRow({"x": 2}, shard_id="abc"),
+        ]
+    )
+    sink.write_block([DictRow({"x": 3}, shard_id="abc")])
+
+    assert counts == {"abc": 2}
+    assert output_rows == 2
+    assert [metric for metric in metrics if metric[0] == "rows_written"] == []
+
+    sink.on_shard_complete("abc")
+
+    assert [metric for metric in metrics if metric[0] == "rows_written"] == [
+        ("rows_written", 3, "abc", "rows")
+    ]
+    written = next(output_dir.glob("*.parquet"))
+    assert pq.read_table(written).num_rows == 3
+
+
+def test_parquet_sink_emits_rows_written_per_completed_shard(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _capture_sink_throughput(monkeypatch)
+    output_dir = tmp_path / "parquet-shard-rows"
+    sink = ParquetSink(output_dir)
+
+    sink.write_block(
+        [
+            DictRow({"x": 1}, shard_id="a"),
+            DictRow({"x": 10}, shard_id="b"),
+            DictRow({"x": 2}, shard_id="a"),
+        ]
+    )
+    sink.write_block([DictRow({"x": 11}, shard_id="b")])
+    sink.on_shard_complete("b")
+
+    rows_metrics = [metric for metric in metrics if metric[0] == "rows_written"]
+    assert rows_metrics == [("rows_written", 2, "b", "rows")]
+
+    sink.on_shard_complete("a")
+
+    rows_metrics = [metric for metric in metrics if metric[0] == "rows_written"]
+    assert rows_metrics == [
+        ("rows_written", 2, "b", "rows"),
+        ("rows_written", 2, "a", "rows"),
+    ]
+    written_rows = sum(
+        pq.read_table(path).num_rows for path in output_dir.glob("*.parquet")
+    )
+    assert sum(int(metric[1]) for metric in rows_metrics) == written_rows
+
+
+def test_parquet_sink_does_not_emit_rows_written_when_close_fails(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _capture_sink_throughput(monkeypatch)
+    sink = _CloseFailingParquetSink(tmp_path)
+
+    sink.write_block([DictRow({"x": 1}, shard_id="abc")])
+    with pytest.raises(RuntimeError, match="close failed"):
+        sink.on_shard_complete("abc")
+
+    assert [
+        metric for metric in metrics if metric[0] in {"rows_written", "files_written"}
+    ] == []
 
 
 def test_write_parquet_dtypes_apply_to_row_blocks(tmp_path) -> None:

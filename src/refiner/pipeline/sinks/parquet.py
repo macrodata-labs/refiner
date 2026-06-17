@@ -102,10 +102,14 @@ class ParquetSink(BaseSink):
         ).write_table(table)
         return table.num_rows
 
+    def _record_rows_written(self, shard_id: str, row_count: int) -> None:
+        self._buffer_rows_written(shard_id, row_count)
+
     def on_shard_complete(self, shard_id: str) -> None:
         writer = self._writers.pop(shard_id, None)
         if writer is not None:
             writer.close()
+            self._emit_pending_rows_written(shard_id)
             log_throughput("files_written", 1, shard_id=shard_id, unit="files")
 
     def close(self) -> None:
