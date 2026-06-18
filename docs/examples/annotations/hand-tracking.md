@@ -17,7 +17,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from egovision.pipelines import to_joint_actions, to_mano_actions
 import refiner as mdr
 
 INPUT_DATASET = "toloka/HomER"
@@ -27,6 +26,8 @@ OUTPUT_DATASET = f"{OUTPUT_ROOT}/{RUN_ID}"
 
 
 def hand_tracking_annotation(row: Any) -> dict[str, Any]:
+    from egovision.pipelines import to_joint_actions, to_mano_actions
+
     hand_tracking = row["hand_tracking"]
     return {
         "video_id": row["video_id"],
