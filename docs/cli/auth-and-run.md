@@ -101,6 +101,7 @@ URL: http://localhost:3000/app/acme-robotics/jobs/job_123
 Attach: macrodata jobs attach job_123
 Summary: macrodata jobs get job_123
 Logs: macrodata jobs logs job_123 --stage 0
+Metrics: macrodata jobs metrics job_123 0
 Workers: macrodata jobs workers job_123
 Cancel: macrodata jobs cancel job_123
 ```
