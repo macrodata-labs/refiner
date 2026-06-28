@@ -4,6 +4,7 @@ from refiner.robotics.subtask_annotation import (
     TimestampedContactSheet,
     contact_sheet_prompt_manifest,
     subtask_annotation,
+    subtask_labeling,
     timestamped_contact_sheets,
 )
 from refiner.robotics.hand_tracking import track_hands
@@ -29,6 +30,7 @@ __all__ = [
     "TimestampedContactSheet",
     "contact_sheet_prompt_manifest",
     "subtask_annotation",
+    "subtask_labeling",
     "timestamped_contact_sheets",
     "track_hands",
     "RoboticsRow",

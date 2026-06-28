@@ -7,9 +7,9 @@ description: "Add VLM-generated temporal subtask annotations to episodes"
 
 ![Subtask annotation timeline](../../assets/subtask_annotations.png)
 
-This example reads a LeRobot dataset, runs temporal subtask annotation on each
-episode video, writes the predicted segments into a new `predicted_subtasks`
-column, and saves the result back in LeRobot format.
+This example reads a LeRobot dataset, runs temporal subtask segmentation on each
+episode video, labels the fixed segments with previous/current/next context,
+and saves the result back in LeRobot format.
 
 ```python
 import refiner as mdr
@@ -25,6 +25,13 @@ pipeline = (
         mdr.robotics.subtask_annotation(
             video_key=VIDEO_KEY,
             output_column="predicted_subtasks",
+        ),
+    )
+    .map_async(
+        mdr.robotics.subtask_labeling(
+            video_key=VIDEO_KEY,
+            segments_column="predicted_subtasks",
+            output_column="labeled_subtasks",
         ),
     )
     .write_lerobot(f"{OUTPUT_ROOT}/berkeley-cable-routing-subtasks")
@@ -50,6 +57,6 @@ passes the resolved values to the Cloud job as redacted secrets. Export both
 variables before launching the pipeline.
 
 Use [Subtask Annotation](../../episode-operations/subtask-annotation.md) for
-parameter details and in-depth explanation. `subtask_annotation` uses Gemini
-3.5 Flash through `GoogleEndpointProvider`, so you need to provide
-`GOOGLE_GENERATIVE_AI_API_KEY`.
+parameter details and in-depth explanation. Both `subtask_annotation` and
+`subtask_labeling` use Gemini 3.5 Flash through `GoogleEndpointProvider`, so
+you need to provide `GOOGLE_GENERATIVE_AI_API_KEY`.

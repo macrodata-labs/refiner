@@ -5,7 +5,9 @@ description: "Use vision-language models to segment robotics episodes into tempo
 
 # Subtask annotation
 
-Use `subtask_annotation` to add temporal subtask labels to robotics episodes.
+Use `subtask_annotation` to add temporal subtask segments to robotics episodes,
+then use `subtask_labeling` to label those fixed segments with stronger
+previous/current/next visual context.
 The annotator samples an episode video into timestamped contact sheets, sends
 those images to a vision-language model, and writes the returned segments back
 to each row.
@@ -29,12 +31,26 @@ pipeline = (
         ),
         max_in_flight=256,
     )
+    .map_async(
+        mdr.robotics.subtask_labeling(
+            video_key="observation.images.top",
+            segments_column="predicted_subtasks",
+            output_column="labeled_subtasks",
+        ),
+        max_in_flight=256,
+    )
 )
 ```
 
 By default, `subtask_annotation` uses Gemini through `GoogleEndpointProvider`.
 Set `GOOGLE_GENERATIVE_AI_API_KEY` before running the pipeline, or pass a
 different provider explicitly.
+
+The labeling block is optional, but it is the recommended default when you
+want the best labels for fixed segments. If each segment already has a label, or
+you pass `labels_column`, `subtask_labeling` runs the seed-aware relabeling
+prompt. If the segments only have timestamps, it runs a plain labeling prompt
+from previous/current/next visual context.
 
 ## Other readers
 
@@ -72,6 +88,22 @@ start time, an end time, and a short action description:
 ]
 ```
 
+`subtask_labeling` writes the same segment shape to its output column, but the
+`subtask` value is rewritten from a dedicated labeling pass. If you already
+store seed labels in a separate column, pass `labels_column`:
+
+```python
+pipeline = pipeline.map_async(
+    mdr.robotics.subtask_labeling(
+        video_key="observation.images.top",
+        segments_column="segments",
+        labels_column="seed_labels",
+        output_column="labeled_subtasks",
+    ),
+    max_in_flight=256,
+)
+```
+
 ## Contact sheets
 
 Video input is sent as contact sheets: timestamped image grids that preserve
@@ -83,7 +115,13 @@ while giving the model enough visual context to choose event boundaries.
 The default settings sample one frame every `0.5` seconds, resize each tile to
 `224px` wide, and pack up to `20` frames per sheet in `5` columns.
 
-## Parameters
+For labeling, Refiner renders three smaller contact sheets per fixed segment:
+the previous segment, the current target segment, and the next segment. Missing
+neighbors at episode boundaries are represented by blank sheets. The model is
+instructed to label only the current target segment and use the neighbors only
+to disambiguate what changed.
+
+## Segmentation parameters
 
 | Parameter | Meaning |
 | --- | --- |
@@ -94,9 +132,23 @@ The default settings sample one frame every `0.5` seconds, resize each tile to
 | `frames_per_sheet` | Maximum number of sampled frames per contact sheet. |
 | `columns` | Contact sheet grid columns. |
 | `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `84`. |
-| `include_contact_sheet_manifest` | Add textual sheet descriptions to the prompt. |
-| `min_segment_duration_sec` | Minimum returned segment duration. Defaults to `0.0`, so valid short segments are kept. |
 | `on_blocked_prompt` | Behavior when the provider blocks an episode prompt. Defaults to `"empty"`, which logs the block and writes an empty segment list. Use `"raise"` to fail the row instead. |
+| `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
+
+## Labeling parameters
+
+| Parameter | Meaning |
+| --- | --- |
+| `video_key` | Video stream used to render previous/current/next segment sheets. |
+| `segments_column` | Column containing fixed segment dictionaries with `start_sec` and `end_sec`. Defaults to `predicted_subtasks`. |
+| `output_column` | Row column that receives the labeled segment list. Defaults to `labeled_subtasks`. |
+| `labels_column` | Optional column containing seed labels aligned one-to-one with `segments_column`. |
+| `segment_label_key` | Segment dictionary key used for the label. Defaults to `subtask`. |
+| `frame_width` | Width of each sampled frame tile. |
+| `max_frames_per_segment` | Maximum sampled frames in each previous/current/next sheet. Defaults to `5`. |
+| `columns` | Contact sheet grid columns. |
+| `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `84`. |
+| `on_blocked_prompt` | Behavior when the provider blocks a labeling prompt. Defaults to `"seed"`, which keeps the seed label. Use `"raise"` to fail the row. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
 ## Related content

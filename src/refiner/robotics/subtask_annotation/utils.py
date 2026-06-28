@@ -4,17 +4,11 @@ import io
 import json
 import math
 import re
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from pydantic import BaseModel
-
-from refiner.inference.providers import GoogleEndpointProvider
-from refiner.inference.types import InferenceProvider, Message
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.steps import MapResult
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import logger
@@ -22,39 +16,7 @@ from refiner.worker.context import logger
 if TYPE_CHECKING:
     from PIL import Image
 
-    from refiner.inference.generate_text import GenerateTextFn
     from refiner.video import VideoSource
-
-_DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from timestamped contact sheets.
-
-Return only JSON with this shape:
-{"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
-
-How to read the images:
-- Each image is a contact sheet with {columns_count} columns and {rows_count} rows.
-- Time runs left-to-right within each row, then continues on the next row.
-- Each tile has a visible timestamp in its top-left corner, such as 012.50s.
-- Use the visible timestamp printed inside the tile, not the tile index, when choosing start_sec and end_sec.
-- Boundaries should normally land on or near one of the visible timestamps.
-
-Rules:
-- Treat each segment as one event that changes what is true about the world.
-- Good event boundaries happen when an object becomes held, is released, reaches a new location, a lid/door changes open/closed state, a tool starts/stops affecting a surface, or contents visibly move.
-- For each event, choose start_sec at the first timestamp where the causal motion for that event is underway, and end_sec at the first timestamp where the resulting world state is achieved.
-- If an action is continuous and changes the same state gradually, keep it as one event.
-- If the same action repeats on different objects or target locations, output separate repeated events.
-- Avoid segments for idle time, camera motion, hesitation, or tiny hand adjustments.
-"""
-
-
-class _SubtaskSegment(BaseModel):
-    start_sec: float
-    end_sec: float
-    subtask: str
-
-
-class _SubtaskAnnotationResult(BaseModel):
-    segments: list[_SubtaskSegment]
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,119 +41,6 @@ class TimestampedContactSheet:
     @property
     def frame_count(self) -> int:
         return len(self.timestamps)
-
-
-def subtask_annotation(
-    *,
-    provider: InferenceProvider = GoogleEndpointProvider(model="gemini-3.5-flash"),
-    video_key: str,
-    output_column: str = "predicted_subtasks",
-    sample_sec: float = 0.5,
-    frame_width: int = 224,
-    frames_per_sheet: int = 20,
-    columns: int = 5,
-    quality: int = 84,
-    temperature: float = 0.1,
-    min_segment_duration_sec: float | None = 0.0,
-    include_contact_sheet_manifest: bool = False,
-    on_blocked_prompt: Literal["empty", "raise"] = "empty",
-    max_concurrent_requests: int = 256,
-) -> Callable[[Row], Any]:
-    """Return an async map block that annotates robotics episode subtasks.
-
-    Args:
-        provider: Text-generation provider used to run the vision-language model.
-        video_key: Video key to annotate.
-        output_column: Row column that receives the predicted subtask segments.
-        sample_sec: Seconds between sampled video frames in the contact sheets.
-        frame_width: Width, in pixels, for each sampled frame tile.
-        frames_per_sheet: Maximum number of sampled frames packed into one sheet.
-        columns: Number of columns in each contact-sheet grid.
-        quality: JPEG quality for contact-sheet images, from 1 to 100.
-        temperature: Generation temperature passed to the provider request.
-        min_segment_duration_sec: Minimum segment duration to keep. Set to
-            ``None`` to disable duration filtering.
-        include_contact_sheet_manifest: Include textual sheet ranges in the prompt.
-        on_blocked_prompt: Behavior when the provider blocks the prompt before
-            returning candidates. ``"empty"`` writes an empty segment list and
-            logs the block; ``"raise"`` propagates the provider error.
-        max_concurrent_requests: Maximum provider requests allowed at once per
-            worker.
-    """
-
-    from refiner.inference import generate_text
-
-    if not video_key.strip():
-        raise ValueError("video_key must be non-empty")
-    if not output_column.strip():
-        raise ValueError("output_column must be non-empty")
-    if min_segment_duration_sec is not None and min_segment_duration_sec < 0:
-        raise ValueError("min_segment_duration_sec must be >= 0")
-    if on_blocked_prompt not in {"empty", "raise"}:
-        raise ValueError("on_blocked_prompt must be 'empty' or 'raise'")
-
-    async def _annotate_subtasks(
-        row: Row,
-        generate_text: "GenerateTextFn",
-    ) -> MapResult:
-        if not isinstance(row, RoboticsRow):
-            raise TypeError("subtask_annotation expects RoboticsRow inputs")
-
-        video = _resolve_video(row, video_key)
-        content = await _subtask_annotation_content(
-            video=video,
-            tasks=row.tasks,
-            sample_sec=sample_sec,
-            frame_width=frame_width,
-            frames_per_sheet=frames_per_sheet,
-            columns=columns,
-            quality=quality,
-            include_contact_sheet_manifest=include_contact_sheet_manifest,
-        )
-        params: dict[str, Any] = {
-            "temperature": temperature,
-        }
-        messages = cast(list[Message], [{"role": "user", "content": content}])
-        try:
-            response = await generate_text(
-                messages=messages,
-                schema=_SubtaskAnnotationResult,
-                **params,
-            )
-        except RuntimeError as exc:
-            block_reason = _blocked_prompt_reason(exc)
-            if block_reason is None or on_blocked_prompt == "raise":
-                raise
-            logger.warning(
-                "subtask annotation provider blocked episode {}: {}",
-                row.episode_id,
-                block_reason,
-            )
-            return row.update({output_column: []})
-        parsed = (
-            response.object
-            if isinstance(response.object, _SubtaskAnnotationResult)
-            else _parse_subtask_annotation_result(response.text)
-        )
-        segments = _normalize_segments(parsed.segments)
-        if min_segment_duration_sec is not None:
-            segments = [
-                segment
-                for segment in segments
-                if float(segment["end_sec"]) - float(segment["start_sec"])
-                >= min_segment_duration_sec
-            ]
-        return row.update(
-            {
-                output_column: segments,
-            }
-        )
-
-    return generate_text(
-        fn=_annotate_subtasks,
-        provider=provider,
-        max_concurrent_requests=max_concurrent_requests,
-    )
 
 
 def _blocked_prompt_reason(exc: RuntimeError) -> str | None:
@@ -238,7 +87,7 @@ def _resolve_video(row: RoboticsRow, video_key: str) -> VideoSource:
     return row.videos[video_key]
 
 
-def _parse_subtask_annotation_result(text: str) -> _SubtaskAnnotationResult:
+def _parse_json_object(text: str) -> Any:
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?", "", stripped, flags=re.IGNORECASE).strip()
@@ -253,80 +102,67 @@ def _parse_subtask_annotation_result(text: str) -> _SubtaskAnnotationResult:
             raise
         value = json.loads(stripped[start : end + 1])
 
-    return _SubtaskAnnotationResult.model_validate(value)
+    return value
 
 
-async def _subtask_annotation_content(
-    *,
-    video: VideoSource,
-    tasks: list[str],
-    sample_sec: float,
-    frame_width: int,
-    frames_per_sheet: int,
-    columns: int,
-    quality: int,
-    include_contact_sheet_manifest: bool,
+def _normalize_input_segments(
+    value: Any,
+    segment_label_key: str,
 ) -> list[dict[str, Any]]:
-    sheets_for_manifest: list[TimestampedContactSheet] = []
-    file_parts: list[dict[str, Any]] = []
-    first_sheet: TimestampedContactSheet | None = None
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise TypeError("segments_column must contain a sequence of segment mappings")
 
-    async for sheet in _iter_timestamped_contact_sheets(
-        video,
-        sample_sec=sample_sec,
-        frame_width=frame_width,
-        frames_per_sheet=frames_per_sheet,
-        columns=columns,
-        quality=quality,
-    ):
-        if first_sheet is None:
-            first_sheet = sheet
-        if include_contact_sheet_manifest:
-            sheets_for_manifest.append(sheet)
-        file_parts.append(
-            {"type": "file", "mediaType": sheet.media_type, "data": sheet.data}
-        )
-
-    if first_sheet is None:
-        raise ValueError("video produced no frames")
-
-    text = _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE.replace(
-        "{columns_count}",
-        str(first_sheet.columns),
-    ).replace("{rows_count}", str(first_sheet.rows))
-    instruction = "; ".join(task for task in tasks if task.strip())
-    if instruction:
-        text = f"{text}\nEpisode instruction: {instruction}\n"
-    if include_contact_sheet_manifest:
-        text = f"{text}\n\n{contact_sheet_prompt_manifest(sheets_for_manifest)}"
-    return [
-        {
-            "type": "text",
-            "text": text,
-        },
-        *file_parts,
-    ]
-
-
-def _normalize_segments(segments: list[_SubtaskSegment]) -> list[dict[str, Any]]:
-    normalized = []
-    for index, segment in enumerate(segments):
-        if segment.end_sec <= segment.start_sec:
+    segments = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise TypeError("segments_column must contain segment mappings")
+        item = cast(Mapping[str, Any], item)
+        if "start_sec" not in item or "end_sec" not in item:
+            raise ValueError("each segment must contain start_sec and end_sec")
+        start_sec = float(item["start_sec"])
+        end_sec = float(item["end_sec"])
+        if end_sec <= start_sec:
             continue
-        label = segment.subtask.strip() or f"segment {index}"
-        normalized.append(
-            {
-                "start_sec": round(max(0.0, float(segment.start_sec)), 3),
-                "end_sec": round(max(0.0, float(segment.end_sec)), 3),
-                "subtask": label,
-            }
-        )
+        segment = dict(item)
+        segment["start_sec"] = round(max(0.0, start_sec), 3)
+        segment["end_sec"] = round(max(0.0, end_sec), 3)
+        segments.append(segment)
+
     sorted_segments = sorted(
-        normalized,
+        segments,
         key=lambda segment: (segment["start_sec"], segment["end_sec"]),
     )
     _log_on_overlapping_segments(sorted_segments)
     return sorted_segments
+
+
+def _seed_labels(
+    *,
+    row: Row,
+    segments: Sequence[Mapping[str, Any]],
+    labels_column: str | None,
+    segment_label_key: str,
+) -> list[str]:
+    labels: Sequence[Any] | None = None
+    if labels_column is not None:
+        value = row[labels_column]
+        if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+            raise TypeError("labels_column must contain a sequence of labels")
+        labels = value
+        if len(labels) != len(segments):
+            raise ValueError("labels_column length must match segments_column length")
+
+    seed_labels = []
+    for index, segment in enumerate(segments):
+        raw_label = (
+            labels[index] if labels is not None else segment.get(segment_label_key)
+        )
+        seed_labels.append(_normalize_label(str(raw_label or "")))
+    return seed_labels
+
+
+def _normalize_label(label: str) -> str:
+    return re.sub(r"\s+", " ", label.strip()).lower()
 
 
 def _log_on_overlapping_segments(segments: Sequence[Mapping[str, Any]]) -> None:
@@ -346,6 +182,123 @@ def _log_on_overlapping_segments(segments: Sequence[Mapping[str, Any]]) -> None:
                 end_sec,
             )
         previous = segment
+
+
+async def _segment_contact_sheet(
+    *,
+    video: VideoSource,
+    start_sec: float,
+    end_sec: float,
+    frame_width: int,
+    max_frames: int,
+    columns: int,
+    quality: int,
+) -> TimestampedContactSheet:
+    if end_sec <= start_sec:
+        raise ValueError("segment end_sec must be greater than start_sec")
+    if max_frames <= 0:
+        raise ValueError("max_frames must be > 0")
+    if columns <= 0:
+        raise ValueError("columns must be > 0")
+
+    check_required_dependencies(
+        "subtask_labeling",
+        ["av", ("PIL", "pillow")],
+        dist="video",
+    )
+
+    frames: list[tuple[float, Image.Image]] = []
+    sample_sec = max((end_sec - start_sec) / max_frames, 1e-6)
+    async for timestamp, image in _sample_timestamped_frames(
+        video,
+        sample_sec=sample_sec,
+        frame_width=frame_width,
+    ):
+        if timestamp + 1e-6 < start_sec:
+            continue
+        if timestamp - 1e-6 > end_sec:
+            break
+        frames.append((timestamp, image))
+
+    if not frames:
+        async for frame in video.iter_frames():
+            timestamp = frame.timestamp_s
+            if timestamp is None or timestamp + 1e-6 < start_sec:
+                continue
+            if timestamp - 1e-6 > end_sec:
+                break
+            image = frame.frame.to_image().convert("RGB")
+            if image.width != frame_width:
+                from PIL import Image
+
+                height = max(1, round(image.height * frame_width / image.width))
+                image = image.resize(
+                    (frame_width, height),
+                    resample=Image.Resampling.BILINEAR,
+                )
+            frames.append((timestamp, _draw_timestamp_badge(image, timestamp)))
+            break
+
+    if len(frames) > max_frames:
+        frames = [frames[index] for index in _uniform_indexes(len(frames), max_frames)]
+
+    if not frames:
+        return _blank_contact_sheet(
+            frame_width=frame_width,
+            columns=columns,
+            quality=quality,
+        )
+
+    rows = math.ceil(len(frames) / columns)
+    sheets = [
+        sheet
+        async for sheet in _build_contact_sheets(
+            _single_batch(frames),
+            rows=rows,
+            columns=columns,
+            quality=quality,
+        )
+    ]
+    return sheets[0]
+
+
+def _uniform_indexes(count: int, limit: int) -> list[int]:
+    if count <= limit:
+        return list(range(count))
+    if limit == 1:
+        return [0]
+    return [round(index * (count - 1) / (limit - 1)) for index in range(limit)]
+
+
+async def _single_batch(
+    frames: Sequence[tuple[float, Image.Image]],
+) -> AsyncIterator[Sequence[tuple[float, Image.Image]]]:
+    yield frames
+
+
+def _blank_contact_sheet(
+    *,
+    frame_width: int,
+    columns: int,
+    quality: int,
+) -> TimestampedContactSheet:
+    from PIL import Image
+
+    frame_height = max(2, round(frame_width * 9 / 16))
+    width = frame_width * columns
+    image = Image.new("RGB", (width, frame_height), color=(245, 245, 245))
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=quality)
+    return TimestampedContactSheet(
+        data=output.getvalue(),
+        media_type="image/jpeg",
+        index=0,
+        timestamps=(0.0,),
+        width=width,
+        height=frame_height,
+        rows=1,
+        columns=columns,
+    )
 
 
 async def timestamped_contact_sheets(
@@ -535,6 +488,5 @@ def _draw_timestamp_badge(image: Image.Image, timestamp: float) -> Image.Image:
 __all__ = [
     "TimestampedContactSheet",
     "contact_sheet_prompt_manifest",
-    "subtask_annotation",
     "timestamped_contact_sheets",
 ]
