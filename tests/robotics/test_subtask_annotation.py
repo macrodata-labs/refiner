@@ -19,8 +19,14 @@ from refiner.pipeline.data.row import DictRow
 from refiner.robotics.lerobot_format import LeRobotMetadata, LeRobotRow
 from refiner.robotics.row import RoboticsRow, _robot_row_converter
 
-subtask_annotation_module = importlib.import_module(
-    "refiner.robotics.subtask_annotation"
+subtask_labeling_module = importlib.import_module(
+    "refiner.robotics.subtask_annotation.labeling"
+)
+subtask_segmentation_module = importlib.import_module(
+    "refiner.robotics.subtask_annotation.segmentation"
+)
+subtask_utils_module = importlib.import_module(
+    "refiner.robotics.subtask_annotation.utils"
 )
 
 
@@ -152,7 +158,7 @@ def test_iter_timestamped_contact_sheets_streams_sheet_batches() -> None:
                 yield _FakeDecodedFrame(timestamp_s=index * 0.5, value=index)
 
     async def _first_sheet(video: _FakeVideo):
-        sheets = subtask_annotation_module._iter_timestamped_contact_sheets(
+        sheets = subtask_utils_module._iter_timestamped_contact_sheets(
             cast(Any, video),
             sample_sec=0.5,
             frame_width=16,
@@ -279,7 +285,7 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
 
     assert seen["provider"].model == "gemini-flash-latest"
     assert request["temperature"] == 0.1
-    assert request["schema"] is subtask_annotation_module._SubtaskAnnotationResult
+    assert request["schema"] is subtask_segmentation_module._SubtaskAnnotationResult
     message = request["messages"][0]
     assert message["role"] == "user"
     assert "Episode instruction: open the drawer" in message["content"][0]["text"]
@@ -412,7 +418,7 @@ def test_subtask_annotation_prompt_uses_completed_events_count_guard(
             finish_reason="stop",
             usage={},
             response={},
-            object=subtask_annotation_module._SubtaskAnnotationResult(segments=[]),
+            object=subtask_segmentation_module._SubtaskAnnotationResult(segments=[]),
         )
 
     asyncio.run(cast(Any, block)(row, _fake_request))
@@ -472,7 +478,7 @@ def test_subtask_annotation_logs_on_overlapping_segments(
     monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
     logged_warnings = []
     monkeypatch.setattr(
-        subtask_annotation_module.logger,
+        subtask_utils_module.logger,
         "warning",
         lambda *args: logged_warnings.append(args),
     )
@@ -570,7 +576,7 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
 
     assert len(requests) == 2
     assert requests[0]["temperature"] == 0.0
-    assert requests[0]["schema"] is subtask_annotation_module._SubtaskLabelingResult
+    assert requests[0]["schema"] is subtask_labeling_module._SubtaskLabelingResult
     first_prompt = requests[0]["messages"][0]["content"][0]["text"]
     assert "Original predicted label for this exact segment" in first_prompt
     assert "reach drawer" in first_prompt
