@@ -12,9 +12,9 @@ from refiner.pipeline.steps import MapResult
 from refiner.robotics.row import RoboticsRow
 from refiner.robotics.subtask_annotation.utils import (
     _blocked_prompt_reason,
-    _iter_timestamped_contact_sheets,
     _log_on_overlapping_segments,
     _resolve_video,
+    timestamped_contact_sheets,
 )
 from refiner.worker.context import logger
 
@@ -157,7 +157,7 @@ async def _subtask_annotation_content(
 ) -> list[dict[str, Any]]:
     file_parts: list[dict[str, Any]] = []
 
-    async for sheet in _iter_timestamped_contact_sheets(
+    async for sheet in timestamped_contact_sheets(
         video,
         sample_sec=sample_sec,
         frame_width=frame_width,

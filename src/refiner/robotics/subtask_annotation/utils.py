@@ -290,32 +290,8 @@ async def timestamped_contact_sheets(
     frames_per_sheet: int = 20,
     columns: int = 5,
     quality: int = 84,
-) -> list[TimestampedContactSheet]:
-    """Sample a video into JPEG contact sheets with visible timestamp badges."""
-
-    return [
-        sheet
-        async for sheet in _iter_timestamped_contact_sheets(
-            video,
-            sample_sec=sample_sec,
-            frame_width=frame_width,
-            frames_per_sheet=frames_per_sheet,
-            columns=columns,
-            quality=quality,
-        )
-    ]
-
-
-async def _iter_timestamped_contact_sheets(
-    video: VideoSource,
-    *,
-    sample_sec: float = 0.5,
-    frame_width: int = 224,
-    frames_per_sheet: int = 20,
-    columns: int = 5,
-    quality: int = 84,
 ) -> AsyncIterator[TimestampedContactSheet]:
-    """Yield JPEG contact sheets without retaining every sampled frame."""
+    """Yield JPEG contact sheets with visible timestamp badges."""
 
     if sample_sec <= 0:
         raise ValueError("sample_sec must be > 0")

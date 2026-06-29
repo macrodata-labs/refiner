@@ -57,14 +57,41 @@ def _write_video(path, *, num_frames: int = 6, fps: int = 5) -> None:
 
 
 async def _build_sheets(video: mdr.video.VideoFile):
-    return await mdr.robotics.timestamped_contact_sheets(
+    return [
+        sheet
+        async for sheet in mdr.robotics.timestamped_contact_sheets(
+            video,
+            sample_sec=0.4,
+            frame_width=64,
+            frames_per_sheet=2,
+            columns=2,
+            quality=95,
+        )
+    ]
+
+
+async def _collect_sheets(video: Any, **kwargs: Any):
+    return [
+        sheet
+        async for sheet in mdr.robotics.timestamped_contact_sheets(
+            video,
+            **kwargs,
+        )
+    ]
+
+
+async def _first_contact_sheet(video: Any):
+    sheets = mdr.robotics.timestamped_contact_sheets(
         video,
-        sample_sec=0.4,
-        frame_width=64,
+        sample_sec=0.5,
+        frame_width=16,
         frames_per_sheet=2,
         columns=2,
-        quality=95,
     )
+    try:
+        return await anext(sheets)
+    finally:
+        await sheets.aclose()
 
 
 def _lerobot_row(
@@ -138,7 +165,7 @@ def test_timestamped_contact_sheets_sample_and_tile_video(tmp_path) -> None:
     assert sheets[0].data.startswith(b"\xff\xd8")
 
 
-def test_iter_timestamped_contact_sheets_streams_sheet_batches() -> None:
+def test_timestamped_contact_sheets_streams_sheet_batches() -> None:
     from PIL import Image
 
     class _FakeImageFrame:
@@ -162,21 +189,8 @@ def test_iter_timestamped_contact_sheets_streams_sheet_batches() -> None:
                 self.frames_consumed += 1
                 yield _FakeDecodedFrame(timestamp_s=index * 0.5, value=index)
 
-    async def _first_sheet(video: _FakeVideo):
-        sheets = subtask_utils_module._iter_timestamped_contact_sheets(
-            cast(Any, video),
-            sample_sec=0.5,
-            frame_width=16,
-            frames_per_sheet=2,
-            columns=2,
-        )
-        try:
-            return await anext(sheets)
-        finally:
-            await sheets.aclose()
-
     video = _FakeVideo()
-    sheet = asyncio.run(_first_sheet(video))
+    sheet = asyncio.run(_first_contact_sheet(video))
 
     assert sheet.timestamps == (0.0, 0.5)
     assert video.frames_consumed == 2
@@ -207,7 +221,7 @@ def test_timestamped_contact_sheets_reject_invalid_options(tmp_path) -> None:
     video = mdr.video.VideoFile(DataFile.resolve(path))
 
     with pytest.raises(ValueError, match="sample_sec must be > 0"):
-        asyncio.run(mdr.robotics.timestamped_contact_sheets(video, sample_sec=0))
+        asyncio.run(_collect_sheets(video, sample_sec=0))
 
 
 def test_contact_sheet_prompt_manifest_describes_continuity(tmp_path) -> None:
