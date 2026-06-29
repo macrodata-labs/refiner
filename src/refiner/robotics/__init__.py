@@ -3,7 +3,6 @@ from refiner.robotics.reward import reward_score
 from refiner.robotics.subtask_annotation import subtask_annotation, subtask_labeling
 from refiner.robotics.subtask_annotation.utils import (
     TimestampedContactSheet,
-    contact_sheet_prompt_manifest,
     timestamped_contact_sheets,
 )
 from refiner.robotics.hand_tracking import track_hands
@@ -27,7 +26,6 @@ __all__ = [
     "motion_trim",
     "reward_score",
     "TimestampedContactSheet",
-    "contact_sheet_prompt_manifest",
     "subtask_annotation",
     "subtask_labeling",
     "timestamped_contact_sheets",

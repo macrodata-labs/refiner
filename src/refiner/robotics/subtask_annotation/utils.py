@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import math
 import re
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -49,31 +49,6 @@ def _blocked_prompt_reason(exc: RuntimeError) -> str | None:
         return None
     reason = reason.strip()
     return reason or None
-
-
-def contact_sheet_prompt_manifest(
-    sheets: Iterable[TimestampedContactSheet],
-) -> str:
-    """Describe ordered contact sheets for a multimodal task prompt."""
-
-    lines = [
-        "The following contact sheets are ordered chronologically.",
-        "Each tile is a sampled video frame with its timestamp burned into the "
-        "top-left corner.",
-        "Actions may continue across contact sheet boundaries; do not create a "
-        "segment boundary just because the next image is a new sheet.",
-    ]
-    seen = False
-    for sheet in sheets:
-        seen = True
-        lines.append(
-            f"Sheet {sheet.index}: {sheet.frame_count} frames, "
-            f"{sheet.rows}x{sheet.columns} grid, "
-            f"{sheet.start_sec:.2f}s through {sheet.end_sec:.2f}s."
-        )
-    if not seen:
-        raise ValueError("sheets must be non-empty")
-    return "\n".join(lines)
 
 
 def _resolve_video(row: RoboticsRow, video_key: str) -> VideoSource:
@@ -381,7 +356,8 @@ async def _build_contact_sheets(
 ) -> AsyncIterator[TimestampedContactSheet]:
     from PIL import Image
 
-    async for sheet_index, chunk in _aenumerate(batches, start=1):
+    sheet_index = 1
+    async for chunk in batches:
         frame_width, frame_height = chunk[0][1].size
         sheet_width = frame_width * columns
         sheet_height = frame_height * rows
@@ -404,17 +380,7 @@ async def _build_contact_sheets(
             rows=rows,
             columns=columns,
         )
-
-
-async def _aenumerate(
-    values: AsyncIterator[Sequence[tuple[float, Image.Image]]],
-    *,
-    start: int,
-) -> AsyncIterator[tuple[int, Sequence[tuple[float, Image.Image]]]]:
-    index = start
-    async for value in values:
-        yield index, value
-        index += 1
+        sheet_index += 1
 
 
 def _draw_timestamp_badge(image: Image.Image, timestamp: float) -> Image.Image:
@@ -444,6 +410,5 @@ def _draw_timestamp_badge(image: Image.Image, timestamp: float) -> Image.Image:
 
 __all__ = [
     "TimestampedContactSheet",
-    "contact_sheet_prompt_manifest",
     "timestamped_contact_sheets",
 ]

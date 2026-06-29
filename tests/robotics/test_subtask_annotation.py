@@ -224,25 +224,6 @@ def test_timestamped_contact_sheets_reject_invalid_options(tmp_path) -> None:
         asyncio.run(_collect_sheets(video, sample_sec=0))
 
 
-def test_contact_sheet_prompt_manifest_describes_continuity(tmp_path) -> None:
-    path = tmp_path / "video.mp4"
-    _write_video(path, num_frames=6, fps=5)
-    video = mdr.video.VideoFile(DataFile.resolve(path))
-
-    sheets = asyncio.run(_build_sheets(video))
-    manifest = mdr.robotics.contact_sheet_prompt_manifest(sheets)
-
-    assert "ordered chronologically" in manifest
-    assert "Actions may continue across contact sheet boundaries" in manifest
-    assert "Sheet 1: 2 frames, 1x2 grid, 0.00s through 0.40s." in manifest
-    assert "Sheet 2: 1 frames, 1x2 grid, 0.80s through 0.80s." in manifest
-
-
-def test_contact_sheet_prompt_manifest_rejects_empty_sheets() -> None:
-    with pytest.raises(ValueError, match="sheets must be non-empty"):
-        mdr.robotics.contact_sheet_prompt_manifest([])
-
-
 def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
     seen = {}
 
