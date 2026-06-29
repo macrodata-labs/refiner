@@ -44,7 +44,10 @@ pipeline = (
 
 By default, `subtask_annotation` uses Gemini through `GoogleEndpointProvider`.
 Set `GOOGLE_GENERATIVE_AI_API_KEY` before running the pipeline, or pass a
-different provider explicitly.
+different provider explicitly. For Google providers, the segmentation block
+passes Gemini `BLOCK_NONE` safety settings for harassment, hate speech, sexually
+explicit, and dangerous-content categories to match the benchmark contact-sheet
+runner and reduce false blocks on robotics videos.
 
 The labeling block is optional, but it is the recommended default when you
 want the best labels for fixed segments. If each segment already has a label, or

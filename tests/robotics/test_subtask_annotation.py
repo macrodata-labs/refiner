@@ -207,12 +207,13 @@ def test_timestamped_contact_sheets_engravings_are_visible(tmp_path) -> None:
     image = Image.open(io.BytesIO(sheet.data)).convert("RGB")
     pixels = np.asarray(image)
 
-    badge = pixels[:14, :48]
-    plain_frame_area = pixels[18:34, :48]
+    top_right_badge = pixels[:16, 64 - 48 : 64]
+    top_left_frame_area = pixels[:16, :16]
 
-    assert badge.min() < 16
-    assert badge.max() > 220
-    assert plain_frame_area.mean() > badge.mean()
+    assert top_right_badge[:, :, 0].max() > 180
+    assert top_right_badge[:, :, 1].max() > 180
+    assert top_right_badge[:, :, 2].min() < 120
+    assert top_left_frame_area.mean() < 120
 
 
 def test_timestamped_contact_sheets_reject_invalid_options(tmp_path) -> None:
@@ -287,6 +288,22 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
     assert seen["provider"].model == "gemini-flash-latest"
     assert request["temperature"] == 0.1
     assert request["schema"] is subtask_segmentation_module._SubtaskAnnotationResult
+    assert request["provider_options"] == {
+        "google": {
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_NONE",
+                },
+            ],
+        }
+    }
     message = request["messages"][0]
     assert message["role"] == "user"
     assert "Episode instruction: open the drawer" in message["content"][0]["text"]

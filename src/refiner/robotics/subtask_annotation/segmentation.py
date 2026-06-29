@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from pydantic import BaseModel
 
 from refiner.inference.providers import GoogleEndpointProvider
-from refiner.inference.types import InferenceProvider, Message
+from refiner.inference.types import GoogleSafetySetting, InferenceProvider, Message
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.robotics.row import RoboticsRow
@@ -37,6 +37,13 @@ Rules:
 - Use the visible timestamps for start_sec and end_sec.
 - Ignore label wording quality; prioritize temporally correct boundaries.
 """
+
+_GEMINI_BLOCK_NONE_SAFETY_SETTINGS: list[GoogleSafetySetting] = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
 
 
 class _SubtaskSegment(BaseModel):
@@ -116,6 +123,9 @@ def subtask_annotation(
             response = await generate_text(
                 messages=messages,
                 schema=_SubtaskAnnotationResult,
+                provider_options={
+                    "google": {"safetySettings": _GEMINI_BLOCK_NONE_SAFETY_SETTINGS}
+                },
                 **params,
             )
         except RuntimeError as exc:

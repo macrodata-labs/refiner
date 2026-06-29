@@ -401,15 +401,17 @@ def _draw_timestamp_badge(image: Image.Image, timestamp: float) -> Image.Image:
     left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
     text_width = right - left
     text_height = bottom - top
-    padding = max(4, round(min(image.width, image.height) * 0.018))
+    padding = 5
     badge_width = text_width + padding * 2
     badge_height = text_height + padding * 2
+    x0 = max(0, image.width - badge_width)
+    x1 = image.width
 
-    draw.rectangle((0, 0, badge_width, badge_height), fill=(0, 0, 0))
+    draw.rectangle((x0, 0, x1, badge_height), fill=(255, 255, 0))
     draw.text(
-        (padding - left, padding - top),
+        (x0 + padding - left, padding - top),
         label,
-        fill=(255, 255, 255),
+        fill=(0, 0, 0),
         font=font,
     )
     return result
