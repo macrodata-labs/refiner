@@ -14,7 +14,6 @@ from refiner.robotics.subtask_annotation.utils import (
     _blocked_prompt_reason,
     _iter_timestamped_contact_sheets,
     _log_on_overlapping_segments,
-    _parse_json_object,
     _resolve_video,
 )
 from refiner.worker.context import logger
@@ -129,11 +128,9 @@ def subtask_annotation(
                 block_reason,
             )
             return row.update({output_column: []})
-        parsed = (
-            response.object
-            if isinstance(response.object, _SubtaskAnnotationResult)
-            else _parse_subtask_annotation_result(response.text)
-        )
+        parsed = response.object
+        if not isinstance(parsed, _SubtaskAnnotationResult):
+            raise TypeError("subtask_annotation expected a structured response object")
         segments = _normalize_segments(parsed.segments)
         return row.update(
             {
@@ -146,10 +143,6 @@ def subtask_annotation(
         provider=provider,
         max_concurrent_requests=max_concurrent_requests,
     )
-
-
-def _parse_subtask_annotation_result(text: str) -> _SubtaskAnnotationResult:
-    return _SubtaskAnnotationResult.model_validate(_parse_json_object(text))
 
 
 async def _subtask_annotation_content(

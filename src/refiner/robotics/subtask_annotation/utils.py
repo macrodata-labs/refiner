@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import json
 import math
 import re
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
@@ -85,24 +84,6 @@ def _resolve_video(row: RoboticsRow, video_key: str) -> VideoSource:
             f"episode {row.episode_id!r} is missing video key {video_key!r}"
         )
     return row.videos[video_key]
-
-
-def _parse_json_object(text: str) -> Any:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?", "", stripped, flags=re.IGNORECASE).strip()
-        stripped = re.sub(r"```$", "", stripped).strip()
-
-    try:
-        value = json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise
-        value = json.loads(stripped[start : end + 1])
-
-    return value
 
 
 def _normalize_input_segments(

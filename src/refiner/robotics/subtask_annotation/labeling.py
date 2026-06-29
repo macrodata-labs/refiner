@@ -15,7 +15,6 @@ from refiner.robotics.subtask_annotation.utils import (
     _blocked_prompt_reason,
     _normalize_input_segments,
     _normalize_label,
-    _parse_json_object,
     _resolve_video,
     _seed_labels,
     _segment_contact_sheet,
@@ -229,11 +228,11 @@ def subtask_labeling(
                 )
                 label = seed_label
             else:
-                parsed = (
-                    response.object
-                    if isinstance(response.object, _SubtaskLabelingResult)
-                    else _parse_subtask_labeling_result(response.text)
-                )
+                parsed = response.object
+                if not isinstance(parsed, _SubtaskLabelingResult):
+                    raise TypeError(
+                        "subtask_labeling expected a structured response object"
+                    )
                 label = _normalize_label(parsed.label) or seed_label
 
             labeled = dict(segment)
@@ -247,10 +246,6 @@ def subtask_labeling(
         provider=provider,
         max_concurrent_requests=max_concurrent_requests,
     )
-
-
-def _parse_subtask_labeling_result(text: str) -> _SubtaskLabelingResult:
-    return _SubtaskLabelingResult.model_validate(_parse_json_object(text))
 
 
 async def _subtask_labeling_content(

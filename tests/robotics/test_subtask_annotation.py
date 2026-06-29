@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import importlib
 import io
-import json
 from typing import Any, cast
 
 import numpy as np
@@ -28,6 +27,12 @@ subtask_segmentation_module = importlib.import_module(
 subtask_utils_module = importlib.import_module(
     "refiner.robotics.subtask_annotation.utils"
 )
+
+
+def _subtask_annotation_result(segments: list[dict[str, Any]]) -> Any:
+    return subtask_segmentation_module._SubtaskAnnotationResult.model_validate(
+        {"segments": segments}
+    )
 
 
 def _write_video(path, *, num_frames: int = 6, fps: int = 5) -> None:
@@ -270,15 +275,16 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
     async def _fake_request(**kwargs):
         request.update(kwargs)
         return InferenceResponse(
-            text=(
-                '{"segments":['
-                '{"start_sec":0.4,"end_sec":0.2,"subtask":"ignored"},'
-                '{"start_sec":0.0,"end_sec":4.0,"subtask":"open drawer"}'
-                "]}"
-            ),
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=_subtask_annotation_result(
+                [
+                    {"start_sec": 0.4, "end_sec": 0.2, "subtask": "ignored"},
+                    {"start_sec": 0.0, "end_sec": 4.0, "subtask": "open drawer"},
+                ],
+            ),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
@@ -324,10 +330,13 @@ def test_subtask_annotation_accepts_robotics_row(tmp_path, monkeypatch) -> None:
     async def _fake_request(**kwargs):
         request.update(kwargs)
         return InferenceResponse(
-            text='{"segments":[{"start_sec":0.0,"end_sec":0.4,"subtask":"pick"}]}',
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=_subtask_annotation_result(
+                [{"start_sec": 0.0, "end_sec": 0.4, "subtask": "pick"}],
+            ),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
@@ -414,11 +423,11 @@ def test_subtask_annotation_prompt_uses_completed_events_count_guard(
     async def _fake_request(**kwargs):
         request.update(kwargs)
         return InferenceResponse(
-            text='{"segments":[]}',
+            text="",
             finish_reason="stop",
             usage={},
             response={},
-            object=subtask_segmentation_module._SubtaskAnnotationResult(segments=[]),
+            object=_subtask_annotation_result([]),
         )
 
     asyncio.run(cast(Any, block)(row, _fake_request))
@@ -447,17 +456,16 @@ def test_subtask_annotation_keeps_short_segments_by_default(
 
     async def _fake_request(**kwargs):
         return InferenceResponse(
-            text=(
-                "```json\n"
-                '{"segments":['
-                '{"start_sec":0.0,"end_sec":3.49,"subtask":"short action"},'
-                '{"start_sec":3.5,"end_sec":7.0,"subtask":"long action"}'
-                "]}\n"
-                "```"
-            ),
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=_subtask_annotation_result(
+                [
+                    {"start_sec": 0.0, "end_sec": 3.49, "subtask": "short action"},
+                    {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"},
+                ],
+            ),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
@@ -491,15 +499,16 @@ def test_subtask_annotation_logs_on_overlapping_segments(
 
     async def _fake_request(**kwargs):
         return InferenceResponse(
-            text=(
-                '{"segments":['
-                '{"start_sec":0.0,"end_sec":2.0,"subtask":"reach"},'
-                '{"start_sec":1.5,"end_sec":3.0,"subtask":"grasp"}'
-                "]}"
-            ),
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=_subtask_annotation_result(
+                [
+                    {"start_sec": 0.0, "end_sec": 2.0, "subtask": "reach"},
+                    {"start_sec": 1.5, "end_sec": 3.0, "subtask": "grasp"},
+                ],
+            ),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
@@ -566,10 +575,11 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
             " grasp the drawer handle " if len(requests) == 1 else "pull open drawer"
         )
         return InferenceResponse(
-            text=json.dumps({"label": label}),
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=subtask_labeling_module._SubtaskLabelingResult(label=label),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
@@ -613,10 +623,13 @@ def test_subtask_labeling_uses_plain_prompt_without_seed_labels(
     async def _fake_request(**kwargs):
         request.update(kwargs)
         return InferenceResponse(
-            text=json.dumps({"label": "pull open drawer"}),
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=subtask_labeling_module._SubtaskLabelingResult(
+                label="pull open drawer"
+            ),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
