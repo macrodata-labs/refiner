@@ -205,17 +205,13 @@ async def _segment_contact_sheet(
             quality=quality,
         )
 
-    rows = math.ceil(len(frames) / columns)
-    sheets = [
-        sheet
-        async for sheet in _build_contact_sheets(
-            _single_batch(frames),
-            rows=rows,
-            columns=columns,
-            quality=quality,
-        )
-    ]
-    return sheets[0]
+    return _build_contact_sheet(
+        frames,
+        sheet_index=1,
+        rows=math.ceil(len(frames) / columns),
+        columns=columns,
+        quality=quality,
+    )
 
 
 def _uniform_indexes(count: int, limit: int) -> list[int]:
@@ -224,12 +220,6 @@ def _uniform_indexes(count: int, limit: int) -> list[int]:
     if limit == 1:
         return [0]
     return [round(index * (count - 1) / (limit - 1)) for index in range(limit)]
-
-
-async def _single_batch(
-    frames: Sequence[tuple[float, Image.Image]],
-) -> AsyncIterator[Sequence[tuple[float, Image.Image]]]:
-    yield frames
 
 
 def _blank_contact_sheet(
@@ -354,33 +344,50 @@ async def _build_contact_sheets(
     columns: int,
     quality: int,
 ) -> AsyncIterator[TimestampedContactSheet]:
-    from PIL import Image
-
     sheet_index = 1
     async for chunk in batches:
-        frame_width, frame_height = chunk[0][1].size
-        sheet_width = frame_width * columns
-        sheet_height = frame_height * rows
-        sheet = Image.new("RGB", (sheet_width, sheet_height), color=(0, 0, 0))
-
-        for index, (_, image) in enumerate(chunk):
-            x = (index % columns) * frame_width
-            y = (index // columns) * frame_height
-            sheet.paste(image, (x, y))
-
-        output = io.BytesIO()
-        sheet.save(output, format="JPEG", quality=quality)
-        yield TimestampedContactSheet(
-            data=output.getvalue(),
-            media_type="image/jpeg",
-            index=sheet_index,
-            timestamps=tuple(timestamp for timestamp, _ in chunk),
-            width=sheet_width,
-            height=sheet_height,
+        yield _build_contact_sheet(
+            chunk,
+            sheet_index=sheet_index,
             rows=rows,
             columns=columns,
+            quality=quality,
         )
         sheet_index += 1
+
+
+def _build_contact_sheet(
+    frames: Sequence[tuple[float, Image.Image]],
+    *,
+    sheet_index: int,
+    rows: int,
+    columns: int,
+    quality: int,
+) -> TimestampedContactSheet:
+    from PIL import Image
+
+    frame_width, frame_height = frames[0][1].size
+    sheet_width = frame_width * columns
+    sheet_height = frame_height * rows
+    sheet = Image.new("RGB", (sheet_width, sheet_height), color=(0, 0, 0))
+
+    for index, (_, image) in enumerate(frames):
+        x = (index % columns) * frame_width
+        y = (index // columns) * frame_height
+        sheet.paste(image, (x, y))
+
+    output = io.BytesIO()
+    sheet.save(output, format="JPEG", quality=quality)
+    return TimestampedContactSheet(
+        data=output.getvalue(),
+        media_type="image/jpeg",
+        index=sheet_index,
+        timestamps=tuple(timestamp for timestamp, _ in frames),
+        width=sheet_width,
+        height=sheet_height,
+        rows=rows,
+        columns=columns,
+    )
 
 
 def _draw_timestamp_badge(image: Image.Image, timestamp: float) -> Image.Image:
