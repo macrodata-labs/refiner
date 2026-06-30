@@ -81,21 +81,21 @@ pipeline = (
 
 ## Output shape
 
-The output column contains a list of segment dictionaries. Each segment has a
-start time, an end time, and an optional short action label:
+The segmentation output column contains a list of segment dictionaries. Each
+segment has a start time, an end time, and a short action description under
+`subtask`:
 
 ```python
 [
-    {"start_sec": 0.0, "end_sec": 1.2, "label": "reach object"},
-    {"start_sec": 1.2, "end_sec": 2.8, "label": "grasp object"},
+    {"start_sec": 0.0, "end_sec": 1.2, "subtask": "reach object"},
+    {"start_sec": 1.2, "end_sec": 2.8, "subtask": "grasp object"},
 ]
 ```
 
-`subtask_labeling` writes the same segment shape to its output column, but the
-`label` value is rewritten from a dedicated labeling pass. If the input segment
-has a non-empty `label`, the labeling prompt treats it as a seed label. If the
-input segment omits `label` or sets it to an empty string, the block uses a plain
-labeling prompt.
+`subtask_labeling` writes fixed segments with a `label` value rewritten from a
+dedicated labeling pass. If the input segment has a non-empty `label`, the
+labeling prompt treats it as a seed label. If the input segment omits `label` or
+sets it to an empty string, the block uses a plain labeling prompt.
 
 ```python
 pipeline = pipeline.map_async(

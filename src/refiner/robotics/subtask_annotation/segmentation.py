@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
 
 Return only JSON with this shape:
-{"segments":[{"start_sec":0.0,"end_sec":1.0,"label":"short action description"}]}
+{"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
 
 Rules:
 - Segment only completed robot manipulation events, not every visible movement.
@@ -42,7 +42,7 @@ Rules:
 class _SubtaskSegment(BaseModel):
     start_sec: float
     end_sec: float
-    label: str
+    subtask: str
 
 
 class _SubtaskAnnotationResult(BaseModel):
@@ -238,12 +238,12 @@ def _normalize_segments(segments: list[_SubtaskSegment]) -> list[dict[str, Any]]
     for index, segment in enumerate(segments):
         if segment.end_sec <= segment.start_sec:
             continue
-        label = segment.label.strip() or f"segment {index}"
+        subtask = segment.subtask.strip() or f"segment {index}"
         normalized.append(
             {
                 "start_sec": round(max(0.0, float(segment.start_sec)), 3),
                 "end_sec": round(max(0.0, float(segment.end_sec)), 3),
-                "label": label,
+                "subtask": subtask,
             }
         )
     sorted_segments = sorted(

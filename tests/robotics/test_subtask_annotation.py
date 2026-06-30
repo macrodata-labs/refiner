@@ -278,8 +278,8 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
             response={},
             object=_subtask_annotation_result(
                 [
-                    {"start_sec": 0.4, "end_sec": 0.2, "label": "ignored"},
-                    {"start_sec": 0.0, "end_sec": 4.0, "label": "open drawer"},
+                    {"start_sec": 0.4, "end_sec": 0.2, "subtask": "ignored"},
+                    {"start_sec": 0.0, "end_sec": 4.0, "subtask": "open drawer"},
                 ],
             ),
         )
@@ -321,7 +321,7 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
     )
     assert message["content"][1]["mediaType"] == "image/jpeg"
     assert result["predicted_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 4.0, "label": "open drawer"}
+        {"start_sec": 0.0, "end_sec": 4.0, "subtask": "open drawer"}
     ]
     assert "predicted_subtasks_json" not in result
     assert "annotation_model" not in result
@@ -349,7 +349,7 @@ def test_subtask_annotation_accepts_robotics_row(tmp_path, monkeypatch) -> None:
             usage={},
             response={},
             object=_subtask_annotation_result(
-                [{"start_sec": 0.0, "end_sec": 0.4, "label": "pick"}],
+                [{"start_sec": 0.0, "end_sec": 0.4, "subtask": "pick"}],
             ),
         )
 
@@ -360,7 +360,7 @@ def test_subtask_annotation_accepts_robotics_row(tmp_path, monkeypatch) -> None:
         in request["messages"][0]["content"][0]["text"]
     )
     assert result["predicted_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.4, "label": "pick"}
+        {"start_sec": 0.0, "end_sec": 0.4, "subtask": "pick"}
     ]
 
 
@@ -476,8 +476,8 @@ def test_subtask_annotation_keeps_short_segments_by_default(
             response={},
             object=_subtask_annotation_result(
                 [
-                    {"start_sec": 0.0, "end_sec": 3.49, "label": "short action"},
-                    {"start_sec": 3.5, "end_sec": 7.0, "label": "long action"},
+                    {"start_sec": 0.0, "end_sec": 3.49, "subtask": "short action"},
+                    {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"},
                 ],
             ),
         )
@@ -485,8 +485,8 @@ def test_subtask_annotation_keeps_short_segments_by_default(
     result = asyncio.run(cast(Any, block)(row, _fake_request))
 
     assert result["predicted_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 3.49, "label": "short action"},
-        {"start_sec": 3.5, "end_sec": 7.0, "label": "long action"},
+        {"start_sec": 0.0, "end_sec": 3.49, "subtask": "short action"},
+        {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"},
     ]
 
 
@@ -519,8 +519,8 @@ def test_subtask_annotation_logs_on_overlapping_segments(
             response={},
             object=_subtask_annotation_result(
                 [
-                    {"start_sec": 0.0, "end_sec": 2.0, "label": "reach"},
-                    {"start_sec": 1.5, "end_sec": 3.0, "label": "grasp"},
+                    {"start_sec": 0.0, "end_sec": 2.0, "subtask": "reach"},
+                    {"start_sec": 1.5, "end_sec": 3.0, "subtask": "grasp"},
                 ],
             ),
         )
@@ -528,8 +528,8 @@ def test_subtask_annotation_logs_on_overlapping_segments(
     result = asyncio.run(cast(Any, block)(row, _fake_request))
 
     assert result["predicted_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 2.0, "label": "reach"},
-        {"start_sec": 1.5, "end_sec": 3.0, "label": "grasp"},
+        {"start_sec": 0.0, "end_sec": 2.0, "subtask": "reach"},
+        {"start_sec": 1.5, "end_sec": 3.0, "subtask": "grasp"},
     ]
     assert len(logged_warnings) == 1
     assert "overlapping segments" in logged_warnings[0][0]
