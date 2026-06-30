@@ -561,6 +561,8 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
     tmp_path,
     monkeypatch,
 ) -> None:
+    from PIL import Image
+
     def _fake_generate_text(**kwargs):
         return kwargs["fn"]
 
@@ -579,7 +581,6 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
     block = mdr.robotics.subtask_labeling(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
-        max_frames_per_segment=2,
     )
     requests = []
 
@@ -623,6 +624,10 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
     assert "Use previous/next images only" in first_prompt
     assert len(requests[0]["messages"][0]["content"]) == 4
     assert requests[0]["messages"][0]["content"][1]["mediaType"] == "image/jpeg"
+    current_sheet = Image.open(
+        io.BytesIO(requests[0]["messages"][0]["content"][2]["data"])
+    )
+    assert current_sheet.width == 336 * 3
     assert result["labeled_subtasks"] == [
         {"start_sec": 0.0, "end_sec": 0.2, "label": "grasp the drawer handle"},
         {"start_sec": 0.2, "end_sec": 0.4, "label": "pull open drawer"},
