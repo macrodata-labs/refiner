@@ -18,7 +18,7 @@ from refiner.robotics.subtask_annotation.utils import (
     _normalize_input_segments,
     _normalize_label,
     _resolve_video,
-    _segment_contact_sheet,
+    _segment_contact_sheets,
 )
 from refiner.worker.context import logger
 
@@ -177,18 +177,14 @@ def subtask_labeling(
         video = _resolve_video(row, video_key)
         segments = _normalize_input_segments(row[segments_column])
         instruction = "; ".join(task for task in row.tasks if task.strip())
-        segment_sheets = [
-            await _segment_contact_sheet(
-                video=video,
-                start_sec=float(segment["start_sec"]),
-                end_sec=float(segment["end_sec"]),
-                frame_width=frame_width,
-                max_frames=max_frames_per_segment,
-                columns=columns,
-                quality=quality,
-            )
-            for segment in segments
-        ]
+        segment_sheets = await _segment_contact_sheets(
+            video=video,
+            segments=segments,
+            frame_width=frame_width,
+            max_frames=max_frames_per_segment,
+            columns=columns,
+            quality=quality,
+        )
         blank_sheet = _blank_contact_sheet(
             frame_width=frame_width,
             columns=columns,

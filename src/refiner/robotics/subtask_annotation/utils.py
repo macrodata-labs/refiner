@@ -199,6 +199,127 @@ async def _segment_contact_sheet(
     )
 
 
+async def _segment_contact_sheets(
+    *,
+    video: VideoSource,
+    segments: Sequence[Mapping[str, Any]],
+    frame_width: int,
+    max_frames: int,
+    columns: int,
+    quality: int,
+) -> list[TimestampedContactSheet]:
+    if max_frames <= 0:
+        raise ValueError("max_frames must be > 0")
+    if columns <= 0:
+        raise ValueError("columns must be > 0")
+
+    check_required_dependencies(
+        "subtask_labeling",
+        ["av", ("PIL", "pillow")],
+        dist="video",
+    )
+
+    targets: list[tuple[float, int]] = []
+    for segment_index, segment in enumerate(segments):
+        start_sec = float(segment["start_sec"])
+        end_sec = float(segment["end_sec"])
+        if end_sec <= start_sec:
+            continue
+        for timestamp in _segment_target_timestamps(
+            start_sec,
+            end_sec,
+            max_frames,
+        ):
+            targets.append((timestamp, segment_index))
+
+    if not targets:
+        return []
+
+    targets.sort(key=lambda item: item[0])
+    frames_by_segment: list[list[tuple[float, Image.Image]]] = [
+        [] for _ in range(len(segments))
+    ]
+    target_index = 0
+    last_image: Image.Image | None = None
+
+    async for frame in video.iter_frames():
+        timestamp = frame.timestamp_s
+        if timestamp is None:
+            continue
+        if target_index >= len(targets):
+            break
+        if timestamp + 1e-6 < targets[target_index][0]:
+            continue
+
+        image = frame.frame.to_image().convert("RGB")
+        if image.width != frame_width:
+            from PIL import Image
+
+            height = max(1, round(image.height * frame_width / image.width))
+            image = image.resize(
+                (frame_width, height),
+                resample=Image.Resampling.BOX,
+            )
+        last_image = image
+
+        while (
+            target_index < len(targets) and timestamp + 1e-6 >= targets[target_index][0]
+        ):
+            target_timestamp, segment_index = targets[target_index]
+            frames_by_segment[segment_index].append(
+                (
+                    target_timestamp,
+                    _draw_timestamp_badge(image, target_timestamp),
+                )
+            )
+            target_index += 1
+
+    if last_image is not None:
+        while target_index < len(targets):
+            target_timestamp, segment_index = targets[target_index]
+            frames_by_segment[segment_index].append(
+                (
+                    target_timestamp,
+                    _draw_timestamp_badge(last_image, target_timestamp),
+                )
+            )
+            target_index += 1
+
+    blank_sheet = _blank_contact_sheet(
+        frame_width=frame_width,
+        columns=columns,
+        quality=quality,
+    )
+    sheets: list[TimestampedContactSheet] = []
+    for frames in frames_by_segment:
+        if not frames:
+            sheets.append(blank_sheet)
+            continue
+        sheets.append(
+            _build_contact_sheet(
+                frames,
+                sheet_index=1,
+                rows=math.ceil(len(frames) / columns),
+                columns=columns,
+                quality=quality,
+            )
+        )
+    return sheets
+
+
+def _segment_target_timestamps(
+    start_sec: float,
+    end_sec: float,
+    max_frames: int,
+) -> list[float]:
+    if max_frames == 1:
+        return [round((start_sec + end_sec) / 2, 6)]
+    return [
+        round(start_sec + index * (end_sec - start_sec) / (max_frames - 1), 6)
+        for index in range(max_frames)
+    ]
+
+
 def _uniform_indexes(count: int, limit: int) -> list[int]:
     if count <= limit:
         return list(range(count))
