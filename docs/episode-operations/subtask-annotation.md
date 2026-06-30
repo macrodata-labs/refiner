@@ -44,16 +44,16 @@ pipeline = (
 
 By default, `subtask_annotation` uses Gemini through `GoogleEndpointProvider`.
 Set `GOOGLE_GENERATIVE_AI_API_KEY` before running the pipeline, or pass a
-different provider explicitly. For Google providers, the segmentation block
-passes Gemini `BLOCK_NONE` safety settings for harassment, hate speech, sexually
-explicit, and dangerous-content categories to match the benchmark contact-sheet
-runner and reduce false blocks on robotics videos.
+different provider explicitly. For Google providers, the segmentation and
+labeling blocks pass Gemini `BLOCK_NONE` safety settings for harassment, hate
+speech, sexually explicit, and dangerous-content categories to match the
+benchmark contact-sheet runner and reduce false blocks on robotics videos.
 
 The labeling block is optional, but it is the recommended default when you
-want the best labels for fixed segments. If each segment already has a label, or
-you pass `labels_column`, `subtask_labeling` runs the seed-aware relabeling
-prompt. If the segments only have timestamps, it runs a plain labeling prompt
-from previous/current/next visual context.
+want the best labels for fixed segments. If a segment already has a non-empty
+`label`, `subtask_labeling` runs the seed-aware relabeling prompt. If segments
+only have timestamps, it runs a plain labeling prompt from previous/current/next
+visual context.
 
 ## Other readers
 
@@ -82,25 +82,26 @@ pipeline = (
 ## Output shape
 
 The output column contains a list of segment dictionaries. Each segment has a
-start time, an end time, and a short action description:
+start time, an end time, and an optional short action label:
 
 ```python
 [
-    {"start_sec": 0.0, "end_sec": 1.2, "subtask": "reach object"},
-    {"start_sec": 1.2, "end_sec": 2.8, "subtask": "grasp object"},
+    {"start_sec": 0.0, "end_sec": 1.2, "label": "reach object"},
+    {"start_sec": 1.2, "end_sec": 2.8, "label": "grasp object"},
 ]
 ```
 
 `subtask_labeling` writes the same segment shape to its output column, but the
-`subtask` value is rewritten from a dedicated labeling pass. If you already
-store seed labels in a separate column, pass `labels_column`:
+`label` value is rewritten from a dedicated labeling pass. If the input segment
+has a non-empty `label`, the labeling prompt treats it as a seed label. If the
+input segment omits `label` or sets it to an empty string, the block uses a plain
+labeling prompt.
 
 ```python
 pipeline = pipeline.map_async(
     mdr.robotics.subtask_labeling(
         video_key="observation.images.top",
         segments_column="segments",
-        labels_column="seed_labels",
         output_column="labeled_subtasks",
     ),
     max_in_flight=256,
@@ -134,8 +135,8 @@ to disambiguate what changed.
 | `frame_width` | Width of each sampled frame tile. |
 | `frames_per_sheet` | Maximum number of sampled frames per contact sheet. |
 | `columns` | Contact sheet grid columns. |
-| `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `84`. |
-| `on_blocked_prompt` | Behavior when the provider blocks an episode prompt. Defaults to `"empty"`, which logs the block and writes an empty segment list. Use `"raise"` to fail the row instead. |
+| `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `95`. If the provider blocks or returns empty text, segmentation retries once with quality `70`. |
+| `on_blocked_prompt` | Behavior when the provider still blocks an episode prompt after the lower-quality retry. Defaults to `"empty"`, which logs the block and writes an empty segment list. Use `"raise"` to fail the row instead. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
 ## Labeling parameters
@@ -143,10 +144,8 @@ to disambiguate what changed.
 | Parameter | Meaning |
 | --- | --- |
 | `video_key` | Video stream used to render previous/current/next segment sheets. |
-| `segments_column` | Column containing fixed segment dictionaries with `start_sec` and `end_sec`. Defaults to `predicted_subtasks`. |
+| `segments_column` | Column containing fixed segment dictionaries with `start_sec`, `end_sec`, and optional `label`. Defaults to `predicted_subtasks`. |
 | `output_column` | Row column that receives the labeled segment list. Defaults to `labeled_subtasks`. |
-| `labels_column` | Optional column containing seed labels aligned one-to-one with `segments_column`. |
-| `segment_label_key` | Segment dictionary key used for the label. Defaults to `subtask`. |
 | `frame_width` | Width of each sampled frame tile. |
 | `max_frames_per_segment` | Maximum sampled frames in each previous/current/next sheet. Defaults to `5`. |
 | `columns` | Contact sheet grid columns. |

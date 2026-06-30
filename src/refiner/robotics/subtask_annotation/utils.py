@@ -7,15 +7,23 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-from refiner.pipeline.data.row import Row
+from refiner.inference.types import GoogleSafetySetting
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import logger
 
 if TYPE_CHECKING:
-    from PIL import Image
+    from PIL import Image, ImageFont
 
     from refiner.video import VideoSource
+
+
+GEMINI_BLOCK_NONE_SAFETY_SETTINGS: list[GoogleSafetySetting] = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +71,6 @@ def _resolve_video(row: RoboticsRow, video_key: str) -> VideoSource:
 
 def _normalize_input_segments(
     value: Any,
-    segment_label_key: str,
 ) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         raise TypeError("segments_column must contain a sequence of segment mappings")
@@ -79,10 +86,13 @@ def _normalize_input_segments(
         end_sec = float(item["end_sec"])
         if end_sec <= start_sec:
             continue
-        segment = dict(item)
-        segment["start_sec"] = round(max(0.0, start_sec), 3)
-        segment["end_sec"] = round(max(0.0, end_sec), 3)
-        segments.append(segment)
+        segments.append(
+            {
+                "start_sec": round(max(0.0, start_sec), 3),
+                "end_sec": round(max(0.0, end_sec), 3),
+                "label": _normalize_label(str(item.get("label") or "")),
+            }
+        )
 
     sorted_segments = sorted(
         segments,
@@ -90,31 +100,6 @@ def _normalize_input_segments(
     )
     _log_on_overlapping_segments(sorted_segments)
     return sorted_segments
-
-
-def _seed_labels(
-    *,
-    row: Row,
-    segments: Sequence[Mapping[str, Any]],
-    labels_column: str | None,
-    segment_label_key: str,
-) -> list[str]:
-    labels: Sequence[Any] | None = None
-    if labels_column is not None:
-        value = row[labels_column]
-        if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-            raise TypeError("labels_column must contain a sequence of labels")
-        labels = value
-        if len(labels) != len(segments):
-            raise ValueError("labels_column length must match segments_column length")
-
-    seed_labels = []
-    for index, segment in enumerate(segments):
-        raw_label = (
-            labels[index] if labels is not None else segment.get(segment_label_key)
-        )
-        seed_labels.append(_normalize_label(str(raw_label or "")))
-    return seed_labels
 
 
 def _normalize_label(label: str) -> str:
@@ -190,7 +175,7 @@ async def _segment_contact_sheet(
                 height = max(1, round(image.height * frame_width / image.width))
                 image = image.resize(
                     (frame_width, height),
-                    resample=Image.Resampling.BILINEAR,
+                    resample=Image.Resampling.BOX,
                 )
             frames.append((timestamp, _draw_timestamp_badge(image, timestamp)))
             break
@@ -234,7 +219,7 @@ def _blank_contact_sheet(
     width = frame_width * columns
     image = Image.new("RGB", (width, frame_height), color=(245, 245, 245))
     output = io.BytesIO()
-    image.save(output, format="JPEG", quality=quality)
+    image.save(output, format="JPEG", quality=quality, subsampling=2)
     return TimestampedContactSheet(
         data=output.getvalue(),
         media_type="image/jpeg",
@@ -254,7 +239,7 @@ async def timestamped_contact_sheets(
     frame_width: int = 224,
     frames_per_sheet: int = 20,
     columns: int = 5,
-    quality: int = 84,
+    quality: int = 95,
 ) -> AsyncIterator[TimestampedContactSheet]:
     """Yield JPEG contact sheets with visible timestamp badges."""
 
@@ -303,11 +288,11 @@ async def _sample_timestamped_frames(
     sample_sec: float,
     frame_width: int,
 ) -> AsyncIterator[tuple[float, Image.Image]]:
-    next_timestamp = 0.0
+    target_timestamp = 0.0
 
     async for frame in video.iter_frames():
         timestamp = frame.timestamp_s
-        if timestamp is None or timestamp + 1e-6 < next_timestamp:
+        if timestamp is None or timestamp + 1e-6 < target_timestamp:
             continue
 
         image = frame.frame.to_image().convert("RGB")
@@ -317,10 +302,12 @@ async def _sample_timestamped_frames(
             height = max(1, round(image.height * frame_width / image.width))
             image = image.resize(
                 (frame_width, height),
-                resample=Image.Resampling.BILINEAR,
+                resample=Image.Resampling.BOX,
             )
-        yield timestamp, _draw_timestamp_badge(image, timestamp)
-        next_timestamp = timestamp + sample_sec
+        while timestamp + 1e-6 >= target_timestamp:
+            sampled_timestamp = round(target_timestamp, 6)
+            yield sampled_timestamp, _draw_timestamp_badge(image, sampled_timestamp)
+            target_timestamp += sample_sec
 
 
 async def _batched(
@@ -377,7 +364,7 @@ def _build_contact_sheet(
         sheet.paste(image, (x, y))
 
     output = io.BytesIO()
-    sheet.save(output, format="JPEG", quality=quality)
+    sheet.save(output, format="JPEG", quality=quality, subsampling=2)
     return TimestampedContactSheet(
         data=output.getvalue(),
         media_type="image/jpeg",
@@ -391,30 +378,31 @@ def _build_contact_sheet(
 
 
 def _draw_timestamp_badge(image: Image.Image, timestamp: float) -> Image.Image:
-    from PIL import ImageDraw, ImageFont
+    from PIL import ImageDraw
 
     result = image.copy()
     draw = ImageDraw.Draw(result)
-    font = ImageFont.load_default()
+    font = _load_timestamp_font()
     label = f"{timestamp:06.2f}s"
 
-    left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
-    text_width = right - left
-    text_height = bottom - top
-    padding = 5
-    badge_width = text_width + padding * 2
-    badge_height = text_height + padding * 2
-    x0 = max(0, image.width - badge_width)
-    x1 = image.width
-
-    draw.rectangle((x0, 0, x1, badge_height), fill=(255, 255, 0))
-    draw.text(
-        (x0 + padding - left, padding - top),
-        label,
-        fill=(0, 0, 0),
-        font=font,
-    )
+    draw.rectangle((0, 0, 72, 26), fill=(0, 0, 0))
+    draw.text((7, 3), label, fill=(255, 255, 255), font=font)
     return result
+
+
+def _load_timestamp_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    from PIL import ImageFont
+
+    for path in (
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, 17)
+        except OSError:
+            pass
+    return ImageFont.load_default()
 
 
 __all__ = [

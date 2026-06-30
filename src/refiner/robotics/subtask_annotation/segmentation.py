@@ -1,16 +1,16 @@
 from __future__ import annotations
-
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel
 
 from refiner.inference.providers import GoogleEndpointProvider
-from refiner.inference.types import GoogleSafetySetting, InferenceProvider, Message
+from refiner.inference.types import InferenceProvider, Message
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.robotics.row import RoboticsRow
 from refiner.robotics.subtask_annotation.utils import (
+    GEMINI_BLOCK_NONE_SAFETY_SETTINGS,
     _blocked_prompt_reason,
     _log_on_overlapping_segments,
     _resolve_video,
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
 
 Return only JSON with this shape:
-{"segments":[{"start_sec":0.0,"end_sec":1.0,"subtask":"short action description"}]}
+{"segments":[{"start_sec":0.0,"end_sec":1.0,"label":"short action description"}]}
 
 Rules:
 - Segment only completed robot manipulation events, not every visible movement.
@@ -38,18 +38,11 @@ Rules:
 - Ignore label wording quality; prioritize temporally correct boundaries.
 """
 
-_GEMINI_BLOCK_NONE_SAFETY_SETTINGS: list[GoogleSafetySetting] = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
-
 
 class _SubtaskSegment(BaseModel):
     start_sec: float
     end_sec: float
-    subtask: str
+    label: str
 
 
 class _SubtaskAnnotationResult(BaseModel):
@@ -65,7 +58,7 @@ def subtask_annotation(
     frame_width: int = 224,
     frames_per_sheet: int = 20,
     columns: int = 5,
-    quality: int = 84,
+    quality: int = 95,
     temperature: float = 0.1,
     on_blocked_prompt: Literal["empty", "raise"] = "empty",
     max_concurrent_requests: int = 256,
@@ -115,23 +108,48 @@ def subtask_annotation(
             columns=columns,
             quality=quality,
         )
-        params: dict[str, Any] = {
-            "temperature": temperature,
-        }
-        messages = cast(list[Message], [{"role": "user", "content": content}])
         try:
-            response = await generate_text(
-                messages=messages,
-                schema=_SubtaskAnnotationResult,
-                provider_options={
-                    "google": {"safetySettings": _GEMINI_BLOCK_NONE_SAFETY_SETTINGS}
-                },
-                **params,
+            response = await _request_subtask_annotation(
+                generate_text=generate_text,
+                content=content,
+                temperature=temperature,
             )
         except RuntimeError as exc:
             block_reason = _blocked_prompt_reason(exc)
-            if block_reason is None or on_blocked_prompt == "raise":
+            if block_reason is None:
                 raise
+            try:
+                fallback_content = await _subtask_annotation_content(
+                    video=video,
+                    tasks=row.tasks,
+                    sample_sec=sample_sec,
+                    frame_width=frame_width,
+                    frames_per_sheet=frames_per_sheet,
+                    columns=columns,
+                    quality=70,
+                )
+                response = await _request_subtask_annotation(
+                    generate_text=generate_text,
+                    content=fallback_content,
+                    temperature=temperature,
+                )
+            except RuntimeError as fallback_exc:
+                fallback_block_reason = _blocked_prompt_reason(fallback_exc)
+                if fallback_block_reason is None or on_blocked_prompt == "raise":
+                    raise
+                block_reason = fallback_block_reason
+            else:
+                parsed = response.object
+                if not isinstance(parsed, _SubtaskAnnotationResult):
+                    raise TypeError(
+                        "subtask_annotation expected a structured response object"
+                    )
+                segments = _normalize_segments(parsed.segments)
+                return row.update(
+                    {
+                        output_column: segments,
+                    }
+                )
             logger.warning(
                 "subtask annotation provider blocked episode {}: {}",
                 row.episode_id,
@@ -152,6 +170,26 @@ def subtask_annotation(
         fn=_annotate_subtasks,
         provider=provider,
         max_concurrent_requests=max_concurrent_requests,
+    )
+
+
+async def _request_subtask_annotation(
+    *,
+    generate_text: "GenerateTextFn",
+    content: list[dict[str, Any]],
+    temperature: float,
+) -> Any:
+    messages = cast(list[Message], [{"role": "user", "content": content}])
+    return await generate_text(
+        messages=messages,
+        schema=_SubtaskAnnotationResult,
+        provider_options={
+            "google": {
+                "safetySettings": GEMINI_BLOCK_NONE_SAFETY_SETTINGS,
+            }
+        },
+        maxRetries=4,
+        temperature=temperature,
     )
 
 
@@ -200,12 +238,12 @@ def _normalize_segments(segments: list[_SubtaskSegment]) -> list[dict[str, Any]]
     for index, segment in enumerate(segments):
         if segment.end_sec <= segment.start_sec:
             continue
-        label = segment.subtask.strip() or f"segment {index}"
+        label = segment.label.strip() or f"segment {index}"
         normalized.append(
             {
                 "start_sec": round(max(0.0, float(segment.start_sec)), 3),
                 "end_sec": round(max(0.0, float(segment.end_sec)), 3),
-                "subtask": label,
+                "label": label,
             }
         )
     sorted_segments = sorted(

@@ -11,19 +11,19 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import MapResult
 from refiner.robotics.row import RoboticsRow
 from refiner.robotics.subtask_annotation.utils import (
+    GEMINI_BLOCK_NONE_SAFETY_SETTINGS,
+    TimestampedContactSheet,
     _blank_contact_sheet,
     _blocked_prompt_reason,
     _normalize_input_segments,
     _normalize_label,
     _resolve_video,
-    _seed_labels,
     _segment_contact_sheet,
 )
 from refiner.worker.context import logger
 
 if TYPE_CHECKING:
     from refiner.inference.generate_text import GenerateTextFn
-    from refiner.video import VideoSource
 
 
 _SUBTASK_LABELING_PROMPT_TEMPLATE = """Annotate one fixed segment from a longer video.
@@ -110,8 +110,6 @@ def subtask_labeling(
     video_key: str,
     segments_column: str = "predicted_subtasks",
     output_column: str = "labeled_subtasks",
-    labels_column: str | None = None,
-    segment_label_key: str = "subtask",
     frame_width: int = 224,
     max_frames_per_segment: int = 5,
     columns: int = 5,
@@ -134,19 +132,13 @@ def subtask_labeling(
             previous/current/next segment contact sheets.
         segments_column: Row column containing the fixed input segment
             dictionaries. Each segment must contain ``start_sec`` and
-            ``end_sec``. If a segment also contains ``segment_label_key``, that
-            value is used as a seed label unless ``labels_column`` is provided.
+            ``end_sec`` and ``label``. Empty labels are allowed and trigger the
+            plain labeling prompt.
         output_column: Row column written by this block. The output is a list of
             segment dictionaries with the same timing fields and a rewritten
-            label at ``segment_label_key``. Keeping this separate from
+            ``label`` value. Keeping this separate from
             ``segments_column`` preserves the original segmentation output for
             inspection or comparison.
-        labels_column: Optional row column containing seed labels aligned
-            one-to-one with ``segments_column``. Use this when timestamps and
-            labels are stored separately. Values in this column take precedence
-            over labels embedded in the segment dictionaries.
-        segment_label_key: Segment dictionary key used to read embedded seed
-            labels and write the final label. Defaults to ``"subtask"``.
         frame_width: Width, in pixels, for rendered segment contact-sheet
             frames.
         max_frames_per_segment: Maximum number of frames sampled for each
@@ -170,10 +162,6 @@ def subtask_labeling(
         raise ValueError("segments_column must be non-empty")
     if not output_column.strip():
         raise ValueError("output_column must be non-empty")
-    if labels_column is not None and not labels_column.strip():
-        raise ValueError("labels_column must be non-empty when provided")
-    if not segment_label_key.strip():
-        raise ValueError("segment_label_key must be non-empty")
     if max_frames_per_segment <= 0:
         raise ValueError("max_frames_per_segment must be > 0")
     if on_blocked_prompt not in {"seed", "raise"}:
@@ -187,33 +175,44 @@ def subtask_labeling(
             raise TypeError("subtask_labeling expects RoboticsRow inputs")
 
         video = _resolve_video(row, video_key)
-        segments = _normalize_input_segments(row[segments_column], segment_label_key)
-        seed_labels = _seed_labels(
-            row=row,
-            segments=segments,
-            labels_column=labels_column,
-            segment_label_key=segment_label_key,
-        )
+        segments = _normalize_input_segments(row[segments_column])
         instruction = "; ".join(task for task in row.tasks if task.strip())
+        segment_sheets = [
+            await _segment_contact_sheet(
+                video=video,
+                start_sec=float(segment["start_sec"]),
+                end_sec=float(segment["end_sec"]),
+                frame_width=frame_width,
+                max_frames=max_frames_per_segment,
+                columns=columns,
+                quality=quality,
+            )
+            for segment in segments
+        ]
+        blank_sheet = _blank_contact_sheet(
+            frame_width=frame_width,
+            columns=columns,
+            quality=quality,
+        )
         labeled_segments: list[dict[str, Any]] = []
         for index, segment in enumerate(segments):
-            seed_label = seed_labels[index]
+            seed_label = str(segment["label"])
             content = await _subtask_labeling_content(
-                video=video,
                 segments=segments,
+                segment_sheets=segment_sheets,
+                blank_sheet=blank_sheet,
                 segment_index=index,
                 instruction=instruction,
                 seed_label=seed_label,
-                frame_width=frame_width,
-                max_frames_per_segment=max_frames_per_segment,
-                columns=columns,
-                quality=quality,
             )
             messages = cast(list[Message], [{"role": "user", "content": content}])
             try:
                 response = await generate_text(
                     messages=messages,
                     schema=_SubtaskLabelingResult,
+                    provider_options={
+                        "google": {"safetySettings": GEMINI_BLOCK_NONE_SAFETY_SETTINGS}
+                    },
                     temperature=temperature,
                 )
             except RuntimeError as exc:
@@ -236,7 +235,7 @@ def subtask_labeling(
                 label = _normalize_label(parsed.label) or seed_label
 
             labeled = dict(segment)
-            labeled[segment_label_key] = label
+            labeled["label"] = label
             labeled_segments.append(labeled)
 
         return row.update({output_column: labeled_segments})
@@ -250,15 +249,12 @@ def subtask_labeling(
 
 async def _subtask_labeling_content(
     *,
-    video: VideoSource,
     segments: Sequence[Mapping[str, Any]],
+    segment_sheets: Sequence[TimestampedContactSheet],
+    blank_sheet: TimestampedContactSheet,
     segment_index: int,
     instruction: str,
     seed_label: str,
-    frame_width: int,
-    max_frames_per_segment: int,
-    columns: int,
-    quality: int,
 ) -> list[dict[str, Any]]:
     segment = segments[segment_index]
     start_sec = float(segment["start_sec"])
@@ -279,22 +275,9 @@ async def _subtask_labeling_content(
     file_parts: list[dict[str, Any]] = []
     for neighbor_index in (segment_index - 1, segment_index, segment_index + 1):
         if 0 <= neighbor_index < len(segments):
-            neighbor = segments[neighbor_index]
-            sheet = await _segment_contact_sheet(
-                video=video,
-                start_sec=float(neighbor["start_sec"]),
-                end_sec=float(neighbor["end_sec"]),
-                frame_width=frame_width,
-                max_frames=max_frames_per_segment,
-                columns=columns,
-                quality=quality,
-            )
+            sheet = segment_sheets[neighbor_index]
         else:
-            sheet = _blank_contact_sheet(
-                frame_width=frame_width,
-                columns=columns,
-                quality=quality,
-            )
+            sheet = blank_sheet
         file_parts.append(
             {"type": "file", "mediaType": sheet.media_type, "data": sheet.data}
         )

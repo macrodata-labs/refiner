@@ -59,7 +59,7 @@ def _write_video(path, *, num_frames: int = 6, fps: int = 5) -> None:
 async def _build_sheets(video: mdr.video.VideoFile):
     return [
         sheet
-        async for sheet in mdr.robotics.timestamped_contact_sheets(
+        async for sheet in subtask_utils_module.timestamped_contact_sheets(
             video,
             sample_sec=0.4,
             frame_width=64,
@@ -73,7 +73,7 @@ async def _build_sheets(video: mdr.video.VideoFile):
 async def _collect_sheets(video: Any, **kwargs: Any):
     return [
         sheet
-        async for sheet in mdr.robotics.timestamped_contact_sheets(
+        async for sheet in subtask_utils_module.timestamped_contact_sheets(
             video,
             **kwargs,
         )
@@ -81,7 +81,7 @@ async def _collect_sheets(video: Any, **kwargs: Any):
 
 
 async def _first_contact_sheet(video: Any):
-    sheets = mdr.robotics.timestamped_contact_sheets(
+    sheets = subtask_utils_module.timestamped_contact_sheets(
         video,
         sample_sec=0.5,
         frame_width=16,
@@ -208,12 +208,13 @@ def test_timestamped_contact_sheets_engravings_are_visible(tmp_path) -> None:
     pixels = np.asarray(image)
 
     top_right_badge = pixels[:16, 64 - 48 : 64]
-    top_left_frame_area = pixels[:16, :16]
+    top_left_badge = pixels[:26, :72]
+    lower_left_frame_area = pixels[32:48, :16]
 
-    assert top_right_badge[:, :, 0].max() > 180
-    assert top_right_badge[:, :, 1].max() > 180
-    assert top_right_badge[:, :, 2].min() < 120
-    assert top_left_frame_area.mean() < 120
+    assert top_left_badge.mean() < 80
+    assert top_left_badge[:, :, :].max() > 180
+    assert top_right_badge.mean() > 50
+    assert lower_left_frame_area.mean() < 120
 
 
 def test_timestamped_contact_sheets_reject_invalid_options(tmp_path) -> None:
@@ -277,8 +278,8 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
             response={},
             object=_subtask_annotation_result(
                 [
-                    {"start_sec": 0.4, "end_sec": 0.2, "subtask": "ignored"},
-                    {"start_sec": 0.0, "end_sec": 4.0, "subtask": "open drawer"},
+                    {"start_sec": 0.4, "end_sec": 0.2, "label": "ignored"},
+                    {"start_sec": 0.0, "end_sec": 4.0, "label": "open drawer"},
                 ],
             ),
         )
@@ -287,6 +288,7 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
 
     assert seen["provider"].model == "gemini-flash-latest"
     assert request["temperature"] == 0.1
+    assert request["maxRetries"] == 4
     assert request["schema"] is subtask_segmentation_module._SubtaskAnnotationResult
     assert request["provider_options"] == {
         "google": {
@@ -319,7 +321,7 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
     )
     assert message["content"][1]["mediaType"] == "image/jpeg"
     assert result["predicted_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 4.0, "subtask": "open drawer"}
+        {"start_sec": 0.0, "end_sec": 4.0, "label": "open drawer"}
     ]
     assert "predicted_subtasks_json" not in result
     assert "annotation_model" not in result
@@ -347,7 +349,7 @@ def test_subtask_annotation_accepts_robotics_row(tmp_path, monkeypatch) -> None:
             usage={},
             response={},
             object=_subtask_annotation_result(
-                [{"start_sec": 0.0, "end_sec": 0.4, "subtask": "pick"}],
+                [{"start_sec": 0.0, "end_sec": 0.4, "label": "pick"}],
             ),
         )
 
@@ -358,7 +360,7 @@ def test_subtask_annotation_accepts_robotics_row(tmp_path, monkeypatch) -> None:
         in request["messages"][0]["content"][0]["text"]
     )
     assert result["predicted_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.4, "subtask": "pick"}
+        {"start_sec": 0.0, "end_sec": 0.4, "label": "pick"}
     ]
 
 
@@ -474,8 +476,8 @@ def test_subtask_annotation_keeps_short_segments_by_default(
             response={},
             object=_subtask_annotation_result(
                 [
-                    {"start_sec": 0.0, "end_sec": 3.49, "subtask": "short action"},
-                    {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"},
+                    {"start_sec": 0.0, "end_sec": 3.49, "label": "short action"},
+                    {"start_sec": 3.5, "end_sec": 7.0, "label": "long action"},
                 ],
             ),
         )
@@ -483,8 +485,8 @@ def test_subtask_annotation_keeps_short_segments_by_default(
     result = asyncio.run(cast(Any, block)(row, _fake_request))
 
     assert result["predicted_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 3.49, "subtask": "short action"},
-        {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"},
+        {"start_sec": 0.0, "end_sec": 3.49, "label": "short action"},
+        {"start_sec": 3.5, "end_sec": 7.0, "label": "long action"},
     ]
 
 
@@ -517,8 +519,8 @@ def test_subtask_annotation_logs_on_overlapping_segments(
             response={},
             object=_subtask_annotation_result(
                 [
-                    {"start_sec": 0.0, "end_sec": 2.0, "subtask": "reach"},
-                    {"start_sec": 1.5, "end_sec": 3.0, "subtask": "grasp"},
+                    {"start_sec": 0.0, "end_sec": 2.0, "label": "reach"},
+                    {"start_sec": 1.5, "end_sec": 3.0, "label": "grasp"},
                 ],
             ),
         )
@@ -526,8 +528,8 @@ def test_subtask_annotation_logs_on_overlapping_segments(
     result = asyncio.run(cast(Any, block)(row, _fake_request))
 
     assert result["predicted_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 2.0, "subtask": "reach"},
-        {"start_sec": 1.5, "end_sec": 3.0, "subtask": "grasp"},
+        {"start_sec": 0.0, "end_sec": 2.0, "label": "reach"},
+        {"start_sec": 1.5, "end_sec": 3.0, "label": "grasp"},
     ]
     assert len(logged_warnings) == 1
     assert "overlapping segments" in logged_warnings[0][0]
@@ -569,8 +571,8 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
         tasks=["open the drawer"],
         extra={
             "predicted_subtasks": [
-                {"start_sec": 0.0, "end_sec": 0.2, "subtask": "reach drawer"},
-                {"start_sec": 0.2, "end_sec": 0.4, "subtask": "pull drawer"},
+                {"start_sec": 0.0, "end_sec": 0.2, "label": "reach drawer"},
+                {"start_sec": 0.2, "end_sec": 0.4, "label": "pull drawer"},
             ],
         },
     )
@@ -599,6 +601,22 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
     assert len(requests) == 2
     assert requests[0]["temperature"] == 0.0
     assert requests[0]["schema"] is subtask_labeling_module._SubtaskLabelingResult
+    assert requests[0]["provider_options"] == {
+        "google": {
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_NONE",
+                },
+            ],
+        }
+    }
     first_prompt = requests[0]["messages"][0]["content"][0]["text"]
     assert "Original predicted label for this exact segment" in first_prompt
     assert "reach drawer" in first_prompt
@@ -606,8 +624,8 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
     assert len(requests[0]["messages"][0]["content"]) == 4
     assert requests[0]["messages"][0]["content"][1]["mediaType"] == "image/jpeg"
     assert result["labeled_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "grasp the drawer handle"},
-        {"start_sec": 0.2, "end_sec": 0.4, "subtask": "pull open drawer"},
+        {"start_sec": 0.0, "end_sec": 0.2, "label": "grasp the drawer handle"},
+        {"start_sec": 0.2, "end_sec": 0.4, "label": "pull open drawer"},
     ]
 
 
@@ -646,17 +664,33 @@ def test_subtask_labeling_uses_plain_prompt_without_seed_labels(
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
 
+    assert request["provider_options"] == {
+        "google": {
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_NONE",
+                },
+            ],
+        }
+    }
     prompt = request["messages"][0]["content"][0]["text"]
     assert "Original predicted label for this exact segment" not in prompt
     assert "Treat the original predicted label as a strong prior" not in prompt
     assert "The segment boundaries are fixed; do not split or merge" in prompt
     assert "Compare the beginning and end of the current segment" in prompt
     assert result["labeled_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "pull open drawer"}
+        {"start_sec": 0.0, "end_sec": 0.2, "label": "pull open drawer"}
     ]
 
 
-def test_subtask_labeling_can_use_labels_column_and_fallback_to_seed(
+def test_subtask_labeling_falls_back_to_seed_label(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -668,15 +702,15 @@ def test_subtask_labeling_can_use_labels_column_and_fallback_to_seed(
     row = _lerobot_row(
         tmp_path,
         extra={
-            "segments": [{"start_sec": 0.0, "end_sec": 0.2}],
-            "labels": [" Pick Up Object "],
+            "segments": [
+                {"start_sec": 0.0, "end_sec": 0.2, "label": " Pick Up Object "}
+            ],
         },
     )
     block = mdr.robotics.subtask_labeling(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
         segments_column="segments",
-        labels_column="labels",
     )
 
     async def _blocked_request(**kwargs):
@@ -688,5 +722,5 @@ def test_subtask_labeling_can_use_labels_column_and_fallback_to_seed(
     result = asyncio.run(cast(Any, block)(row, _blocked_request))
 
     assert result["labeled_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "pick up object"}
+        {"start_sec": 0.0, "end_sec": 0.2, "label": "pick up object"}
     ]
