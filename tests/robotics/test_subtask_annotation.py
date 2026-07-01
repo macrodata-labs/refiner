@@ -248,9 +248,10 @@ def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
     assert seen["provider"] is provider
     assert seen["max_concurrent_requests"] == 17
     assert callable(seen["fn"])
-    assert (
-        "quality" not in inspect.signature(mdr.robotics.subtask_annotation).parameters
-    )
+    signature = inspect.signature(mdr.robotics.subtask_annotation)
+    assert "frame_width" not in signature.parameters
+    assert "columns" not in signature.parameters
+    assert "quality" not in signature.parameters
 
 
 def test_subtask_annotation_requires_video_key() -> None:
@@ -435,7 +436,6 @@ def test_subtask_annotation_prompt_uses_completed_events_count_guard(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
         frames_per_sheet=6,
-        columns=4,
     )
     request = {}
 
@@ -563,8 +563,9 @@ def test_subtask_labeling_builds_generate_text_block(monkeypatch) -> None:
     assert seen["max_concurrent_requests"] == 11
     assert callable(seen["fn"])
     signature = inspect.signature(mdr.robotics.subtask_labeling)
-    assert signature.parameters["frame_width"].default == 336
-    assert signature.parameters["max_frames_per_segment"].default == 5
+    assert "frame_width" not in signature.parameters
+    assert "max_frames_per_segment" not in signature.parameters
+    assert "columns" not in signature.parameters
     assert signature.parameters["quality"].default == 95
 
 
@@ -708,7 +709,6 @@ def test_subtask_labeling_uses_plain_prompt_without_seed_labels(
     block = mdr.robotics.subtask_labeling(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
-        max_frames_per_segment=2,
     )
     request = {}
 

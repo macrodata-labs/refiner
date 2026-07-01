@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 _SEGMENTATION_CONTACT_SHEET_QUALITY = 95
 _SEGMENTATION_FALLBACK_CONTACT_SHEET_QUALITY = 70
+_SEGMENTATION_FRAME_WIDTH = 224
+_SEGMENTATION_COLUMNS = 5
 
 _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
 
@@ -58,9 +60,7 @@ def subtask_annotation(
     video_key: str,
     output_column: str = "predicted_subtasks",
     sample_sec: float = 0.5,
-    frame_width: int = 224,
     frames_per_sheet: int = 20,
-    columns: int = 5,
     temperature: float = 0.1,
     on_blocked_prompt: Literal["empty", "raise"] = "empty",
     max_concurrent_requests: int = 256,
@@ -72,9 +72,7 @@ def subtask_annotation(
         video_key: Video key to annotate.
         output_column: Row column that receives the predicted subtask segments.
         sample_sec: Seconds between sampled video frames in the contact sheets.
-        frame_width: Width, in pixels, for each sampled frame tile.
         frames_per_sheet: Maximum number of sampled frames packed into one sheet.
-        columns: Number of columns in each contact-sheet grid.
         temperature: Generation temperature passed to the provider request.
         on_blocked_prompt: Behavior when the provider blocks the prompt before
             returning candidates. ``"empty"`` writes an empty segment list and
@@ -104,9 +102,9 @@ def subtask_annotation(
             video=video,
             tasks=row.tasks,
             sample_sec=sample_sec,
-            frame_width=frame_width,
+            frame_width=_SEGMENTATION_FRAME_WIDTH,
             frames_per_sheet=frames_per_sheet,
-            columns=columns,
+            columns=_SEGMENTATION_COLUMNS,
             quality=_SEGMENTATION_CONTACT_SHEET_QUALITY,
         )
         try:
@@ -124,9 +122,9 @@ def subtask_annotation(
                     video=video,
                     tasks=row.tasks,
                     sample_sec=sample_sec,
-                    frame_width=frame_width,
+                    frame_width=_SEGMENTATION_FRAME_WIDTH,
                     frames_per_sheet=frames_per_sheet,
-                    columns=columns,
+                    columns=_SEGMENTATION_COLUMNS,
                     quality=_SEGMENTATION_FALLBACK_CONTACT_SHEET_QUALITY,
                 )
                 response = await _request_subtask_annotation(

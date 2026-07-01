@@ -134,9 +134,7 @@ current target segment and use the neighbors only to disambiguate what changed.
 | `video_key` | Video stream to annotate. |
 | `output_column` | Row column that receives the predicted segment list. |
 | `sample_sec` | Seconds between sampled frames. |
-| `frame_width` | Width of each sampled frame tile. |
 | `frames_per_sheet` | Maximum number of sampled frames per contact sheet. |
-| `columns` | Contact sheet grid columns. |
 | `on_blocked_prompt` | Behavior when the provider still blocks an episode prompt after the built-in fallback retry. Defaults to `"empty"`, which logs the block and writes an empty segment list. Use `"raise"` to fail the row instead. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
@@ -147,9 +145,6 @@ current target segment and use the neighbors only to disambiguate what changed.
 | `video_key` | Video stream used to render previous/current/next segment sheets. |
 | `segments_column` | Column containing fixed segment dictionaries with `start_sec`, `end_sec`, and optional seed `subtask`. Defaults to `predicted_subtasks`. |
 | `output_column` | Row column that receives the relabeled segment list. Defaults to `labeled_subtasks`. Each output segment uses `subtask` for the relabeled text. |
-| `frame_width` | Width of each sampled frame tile. Defaults to `336`. |
-| `max_frames_per_segment` | Maximum sampled frames in each previous/current/next sheet. Defaults to `5`. |
-| `columns` | Contact sheet grid columns. Defaults to `3`. |
 | `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `95`. |
 | `on_blocked_prompt` | Behavior when the provider blocks a labeling prompt. Defaults to `"seed"`, which keeps the seed subtask. Use `"raise"` to fail the row. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |

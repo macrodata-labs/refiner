@@ -26,6 +26,10 @@ if TYPE_CHECKING:
     from refiner.inference.generate_text import GenerateTextFn
 
 
+_LABELING_FRAME_WIDTH = 336
+_LABELING_MAX_FRAMES_PER_SEGMENT = 5
+_LABELING_COLUMNS = 3
+
 _SUBTASK_LABELING_PROMPT_TEMPLATE = """Annotate one fixed segment from a longer video.
 
 Return only JSON:
@@ -110,9 +114,6 @@ def subtask_labeling(
     video_key: str,
     segments_column: str = "predicted_subtasks",
     output_column: str = "labeled_subtasks",
-    frame_width: int = 336,
-    max_frames_per_segment: int = 5,
-    columns: int = 3,
     quality: int = 95,
     temperature: float = 0.0,
     on_blocked_prompt: Literal["seed", "raise"] = "seed",
@@ -140,11 +141,6 @@ def subtask_labeling(
             ``subtask`` value. Keeping this separate from
             ``segments_column`` preserves the original segmentation output for
             inspection or comparison.
-        frame_width: Width, in pixels, for rendered segment contact-sheet
-            frames.
-        max_frames_per_segment: Maximum number of frames sampled for each
-            previous, current, and next segment sheet.
-        columns: Number of columns in each segment contact sheet.
         quality: JPEG quality for rendered contact sheets, from ``1`` to
             ``100``.
         temperature: Sampling temperature passed to the inference provider.
@@ -163,8 +159,6 @@ def subtask_labeling(
         raise ValueError("segments_column must be non-empty")
     if not output_column.strip():
         raise ValueError("output_column must be non-empty")
-    if max_frames_per_segment <= 0:
-        raise ValueError("max_frames_per_segment must be > 0")
     if on_blocked_prompt not in {"seed", "raise"}:
         raise ValueError("on_blocked_prompt must be 'seed' or 'raise'")
 
@@ -181,14 +175,14 @@ def subtask_labeling(
         segment_sheets = await _segment_contact_sheets(
             video=video,
             segments=segments,
-            frame_width=frame_width,
-            max_frames=max_frames_per_segment,
-            columns=columns,
+            frame_width=_LABELING_FRAME_WIDTH,
+            max_frames=_LABELING_MAX_FRAMES_PER_SEGMENT,
+            columns=_LABELING_COLUMNS,
             quality=quality,
         )
         blank_sheet = _blank_contact_sheet(
-            frame_width=frame_width,
-            columns=columns,
+            frame_width=_LABELING_FRAME_WIDTH,
+            columns=_LABELING_COLUMNS,
             quality=quality,
         )
         labeled_segments: list[dict[str, Any]] = []
