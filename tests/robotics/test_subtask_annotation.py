@@ -635,8 +635,8 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
     )
     assert current_sheet.width == 336 * 3
     assert result["labeled_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.2, "label": "grasp the drawer handle"},
-        {"start_sec": 0.2, "end_sec": 0.4, "label": "pull open drawer"},
+        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "grasp the drawer handle"},
+        {"start_sec": 0.2, "end_sec": 0.4, "subtask": "pull open drawer"},
     ]
 
 
@@ -682,7 +682,7 @@ def test_subtask_labeling_ignores_label_field_for_seed_labels(
     assert "Original predicted label for this exact segment" not in prompt
     assert "pull open drawer" not in prompt
     assert result["labeled_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.2, "label": "pull open drawer"}
+        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "pull open drawer"}
     ]
 
 
@@ -743,7 +743,7 @@ def test_subtask_labeling_uses_plain_prompt_without_seed_labels(
     assert "The segment boundaries are fixed; do not split or merge" in prompt
     assert "Compare the beginning and end of the current segment" in prompt
     assert result["labeled_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.2, "label": "pull open drawer"}
+        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "pull open drawer"}
     ]
 
 
@@ -779,5 +779,5 @@ def test_subtask_labeling_falls_back_to_seed_label(
     result = asyncio.run(cast(Any, block)(row, _blocked_request))
 
     assert result["labeled_subtasks"] == [
-        {"start_sec": 0.0, "end_sec": 0.2, "label": "pick up object"}
+        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "pick up object"}
     ]

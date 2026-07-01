@@ -137,7 +137,7 @@ def subtask_labeling(
             use the plain labeling prompt.
         output_column: Row column written by this block. The output is a list of
             segment dictionaries with the same timing fields and a rewritten
-            ``label`` value. Keeping this separate from
+            ``subtask`` value. Keeping this separate from
             ``segments_column`` preserves the original segmentation output for
             inspection or comparison.
         frame_width: Width, in pixels, for rendered segment contact-sheet
@@ -193,7 +193,7 @@ def subtask_labeling(
         )
         labeled_segments: list[dict[str, Any]] = []
         for index, segment in enumerate(segments):
-            seed_label = str(segment["label"])
+            seed_label = str(segment["subtask"])
             content = await _subtask_labeling_content(
                 segments=segments,
                 segment_sheets=segment_sheets,
@@ -232,7 +232,7 @@ def subtask_labeling(
                 label = _normalize_label(parsed.label) or seed_label
 
             labeled = dict(segment)
-            labeled["label"] = label
+            labeled["subtask"] = label
             labeled_segments.append(labeled)
 
         return row.update({output_column: labeled_segments})

@@ -92,7 +92,7 @@ segment has a start time, an end time, and a short action description under
 ]
 ```
 
-`subtask_labeling` writes fixed segments with a `label` value rewritten from a
+`subtask_labeling` writes fixed segments with a `subtask` value rewritten from a
 dedicated labeling pass. If the input segment has a non-empty `subtask`, the
 labeling prompt treats it as the seed label. If the input segment omits
 `subtask` or sets it to an empty string, the block uses a plain labeling prompt.
@@ -147,7 +147,7 @@ current target segment and use the neighbors only to disambiguate what changed.
 | --- | --- |
 | `video_key` | Video stream used to render previous/current/next segment sheets. |
 | `segments_column` | Column containing fixed segment dictionaries with `start_sec`, `end_sec`, and optional seed `subtask`. Defaults to `predicted_subtasks`. |
-| `output_column` | Row column that receives the labeled segment list. Defaults to `labeled_subtasks`. |
+| `output_column` | Row column that receives the relabeled segment list. Defaults to `labeled_subtasks`. Each output segment uses `subtask` for the relabeled text. |
 | `frame_width` | Width of each sampled frame tile. Defaults to `336`. |
 | `max_frames_per_segment` | Maximum sampled frames in each previous/current/next sheet. Defaults to `5`. |
 | `columns` | Contact sheet grid columns. Defaults to `3`. |
