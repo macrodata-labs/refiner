@@ -6,7 +6,7 @@ description: "Use vision-language models to segment robotics episodes into tempo
 # Subtask annotation
 
 Use `subtask_annotation` to add temporal subtask segments to robotics episodes,
-then use `subtask_labeling` to label those fixed segments with stronger
+then use `subtask_labeling` to re-label those fixed segments with stronger
 previous/current/next visual context.
 The annotator samples an episode video into timestamped contact sheets, sends
 those images to a vision-language model, and writes the returned segments back
@@ -44,14 +44,11 @@ pipeline = (
 
 By default, `subtask_annotation` uses Gemini through `GoogleEndpointProvider`.
 Set `GOOGLE_GENERATIVE_AI_API_KEY` before running the pipeline, or pass a
-different provider explicitly. For Google providers, the segmentation and
-labeling blocks pass Gemini `BLOCK_NONE` safety settings for harassment, hate
-speech, sexually explicit, and dangerous-content categories to match the
-benchmark contact-sheet runner and reduce false blocks on robotics videos.
+different provider explicitly. 
 
 The labeling block is optional, but it is the recommended default when you
 want the best labels for fixed segments. If a segment already has a non-empty
-`subtask`, `subtask_labeling` runs the seed-aware relabeling prompt. If
+`subtask`, `subtask_labeling` will improve the labels using better conditioning. If
 segments only have timestamps, it runs a plain labeling prompt from
 previous/current/next visual context.
 
@@ -119,14 +116,6 @@ while giving the model enough visual context to choose event boundaries.
 The default settings sample one frame every `0.5` seconds, resize each tile to
 `224px` wide, and pack up to `20` frames per sheet in `5` columns.
 
-For labeling, Refiner renders up to three fixed-segment contact sheets: the
-previous segment, the current target segment, and the next segment. Each segment
-sheet samples up to five timestamped frames, resizes each tile to `336px` wide
-with Pillow `BOX` resampling, packs frames into `3` columns, and encodes JPEG
-with quality `95` and subsampling `2`. Missing neighbors at episode boundaries
-are represented by blank sheets. The model is instructed to label only the
-current target segment and use the neighbors only to disambiguate what changed.
-
 ## Segmentation parameters
 
 | Parameter | Meaning |
@@ -154,5 +143,5 @@ and [Multimodal and Structured Output](../inference/multimodal-and-structured-ou
 For a complete cloud example, see
 [Video Subtask Annotations](../examples/annotations/subtask-annotations.md).
 
-For background on the benchmark and annotation interface, see
+For background and design decisions, see
 [Annotating Robot Video Subtasks](https://macrodata.co/blog/annotating-robot-video-subtasks).
