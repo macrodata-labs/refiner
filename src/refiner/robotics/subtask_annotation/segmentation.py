@@ -25,7 +25,9 @@ if TYPE_CHECKING:
 
 _SEGMENTATION_CONTACT_SHEET_QUALITY = 95
 _SEGMENTATION_FALLBACK_CONTACT_SHEET_QUALITY = 70
+_SEGMENTATION_SAMPLE_SEC = 0.5
 _SEGMENTATION_FRAME_WIDTH = 224
+_SEGMENTATION_FRAMES_PER_SHEET = 20
 _SEGMENTATION_COLUMNS = 5
 
 _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
@@ -59,8 +61,6 @@ def subtask_annotation(
     provider: InferenceProvider = GoogleEndpointProvider(model="gemini-3.5-flash"),
     video_key: str,
     output_column: str = "predicted_subtasks",
-    sample_sec: float = 0.5,
-    frames_per_sheet: int = 20,
     temperature: float = 0.1,
     on_blocked_prompt: Literal["empty", "raise"] = "empty",
     max_concurrent_requests: int = 256,
@@ -71,8 +71,6 @@ def subtask_annotation(
         provider: Text-generation provider used to run the vision-language model.
         video_key: Video key to annotate.
         output_column: Row column that receives the predicted subtask segments.
-        sample_sec: Seconds between sampled video frames in the contact sheets.
-        frames_per_sheet: Maximum number of sampled frames packed into one sheet.
         temperature: Generation temperature passed to the provider request.
         on_blocked_prompt: Behavior when the provider blocks the prompt before
             returning candidates. ``"empty"`` writes an empty segment list and
@@ -101,9 +99,9 @@ def subtask_annotation(
         content = await _subtask_annotation_content(
             video=video,
             tasks=row.tasks,
-            sample_sec=sample_sec,
+            sample_sec=_SEGMENTATION_SAMPLE_SEC,
             frame_width=_SEGMENTATION_FRAME_WIDTH,
-            frames_per_sheet=frames_per_sheet,
+            frames_per_sheet=_SEGMENTATION_FRAMES_PER_SHEET,
             columns=_SEGMENTATION_COLUMNS,
             quality=_SEGMENTATION_CONTACT_SHEET_QUALITY,
         )
@@ -121,9 +119,9 @@ def subtask_annotation(
                 fallback_content = await _subtask_annotation_content(
                     video=video,
                     tasks=row.tasks,
-                    sample_sec=sample_sec,
+                    sample_sec=_SEGMENTATION_SAMPLE_SEC,
                     frame_width=_SEGMENTATION_FRAME_WIDTH,
-                    frames_per_sheet=frames_per_sheet,
+                    frames_per_sheet=_SEGMENTATION_FRAMES_PER_SHEET,
                     columns=_SEGMENTATION_COLUMNS,
                     quality=_SEGMENTATION_FALLBACK_CONTACT_SHEET_QUALITY,
                 )

@@ -133,8 +133,6 @@ current target segment and use the neighbors only to disambiguate what changed.
 | --- | --- |
 | `video_key` | Video stream to annotate. |
 | `output_column` | Row column that receives the predicted segment list. |
-| `sample_sec` | Seconds between sampled frames. |
-| `frames_per_sheet` | Maximum number of sampled frames per contact sheet. |
 | `on_blocked_prompt` | Behavior when the provider still blocks an episode prompt after the built-in fallback retry. Defaults to `"empty"`, which logs the block and writes an empty segment list. Use `"raise"` to fail the row instead. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
