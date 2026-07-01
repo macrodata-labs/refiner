@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 _LABELING_FRAME_WIDTH = 336
 _LABELING_MAX_FRAMES_PER_SEGMENT = 5
 _LABELING_COLUMNS = 3
+_LABELING_CONTACT_SHEET_QUALITY = 95
 
 _SUBTASK_LABELING_PROMPT_TEMPLATE = """Annotate one fixed segment from a longer video.
 
@@ -114,7 +115,6 @@ def subtask_labeling(
     video_key: str,
     segments_column: str = "predicted_subtasks",
     output_column: str = "labeled_subtasks",
-    quality: int = 95,
     temperature: float = 0.0,
     on_blocked_prompt: Literal["seed", "raise"] = "seed",
     max_concurrent_requests: int = 256,
@@ -141,8 +141,6 @@ def subtask_labeling(
             ``subtask`` value. Keeping this separate from
             ``segments_column`` preserves the original segmentation output for
             inspection or comparison.
-        quality: JPEG quality for rendered contact sheets, from ``1`` to
-            ``100``.
         temperature: Sampling temperature passed to the inference provider.
         on_blocked_prompt: Behavior when the provider blocks a labeling prompt.
             ``"seed"`` writes the seed subtask fallback; ``"raise"``
@@ -178,12 +176,12 @@ def subtask_labeling(
             frame_width=_LABELING_FRAME_WIDTH,
             max_frames=_LABELING_MAX_FRAMES_PER_SEGMENT,
             columns=_LABELING_COLUMNS,
-            quality=quality,
+            quality=_LABELING_CONTACT_SHEET_QUALITY,
         )
         blank_sheet = _blank_contact_sheet(
             frame_width=_LABELING_FRAME_WIDTH,
             columns=_LABELING_COLUMNS,
-            quality=quality,
+            quality=_LABELING_CONTACT_SHEET_QUALITY,
         )
         labeled_segments: list[dict[str, Any]] = []
         for index, segment in enumerate(segments):

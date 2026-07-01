@@ -566,7 +566,7 @@ def test_subtask_labeling_builds_generate_text_block(monkeypatch) -> None:
     assert "frame_width" not in signature.parameters
     assert "max_frames_per_segment" not in signature.parameters
     assert "columns" not in signature.parameters
-    assert signature.parameters["quality"].default == 95
+    assert "quality" not in signature.parameters
 
 
 def test_subtask_labeling_labels_fixed_segments_with_seed_labels(

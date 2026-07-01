@@ -145,7 +145,6 @@ current target segment and use the neighbors only to disambiguate what changed.
 | `video_key` | Video stream used to render previous/current/next segment sheets. |
 | `segments_column` | Column containing fixed segment dictionaries with `start_sec`, `end_sec`, and optional seed `subtask`. Defaults to `predicted_subtasks`. |
 | `output_column` | Row column that receives the relabeled segment list. Defaults to `labeled_subtasks`. Each output segment uses `subtask` for the relabeled text. |
-| `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `95`. |
 | `on_blocked_prompt` | Behavior when the provider blocks a labeling prompt. Defaults to `"seed"`, which keeps the seed subtask. Use `"raise"` to fail the row. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
