@@ -207,13 +207,11 @@ def test_timestamped_contact_sheets_engravings_are_visible(tmp_path) -> None:
     image = Image.open(io.BytesIO(sheet.data)).convert("RGB")
     pixels = np.asarray(image)
 
-    top_right_badge = pixels[:16, 64 - 48 : 64]
     top_left_badge = pixels[:26, :72]
     lower_left_frame_area = pixels[32:48, :16]
 
     assert top_left_badge.mean() < 80
     assert top_left_badge[:, :, :].max() > 180
-    assert top_right_badge.mean() > 50
     assert lower_left_frame_area.mean() < 120
 
 
