@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 _SUBTASK_LABELING_PROMPT_TEMPLATE = """Annotate one fixed segment from a longer video.
 
 Return only JSON:
-{{"label":"short descriptive subtask label"}}
+{{"subtask":"short descriptive subtask label"}}
 
 Inputs:
 - The first image is the previous fixed segment, if it exists; otherwise it is blank/context only.
@@ -61,7 +61,7 @@ Rules:
 _SUBTASK_SEED_LABELING_PROMPT_TEMPLATE = """Annotate one fixed segment from a longer video.
 
 Return only JSON:
-{{"label":"short descriptive subtask label"}}
+{{"subtask":"short descriptive subtask label"}}
 
 Inputs:
 - The first image is the previous fixed segment, if it exists; otherwise it is blank/context only.
@@ -101,7 +101,7 @@ Rules:
 
 
 class _SubtaskLabelingResult(BaseModel):
-    label: str
+    subtask: str
 
 
 def subtask_labeling(
@@ -229,7 +229,7 @@ def subtask_labeling(
                     raise TypeError(
                         "subtask_labeling expected a structured response object"
                     )
-                label = _normalize_label(parsed.label) or seed_label
+                label = _normalize_label(parsed.subtask) or seed_label
 
             labeled = dict(segment)
             labeled["subtask"] = label

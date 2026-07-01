@@ -600,7 +600,7 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
             finish_reason="stop",
             usage={},
             response={},
-            object=subtask_labeling_module._SubtaskLabelingResult(label=label),
+            object=subtask_labeling_module._SubtaskLabelingResult(subtask=label),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
@@ -672,7 +672,7 @@ def test_subtask_labeling_ignores_label_field_for_seed_labels(
             usage={},
             response={},
             object=subtask_labeling_module._SubtaskLabelingResult(
-                label="pull open drawer"
+                subtask="pull open drawer"
             ),
         )
 
@@ -715,7 +715,7 @@ def test_subtask_labeling_uses_plain_prompt_without_seed_labels(
             usage={},
             response={},
             object=subtask_labeling_module._SubtaskLabelingResult(
-                label="pull open drawer"
+                subtask="pull open drawer"
             ),
         )
 
