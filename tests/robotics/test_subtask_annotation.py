@@ -536,6 +536,8 @@ def test_subtask_annotation_logs_on_overlapping_segments(
 
 
 def test_subtask_labeling_builds_generate_text_block(monkeypatch) -> None:
+    import inspect
+
     seen = {}
 
     def _fake_generate_text(**kwargs):
@@ -555,6 +557,10 @@ def test_subtask_labeling_builds_generate_text_block(monkeypatch) -> None:
     assert seen["provider"] is provider
     assert seen["max_concurrent_requests"] == 11
     assert callable(seen["fn"])
+    signature = inspect.signature(mdr.robotics.subtask_labeling)
+    assert signature.parameters["frame_width"].default == 336
+    assert signature.parameters["max_frames_per_segment"].default == 5
+    assert signature.parameters["quality"].default == 95
 
 
 def test_subtask_labeling_labels_fixed_segments_with_seed_labels(

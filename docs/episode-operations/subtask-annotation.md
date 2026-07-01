@@ -121,9 +121,9 @@ The default settings sample one frame every `0.5` seconds, resize each tile to
 
 For labeling, Refiner renders up to three fixed-segment contact sheets: the
 previous segment, the current target segment, and the next segment. Each segment
-sheet samples up to three timestamped frames, resizes each tile to `336px` wide
+sheet samples up to five timestamped frames, resizes each tile to `336px` wide
 with Pillow `BOX` resampling, packs frames into `3` columns, and encodes JPEG
-with quality `88` and subsampling `2`. Missing neighbors at episode boundaries
+with quality `95` and subsampling `2`. Missing neighbors at episode boundaries
 are represented by blank sheets. The model is instructed to label only the
 current target segment and use the neighbors only to disambiguate what changed.
 
@@ -149,9 +149,9 @@ current target segment and use the neighbors only to disambiguate what changed.
 | `segments_column` | Column containing fixed segment dictionaries with `start_sec`, `end_sec`, and optional seed `subtask`. Defaults to `predicted_subtasks`. |
 | `output_column` | Row column that receives the labeled segment list. Defaults to `labeled_subtasks`. |
 | `frame_width` | Width of each sampled frame tile. Defaults to `336`. |
-| `max_frames_per_segment` | Maximum sampled frames in each previous/current/next sheet. Defaults to `3`. |
+| `max_frames_per_segment` | Maximum sampled frames in each previous/current/next sheet. Defaults to `5`. |
 | `columns` | Contact sheet grid columns. Defaults to `3`. |
-| `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `88`. |
+| `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `95`. |
 | `on_blocked_prompt` | Behavior when the provider blocks a labeling prompt. Defaults to `"seed"`, which keeps the seed subtask. Use `"raise"` to fail the row. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
