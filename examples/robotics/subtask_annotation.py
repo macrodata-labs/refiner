@@ -24,6 +24,15 @@ pipeline = (
         ),
         max_in_flight=256,
     )
+    .map_async(
+        mdr.robotics.subtask_labeling(
+            video_key=VIDEO_KEY,
+            segments_column="predicted_subtasks",
+            output_column="labeled_subtasks",
+            max_concurrent_requests=256,
+        ),
+        max_in_flight=256,
+    )
     .write_lerobot(OUTPUT_DATASET)
 )
 

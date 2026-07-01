@@ -1,11 +1,6 @@
 from refiner.robotics.motion import motion_trim
 from refiner.robotics.reward import reward_score
-from refiner.robotics.subtask_annotation import (
-    TimestampedContactSheet,
-    contact_sheet_prompt_manifest,
-    subtask_annotation,
-    timestamped_contact_sheets,
-)
+from refiner.robotics.subtask_annotation import subtask_annotation, subtask_labeling
 from refiner.robotics.hand_tracking import track_hands
 from refiner.robotics.row import (
     RoboticsRow,
@@ -26,10 +21,8 @@ from refiner.robotics.lerobot_format import (
 __all__ = [
     "motion_trim",
     "reward_score",
-    "TimestampedContactSheet",
-    "contact_sheet_prompt_manifest",
     "subtask_annotation",
-    "timestamped_contact_sheets",
+    "subtask_labeling",
     "track_hands",
     "RoboticsRow",
     "RoboticsTabular",

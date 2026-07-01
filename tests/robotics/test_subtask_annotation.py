@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import refiner as mdr
+import refiner.robotics
 import refiner.inference as inference_module
 from refiner.io import DataFile
 from refiner.io import DataFolder
@@ -17,9 +18,21 @@ from refiner.pipeline.data.row import DictRow
 from refiner.robotics.lerobot_format import LeRobotMetadata, LeRobotRow
 from refiner.robotics.row import RoboticsRow, _robot_row_converter
 
-subtask_annotation_module = importlib.import_module(
-    "refiner.robotics.subtask_annotation"
+subtask_labeling_module = importlib.import_module(
+    "refiner.robotics.subtask_annotation.labeling"
 )
+subtask_segmentation_module = importlib.import_module(
+    "refiner.robotics.subtask_annotation.segmentation"
+)
+subtask_utils_module = importlib.import_module(
+    "refiner.robotics.subtask_annotation.utils"
+)
+
+
+def _subtask_annotation_result(segments: list[dict[str, Any]]) -> Any:
+    return subtask_segmentation_module._SubtaskAnnotationResult.model_validate(
+        {"segments": segments}
+    )
 
 
 def _write_video(path, *, num_frames: int = 6, fps: int = 5) -> None:
@@ -44,17 +57,49 @@ def _write_video(path, *, num_frames: int = 6, fps: int = 5) -> None:
 
 
 async def _build_sheets(video: mdr.video.VideoFile):
-    return await mdr.robotics.timestamped_contact_sheets(
+    return [
+        sheet
+        async for sheet in subtask_utils_module.timestamped_contact_sheets(
+            video,
+            sample_sec=0.4,
+            frame_width=64,
+            frames_per_sheet=2,
+            columns=2,
+            quality=95,
+        )
+    ]
+
+
+async def _collect_sheets(video: Any, **kwargs: Any):
+    return [
+        sheet
+        async for sheet in subtask_utils_module.timestamped_contact_sheets(
+            video,
+            **kwargs,
+        )
+    ]
+
+
+async def _first_contact_sheet(video: Any):
+    sheets = subtask_utils_module.timestamped_contact_sheets(
         video,
-        sample_sec=0.4,
-        frame_width=64,
+        sample_sec=0.5,
+        frame_width=16,
         frames_per_sheet=2,
         columns=2,
-        quality=95,
     )
+    try:
+        return await anext(sheets)
+    finally:
+        await sheets.aclose()
 
 
-def _lerobot_row(tmp_path, *, tasks: list[str] | None = None) -> LeRobotRow:
+def _lerobot_row(
+    tmp_path,
+    *,
+    tasks: list[str] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> LeRobotRow:
     path = tmp_path / "video.mp4"
     _write_video(path, num_frames=3, fps=5)
     return LeRobotRow(
@@ -66,6 +111,7 @@ def _lerobot_row(tmp_path, *, tasks: list[str] | None = None) -> LeRobotRow:
                 "videos/observation.images.main/uri": "video.mp4",
                 "videos/observation.images.main/from_timestamp": 0.0,
                 "videos/observation.images.main/to_timestamp": 0.6,
+                **(extra or {}),
             }
         ),
         metadata=cast(LeRobotMetadata, None),
@@ -119,7 +165,7 @@ def test_timestamped_contact_sheets_sample_and_tile_video(tmp_path) -> None:
     assert sheets[0].data.startswith(b"\xff\xd8")
 
 
-def test_iter_timestamped_contact_sheets_streams_sheet_batches() -> None:
+def test_timestamped_contact_sheets_streams_sheet_batches() -> None:
     from PIL import Image
 
     class _FakeImageFrame:
@@ -143,21 +189,8 @@ def test_iter_timestamped_contact_sheets_streams_sheet_batches() -> None:
                 self.frames_consumed += 1
                 yield _FakeDecodedFrame(timestamp_s=index * 0.5, value=index)
 
-    async def _first_sheet(video: _FakeVideo):
-        sheets = subtask_annotation_module._iter_timestamped_contact_sheets(
-            cast(Any, video),
-            sample_sec=0.5,
-            frame_width=16,
-            frames_per_sheet=2,
-            columns=2,
-        )
-        try:
-            return await anext(sheets)
-        finally:
-            await sheets.aclose()
-
     video = _FakeVideo()
-    sheet = asyncio.run(_first_sheet(video))
+    sheet = asyncio.run(_first_contact_sheet(video))
 
     assert sheet.timestamps == (0.0, 0.5)
     assert video.frames_consumed == 2
@@ -174,12 +207,12 @@ def test_timestamped_contact_sheets_engravings_are_visible(tmp_path) -> None:
     image = Image.open(io.BytesIO(sheet.data)).convert("RGB")
     pixels = np.asarray(image)
 
-    badge = pixels[:14, :48]
-    plain_frame_area = pixels[18:34, :48]
+    top_left_badge = pixels[:26, :72]
+    lower_left_frame_area = pixels[32:48, :16]
 
-    assert badge.min() < 16
-    assert badge.max() > 220
-    assert plain_frame_area.mean() > badge.mean()
+    assert top_left_badge.mean() < 80
+    assert top_left_badge[:, :, :].max() > 180
+    assert lower_left_frame_area.mean() < 120
 
 
 def test_timestamped_contact_sheets_reject_invalid_options(tmp_path) -> None:
@@ -188,29 +221,12 @@ def test_timestamped_contact_sheets_reject_invalid_options(tmp_path) -> None:
     video = mdr.video.VideoFile(DataFile.resolve(path))
 
     with pytest.raises(ValueError, match="sample_sec must be > 0"):
-        asyncio.run(mdr.robotics.timestamped_contact_sheets(video, sample_sec=0))
-
-
-def test_contact_sheet_prompt_manifest_describes_continuity(tmp_path) -> None:
-    path = tmp_path / "video.mp4"
-    _write_video(path, num_frames=6, fps=5)
-    video = mdr.video.VideoFile(DataFile.resolve(path))
-
-    sheets = asyncio.run(_build_sheets(video))
-    manifest = mdr.robotics.contact_sheet_prompt_manifest(sheets)
-
-    assert "ordered chronologically" in manifest
-    assert "Actions may continue across contact sheet boundaries" in manifest
-    assert "Sheet 1: 2 frames, 1x2 grid, 0.00s through 0.40s." in manifest
-    assert "Sheet 2: 1 frames, 1x2 grid, 0.80s through 0.80s." in manifest
-
-
-def test_contact_sheet_prompt_manifest_rejects_empty_sheets() -> None:
-    with pytest.raises(ValueError, match="sheets must be non-empty"):
-        mdr.robotics.contact_sheet_prompt_manifest([])
+        asyncio.run(_collect_sheets(video, sample_sec=0))
 
 
 def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
+    import inspect
+
     seen = {}
 
     def _fake_generate_text(**kwargs):
@@ -230,6 +246,12 @@ def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
     assert seen["provider"] is provider
     assert seen["max_concurrent_requests"] == 17
     assert callable(seen["fn"])
+    signature = inspect.signature(mdr.robotics.subtask_annotation)
+    assert "sample_sec" not in signature.parameters
+    assert "frame_width" not in signature.parameters
+    assert "frames_per_sheet" not in signature.parameters
+    assert "columns" not in signature.parameters
+    assert "quality" not in signature.parameters
 
 
 def test_subtask_annotation_requires_video_key() -> None:
@@ -256,33 +278,49 @@ def test_subtask_annotation_block_updates_row(tmp_path, monkeypatch) -> None:
     async def _fake_request(**kwargs):
         request.update(kwargs)
         return InferenceResponse(
-            text=(
-                '{"segments":['
-                '{"start_sec":0.4,"end_sec":0.2,"subtask":"ignored"},'
-                '{"start_sec":0.0,"end_sec":4.0,"subtask":"open drawer"}'
-                "]}"
-            ),
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=_subtask_annotation_result(
+                [
+                    {"start_sec": 0.4, "end_sec": 0.2, "subtask": "ignored"},
+                    {"start_sec": 0.0, "end_sec": 4.0, "subtask": "open drawer"},
+                ],
+            ),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
 
     assert seen["provider"].model == "gemini-flash-latest"
     assert request["temperature"] == 0.1
-    assert request["schema"] is subtask_annotation_module._SubtaskAnnotationResult
+    assert request["maxRetries"] == 4
+    assert request["schema"] is subtask_segmentation_module._SubtaskAnnotationResult
+    assert request["provider_options"] == {
+        "google": {
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_NONE",
+                },
+            ],
+        }
+    }
     message = request["messages"][0]
     assert message["role"] == "user"
     assert "Episode instruction: open the drawer" in message["content"][0]["text"]
     assert (
-        "Each image is a contact sheet with 5 columns and 4 rows."
+        "Segment only completed robot manipulation events"
         in (message["content"][0]["text"])
     )
-    assert (
-        "Use the visible timestamp printed inside the tile"
-        in (message["content"][0]["text"])
-    )
+    assert "Do not split approach, grasp adjustment" in (message["content"][0]["text"])
+    assert "Most segments should be 2-10 seconds" in message["content"][0]["text"]
     assert (
         "Actions may continue across contact sheet boundaries"
         not in message["content"][0]["text"]
@@ -312,10 +350,13 @@ def test_subtask_annotation_accepts_robotics_row(tmp_path, monkeypatch) -> None:
     async def _fake_request(**kwargs):
         request.update(kwargs)
         return InferenceResponse(
-            text='{"segments":[{"start_sec":0.0,"end_sec":0.4,"subtask":"pick"}]}',
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=_subtask_annotation_result(
+                [{"start_sec": 0.0, "end_sec": 0.4, "subtask": "pick"}],
+            ),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
@@ -381,42 +422,7 @@ def test_subtask_annotation_can_raise_for_blocked_prompt(
         asyncio.run(cast(Any, block)(row, _blocked_request))
 
 
-def test_subtask_annotation_can_include_contact_sheet_manifest(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    def _fake_generate_text(**kwargs):
-        return kwargs["fn"]
-
-    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
-
-    row = _lerobot_row(tmp_path, tasks=["open the drawer"])
-    block = mdr.robotics.subtask_annotation(
-        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
-        video_key="observation.images.main",
-        include_contact_sheet_manifest=True,
-    )
-    request = {}
-
-    async def _fake_request(**kwargs):
-        request.update(kwargs)
-        return InferenceResponse(
-            text='{"segments":[]}',
-            finish_reason="stop",
-            usage={},
-            response={},
-            object=subtask_annotation_module._SubtaskAnnotationResult(segments=[]),
-        )
-
-    asyncio.run(cast(Any, block)(row, _fake_request))
-
-    assert (
-        "Actions may continue across contact sheet boundaries"
-        in request["messages"][0]["content"][0]["text"]
-    )
-
-
-def test_subtask_annotation_prompt_uses_configured_contact_sheet_layout(
+def test_subtask_annotation_prompt_uses_completed_events_count_guard(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -429,26 +435,26 @@ def test_subtask_annotation_prompt_uses_configured_contact_sheet_layout(
     block = mdr.robotics.subtask_annotation(
         provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
         video_key="observation.images.main",
-        frames_per_sheet=6,
-        columns=4,
     )
     request = {}
 
     async def _fake_request(**kwargs):
         request.update(kwargs)
         return InferenceResponse(
-            text='{"segments":[]}',
+            text="",
             finish_reason="stop",
             usage={},
             response={},
-            object=subtask_annotation_module._SubtaskAnnotationResult(segments=[]),
+            object=_subtask_annotation_result([]),
         )
 
     asyncio.run(cast(Any, block)(row, _fake_request))
 
     prompt = request["messages"][0]["content"][0]["text"]
-    assert "Each image is a contact sheet with 4 columns and 2 rows." in prompt
-    assert "5 columns and 4 rows" not in prompt
+    assert "Segment only completed robot manipulation events" in prompt
+    assert "Do not merge separate pick/place/open/close/pour/wipe events" in prompt
+    assert "Ignore label wording quality" in prompt
+    assert "columns and" not in prompt
 
 
 def test_subtask_annotation_keeps_short_segments_by_default(
@@ -468,17 +474,16 @@ def test_subtask_annotation_keeps_short_segments_by_default(
 
     async def _fake_request(**kwargs):
         return InferenceResponse(
-            text=(
-                "```json\n"
-                '{"segments":['
-                '{"start_sec":0.0,"end_sec":3.49,"subtask":"short action"},'
-                '{"start_sec":3.5,"end_sec":7.0,"subtask":"long action"}'
-                "]}\n"
-                "```"
-            ),
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=_subtask_annotation_result(
+                [
+                    {"start_sec": 0.0, "end_sec": 3.49, "subtask": "short action"},
+                    {"start_sec": 3.5, "end_sec": 7.0, "subtask": "long action"},
+                ],
+            ),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
@@ -499,7 +504,7 @@ def test_subtask_annotation_logs_on_overlapping_segments(
     monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
     logged_warnings = []
     monkeypatch.setattr(
-        subtask_annotation_module.logger,
+        subtask_utils_module.logger,
         "warning",
         lambda *args: logged_warnings.append(args),
     )
@@ -512,15 +517,16 @@ def test_subtask_annotation_logs_on_overlapping_segments(
 
     async def _fake_request(**kwargs):
         return InferenceResponse(
-            text=(
-                '{"segments":['
-                '{"start_sec":0.0,"end_sec":2.0,"subtask":"reach"},'
-                '{"start_sec":1.5,"end_sec":3.0,"subtask":"grasp"}'
-                "]}"
-            ),
+            text="",
             finish_reason="stop",
             usage={},
             response={},
+            object=_subtask_annotation_result(
+                [
+                    {"start_sec": 0.0, "end_sec": 2.0, "subtask": "reach"},
+                    {"start_sec": 1.5, "end_sec": 3.0, "subtask": "grasp"},
+                ],
+            ),
         )
 
     result = asyncio.run(cast(Any, block)(row, _fake_request))
@@ -531,3 +537,251 @@ def test_subtask_annotation_logs_on_overlapping_segments(
     ]
     assert len(logged_warnings) == 1
     assert "overlapping segments" in logged_warnings[0][0]
+
+
+def test_subtask_labeling_builds_generate_text_block(monkeypatch) -> None:
+    import inspect
+
+    seen = {}
+
+    def _fake_generate_text(**kwargs):
+        seen.update(kwargs)
+        return "labeling-block"
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+    provider = mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest")
+
+    block = mdr.robotics.subtask_labeling(
+        provider=provider,
+        video_key="observation.images.main",
+        max_concurrent_requests=11,
+    )
+
+    assert block == "labeling-block"
+    assert seen["provider"] is provider
+    assert seen["max_concurrent_requests"] == 11
+    assert callable(seen["fn"])
+    signature = inspect.signature(mdr.robotics.subtask_labeling)
+    assert "frame_width" not in signature.parameters
+    assert "max_frames_per_segment" not in signature.parameters
+    assert "columns" not in signature.parameters
+    assert "quality" not in signature.parameters
+
+
+def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from PIL import Image
+
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _lerobot_row(
+        tmp_path,
+        tasks=["open the drawer"],
+        extra={
+            "predicted_subtasks": [
+                {"start_sec": 0.0, "end_sec": 0.2, "subtask": "reach drawer"},
+                {"start_sec": 0.2, "end_sec": 0.4, "subtask": "pull drawer"},
+            ],
+        },
+    )
+    block = mdr.robotics.subtask_labeling(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+    )
+    requests = []
+
+    async def _fake_request(**kwargs):
+        requests.append(kwargs)
+        label = (
+            " grasp the drawer handle " if len(requests) == 1 else "pull open drawer"
+        )
+        return InferenceResponse(
+            text="",
+            finish_reason="stop",
+            usage={},
+            response={},
+            object=subtask_labeling_module._SubtaskLabelingResult(subtask=label),
+        )
+
+    result = asyncio.run(cast(Any, block)(row, _fake_request))
+
+    assert len(requests) == 2
+    assert requests[0]["temperature"] == 0.0
+    assert requests[0]["schema"] is subtask_labeling_module._SubtaskLabelingResult
+    assert requests[0]["provider_options"] == {
+        "google": {
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_NONE",
+                },
+            ],
+        }
+    }
+    first_prompt = requests[0]["messages"][0]["content"][0]["text"]
+    assert "Original predicted label for this exact segment" in first_prompt
+    assert "reach drawer" in first_prompt
+    assert "Use previous/next images only" in first_prompt
+    assert len(requests[0]["messages"][0]["content"]) == 4
+    assert requests[0]["messages"][0]["content"][1]["mediaType"] == "image/jpeg"
+    current_sheet = Image.open(
+        io.BytesIO(requests[0]["messages"][0]["content"][2]["data"])
+    )
+    assert current_sheet.width == 336 * 3
+    assert result["labeled_subtasks"] == [
+        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "grasp the drawer handle"},
+        {"start_sec": 0.2, "end_sec": 0.4, "subtask": "pull open drawer"},
+    ]
+
+
+def test_subtask_labeling_ignores_label_field_for_seed_labels(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _lerobot_row(
+        tmp_path,
+        tasks=["open the drawer"],
+        extra={
+            "predicted_subtasks": [
+                {"start_sec": 0.0, "end_sec": 0.2, "label": "pull open drawer"},
+            ],
+        },
+    )
+    block = mdr.robotics.subtask_labeling(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+    )
+    request = {}
+
+    async def _fake_request(**kwargs):
+        request.update(kwargs)
+        return InferenceResponse(
+            text="",
+            finish_reason="stop",
+            usage={},
+            response={},
+            object=subtask_labeling_module._SubtaskLabelingResult(
+                subtask="pull open drawer"
+            ),
+        )
+
+    result = asyncio.run(cast(Any, block)(row, _fake_request))
+
+    prompt = request["messages"][0]["content"][0]["text"]
+    assert "Original predicted label for this exact segment" not in prompt
+    assert "pull open drawer" not in prompt
+    assert result["labeled_subtasks"] == [
+        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "pull open drawer"}
+    ]
+
+
+def test_subtask_labeling_uses_plain_prompt_without_seed_labels(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _lerobot_row(
+        tmp_path,
+        tasks=["open the drawer"],
+        extra={"predicted_subtasks": [{"start_sec": 0.0, "end_sec": 0.2}]},
+    )
+    block = mdr.robotics.subtask_labeling(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+    )
+    request = {}
+
+    async def _fake_request(**kwargs):
+        request.update(kwargs)
+        return InferenceResponse(
+            text="",
+            finish_reason="stop",
+            usage={},
+            response={},
+            object=subtask_labeling_module._SubtaskLabelingResult(
+                subtask="pull open drawer"
+            ),
+        )
+
+    result = asyncio.run(cast(Any, block)(row, _fake_request))
+
+    assert request["provider_options"] == {
+        "google": {
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_NONE",
+                },
+            ],
+        }
+    }
+    prompt = request["messages"][0]["content"][0]["text"]
+    assert "Original predicted label for this exact segment" not in prompt
+    assert "Treat the original predicted label as a strong prior" not in prompt
+    assert "The segment boundaries are fixed; do not split or merge" in prompt
+    assert "Compare the beginning and end of the current segment" in prompt
+    assert result["labeled_subtasks"] == [
+        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "pull open drawer"}
+    ]
+
+
+def test_subtask_labeling_falls_back_to_seed_label(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _lerobot_row(
+        tmp_path,
+        extra={
+            "segments": [
+                {"start_sec": 0.0, "end_sec": 0.2, "subtask": " Pick Up Object "}
+            ],
+        },
+    )
+    block = mdr.robotics.subtask_labeling(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+        segments_column="segments",
+    )
+
+    async def _blocked_request(**kwargs):
+        raise RuntimeError(
+            "google generation response is missing candidates[0]: "
+            "promptFeedback.blockReason=PROHIBITED_CONTENT"
+        )
+
+    result = asyncio.run(cast(Any, block)(row, _blocked_request))
+
+    assert result["labeled_subtasks"] == [
+        {"start_sec": 0.0, "end_sec": 0.2, "subtask": "pick up object"}
+    ]
