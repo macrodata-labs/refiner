@@ -8,7 +8,7 @@ description: "Add VLM-generated temporal subtask annotations to episodes"
 ![Subtask annotation timeline](../../assets/subtask_annotations.png)
 
 This example reads a LeRobot dataset, runs temporal subtask segmentation on each
-episode video, labels the fixed segments with previous/current/next context,
+episode video, optionally relabels the predicted subtasks to improve accuracy,
 and saves the result back in LeRobot format.
 
 ```python

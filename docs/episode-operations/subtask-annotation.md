@@ -51,9 +51,9 @@ benchmark contact-sheet runner and reduce false blocks on robotics videos.
 
 The labeling block is optional, but it is the recommended default when you
 want the best labels for fixed segments. If a segment already has a non-empty
-`label`, `subtask_labeling` runs the seed-aware relabeling prompt. If segments
-only have timestamps, it runs a plain labeling prompt from previous/current/next
-visual context.
+`subtask`, `subtask_labeling` runs the seed-aware relabeling prompt. If
+segments only have timestamps, it runs a plain labeling prompt from
+previous/current/next visual context.
 
 ## Other readers
 
@@ -93,9 +93,9 @@ segment has a start time, an end time, and a short action description under
 ```
 
 `subtask_labeling` writes fixed segments with a `label` value rewritten from a
-dedicated labeling pass. If the input segment has a non-empty `label`, the
-labeling prompt treats it as a seed label. If the input segment omits `label` or
-sets it to an empty string, the block uses a plain labeling prompt.
+dedicated labeling pass. If the input segment has a non-empty `subtask`, the
+labeling prompt treats it as the seed label. If the input segment omits
+`subtask` or sets it to an empty string, the block uses a plain labeling prompt.
 
 ```python
 pipeline = pipeline.map_async(
@@ -146,13 +146,13 @@ current target segment and use the neighbors only to disambiguate what changed.
 | Parameter | Meaning |
 | --- | --- |
 | `video_key` | Video stream used to render previous/current/next segment sheets. |
-| `segments_column` | Column containing fixed segment dictionaries with `start_sec`, `end_sec`, and optional `label`. Defaults to `predicted_subtasks`. |
+| `segments_column` | Column containing fixed segment dictionaries with `start_sec`, `end_sec`, and optional seed `subtask`. Defaults to `predicted_subtasks`. |
 | `output_column` | Row column that receives the labeled segment list. Defaults to `labeled_subtasks`. |
 | `frame_width` | Width of each sampled frame tile. Defaults to `336`. |
 | `max_frames_per_segment` | Maximum sampled frames in each previous/current/next sheet. Defaults to `3`. |
 | `columns` | Contact sheet grid columns. Defaults to `3`. |
 | `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `88`. |
-| `on_blocked_prompt` | Behavior when the provider blocks a labeling prompt. Defaults to `"seed"`, which keeps the seed label. Use `"raise"` to fail the row. |
+| `on_blocked_prompt` | Behavior when the provider blocks a labeling prompt. Defaults to `"seed"`, which keeps the seed subtask. Use `"raise"` to fail the row. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
 ## Related content

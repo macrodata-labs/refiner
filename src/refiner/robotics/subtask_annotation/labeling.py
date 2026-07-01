@@ -120,11 +120,11 @@ def subtask_labeling(
 ) -> Callable[[Row], Any]:
     """Return an async map block that labels fixed subtask segments.
 
-    If no seed label is available for a segment, the block uses a plain labeling
-    prompt over previous/current/next visual context. If a seed label is
-    available, the block uses the seed-aware relabeling prompt and falls back to
-    the seed label when the provider blocks the prompt and ``on_blocked_prompt``
-    is ``"seed"``.
+    If no seed subtask is available for a segment, the block uses a plain
+    labeling prompt over previous/current/next visual context. If a seed
+    subtask is available, the block uses the seed-aware relabeling prompt and
+    falls back to the seed subtask when the provider blocks the prompt and
+    ``on_blocked_prompt`` is ``"seed"``.
 
     Args:
         provider: Inference provider used to label each fixed segment.
@@ -132,8 +132,9 @@ def subtask_labeling(
             previous/current/next segment contact sheets.
         segments_column: Row column containing the fixed input segment
             dictionaries. Each segment must contain ``start_sec`` and
-            ``end_sec`` and ``label``. Empty labels are allowed and trigger the
-            plain labeling prompt.
+            ``end_sec``. If a segment contains ``subtask``, that value is used
+            as the seed for the relabeling prompt. Segments without ``subtask``
+            use the plain labeling prompt.
         output_column: Row column written by this block. The output is a list of
             segment dictionaries with the same timing fields and a rewritten
             ``label`` value. Keeping this separate from
@@ -148,8 +149,8 @@ def subtask_labeling(
             ``100``.
         temperature: Sampling temperature passed to the inference provider.
         on_blocked_prompt: Behavior when the provider blocks a labeling prompt.
-            ``"seed"`` writes the seed label fallback; ``"raise"`` propagates
-            the provider error.
+            ``"seed"`` writes the seed subtask fallback; ``"raise"``
+            propagates the provider error.
         max_concurrent_requests: Maximum provider requests allowed concurrently
             per worker.
     """

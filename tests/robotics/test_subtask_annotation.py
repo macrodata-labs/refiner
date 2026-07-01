@@ -573,8 +573,8 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
         tasks=["open the drawer"],
         extra={
             "predicted_subtasks": [
-                {"start_sec": 0.0, "end_sec": 0.2, "label": "reach drawer"},
-                {"start_sec": 0.2, "end_sec": 0.4, "label": "pull drawer"},
+                {"start_sec": 0.0, "end_sec": 0.2, "subtask": "reach drawer"},
+                {"start_sec": 0.2, "end_sec": 0.4, "subtask": "pull drawer"},
             ],
         },
     )
@@ -631,6 +631,52 @@ def test_subtask_labeling_labels_fixed_segments_with_seed_labels(
     assert result["labeled_subtasks"] == [
         {"start_sec": 0.0, "end_sec": 0.2, "label": "grasp the drawer handle"},
         {"start_sec": 0.2, "end_sec": 0.4, "label": "pull open drawer"},
+    ]
+
+
+def test_subtask_labeling_ignores_label_field_for_seed_labels(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def _fake_generate_text(**kwargs):
+        return kwargs["fn"]
+
+    monkeypatch.setattr(inference_module, "generate_text", _fake_generate_text)
+
+    row = _lerobot_row(
+        tmp_path,
+        tasks=["open the drawer"],
+        extra={
+            "predicted_subtasks": [
+                {"start_sec": 0.0, "end_sec": 0.2, "label": "pull open drawer"},
+            ],
+        },
+    )
+    block = mdr.robotics.subtask_labeling(
+        provider=mdr.inference.GoogleEndpointProvider(model="gemini-flash-latest"),
+        video_key="observation.images.main",
+    )
+    request = {}
+
+    async def _fake_request(**kwargs):
+        request.update(kwargs)
+        return InferenceResponse(
+            text="",
+            finish_reason="stop",
+            usage={},
+            response={},
+            object=subtask_labeling_module._SubtaskLabelingResult(
+                label="pull open drawer"
+            ),
+        )
+
+    result = asyncio.run(cast(Any, block)(row, _fake_request))
+
+    prompt = request["messages"][0]["content"][0]["text"]
+    assert "Original predicted label for this exact segment" not in prompt
+    assert "pull open drawer" not in prompt
+    assert result["labeled_subtasks"] == [
+        {"start_sec": 0.0, "end_sec": 0.2, "label": "pull open drawer"}
     ]
 
 
@@ -708,7 +754,7 @@ def test_subtask_labeling_falls_back_to_seed_label(
         tmp_path,
         extra={
             "segments": [
-                {"start_sec": 0.0, "end_sec": 0.2, "label": " Pick Up Object "}
+                {"start_sec": 0.0, "end_sec": 0.2, "subtask": " Pick Up Object "}
             ],
         },
     )

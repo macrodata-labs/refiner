@@ -90,7 +90,7 @@ def _normalize_input_segments(
             {
                 "start_sec": round(max(0.0, start_sec), 3),
                 "end_sec": round(max(0.0, end_sec), 3),
-                "label": _normalize_label(str(item.get("label") or "")),
+                "label": _normalize_label(str(item.get("subtask") or "")),
             }
         )
 
