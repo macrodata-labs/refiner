@@ -137,8 +137,7 @@ current target segment and use the neighbors only to disambiguate what changed.
 | `frame_width` | Width of each sampled frame tile. |
 | `frames_per_sheet` | Maximum number of sampled frames per contact sheet. |
 | `columns` | Contact sheet grid columns. |
-| `quality` | JPEG quality for generated sheet images, from `1` to `100`. Defaults to `95`. If the provider blocks or returns empty text, segmentation retries once with quality `70`. |
-| `on_blocked_prompt` | Behavior when the provider still blocks an episode prompt after the lower-quality retry. Defaults to `"empty"`, which logs the block and writes an empty segment list. Use `"raise"` to fail the row instead. |
+| `on_blocked_prompt` | Behavior when the provider still blocks an episode prompt after the built-in fallback retry. Defaults to `"empty"`, which logs the block and writes an empty segment list. Use `"raise"` to fail the row instead. |
 | `max_concurrent_requests` | Maximum provider requests allowed at once per worker. |
 
 ## Labeling parameters

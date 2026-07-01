@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from refiner.video import VideoSource
 
 
+_SEGMENTATION_CONTACT_SHEET_QUALITY = 95
+_SEGMENTATION_FALLBACK_CONTACT_SHEET_QUALITY = 70
+
 _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
 
 Return only JSON with this shape:
@@ -58,7 +61,6 @@ def subtask_annotation(
     frame_width: int = 224,
     frames_per_sheet: int = 20,
     columns: int = 5,
-    quality: int = 95,
     temperature: float = 0.1,
     on_blocked_prompt: Literal["empty", "raise"] = "empty",
     max_concurrent_requests: int = 256,
@@ -73,7 +75,6 @@ def subtask_annotation(
         frame_width: Width, in pixels, for each sampled frame tile.
         frames_per_sheet: Maximum number of sampled frames packed into one sheet.
         columns: Number of columns in each contact-sheet grid.
-        quality: JPEG quality for contact-sheet images, from 1 to 100.
         temperature: Generation temperature passed to the provider request.
         on_blocked_prompt: Behavior when the provider blocks the prompt before
             returning candidates. ``"empty"`` writes an empty segment list and
@@ -106,7 +107,7 @@ def subtask_annotation(
             frame_width=frame_width,
             frames_per_sheet=frames_per_sheet,
             columns=columns,
-            quality=quality,
+            quality=_SEGMENTATION_CONTACT_SHEET_QUALITY,
         )
         try:
             response = await _request_subtask_annotation(
@@ -126,7 +127,7 @@ def subtask_annotation(
                     frame_width=frame_width,
                     frames_per_sheet=frames_per_sheet,
                     columns=columns,
-                    quality=70,
+                    quality=_SEGMENTATION_FALLBACK_CONTACT_SHEET_QUALITY,
                 )
                 response = await _request_subtask_annotation(
                     generate_text=generate_text,

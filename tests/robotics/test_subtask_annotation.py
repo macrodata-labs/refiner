@@ -227,6 +227,8 @@ def test_timestamped_contact_sheets_reject_invalid_options(tmp_path) -> None:
 
 
 def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
+    import inspect
+
     seen = {}
 
     def _fake_generate_text(**kwargs):
@@ -246,6 +248,9 @@ def test_subtask_annotation_builds_generate_text_block(monkeypatch) -> None:
     assert seen["provider"] is provider
     assert seen["max_concurrent_requests"] == 17
     assert callable(seen["fn"])
+    assert (
+        "quality" not in inspect.signature(mdr.robotics.subtask_annotation).parameters
+    )
 
 
 def test_subtask_annotation_requires_video_key() -> None:
