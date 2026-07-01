@@ -153,3 +153,6 @@ and [Multimodal and Structured Output](../inference/multimodal-and-structured-ou
 
 For a complete cloud example, see
 [Video Subtask Annotations](../examples/annotations/subtask-annotations.md).
+
+For background on the benchmark and annotation interface, see
+[Annotating Robot Video Subtasks](https://macrodata.co/blog/annotating-robot-video-subtasks).

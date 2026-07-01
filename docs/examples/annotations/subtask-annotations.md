@@ -60,3 +60,6 @@ Use [Subtask Annotation](../../episode-operations/subtask-annotation.md) for
 parameter details and in-depth explanation. Both `subtask_annotation` and
 `subtask_labeling` use Gemini 3.5 Flash through `GoogleEndpointProvider`, so
 you need to provide `GOOGLE_GENERATIVE_AI_API_KEY`.
+
+For the benchmark context behind this workflow, see
+[Annotating Robot Video Subtasks](https://macrodata.co/blog/annotating-robot-video-subtasks).
