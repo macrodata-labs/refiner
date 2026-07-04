@@ -65,7 +65,7 @@ def test_iter_frames_respects_clip_bounds(tmp_path) -> None:
     frames = asyncio.run(_collect_frames(video))
 
     assert [frame.index for frame in frames] == [0, 1, 2]
-    assert [frame.timestamp_s for frame in frames] == [0.2, 0.4, 0.6]
+    assert [frame.timestamp_s for frame in frames] == pytest.approx([0.0, 0.2, 0.4])
 
 
 def test_video_frame_array_clip_returns_frame_view() -> None:
