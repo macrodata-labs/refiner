@@ -110,18 +110,27 @@ async def iter_encoded_frames(
 ) -> AsyncIterator[DecodedVideoFrame]:
     prepared = await prepare_video_source(video=video)
     try:
+        clip_from = video_from_timestamp_s(prepared.video)
         frames = _iter_selected_frames(
             container=prepared.container,
             stream=prepared.stream,
-            clip_from=video_from_timestamp_s(prepared.video),
+            clip_from=clip_from,
             clip_to=video_to_timestamp_s(prepared.video),
             seek=True,
         )
         for index, frame in enumerate(frames):
+            # Rebase pts/timestamp_s to the clip start so sub-clips begin at 0,
+            # clamping to non-negative for frames yielded just before clip_from.
+            timestamp_s = _frame_timestamp_s(frame)
+            if timestamp_s is not None:
+                timestamp_s = max(0.0, timestamp_s - clip_from)
+            pts = None if frame.pts is None else int(frame.pts)
+            if pts is not None and frame.time_base is not None:
+                pts = max(0, pts - round(clip_from / float(frame.time_base)))
             yield DecodedVideoFrame(
                 index=index,
-                pts=None if frame.pts is None else int(frame.pts),
-                timestamp_s=_frame_timestamp_s(frame),
+                pts=pts,
+                timestamp_s=timestamp_s,
                 width=int(frame.width),
                 height=int(frame.height),
                 frame=frame,
