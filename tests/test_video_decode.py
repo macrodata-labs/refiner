@@ -66,6 +66,10 @@ def test_iter_frames_respects_clip_bounds(tmp_path) -> None:
 
     assert [frame.index for frame in frames] == [0, 1, 2]
     assert [frame.timestamp_s for frame in frames] == pytest.approx([0.0, 0.2, 0.4])
+    # pts is rebased to the clip start too, in sync with timestamp_s.
+    assert [frame.pts for frame in frames] == [0, 2048, 4096]
+    assert all(frame.pts >= 0 for frame in frames)
+    assert all(frame.timestamp_s >= 0.0 for frame in frames)
 
 
 def test_video_frame_array_clip_returns_frame_view() -> None:

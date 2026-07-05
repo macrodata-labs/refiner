@@ -119,14 +119,17 @@ async def iter_encoded_frames(
             seek=True,
         )
         for index, frame in enumerate(frames):
-            # Report timestamps relative to the clip start so sub-clips (a LeRobot
-            # v3 episode inside a packed video file) begin at 0.
+            # Rebase pts/timestamp_s to the clip start so sub-clips begin at 0,
+            # clamping to non-negative for frames yielded just before clip_from.
             timestamp_s = _frame_timestamp_s(frame)
             if timestamp_s is not None:
-                timestamp_s -= clip_from
+                timestamp_s = max(0.0, timestamp_s - clip_from)
+            pts = None if frame.pts is None else int(frame.pts)
+            if pts is not None and frame.time_base is not None:
+                pts = max(0, pts - round(clip_from / float(frame.time_base)))
             yield DecodedVideoFrame(
                 index=index,
-                pts=None if frame.pts is None else int(frame.pts),
+                pts=pts,
                 timestamp_s=timestamp_s,
                 width=int(frame.width),
                 height=int(frame.height),
