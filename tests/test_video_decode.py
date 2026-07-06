@@ -72,6 +72,24 @@ def test_iter_frames_respects_clip_bounds(tmp_path) -> None:
     assert all(frame.timestamp_s >= 0.0 for frame in frames)
 
 
+def test_iter_frames_rebases_to_first_emitted_frame(tmp_path) -> None:
+    path = tmp_path / "video.mp4"
+    _write_video(path, num_frames=5, fps=5)
+    video = mdr.video.VideoFile(
+        DataFile.resolve(path),
+        from_timestamp_s=0.25,
+        to_timestamp_s=0.7,
+    )
+
+    frames = asyncio.run(_collect_frames(video))
+
+    assert [frame.index for frame in frames] == [0, 1]
+    assert [frame.timestamp_s for frame in frames] == pytest.approx([0.0, 0.2])
+    assert [frame.pts for frame in frames] == [0, 2048]
+    assert [frame.frame.pts for frame in frames] == [0, 2048]
+    assert [frame.frame.time for frame in frames] == pytest.approx([0.0, 0.2])
+
+
 def test_video_frame_array_clip_returns_frame_view() -> None:
     frames = np.stack([np.full((4, 4, 3), value, dtype=np.uint8) for value in range(6)])
     video = mdr.video.VideoFrameArray(frames, fps=10)

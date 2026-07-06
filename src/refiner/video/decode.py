@@ -4,7 +4,7 @@ import io
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, Iterator
 
 import numpy as np
 
@@ -19,6 +19,8 @@ from refiner.video.remux import (
 
 if TYPE_CHECKING:
     import av
+    from av import VideoFrame, VideoStream
+    from av.container import InputContainer
 
     from refiner.video.types import VideoBytes, VideoFile, VideoSource
     from refiner.video.transcode import VideoTranscodeConfig
@@ -118,23 +120,37 @@ async def iter_encoded_frames(
             clip_to=video_to_timestamp_s(prepared.video),
             seek=True,
         )
-        for index, frame in enumerate(frames):
-            # Rebase pts/timestamp_s to the clip start so sub-clips begin at 0,
-            # clamping to non-negative for frames yielded just before clip_from.
-            timestamp_s = _frame_timestamp_s(frame)
-            if timestamp_s is not None:
-                timestamp_s = max(0.0, timestamp_s - clip_from)
-            pts = None if frame.pts is None else int(frame.pts)
-            if pts is not None and frame.time_base is not None:
-                pts = max(0, pts - round(clip_from / float(frame.time_base)))
-            yield DecodedVideoFrame(
+
+        frames = iter(enumerate(frames))
+        _, first_frame = next(frames, (0, None))
+        if first_frame is None:
+            return
+
+        pts_delta = first_frame.pts or 0
+
+        def create_decoded_frame(index: int, frame: VideoFrame) -> DecodedVideoFrame:
+            # Rebase pts/dts to the first emitted frame so decoded sub-clips
+            # start at 0 even when the requested boundary falls between frames.
+            if frame.pts is not None:
+                frame.pts = max(0, frame.pts - pts_delta)
+            if frame.dts is not None:
+                # negative dts may be required for proper ordering, can't clamp
+                frame.dts -= pts_delta
+
+            return DecodedVideoFrame(
                 index=index,
-                pts=pts,
-                timestamp_s=timestamp_s,
-                width=int(frame.width),
-                height=int(frame.height),
+                pts=frame.pts,
+                timestamp_s=frame.time,
+                width=frame.width,
+                height=frame.height,
                 frame=frame,
             )
+
+        yield create_decoded_frame(0, first_frame)
+
+        for index, frame in frames:
+            yield create_decoded_frame(index, frame)
+
     finally:
         prepared.close()
 
@@ -246,12 +262,12 @@ def _next_anchor_index(frame_index: int, stride: int) -> int:
 
 def _iter_selected_frames(
     *,
-    container: Any,
-    stream: Any,
+    container: InputContainer,
+    stream: VideoStream,
     clip_from: float,
     clip_to: float | None,
     seek: bool,
-):
+) -> Iterator[VideoFrame]:
     if seek and stream.time_base is not None:
         seek_ts = int(clip_from / float(stream.time_base))
         try:
@@ -263,7 +279,7 @@ def _iter_selected_frames(
                 pass
 
     for frame in container.decode(stream):
-        ts = _frame_timestamp_s(frame)
+        ts = frame.time
         if ts is None:
             continue
         if ts + _FRAME_TIMESTAMP_EPSILON_S < clip_from:
@@ -271,12 +287,6 @@ def _iter_selected_frames(
         if clip_to is not None and ts - _FRAME_TIMESTAMP_EPSILON_S >= clip_to:
             break
         yield frame
-
-
-def _frame_timestamp_s(frame: Any) -> float | None:
-    if frame.pts is None or frame.time_base is None:
-        return None
-    return float(frame.pts * frame.time_base)
 
 
 __all__ = [
