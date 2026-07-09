@@ -64,6 +64,10 @@ mcap = [
     "mcap-ros2-support",
     "pillow",
 ]
+rerun = [
+    "pillow",
+    "rerun-sdk[datafusion]>=0.33,<0.34",
+]
 s3 = [
     "s3fs",
 ]
@@ -87,6 +91,7 @@ all = [
     "macrodata-refiner[hdf5]",
     "macrodata-refiner[hf]",
     "macrodata-refiner[mcap]",
+    "macrodata-refiner[rerun]",
     "macrodata-refiner[video]",
     "macrodata-refiner[zarr]",
     "macrodata-refiner[text]",
