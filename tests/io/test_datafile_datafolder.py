@@ -85,6 +85,33 @@ def test_datafile_copy_writes_destination(tmp_path):
     assert dest_path.read_bytes() == b"payload"
 
 
+def test_datafile_copy_uses_remote_put_file_for_local_sources(tmp_path, monkeypatch):
+    source_path = tmp_path / "source.txt"
+    source_path.write_bytes(b"payload")
+    fs = MemoryFileSystem()
+    dest = DataFile.resolve(("bucket/dest.txt", fs))
+
+    put_calls: list[tuple[str, str, dict[str, Any]]] = []
+    original_put_file = fs.put_file
+
+    def fake_put_file(lpath, rpath, **kwargs):
+        put_calls.append((str(lpath), str(rpath), dict(kwargs)))
+        return original_put_file(lpath, rpath, **kwargs)
+
+    monkeypatch.setattr(fs, "put_file", fake_put_file)
+
+    DataFile.resolve(str(source_path)).copy(dest)
+
+    assert put_calls == [
+        (
+            str(source_path),
+            "bucket/dest.txt",
+            {"block_size": 8 * 1024 * 1024},
+        )
+    ]
+    assert fs.cat("bucket/dest.txt") == b"payload"
+
+
 def test_datafile_resolve_adds_hf_token_for_huggingface_http_urls(monkeypatch):
     captured = {}
 

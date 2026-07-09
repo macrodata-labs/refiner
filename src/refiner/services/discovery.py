@@ -4,41 +4,11 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from refiner.pipeline.steps import (
-    FnAsyncRowStep,
-    FnBatchStep,
-    FnFlatMapStep,
-    FnRowStep,
-    FnTableStep,
-)
+from refiner.pipeline.builtins import iter_pipeline_builtin_specs
 from refiner.services.base import RuntimeServiceSpec
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
-
-
-_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
-
-
-def _builtin_description(fn: Any) -> dict[str, Any] | None:
-    spec = getattr(fn, _REFINER_BUILTIN_CALL_ATTR, None)
-    if not isinstance(spec, dict):
-        return None
-    name = spec.get("name")
-    if not isinstance(name, str) or not name:
-        return None
-    args = spec.get("args")
-    if not isinstance(args, dict):
-        return None
-    services = spec.get("services", ())
-    if not isinstance(services, (list, tuple)):
-        return None
-    parsed_services: list[RuntimeServiceSpec] = []
-    for service in services:
-        if not isinstance(service, RuntimeServiceSpec):
-            return None
-        parsed_services.append(service)
-    return {"name": name, "args": args, "services": tuple(parsed_services)}
 
 
 def collect_pipeline_services(
@@ -46,27 +16,14 @@ def collect_pipeline_services(
 ) -> tuple[RuntimeServiceSpec, ...]:
     services_by_key: dict[tuple[str, str, str], RuntimeServiceSpec] = {}
 
-    for step in pipeline.pipeline_steps:
-        candidates: list[Any] = []
-        if isinstance(
-            step,
-            FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep,
-        ):
-            candidates.append(step.fn)
-        elif (fn := getattr(step, "fn", None)) is not None:
-            candidates.append(fn)
-
-        for candidate in candidates:
-            builtin = _builtin_description(candidate)
-            if builtin is None:
-                continue
-            for service in builtin["services"]:
-                key = (
-                    service.name,
-                    service.kind,
-                    _service_config_key(service.config),
-                )
-                services_by_key.setdefault(key, service)
+    for spec in iter_pipeline_builtin_specs(pipeline):
+        for service in spec.services:
+            key = (
+                service.name,
+                service.kind,
+                _service_config_key(service.config),
+            )
+            services_by_key.setdefault(key, service)
     return tuple(services_by_key.values())
 
 

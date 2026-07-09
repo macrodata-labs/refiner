@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import cast
 
-from refiner.platform.client import MacrodataClient
+import pytest
+
+from refiner.platform.client import MacrodataApiError, MacrodataClient
 
 
 def _job_submit_response() -> dict[str, object]:
@@ -47,3 +49,28 @@ def test_create_job_includes_manifest_refiner_metadata(monkeypatch) -> None:
             "refiner_ref": "abc123def456",
         },
     }
+
+
+def test_create_job_does_not_retry_request_timeout(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        del kwargs
+        calls += 1
+        raise MacrodataApiError(0, "read timed out")
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", sleeps.append)
+
+    client = MacrodataClient(api_key="ing_test", base_url="https://example.com")
+    with pytest.raises(MacrodataApiError, match="read timed out"):
+        client.create_job(
+            name="local job",
+            plan={"stages": [{"name": "stage_0", "steps": []}]},
+            manifest={"version": 1},
+        )
+
+    assert calls == 1
+    assert sleeps == []

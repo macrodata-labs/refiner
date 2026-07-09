@@ -16,6 +16,7 @@ from refiner.pipeline import from_items
 from refiner.pipeline.sinks import JsonlSink
 from refiner.pipeline.sinks.parquet import ParquetSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
+from refiner.pipeline.sinks.reducer.file import _cleanup_default_root_entries
 from refiner.worker.context import set_active_run_context
 from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 from refiner.worker.context import worker_token_for
@@ -962,6 +963,66 @@ def test_file_cleanup_reducer_removes_non_finalized_directories(tmp_path) -> Non
 
     assert winner_dir.exists()
     assert not loser_dir.exists()
+
+
+def test_file_cleanup_reducer_lists_root_once_for_default_rrd_layout(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    output_dir = tmp_path / "rrd-cleanup"
+    shard_id = "0123456789ab"
+    winner_worker_id = "worker-2"
+    loser_worker_id = "worker-1"
+    winner_dir = output_dir / f"{shard_id}__w{worker_token_for(winner_worker_id)}"
+    loser_dir = output_dir / f"{shard_id}__w{worker_token_for(loser_worker_id)}"
+    winner_dir.mkdir(parents=True)
+    loser_dir.mkdir(parents=True)
+    (winner_dir / "0.rrd").write_bytes(b"keep")
+    (loser_dir / "0.rrd").write_bytes(b"drop")
+
+    reducer = FileCleanupReducerSink(
+        output_dir,
+        filename_template="{shard_id}__w{worker_id}/{row_index}.rrd",
+        reducer_name="cleanup_rrd",
+    )
+    ls_calls: list[str] = []
+    original_ls = reducer.output.ls
+
+    def fake_ls(path, detail=False):
+        ls_calls.append(path)
+        return original_ls(path, detail=detail)
+
+    monkeypatch.setattr(reducer.output, "ls", fake_ls)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(
+            RuntimeLifecycle,
+            _FinalizedWorkersRuntime(
+                [FinalizedShardWorker(shard_id=shard_id, worker_id=winner_worker_id)]
+            ),
+        ),
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert len(ls_calls) == 1
+    assert winner_dir.exists()
+    assert not loser_dir.exists()
+
+
+def test_cleanup_default_root_entries_returns_only_losers() -> None:
+    root_entries = [
+        "0123456789ab__w111111111111",
+        "0123456789ab__w222222222222",
+        "not-a-match",
+    ]
+    keep_keys = {"0123456789ab__w111111111111"}
+
+    assert _cleanup_default_root_entries(root_entries, keep_keys) == {
+        "0123456789ab__w222222222222"
+    }
 
 
 def test_file_cleanup_reducer_removes_non_finalized_nested_directories(
