@@ -85,6 +85,45 @@ def test_launch_local_writes_parquet_per_shard(tmp_path) -> None:
     assert sorted(values) == [10, 20, 30]
 
 
+def test_parquet_round_trips_subtask_segments_and_provenance(tmp_path) -> None:
+    output_dir = tmp_path / "subtask-parquet"
+    segments = [{"start_sec": 0.0, "end_sec": 1.25, "subtask": "pick part"}]
+    result = {
+        "status": "ok",
+        "segments": segments,
+        "raw_segments": segments,
+        "issues": [],
+        "provenance": {
+            "domain_id": "assembly",
+            "profile_version": "1",
+            "profile_hash": "a" * 64,
+            "config_hash": "b" * 64,
+            "backend": "vlm-contact-sheets",
+            "model": "gemini-3.5-flash",
+            "latency_ms": 42.0,
+            "usage": {"totalTokens": 123},
+        },
+    }
+    from_items(
+        [
+            {
+                "episode_id": "episode-1",
+                "predicted_subtasks": segments,
+                "subtask_annotation_result": result,
+            }
+        ]
+    ).write_parquet(output_dir).launch_local(
+        name="subtask-parquet-roundtrip",
+        num_workers=1,
+        rundir=str(tmp_path / "run-subtask-parquet"),
+    )
+
+    table = pq.read_table(next(output_dir.glob("*.parquet")))
+    row = table.to_pylist()[0]
+    assert row["predicted_subtasks"] == segments
+    assert row["subtask_annotation_result"] == result
+
+
 def test_write_parquet_dtypes_apply_to_row_blocks(tmp_path) -> None:
     output_dir = tmp_path / "parquet-dtypes"
     pipeline = from_items(

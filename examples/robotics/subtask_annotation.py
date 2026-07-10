@@ -14,12 +14,23 @@ VIDEO_KEY = "observation.images.top_image"
 RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 OUTPUT_DATASET = f"{OUTPUT_ROOT}/berkeley-cable-routing-subtasks-{RUN_ID}"
 
+PROFILE = mdr.robotics.DomainProfile(
+    domain_id="berkeley-cable-routing",
+    version="1",
+    policy=mdr.robotics.MANIPULATION_EVENTS_V1,
+    gold_set="berkeley-cable-routing-consensus-v1",
+)
+
 pipeline = (
     mdr.read_lerobot(INPUT_DATASET)
     .map_async(
         mdr.robotics.subtask_annotation(
+            profile=PROFILE,
+            provider=mdr.inference.GoogleEndpointProvider(model="gemini-3.5-flash"),
             video_key=VIDEO_KEY,
             output_column="predicted_subtasks",
+            result_column="subtask_annotation_result",
+            thinking_budget=16384,
             max_concurrent_requests=256,
         ),
         max_in_flight=256,

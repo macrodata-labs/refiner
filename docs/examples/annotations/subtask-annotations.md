@@ -18,13 +18,26 @@ INPUT_DATASET = "hf://datasets/lerobot/berkeley_cable_routing"
 OUTPUT_ROOT = "hf://buckets/macrodata/test_bucket"
 VIDEO_KEY = "observation.images.top_image"
 
+PROFILE = mdr.robotics.DomainProfile(
+    domain_id="berkeley-cable-routing",
+    version="1",
+    policy=mdr.robotics.MANIPULATION_EVENTS_V1,
+    gold_set="berkeley-cable-routing-consensus-v1",
+)
+
 
 pipeline = (
     mdr.read_lerobot(INPUT_DATASET)
     .map_async(
         mdr.robotics.subtask_annotation(
+            profile=PROFILE,
+            provider=mdr.inference.GoogleEndpointProvider(
+                model="gemini-3.5-flash"
+            ),
             video_key=VIDEO_KEY,
             output_column="predicted_subtasks",
+            result_column="subtask_annotation_result",
+            thinking_budget=16384,
         ),
     )
     .map_async(
@@ -58,8 +71,10 @@ variables before launching the pipeline.
 
 Use [Subtask Annotation](../../episode-operations/subtask-annotation.md) for
 parameter details and in-depth explanation. Both `subtask_annotation` and
-`subtask_labeling` use Gemini 3.5 Flash through `GoogleEndpointProvider`, so
-you need to provide `GOOGLE_GENERATIVE_AI_API_KEY`.
+`subtask_labeling` use Gemini through `GoogleEndpointProvider`, so you need to
+provide `GOOGLE_GENERATIVE_AI_API_KEY`. The segmentation request pins the model
+name and thinking budget in its config hash; pin the labeling provider explicitly
+as well when comparing complete pipeline releases.
 
 For the benchmark context behind this workflow, see
 [Annotating Robot Video Subtasks](https://macrodata.co/blog/annotating-robot-video-subtasks).

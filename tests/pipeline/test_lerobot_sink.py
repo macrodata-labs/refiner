@@ -617,6 +617,53 @@ def test_write_lerobot_launch_local_runs_stage1_then_stage2(tmp_path: Path) -> N
     assert (out_root / "meta" / "tasks.parquet").exists()
 
 
+def test_lerobot_round_trips_subtask_segments_and_provenance(tmp_path: Path) -> None:
+    out_root = tmp_path / "subtask-roundtrip"
+    segments = [{"start_sec": 0.0, "end_sec": 0.2, "subtask": "pick part"}]
+    result = {
+        "status": "ok",
+        "segments": segments,
+        "raw_segments": segments,
+        "issues": [],
+        "provenance": {
+            "domain_id": "assembly",
+            "profile_version": "1",
+            "profile_hash": "a" * 64,
+            "config_hash": "b" * 64,
+            "backend": "vlm-contact-sheets",
+            "model": "gemini-3.5-flash",
+            "latency_ms": 42.0,
+            "usage": {"totalTokens": 123},
+        },
+    }
+    episode = _lerobot_episode(
+        episode_index=0,
+        task="pick",
+        task_index=0,
+        values=[1.0, 2.0],
+    ).update(
+        {
+            "predicted_subtasks": segments,
+            "subtask_annotation_result": result,
+        }
+    )
+
+    stats = (
+        mdr.from_items([episode])
+        .write_lerobot(str(out_root))
+        .launch_local(
+            name="subtask-lerobot-roundtrip",
+            num_workers=1,
+            rundir=str(tmp_path / "run-subtask-lerobot"),
+        )
+    )
+
+    assert stats.failed == 0
+    row = mdr.read_lerobot(str(out_root)).materialize()[0]
+    assert row["predicted_subtasks"] == segments
+    assert row["subtask_annotation_result"] == result
+
+
 def test_write_lerobot_accepts_generic_robotics_rows(tmp_path: Path) -> None:
     out_root = tmp_path / "generic-robotics"
     rows = [

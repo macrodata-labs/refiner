@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -117,6 +118,7 @@ def subtask_labeling(
     output_column: str = "labeled_subtasks",
     temperature: float = 0.0,
     on_blocked_prompt: Literal["seed", "raise"] = "seed",
+    max_concurrent_segments: int = 8,
     max_concurrent_requests: int = 256,
 ) -> Callable[[Row], Any]:
     """Return an async map block that labels fixed subtask segments.
@@ -145,6 +147,8 @@ def subtask_labeling(
         on_blocked_prompt: Behavior when the provider blocks a labeling prompt.
             ``"seed"`` writes the seed subtask fallback; ``"raise"``
             propagates the provider error.
+        max_concurrent_segments: Maximum segment-labeling requests launched at once
+            for one episode. The provider-wide request limit still applies.
         max_concurrent_requests: Maximum provider requests allowed concurrently
             per worker.
     """
@@ -159,6 +163,8 @@ def subtask_labeling(
         raise ValueError("output_column must be non-empty")
     if on_blocked_prompt not in {"seed", "raise"}:
         raise ValueError("on_blocked_prompt must be 'seed' or 'raise'")
+    if max_concurrent_segments <= 0:
+        raise ValueError("max_concurrent_segments must be > 0")
 
     async def _label_subtasks(
         row: Row,
@@ -167,8 +173,11 @@ def subtask_labeling(
         if not isinstance(row, RoboticsRow):
             raise TypeError("subtask_labeling expects RoboticsRow inputs")
 
+        segment_value = row[segments_column]
+        if segment_value is None:
+            return row.update({output_column: None})
         video = _resolve_video(row, video_key)
-        segments = _normalize_input_segments(row[segments_column])
+        segments = _normalize_input_segments(segment_value)
         instruction = "; ".join(task for task in row.tasks if task.strip())
         segment_sheets = await _segment_contact_sheets(
             video=video,
@@ -183,8 +192,12 @@ def subtask_labeling(
             columns=_LABELING_COLUMNS,
             quality=_LABELING_CONTACT_SHEET_QUALITY,
         )
-        labeled_segments: list[dict[str, Any]] = []
-        for index, segment in enumerate(segments):
+        segment_semaphore = asyncio.Semaphore(max_concurrent_segments)
+
+        async def _label_segment(
+            index: int,
+            segment: Mapping[str, Any],
+        ) -> dict[str, Any]:
             seed_label = str(segment["subtask"])
             content = await _subtask_labeling_content(
                 segments=segments,
@@ -196,14 +209,17 @@ def subtask_labeling(
             )
             messages = cast(list[Message], [{"role": "user", "content": content}])
             try:
-                response = await generate_text(
-                    messages=messages,
-                    schema=_SubtaskLabelingResult,
-                    provider_options={
-                        "google": {"safetySettings": GEMINI_BLOCK_NONE_SAFETY_SETTINGS}
-                    },
-                    temperature=temperature,
-                )
+                async with segment_semaphore:
+                    response = await generate_text(
+                        messages=messages,
+                        schema=_SubtaskLabelingResult,
+                        provider_options={
+                            "google": {
+                                "safetySettings": GEMINI_BLOCK_NONE_SAFETY_SETTINGS
+                            }
+                        },
+                        temperature=temperature,
+                    )
             except RuntimeError as exc:
                 block_reason = _blocked_prompt_reason(exc)
                 if block_reason is None or on_blocked_prompt == "raise":
@@ -225,7 +241,11 @@ def subtask_labeling(
 
             labeled = dict(segment)
             labeled["subtask"] = label
-            labeled_segments.append(labeled)
+            return labeled
+
+        labeled_segments = await asyncio.gather(
+            *(_label_segment(index, segment) for index, segment in enumerate(segments))
+        )
 
         return row.update({output_column: labeled_segments})
 
