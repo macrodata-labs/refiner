@@ -24,6 +24,15 @@ if TYPE_CHECKING:
     from refiner.video.writer import VideoStreamWriter, WrittenVideo
 
 
+_REMOTE_VIDEO_BLOCK_SIZE = 5 * 1024 * 1024
+
+
+def _uses_s3(filesystem: Any) -> bool:
+    protocol = getattr(filesystem, "protocol", None)
+    protocols = (protocol,) if isinstance(protocol, str) else tuple(protocol or ())
+    return any(str(item).lower() in {"s3", "s3a"} for item in protocols)
+
+
 @runtime_checkable
 class VideoSource(Protocol):
     def clipped(
@@ -92,6 +101,17 @@ class VideoFile:
         return str(self.data_file)
 
     def open(self) -> IO[bytes]:
+        # MP4 demuxing repeatedly alternates between small reads in the sample
+        # tables near the start of the file and reads in the current media
+        # region. s3fs's default ReadAheadCache retains only one region, so
+        # PyAV can force a large S3 range refill for every tiny alternating
+        # read. BlockCache retains both regions and avoids that cache thrash.
+        if _uses_s3(self.data_file.fs):
+            return self.data_file.open(
+                mode="rb",
+                cache_type="blockcache",
+                block_size=_REMOTE_VIDEO_BLOCK_SIZE,
+            )
         return self.data_file.open(mode="rb")
 
     def clipped(

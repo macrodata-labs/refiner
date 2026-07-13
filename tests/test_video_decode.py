@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -9,6 +10,7 @@ import refiner as mdr
 from refiner.io import DataFile
 from refiner.io import DataFolder
 from refiner.video import VideoStreamWriter, VideoTranscodeConfig
+from refiner.video.types import _REMOTE_VIDEO_BLOCK_SIZE
 
 
 def _write_video(path, *, num_frames: int = 5, fps: int = 5) -> None:
@@ -51,6 +53,35 @@ async def _collect_windows(
             drop_incomplete=drop_incomplete,
         )
     ]
+
+
+@pytest.mark.parametrize("protocol", ["s3", "s3a", ("s3", "s3a")])
+def test_video_file_uses_block_cache_for_s3(protocol) -> None:
+    data_file = Mock(spec=DataFile)
+    data_file.fs.protocol = protocol
+    opened = Mock()
+    data_file.open.return_value = opened
+
+    result = mdr.video.VideoFile(data_file).open()
+
+    assert result is opened
+    data_file.open.assert_called_once_with(
+        mode="rb",
+        cache_type="blockcache",
+        block_size=_REMOTE_VIDEO_BLOCK_SIZE,
+    )
+
+
+def test_video_file_preserves_default_cache_for_local_filesystem() -> None:
+    data_file = Mock(spec=DataFile)
+    data_file.fs.protocol = "file"
+    opened = Mock()
+    data_file.open.return_value = opened
+
+    result = mdr.video.VideoFile(data_file).open()
+
+    assert result is opened
+    data_file.open.assert_called_once_with(mode="rb")
 
 
 def test_iter_frames_respects_clip_bounds(tmp_path) -> None:
