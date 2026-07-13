@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel
 
+from refiner.inference import InferenceSchemaValidationError
 from refiner.inference.providers import GoogleEndpointProvider
 from refiner.inference.types import InferenceProvider, Message
 from refiner.pipeline.data.row import Row
@@ -29,6 +30,7 @@ _SEGMENTATION_SAMPLE_SEC = 0.5
 _SEGMENTATION_FRAME_WIDTH = 224
 _SEGMENTATION_FRAMES_PER_SHEET = 20
 _SEGMENTATION_COLUMNS = 5
+_STRUCTURED_OUTPUT_ATTEMPTS = 3
 
 _DEFAULT_SUBTASK_ANNOTATION_PROMPT_TEMPLATE = """Reconstruct the sequence of manipulation events in this robot video from the timestamped contact sheets.
 
@@ -177,17 +179,29 @@ async def _request_subtask_annotation(
     temperature: float,
 ) -> Any:
     messages = cast(list[Message], [{"role": "user", "content": content}])
-    return await generate_text(
-        messages=messages,
-        schema=_SubtaskAnnotationResult,
-        provider_options={
-            "google": {
-                "safetySettings": GEMINI_BLOCK_NONE_SAFETY_SETTINGS,
-            }
-        },
-        maxRetries=4,
-        temperature=temperature,
-    )
+    for attempt in range(1, _STRUCTURED_OUTPUT_ATTEMPTS + 1):
+        try:
+            return await generate_text(
+                messages=messages,
+                schema=_SubtaskAnnotationResult,
+                provider_options={
+                    "google": {
+                        "safetySettings": GEMINI_BLOCK_NONE_SAFETY_SETTINGS,
+                    }
+                },
+                maxRetries=4,
+                temperature=temperature,
+            )
+        except InferenceSchemaValidationError:
+            if attempt == _STRUCTURED_OUTPUT_ATTEMPTS:
+                raise
+            logger.warning(
+                "subtask annotation structured output validation failed; "
+                "retrying request attempt={}/{}",
+                attempt,
+                _STRUCTURED_OUTPUT_ATTEMPTS,
+            )
+    raise AssertionError("structured output retry loop exited unexpectedly")
 
 
 async def _subtask_annotation_content(

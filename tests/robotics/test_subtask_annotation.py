@@ -35,6 +35,37 @@ def _subtask_annotation_result(segments: list[dict[str, Any]]) -> Any:
     )
 
 
+def test_subtask_annotation_retries_invalid_structured_output(monkeypatch) -> None:
+    class RetryableSchemaError(ValueError):
+        pass
+
+    expected = object()
+    calls = 0
+
+    async def _fake_generate_text(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise RetryableSchemaError
+        return expected
+
+    monkeypatch.setattr(
+        subtask_segmentation_module,
+        "InferenceSchemaValidationError",
+        RetryableSchemaError,
+    )
+    result = asyncio.run(
+        subtask_segmentation_module._request_subtask_annotation(
+            generate_text=_fake_generate_text,
+            content=[{"type": "text", "text": "annotate"}],
+            temperature=0.1,
+        )
+    )
+
+    assert result is expected
+    assert calls == 3
+
+
 def _write_video(path, *, num_frames: int = 6, fps: int = 5) -> None:
     import av
 
