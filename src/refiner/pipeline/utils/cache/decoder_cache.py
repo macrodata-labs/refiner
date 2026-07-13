@@ -13,6 +13,30 @@ from refiner.pipeline.utils.cache.lease_cache import LeaseCache
 from refiner.utils import check_required_dependencies
 
 
+_REMOTE_VIDEO_BLOCK_SIZE = 5 * 1024 * 1024
+
+
+def _uses_s3(filesystem: Any) -> bool:
+    protocol = getattr(filesystem, "protocol", None)
+    protocols = (protocol,) if isinstance(protocol, str) else tuple(protocol or ())
+    return any(str(item).lower() in {"s3", "s3a"} for item in protocols)
+
+
+def open_video_data_file(video: DataFile) -> IO[bytes]:
+    # MP4 demuxing repeatedly alternates between small reads in the sample
+    # tables near the start of the file and reads in the current media region.
+    # s3fs's default ReadAheadCache retains only one region, so PyAV can force
+    # a large S3 range refill for every tiny alternating read. BlockCache keeps
+    # both hot regions and avoids that cache thrash.
+    if _uses_s3(video.fs):
+        return video.open(
+            mode="rb",
+            cache_type="blockcache",
+            block_size=_REMOTE_VIDEO_BLOCK_SIZE,
+        )
+    return video.open(mode="rb")
+
+
 @dataclass(frozen=True, slots=True)
 class VideoSourceProbe:
     width: int
@@ -112,7 +136,7 @@ def open_video_source(video: Any) -> OpenedVideoSource:
     source_name = str(video)
     if isinstance(video, DataFile):
         source_name = str(video)
-        input_file = video.open(mode="rb")
+        input_file = open_video_data_file(video)
     else:
         source_name = str(getattr(video, "uri", type(video).__name__))
         input_file = video.open()

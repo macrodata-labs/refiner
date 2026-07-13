@@ -9,8 +9,8 @@ import pytest
 import refiner as mdr
 from refiner.io import DataFile
 from refiner.io import DataFolder
+from refiner.pipeline.utils.cache.decoder_cache import _REMOTE_VIDEO_BLOCK_SIZE
 from refiner.video import VideoStreamWriter, VideoTranscodeConfig
-from refiner.video.types import _REMOTE_VIDEO_BLOCK_SIZE
 
 
 def _write_video(path, *, num_frames: int = 5, fps: int = 5) -> None:
