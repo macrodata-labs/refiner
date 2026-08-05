@@ -5,6 +5,12 @@ description: "Inspect cloud jobs from the Macrodata CLI"
 
 # Jobs, logs, and metrics
 
+> [!WARNING]
+>
+> **Early access:** Hosted job inspection currently requires an approved
+> Macrodata Cloud workspace. Local Refiner execution does not require platform
+> access.
+
 Job inspection commands default to terminal-friendly output. Add `--json` when
 an agent, script, or CI job needs structured data.
 

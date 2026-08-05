@@ -31,15 +31,8 @@ This returns a new pipeline with a sink. It does not write immediately.
 pipeline.launch_local(name="write-test", num_workers=2)
 ```
 
-or:
-
-```python
-pipeline.launch_cloud(name="write-cloud", num_workers=16)
-```
-
 ## Related pages
 
 - [LeRobot Writer](lerobot.md)
 - [Media Assets and Reducers](media-assets-and-reducers.md)
 - [Running Pipelines](../running-pipelines/index.md)
-

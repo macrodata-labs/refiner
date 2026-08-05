@@ -28,12 +28,9 @@ def main() -> None:
         .write_lerobot(
             f"hf://buckets/macrodata/test_bucket/libero-robometer-reward/{stamp}"
         )
-        .launch_cloud(
+        .launch_local(
             name="robometer-reward",
             num_workers=1,
-            cpus_per_worker=1,
-            mem_mb_per_worker=4096,
-            secrets={"HF_TOKEN": None},
         )
     )
 

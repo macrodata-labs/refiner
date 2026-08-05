@@ -13,9 +13,13 @@ Refiner is an open-source library for building robotics data pipelines. A
 [process a wide range of formats](reading-data/index.md) out of the box, use
 [models](inference/index.md) for labeling and scoring, and
 [inspect pipelines locally](running-pipelines/in-process-debugging.md) while you
-develop. When you do not want to manage infrastructure, run the same code with
-[local workers](running-pipelines/local-launcher.md) or submit it to
-the [Macrodata Cloud](running-pipelines/cloud-launcher.md).
+develop. When you want parallel execution on your machine, run the same code
+with [local workers](running-pipelines/local-launcher.md).
+
+<!--
+Approved early-access partners can also submit the same pipeline to the
+[Macrodata Cloud](running-pipelines/cloud-launcher.md).
+-->
 
 Readers and writers are [sharded](reading-data/sharding.md), so most pipelines
 do not need to download or materialize the entire dataset before doing useful
@@ -36,10 +40,11 @@ The `hf` and `video` extras are optional, but the example below uses them for
 [video data](episode-data/frames-and-videos.md). To install every optional
 dependency, use `pip install macrodata-refiner[all]`.
 
-[Create an account](/auth/register), then authenticate once with the
-[Macrodata CLI](cli/auth-and-run.md). This is optional for local development,
-but it lets you keep track of local runs in your workspace. The same
-credentials will also be used to submit cloud runs:
+<!--
+No Macrodata account is required for local Refiner development. If your team
+has Macrodata Cloud early access, authenticate once with the
+[Macrodata CLI](cli/auth-and-run.md) to track workspace runs and submit cloud
+jobs:
 
 ```bash
 macrodata login
@@ -47,6 +52,7 @@ macrodata login
 
 The CLI stores an [API key](platform/workspaces-and-api-keys.md) for you. You
 can also set one directly with the `MACRODATA_API_KEY` environment variable.
+-->
 
 ## Example
 
@@ -81,9 +87,13 @@ Each step returns a new pipeline value:
 | `.write_lerobot(...)` | Writes the transformed dataset with the [LeRobot writer](writing-data/lerobot.md). |
 
 Nothing runs when you create the pipeline. Refiner executes it only when you
-inspect rows with methods like `take()`, launch
-[local workers](running-pipelines/local-launcher.md), or submit a
+inspect rows with methods like `take()` or launch
+[local workers](running-pipelines/local-launcher.md).
+
+<!--
+Approved early-access partners can also submit the pipeline as a
 [cloud job](running-pipelines/cloud-launcher.md).
+-->
 
 ## Inspect a pipeline
 
@@ -159,12 +169,16 @@ pipeline = (
 pipeline.launch_local(name="quickstart-aloha-summary")
 ```
 
-[Local launch](running-pipelines/local-launcher.md) runs worker processes on
-your machine. Use it when you want the same
-[shard](reading-data/sharding.md) and worker behavior as a launched job without
-using cloud resources. If you are [logged in](cli/auth-and-run.md), local runs
-are also tracked in the platform interface.
+[Local launch](running-pipelines/local-launcher.md) is the standard way to run a
+complete Refiner pipeline. It distributes [shards](reading-data/sharding.md)
+across worker processes on your machine.
 
+<!--
+If you are [logged in](cli/auth-and-run.md), local runs are also tracked in the
+platform interface.
+-->
+
+<!--
 ## Run on the Macrodata Cloud
 
 Running the same pipeline on the Macrodata Cloud is as simple as swapping out
@@ -195,6 +209,7 @@ pipeline = (
 # Using launch_cloud now
 pipeline.launch_cloud(name="quickstart-aloha-summary")
 ```
+-->
 
 ## Advanced example
 
@@ -242,28 +257,26 @@ output = "hf://buckets/macrodata/test_bucket/libero-spatial"
         },
     )
     .write_lerobot(output, max_video_prepare_in_flight=2)
-    .launch_cloud(
+    .launch_local(
         name="libero-spatial-subset",
-        num_workers=10,
-        cpus_per_worker=1,
-        mem_mb_per_worker=1024,
-        # Replace this with a token that can write the output.
-        secrets=mdr.Secrets.dict({"HF_TOKEN": "---"}),
+        num_workers=2,
     )
 )
 ```
 
 This example converts the public LIBERO spatial HDF5 subset to LeRobot using
-cloud workers. It reads one demo group per row, derives the task label from the
-filename, turns action/state/image arrays into robotics episodes, encodes the
-two camera streams as videos, and writes a LeRobot dataset to your output
-bucket.
+local workers. It reads one demo group per row, derives the task label from the
+filename, turns action/state/image arrays into robotics episodes, encodes the two
+camera streams as videos, and writes a LeRobot dataset to your output bucket.
 
-The input dataset is public, but the cloud workers need `HF_TOKEN` to write back
-to your Hugging Face bucket. You can also safely store reusable secrets directly
-on the platform and reference them with `mdr.Secrets.env(...)`. See
-[Secrets and environment](platform/secrets-and-environment.md).
+The input dataset is public, but writing to your Hugging Face bucket requires an
+`HF_TOKEN` in the environment inherited by the local workers:
 
+```bash
+export HF_TOKEN="your-write-token"
+```
+
+<!--
 After submission, follow the run from [Jobs](/jobs). Once scheduled, this
 example should only take a couple of minutes. The job page shows live status,
 worker progress, logs, metrics, resource usage, and output links while the
@@ -271,6 +284,7 @@ conversion runs. You can inspect the same run from the terminal with the
 [`macrodata jobs` CLI](cli/jobs-logs-and-metrics.md). Cloud jobs are billed for
 the compute they actually use and draw down workspace credits; see
 [Billing](platform/billing.md) or [pricing](/pricing).
+-->
 
 For the full four-suite LIBERO conversion, see
 [Libero HDF5](examples/formats/libero-hdf5.md).

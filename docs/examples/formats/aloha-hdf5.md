@@ -44,12 +44,14 @@ print(pipeline.take(1)[0].num_frames)
 Then launch:
 
 ```python
-pipeline.launch_cloud(
+pipeline.launch_local(
     name="convert-aloha",
-    num_workers=8,
-    secrets={"HF_TOKEN": None},
+    num_workers=2,
 )
 ```
+
+Set `HF_TOKEN` in your local environment before launching so the workers can
+write to the Hugging Face bucket.
 
 Related: [HDF5 Reader](../../reading-data/hdf5.md),
 [Converting to Robot Rows](../../episode-data/converting-to-robot-rows.md).

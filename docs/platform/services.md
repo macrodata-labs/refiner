@@ -5,6 +5,12 @@ description: "Inspect runtime services started by Refiner cloud jobs"
 
 # Services
 
+> [!WARNING]
+>
+> **Early access:** Managed runtime services are currently available to
+> approved Macrodata Cloud partners. [Contact Macrodata](/contact)
+> to discuss a supported workload.
+
 Services are runtime processes started for cloud jobs. They are used when a
 pipeline needs a shared process alongside workers, most commonly model-serving
 workloads such as vLLM-backed inference.

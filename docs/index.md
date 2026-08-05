@@ -1,21 +1,24 @@
 ---
 title: "Refiner docs"
-description: "A guide to building, running, and operating robotics data pipelines with Refiner"
+description: "Read, transform, and write robotics datasets with Refiner"
 ---
 
 # Refiner docs
 
-Refiner is a Python framework for robotics data pipelines. It reads episode
-datasets, exposes frames and videos through a consistent row model, transforms
-or enriches those episodes, and writes training-ready outputs such as LeRobot,
-Zarr, Parquet, or JSONL.
+Refiner is Macrodata's open-source Python library for reading, transforming, and
+writing robotics datasets. It provides one pipeline model for working with
+robot episodes, frames, videos, metadata, and model-based processing.
+
+These docs also include open-source reference versions of some of the pipelines
+we develop at Macrodata. They are useful starting points, but they are not the
+full pipelines we adapt, evaluate, and run for customers.
 
 The docs are organized around the path most teams follow:
 
 | Step | Start here | What you should know after reading |
 | --- | --- | --- |
 | Try Refiner | [Quickstart](quickstart.md) | How a complete read-transform-write pipeline looks. |
-| Run code | [Running Pipelines](running-pipelines/index.md) | How local iteration, local launch, and cloud launch differ. |
+| Run code | [Running Pipelines](running-pipelines/index.md) | How to inspect pipelines in process and launch local workers. |
 | Load data | [Reading Data](reading-data/index.md) | Which reader to use and how input sharding works. |
 | Understand rows | [Episode Data](episode-data/index.md) | How episodes, frame tables, videos, metadata, tasks, and stats are represented. |
 | Transform data | [Transforms](transforms/index.md) | How `map`, `map_async`, `batch_map`, expressions, and dtypes fit together. |
@@ -23,7 +26,6 @@ The docs are organized around the path most teams follow:
 | Call models | [Inference](inference/index.md) | How to use text, multimodal, structured, vLLM, and pooling inference. |
 | Save outputs | [Writing Data](writing-data/index.md) | How writers stage files, media, and reducers. |
 | Follow recipes | [Examples](examples/index.md) | End-to-end dataset conversion and enrichment workflows. |
-| Use the Macrodata Cloud | [Platform](platform/index.md) | Workspaces, API keys, manifests, cloud jobs, files, and secrets. |
 | Use commands | [CLI](cli/index.md) | The `macrodata` command surface. |
 
 For quick API lookup, see [Reference](reference/index.md).
@@ -42,3 +44,7 @@ If you are new to Refiner, read:
 If you already have a custom source dataset, start with
 [HDF5](reading-data/hdf5.md), [Zarr](reading-data/zarr.md), or
 [Converting to Robot Rows](episode-data/converting-to-robot-rows.md).
+
+If you want to see what the full pipelines can do with your data,
+[send us a representative sample](https://macrodata.co/contact). We will review
+it and show you what we can extract.

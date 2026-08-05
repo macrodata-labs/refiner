@@ -73,5 +73,4 @@ Use this for perception pipelines or model APIs that naturally process batches.
 ## Related pages
 
 - [Subtask Annotation](../episode-operations/subtask-annotation.md)
-- [Hand Tracking](../episode-operations/hand-tracking.md)
 - [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)

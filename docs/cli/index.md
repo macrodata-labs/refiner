@@ -5,6 +5,12 @@ description: "Use the macrodata command line interface with Refiner"
 
 # CLI
 
+> [!WARNING]
+>
+> **Early access:** Commands that authenticate with Macrodata Cloud or manage
+> hosted jobs, services, and secrets require an approved partner workspace.
+> Local Refiner execution does not require platform access.
+
 The `macrodata` CLI authenticates, submits scripts, inspects jobs, follows logs,
 reads metrics, and manages secrets.
 

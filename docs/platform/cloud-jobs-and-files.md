@@ -5,6 +5,12 @@ description: "Track cloud jobs and understand file staging from the user perspec
 
 # Cloud Jobs and files
 
+> [!WARNING]
+>
+> **Early access:** Macrodata Cloud is currently available to approved
+> partners. Refiner remains open source and runs locally without platform
+> access. [Contact Macrodata](/contact) to discuss access.
+
 A cloud job is a submitted Refiner run owned by a workspace. Jobs have stages,
 workers, logs, metrics, manifests, resource settings, optional services, and
 output references.

@@ -5,6 +5,12 @@ description: "CPU, memory, GPU, and runtime service configuration for launched R
 
 # Resources, GPUs, and services
 
+> [!WARNING]
+>
+> **Early access:** Cloud GPUs and managed runtime services are currently
+> available to approved Macrodata Cloud partners. Local Refiner resource
+> settings remain available to all open-source users.
+
 Resource settings belong on launch calls, not inside transform functions. This
 keeps the pipeline logic portable between local debugging and cloud execution.
 

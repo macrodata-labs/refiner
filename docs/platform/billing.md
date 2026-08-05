@@ -5,6 +5,12 @@ description: "Understand workspace credits, payment methods, usage, and auto-rec
 
 # Billing
 
+> [!WARNING]
+>
+> **Early access:** Macrodata Cloud billing applies only to approved partner
+> workspaces. Refiner remains open source and runs locally without platform
+> access. [Contact Macrodata](/contact) to discuss access.
+
 Macrodata Cloud uses credit-based pricing. Credits are how a workspace pays
 for cloud execution. When a job runs, Macrodata measures the resources used by
 that job, converts the usage to credits using the published pricing rates, and

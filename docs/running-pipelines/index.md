@@ -11,10 +11,12 @@ A Refiner pipeline can be evaluated three ways:
 | --- | --- | --- |
 | In process | You are inspecting rows, testing a transform, or debugging quickly. | `iter_rows()`, `take()`, `materialize()` |
 | Local launch | You want real worker/shard behavior on your machine. | `launch_local(...)` |
-| Cloud launch | You want managed workers, logs, metrics, manifests, and scalable resources. | `launch_cloud(...)` |
+| Cloud launch (early access) | You are an approved partner and want managed workers, logs, metrics, manifests, and scalable resources. | `launch_cloud(...)` |
 
 Start with [In-Process Debugging](in-process-debugging.md), then move to
 [Local Launcher](local-launcher.md) or [Cloud Launcher](cloud-launcher.md).
+Cloud launch is currently available to approved partners; Refiner's in-process
+and local modes remain open to all users.
 
 ## Execution terms
 

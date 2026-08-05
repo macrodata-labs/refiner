@@ -49,7 +49,6 @@
 - [Motion trimming](episode-operations/motion-trimming.md)
 - [Subtask annotation](episode-operations/subtask-annotation.md)
 - [Reward scoring](episode-operations/reward-scoring.md)
-- [Hand tracking](episode-operations/hand-tracking.md)
 
 ## Inference
 
@@ -79,10 +78,9 @@
 - [Merge LeRobot datasets](examples/datasets/merge-lerobot-datasets.md)
 - [Video subtask annotations](examples/annotations/subtask-annotations.md)
 - [Running reward models](examples/annotations/reward-models.md)
-- [Hand tracking](examples/annotations/hand-tracking.md)
 - [Cloud GPU Job](examples/cloud/cloud-gpu-job.md)
 
-## Platform
+## Macrodata Cloud (early access)
 
 - [Overview](platform/index.md)
 - [Workspaces and API Keys](platform/workspaces-and-api-keys.md)

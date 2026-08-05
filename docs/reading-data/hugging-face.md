@@ -18,13 +18,11 @@ Most file-based readers can use `hf://` paths:
 pipeline = mdr.read_lerobot("hf://datasets/lerobot/aloha_sim_transfer_cube_human")
 ```
 
-For private datasets, provide `HF_TOKEN` locally or as a cloud secret.
+For private datasets, set `HF_TOKEN` in your environment before running the
+pipeline. Local workers inherit it automatically:
 
-```python
-pipeline.launch_cloud(
-    name="private-dataset-job",
-    secrets={"HF_TOKEN": None},
-)
+```bash
+export HF_TOKEN="your-read-token"
 ```
 
 ## Dataset tables
@@ -39,8 +37,7 @@ pipeline = mdr.read_hf_dataset(
 )
 ```
 
-For local use, install `macrodata-refiner[datasets]`. Cloud jobs add this extra
-automatically when the pipeline uses `read_hf_dataset(...)`.
+Install `macrodata-refiner[datasets]` to use `read_hf_dataset(...)`.
 
 Use this for table-style datasets. For LeRobot dataset roots, prefer
 [`read_lerobot`](lerobot.md).
@@ -48,4 +45,4 @@ Use this for table-style datasets. For LeRobot dataset roots, prefer
 ## Related pages
 
 - [Path Formats](../reference/path-formats.md)
-- [Secrets and environment](../platform/secrets-and-environment.md)
+- [Local launcher](../running-pipelines/local-launcher.md)

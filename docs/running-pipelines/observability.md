@@ -5,6 +5,12 @@ description: "Logs, user metrics, resource metrics, and job progress for Refiner
 
 # Observability
 
+> [!WARNING]
+>
+> **Early access:** Hosted logs, metrics, and job observability are currently
+> available to approved Macrodata Cloud partners. Refiner's local execution
+> remains available without platform access.
+
 Cloud jobs report progress, logs, and metrics while workers run. Use these
 signals to answer three questions:
 
@@ -60,4 +66,3 @@ See [CLI Jobs, Logs, and Metrics](../cli/jobs-logs-and-metrics.md).
 - [Cloud Launcher](cloud-launcher.md)
 - [Platform Jobs and Files](../platform/cloud-jobs-and-files.md)
 - [Resources, GPUs, and Services](resources-gpus-and-services.md)
-
