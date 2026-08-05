@@ -60,11 +60,9 @@ def hand_tracking_annotation(row: Any) -> dict[str, Any]:
     )
     .map(hand_tracking_annotation)
     .write_jsonl(OUTPUT_DATASET)
-    .launch_cloud(
+    .launch_local(
         name="hand-tracking",
         num_workers=1,
-        mem_mb_per_worker=32 * 1024,
         gpu=mdr.GPU(count=1, type="h100"),
-        secrets=mdr.Secrets.env(keys=("HF_TOKEN",)),
     )
 )

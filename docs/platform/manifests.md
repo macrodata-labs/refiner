@@ -5,6 +5,12 @@ description: "Understand and inspect Refiner cloud job manifests"
 
 # Manifests
 
+> [!WARNING]
+>
+> **Early access:** Macrodata Cloud is currently available to approved
+> partners. Refiner remains open source and runs locally without platform
+> access. [Contact Macrodata](/contact) to discuss access.
+
 A manifest records what Refiner submitted for a cloud job. It is the
 reproducibility record for a run: code, dependency context, pipeline plan,
 resource settings, and secret references.

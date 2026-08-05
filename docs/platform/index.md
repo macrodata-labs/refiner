@@ -5,6 +5,13 @@ description: "Use the Macrodata Cloud to run, track, share, and inspect Refiner 
 
 # Platform
 
+> [!WARNING]
+>
+> **Early access:** Macrodata Cloud is currently available to approved
+> partners. Refiner remains open source and runs locally without platform
+> access. [Contact Macrodata](/contact) to discuss access or
+> a managed evaluation on your data.
+
 Macrodata Cloud turns Refiner pipelines from local scripts into shared robotics
 data operations. The code stays Python, but the run gets durable execution,
 workspace ownership, a job record, logs, metrics, secrets, manifests, files,

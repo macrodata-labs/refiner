@@ -5,6 +5,12 @@ description: "Predefined variables that affect Refiner, the CLI, and local worke
 
 # Environment variables
 
+> [!WARNING]
+>
+> **Early access:** The platform and cloud-worker settings on this page apply
+> to approved Macrodata Cloud partners. Refiner's local settings remain
+> available to all open-source users.
+
 This page lists predefined environment variables that Refiner reads directly.
 For arbitrary non-secret variables passed to cloud workers, use
 [`launch_cloud(env=...)`](secrets-and-environment.md#non-secret-environment).

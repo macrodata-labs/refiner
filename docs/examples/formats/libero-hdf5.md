@@ -5,7 +5,7 @@ description: "Convert the LIBERO HDF5 eval datasets to LeRobot"
 
 # Libero HDF5
 
-Convert all four LIBERO HDF5 eval subsets to LeRobot on cloud workers:
+Convert all four LIBERO HDF5 eval subsets to LeRobot with local workers:
 
 ```python
 from datetime import datetime, timezone
@@ -57,12 +57,9 @@ output = f"{output_prefix}/{stamp}-full-eval"
         },
     )
     .write_lerobot(output, max_video_prepare_in_flight=2)
-    .launch_cloud(
+    .launch_local(
         name="libero-hdf5-full-eval",
-        num_workers=40,
-        cpus_per_worker=1,
-        mem_mb_per_worker=1024,
-        secrets=mdr.Secrets.env(name="default", keys=["HF_TOKEN"]),
+        num_workers=2,
     )
 )
 ```
@@ -118,10 +115,10 @@ with spaces.
 example bounds per-worker video preparation with `max_video_prepare_in_flight=2`
 to keep memory use predictable while two camera streams are encoded.
 
-`launch_cloud(...)` runs the conversion with 40 workers. Refiner automatically
-adds the extras needed to read HDF5, access Hugging Face storage, and encode
-videos. The `HF_TOKEN` secret is passed through so workers can read and write
-Hugging Face paths.
+`launch_local(...)` distributes the conversion across two worker processes on
+your machine. Install the HDF5, Hugging Face, and video extras, and set
+`HF_TOKEN` in your local environment so the workers can read and write Hugging
+Face paths.
 
 Related: [HDF5 Reader](../../reading-data/hdf5.md),
 [Converting to Robot Rows](../../episode-data/converting-to-robot-rows.md).

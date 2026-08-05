@@ -5,6 +5,12 @@ description: "Pass credentials and configuration to cloud jobs and the viewer"
 
 # Secrets and environment
 
+> [!WARNING]
+>
+> **Early access:** Workspace secrets and cloud-worker environments are
+> currently available to approved Macrodata Cloud partners. Refiner remains
+> open source and runs locally without platform access.
+
 Cloud jobs and the viewer often need credentials for storage, model providers,
 or private datasets. Store those values as workspace secrets instead of
 hard-coding them in pipeline code.

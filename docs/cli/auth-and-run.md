@@ -5,6 +5,13 @@ description: "Authenticate and run Refiner scripts from the CLI"
 
 # Auth and run
 
+> [!WARNING]
+>
+> **Early access:** Macrodata Cloud authentication and submission currently
+> require an approved partner workspace. Local Refiner execution does not
+> require a Macrodata account. [Contact Macrodata](/contact)
+> to discuss access.
+
 ## Login
 
 ```bash

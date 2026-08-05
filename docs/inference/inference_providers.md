@@ -64,6 +64,12 @@ provider = mdr.inference.AnthropicEndpointProvider(
 
 ## vLLM
 
+> [!WARNING]
+>
+> **Early access:** `VLLMProvider` provisions a managed Macrodata Cloud service
+> and is currently available only to approved partners. For local execution,
+> connect to a vLLM server you operate with `OpenAIEndpointProvider`.
+
 Use `VLLMProvider` with cloud launch when a pipeline should run against a
 managed vLLM service for an open-weight model. Refiner provisions the vLLM
 service as part of the cloud job and routes worker requests to it. You do not

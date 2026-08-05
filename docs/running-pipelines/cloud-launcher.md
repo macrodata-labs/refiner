@@ -5,6 +5,12 @@ description: "Submit Refiner pipelines to the Macrodata Cloud"
 
 # Cloud launcher
 
+> [!WARNING]
+>
+> **Early access:** Macrodata Cloud is currently available to approved
+> partners. Refiner remains open source and runs locally without platform
+> access. [Contact Macrodata](/contact) to discuss access.
+
 Cloud launch submits a pipeline to the Macrodata Cloud, where workers claim
 shards, run transforms, write outputs, and report logs and metrics.
 

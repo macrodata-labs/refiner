@@ -5,6 +5,12 @@ description: "Manage workspace secrets from the Macrodata CLI"
 
 # CLI secrets
 
+> [!WARNING]
+>
+> **Early access:** Workspace secret management currently requires an approved
+> Macrodata Cloud workspace. Local Refiner execution does not require platform
+> access.
+
 Use CLI secrets for values that cloud jobs need but source code should not
 contain. Secret values are stored in a workspace environment and are injected
 into launched jobs only when the pipeline requests them.

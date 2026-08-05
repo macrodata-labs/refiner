@@ -5,6 +5,13 @@ description: "Organize platform resources and authenticate Refiner jobs"
 
 # Workspaces and API keys
 
+> [!WARNING]
+>
+> **Early access:** Platform workspaces and API keys are currently available to
+> approved Macrodata Cloud partners. Refiner remains open source and runs
+> locally without platform access. [Contact Macrodata](/contact)
+> to discuss access.
+
 A workspace owns the platform resources created by Refiner: jobs, logs, metrics,
 manifests, files, secrets, API keys, services, viewer access, billing, and
 members.

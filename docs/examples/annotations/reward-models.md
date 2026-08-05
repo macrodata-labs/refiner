@@ -41,12 +41,9 @@ def main() -> None:
         .write_lerobot(
             f"hf://buckets/macrodata/test_bucket/libero-robometer-reward/{stamp}"
         )
-        .launch_cloud(
+        .launch_local(
             name="robometer-reward",
             num_workers=1,
-            cpus_per_worker=1,
-            mem_mb_per_worker=4096,
-            secrets={"HF_TOKEN": None},
         )
     )
 
@@ -56,8 +53,11 @@ if __name__ == "__main__":
 ```
 
 The output path includes a UTC timestamp so repeated runs do not overwrite prior
-results. `HF_TOKEN` is loaded from the local submitter environment and mounted
-as a worker secret so workers can read and write Hugging Face datasets and
-buckets.
+results. Set `HF_TOKEN` in your local environment so workers can read and write
+Hugging Face datasets and buckets.
 
 See [Reward Scoring](../../episode-operations/reward-scoring.md).
+
+This example documents the open-source operation rather than a performance
+guarantee for arbitrary datasets. To discuss whether reward scoring fits your
+data and evaluation goal, [contact Macrodata](/contact).

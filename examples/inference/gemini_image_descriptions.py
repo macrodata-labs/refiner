@@ -78,11 +78,8 @@ if __name__ == "__main__":
         .write_parquet(
             "hf://buckets/macrodata/test_bucket/food101-gemini-descriptions-gemini-2.5-flash-1k.parquet"
         )
-        .launch_cloud(
+        .launch_local(
             name="food101-gemini-descriptions",
             num_workers=1,
-            secrets=mdr.Secrets.dict(
-                {"HF_TOKEN": None, "GOOGLE_GENERATIVE_AI_API_KEY": None}
-            ),
         )
     )

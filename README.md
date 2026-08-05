@@ -4,12 +4,18 @@
 
 <h1 align="center">Macrodata Refiner</h1>
 
-Refiner is an open-source engine for turning raw robotics and multimodal data into **high-quality datasets** for model training.
+Refiner is Macrodata's open-source Python library for reading, transforming, and
+writing robotics datasets.
 
-It gives training-data teams one pipeline model for multimodal data, robotics
-workflows, and model-based processing.
+It provides one pipeline model for working with robot episodes, frames, videos,
+metadata, and model-based processing. Use it to convert formats, transform data,
+run inference, and write structured outputs on your own infrastructure.
 
-It also plugs into the Macrodata platform, which gives you visibility into what is happening to your data while pipelines run: job and shard lifecycle, logs, metrics, manifests, and pipeline behavior. The same code can run locally for development and then scale out through Macrodata's elastic serverless cloud.
+This repository also includes open-source reference versions of some of the
+pipelines we develop at Macrodata. They are useful starting points, but they are
+not the full pipelines we adapt, evaluate, and run for customers. If you want to
+see what those pipelines can do with your data,
+[send us a representative sample](https://macrodata.co/contact).
 
 ## Quickstart
 
@@ -50,46 +56,18 @@ def add_preview(row):
 )
 ```
 
-### Cloud example
-
-Create a Macrodata API key: https://macrodata.co/settings/api-keys  
-And authenticate the CLI:
-
-```bash
-macrodata login
-```
-
-Launch a robotics pipeline on Macrodata Cloud.
-
-```python
-import refiner as mdr
-
-(
-    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
-    .map(
-        mdr.robotics.motion_trim(
-            threshold=0.001,
-            pad_frames=5,
-        )
-    )
-    .write_lerobot("hf://buckets/acme-robotics/aloha_motion")
-    .launch_cloud(
-        name="motion_trim",
-        num_workers=4,
-    )
-)
-```
-
-Need cloud GPUs? See [Resources, GPUs, and Services](docs/running-pipelines/resources-gpus-and-services.md).
-
 ## Batteries included
 
-- training-data-first pipeline primitives instead of generic ETL abstractions
-- multimodal processing, with robotics support today
-- built-in readers, transforms, sinks, and runtime machinery for common dataset work
-- access to any storage backend supported by `fsspec` (S3, GCP, Hugging Face, etc.)
-- local execution for development and elastic cloud execution for large runs
-- built-in observability through the Macrodata platform for job state, logs, metrics, and manifests
+- a consistent row and episode model for robot trajectories, frames, videos,
+  metadata, tasks, and statistics
+- readers and writers for LeRobot, HDF5, Zarr, MCAP, Parquet, JSONL, and other
+  common data formats
+- composable transforms and model inference for converting and enriching data
+- open-source reference operations for motion trimming, subtask annotation,
+  reward scoring, and hand tracking
+- access to storage backends supported by `fsspec`, including S3, GCP, and
+  Hugging Face
+- in-process debugging and local multi-worker execution
 
 ## Docs
 
@@ -107,11 +85,6 @@ Build a dataset:
 - [Episode operations](docs/episode-operations/index.md)
 - [Writing data](docs/writing-data/index.md)
 - [Examples](docs/examples/index.md)
-
-Operate jobs:
-
-- [Platform](docs/platform/index.md)
-- [CLI](docs/cli/index.md)
 - [Reference](docs/reference/index.md)
 
 ## Community

@@ -37,24 +37,14 @@ pipeline = (
     .write_lerobot(f"{OUTPUT_ROOT}/berkeley-cable-routing-subtasks")
 )
 
-pipeline.launch_cloud(
+pipeline.launch_local(
     name="berkeley-subtask-annotation",
     num_workers=1,
-    cpus_per_worker=1,
-    mem_mb_per_worker=2048,
-    secrets=mdr.Secrets.dict(
-        {
-            "HF_TOKEN": None,
-            "GOOGLE_GENERATIVE_AI_API_KEY": None,
-        }
-    ),
 )
 ```
 
-`HF_TOKEN` and `GOOGLE_GENERATIVE_AI_API_KEY` are loaded from your local
-environment at submission time because each value is set to `None`. Refiner
-passes the resolved values to the Cloud job as redacted secrets. Export both
-variables before launching the pipeline.
+Export `HF_TOKEN` and `GOOGLE_GENERATIVE_AI_API_KEY` before launching the
+pipeline. Local workers inherit both values from your environment.
 
 Use [Subtask Annotation](../../episode-operations/subtask-annotation.md) for
 parameter details and in-depth explanation. Both `subtask_annotation` and
@@ -63,3 +53,7 @@ you need to provide `GOOGLE_GENERATIVE_AI_API_KEY`.
 
 For the benchmark context behind this workflow, see
 [Annotating Robot Video Subtasks](https://macrodata.co/blog/annotating-robot-video-subtasks).
+
+This is an open-source reference workflow. To have Macrodata evaluate subtask
+annotations on representative episodes from your dataset,
+[send us a sample](/contact).

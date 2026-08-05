@@ -5,6 +5,12 @@ description: "Inspect Parquet, JSON, and CSV files from workspace-accessible sto
 
 # Viewer
 
+> [!WARNING]
+>
+> **Early access:** The hosted viewer is currently available to approved
+> Macrodata Cloud partners. Refiner itself remains open source and runs locally
+> without platform access.
+
 The viewer is a browser data inspector for Parquet, JSON, and CSV files. It can
 open public files or private files resolved with workspace secrets.
 

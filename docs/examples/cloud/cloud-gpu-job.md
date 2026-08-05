@@ -4,6 +4,13 @@ description: "Request cloud GPUs for model-heavy Refiner jobs"
 ---
 
 # Cloud GPU Job
+
+> [!WARNING]
+>
+> **Early access:** Macrodata Cloud GPU jobs are currently available to
+> approved partners. [Contact Macrodata](/contact) to discuss
+> access. Refiner itself remains open source and runs locally.
+
 Many data workloads require running models on GPUs—whether for vision models, encoder models, or other machine learning tasks. Refiner natively supports these GPU-powered workloads!
 
 ```python

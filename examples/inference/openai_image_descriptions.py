@@ -73,9 +73,8 @@ if __name__ == "__main__":
         .write_parquet(
             "hf://buckets/macrodata/test_bucket/food101-openai-descriptions-gpt-4.1-1k.parquet"
         )
-        .launch_cloud(
+        .launch_local(
             name="food101-openai-descriptions",
             num_workers=1,
-            secrets=mdr.Secrets.dict({"HF_TOKEN": None, "OPENAI_API_KEY": None}),
         )
     )

@@ -7,9 +7,7 @@ mdr.read_lerobot(
     ]
 ).write_lerobot(
     "hf://buckets/macrodata/test_bucket/aloha_merge-1000",
-).launch_cloud(
+).launch_local(
     name="merge_aloha",
     num_workers=1,
-    mem_mb_per_worker=1024 * 8,
-    secrets={"HF_TOKEN": None},
 )

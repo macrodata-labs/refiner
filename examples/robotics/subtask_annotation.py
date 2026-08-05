@@ -36,15 +36,7 @@ pipeline = (
     .write_lerobot(OUTPUT_DATASET)
 )
 
-pipeline.launch_cloud(
+pipeline.launch_local(
     name="berkeley-subtask-annotation",
     num_workers=1,
-    cpus_per_worker=1,
-    mem_mb_per_worker=2048,
-    secrets=mdr.Secrets.dict(
-        {
-            "HF_TOKEN": None,
-            "GOOGLE_GENERATIVE_AI_API_KEY": None,
-        }
-    ),
 )

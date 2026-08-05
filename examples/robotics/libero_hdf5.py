@@ -51,12 +51,9 @@ def main() -> None:
             },
         )
         .write_lerobot(output, max_video_prepare_in_flight=2)
-        .launch_cloud(
+        .launch_local(
             name="libero-hdf5-full-eval",
-            num_workers=40,
-            cpus_per_worker=1,
-            mem_mb_per_worker=1024,
-            secrets=mdr.Secrets.dict({"HF_TOKEN": None}),
+            num_workers=2,
         )
     )
 

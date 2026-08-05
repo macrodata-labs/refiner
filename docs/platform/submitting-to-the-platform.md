@@ -5,6 +5,13 @@ description: "Authenticate, launch cloud jobs, and inspect submitted Refiner run
 
 # Submitting to the platform
 
+> [!WARNING]
+>
+> **Early access:** Platform submission is currently available to approved
+> Macrodata Cloud partners. Refiner remains open source and runs locally without
+> platform access. [Contact Macrodata](/contact) to discuss
+> access.
+
 Submitting a Refiner pipeline to the Macrodata Cloud creates a workspace-owned
 job record. The platform stores the run metadata, starts workers, tracks
 progress, collects logs and metrics, preserves the manifest, and exposes the
