@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from email.message import Message
 from importlib import metadata as importlib_metadata
 from pathlib import Path
+from typing import cast
 from urllib import error as urllib_error
 
 import pytest
@@ -43,6 +44,18 @@ class _RefinerExtrasSink(BaseSink):
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("zarr",)
+
+
+class _OutputExtras:
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        return ("s3",)
+
+
+class _OutputExtrasSink(BaseSink):
+    output = _OutputExtras()
+
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        del shard_id, block
 
 
 def test_build_run_manifest_captures_script_from_argv(
@@ -256,6 +269,29 @@ def test_build_run_manifest_adds_refiner_extras_declared_by_pipeline(
     ]
 
 
+def test_build_run_manifest_preserves_custom_sink_output_extras(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    script_path = tmp_path / "demo_job.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(script_path)])
+
+    pipeline = RefinerPipeline(_RefinerExtrasSource()).with_sink(_OutputExtrasSink())
+    stages = [
+        PlannedStage(
+            index=0,
+            name="stage_0",
+            pipeline=pipeline,
+            compute=StageComputeRequirements(num_workers=1),
+        )
+    ]
+
+    manifest = build_run_manifest(capture_dependencies=False, pipeline_stages=stages)
+
+    assert manifest["environment"]["refiner_extras"] == ["hf", "s3"]
+
+
 def test_build_run_manifest_normalizes_refiner_extra_names(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -426,6 +462,10 @@ def test_build_run_manifest_environment_does_not_include_rundir_by_default(
 
 
 def test_refiner_ref_exists_on_remote_returns_true_on_success(monkeypatch) -> None:
+    def _raise_no_gh(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("refiner.platform.manifest.subprocess.run", _raise_no_gh)
     monkeypatch.setattr(
         "refiner.platform.manifest.urllib_request.urlopen",
         lambda request: nullcontext(object()),
@@ -435,6 +475,11 @@ def test_refiner_ref_exists_on_remote_returns_true_on_success(monkeypatch) -> No
 
 
 def test_refiner_ref_exists_on_remote_returns_false_on_404(monkeypatch) -> None:
+    def _raise_no_gh(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("refiner.platform.manifest.subprocess.run", _raise_no_gh)
+
     def _raise_404(request):
         raise urllib_error.HTTPError(
             request.full_url,
@@ -450,6 +495,29 @@ def test_refiner_ref_exists_on_remote_returns_false_on_404(monkeypatch) -> None:
     )
 
     assert refiner_ref_exists_on_remote("abc123") is False
+
+
+def test_refiner_ref_exists_on_remote_prefers_gh_api(monkeypatch) -> None:
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def _fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return None
+
+    monkeypatch.setattr("refiner.platform.manifest.subprocess.run", _fake_run)
+    monkeypatch.setattr(
+        "refiner.platform.manifest.urllib_request.urlopen",
+        lambda request: pytest.fail("urllib fallback should not be used when gh works"),
+    )
+
+    assert refiner_ref_exists_on_remote("abc123") is True
+    assert calls
+    command = cast(list[str], calls[0][0][0])
+    assert command[:3] == [
+        "gh",
+        "api",
+        "repos/macrodata-labs/refiner/commits/abc123",
+    ]
 
 
 def test_manifest_prefers_macrodata_refiner_distribution(monkeypatch) -> None:

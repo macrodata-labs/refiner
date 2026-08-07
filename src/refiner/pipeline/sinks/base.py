@@ -72,10 +72,16 @@ class BaseSink(ABC):
         return ()
 
     def _io_refiner_extras(self) -> tuple[str, ...]:
-        """Storage extras required by this sink's output, if it has one."""
-        if not hasattr(self, "output"):
-            return ()
-        return cast(Any, self).output.required_refiner_extras()
+        """Storage extras required by this sink's IO handles.
+
+        Keep a structural fallback for existing custom sinks that expose an
+        ``output`` object with ``required_refiner_extras()``.
+        """
+        output = getattr(self, "output", None)
+        required_refiner_extras = getattr(output, "required_refiner_extras", None)
+        if callable(required_refiner_extras):
+            return tuple(cast(Any, required_refiner_extras)())
+        return ()
 
     def build_reducer(self) -> "BaseSink | None":
         """Return an optional 1-worker reducer sink for launched execution.

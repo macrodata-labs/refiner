@@ -10,14 +10,15 @@ from refiner.pipeline.data.shard import Shard
 from refiner.worker.context import worker_token_for
 
 
-class FinalizedShardWorker(msgspec.Struct, frozen=True):
+class FinalizedShardWorker(msgspec.Struct):
     shard_id: str
     worker_id: str
     global_ordinal: int | None = None
+    worker_token: str = ""
 
-    @property
-    def worker_token(self) -> str:
-        return worker_token_for(self.worker_id)
+    def __post_init__(self) -> None:
+        if not self.worker_token:
+            self.worker_token = worker_token_for(self.worker_id)
 
 
 class RuntimeLifecycle(Protocol):

@@ -77,6 +77,21 @@ class FileCleanupReducerSink(BaseSink):
         self.reducer_name = reducer_name
         self.assets_subdir = assets_subdir
         self._output_path_patterns = _compile_output_path_patterns(filename_template)
+        literal_prefix = ""
+        for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
+            self.filename_template
+        ):
+            literal_prefix += literal_text
+            if field_name is not None:
+                break
+        self._listing_prefix = (
+            "" if "/" not in literal_prefix else literal_prefix.rsplit("/", 1)[0]
+        )
+        self._cleanup_uses_default_root = (
+            self.assets_subdir is None
+            and self._listing_prefix == ""
+            and len(self._output_path_patterns) == 2
+        )
         self._cleanup_ran = False
 
     def write_shard_block(self, shard_id, block) -> None:
@@ -111,23 +126,31 @@ class FileCleanupReducerSink(BaseSink):
                 f"{self.reducer_name} requires an active reducer stage with a prior writer stage"
             )
 
-        keep_pairs = {
-            (row.shard_id, row.worker_token)
-            for row in get_finalized_workers(stage_index=stage_index - 1)
-        }
+        finalized_workers = get_finalized_workers(stage_index=stage_index - 1)
 
-        literal_prefix = ""
-        for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
-            self.filename_template
-        ):
-            literal_prefix += literal_text
-            if field_name is not None:
-                break
-        listing_prefix = (
-            "" if "/" not in literal_prefix else literal_prefix.rsplit("/", 1)[0]
-        )
-        paths = [listing_prefix]
-        prefix_parts = [part for part in listing_prefix.split("/") if part]
+        if self._cleanup_uses_default_root:
+            keep_keys = {
+                f"{row.shard_id}__w{row.worker_token}" for row in finalized_workers
+            }
+            rm = self.output.rm
+            keep_key_contains = keep_keys.__contains__
+            try:
+                root_entries = self.output.ls(self._listing_prefix, detail=False)
+            except (FileNotFoundError, NotADirectoryError):
+                root_entries = []
+            for rel_path in root_entries:
+                if len(rel_path) != 27 or rel_path[12:15] != "__w":
+                    continue
+                if keep_key_contains(rel_path):
+                    continue
+                try:
+                    rm(rel_path, recursive=True)
+                except FileNotFoundError:
+                    continue
+            return
+        keep_pairs = {(row.shard_id, row.worker_token) for row in finalized_workers}
+        paths = [self._listing_prefix]
+        prefix_parts = [part for part in self._listing_prefix.split("/") if part]
         for pattern in self._output_path_patterns[len(prefix_parts) :]:
             next_paths: list[str] = []
             for path in paths:
@@ -178,3 +201,16 @@ class FileCleanupReducerSink(BaseSink):
 
 
 __all__ = ["FileCleanupReducerSink"]
+
+
+def _cleanup_default_root_entries(
+    root_entries: list[str],
+    keep_keys: set[str],
+) -> set[str]:
+    paths_to_delete: set[str] = set()
+    for rel_path in root_entries:
+        if len(rel_path) != 27 or rel_path[12:15] != "__w":
+            continue
+        if rel_path not in keep_keys:
+            paths_to_delete.add(rel_path)
+    return paths_to_delete

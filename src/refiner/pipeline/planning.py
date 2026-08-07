@@ -22,10 +22,10 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
+from refiner.pipeline.builtins import REFINER_BUILTIN_CALL_ATTR, builtin_call_spec
 from refiner.pipeline.data.datatype import dtype_to_plan
 from refiner.pipeline.resources import GPU
 from refiner.platform.manifest import _redact_captured_text
-from refiner.services import RuntimeServiceSpec
 from refiner.services.discovery import (
     collect_pipeline_services,
     runtime_service_specs_to_dicts,
@@ -33,9 +33,6 @@ from refiner.services.discovery import (
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
-
-
-_REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +63,9 @@ class PlannedStage:
 
 
 def _explicit_callable_name(fn: Any) -> str | None:
-    builtin_description = _builtin_description(fn)
-    if builtin_description is not None:
-        return builtin_description["name"]
+    spec = builtin_call_spec(fn)
+    if spec is not None:
+        return spec.name
     name = getattr(fn, "__name__", None)
     if not isinstance(name, str):
         return None
@@ -84,13 +81,13 @@ def _callable_step_args(
     extra_args: dict[str, Any] | None = None,
     builtin_extra_args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    builtin_description = _builtin_description(fn)
-    if builtin_description is None:
+    spec = builtin_call_spec(fn)
+    if spec is None:
         args: dict[str, Any] = {"fn": fn}
         if extra_args:
             args.update(extra_args)
     else:
-        args = dict(builtin_description["args"])
+        args = dict(spec.args)
         if builtin_extra_args:
             args.update(builtin_extra_args)
     return args
@@ -310,34 +307,13 @@ def _callable_source(fn: Any) -> str:
     return repr(fn)
 
 
-def _builtin_description(fn: Any) -> dict[str, Any] | None:
-    spec = getattr(fn, _REFINER_BUILTIN_CALL_ATTR, None)
-    if not isinstance(spec, dict):
-        return None
-    name = spec.get("name")
-    if not isinstance(name, str) or not name:
-        return None
-    args = spec.get("args")
-    if not isinstance(args, dict):
-        return None
-    services = spec.get("services", ())
-    if not isinstance(services, (list, tuple)):
-        return None
-    parsed_services: list[RuntimeServiceSpec] = []
-    for service in services:
-        if not isinstance(service, RuntimeServiceSpec):
-            return None
-        parsed_services.append(service)
-    return {"name": name, "args": args, "services": tuple(parsed_services)}
-
-
 def describe_builtin(
     name: str, *, refiner_extras: tuple[str, ...] = (), **args: Any
 ) -> Any:
     def _decorate(fn: Any) -> Any:
         setattr(
             fn,
-            _REFINER_BUILTIN_CALL_ATTR,
+            REFINER_BUILTIN_CALL_ATTR,
             {
                 "name": name,
                 "args": args,

@@ -105,6 +105,7 @@ class CloudLauncher(BaseLauncher):
             local environment in the cloud runtime.
         dependencies: Additional packages to install in the cloud runtime.
             Entries are requirement strings.
+        extra_dependencies: Compatibility alias for ``dependencies``.
         refiner_extras: Additional macrodata-refiner extras to install in the
             cloud runtime. Built-in blocks automatically declare the extras they
             require; pass this for extras used outside those blocks.
@@ -123,6 +124,7 @@ class CloudLauncher(BaseLauncher):
         gpu: GPU | None = None,
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
+        extra_dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
         secrets: SecretInput | None = None,
         env: dict[str, object | None] | None = None,
@@ -141,6 +143,10 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
+        if dependencies is not None and extra_dependencies is not None:
+            raise ValueError("Pass only one of dependencies or extra_dependencies")
+        if dependencies is None:
+            dependencies = extra_dependencies
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.sync_local_dependencies = sync_local_dependencies

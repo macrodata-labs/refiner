@@ -20,6 +20,7 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
 from refiner.worker.lifecycle import FinalizedShardWorker, sort_finalized_workers
+from refiner.worker.context import worker_token_for
 
 
 class _FakeReader(BaseReader):
@@ -83,6 +84,12 @@ def test_sort_finalized_workers_uses_legacy_order_when_any_ordinal_is_missing() 
         "shard-b",
         "shard-c",
     ]
+
+
+def test_finalized_worker_caches_worker_token() -> None:
+    row = FinalizedShardWorker("shard-a", "worker-a")
+
+    assert row.worker_token == worker_token_for("worker-a")
 
 
 class _NoopTelemetryEmitter:

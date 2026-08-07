@@ -16,6 +16,7 @@ Install extras based on the data and operations you use.
 | `hdf5` | HDF5 reader support. |
 | `zarr` | Zarr reader and writer support. |
 | `mcap` | MCAP robotics log reader support, including ROS2, protobuf, and H.264 video decoding. |
+| `rerun` | Rerun RRD reader and writer support. |
 | `video` | Video decode/write support. |
 | `text` | Common Crawl text readers. |
 | `s3` | S3 filesystem support. |
@@ -30,5 +31,6 @@ pip install macrodata-refiner[hf,video]
 pip install macrodata-refiner[datasets]
 pip install macrodata-refiner[hdf5,zarr]
 pip install macrodata-refiner[mcap]
+pip install macrodata-refiner[rerun]
 pip install macrodata-refiner[hand_tracking]
 ```

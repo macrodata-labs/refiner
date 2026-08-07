@@ -348,6 +348,48 @@ def test_pipeline_launch_cloud_skips_local_dependency_capture_by_default(
     assert captured_manifest_kwargs["refiner_extras"] == ["hf", "video"]
 
 
+def test_pipeline_launch_cloud_accepts_extra_dependencies_alias(
+    monkeypatch,
+) -> None:
+    captured_manifest_kwargs = {}
+
+    def manifest(**kwargs):
+        captured_manifest_kwargs.update(kwargs)
+        return {"version": 1}
+
+    _stub_cloud_submit(monkeypatch, manifest=manifest)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        extra_dependencies=["torch"],
+    )
+
+    assert captured_manifest_kwargs["dependencies"] == ["torch"]
+
+
+def test_pipeline_launch_cloud_rejects_both_dependency_names() -> None:
+    with pytest.raises(ValueError, match="dependencies or extra_dependencies"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud",
+            dependencies=["torch"],
+            extra_dependencies=["numpy"],
+        )
+
+
+def test_cloud_launcher_accepts_extra_dependencies_alias() -> None:
+    launcher = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="demo cloud",
+        extra_dependencies=["torch"],
+    )
+
+    assert launcher.dependencies == ["torch"]
+
+
 def test_pipeline_launch_cloud_passes_pipeline_stages_to_manifest(
     monkeypatch,
 ) -> None:

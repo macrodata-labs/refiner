@@ -257,3 +257,55 @@ def test_cli_delete_secret_encodes_name_and_env(monkeypatch) -> None:
 
     assert captured["method"] == "DELETE"
     assert captured["path"] == "/api/cli/secrets/HF%2FTOKEN?env=production"
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_path"),
+    [
+        (
+            lambda client: client.cli_cancel_job(job_id="job-1"),
+            "/api/cli/jobs/job-1/cancel",
+        ),
+        (
+            lambda client: client.cli_set_secret(
+                name="HF_TOKEN",
+                value="secret",
+                env="production",
+            ),
+            "/api/cli/secrets",
+        ),
+        (
+            lambda client: client.cli_delete_secret(
+                name="HF_TOKEN",
+                env="production",
+            ),
+            "/api/cli/secrets/HF_TOKEN?env=production",
+        ),
+    ],
+)
+def test_cli_mutations_retry_transient_failures(
+    monkeypatch,
+    operation,
+    expected_path: str,
+) -> None:
+    calls = 0
+    captured: dict[str, object] = {}
+    sleeps: list[float] = []
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        captured.update(kwargs)
+        if calls == 1:
+            raise MacrodataApiError(503, "try again")
+        return {"success": True}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", sleeps.append)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    assert operation(client) == {"success": True}
+
+    assert calls == 2
+    assert captured["path"] == expected_path
+    assert sleeps == [0.25]

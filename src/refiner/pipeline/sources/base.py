@@ -12,7 +12,7 @@ from refiner.pipeline.data.shard import Shard
 from refiner.worker.metrics.api import log_throughput
 
 _INTERNAL_SHARD_ID_KEY = "__shard_id"
-SourceUnit: TypeAlias = Row | Tabular
+SourceUnit: TypeAlias = Row | list[Row] | Tabular
 
 
 class BaseSource(ABC):
@@ -73,6 +73,8 @@ __all__ = ["BaseSource"]
 def _unit_num_rows(unit: SourceUnit) -> int:
     if isinstance(unit, Row):
         return 1
+    if isinstance(unit, list):
+        return len(unit)
     if isinstance(unit, Tabular):
         return int(unit.num_rows)
     raise TypeError(f"Unsupported source unit type: {type(unit)!r}")
@@ -81,6 +83,9 @@ def _unit_num_rows(unit: SourceUnit) -> int:
 def _with_shard_id(unit: SourceUnit, shard_id: str) -> SourceUnit:
     if isinstance(unit, Row):
         return unit.update(**{_INTERNAL_SHARD_ID_KEY: shard_id})
+
+    if isinstance(unit, list):
+        return [row.update(**{_INTERNAL_SHARD_ID_KEY: shard_id}) for row in unit]
 
     if isinstance(unit, Tabular):
         table = unit.table
