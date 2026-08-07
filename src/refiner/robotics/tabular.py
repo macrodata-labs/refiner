@@ -165,7 +165,8 @@ def _row_index_key(rows: Sequence[Row]) -> str:
 
 def _is_side_data_value(value: Any) -> bool:
     return value is not _MISSING and (
-        isinstance(value, Tabular) or isinstance(value, VideoSource)
+        isinstance(value, Tabular | VideoSource | pa.Array | pa.ChunkedArray)
+        or bool(getattr(value, "__refiner_side_data__", False))
     )
 
 

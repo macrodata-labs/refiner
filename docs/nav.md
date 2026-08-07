@@ -20,6 +20,7 @@
 - [HDF5](reading-data/hdf5.md)
 - [Zarr](reading-data/zarr.md)
 - [MCAP](reading-data/mcap.md)
+- [Rerun](reading-data/rerun.md)
 - [Tabular files](reading-data/tabular-files.md)
 - [Files and videos](reading-data/files-and-videos.md)
 - [Hugging Face](reading-data/hugging-face.md)
