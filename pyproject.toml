@@ -121,6 +121,9 @@ dev = [
 testpaths = ["tests"]
 addopts = "-ra"
 
+[tool.uv]
+exclude-newer = "14 days"
+
 [tool.ty]
 [tool.ty.terminal]
 error-on-warning = false
