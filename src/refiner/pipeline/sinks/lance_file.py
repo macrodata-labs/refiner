@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import posixpath
+from pathlib import PureWindowsPath
 from typing import Any
 
 import pyarrow as pa
@@ -35,6 +37,18 @@ class LanceSink(BaseSink):
                 "whose credentials and endpoint are available to Lance"
             )
         validate_lance_uri(self.output.abs_path())
+        normalized_template = posixpath.normpath(filename_template)
+        if (
+            not filename_template
+            or normalized_template != filename_template
+            or normalized_template in {".", ".."}
+            or normalized_template.startswith("../")
+            or normalized_template.startswith("/")
+            or "\\" in filename_template
+            or "://" in filename_template
+            or PureWindowsPath(filename_template).drive
+        ):
+            raise ValueError("filename_template must be a normalized relative path")
         self.filename_template = filename_template
         self._writers: dict[str, Any] = {}
 

@@ -179,6 +179,26 @@ def test_launch_local_writes_lance_files_per_shard(tmp_path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "filename_template",
+    [
+        "../escaped/{shard_id}__w{worker_id}.lance",
+        "nested/../escaped/{shard_id}__w{worker_id}.lance",
+        "/tmp/{shard_id}__w{worker_id}.lance",
+        "C:/tmp/{shard_id}__w{worker_id}.lance",
+        "nested\\..\\escaped\\{shard_id}__w{worker_id}.lance",
+    ],
+)
+def test_lance_file_sink_rejects_escaping_filename_templates(
+    tmp_path, filename_template
+) -> None:
+    with pytest.raises(ValueError, match="normalized relative path"):
+        from_items([]).write_lance(
+            tmp_path / "lance-files",
+            filename_template=filename_template,
+        )
+
+
 def test_launch_local_writes_lance_dataset(tmp_path) -> None:
     lance = pytest.importorskip("lance")
 
@@ -332,7 +352,7 @@ def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
     }
 
 
-def test_lance_add_columns_streams_contiguous_reordered_batches() -> None:
+def test_lance_add_columns_streams_contiguous_reordered_batches(tmp_path) -> None:
     first_batch_consumed = threading.Event()
     consumed: list[int] = []
 
@@ -355,6 +375,7 @@ def test_lance_add_columns_streams_contiguous_reordered_batches() -> None:
         fragment_id=7,
         num_rows=4,
         schema=pa.schema([("y", pa.int64())]),
+        output=LanceDatasetSink(tmp_path / "streaming-columns.lance").output,
     )
     writer.put(
         pa.chunked_array([[2, 3]], type=pa.uint64()),
@@ -855,6 +876,7 @@ def test_lance_add_columns_rejects_missing_rows(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "missing.lance"
     base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+    base_files = set((dataset_uri / "data").glob("*.lance"))
     pipeline = (
         load_lance(dataset_uri, version=base.version)
         .filter(lambda row: int(row["x"]) == 1)
@@ -874,6 +896,7 @@ def test_lance_add_columns_rejects_missing_rows(tmp_path) -> None:
         )
 
     assert lance.dataset(str(dataset_uri)).version == base.version
+    assert set((dataset_uri / "data").glob("*.lance")) == base_files
 
 
 def test_lance_add_columns_reducer_rejects_missing_fragment(tmp_path) -> None:
@@ -1116,6 +1139,47 @@ def test_lance_reducer_preserves_files_after_schema_mismatch(tmp_path) -> None:
 
     assert len(list((output_dir / "data").glob("*.lance"))) == 2
     assert list((output_dir / "_refiner_lance_fragments").glob("**/*.jsonl"))
+
+
+def test_lance_reducer_rejects_schema_metadata_mismatch(tmp_path) -> None:
+    pytest.importorskip("lance")
+    output_dir = tmp_path / "schema-metadata-mismatch.lance"
+    finalized = [
+        FinalizedShardWorker(shard_id="0123456789ab", worker_id="worker-1"),
+        FinalizedShardWorker(shard_id="abcdef012345", worker_id="worker-2"),
+    ]
+    runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime(finalized))
+
+    for finalized_worker, metadata_value in zip(
+        finalized, [b"first", b"second"], strict=True
+    ):
+        schema = pa.schema(
+            [pa.field("x", pa.int64(), metadata={b"source": metadata_value})]
+        )
+        sink = LanceDatasetSink(output_dir)
+        with set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=finalized_worker.worker_id,
+            worker_name=None,
+            runtime_lifecycle=runtime,
+        ):
+            sink.write_shard_block(
+                finalized_worker.shard_id,
+                Tabular(pa.Table.from_arrays([[1]], schema=schema)),
+            )
+            sink.on_shard_complete(finalized_worker.shard_id)
+
+    reducer = LanceDatasetCommitReducerSink(output_dir, mode="create")
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        with pytest.raises(ValueError, match="inconsistent schemas"):
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
 
 def test_lance_reducer_commits_fragments_in_global_ordinal_order(tmp_path) -> None:

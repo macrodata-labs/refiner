@@ -373,11 +373,13 @@ class _StreamingAddColumnsWriter:
         fragment_id: int,
         num_rows: int,
         schema: pa.Schema,
+        output: DataFolder,
     ) -> None:
         self.fragment = fragment
         self.fragment_id = fragment_id
         self.num_rows = num_rows
         self.schema = schema
+        self.output = output
         self.base_json = _json_dumps(fragment.metadata.to_json())
         self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
             maxsize=8
@@ -494,15 +496,31 @@ class _StreamingAddColumnsWriter:
                 except queue_module.Full:
                     continue
 
+    def _cleanup_result(self, result: tuple[Any, Any]) -> None:
+        updated_fragment, _ = result
+        updated_json = _json_dumps(updated_fragment.to_json())
+        created_files = sorted(
+            set(_fragment_data_paths(updated_json)).difference(
+                _fragment_data_paths(self.base_json)
+            )
+        )
+        _remove_paths_best_effort(
+            self.output,
+            created_files,
+            operation="partial Lance add-columns cleanup",
+        )
+
     def finish(self) -> tuple[Any, Any]:
         complete = self.next_position == self.num_rows and not self.pending
         self._close_input()
         if not complete:
             if self._spool_path is None:
                 try:
-                    self.task_future.result()
+                    result = self.task_future.result()
                 except Exception:  # noqa: BLE001
                     pass
+                else:
+                    self._cleanup_result(result)
             else:
                 os.unlink(self._spool_path)
             raise ValueError(
@@ -522,9 +540,11 @@ class _StreamingAddColumnsWriter:
             os.unlink(self._spool_path)
             return
         try:
-            self.task_future.result()
+            result = self.task_future.result()
         except Exception:  # noqa: BLE001
             pass
+        else:
+            self._cleanup_result(result)
 
 
 class LanceDatasetSink(BaseSink):
@@ -689,7 +709,9 @@ class LanceDatasetSink(BaseSink):
         )
         if self._add_columns_schema is None:
             self._add_columns_schema = output_schema
-        elif not self._add_columns_schema.equals(output_schema):
+        elif not self._add_columns_schema.equals(
+            output_schema, check_metadata=True
+        ):
             raise ValueError("add_columns output schema changed between blocks")
         fragment_ids = pc.cast(
             table.column(LANCE_FRAGMENT_ID_COLUMN), pa.uint64()
@@ -709,6 +731,7 @@ class LanceDatasetSink(BaseSink):
                 fragment_id=fragment_id,
                 num_rows=int(fragment.count_rows()),
                 schema=output_schema,
+                output=self.output,
             )
             self._add_columns_writers_by_shard[shard_id] = writer
         elif writer.fragment_id != fragment_id:
@@ -731,7 +754,7 @@ class LanceDatasetSink(BaseSink):
             self._load_overwrite_version()
 
         existing_schema = self._schema_by_shard.setdefault(shard_id, table.schema)
-        if not existing_schema.equals(table.schema):
+        if not existing_schema.equals(table.schema, check_metadata=True):
             raise ValueError("Cannot write one Lance shard with inconsistent schemas.")
         writer = self._writers_by_shard.get(shard_id)
         if writer is None:
@@ -1207,7 +1230,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             )
             if schema is None:
                 schema = next_schema
-            elif not schema.equals(next_schema):
+            elif not schema.equals(next_schema, check_metadata=True):
                 raise ValueError(
                     "Cannot commit Lance fragments with inconsistent schemas."
                 )
