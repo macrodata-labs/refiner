@@ -967,6 +967,15 @@ class LanceDatasetCommitReducerSink(BaseSink):
             raise ValueError(
                 "Lance created-files metadata is outside its worker attempt"
             )
+
+        def require_created_files() -> list[str]:
+            missing = [path for path in created_files if not self.output.exists(path)]
+            if missing:
+                raise ValueError(
+                    "Lance created file is missing: " + ", ".join(sorted(missing))
+                )
+            return list(created_files)
+
         if self.mode != "add_columns":
             expected = {
                 path
@@ -977,7 +986,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 raise ValueError(
                     "Lance created-files metadata does not match fragment data"
                 )
-            return list(created_files)
+            return require_created_files()
         if (
             source_version is None
             or source_version != self.source_version
@@ -996,7 +1005,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             raise ValueError(
                 "Lance created-files metadata does not match fragment data"
             )
-        return list(created_files)
+        return require_created_files()
 
     def _validate_add_columns_fragment_coverage(
         self,

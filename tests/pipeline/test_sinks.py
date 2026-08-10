@@ -19,6 +19,7 @@ from refiner.pipeline.sinks import JsonlSink
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
+    _attempt_fragment_prefix,
     _fragment_data_paths,
     _relocate_fragment_files,
     _schema_to_base64,
@@ -1153,6 +1154,35 @@ def test_lance_reducer_rejects_files_outside_worker_attempt(tmp_path) -> None:
             None,
             fragments=[fragment],
             created_files=["data/other/file.lance"],
+            source_version=None,
+            source_fragment_id=None,
+            metadata_path=rel_path,
+        )
+
+
+def test_lance_reducer_rejects_missing_created_file(tmp_path) -> None:
+    reducer = LanceDatasetCommitReducerSink(
+        tmp_path / "missing-created-file.lance",
+        mode="create",
+    )
+    shard_id = "0123456789ab"
+    worker_id = "0123456789ab"
+    job_id = "job"
+    fragment_path = (
+        _attempt_fragment_prefix(
+            shard_id,
+            job_id=job_id,
+            worker_id=worker_id,
+        )
+        + "__file.lance"
+    )
+    rel_path = f"_refiner_lance_fragments/{job_id}/{shard_id}__w{worker_id}.jsonl"
+
+    with pytest.raises(ValueError, match="created file is missing"):
+        reducer._verified_created_files(
+            None,
+            fragments=[json.dumps({"files": [{"path": fragment_path}]})],
+            created_files=[f"data/{fragment_path}"],
             source_version=None,
             source_fragment_id=None,
             metadata_path=rel_path,
