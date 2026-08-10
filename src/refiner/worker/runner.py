@@ -196,8 +196,6 @@ class Worker:
                 rows_read = 0
                 with inflight_lock:
                     inflight_by_id[shard.id] = shard
-                with set_active_step_index(sink_step_index):
-                    sink.on_shard_start(shard)
                 if runtime_services and not runtime_services_started:
                     asyncio.run(service_manager.start_services(runtime_services))
                     runtime_services_started = True

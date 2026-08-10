@@ -14,11 +14,7 @@ import pyarrow as pa
 from refiner.execution.asyncio.runtime import io_executor
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
-from refiner.pipeline.data.shard import (
-    SHARD_ID_COLUMN,
-    RowRangeDescriptor,
-    Shard,
-)
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import (
@@ -527,36 +523,6 @@ class LanceDatasetSink(BaseSink):
             [schema.field(column) for column in self.columns]
         )
 
-    def on_shard_start(self, shard: Shard) -> None:
-        if self.mode != "add_columns":
-            return
-        descriptor = shard.descriptor
-        if not isinstance(descriptor, RowRangeDescriptor):
-            raise TypeError("add_columns requires row-range shards")
-        if descriptor.end != descriptor.start + 1:
-            raise ValueError("Lance shards must identify exactly one fragment")
-        assert self.source_uri is not None
-        assert self.source_version is not None
-        fragments = (
-            _import_lance()
-            .dataset(
-                self.source_uri,
-                version=self.source_version,
-            )
-            .get_fragments()
-        )
-        if descriptor.start < 0 or descriptor.start >= len(fragments):
-            raise ValueError(
-                f"Lance fragment index {descriptor.start} is out of bounds"
-            )
-        fragment = fragments[descriptor.start]
-        self._source_fragment_by_shard[shard.id] = (
-            int(fragment.fragment_id),
-            int(fragment.count_rows()),
-        )
-        self._next_position_by_shard[shard.id] = 0
-        self._pending_rows_by_shard[shard.id] = {}
-
     def _add_columns_writer(
         self,
         shard_id: str,
@@ -607,20 +573,33 @@ class LanceDatasetSink(BaseSink):
         elif not self._add_columns_schema.equals(output_schema):
             raise ValueError("add_columns output schema changed between blocks")
 
+        rows = table.to_pylist()
+        raw_fragment_id = rows[0][LANCE_FRAGMENT_ID_COLUMN]
+        if not isinstance(raw_fragment_id, int):
+            raise ValueError("Lance fragment id must be an integer")
+        fragment_id = int(raw_fragment_id)
         fragment_metadata = self._source_fragment_by_shard.get(shard_id)
         if fragment_metadata is None:
-            raise ValueError(f"Missing Lance source metadata for shard {shard_id}")
-        fragment_id, num_rows = fragment_metadata
-        next_position = self._next_position_by_shard[shard_id]
-        pending = self._pending_rows_by_shard[shard_id]
-        for row in table.to_pylist():
+            assert self.source_uri is not None
+            assert self.source_version is not None
+            fragment = (
+                _import_lance()
+                .dataset(self.source_uri, version=self.source_version)
+                .get_fragment(fragment_id)
+            )
+            fragment_metadata = (fragment_id, int(fragment.count_rows()))
+            self._source_fragment_by_shard[shard_id] = fragment_metadata
+        expected_fragment_id, num_rows = fragment_metadata
+        next_position = self._next_position_by_shard.setdefault(shard_id, 0)
+        pending = self._pending_rows_by_shard.setdefault(shard_id, {})
+        for row in rows:
             raw_fragment_id = row[LANCE_FRAGMENT_ID_COLUMN]
             if not isinstance(raw_fragment_id, int):
                 raise ValueError("Lance fragment id must be an integer")
-            if int(raw_fragment_id) != fragment_id:
+            if int(raw_fragment_id) != expected_fragment_id:
                 raise ValueError(
                     f"Lance row belongs to fragment {raw_fragment_id}; "
-                    f"expected {fragment_id}"
+                    f"expected {expected_fragment_id}"
                 )
             raw_position = row[LANCE_ROW_POSITION_COLUMN]
             if not isinstance(raw_position, int):
@@ -699,7 +678,7 @@ class LanceDatasetSink(BaseSink):
         pending = self._pending_rows_by_shard.pop(shard_id, {})
         written = self._next_position_by_shard.pop(shard_id, 0)
         if fragment_metadata is None:
-            raise ValueError(f"Missing Lance source metadata for shard {shard_id}")
+            return
         fragment_id, num_rows = fragment_metadata
         if pending or written != num_rows:
             raise ValueError(
@@ -859,6 +838,37 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 return None
             raise
 
+    def _validate_add_columns_fragment_coverage(
+        self,
+        lance: Any,
+        source_fragment_ids: set[int],
+    ) -> None:
+        if self.mode != "add_columns":
+            return
+        if self.source_version is None:
+            raise ValueError("add_columns reducer is missing its source version")
+        source = lance.dataset(
+            self._dataset_uri(),
+            version=self.source_version,
+        )
+        expected_fragment_ids = {
+            int(fragment.fragment_id)
+            for fragment in source.get_fragments()
+            if int(fragment.count_rows()) > 0
+        }
+        missing = sorted(expected_fragment_ids.difference(source_fragment_ids))
+        unexpected = sorted(source_fragment_ids.difference(expected_fragment_ids))
+        if missing:
+            raise ValueError(
+                "Missing Lance fragment results: "
+                + ", ".join(str(fragment_id) for fragment_id in missing)
+            )
+        if unexpected:
+            raise ValueError(
+                "Unexpected Lance fragment results: "
+                + ", ".join(str(fragment_id) for fragment_id in unexpected)
+            )
+
     def _run_commit(self) -> None:
         if self._commit_ran:
             return
@@ -896,6 +906,8 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     self.output.rm(rel_path)
                 except FileNotFoundError:
                     continue
+            if self.mode == "add_columns":
+                self._validate_add_columns_fragment_coverage(_import_lance(), set())
             return
 
         lance = _import_lance()
@@ -935,6 +947,8 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     raise ValueError(
                         "Cannot commit Lance fragments with inconsistent field IDs."
                     )
+
+        self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
 
         if schema is None or not fragment_json:
             return

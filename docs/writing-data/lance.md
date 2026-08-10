@@ -67,15 +67,17 @@ pipeline = (
 The `columns` argument is required and only those columns are written. Existing
 columns, including large blob columns, remain referenced by their original
 files. Results may arrive out of order; Refiner restores fragment-local source
-order before writing. Missing or duplicate results fail the shard and do not
+order before writing. Missing or duplicate results fail execution and do not
 create a new dataset version.
 
 ## Internal Notes
 
 Workers stream uncommitted column files and replacement-fragment metadata. The
 reducer commits finalized attempts once against the pinned read version with a
-Lance merge operation. Cleanup records only files created by each attempt, so
-rejected retries cannot delete base dataset files.
+Lance merge operation. Before committing, it verifies that every non-empty
+fragment in the pinned source version has exactly one finalized result. Cleanup
+records only files created by each attempt, so rejected retries cannot delete
+base dataset files.
 
 This follows the worker-output/coordinator-commit pattern used by Spark,
 Beam/Dataflow, Daft, and Ray Data. Refiner keeps Lance fragments as its work
