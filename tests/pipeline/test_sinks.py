@@ -19,6 +19,7 @@ from refiner.pipeline.sinks import JsonlSink
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
+    _fragment_data_paths,
     _relocate_fragment_files,
     _schema_to_base64,
 )
@@ -992,7 +993,13 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
     )
 
 
-def test_lance_reducer_rejects_unsafe_created_file_paths(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "unsafe_path",
+    ["../victim", "data/attempt__x\\..\\..\\..\\victim"],
+)
+def test_lance_reducer_rejects_unsafe_created_file_paths(
+    tmp_path, unsafe_path: str
+) -> None:
     reducer = LanceDatasetCommitReducerSink(
         tmp_path / "unsafe-cleanup.lance",
         mode="add_columns",
@@ -1004,7 +1011,7 @@ def test_lance_reducer_rejects_unsafe_created_file_paths(tmp_path) -> None:
             {
                 "schema": _schema_to_base64(pa.schema([("y", pa.int64())])),
                 "fragments": ["{}"],
-                "created_files": ["../victim"],
+                "created_files": [unsafe_path],
                 "source_version": 1,
                 "source_fragment_id": 0,
             },
@@ -1013,6 +1020,13 @@ def test_lance_reducer_rejects_unsafe_created_file_paths(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Invalid Lance created-file path"):
         reducer._read_metadata(rel_path)
+
+
+def test_lance_reducer_rejects_backslashes_in_fragment_paths(tmp_path) -> None:
+    fragment = json.dumps({"files": [{"path": "attempt__x\\..\\victim"}]})
+
+    with pytest.raises(ValueError, match="Invalid Lance fragment file path"):
+        _fragment_data_paths(fragment)
 
 
 def test_lance_reducer_rejects_files_outside_worker_attempt(tmp_path) -> None:

@@ -199,6 +199,8 @@ def _fragment_data_paths(fragment_json: str) -> list[str]:
         path = file_info.get("path") if isinstance(file_info, dict) else None
         if not isinstance(path, str):
             continue
+        if "\\" in path:
+            raise ValueError(f"Invalid Lance fragment file path: {path}")
         normalized = posixpath.normpath(path)
         if (
             normalized.startswith("../")
@@ -213,6 +215,8 @@ def _fragment_data_paths(fragment_json: str) -> list[str]:
 def _validate_created_file_path(path: object) -> str:
     if not isinstance(path, str):
         raise ValueError("Invalid Lance created-file path")
+    if "\\" in path:
+        raise ValueError(f"Invalid Lance created-file path: {path}")
     normalized = posixpath.normpath(path)
     if (
         normalized != path
@@ -857,18 +861,11 @@ class LanceDatasetCommitReducerSink(BaseSink):
         commit_message: str,
         *,
         expected_versions: Sequence[int] = (),
-        search_history: bool = False,
     ) -> bool:
         existing = self._load_existing_dataset(lance)
         if existing is None:
             return False
         candidate_versions = {int(existing.version), *expected_versions}
-        if search_history:
-            candidate_versions = {
-                int(version_info["version"])
-                for version_info in existing.versions()
-                if isinstance(version_info.get("version"), int)
-            }
         for version in sorted(candidate_versions, reverse=True):
             try:
                 transaction = existing.read_transaction(version)
@@ -1058,7 +1055,6 @@ class LanceDatasetCommitReducerSink(BaseSink):
             lance,
             commit_message,
             expected_versions=[expected_version],
-            search_history=self.mode == "overwrite",
         ):
             return
         if self.mode == "create" and existing is not None:
