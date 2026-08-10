@@ -1074,7 +1074,10 @@ class LanceDatasetCommitReducerSink(BaseSink):
         finalized = _finalized_workers(reducer_name="write_lance_dataset_commit")
         commit_message = self._commit_message(
             schema=self.planned_schema,
-            fragments=[f"{row.shard_id}/{row.worker_token}" for row in finalized],
+            fragments=[
+                f"job:{get_active_job_id()}",
+                *(f"{row.shard_id}/{row.worker_token}" for row in finalized),
+            ],
             source_versions=(
                 {self.source_version}
                 if self.mode == "overwrite" and self.source_version is not None

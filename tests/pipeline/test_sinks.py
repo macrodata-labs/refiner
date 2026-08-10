@@ -742,6 +742,36 @@ def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
     assert lance.dataset(str(dataset_uri)).version == 1
 
 
+def test_lance_empty_create_does_not_match_independent_run(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "empty-create-independent-run.lance"
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime([]),
+    )
+
+    for job_id in ("first-job", "second-job"):
+        reducer = LanceDatasetCommitReducerSink(
+            dataset_uri,
+            mode="create",
+            planned_schema=pa.schema([("x", pa.int64())]),
+        )
+        with set_active_run_context(
+            job_id=job_id,
+            stage_index=1,
+            worker_id="reducer",
+            worker_name=None,
+            runtime_lifecycle=runtime,
+        ):
+            if job_id == "first-job":
+                reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+            else:
+                with pytest.raises(ValueError, match="already exists"):
+                    reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert lance.dataset(str(dataset_uri)).version == 1
+
+
 def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "empty-overwrite-retry.lance"
