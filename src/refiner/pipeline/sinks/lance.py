@@ -795,6 +795,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         self._managed_path_pattern = _compile_output_path_patterns(
             _METADATA_FILENAME_TEMPLATE
         )[-1]
+        self._datasets_by_version: dict[int, Any] = {}
         self._commit_ran = False
         self._pending_metadata_cleanup: tuple[str, ...] = ()
 
@@ -932,6 +933,13 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 return None
             raise
 
+    def _load_dataset_version(self, lance: Any, version: int) -> Any:
+        dataset = self._datasets_by_version.get(version)
+        if dataset is None:
+            dataset = lance.dataset(self._dataset_uri(), version=version)
+            self._datasets_by_version[version] = dataset
+        return dataset
+
     def _verified_created_files(
         self,
         lance: Any,
@@ -971,14 +979,15 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 )
             return list(created_files)
         if (
-            source_version != self.source_version
+            source_version is None
+            or source_version != self.source_version
             or source_fragment_id is None
             or len(fragments) != 1
         ):
             raise ValueError("Invalid rejected Lance add-columns metadata")
-        base_fragment = lance.dataset(
-            self._dataset_uri(), version=source_version
-        ).get_fragment(source_fragment_id)
+        base_fragment = self._load_dataset_version(lance, source_version).get_fragment(
+            source_fragment_id
+        )
         base_json = _json_dumps(base_fragment.metadata.to_json())
         expected = set(_fragment_data_paths(fragments[0])).difference(
             _fragment_data_paths(base_json)
@@ -998,10 +1007,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             return
         if self.source_version is None:
             raise ValueError("add_columns reducer is missing its source version")
-        source = lance.dataset(
-            self._dataset_uri(),
-            version=self.source_version,
-        )
+        source = self._load_dataset_version(lance, self.source_version)
         expected_fragment_ids = {
             int(fragment.fragment_id)
             for fragment in source.get_fragments()
