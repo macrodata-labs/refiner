@@ -239,6 +239,16 @@ class RefinerPipeline:
         not expose a static schema. Row-level Python callbacks may still emit
         fields not visible here unless they declare ``dtypes``.
         """
+        schema = self._execution_output_schema()
+        if schema is None or not isinstance(self.source, LanceSource):
+            return schema
+        return pa.schema(
+            [field for field in schema if field.name not in LANCE_INTERNAL_COLUMNS],
+            metadata=schema.metadata,
+        )
+
+    def _execution_output_schema(self) -> pa.Schema | None:
+        """Return the sink-boundary schema, including source bookkeeping fields."""
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
     def map(

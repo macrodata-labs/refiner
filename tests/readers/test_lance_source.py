@@ -89,8 +89,11 @@ def test_load_lance_hides_internal_columns_from_iter_rows(tmp_path) -> None:
     lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
 
     row = next(iter(load_lance(dataset_uri).iter_rows()))
+    output_schema = load_lance(dataset_uri).output_schema()
 
     assert row.to_dict() == {"x": 1}
+    assert output_schema is not None
+    assert output_schema.names == ["x"]
 
 
 def test_load_lance_rejects_configured_fsspec_handle() -> None:
@@ -117,3 +120,18 @@ def test_load_lance_rejects_reserved_shard_id_column(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="reserved column __shard_id"):
         load_lance(dataset_uri)
+
+
+def test_load_lance_cache_does_not_cross_source_instances(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "recreated.lance"
+    old_uri = tmp_path / "old-recreated.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    first = load_lance(dataset_uri)
+    assert [int(row["x"]) for row in first.iter_rows()] == [1]
+
+    dataset_uri.rename(old_uri)
+    lance.write_dataset(pa.table({"x": [2]}), str(dataset_uri))
+    second = load_lance(dataset_uri)
+
+    assert [int(row["x"]) for row in second.iter_rows()] == [2]

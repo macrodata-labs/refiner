@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
+import hashlib
 import json
 import posixpath
 import queue as queue_module
 import re
-import concurrent.futures
 import threading
 from collections.abc import Sequence
 from typing import Any, Literal, get_args
@@ -28,7 +29,6 @@ from refiner.pipeline.sinks.reducer.file import (
 from refiner.pipeline.sources.lance import (
     LANCE_FRAGMENT_ID_COLUMN,
     LANCE_ROW_POSITION_COLUMN,
-    _open_lance_dataset,
 )
 from refiner.worker.context import (
     get_active_stage_index,
@@ -80,16 +80,13 @@ def _metadata_prefix() -> str:
     return f"_refiner_lance_fragments/{get_active_job_id()}"
 
 
-def _finalized_worker_pairs(*, reducer_name: str) -> set[tuple[str, str]]:
+def _finalized_workers(*, reducer_name: str) -> list[Any]:
     stage_index = get_active_stage_index()
     if stage_index is None or stage_index <= 0:
         raise ValueError(
             f"{reducer_name} requires an active reducer stage with a prior writer stage"
         )
-    return {
-        (row.shard_id, row.worker_token)
-        for row in get_finalized_workers(stage_index=stage_index - 1)
-    }
+    return list(get_finalized_workers(stage_index=stage_index - 1))
 
 
 def _managed_paths(
@@ -100,7 +97,13 @@ def _managed_paths(
     reducer_name: str,
     cleanup_path_prefix: str | None = None,
 ) -> tuple[list[str], list[str]]:
-    keep_pairs = _finalized_worker_pairs(reducer_name=reducer_name)
+    finalized_workers = _finalized_workers(reducer_name=reducer_name)
+    keep_pairs = {(row.shard_id, row.worker_token) for row in finalized_workers}
+    predecessor_jobs_by_pair = {
+        (row.shard_id, row.worker_token): row.job_id
+        for row in finalized_workers
+        if row.job_id is not None
+    }
     current_paths: set[str] = set()
     if cleanup_path_prefix is not None:
         try:
@@ -125,10 +128,22 @@ def _managed_paths(
     missing_pairs = keep_pairs.difference(finalized_by_pair)
     historical_paths: set[str] = set()
     if missing_pairs:
-        try:
-            listed = output.find(search_path)
-        except FileNotFoundError:
-            listed = []
+        listed: list[str] = []
+        known_jobs = {
+            predecessor_jobs_by_pair[pair]
+            for pair in missing_pairs
+            if pair in predecessor_jobs_by_pair
+        }
+        for job_id in sorted(known_jobs):
+            try:
+                listed.extend(output.find(f"{search_path}/{job_id}"))
+            except FileNotFoundError:
+                continue
+        if any(pair not in predecessor_jobs_by_pair for pair in missing_pairs):
+            try:
+                listed.extend(output.find(search_path))
+            except FileNotFoundError:
+                pass
         candidates: dict[tuple[str, str], set[str]] = {
             pair: set() for pair in missing_pairs
         }
@@ -139,7 +154,11 @@ def _managed_paths(
             if match is None:
                 continue
             pair = (match.group("shard_id"), match.group("worker_id"))
-            if pair in candidates:
+            predecessor_job = predecessor_jobs_by_pair.get(pair)
+            if pair in candidates and (
+                predecessor_job is None
+                or posixpath.dirname(rel_path) == f"{search_path}/{predecessor_job}"
+            ):
                 candidates[pair].add(rel_path)
 
         selected_prefixes: set[str] = set()
@@ -322,12 +341,27 @@ class LanceDatasetSink(BaseSink):
         self._add_columns_schema: pa.Schema | None = None
         self._existing_schema: pa.Schema | None = None
         self._existing_version: int | None = None
+        self._source_dataset_cache: Any | None = None
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("lance",)
 
     def _dataset_uri(self) -> str:
         return self.output.abs_path()
+
+    def _source_dataset(self) -> Any:
+        assert self.source_uri is not None
+        assert self.source_version is not None
+        if self._source_dataset_cache is None:
+            self._source_dataset_cache = _import_lance().dataset(
+                self.source_uri, version=self.source_version
+            )
+        return self._source_dataset_cache
+
+    def __getstate__(self) -> dict[str, object]:
+        state = self.__dict__.copy()
+        state["_source_dataset_cache"] = None
+        return state
 
     def _relpath(self, shard_id: str) -> str:
         return _METADATA_FILENAME_TEMPLATE.format(
@@ -368,10 +402,7 @@ class LanceDatasetSink(BaseSink):
                 )
         assert self.source_uri is not None
         assert self.source_version is not None
-        source_schema = _open_lance_dataset(
-            self.source_uri,
-            self.source_version,
-        ).schema
+        source_schema = self._source_dataset().schema
         conflicts = sorted(set(self.columns).intersection(source_schema.names))
         if conflicts:
             raise ValueError(
@@ -485,9 +516,7 @@ class LanceDatasetSink(BaseSink):
             raise ValueError(f"Shard {shard_id} contains multiple Lance fragments")
         fragment_id = int(fragment_id_range["min"])
 
-        fragment = _open_lance_dataset(
-            self.source_uri, self.source_version
-        ).get_fragment(fragment_id)
+        fragment = self._source_dataset().get_fragment(fragment_id)
         num_rows = int(fragment.count_rows())
         if table.num_rows != num_rows:
             raise ValueError(
@@ -601,6 +630,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             _METADATA_FILENAME_TEMPLATE
         )[-1]
         self._commit_ran = False
+        self._pending_metadata_cleanup: tuple[str, ...] = ()
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("lance",)
@@ -624,6 +654,57 @@ class LanceDatasetCommitReducerSink(BaseSink):
     def write_shard_block(self, shard_id: str, block: Block) -> None:
         del shard_id, block
         self._run_commit()
+
+    def on_shard_finalized(self, shard_id: str) -> None:
+        del shard_id
+        for rel_path in self._pending_metadata_cleanup:
+            try:
+                self.output.rm(rel_path)
+            except FileNotFoundError:
+                continue
+            except Exception as err:  # noqa: BLE001
+                logger.warning(
+                    "post-commit Lance metadata cleanup failed path={}: {}: {}",
+                    rel_path,
+                    type(err).__name__,
+                    err,
+                )
+        self._pending_metadata_cleanup = ()
+
+    def _commit_message(
+        self,
+        *,
+        schema: pa.Schema,
+        fragments: Sequence[str],
+        source_versions: set[int],
+        lance_schema_payload: dict[str, object] | None,
+    ) -> str:
+        payload = {
+            "mode": self.mode,
+            "schema": _schema_to_base64(schema),
+            "fragments": sorted(fragments),
+            "source_versions": sorted(source_versions),
+            "lance_schema": lance_schema_payload,
+        }
+        digest = hashlib.sha256(_json_dumps(payload).encode("utf-8")).hexdigest()
+        return f"refiner:{digest}"
+
+    def _was_committed(self, lance: Any, commit_message: str) -> bool:
+        existing = self._load_existing_dataset(lance)
+        if existing is None:
+            return False
+        for version_info in reversed(existing.versions()):
+            version = version_info.get("version")
+            if not isinstance(version, int):
+                continue
+            transaction = existing.read_transaction(version)
+            properties = getattr(transaction, "transaction_properties", None)
+            if (
+                isinstance(properties, dict)
+                and properties.get("__lance_commit_message") == commit_message
+            ):
+                return True
+        return False
 
     def _read_metadata(
         self, rel_path: str
@@ -808,12 +889,8 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 rejected_fragments,
                 rejected_created_files,
             )
-            for rel_path in cleanup_paths:
-                try:
-                    self.output.rm(rel_path)
-                except FileNotFoundError:
-                    continue
             self._commit_empty_output(_import_lance())
+            self._pending_metadata_cleanup = tuple(sorted(set(cleanup_paths)))
             return
 
         lance = _import_lance()
@@ -854,9 +931,24 @@ class LanceDatasetCommitReducerSink(BaseSink):
                         "Cannot commit Lance fragments with inconsistent field IDs."
                     )
 
-        self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
-
         if schema is None or not fragment_json:
+            return
+
+        self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
+        commit_message = self._commit_message(
+            schema=schema,
+            fragments=fragment_json,
+            source_versions=source_versions,
+            lance_schema_payload=lance_schema_payload,
+        )
+        if self._was_committed(lance, commit_message):
+            self._cleanup_rejected_data(
+                rejected_fragments,
+                rejected_created_files,
+            )
+            self._pending_metadata_cleanup = tuple(
+                sorted(set(cleanup_paths).union(metadata_paths))
+            )
             return
 
         existing = self._load_existing_dataset(lance)
@@ -922,24 +1014,16 @@ class LanceDatasetCommitReducerSink(BaseSink):
             self._dataset_uri(),
             operation,
             read_version=read_version,
+            commit_message=commit_message,
             **commit_options,
         )
         self._cleanup_rejected_data(
             rejected_fragments,
             rejected_created_files,
         )
-        for rel_path in sorted(set(cleanup_paths).union(metadata_paths)):
-            try:
-                self.output.rm(rel_path)
-            except FileNotFoundError:
-                continue
-            except Exception as err:  # noqa: BLE001
-                logger.warning(
-                    "post-commit Lance metadata cleanup failed path={}: {}: {}",
-                    rel_path,
-                    type(err).__name__,
-                    err,
-                )
+        self._pending_metadata_cleanup = tuple(
+            sorted(set(cleanup_paths).union(metadata_paths))
+        )
 
     def _cleanup_rejected_data(
         self,

@@ -14,6 +14,7 @@ class FinalizedShardWorker(msgspec.Struct, frozen=True):
     shard_id: str
     worker_id: str
     global_ordinal: int | None = None
+    job_id: str | None = None
 
     @property
     def worker_token(self) -> str:
@@ -57,6 +58,7 @@ def read_finalized_workers(
             global_ordinal = (
                 payload.get("global_ordinal") if isinstance(payload, dict) else None
             )
+            job_id = payload.get("job_id") if isinstance(payload, dict) else None
             if isinstance(shard_id, str):
                 rows.append(
                     FinalizedShardWorker(
@@ -65,6 +67,7 @@ def read_finalized_workers(
                         global_ordinal=(
                             global_ordinal if isinstance(global_ordinal, int) else None
                         ),
+                        job_id=job_id if isinstance(job_id, str) else None,
                     )
                 )
     return sort_finalized_workers(rows)
@@ -100,6 +103,8 @@ class LocalRuntimeLifecycle:
         del shards
 
     def complete(self, shard: Shard) -> None:
+        from refiner.worker.context import get_active_job_id
+
         path = (
             Path(self.rundir)
             / f"stage-{self.stage_index}"
@@ -112,6 +117,7 @@ class LocalRuntimeLifecycle:
                 json.dumps(
                     {
                         "global_ordinal": shard.global_ordinal,
+                        "job_id": get_active_job_id(),
                         "shard_id": shard.id,
                     },
                     sort_keys=True,

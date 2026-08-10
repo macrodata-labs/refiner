@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from functools import lru_cache
 from typing import Any
 
 import pyarrow as pa
@@ -24,11 +23,6 @@ def _import_lance() -> Any:
     import lance
 
     return lance
-
-
-@lru_cache(maxsize=16)
-def _open_lance_dataset(dataset_uri: str, version: int) -> Any:
-    return _import_lance().dataset(dataset_uri, version=version)
 
 
 class LanceSource(BaseSource):
@@ -64,6 +58,7 @@ class LanceSource(BaseSource):
         self.columns = tuple(columns) if columns is not None else None
         self.batch_size = int(batch_size)
         self.blob_handling = blob_handling
+        self._dataset_cache: Any | None = None
 
         dataset = _import_lance().dataset(self.dataset_uri, version=version)
         self.version = int(dataset.version)
@@ -102,7 +97,16 @@ class LanceSource(BaseSource):
         return self.input.required_refiner_extras()
 
     def _dataset(self) -> Any:
-        return _open_lance_dataset(self.dataset_uri, self.version)
+        if self._dataset_cache is None:
+            self._dataset_cache = _import_lance().dataset(
+                self.dataset_uri, version=self.version
+            )
+        return self._dataset_cache
+
+    def __getstate__(self) -> dict[str, object]:
+        state = self.__dict__.copy()
+        state["_dataset_cache"] = None
+        return state
 
     def list_shards(self) -> list[Shard]:
         return [

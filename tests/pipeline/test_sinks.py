@@ -638,6 +638,7 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
         ),
     ):
         reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+        reducer.on_shard_finalized("reduce")
 
     assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
         "x": [1, 2],
@@ -1332,6 +1333,7 @@ def test_jsonl_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
         ),
     ):
         reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+        reducer.on_shard_finalized("reduce")
 
     kept = output_dir / f"{shard_id}__w{worker_token_for(worker_ids[1])}.jsonl"
     deleted = output_dir / f"{shard_id}__w{worker_token_for(worker_ids[0])}.jsonl"
@@ -1531,6 +1533,7 @@ def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
         ),
     ):
         reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+        reducer.on_shard_finalized("reduce")
 
     table = lance.dataset(str(output_dir)).to_table()
     assert table.column("x").to_pylist() == [9]
@@ -1549,7 +1552,13 @@ def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
     runtime = cast(
         RuntimeLifecycle,
         _FinalizedWorkersRuntime(
-            [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_ids[1])]
+            [
+                FinalizedShardWorker(
+                    shard_id=shard_id,
+                    worker_id=worker_ids[1],
+                    job_id="original-job",
+                )
+            ]
         ),
     )
     for worker_id, value in zip(worker_ids, [1, 9], strict=True):
@@ -1574,6 +1583,7 @@ def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
         runtime_lifecycle=runtime,
     ):
         reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+        reducer.on_shard_finalized("reduce")
 
     assert lance.dataset(str(output_dir)).to_table().to_pydict() == {"x": [9]}
     assert len(list((output_dir / "data").glob("*.lance"))) == 1
@@ -1617,6 +1627,49 @@ def test_lance_dataset_reducer_prefers_current_job_metadata(tmp_path) -> None:
         reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
     assert lance.dataset(str(output_dir)).to_table().to_pydict() == {"x": [9]}
+
+
+def test_lance_dataset_reducer_retry_is_idempotent(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    output_dir = tmp_path / "lance-idempotent-retry.lance"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
+        ),
+    )
+    sink = LanceDatasetSink(output_dir)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        sink.write_block([DictRow({"x": 9}, shard_id=shard_id)])
+        sink.on_shard_complete(shard_id)
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        first = sink.build_reducer()
+        assert isinstance(first, LanceDatasetCommitReducerSink)
+        first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+        committed_version = lance.dataset(str(output_dir)).version
+
+        retry = sink.build_reducer()
+        assert isinstance(retry, LanceDatasetCommitReducerSink)
+        retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+        assert lance.dataset(str(output_dir)).version == committed_version
+        retry.on_shard_finalized("reduce")
+
+    assert not any((output_dir / "_refiner_lance_fragments").glob("**/*.jsonl"))
 
 
 def test_lance_dataset_reducer_rejects_ambiguous_resume_metadata(tmp_path) -> None:
