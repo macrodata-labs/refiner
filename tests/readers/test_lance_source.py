@@ -111,6 +111,15 @@ def test_load_lance_rejects_configured_fsspec_setter() -> None:
         load_lance(input_folder)
 
 
+@pytest.mark.parametrize(
+    "uri",
+    ["s3://user:password@bucket/dataset.lance", "s3://bucket/data.lance?token=x"],
+)
+def test_load_lance_rejects_secret_bearing_uri(uri: str) -> None:
+    with pytest.raises(ValueError, match="must not contain credentials"):
+        load_lance(uri)
+
+
 def test_load_lance_rejects_reserved_shard_id_column(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "reserved-shard-id.lance"

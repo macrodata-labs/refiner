@@ -9,7 +9,6 @@ from refiner.execution.asyncio.runtime import submit
 from refiner.execution.buffer import RowBuffer
 from refiner.execution.tracking.shards import ShardDeltaFn, ShardDeltaTracker
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.sources.lance import LANCE_INTERNAL_COLUMNS
 from refiner.pipeline.steps import (
     AsyncRowStep,
     BatchStep,
@@ -25,10 +24,12 @@ from refiner.worker.metrics.api import register_gauge
 AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
 
 
-def _preserve_lance_internal_columns(source: Row, result: Row) -> Row:
+def _preserve_internal_columns(
+    source: Row, result: Row, protected_columns: frozenset[str]
+) -> Row:
     missing = {
         column: source[column]
-        for column in LANCE_INTERNAL_COLUMNS
+        for column in protected_columns
         if column in source and column not in result
     }
     return result.update(missing) if missing else result
@@ -39,6 +40,7 @@ def execute_row_steps(
     steps: Sequence[RefinerStep],
     *,
     on_shard_delta: ShardDeltaFn | None = None,
+    protected_columns: frozenset[str] = frozenset(),
 ) -> Iterator[Row]:
     """Execute row/batch/flatmap steps using per-step queues.
 
@@ -77,7 +79,7 @@ def execute_row_steps(
                 result = await result
             result = cast(MapResult, result)
             if isinstance(result, Row):
-                return _preserve_lance_internal_columns(row, result)
+                return _preserve_internal_columns(row, result, protected_columns)
             if isinstance(result, dict):
                 return row.update(result)
             raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
@@ -94,7 +96,9 @@ def execute_row_steps(
                     row.log_throughput("rows_processed", 1, unit="rows")
                     result = step.apply_row(row)
                     if isinstance(result, Row):
-                        out.append(_preserve_lance_internal_columns(row, result))
+                        out.append(
+                            _preserve_internal_columns(row, result, protected_columns)
+                        )
                     elif isinstance(result, dict):
                         out.append(row.update(result))
                     else:
@@ -140,7 +144,9 @@ def execute_row_steps(
                         emitted_by_shard: dict[str, int] = {}
                         for item in step.apply_row_many(row):
                             if isinstance(item, Row):
-                                emitted = _preserve_lance_internal_columns(row, item)
+                                emitted = _preserve_internal_columns(
+                                    row, item, protected_columns
+                                )
                             elif isinstance(item, dict):
                                 emitted = row.update(item)
                             else:
@@ -174,7 +180,13 @@ def execute_row_steps(
                     return
                 with ShardDeltaTracker(on_shard_delta) as delta:
                     delta.remove_rows(batch_in)
-                    for item in step.apply_batch(batch_in):
+                    batch_out = list(step.apply_batch(batch_in))
+                    if len(batch_out) == len(batch_in):
+                        batch_out = [
+                            _preserve_internal_columns(source, item, protected_columns)
+                            for source, item in zip(batch_in, batch_out, strict=True)
+                        ]
+                    for item in batch_out:
                         item.log_throughput("rows_out", 1, unit="rows")
                         if item.shard_id is not None:
                             delta.add(item.shard_id, 1)

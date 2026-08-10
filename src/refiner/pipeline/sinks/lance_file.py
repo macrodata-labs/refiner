@@ -7,7 +7,7 @@ import pyarrow as pa
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.sinks.base import BaseSink
-from refiner.pipeline.sinks.lance_utils import block_to_table
+from refiner.pipeline.sinks.lance_utils import block_to_table, validate_lance_uri
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
@@ -34,6 +34,7 @@ class LanceSink(BaseSink):
                 "write_lance does not support configured fsspec handles; pass a URI "
                 "whose credentials and endpoint are available to Lance"
             )
+        validate_lance_uri(self.output.abs_path())
         self.filename_template = filename_template
         self._writers: dict[str, Any] = {}
 

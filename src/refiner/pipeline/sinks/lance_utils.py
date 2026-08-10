@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 import pyarrow as pa
 
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
+
+
+def validate_lance_uri(uri: str) -> None:
+    parsed = urlsplit(uri)
+    if parsed.username is not None or parsed.password is not None or parsed.query:
+        raise ValueError(
+            "Lance URIs must not contain credentials or query parameters; "
+            "configure storage credentials through the environment or Lance settings"
+        )
 
 
 def block_to_table(block: Block) -> pa.Table:

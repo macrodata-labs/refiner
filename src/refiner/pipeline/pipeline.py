@@ -575,6 +575,11 @@ class RefinerPipeline:
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             on_shard_delta=on_shard_delta,
             input_schema=self.source.schema,
+            protected_columns=(
+                LANCE_INTERNAL_COLUMNS
+                if isinstance(self.source, LanceSource)
+                else frozenset()
+            ),
         )
 
     def iter_rows(self) -> Iterable[Row]:

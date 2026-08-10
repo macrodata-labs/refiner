@@ -8,6 +8,7 @@ import pyarrow as pa
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN, RowRangeDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.sinks.lance_utils import validate_lance_uri
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.utils import check_required_dependencies
 
@@ -55,6 +56,7 @@ class LanceSource(BaseSource):
                 "whose credentials and endpoint are available to Lance"
             )
         self.dataset_uri = self.input.abs_path()
+        validate_lance_uri(self.dataset_uri)
         self.columns = tuple(columns) if columns is not None else None
         self.batch_size = int(batch_size)
         self.blob_handling = blob_handling

@@ -404,6 +404,55 @@ def test_lance_add_columns_preserves_internal_columns_across_replacement_row(
     }
 
 
+def test_lance_add_columns_preserves_internal_columns_across_replacement_batch(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "replacement-batch.lance"
+    base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+    pipeline = (
+        load_lance(dataset_uri, version=base.version)
+        .batch_map(
+            lambda rows: [
+                DictRow({"y": int(row["x"]) + 1}, shard_id=row.shard_id)
+                for row in rows
+            ],
+            batch_size=2,
+            dtypes={"y": datatype.int64()},
+        )
+        .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
+    )
+
+    pipeline.launch_local(
+        name="lance-replacement-batch",
+        num_workers=1,
+        rundir=str(tmp_path / "replacement-batch-run"),
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": [1, 2],
+        "y": [2, 3],
+    }
+
+
+def test_non_lance_replacement_rows_do_not_preserve_lance_internal_columns() -> None:
+    rows = list(
+        from_items(
+            [
+                {
+                    "x": 1,
+                    LANCE_FRAGMENT_ID_COLUMN: 7,
+                    LANCE_ROW_POSITION_COLUMN: 0,
+                }
+            ]
+        )
+        .map(lambda row: DictRow({"x": 2}, shard_id=row.shard_id))
+        .iter_rows()
+    )
+
+    assert rows[0].to_dict() == {"x": 2}
+
+
 def test_lance_empty_create_and_overwrite_preserve_schema(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     input_uri = tmp_path / "empty-input.lance"
@@ -758,6 +807,25 @@ def test_lance_reducer_rejects_unsafe_created_file_paths(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Invalid Lance created-file path"):
         reducer._read_metadata(rel_path)
+
+
+def test_lance_reducer_rejects_files_outside_worker_attempt(tmp_path) -> None:
+    reducer = LanceDatasetCommitReducerSink(
+        tmp_path / "unsafe-attempt.lance",
+        mode="create",
+    )
+    rel_path = "_refiner_lance_fragments/job/0123456789ab__w0123456789ab.jsonl"
+    fragment = json.dumps({"files": [{"path": "other/file.lance"}]})
+
+    with pytest.raises(ValueError, match="outside its worker attempt"):
+        reducer._verified_created_files(
+            None,
+            fragments=[fragment],
+            created_files=["data/other/file.lance"],
+            source_version=None,
+            source_fragment_id=None,
+            metadata_path=rel_path,
+        )
 
 
 def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> None:
@@ -1799,6 +1867,17 @@ def test_lance_sinks_reject_configured_fsspec_handles() -> None:
         from_items([]).write_lance(configured_output)
     with pytest.raises(ValueError, match="configured fsspec handles"):
         from_items([]).write_lance_dataset(configured_output)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["s3://user:password@bucket/dataset.lance", "s3://bucket/data.lance?token=x"],
+)
+def test_lance_sinks_reject_secret_bearing_uris(uri: str) -> None:
+    with pytest.raises(ValueError, match="must not contain credentials"):
+        from_items([]).write_lance(uri)
+    with pytest.raises(ValueError, match="must not contain credentials"):
+        from_items([]).write_lance_dataset(uri)
 
 
 def test_lance_add_columns_rejects_internal_column_names(tmp_path) -> None:

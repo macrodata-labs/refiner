@@ -23,7 +23,7 @@ from refiner.pipeline.sinks.lance_schema import (
     lance_schema_from_payload as _lance_schema_from_payload,
     lance_schema_to_payload as _lance_schema_to_payload,
 )
-from refiner.pipeline.sinks.lance_utils import block_to_table
+from refiner.pipeline.sinks.lance_utils import block_to_table, validate_lance_uri
 from refiner.pipeline.sinks.reducer.file import (
     _compile_output_path_patterns,
 )
@@ -230,6 +230,63 @@ def _remove_fragment_data(output: DataFolder, fragment_json: str) -> None:
             continue
 
 
+def _attempt_fragment_prefix(
+    shard_id: str,
+    *,
+    job_id: str | None = None,
+    worker_id: str | None = None,
+) -> str:
+    resolved_job_id = get_active_job_id() if job_id is None else job_id
+    resolved_worker_id = (
+        get_active_worker_token() if worker_id is None else worker_id
+    )
+    job_token = hashlib.sha256(resolved_job_id.encode()).hexdigest()[:16]
+    return f"_refiner_lance_attempt_{job_token}_{shard_id}__w{resolved_worker_id}"
+
+
+def _relocate_fragment_files(
+    output: DataFolder,
+    fragment_json: str,
+    *,
+    attempt_prefix: str,
+    only_paths: set[str] | None = None,
+) -> tuple[str, list[str]]:
+    payload = json.loads(fragment_json)
+    files = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(files, list):
+        raise ValueError("Invalid Lance fragment metadata")
+    _fragment_data_paths(fragment_json)
+    relocated: list[str] = []
+    moved: list[tuple[str, str]] = []
+    try:
+        for file_info in files:
+            path = file_info.get("path") if isinstance(file_info, dict) else None
+            if not isinstance(path, str):
+                raise ValueError("Invalid Lance fragment file metadata")
+            source_path = posixpath.join("data", posixpath.normpath(path))
+            if only_paths is not None and source_path not in only_paths:
+                continue
+            path_token = hashlib.sha256(path.encode()).hexdigest()[:16]
+            target_fragment_path = (
+                f"{attempt_prefix}__{path_token}__{posixpath.basename(path)}"
+            )
+            target_path = posixpath.join("data", target_fragment_path)
+            output.file(source_path).copy(output.file(target_path))
+            output.rm(source_path)
+            moved.append((source_path, target_path))
+            file_info["path"] = target_fragment_path
+            relocated.append(target_path)
+    except Exception:
+        for source_path, target_path in reversed(moved):
+            try:
+                output.file(target_path).copy(output.file(source_path))
+                output.rm(target_path)
+            except Exception:  # noqa: BLE001
+                continue
+        raise
+    return _json_dumps(payload), relocated
+
+
 class _StreamingShardWriter:
     def __init__(
         self,
@@ -336,6 +393,9 @@ class LanceDatasetSink(BaseSink):
                 "write_lance_dataset does not support configured fsspec handles; "
                 "pass a URI whose credentials and endpoint are available to Lance"
             )
+        validate_lance_uri(self.output.abs_path())
+        if source_uri is not None:
+            validate_lance_uri(source_uri)
         self.mode = mode
         self.columns = tuple(columns) if columns is not None else None
         self.source_uri = source_uri
@@ -488,9 +548,26 @@ class LanceDatasetSink(BaseSink):
         fragments = writer.finish()
         if not fragments:
             return
+        original_fragments = fragments
+        fragments = []
+        created_files: list[str] = []
+        try:
+            for fragment in original_fragments:
+                relocated, next_created = _relocate_fragment_files(
+                    self.output,
+                    fragment,
+                    attempt_prefix=_attempt_fragment_prefix(shard_id),
+                )
+                fragments.append(relocated)
+                created_files.extend(next_created)
+        except Exception:
+            for fragment in [*original_fragments, *fragments]:
+                _remove_fragment_data(self.output, fragment)
+            raise
         payload: dict[str, object] = {
             "schema": _schema_to_base64(schema),
             "fragments": fragments,
+            "created_files": sorted(created_files),
         }
         if self.mode == "append":
             payload["source_version"] = self._existing_version
@@ -557,11 +634,16 @@ class LanceDatasetSink(BaseSink):
             reader_schema=self._add_columns_schema,
         )
         updated_json = _json_dumps(updated_fragment.to_json())
-        created_files = sorted(
-            set(_fragment_data_paths(updated_json)).difference(
-                _fragment_data_paths(base_json)
-            )
+        original_created_files = set(_fragment_data_paths(updated_json)).difference(
+            _fragment_data_paths(base_json)
         )
+        updated_json, created_files = _relocate_fragment_files(
+            self.output,
+            updated_json,
+            attempt_prefix=_attempt_fragment_prefix(shard_id),
+            only_paths=original_created_files,
+        )
+        created_files = sorted(created_files)
         payload = {
             "schema": _schema_to_base64(merged_schema.to_pyarrow()),
             "lance_schema": _lance_schema_to_payload(merged_schema),
@@ -631,6 +713,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
     ) -> None:
         _validate_write_mode(mode)
         self.output = DataFolder.resolve(output)
+        validate_lance_uri(self.output.abs_path())
         self.mode = mode
         self.source_version = source_version
         self.planned_schema = planned_schema
@@ -749,13 +832,18 @@ class LanceDatasetCommitReducerSink(BaseSink):
         lance_schema_raw = (
             payload.get("lance_schema") if isinstance(payload, dict) else None
         )
-        if not isinstance(schema_raw, str) or not isinstance(fragment_raw, list):
+        if (
+            not isinstance(schema_raw, str)
+            or not isinstance(fragment_raw, list)
+            or not all(isinstance(fragment, str) for fragment in fragment_raw)
+        ):
             raise ValueError(f"Invalid Lance metadata payload: {rel_path}")
         if not isinstance(created_raw, list):
             raise ValueError(f"Invalid Lance created-files payload: {rel_path}")
+        fragments = [fragment for fragment in fragment_raw if isinstance(fragment, str)]
         return (
             _schema_from_base64(schema_raw),
-            [str(fragment) for fragment in fragment_raw],
+            fragments,
             [_validate_created_file_path(path) for path in created_raw],
             int(source_version_raw) if source_version_raw is not None else None,
             int(source_fragment_raw) if source_fragment_raw is not None else None,
@@ -779,8 +867,29 @@ class LanceDatasetCommitReducerSink(BaseSink):
         created_files: Sequence[str],
         source_version: int | None,
         source_fragment_id: int | None,
+        metadata_path: str,
     ) -> list[str]:
+        match = self._managed_path_pattern.fullmatch(metadata_path)
+        if match is None:
+            raise ValueError(f"Invalid Lance metadata path: {metadata_path}")
+        job_id = posixpath.basename(posixpath.dirname(metadata_path))
+        attempt_prefix = "data/" + _attempt_fragment_prefix(
+            match.group("shard_id"),
+            job_id=job_id,
+            worker_id=match.group("worker_id"),
+        ) + "__"
+        if any(not path.startswith(attempt_prefix) for path in created_files):
+            raise ValueError(
+                "Lance created-files metadata is outside its worker attempt"
+            )
         if self.mode != "add_columns":
+            expected = {
+                path for fragment in fragments for path in _fragment_data_paths(fragment)
+            }
+            if set(created_files) != expected:
+                raise ValueError(
+                    "Lance created-files metadata does not match fragment data"
+                )
             return list(created_files)
         if (
             source_version != self.source_version
@@ -907,6 +1016,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     created_files=next_created_files,
                     source_version=next_source_version,
                     source_fragment_id=next_source_fragment_id,
+                    metadata_path=rel_path,
                 )
             except Exception as err:  # noqa: BLE001
                 logger.warning(
@@ -944,6 +1054,14 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 next_source_fragment_id,
                 next_lance_schema,
             ) = self._read_metadata(rel_path)
+            next_created_files = self._verified_created_files(
+                lance,
+                fragments=next_fragments,
+                created_files=next_created_files,
+                source_version=next_source_version,
+                source_fragment_id=next_source_fragment_id,
+                metadata_path=rel_path,
+            )
             if schema is None:
                 schema = next_schema
             elif not schema.equals(next_schema):
@@ -1091,26 +1209,16 @@ class LanceDatasetCommitReducerSink(BaseSink):
         rejected_fragments: Sequence[str],
         rejected_created_files: Sequence[str],
     ) -> None:
-        if self.mode == "add_columns":
-            for path in rejected_created_files:
-                try:
-                    self.output.rm(path)
-                except FileNotFoundError:
-                    continue
-                except Exception as err:  # noqa: BLE001
-                    logger.warning(
-                        "Lance rejected-file cleanup failed path={}: {}: {}",
-                        path,
-                        type(err).__name__,
-                        err,
-                    )
-            return
-        for fragment in rejected_fragments:
+        del rejected_fragments
+        for path in rejected_created_files:
             try:
-                _remove_fragment_data(self.output, fragment)
+                self.output.rm(path)
+            except FileNotFoundError:
+                continue
             except Exception as err:  # noqa: BLE001
                 logger.warning(
-                    "Lance rejected-fragment cleanup failed: {}: {}",
+                    "Lance rejected-file cleanup failed path={}: {}: {}",
+                    path,
                     type(err).__name__,
                     err,
                 )

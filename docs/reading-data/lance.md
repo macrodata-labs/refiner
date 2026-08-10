@@ -31,7 +31,8 @@ blob materialization behavior when reading blob columns.
 
 `load_lance` uses Lance's native storage layer. It rejects configured fsspec
 filesystem objects and `storage_options`; provide a URI whose endpoint and
-credentials are available to Lance instead.
+credentials are available to Lance instead. Credential-bearing URIs and URI
+query parameters are rejected so pipeline plans do not serialize secrets.
 
 Each Lance fragment becomes one Refiner shard. A worker may claim and process
 multiple fragments over its lifetime.
