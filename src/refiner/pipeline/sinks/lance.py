@@ -971,6 +971,24 @@ class LanceDatasetCommitReducerSink(BaseSink):
         def require_created_files() -> list[str]:
             missing = [path for path in created_files if not self.output.exists(path)]
             if missing:
+                if source_version is not None and self.mode in {
+                    "append",
+                    "overwrite",
+                    "add_columns",
+                }:
+                    existing = self._load_existing_dataset(lance)
+                    existing_version = (
+                        int(existing.version) if existing is not None else 0
+                    )
+                    if existing_version != source_version:
+                        action = (
+                            "add columns" if self.mode == "add_columns" else self.mode
+                        )
+                        raise ValueError(
+                            f"Cannot {action} Lance fragments because the dataset "
+                            f"changed from version {source_version} to "
+                            f"{existing_version}"
+                        )
                 raise ValueError(
                     "Lance created file is missing: " + ", ".join(sorted(missing))
                 )
