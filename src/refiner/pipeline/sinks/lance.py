@@ -4,9 +4,11 @@ import base64
 import concurrent.futures
 import hashlib
 import json
+import os
 import posixpath
 import queue as queue_module
 import re
+import tempfile
 from collections.abc import Sequence
 from typing import Any, Literal, get_args
 
@@ -296,9 +298,20 @@ class _StreamingShardWriter:
         self.dataset_uri = dataset_uri
         self.schema = schema
         self.mode = mode
-        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue()
+        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
+            maxsize=8
+        )
         self.closed = False
         self.task_future = _LANCE_WRITER_POOL.submit(self._run)
+        self._spool_path: str | None = None
+        self._spool_sink: pa.OSFile | None = None
+        self._spool_writer: pa.RecordBatchStreamWriter | None = None
+        if not self.task_future.running() and self.task_future.cancel():
+            tmp = tempfile.NamedTemporaryFile(prefix="refiner-lance-", delete=False)
+            self._spool_path = tmp.name
+            tmp.close()
+            self._spool_sink = pa.OSFile(self._spool_path, "wb")
+            self._spool_writer = pa.ipc.new_stream(self._spool_sink, self.schema)
 
     def _iter_batches(self):
         while True:
@@ -307,9 +320,8 @@ class _StreamingShardWriter:
                 return
             yield item
 
-    def _run(self) -> list[str]:
+    def _write_reader(self, reader: pa.RecordBatchReader) -> list[str]:
         lance = _import_lance()
-        reader = pa.RecordBatchReader.from_batches(self.schema, self._iter_batches())
         fragments = lance.fragment.write_fragments(
             reader,
             self.dataset_uri,
@@ -318,7 +330,14 @@ class _StreamingShardWriter:
         )
         return [_json_dumps(fragment.to_json()) for fragment in fragments]
 
+    def _run(self) -> list[str]:
+        return self._write_reader(
+            pa.RecordBatchReader.from_batches(self.schema, self._iter_batches())
+        )
+
     def _raise_if_failed(self) -> None:
+        if self._spool_writer is not None:
+            return
         if not self.task_future.done():
             return
         error = self.task_future.exception()
@@ -333,14 +352,27 @@ class _StreamingShardWriter:
         if self.closed:
             raise RuntimeError("Cannot write to a closed Lance shard writer.")
         for batch in batches:
-            self._put(batch)
+            if self._spool_writer is not None:
+                self._spool_writer.write_batch(batch)
+            else:
+                self._put(batch)
 
     def finish(self) -> list[str]:
         if not self.closed:
             self.closed = True
-            self._put(_QUEUE_CLOSED)
-        if self.task_future.cancel():
-            return self._run()
+            if self._spool_writer is None:
+                self._put(_QUEUE_CLOSED)
+        if self._spool_writer is not None:
+            assert self._spool_sink is not None
+            assert self._spool_path is not None
+            self._spool_writer.close()
+            self._spool_sink.close()
+            self._spool_writer = None
+            try:
+                with pa.memory_map(self._spool_path, "r") as source:
+                    return self._write_reader(pa.ipc.open_stream(source))
+            finally:
+                os.unlink(self._spool_path)
         return list(self.task_future.result())
 
 
@@ -442,6 +474,20 @@ class LanceDatasetSink(BaseSink):
         self._existing_version = int(dataset.version)
         return self._existing_schema
 
+    def _load_overwrite_version(self) -> int:
+        if self._existing_version is not None:
+            return self._existing_version
+        try:
+            dataset = _import_lance().dataset(self._dataset_uri())
+        except (FileNotFoundError, OSError, ValueError) as err:
+            message = str(err).lower()
+            if "not found" not in message and "does not exist" not in message:
+                raise
+            self._existing_version = 0
+        else:
+            self._existing_version = int(dataset.version)
+        return self._existing_version
+
     def set_input_schema(self, schema: pa.Schema | None) -> None:
         if self.mode != "add_columns" or schema is None:
             return
@@ -510,6 +556,8 @@ class LanceDatasetSink(BaseSink):
             return
         if self.mode == "append":
             table = table.cast(self._load_existing_schema())
+        elif self.mode == "overwrite":
+            self._load_overwrite_version()
 
         existing_schema = self._schema_by_shard.setdefault(shard_id, table.schema)
         if not existing_schema.equals(table.schema):
@@ -556,7 +604,7 @@ class LanceDatasetSink(BaseSink):
             "fragments": fragments,
             "created_files": sorted(created_files),
         }
-        if self.mode == "append":
+        if self.mode in ("append", "overwrite"):
             payload["source_version"] = self._existing_version
         try:
             with self.output.open(
@@ -790,12 +838,8 @@ class LanceDatasetCommitReducerSink(BaseSink):
             for version_info in existing.versions()
             if isinstance(version_info.get("version"), int)
         }
-        candidate_versions = (
+        candidate_versions = {int(existing.version), *expected_versions}.intersection(
             available_versions
-            if self.mode == "overwrite"
-            else {int(existing.version), *expected_versions}.intersection(
-                available_versions
-            )
         )
         for version in sorted(candidate_versions, reverse=True):
             transaction = existing.read_transaction(version)
@@ -1046,7 +1090,6 @@ class LanceDatasetCommitReducerSink(BaseSink):
         source_versions: set[int] = set()
         source_fragment_ids: set[int] = set()
         selected_created_files: list[str] = []
-        selected_metadata_paths: list[str] = []
         lance_schema_payload: dict[str, object] | None = None
         try:
             for rel_path in sorted(metadata_paths):
@@ -1067,7 +1110,6 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     metadata_path=rel_path,
                 )
                 selected_created_files.extend(next_created_files)
-                selected_metadata_paths.append(rel_path)
                 if schema is None:
                     schema = next_schema
                 elif not schema.equals(next_schema):
@@ -1093,7 +1135,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                         )
             self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
         except Exception:
-            self._cleanup_failed_commit(selected_metadata_paths, selected_created_files)
+            self._cleanup_failed_commit(selected_created_files)
             raise
 
         if schema is None or not fragment_json:
@@ -1106,7 +1148,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         )
         expected_versions = (
             [next(iter(source_versions)) + 1]
-            if self.mode == "append" and len(source_versions) == 1
+            if self.mode in ("append", "overwrite") and len(source_versions) == 1
             else (
                 [self.source_version + 1]
                 if self.mode == "add_columns" and self.source_version is not None
@@ -1124,22 +1166,22 @@ class LanceDatasetCommitReducerSink(BaseSink):
 
         existing = self._load_existing_dataset(lance)
         if self.mode == "create" and existing is not None:
-            self._cleanup_failed_commit(metadata_paths, selected_created_files)
+            self._cleanup_failed_commit(selected_created_files)
             raise ValueError(
                 "Cannot create a Lance dataset at a location where one already exists."
             )
         if self.mode == "append":
             if existing is None:
-                self._cleanup_failed_commit(metadata_paths, selected_created_files)
+                self._cleanup_failed_commit(selected_created_files)
                 raise ValueError("Cannot append to a non-existent Lance dataset.")
             if len(source_versions) != 1:
-                self._cleanup_failed_commit(metadata_paths, selected_created_files)
+                self._cleanup_failed_commit(selected_created_files)
                 raise ValueError(
                     "Cannot append Lance fragments from different versions"
                 )
             read_version = next(iter(source_versions))
             if existing.version != read_version:
-                self._cleanup_failed_commit(metadata_paths, selected_created_files)
+                self._cleanup_failed_commit(selected_created_files)
                 raise ValueError(
                     "Cannot append Lance fragments because the dataset changed "
                     f"from version {read_version} to {existing.version}"
@@ -1152,22 +1194,22 @@ class LanceDatasetCommitReducerSink(BaseSink):
             )
         elif self.mode == "add_columns":
             if existing is None:
-                self._cleanup_failed_commit(metadata_paths, selected_created_files)
+                self._cleanup_failed_commit(selected_created_files)
                 raise ValueError("Cannot add columns to a non-existent Lance dataset.")
             if self.source_version is None:
-                self._cleanup_failed_commit(metadata_paths, selected_created_files)
+                self._cleanup_failed_commit(selected_created_files)
                 raise ValueError("add_columns reducer is missing its source version")
             if source_versions != {self.source_version}:
-                self._cleanup_failed_commit(metadata_paths, selected_created_files)
+                self._cleanup_failed_commit(selected_created_files)
                 raise ValueError("Cannot merge Lance fragments from different versions")
             if existing.version != self.source_version:
-                self._cleanup_failed_commit(metadata_paths, selected_created_files)
+                self._cleanup_failed_commit(selected_created_files)
                 raise ValueError(
                     "Cannot add columns because the Lance dataset changed "
                     f"from version {self.source_version} to {existing.version}"
                 )
             if lance_schema_payload is None:
-                self._cleanup_failed_commit(metadata_paths, selected_created_files)
+                self._cleanup_failed_commit(selected_created_files)
                 raise ValueError("add_columns metadata is missing the Lance schema")
             operation = lance.LanceOperation.Merge(
                 [
@@ -1177,6 +1219,28 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 _lance_schema_from_payload(lance, lance_schema_payload),
             )
             read_version = self.source_version
+        elif self.mode == "overwrite":
+            if len(source_versions) != 1:
+                self._cleanup_failed_commit(selected_created_files)
+                raise ValueError(
+                    "Cannot overwrite Lance fragments from different versions"
+                )
+            source_version = next(iter(source_versions))
+            existing_version = int(existing.version) if existing is not None else 0
+            if existing_version != source_version:
+                self._cleanup_failed_commit(selected_created_files)
+                raise ValueError(
+                    "Cannot overwrite Lance fragments because the dataset changed "
+                    f"from version {source_version} to {existing_version}"
+                )
+            operation = lance.LanceOperation.Overwrite(
+                schema,
+                [
+                    lance.fragment.FragmentMetadata.from_json(fragment)
+                    for fragment in fragment_json
+                ],
+            )
+            read_version = source_version
         else:
             operation = lance.LanceOperation.Overwrite(
                 schema,
@@ -1185,7 +1249,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     for fragment in fragment_json
                 ],
             )
-            read_version = existing.version if existing is not None else 0
+            read_version = 0
 
         lance.LanceDataset.commit(
             self._dataset_uri(),
@@ -1218,22 +1282,9 @@ class LanceDatasetCommitReducerSink(BaseSink):
 
     def _cleanup_failed_commit(
         self,
-        metadata_paths: Sequence[str],
         created_files: Sequence[str],
     ) -> None:
         self._cleanup_rejected_data(created_files)
-        for rel_path in metadata_paths:
-            try:
-                self.output.rm(rel_path)
-            except FileNotFoundError:
-                continue
-            except Exception as err:  # noqa: BLE001
-                logger.warning(
-                    "Lance failed-commit metadata cleanup failed path={}: {}: {}",
-                    rel_path,
-                    type(err).__name__,
-                    err,
-                )
 
 
 __all__ = ["LanceDatasetCommitReducerSink", "LanceDatasetSink", "LanceWriteMode"]

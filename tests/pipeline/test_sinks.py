@@ -640,7 +640,13 @@ def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:
     assert latest.version == appended.version
     assert latest.to_table().to_pydict() == {"x": [1, 2]}
     assert not list((dataset_uri / "data").glob("_refiner_lance_attempt_*"))
-    assert not list((dataset_uri / "_refiner_lance_fragments").glob("**/*.jsonl"))
+    assert list((dataset_uri / "_refiner_lance_fragments").glob("**/*.jsonl"))
+    with pytest.raises(RuntimeError):
+        pipeline.launch_local(
+            name="lance-version-conflict",
+            num_workers=1,
+            rundir=str(tmp_path / "run"),
+        )
 
 
 def test_lance_append_rejects_concurrent_dataset_version(tmp_path) -> None:
@@ -686,7 +692,18 @@ def test_lance_append_rejects_concurrent_dataset_version(tmp_path) -> None:
     assert latest.to_table().to_pydict() == {"x": [1, 3]}
     assert base.version < appended.version
     assert not list((dataset_uri / "data").glob("_refiner_lance_attempt_*"))
-    assert not list((dataset_uri / "_refiner_lance_fragments").glob("**/*.jsonl"))
+    assert list((dataset_uri / "_refiner_lance_fragments").glob("**/*.jsonl"))
+    retry = sink.build_reducer()
+    assert isinstance(retry, LanceDatasetCommitReducerSink)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        with pytest.raises(ValueError, match="dataset changed"):
+            retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
 
 def test_lance_add_columns_rejects_missing_rows(tmp_path) -> None:
@@ -931,7 +948,7 @@ def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
             reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
     assert not list((output_dir / "data").glob("*.lance"))
-    assert not list((output_dir / "_refiner_lance_fragments").glob("**/*.jsonl"))
+    assert list((output_dir / "_refiner_lance_fragments").glob("**/*.jsonl"))
 
 
 def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> None:
