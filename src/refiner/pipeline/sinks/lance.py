@@ -138,14 +138,14 @@ def _managed_paths(
     historical_paths: set[str] = set()
     if missing_pairs:
         listed: list[str] = []
-        known_jobs = {
-            predecessor_jobs_by_pair[pair]
+        known_job_tokens = {
+            _job_token(predecessor_jobs_by_pair[pair])
             for pair in missing_pairs
             if pair in predecessor_jobs_by_pair
         }
-        for job_id in sorted(known_jobs):
+        for job_token in sorted(known_job_tokens):
             try:
-                listed.extend(output.find(f"{search_path}/{job_id}"))
+                listed.extend(output.find(f"{search_path}/{job_token}"))
             except FileNotFoundError:
                 continue
         if any(pair not in predecessor_jobs_by_pair for pair in missing_pairs):
@@ -166,7 +166,8 @@ def _managed_paths(
             predecessor_job = predecessor_jobs_by_pair.get(pair)
             if pair in candidates and (
                 predecessor_job is None
-                or posixpath.dirname(rel_path) == f"{search_path}/{predecessor_job}"
+                or posixpath.dirname(rel_path)
+                == f"{search_path}/{_job_token(predecessor_job)}"
             ):
                 candidates[pair].add(rel_path)
 

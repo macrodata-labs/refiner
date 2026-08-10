@@ -2235,7 +2235,9 @@ def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
     assert lance.dataset(str(output_dir)).to_table().to_pydict() == {"x": [9]}
     assert len(list((output_dir / "data").glob("*.lance"))) == 1
     assert not any(
-        (output_dir / "_refiner_lance_fragments" / "original-job").glob("*.jsonl")
+        (output_dir / "_refiner_lance_fragments" / _job_token("original-job")).glob(
+            "*.jsonl"
+        )
     )
 
 
