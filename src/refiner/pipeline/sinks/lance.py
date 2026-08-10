@@ -339,6 +339,8 @@ class _StreamingShardWriter:
         if not self.closed:
             self.closed = True
             self._put(_QUEUE_CLOSED)
+        if self.task_future.cancel():
+            return self._run()
         return list(self.task_future.result())
 
 

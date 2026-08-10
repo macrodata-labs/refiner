@@ -569,13 +569,16 @@ class RefinerPipeline:
             on_shard_delta: Optional callback used by workers to track shard
                 progress as rows move through the pipeline.
         """
+        retained = (
+            self.sink.retained_source_columns if self.sink is not None else frozenset()
+        )
         yield from execute_segments(
             rows,
             self._get_compiled_segments(),
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             on_shard_delta=on_shard_delta,
             input_schema=self.source.schema,
-            protected_columns=self.source.protected_columns,
+            protected_columns=self.source.protected_columns.intersection(retained),
         )
 
     def iter_rows(self) -> Iterable[Row]:
