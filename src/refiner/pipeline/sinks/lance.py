@@ -16,6 +16,7 @@ import pyarrow.compute as pc
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.lance_file import LanceSink
 from refiner.pipeline.sinks.lance_schema import (
@@ -28,6 +29,7 @@ from refiner.pipeline.sinks.reducer.file import (
 )
 from refiner.pipeline.sources.lance import (
     LANCE_FRAGMENT_ID_COLUMN,
+    LANCE_INTERNAL_COLUMNS,
     LANCE_ROW_POSITION_COLUMN,
 )
 from refiner.worker.context import (
@@ -318,6 +320,12 @@ class LanceDatasetSink(BaseSink):
             raise ValueError("add_columns requires at least one output column")
         if columns is not None and len(set(columns)) != len(columns):
             raise ValueError("Lance output columns must be unique")
+        if columns is not None:
+            reserved_columns = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(
+                columns
+            )
+            if reserved_columns:
+                raise ValueError(f"{sorted(reserved_columns)[0]} is an internal column")
         if mode != "add_columns" and columns is not None:
             raise ValueError("columns is only supported with mode='add_columns'")
         if mode == "add_columns" and (source_uri is None or source_version is None):
@@ -508,7 +516,7 @@ class LanceDatasetSink(BaseSink):
         assert self._add_columns_schema is not None
 
         table = pa.concat_tables(tables)
-        fragment_ids = table.column(LANCE_FRAGMENT_ID_COLUMN)
+        fragment_ids = pc.cast(table.column(LANCE_FRAGMENT_ID_COLUMN), pa.uint64())
         if fragment_ids.null_count:
             raise ValueError("Lance fragment id cannot be null")
         fragment_id_range = pc.call_function("min_max", [fragment_ids]).as_py()
@@ -524,7 +532,7 @@ class LanceDatasetSink(BaseSink):
                 f"rows out of {num_rows}"
             )
 
-        positions = table.column(LANCE_ROW_POSITION_COLUMN)
+        positions = pc.cast(table.column(LANCE_ROW_POSITION_COLUMN), pa.uint64())
         if positions.null_count:
             raise ValueError("Lance row position cannot be null")
         expected_positions = pa.array(range(num_rows), type=pa.uint64())
@@ -689,14 +697,23 @@ class LanceDatasetCommitReducerSink(BaseSink):
         digest = hashlib.sha256(_json_dumps(payload).encode("utf-8")).hexdigest()
         return f"refiner:{digest}"
 
-    def _was_committed(self, lance: Any, commit_message: str) -> bool:
+    def _was_committed(
+        self,
+        lance: Any,
+        commit_message: str,
+        *,
+        expected_versions: Sequence[int] = (),
+    ) -> bool:
         existing = self._load_existing_dataset(lance)
         if existing is None:
             return False
-        for version_info in reversed(existing.versions()):
-            version = version_info.get("version")
-            if not isinstance(version, int):
-                continue
+        versions = {int(existing.version), *expected_versions}
+        available_versions = {
+            int(version_info["version"])
+            for version_info in existing.versions()
+            if isinstance(version_info.get("version"), int)
+        }
+        for version in sorted(versions.intersection(available_versions), reverse=True):
             transaction = existing.read_transaction(version)
             properties = getattr(transaction, "transaction_properties", None)
             if (
@@ -817,10 +834,6 @@ class LanceDatasetCommitReducerSink(BaseSink):
 
     def _commit_empty_output(self, lance: Any) -> None:
         existing = self._load_existing_dataset(lance)
-        if self.mode == "create" and existing is not None:
-            raise ValueError(
-                "Cannot create a Lance dataset at a location where one already exists."
-            )
         if self.mode == "append":
             if existing is None:
                 raise ValueError("Cannot append to a non-existent Lance dataset.")
@@ -832,11 +845,33 @@ class LanceDatasetCommitReducerSink(BaseSink):
             raise ValueError(
                 f"Cannot {self.mode} an empty Lance dataset without a known schema"
             )
+        finalized = _finalized_workers(reducer_name="write_lance_dataset_commit")
+        commit_message = self._commit_message(
+            schema=self.planned_schema,
+            fragments=[f"{row.shard_id}/{row.worker_token}" for row in finalized],
+            source_versions=set(),
+            lance_schema_payload=None,
+        )
+        expected_version = (
+            1
+            if self.mode == "create"
+            else (int(existing.version) if existing is not None else 0)
+        )
+        if self._was_committed(
+            lance, commit_message, expected_versions=[expected_version]
+        ):
+            return
+        if self.mode == "create" and existing is not None:
+            raise ValueError(
+                "Cannot create a Lance dataset at a location where one already exists."
+            )
         operation = lance.LanceOperation.Overwrite(self.planned_schema, [])
         lance.LanceDataset.commit(
             self._dataset_uri(),
             operation,
             read_version=existing.version if existing is not None else 0,
+            max_retries=0,
+            commit_message=commit_message,
         )
 
     def _run_commit(self) -> None:
@@ -898,12 +933,13 @@ class LanceDatasetCommitReducerSink(BaseSink):
         schema: pa.Schema | None = None
         source_versions: set[int] = set()
         source_fragment_ids: set[int] = set()
+        selected_created_files: list[str] = []
         lance_schema_payload: dict[str, object] | None = None
         for rel_path in sorted(metadata_paths):
             (
                 next_schema,
                 next_fragments,
-                _,
+                next_created_files,
                 next_source_version,
                 next_source_fragment_id,
                 next_lance_schema,
@@ -915,6 +951,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     "Cannot commit Lance fragments with inconsistent schemas."
                 )
             fragment_json.extend(next_fragments)
+            selected_created_files.extend(next_created_files)
             if next_source_version is not None:
                 source_versions.add(next_source_version)
             if next_source_fragment_id is not None:
@@ -934,14 +971,41 @@ class LanceDatasetCommitReducerSink(BaseSink):
         if schema is None or not fragment_json:
             return
 
-        self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
+        try:
+            self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
+        except Exception:
+            self._cleanup_rejected_data([], selected_created_files)
+            for rel_path in metadata_paths:
+                try:
+                    self.output.rm(rel_path)
+                except FileNotFoundError:
+                    continue
+                except Exception as err:  # noqa: BLE001
+                    logger.warning(
+                        "Lance failed-commit metadata cleanup failed path={}: {}: {}",
+                        rel_path,
+                        type(err).__name__,
+                        err,
+                    )
+            raise
         commit_message = self._commit_message(
             schema=schema,
             fragments=fragment_json,
             source_versions=source_versions,
             lance_schema_payload=lance_schema_payload,
         )
-        if self._was_committed(lance, commit_message):
+        expected_versions = (
+            [next(iter(source_versions)) + 1]
+            if self.mode == "append" and len(source_versions) == 1
+            else (
+                [self.source_version + 1]
+                if self.mode == "add_columns" and self.source_version is not None
+                else ([1] if self.mode == "create" else [])
+            )
+        )
+        if self._was_committed(
+            lance, commit_message, expected_versions=expected_versions
+        ):
             self._cleanup_rejected_data(
                 rejected_fragments,
                 rejected_created_files,
@@ -1007,15 +1071,12 @@ class LanceDatasetCommitReducerSink(BaseSink):
             )
             read_version = existing.version if existing is not None else 0
 
-        commit_options = (
-            {"max_retries": 0} if self.mode in {"add_columns", "append"} else {}
-        )
         lance.LanceDataset.commit(
             self._dataset_uri(),
             operation,
             read_version=read_version,
             commit_message=commit_message,
-            **commit_options,
+            max_retries=0,
         )
         self._cleanup_rejected_data(
             rejected_fragments,

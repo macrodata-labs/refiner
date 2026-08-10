@@ -251,6 +251,25 @@ class RefinerPipeline:
         """Return the sink-boundary schema, including source bookkeeping fields."""
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
+    def _output_schema_is_complete(self) -> bool:
+        steps: list[RefinerStep | VectorizedOp] = []
+        for step in self.pipeline_steps:
+            if isinstance(step, VectorizedSegmentStep):
+                steps.extend(step.ops)
+            else:
+                steps.append(step)
+        for step in steps:
+            if isinstance(step, (WithColumnsStep, FnTableStep)):
+                return False
+            if (
+                isinstance(
+                    step, (FnRowStep, FnAsyncRowStep, FnBatchStep, FnFlatMapStep)
+                )
+                and not step.dtypes
+            ):
+                return False
+        return True
+
     def map(
         self, fn: MapFn, *, dtypes: DTypeMapping | None = None
     ) -> "RefinerPipeline":
@@ -700,7 +719,9 @@ class RefinerPipeline:
         """Attach a distributed Lance dataset writer or schema-evolution sink."""
         source_uri: str | None = None
         source_version: int | None = None
-        planned_schema = self.output_schema()
+        planned_schema = (
+            self.output_schema() if self._output_schema_is_complete() else None
+        )
         if isinstance(self.source, LanceSource) and mode != "add_columns":
             if planned_schema is not None:
                 planned_schema = pa.schema(

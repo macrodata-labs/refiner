@@ -374,6 +374,36 @@ def test_lance_add_columns_accepts_expression_created_column(tmp_path) -> None:
     }
 
 
+def test_lance_add_columns_preserves_internal_columns_across_replacement_row(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "replacement-row.lance"
+    base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+    pipeline = (
+        load_lance(dataset_uri, version=base.version)
+        .map(
+            lambda row: DictRow(
+                {"x": int(row["x"]), "y": int(row["x"]) + 1},
+                shard_id=row.shard_id,
+            ),
+            dtypes={"y": datatype.int64()},
+        )
+        .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
+    )
+
+    pipeline.launch_local(
+        name="lance-replacement-row",
+        num_workers=1,
+        rundir=str(tmp_path / "replacement-row-run"),
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": [1, 2],
+        "y": [2, 3],
+    }
+
+
 def test_lance_empty_create_and_overwrite_preserve_schema(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     input_uri = tmp_path / "empty-input.lance"
@@ -417,6 +447,54 @@ def test_lance_add_columns_rejects_empty_dataset(tmp_path) -> None:
             rundir=str(tmp_path / "empty-add-columns-run"),
         )
     assert lance.dataset(str(dataset_uri)).schema.names == ["x"]
+
+
+def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "empty-create-retry.lance"
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id="input-shard", worker_id="worker-1")]
+        ),
+    )
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        for _ in range(2):
+            reducer = LanceDatasetCommitReducerSink(
+                dataset_uri,
+                mode="create",
+                planned_schema=pa.schema([("x", pa.int64())]),
+            )
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert lance.dataset(str(dataset_uri)).version == 1
+
+
+def test_lance_empty_create_rejects_partially_inferred_schema(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    input_uri = tmp_path / "partial-schema-input.lance"
+    output_uri = tmp_path / "partial-schema-output.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(input_uri))
+    pipeline = (
+        load_lance(input_uri)
+        .with_column("y", col("x") + 1)
+        .filter(lambda _row: False)
+        .write_lance_dataset(output_uri)
+    )
+
+    with pytest.raises(RuntimeError):
+        pipeline.launch_local(
+            name="lance-empty-partial-schema",
+            num_workers=1,
+            rundir=str(tmp_path / "empty-partial-schema-run"),
+        )
+    assert not output_uri.exists()
 
 
 def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:
@@ -528,6 +606,11 @@ def test_lance_add_columns_reducer_rejects_missing_fragment(tmp_path) -> None:
         max_rows_per_file=2,
     )
     assert len(base.get_fragments()) == 2
+    base_files = {
+        dataset_uri / "data" / file["path"]
+        for fragment in base.get_fragments()
+        for file in fragment.metadata.to_json()["files"]
+    }
     pipeline = (
         load_lance(dataset_uri, version=base.version)
         .filter(lambda row: int(row["x"]) <= 2)
@@ -550,6 +633,7 @@ def test_lance_add_columns_reducer_rejects_missing_fragment(tmp_path) -> None:
         )
 
     assert lance.dataset(str(dataset_uri)).version == base.version
+    assert set((dataset_uri / "data").glob("*.lance")) == base_files
 
 
 def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
@@ -1715,6 +1799,17 @@ def test_lance_sinks_reject_configured_fsspec_handles() -> None:
         from_items([]).write_lance(configured_output)
     with pytest.raises(ValueError, match="configured fsspec handles"):
         from_items([]).write_lance_dataset(configured_output)
+
+
+def test_lance_add_columns_rejects_internal_column_names(tmp_path) -> None:
+    with pytest.raises(ValueError, match="internal column"):
+        LanceDatasetSink(
+            tmp_path / "reserved-columns.lance",
+            mode="add_columns",
+            columns=[LANCE_ROW_POSITION_COLUMN],
+            source_uri=str(tmp_path / "reserved-columns.lance"),
+            source_version=1,
+        )
 
 
 def test_lance_dataset_post_commit_metadata_cleanup_is_best_effort(

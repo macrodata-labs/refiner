@@ -9,6 +9,7 @@ from refiner.execution.asyncio.runtime import submit
 from refiner.execution.buffer import RowBuffer
 from refiner.execution.tracking.shards import ShardDeltaFn, ShardDeltaTracker
 from refiner.pipeline.data.row import Row
+from refiner.pipeline.sources.lance import LANCE_INTERNAL_COLUMNS
 from refiner.pipeline.steps import (
     AsyncRowStep,
     BatchStep,
@@ -22,6 +23,15 @@ from refiner.worker.context import set_active_step_index
 from refiner.worker.metrics.api import register_gauge
 
 AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
+
+
+def _preserve_lance_internal_columns(source: Row, result: Row) -> Row:
+    missing = {
+        column: source[column]
+        for column in LANCE_INTERNAL_COLUMNS
+        if column in source and column not in result
+    }
+    return result.update(missing) if missing else result
 
 
 def execute_row_steps(
@@ -67,7 +77,7 @@ def execute_row_steps(
                 result = await result
             result = cast(MapResult, result)
             if isinstance(result, Row):
-                return result
+                return _preserve_lance_internal_columns(row, result)
             if isinstance(result, dict):
                 return row.update(result)
             raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
@@ -84,7 +94,7 @@ def execute_row_steps(
                     row.log_throughput("rows_processed", 1, unit="rows")
                     result = step.apply_row(row)
                     if isinstance(result, Row):
-                        out.append(result)
+                        out.append(_preserve_lance_internal_columns(row, result))
                     elif isinstance(result, dict):
                         out.append(row.update(result))
                     else:
@@ -130,7 +140,7 @@ def execute_row_steps(
                         emitted_by_shard: dict[str, int] = {}
                         for item in step.apply_row_many(row):
                             if isinstance(item, Row):
-                                emitted = item
+                                emitted = _preserve_lance_internal_columns(row, item)
                             elif isinstance(item, dict):
                                 emitted = row.update(item)
                             else:
