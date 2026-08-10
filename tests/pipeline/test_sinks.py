@@ -610,8 +610,10 @@ def test_lance_empty_overwrite_rejects_concurrent_update(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "empty-overwrite-conflict.lance"
     lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
-    pipeline = load_lance(dataset_uri).filter(col("x") < 0).write_lance_dataset(
-        dataset_uri, mode="overwrite"
+    pipeline = (
+        load_lance(dataset_uri)
+        .filter(col("x") < 0)
+        .write_lance_dataset(dataset_uri, mode="overwrite")
     )
     sink = pipeline.sink
     assert sink is not None
