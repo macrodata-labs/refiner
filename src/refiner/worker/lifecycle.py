@@ -7,7 +7,7 @@ from typing import Iterable, Protocol
 import msgspec
 
 from refiner.pipeline.data.shard import Shard
-from refiner.worker.context import worker_token_for
+from refiner.worker.context import get_active_job_id, worker_token_for
 
 
 class FinalizedShardWorker(msgspec.Struct, frozen=True):
@@ -103,8 +103,6 @@ class LocalRuntimeLifecycle:
         del shards
 
     def complete(self, shard: Shard) -> None:
-        from refiner.worker.context import get_active_job_id
-
         path = (
             Path(self.rundir)
             / f"stage-{self.stage_index}"

@@ -97,9 +97,7 @@ def _finalized_workers(*, reducer_name: str) -> list[Any]:
         raise ValueError(
             f"{reducer_name} requires an active reducer stage with a prior writer stage"
         )
-    return sort_finalized_workers(
-        get_finalized_workers(stage_index=stage_index - 1)
-    )
+    return sort_finalized_workers(get_finalized_workers(stage_index=stage_index - 1))
 
 
 def _managed_paths(
@@ -196,8 +194,7 @@ def _managed_paths(
     missing_pairs = keep_pairs.difference(finalized_by_pair)
     if missing_pairs:
         missing = ", ".join(
-            f"{shard_id}/{worker_id}"
-            for shard_id, worker_id in sorted(missing_pairs)
+            f"{shard_id}/{worker_id}" for shard_id, worker_id in sorted(missing_pairs)
         )
         raise ValueError(f"Missing Lance metadata for finalized workers: {missing}")
 
@@ -404,7 +401,9 @@ class _StreamingAddColumnsWriter:
         self._spool_sink: pa.OSFile | None = None
         self._spool_writer: pa.RecordBatchStreamWriter | None = None
         if not self.task_future.running() and self.task_future.cancel():
-            tmp = tempfile.NamedTemporaryFile(prefix="refiner-lance-columns-", delete=False)
+            tmp = tempfile.NamedTemporaryFile(
+                prefix="refiner-lance-columns-", delete=False
+            )
             self._spool_path = tmp.name
             tmp.close()
             self._spool_sink = pa.OSFile(self._spool_path, "wb")
@@ -486,7 +485,10 @@ class _StreamingAddColumnsWriter:
                     f"Lance fragment {self.fragment_id} has invalid or duplicate "
                     "row positions"
                 )
-            self.pending[start] = (end, sorted_output.slice(run_start, index - run_start))
+            self.pending[start] = (
+                end,
+                sorted_output.slice(run_start, index - run_start),
+            )
             run_start = index
         self._emit_ready()
 
@@ -603,9 +605,7 @@ class LanceDatasetSink(BaseSink):
             raise ValueError("add_columns must write back to the loaded Lance dataset")
         self._writers_by_shard: dict[str, _StreamingShardWriter] = {}
         self._schema_by_shard: dict[str, pa.Schema] = {}
-        self._add_columns_writers_by_shard: dict[
-            str, _StreamingAddColumnsWriter
-        ] = {}
+        self._add_columns_writers_by_shard: dict[str, _StreamingAddColumnsWriter] = {}
         self._add_columns_schema: pa.Schema | None = None
         self._existing_schema: pa.Schema | None = None
         self._existing_version: int | None = None
@@ -723,13 +723,9 @@ class LanceDatasetSink(BaseSink):
         )
         if self._add_columns_schema is None:
             self._add_columns_schema = output_schema
-        elif not self._add_columns_schema.equals(
-            output_schema, check_metadata=True
-        ):
+        elif not self._add_columns_schema.equals(output_schema, check_metadata=True):
             raise ValueError("add_columns output schema changed between blocks")
-        fragment_ids = pc.cast(
-            table.column(LANCE_FRAGMENT_ID_COLUMN), pa.uint64()
-        )
+        fragment_ids = pc.cast(table.column(LANCE_FRAGMENT_ID_COLUMN), pa.uint64())
         if fragment_ids.null_count:
             raise ValueError("Lance fragment id cannot be null")
         fragment_id_range = pc.call_function("min_max", [fragment_ids]).as_py()
@@ -1301,8 +1297,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             if next_source_fragment_id is not None:
                 if next_source_fragment_id in source_fragment_ids:
                     raise ValueError(
-                        "Duplicate Lance fragment result: "
-                        f"{next_source_fragment_id}"
+                        f"Duplicate Lance fragment result: {next_source_fragment_id}"
                     )
                 source_fragment_ids.add(next_source_fragment_id)
             if next_lance_schema is not None:
@@ -1444,5 +1439,6 @@ class LanceDatasetCommitReducerSink(BaseSink):
             rejected_created_files,
             operation="Lance rejected-file cleanup",
         )
+
 
 __all__ = ["LanceDatasetCommitReducerSink", "LanceDatasetSink", "LanceWriteMode"]
