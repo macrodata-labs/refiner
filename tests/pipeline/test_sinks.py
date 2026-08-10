@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import cast
 
 import numpy as np
@@ -19,6 +20,7 @@ from refiner.pipeline.sinks import JsonlSink
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
+    _StreamingAddColumnsWriter,
     _schema_to_base64,
 )
 from refiner.pipeline.sinks.parquet import ParquetSink
@@ -269,6 +271,32 @@ def test_launch_local_adds_lance_columns_without_rewriting_base_files(tmp_path) 
     assert base_files < evolved_files
 
 
+def test_lance_add_columns_handles_more_fragments_than_io_threads(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "many-column-fragments.lance"
+    base = lance.write_dataset(
+        pa.table({"x": list(range(12))}),
+        str(dataset_uri),
+        max_rows_per_file=1,
+    )
+
+    (
+        load_lance(dataset_uri, version=base.version, batch_size=1)
+        .map(lambda row: {"y": int(row["x"]) * 10}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
+        .launch_local(
+            name="lance-many-column-fragments",
+            num_workers=1,
+            rundir=str(tmp_path / "many-column-fragments-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": list(range(12)),
+        "y": [value * 10 for value in range(12)],
+    }
+
+
 def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "reordered.lance"
@@ -302,6 +330,45 @@ def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
         "x": [1, 2, 3],
         "y": [10, 20, 30],
     }
+
+
+def test_lance_add_columns_streams_contiguous_reordered_batches() -> None:
+    first_batch_consumed = threading.Event()
+    consumed: list[int] = []
+
+    class _Metadata:
+        def to_json(self):
+            return {"files": [], "physical_rows": 4}
+
+    class _Fragment:
+        metadata = _Metadata()
+
+        def merge_columns(self, reader, *, reader_schema):
+            assert reader_schema == pa.schema([("y", pa.int64())])
+            for batch in reader:
+                consumed.extend(batch.column("y").to_pylist())
+                first_batch_consumed.set()
+            return "updated", "schema"
+
+    writer = _StreamingAddColumnsWriter(
+        fragment=_Fragment(),
+        fragment_id=7,
+        num_rows=4,
+        schema=pa.schema([("y", pa.int64())]),
+    )
+    writer.put(
+        pa.chunked_array([[2, 3]], type=pa.uint64()),
+        pa.table({"y": [30, 40]}),
+    )
+    assert not first_batch_consumed.is_set()
+
+    writer.put(
+        pa.chunked_array([[1, 0]], type=pa.uint64()),
+        pa.table({"y": [20, 10]}),
+    )
+    assert first_batch_consumed.wait(timeout=2)
+    assert writer.finish() == ("updated", "schema")
+    assert consumed == [10, 20, 30, 40]
 
 
 def test_lance_add_columns_preserves_existing_field_ids(tmp_path) -> None:
@@ -569,7 +636,7 @@ def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
 def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "empty-overwrite-retry.lance"
-    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
     runtime = cast(
         RuntimeLifecycle,
         _FinalizedWorkersRuntime(
@@ -586,6 +653,7 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
         first = LanceDatasetCommitReducerSink(
             dataset_uri,
             mode="overwrite",
+            source_version=base.version,
             planned_schema=pa.schema([("x", pa.int64())]),
         )
         first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
@@ -595,6 +663,7 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
         retry = LanceDatasetCommitReducerSink(
             dataset_uri,
             mode="overwrite",
+            source_version=base.version,
             planned_schema=pa.schema([("x", pa.int64())]),
         )
         retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
@@ -602,6 +671,43 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
     latest = lance.dataset(str(dataset_uri))
     assert latest.version == concurrent_version
     assert latest.to_table().to_pydict() == {"x": [99]}
+
+
+def test_lance_empty_overwrite_rejects_concurrent_dataset_version(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "empty-overwrite-concurrent.lance"
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id="input-shard", worker_id="worker-1")]
+        ),
+    )
+    sink = LanceDatasetSink(
+        dataset_uri,
+        mode="overwrite",
+        planned_schema=pa.schema([("x", pa.int64())]),
+    )
+    reducer = sink.build_reducer()
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+    assert reducer.source_version == base.version
+    concurrent = lance.write_dataset(
+        pa.table({"x": [2]}), str(dataset_uri), mode="append"
+    )
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        with pytest.raises(ValueError, match="dataset changed"):
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    latest = lance.dataset(str(dataset_uri))
+    assert latest.version == concurrent.version
+    assert latest.to_table().to_pydict() == {"x": [1, 2]}
 
 
 def test_lance_empty_create_rejects_partially_inferred_schema(tmp_path) -> None:
@@ -806,7 +912,10 @@ def test_lance_add_columns_reducer_rejects_missing_fragment(tmp_path) -> None:
         )
 
     assert lance.dataset(str(dataset_uri)).version == base.version
-    assert set((dataset_uri / "data").glob("*.lance")) == base_files
+    data_files = set((dataset_uri / "data").glob("*.lance"))
+    assert base_files.issubset(data_files)
+    assert len(data_files.difference(base_files)) == 1
+    assert list((dataset_uri / "_refiner_lance_fragments").glob("**/*.jsonl"))
 
 
 def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
@@ -933,26 +1042,45 @@ def test_lance_reducer_rejects_unsafe_created_file_paths(tmp_path) -> None:
         reducer._read_metadata(rel_path)
 
 
-def test_lance_reducer_rejects_files_outside_worker_attempt(tmp_path) -> None:
+def test_lance_reducer_accepts_matching_native_fragment_paths(tmp_path) -> None:
     reducer = LanceDatasetCommitReducerSink(
-        tmp_path / "unsafe-attempt.lance",
+        tmp_path / "native-fragment.lance",
         mode="create",
     )
     rel_path = "_refiner_lance_fragments/job/0123456789ab__w0123456789ab.jsonl"
     fragment = json.dumps({"files": [{"path": "other/file.lance"}]})
 
-    with pytest.raises(ValueError, match="outside its worker attempt"):
-        reducer._verified_created_files(
-            None,
-            fragments=[fragment],
-            created_files=["data/other/file.lance"],
-            source_version=None,
-            source_fragment_id=None,
-            metadata_path=rel_path,
-        )
+    assert reducer._verified_created_files(
+        None,
+        fragments=[fragment],
+        created_files=["data/other/file.lance"],
+        source_version=None,
+        source_fragment_id=None,
+        metadata_path=rel_path,
+    ) == ["data/other/file.lance"]
 
 
-def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
+def test_lance_reducer_cleans_rejected_files_concurrently(
+    tmp_path, monkeypatch
+) -> None:
+    reducer = LanceDatasetCommitReducerSink(
+        tmp_path / "parallel-cleanup.lance",
+        mode="create",
+    )
+    barrier = threading.Barrier(2)
+    removed: list[str] = []
+
+    def remove(path: str) -> None:
+        barrier.wait(timeout=2)
+        removed.append(path)
+
+    monkeypatch.setattr(reducer.output, "rm", remove)
+    reducer._cleanup_rejected_data(["data/first.lance", "data/second.lance"])
+
+    assert set(removed) == {"data/first.lance", "data/second.lance"}
+
+
+def test_lance_reducer_preserves_files_after_schema_mismatch(tmp_path) -> None:
     pytest.importorskip("lance")
     output_dir = tmp_path / "schema-mismatch.lance"
     finalized = [
@@ -986,8 +1114,52 @@ def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
         with pytest.raises(ValueError, match="inconsistent schemas"):
             reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
-    assert not list((output_dir / "data").glob("*.lance"))
+    assert len(list((output_dir / "data").glob("*.lance"))) == 2
     assert list((output_dir / "_refiner_lance_fragments").glob("**/*.jsonl"))
+
+
+def test_lance_reducer_commits_fragments_in_global_ordinal_order(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    output_dir = tmp_path / "ordered-fragments.lance"
+    finalized = [
+        FinalizedShardWorker(
+            shard_id="000000000000",
+            worker_id="worker-later",
+            global_ordinal=1,
+        ),
+        FinalizedShardWorker(
+            shard_id="ffffffffffff",
+            worker_id="worker-earlier",
+            global_ordinal=0,
+        ),
+    ]
+    runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime(finalized))
+
+    for finalized_worker, value in zip(finalized, [2, 1], strict=True):
+        sink = LanceDatasetSink(output_dir)
+        with set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=finalized_worker.worker_id,
+            worker_name=None,
+            runtime_lifecycle=runtime,
+        ):
+            sink.write_block(
+                [DictRow({"x": value}, shard_id=finalized_worker.shard_id)]
+            )
+            sink.on_shard_complete(finalized_worker.shard_id)
+
+    reducer = LanceDatasetCommitReducerSink(output_dir, mode="create")
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert lance.dataset(str(output_dir)).to_table().to_pydict() == {"x": [1, 2]}
 
 
 def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> None:
