@@ -2082,6 +2082,7 @@ def test_lance_sinks_reject_configured_fsspec_handles() -> None:
         "s3://user:password@bucket/dataset.lance",
         "s3://bucket/data.lance?token=x",
         "s3://bucket/data.lance#token=x",
+        "simplecache::s3://user:password@bucket/dataset.lance",
     ],
 )
 def test_lance_sinks_reject_secret_bearing_uris(uri: str) -> None:
