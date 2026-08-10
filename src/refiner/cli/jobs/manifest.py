@@ -32,9 +32,9 @@ def _requirements_text(value: Any) -> str | None:
     lines: list[str] = []
     for dependency in value:
         if isinstance(dependency, dict):
-            lines.append(
-                f"{_safe_text(dependency.get('name'))}=={_safe_text(dependency.get('version'))}"
-            )
+            name = _safe_text(dependency.get("name"))
+            version = dependency.get("version")
+            lines.append(f"{name}=={_safe_text(version)}" if version else name)
     return "\n".join(lines)
 
 

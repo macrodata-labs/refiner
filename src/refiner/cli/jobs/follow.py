@@ -44,10 +44,7 @@ def parse_epoch_ms(value: Any) -> int | None:
 
 
 def job_status(payload: dict[str, Any]) -> str:
-    job = payload.get("job")
-    if not isinstance(job, dict):
-        return ""
-    return safe_text(job.get("status")).lower()
+    return safe_text(payload.get("status")).lower()
 
 
 def log_entry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str]:

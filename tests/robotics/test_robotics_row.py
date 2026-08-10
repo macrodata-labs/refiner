@@ -34,10 +34,7 @@ def _robot_rows(
         converter = _robot_row_converter(**cast(Any, {**kwargs, "schema": rows.schema}))
         return [cast(RoboticsRow, converter(row)) for row in rows]
     converter = _robot_row_converter(**kwargs)
-    converted = converter(rows)
-    if kwargs.get("episode_ends_key") is not None:
-        return [cast(RoboticsRow, row) for row in converted]
-    return [cast(RoboticsRow, converted)]
+    return [cast(RoboticsRow, converter(rows))]
 
 
 def test_to_robot_rows_does_not_treat_video_uri_frames_as_frame_table() -> None:
@@ -57,11 +54,45 @@ def test_to_robot_rows_does_not_treat_video_uri_frames_as_frame_table() -> None:
     )
 
     assert robotics_row.episode_id == "episode-1"
+    assert robotics_row.tasks == ["pick the cup"]
     assert robotics_row.task == "pick the cup"
     assert robotics_row.num_frames == -1
     video = robotics_row.videos["observation.images.main"]
     assert isinstance(video, VideoFile)
     assert video.uri.endswith("/clips/episode-1.mp4")
+
+
+def test_robotics_row_repr_summarizes_episode() -> None:
+    row = DictRow(
+        {
+            "id": "episode-1",
+            "task": "pick the cup",
+            "action": [[0.0], [1.0]],
+            "camera": "clips/episode-1.mp4",
+            "payload": "kept",
+        }
+    )
+
+    robotics_row = _robot_row(
+        row,
+        episode_id_key="id",
+        task_key="task",
+        fps=12,
+        robot_type="mockbot",
+        video_keys={"observation.images.main": "camera"},
+    )
+
+    text = repr(robotics_row)
+
+    assert text.startswith("RoboticsRow(")
+    assert "episode_id='episode-1'" in text
+    assert "num_frames=2" in text
+    assert "task='pick the cup'" in text
+    assert "fps=12" in text
+    assert "robot_type='mockbot'" in text
+    assert "videos=['observation.images.main']" in text
+    assert "actions (row.actions): double[2, 1]" in text
+    assert "source_fields=['id', 'payload']" in text
 
 
 def test_to_robot_rows_exposes_stats_and_embedded_video_bytes() -> None:
@@ -221,6 +252,48 @@ def test_to_robot_rows_defaults_to_no_episode_id_source() -> None:
     assert dict(cast(Row, robotics_row).items())["episode_id"] == "source-value"
 
 
+def test_to_robot_rows_reads_nested_episode_task() -> None:
+    row = DictRow(
+        {
+            "steps": [
+                {
+                    "language_instruction": None,
+                    "action": [0.0],
+                    "observation": {"state": [1.0]},
+                },
+                {
+                    "language_instruction": "",
+                    "action": [0.0],
+                    "observation": {"state": [1.0]},
+                },
+                {
+                    "language_instruction": "pick up the cup",
+                    "action": [0.0],
+                    "observation": {"state": [1.0]},
+                },
+            ]
+        }
+    )
+
+    robotics_row = _robot_row(
+        row,
+        nested_frames_key="steps",
+        task_key="steps/language_instruction",
+    )
+
+    assert robotics_row.tasks == ["pick up the cup"]
+    assert robotics_row.task == "pick up the cup"
+
+
+def test_to_robot_rows_normalizes_task_values() -> None:
+    row = DictRow({"task": ["pick", "place"]})
+    robotics_row = _robot_row(row, task_key="task")
+
+    assert robotics_row.tasks == ["pick", "place"]
+    assert robotics_row.task == "pick"
+    assert robotics_row.update({"task": "reset"}).tasks == ["reset"]
+
+
 def test_to_robot_rows_accepts_literal_fps_and_robot_type() -> None:
     row = DictRow({"episode_id": "episode-1"})
 
@@ -228,6 +301,48 @@ def test_to_robot_rows_accepts_literal_fps_and_robot_type() -> None:
 
     assert robotics_row.fps == 20.0
     assert robotics_row.robot_type == "koch"
+
+
+def test_to_robot_rows_infers_timestamps_from_literal_fps() -> None:
+    row = DictRow({"episode_id": "episode-1", "action": [[0.0], [0.1], [0.2]]})
+
+    robotics_row = _robot_row(row, fps=10.0, state_key=None)
+
+    assert robotics_row.to_frame_table().column(
+        "timestamp"
+    ).to_pylist() == pytest.approx(
+        [
+            0.0,
+            0.1,
+            0.2,
+        ]
+    )
+
+
+def test_to_robot_rows_infers_nested_frame_timestamps_from_literal_fps() -> None:
+    row = DictRow(
+        {
+            "episode_id": "episode-1",
+            "frames": [
+                {"action": [0.0], "observation.state": [1.0]},
+                {"action": [0.1], "observation.state": [1.1]},
+            ],
+        }
+    )
+
+    robotics_row = _robot_row(
+        row,
+        nested_frames_key="frames",
+        fps=10.0,
+    )
+
+    frame_table = robotics_row.to_frame_table()
+    assert frame_table.table.column_names == [
+        "timestamp",
+        "action",
+        "observation.state",
+    ]
+    assert frame_table.column("timestamp").to_pylist() == pytest.approx([0.0, 0.1])
 
 
 def test_to_robot_rows_preserves_explicit_fps_and_robot_type_keys() -> None:
@@ -247,31 +362,6 @@ def test_to_robot_rows_preserves_explicit_fps_and_robot_type_keys() -> None:
 
     assert robotics_row.fps == 15.0
     assert robotics_row.robot_type == "aloha"
-
-
-def test_to_robot_rows_reuses_literal_fps_and_robot_type_for_episode_splits() -> None:
-    row = DictRow(
-        {
-            "dataset_id": "pusht",
-            "episode_ends": [1, 2],
-            "action": [[0.0], [1.0]],
-        }
-    )
-
-    rows = list(
-        _robot_rows(
-            row,
-            episode_id_key="dataset_id",
-            episode_ends_key="episode_ends",
-            timestamp_key=None,
-            state_key=None,
-            fps=30.0,
-            robot_type="pusht",
-        )
-    )
-
-    assert [row.fps for row in rows] == [30.0, 30.0]
-    assert [row.robot_type for row in rows] == ["pusht", "pusht"]
 
 
 def test_pipeline_to_robot_rows_forwards_literals_and_explicit_keys() -> None:
@@ -652,118 +742,6 @@ def test_to_robot_rows_flattens_nested_frame_dicts() -> None:
 
     assert robotics_row.num_frames == 2
     assert robotics_row.states.to_pylist() == [[0.0], [1.0]]
-
-
-def test_to_robot_rows_splits_dataset_arrays_with_episode_ends() -> None:
-    row = DictRow(
-        {
-            "dataset_id": "pusht",
-            "meta": {"episode_ends": [2, 5]},
-            "data": {
-                "obs": [[0.0], [0.1], [1.0], [1.1], [1.2]],
-                "action": [[0.0], [0.1], [1.0], [1.1], [1.2]],
-            },
-        }
-    )
-
-    rows = list(
-        _robot_rows(
-            row,
-            episode_id_key="dataset_id",
-            episode_ends_key="meta/episode_ends",
-            timestamp_key=None,
-            state_key="data/obs",
-            action_key="data/action",
-        )
-    )
-
-    assert [row.episode_id for row in rows] == ["pusht-0", "pusht-1"]
-    assert [row.num_frames for row in rows] == [2, 3]
-    assert rows[1].actions == [[1.0], [1.1], [1.2]]
-
-
-def test_to_robot_rows_splits_video_frame_arrays_with_episode_ends() -> None:
-    frames = np.arange(5 * 2 * 2 * 3, dtype=np.uint8).reshape(5, 2, 2, 3)
-    row = DictRow(
-        {
-            "dataset_id": "pusht",
-            "episode_ends": [2, 5],
-            "actions": [[0.0], [0.1], [1.0], [1.1], [1.2]],
-            "front": frames,
-        }
-    )
-
-    rows = list(
-        _robot_rows(
-            row,
-            episode_id_key="dataset_id",
-            episode_ends_key="episode_ends",
-            timestamp_key=None,
-            action_key="actions",
-            state_key=None,
-            video_keys={"observation.images.front": "front"},
-            fps=10,
-        )
-    )
-
-    videos = [row.videos["observation.images.front"] for row in rows]
-
-    assert [
-        video.frame_count for video in videos if isinstance(video, VideoFrameArray)
-    ] == [
-        2,
-        3,
-    ]
-    assert isinstance(videos[0], VideoFrameArray)
-    assert isinstance(videos[1], VideoFrameArray)
-    np.testing.assert_array_equal(
-        np.asarray(list(videos[0].iter_frame_arrays())),
-        frames[:2],
-    )
-    np.testing.assert_array_equal(
-        np.asarray(list(videos[1].iter_frame_arrays())),
-        frames[2:],
-    )
-
-
-def test_to_robot_rows_splits_tuple_state_key_sources_with_episode_ends() -> None:
-    row = DictRow(
-        {
-            "dataset_id": "robomimic",
-            "meta": {"episode_ends": [2, 4]},
-            "actions": [[0.0], [0.1], [1.0], [1.1]],
-            "obs": {
-                "joint_pos": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
-                "joint_vel": [[0.1], [0.2], [0.3], [0.4]],
-                "eef_pos": np.asarray(
-                    [[10.0, 11.0], [12.0, 13.0], [14.0, 15.0], [16.0, 17.0]],
-                    dtype=np.float32,
-                ),
-            },
-        }
-    )
-
-    rows = list(
-        _robot_rows(
-            row,
-            episode_id_key="dataset_id",
-            episode_ends_key="meta/episode_ends",
-            timestamp_key=None,
-            action_key="actions",
-            state_key=("obs/joint_pos", "obs/joint_vel", "obs/eef_pos"),
-        )
-    )
-
-    assert [row.episode_id for row in rows] == ["robomimic-0", "robomimic-1"]
-    assert [row.num_frames for row in rows] == [2, 2]
-    assert rows[0].states == [
-        [1.0, 2.0, 0.1, 10.0, 11.0],
-        [3.0, 4.0, 0.2, 12.0, 13.0],
-    ]
-    assert rows[1].states == [
-        [5.0, 6.0, 0.3, 14.0, 15.0],
-        [7.0, 8.0, 0.4, 16.0, 17.0],
-    ]
 
 
 def test_motion_trim_works_with_mapped_semantic_keys() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -81,6 +82,34 @@ def test_datafileset_extensions_do_not_filter_explicit_files() -> None:
 
         assert len(fileset.files) == 1
         assert fileset.files[0].path == str(local_path)
+
+
+def test_datafileset_extensions_do_not_filter_explicit_globs() -> None:
+    with TemporaryDirectory() as tmp:
+        local_path = Path(tmp) / "local.txt"
+        local_path.write_text("x")
+
+        fileset = DataFileSet.resolve(str(Path(tmp) / "*.txt"), extensions=(".jsonl",))
+
+        assert len(fileset.files) == 1
+        assert fileset.files[0].path == str(local_path)
+
+
+def test_reader_describe_normalizes_deferred_relative_local_globs(tmp_path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_jsonl(data_dir / "row.jsonl", [1])
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(tmp_path)
+        description = read_json("data/*.jsonl", lines=True).source.describe()
+    finally:
+        os.chdir(old_cwd)
+
+    expected = str(tmp_path / "data" / "*.jsonl")
+    assert description["path"] == expected
+    assert description["inputs"] == [expected]
 
 
 def test_jsonl_reader_reads_across_multiple_directories() -> None:

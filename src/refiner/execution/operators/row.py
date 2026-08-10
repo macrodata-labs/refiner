@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
 from typing import cast
 
 from refiner.execution.asyncio.window import AsyncWindow
+from refiner.execution.asyncio.runtime import submit
 from refiner.execution.buffer import RowBuffer
 from refiner.execution.tracking.shards import ShardDeltaFn, ShardDeltaTracker
 from refiner.pipeline.data.row import Row
@@ -19,6 +20,8 @@ from refiner.pipeline.steps import (
 )
 from refiner.worker.context import set_active_step_index
 from refiner.worker.metrics.api import register_gauge
+
+AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
 
 
 def execute_row_steps(
@@ -95,11 +98,16 @@ def execute_row_steps(
                 if window is None:
                     return
                 for row in inp.take_all():
-                    row.log_throughput("rows_processed", 1, unit="rows")
                     window.submit_blocking(_run_async_step(step=step, row=row))
-                out.extend(window.take_completed())
+                completed_rows = window.take_completed()
+                for row in completed_rows:
+                    row.log_throughput("rows_processed", 1, unit="rows")
+                out.extend(completed_rows)
                 if flush_all:
-                    out.extend(window.drain())
+                    drained_rows = window.drain()
+                    for row in drained_rows:
+                        row.log_throughput("rows_processed", 1, unit="rows")
+                    out.extend(drained_rows)
                 return
 
             if isinstance(step, FilterRowStep):
@@ -169,19 +177,37 @@ def execute_row_steps(
         for i in range(len(ordered)):
             _run_step(i, flush_all=flush_all)
 
+    def _close_async_steps() -> None:
+        for window in async_windows:
+            if window is not None:
+                window.cancel_pending()
+        close_fns: list[AsyncCloseFn] = []
+        for step in ordered:
+            if not isinstance(step, AsyncRowStep):
+                continue
+            fn = getattr(step, "fn", None)
+            close = getattr(fn, "aclose", None)
+            if close is not None:
+                close_fns.append(cast(AsyncCloseFn, close))
+        for close in close_fns:
+            submit(close()).result()
+
     def _drain_output() -> Iterator[Row]:
         outq = queues[-1]
         if not outq:
             return
         yield from outq.take_all()
 
-    for row in rows:
-        queues[0].append(row)
-        _pump(flush_all=False)
-        yield from _drain_output()
+    try:
+        for row in rows:
+            queues[0].append(row)
+            _pump(flush_all=False)
+            yield from _drain_output()
 
-    _pump(flush_all=True)
-    yield from _drain_output()
+        _pump(flush_all=True)
+        yield from _drain_output()
+    finally:
+        _close_async_steps()
 
 
 __all__ = ["execute_row_steps", "ShardDeltaFn"]

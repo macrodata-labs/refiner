@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 
-from refiner.cli.run.command import cmd_run
-
 
 def register_run_command(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
@@ -39,4 +37,4 @@ def register_run_command(
         nargs=argparse.REMAINDER,
         help="Arguments passed through to the script",
     )
-    run.set_defaults(handler=cmd_run)
+    run.set_defaults(handler_module="refiner.cli.run.command", handler="cmd_run")

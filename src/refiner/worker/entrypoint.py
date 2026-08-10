@@ -83,6 +83,10 @@ def main() -> int:
                 "output_rows": stats.output_rows,
             }
         )
+    except KeyboardInterrupt:
+        logger.warning("local worker interrupted")
+        payload["failed"] = 1
+        payload["error"] = "Interrupted."
     except Exception as e:
         message = str(e).strip() or type(e).__name__
         logger.exception("local worker entrypoint failed: {}", message)
@@ -91,6 +95,7 @@ def main() -> int:
     finally:
         if log_emitter is not None:
             log_emitter.shutdown()
+
     print(json.dumps(payload, sort_keys=True), flush=True)
     return 0 if payload["error"] is None else 1
 

@@ -19,11 +19,10 @@ def cmd_jobs_attach(args: Namespace) -> int:
     except (MacrodataApiError, MacrodataCredentialsError) as err:
         return handle_error(err)
 
-    job = payload.get("job")
-    if not isinstance(job, dict):
+    if not isinstance(payload, dict):
         print("Job details unavailable.", file=sys.stderr)
         return 1
-    if _executor_text(job.get("executorKind")) != "cloud":
+    if _executor_text(payload.get("executorKind")) != "cloud":
         print(
             "`macrodata jobs attach` is only supported for cloud jobs.", file=sys.stderr
         )

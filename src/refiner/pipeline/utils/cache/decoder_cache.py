@@ -17,7 +17,7 @@ from refiner.utils import check_required_dependencies
 class VideoSourceProbe:
     width: int
     height: int
-    fps: int | None
+    fps: float | None
     time_base: Fraction
     codec: str | None
     pix_fmt: str | None
@@ -89,7 +89,7 @@ def _probe_video_source(
     return VideoSourceProbe(
         width=int(stream.width),
         height=int(stream.height),
-        fps=int(round(float(stream_fps))) if stream_fps is not None else None,
+        fps=float(stream_fps) if stream_fps is not None else None,
         time_base=Fraction(cast(Any, stream.time_base)),
         codec=str(
             getattr(codec_obj, "canonical_name", None)

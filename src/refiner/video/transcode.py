@@ -52,11 +52,12 @@ class TranscodeWriter:
         self,
         *,
         config: VideoTranscodeConfig,
-        fps: int,
+        fps: float,
         output_file: IO[bytes],
     ) -> None:
         self.config = config
-        self.fps = int(fps)
+        self.fps = float(fps)
+        self.rate = Fraction(self.fps).limit_denominator(100000)
         self.output_file = output_file
         self.container: Any | None = None
         self.stream: Any | None = None
@@ -70,7 +71,7 @@ class TranscodeWriter:
         folder: DataFolder,
         output_rel: str,
         config: VideoTranscodeConfig,
-        fps: int,
+        fps: float,
     ) -> "TranscodeWriter":
         check_required_dependencies("video transcoding", ["av"], dist="video")
         output_file = folder.open(output_rel, mode="wb")
@@ -86,7 +87,7 @@ class TranscodeWriter:
         *,
         output_file: IO[bytes],
         config: VideoTranscodeConfig,
-        fps: int,
+        fps: float,
         movflags: str | None = _SEGMENTED_MP4_MOVFLAGS,
     ) -> "TranscodeWriter":
         check_required_dependencies("video transcoding", ["av"], dist="video")
@@ -121,7 +122,7 @@ class TranscodeWriter:
 
         stream = self.container.add_stream(
             self.config.codec,
-            rate=self.fps,
+            rate=self.rate,
             options=options or None,
         )
         stream.width = int(width)
@@ -145,7 +146,7 @@ class TranscodeWriter:
                 format=self.stream.pix_fmt,
             )
         out_frame.pts = self.frames_written
-        out_frame.time_base = Fraction(1, self.fps)
+        out_frame.time_base = Fraction(self.rate.denominator, self.rate.numerator)
 
         for packet in self.stream.encode(out_frame):
             self.container.mux(packet)

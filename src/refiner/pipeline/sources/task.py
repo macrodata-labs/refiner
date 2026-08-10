@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
+from typing import Any
 
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource
 from refiner.pipeline.data.row import DictRow, Row
+from refiner.pipeline.steps import FlatMapStep, MapResult
 
 
 class TaskSource(BaseSource):
@@ -36,4 +39,38 @@ class TaskSource(BaseSource):
         return {"num_tasks": self._num_tasks}
 
 
-__all__ = ["TaskSource"]
+@dataclass(frozen=True, slots=True)
+class TaskStep(FlatMapStep):
+    """Apply a task callback and normalize zero, one, or many output rows."""
+
+    fn: Callable[[int, int], Any]
+    num_tasks: int
+    index: int
+    op_name: str | None = "task"
+
+    def apply_row_many(self, row: Row) -> Iterator[MapResult]:
+        result = self.fn(row["task_rank"], self.num_tasks)
+
+        if result is None:
+            return
+        if isinstance(result, Row):
+            yield result
+            return
+        if isinstance(result, Mapping):
+            yield dict(result)
+            return
+        if isinstance(result, Iterable) and not isinstance(
+            result, (str, bytes, bytearray, memoryview)
+        ):
+            for item in result:
+                if isinstance(item, Row):
+                    yield item
+                elif isinstance(item, Mapping):
+                    yield dict(item)
+                else:
+                    yield {"result": item}
+            return
+        yield {"result": result}
+
+
+__all__ = ["TaskSource", "TaskStep"]

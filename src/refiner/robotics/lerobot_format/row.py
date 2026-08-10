@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 
-from refiner.io import DataFolder
+from refiner.io import DataFile, DataFolder
 from refiner.video import VideoFile, VideoSource
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
@@ -15,7 +15,12 @@ from refiner.robotics.lerobot_format.metadata.metadata import LeRobotMetadata
 from refiner.robotics.lerobot_format.metadata.stats import (
     LeRobotFeatureStats,
 )
-from refiner.robotics.row import RoboticsRow
+from refiner.robotics.row import (
+    RoboticsRow,
+    _capped_list,
+    _robotics_frame_data_items,
+    _robotics_frame_data_repr,
+)
 
 if TYPE_CHECKING:
     from refiner.robotics.lerobot_format.tabular import LeRobotTabular
@@ -109,6 +114,57 @@ class LeRobotRow(Row, RoboticsRow):
         fixed_keys = ("metadata", "frames")
         return len(self._row) + sum(1 for key in fixed_keys if key not in self._row)
 
+    def __repr__(self) -> str:
+        parts = [
+            f"episode_id={self.episode_id!r}",
+            f"num_frames={self.num_frames}",
+        ]
+        if self.task is not None:
+            parts.append(f"task={self.task!r}")
+        elif self.tasks:
+            parts.append(f"tasks={self.tasks!r}")
+        if self.fps is not None:
+            parts.append(f"fps={self.fps:g}")
+        if self.robot_type is not None:
+            parts.append(f"robot_type={self.robot_type!r}")
+        frame_data = _robotics_frame_data_repr(self, include_other_columns=False)
+        if frame_data:
+            parts.append(f"frame_data={frame_data}")
+        videos = _lerobot_video_data_repr(self)
+        if videos:
+            parts.append(f"videos={videos}")
+        stats = _capped_list(list(self.stats))
+        if stats:
+            parts.append(f"stats={stats!r}")
+        return f"LeRobotRow({', '.join(parts)})"
+
+    def __str__(self) -> str:
+        lines = [
+            "LeRobotRow",
+            f"  episode_id: {self.episode_id!r}",
+            f"  num_frames: {self.num_frames}",
+        ]
+        if self.task is not None:
+            lines.append(f"  task: {self.task!r}")
+        elif self.tasks:
+            lines.append(f"  tasks: {self.tasks!r}")
+        if self.fps is not None:
+            lines.append(f"  fps: {self.fps:g}")
+        if self.robot_type is not None:
+            lines.append(f"  robot_type: {self.robot_type!r}")
+        frame_data = _robotics_frame_data_items(self, include_other_columns=False)
+        if frame_data:
+            lines.append("  frame_data (row.to_frame_table()):")
+            lines.extend(f"    {item}" for item in frame_data)
+        videos = _lerobot_video_data_items(self)
+        if videos:
+            lines.append("  videos (row.videos):")
+            lines.extend(f"    {item}" for item in videos)
+        stats = _capped_list(list(self.stats))
+        if stats:
+            lines.append(f"  stats: {stats!r}")
+        return "\n".join(lines)
+
     @property
     def shard_id(self) -> str | None:
         return self._row.shard_id
@@ -124,12 +180,18 @@ class LeRobotRow(Row, RoboticsRow):
 
     @property
     def tasks(self) -> list[str]:
-        return list(self._row.get("tasks", []))
+        value = self._row.get("tasks")
+        if value is None:
+            value = self._row.get("task")
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+            return cast(list[str], list(value))
+        return []
 
     @property
     def task(self) -> str | None:
-        task = self._row.get("task")
-        return task if isinstance(task, str) else None
+        return next(iter(self.tasks), None)
 
     @property
     def num_frames(self) -> int:
@@ -224,14 +286,19 @@ class LeRobotRow(Row, RoboticsRow):
         uri = self._row.get(f"videos/{key}/uri")
         if uri is None:
             uri = self._build_default_video_uri(key)
+        uri = str(uri)
         to_timestamp = self._row.get(f"videos/{key}/to_timestamp")
         if to_timestamp is None:
             raise KeyError(key)
         from_timestamp = self._row.get(f"videos/{key}/from_timestamp")
-        if self.root is None:
+        if "://" in uri or uri.startswith("/"):
+            data_file = DataFile.resolve(uri)
+        elif self.root is not None:
+            data_file = self.root.file(uri)
+        else:
             raise KeyError(key)
         return VideoFile(
-            data_file=self.root.file(str(uri)),
+            data_file=data_file,
             from_timestamp_s=float(from_timestamp)
             if from_timestamp is not None
             else 0.0,
@@ -313,6 +380,12 @@ class LeRobotRow(Row, RoboticsRow):
     ) -> "LeRobotRow":
         merged = dict(patch or {})
         merged.update(kwargs)
+        if "task" in merged:
+            task = merged.pop("task")
+            merged["tasks"] = [task] if isinstance(task, str) and task.strip() else []
+        tasks = merged.get("tasks")
+        if isinstance(tasks, str):
+            merged["tasks"] = [tasks] if tasks.strip() else []
         metadata = merged.pop("metadata", self.metadata)
         frames = merged.pop("frames", self.frames)
         return LeRobotRow(
@@ -337,6 +410,33 @@ class LeRobotRow(Row, RoboticsRow):
             frames=self.frames,
             root=self.root,
         )
+
+
+def _lerobot_video_data_repr(row: LeRobotRow) -> str:
+    items = _lerobot_video_data_items(row)
+    return "{" + ", ".join(items) + "}" if items else ""
+
+
+def _lerobot_video_data_items(row: LeRobotRow) -> list[str]:
+    items: list[str] = []
+    features = row.metadata.info.features
+    for key in row.videos:
+        feature = features.get(key)
+        if feature is None:
+            summary = "video"
+        else:
+            summary = "video"
+            if feature.shape:
+                summary += "[" + ", ".join(str(size) for size in feature.shape) + "]"
+            fps = (
+                feature.video_info.fps
+                if feature.video_info is not None
+                else feature.fps
+            )
+            if fps is not None:
+                summary += f"@{fps:g}fps"
+        items.append(f"{key}: {summary}")
+    return _capped_list(items, limit=4)
 
 
 __all__ = [

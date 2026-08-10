@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +9,7 @@ from fsspec import AbstractFileSystem
 import pyarrow as pa
 
 from refiner.io import DataFile, DataFileSet, DataFolder
+from refiner.io.datafile import _file_cache_key
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.data.datatype import DTypeMapping, schema_with_dtypes
 from refiner.pipeline.data.shard import FilePart, Shard
@@ -46,6 +47,7 @@ class BaseReader(BaseSource):
         storage_options: Mapping[str, Any] | None = None,
         recursive: bool = False,
         extensions: Sequence[str] = (),
+        include_file: Callable[[str], bool] | None = None,
         target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
         num_shards: int | None = None,
         file_path_column: str | None = "file_path",
@@ -60,6 +62,7 @@ class BaseReader(BaseSource):
             storage_options: Optional fsspec init options (used only when `fs` is not provided).
             recursive: If a directory input is provided, whether to list recursively.
             extensions: If a directory input is provided, filter by these suffixes (case-insensitive).
+            include_file: Optional predicate for files discovered from directory inputs.
             target_shard_bytes: Target approximate byte size for planned shards.
             num_shards: Optional explicit number of planned shards.
             dtypes: Optional dtype overrides exposed as this source's schema.
@@ -70,6 +73,7 @@ class BaseReader(BaseSource):
             storage_options=storage_options,
             recursive=recursive,
             extensions=extensions,
+            include_file=include_file,
         )
         self.target_shard_bytes = max(1, target_shard_bytes)
         self.num_shards = num_shards
@@ -107,12 +111,15 @@ class BaseReader(BaseSource):
             elif isinstance(entry, DataFolder):
                 inputs.append(str(entry.abs_paths("")))
             else:
-                inputs.append(str(entry.fs.unstrip_protocol(entry.path)))
+                inputs.append(entry.abs_path())
         return {
             "path": ", ".join(inputs),
             "inputs": inputs,
             "file_path_column": self.file_path_column,
         }
+
+    def _io_refiner_extras(self) -> tuple[str, ...]:
+        return self.fileset.required_refiner_extras()
 
     def _with_file_path(
         self, row: dict[str, Any], source_file: DataFile
@@ -139,7 +146,12 @@ class BaseReader(BaseSource):
         Returns:
             (fh, opened_new): `opened_new` is True if a new file handle was opened.
         """
-        if not force_reopen and self._open_file == file and self._open_fh is not None:
+        if (
+            not force_reopen
+            and self._open_file is not None
+            and _file_cache_key(self._open_file) == _file_cache_key(file)
+            and self._open_fh is not None
+        ):
             return self._open_fh, False
 
         if self._open_fh is not None:
@@ -242,9 +254,7 @@ class BaseReader(BaseSource):
                 path = file.abs_path()
                 size = self.fileset.size(source_index, path)
                 # Atomic files stay whole: `end=-1` means "reader decides how to read the full file".
-                if not self.split_by_bytes or not is_splittable_by_bytes(
-                    file.fs, file.path
-                ):
+                if not self.split_by_bytes or not is_splittable_by_bytes(file):
                     if (
                         current_parts
                         and current_size + size > target_bytes

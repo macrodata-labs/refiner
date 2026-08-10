@@ -4,11 +4,18 @@
 
 <h1 align="center">Macrodata Refiner</h1>
 
-Refiner is an open-source engine for turning raw, unstructured, and multimodal data into **high-quality datasets** for large model training.
+Refiner is Macrodata's open-source Python library for reading, transforming, and
+writing robotics datasets.
 
-It replaces the brittle scripts and stitched-together data tooling that teams still use for training data work, while offering much better support for multimodal data, robotics workflows, and model-based processing.
+It provides one pipeline model for working with robot episodes, frames, videos,
+metadata, and model-based processing. Use it to convert formats, transform data,
+run inference, and write structured outputs on your own infrastructure.
 
-It also plugs into the Macrodata platform, which gives you visibility into what is happening to your data while pipelines run: job and shard lifecycle, logs, metrics, manifests, and pipeline behavior. The same code can run locally for development and then scale out through Macrodata's elastic serverless cloud.
+This repository also includes open-source reference versions of some of the
+pipelines we develop at Macrodata. They are useful starting points, but they are
+not the full pipelines we adapt, evaluate, and run for customers. If you want to
+see what those pipelines can do with your data,
+[send us a representative sample](https://macrodata.co/contact).
 
 ## Quickstart
 
@@ -18,44 +25,10 @@ Install:
 pip install macrodata-refiner
 ```
 
-Create a Macrodata API key:
+This gives you:
 
-- https://macrodata.co/settings/api-keys
-
-Log in:
-
-```bash
-macrodata login
-```
-
-### Cloud example
-
-Launch a robotics pipeline on Macrodata Cloud.
-
-This requires a valid API key.
-
-```python
-import refiner as mdr
-
-(
-    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
-    .map(
-        mdr.robotics.motion_trim(
-            threshold=0.001,
-            pad_frames=5,
-        )
-    )
-    .write_lerobot("hf://buckets/macrodata/test_bucket/aloha_motion")
-    .launch_cloud(
-        name="motion_trim",
-        num_workers=4,
-    )
-)
-```
-
-Need cloud GPUs? See [Launchers](docs/launchers.md) for the GPU-specific cloud options.
-
-### Local example
+- the Python package as `refiner`
+- the CLI as `macrodata`
 
 Launch a local pipeline:
 
@@ -83,40 +56,36 @@ def add_preview(row):
 )
 ```
 
-`pip install` gives you:
-
-- the Python package as `refiner`
-- the CLI as `macrodata`
-
 ## Batteries included
 
-- training-data-first pipeline primitives instead of generic ETL abstractions
-- multimodal processing, with robotics support today
-- a lot of built-in readers, transforms, sinks, and lifecycle/runtime machinery so you do not have to rebuild the same scaffolding in scripts
-- access to any storage backend supported by `fsspec` (S3, GCP, Hugging Face, etc.)
-- local execution for development and elastic cloud execution for large runs
-- built-in observability through the Macrodata platform, so you can inspect how your data is changing instead of debugging blindly after the fact
+- a consistent row and episode model for robot trajectories, frames, videos,
+  metadata, tasks, and statistics
+- readers and writers for LeRobot, HDF5, Zarr, MCAP, Parquet, JSONL, and other
+  common data formats
+- composable transforms and model inference for converting and enriching data
+- open-source reference operations for motion trimming, subtask annotation,
+  reward scoring, and hand tracking
+- access to storage backends supported by `fsspec`, including S3, GCP, and
+  Hugging Face
+- in-process debugging and local multi-worker execution
 
 ## Docs
 
-Getting started:
+Start here:
 
-- [Pipeline basics](docs/pipeline-basics.md)
-- [Launchers](docs/launchers.md)
-- [CLI](docs/cli.md)
+- [Docs index](docs/index.md)
+- [Quickstart](docs/quickstart.md)
+- [Running pipelines](docs/running-pipelines/index.md)
 
-Core concepts:
+Build a dataset:
 
-- [Reading and writing data](docs/reading-and-writing.md)
-- [Transforms](docs/transforms.md)
-- [Expressions](docs/expressions.md)
-- [In-process debugging](docs/in-process-debugging.md)
-- [Task pipelines](docs/task-pipelines.md)
-
-Modalities and platform:
-
-- [Robotics](docs/robotics.md)
-- [Observability](docs/observability.md)
+- [Reading data](docs/reading-data/index.md)
+- [Episode data](docs/episode-data/index.md)
+- [Transforms](docs/transforms/index.md)
+- [Episode operations](docs/episode-operations/index.md)
+- [Writing data](docs/writing-data/index.md)
+- [Examples](docs/examples/index.md)
+- [Reference](docs/reference/index.md)
 
 ## Community
 

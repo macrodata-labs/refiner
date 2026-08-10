@@ -74,7 +74,7 @@ class Worker:
 
         # Error state: worker failures are converted into shard failures, and
         # heartbeat failures are surfaced from the background thread.
-        execution_error: Exception | None = None
+        execution_error: BaseException | None = None
         heartbeat_error: Exception | None = None
 
         stop_heartbeat = threading.Event()
@@ -130,6 +130,16 @@ class Worker:
                 sink.on_shard_complete(shard_id)
             self.user_metrics_emitter.force_flush_user_metrics()
             self.runtime_lifecycle.complete(shard)
+            try:
+                with set_active_step_index(sink_step_index):
+                    sink.on_shard_finalized(shard_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "post-completion sink cleanup failed shard_id={}: {}: {}",
+                    shard.id,
+                    type(e).__name__,
+                    e,
+                )
             with inflight_lock:
                 inflight_by_id.pop(shard_id, None)
                 source_done_shards.discard(shard_id)
@@ -244,7 +254,26 @@ class Worker:
                 self.stage_index,
                 self.worker_id,
             )
-            run_exception: Exception | None = None
+            run_exception: BaseException | None = None
+
+            def _fail_inflight_shards(error: str) -> int:
+                with inflight_lock:
+                    failed_shards = list(inflight_by_id.values())
+                    inflight_by_id.clear()
+                    pending_rows_by_shard.clear()
+                    source_done_shards.clear()
+                for shard in failed_shards:
+                    logger.warning(
+                        "shard failed shard_id={} global_ordinal={} error={}",
+                        shard.id,
+                        shard.global_ordinal,
+                        error,
+                    )
+                    self.user_metrics_emitter.force_flush_logs()
+                    self.runtime_lifecycle.fail(shard, error)
+                    self.user_metrics_emitter.force_flush_user_metrics()
+                return len(failed_shards)
+
             try:
                 try:
                     for block in self.pipeline.execute(
@@ -264,34 +293,32 @@ class Worker:
                         )
                         if sink.counts_output_rows:
                             output_rows += written_output_rows
+                except KeyboardInterrupt as e:
+                    execution_error = e
+                    logger.warning(
+                        "worker interrupted worker_id={} claimed={} completed={}",
+                        self.worker_id,
+                        claimed,
+                        completed,
+                    )
+                    self.user_metrics_emitter.force_flush_logs()
+                    failed += _fail_inflight_shards("Interrupted.")
+                    raise
                 except Exception as e:
                     execution_error = e
                     failed_error = str(e).strip() or type(e).__name__
                     with inflight_lock:
-                        failed_shards = list(inflight_by_id.values())
-                        inflight_by_id.clear()
-                        pending_rows_by_shard.clear()
-                        source_done_shards.clear()
+                        in_flight_count = len(inflight_by_id)
                     logger.exception(
                         "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
                         self.worker_id,
                         claimed,
                         completed,
-                        len(failed_shards),
+                        in_flight_count,
                         failed_error,
                     )
                     self.user_metrics_emitter.force_flush_logs()
-                    for shard in failed_shards:
-                        logger.warning(
-                            "shard failed shard_id={} global_ordinal={} error={}",
-                            shard.id,
-                            shard.global_ordinal,
-                            failed_error,
-                        )
-                        self.user_metrics_emitter.force_flush_logs()
-                        self.runtime_lifecycle.fail(shard, failed_error)
-                        self.user_metrics_emitter.force_flush_user_metrics()
-                        failed += 1
+                    failed += _fail_inflight_shards(failed_error)
                 else:
                     _heartbeat_once()
                     with inflight_lock:
@@ -308,7 +335,7 @@ class Worker:
                     failed=failed,
                     output_rows=output_rows,
                 )
-            except Exception as e:
+            except BaseException as e:
                 run_exception = e
                 raise
             finally:

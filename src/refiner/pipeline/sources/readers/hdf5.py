@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 import fnmatch
 from glob import has_magic
-from typing import Any, Literal, cast
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any, Literal
 
 from fsspec import AbstractFileSystem
 
@@ -13,58 +15,16 @@ from refiner.pipeline.data.datatype import DTypeMapping, dtype_to_plan
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.sources.readers.base import BaseReader, Shard, SourceUnit
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    PathSelection,
+    decode_value,
+    path_selection_map,
+)
 from refiner.utils import check_required_dependencies
 
 
 MissingPolicy = Literal["error", "drop_row", "set_null"]
-PathSelection = Mapping[str, str] | Sequence[str] | str
-
-
-def _decode_value(
-    value: Any,
-    *,
-    decode_bytes: bool = True,
-    preserve_arrays: bool = False,
-) -> Any:
-    if isinstance(value, bytes):
-        if not decode_bytes:
-            return value
-        try:
-            return value.decode("utf-8")
-        except UnicodeDecodeError:
-            return value
-    if isinstance(value, str) and any("\udc80" <= char <= "\udcff" for char in value):
-        return value.encode("utf-8", errors="surrogateescape")
-    if hasattr(value, "shape") and value.shape == ():
-        return _decode_value(
-            value.item(),
-            decode_bytes=decode_bytes,
-            preserve_arrays=preserve_arrays,
-        )
-    if hasattr(value, "tolist"):
-        if preserve_arrays and getattr(
-            getattr(value, "dtype", None), "kind", None
-        ) not in (
-            "O",
-            "S",
-        ):
-            return value
-        return _decode_value(
-            value.tolist(),
-            decode_bytes=decode_bytes,
-            preserve_arrays=preserve_arrays,
-        )
-    if isinstance(value, list):
-        return [
-            _decode_value(
-                item,
-                decode_bytes=decode_bytes,
-                preserve_arrays=preserve_arrays,
-            )
-            for item in value
-        ]
-    return value
 
 
 class Hdf5Reader(BaseReader):
@@ -91,6 +51,7 @@ class Hdf5Reader(BaseReader):
         file_path_column: str | None = "file_path",
         group_path_column: str | None = "hdf5_group",
         missing_policy: MissingPolicy = "error",
+        cache_remote_files: bool = False,
         dtypes: DTypeMapping | None = None,
     ):
         super().__init__(
@@ -126,36 +87,16 @@ class Hdf5Reader(BaseReader):
                 raise ValueError(
                     "groups accepts a single glob string or a list of exact group paths"
                 )
-        self.datasets = self._mapping(datasets)
-        self.attrs = self._mapping(attrs)
+        self.datasets = path_selection_map(datasets, format_name="HDF5")
+        self.attrs = path_selection_map(attrs, format_name="HDF5")
         self.group_path_column = group_path_column
         self.missing_policy = missing_policy
+        self.cache_remote_files = cache_remote_files
         if missing_policy not in ("error", "drop_row", "set_null"):
             raise ValueError(
                 "missing_policy must be one of 'error', 'drop_row', or 'set_null'"
             )
         self._validate_column_names()
-
-    @staticmethod
-    def _mapping(
-        value: PathSelection | None,
-    ) -> dict[str, str]:
-        if value is None:
-            return {}
-        if isinstance(value, str):
-            return {value.rsplit("/", 1)[-1]: value}
-        if isinstance(value, Mapping):
-            return dict(cast(Mapping[str, str], value))
-        out: dict[str, str] = {}
-        for path in value:
-            name = path.rsplit("/", 1)[-1]
-            if name in out:
-                raise ValueError(
-                    "HDF5 path selections must have unique derived column names; "
-                    f"use an explicit mapping for duplicate name {name!r}"
-                )
-            out[name] = path
-        return out
 
     def describe(self) -> dict[str, Any]:
         description = super().describe()
@@ -168,6 +109,7 @@ class Hdf5Reader(BaseReader):
                 "attrs": dict(self.attrs),
                 "group_path_column": self.group_path_column,
                 "missing_policy": self.missing_policy,
+                "cache_remote_files": self.cache_remote_files,
                 "dtypes": (
                     {key: dtype_to_plan(dtype) for key, dtype in self.dtypes.items()}
                     if self.dtypes
@@ -176,6 +118,9 @@ class Hdf5Reader(BaseReader):
             }
         )
         return description
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("hdf5",)
 
     def _validate_column_names(self) -> None:
         for name, path in self.datasets.items():
@@ -221,13 +166,25 @@ class Hdf5Reader(BaseReader):
         check_required_dependencies("read_hdf5", ["h5py"], dist="hdf5")
         import h5py
 
-        for part in descriptor.parts:
-            source = self.fileset.resolve_file(part.source_index, part.path)
-            with source.open(mode="rb") as raw, h5py.File(raw, "r") as h5:
-                for group_path, group in self._iter_groups(h5, h5py):
-                    row = self._read_group(source, group, group_path, h5py)
-                    if row is not None:
-                        yield DictRow(row)
+        with TemporaryDirectory(prefix="refiner-hdf5-") as tempdir:
+            for part_index, part in enumerate(descriptor.parts):
+                source = self.fileset.resolve_file(part.source_index, part.path)
+                open_source = source
+                local_path: Path | None = None
+                if self.cache_remote_files and not source.is_local:
+                    suffix = Path(source.path).suffix or ".hdf5"
+                    local_path = Path(tempdir) / f"source-{part_index:06d}{suffix}"
+                    source.copy(str(local_path))
+                    open_source = DataFile.resolve(str(local_path))
+                try:
+                    with open_source.open(mode="rb") as raw, h5py.File(raw, "r") as h5:
+                        for group_path, group in self._iter_groups(h5, h5py):
+                            row = self._read_group(source, group, group_path, h5py)
+                            if row is not None:
+                                yield DictRow(row)
+                finally:
+                    if local_path is not None:
+                        local_path.unlink(missing_ok=True)
 
     def _iter_groups(self, h5, h5py) -> Iterator[tuple[str, Any]]:
         if isinstance(self.groups, str):
@@ -304,7 +261,7 @@ class Hdf5Reader(BaseReader):
                 raise TypeError(
                     f"HDF5 path under {group_path} is not a dataset: {dataset_path}"
                 )
-            row[output_name] = _decode_value(
+            row[output_name] = decode_value(
                 dataset[()],
                 decode_bytes=dataset.dtype.kind != "S",
                 preserve_arrays=True,
@@ -318,7 +275,7 @@ class Hdf5Reader(BaseReader):
                     row[output_name] = None
                     continue
                 raise KeyError(f"HDF5 attr not found on {group_path}: {attr_name}")
-            row[output_name] = _decode_value(group.attrs[attr_name])
+            row[output_name] = decode_value(group.attrs[attr_name])
 
         return self._with_file_path(row, source)
 

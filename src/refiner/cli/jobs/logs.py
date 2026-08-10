@@ -7,7 +7,7 @@ from loguru import logger
 import re
 import sys
 import time
-from typing import Any, cast
+from typing import Any
 
 from refiner.cli.jobs.follow import (
     ForwardLogPoller,
@@ -361,8 +361,8 @@ def _stream_logs(
             except MacrodataCredentialsError:
                 raise
             status_retryable_error_count = 0
-            logs_available = isinstance(job_payload.get("job"), dict) and bool(
-                cast(dict[str, Any], job_payload["job"]).get("logsAvailable", True)
+            logs_available = isinstance(job_payload, dict) and bool(
+                job_payload.get("logsAvailable", True)
             )
             if _job_status(job_payload) in TERMINAL_JOB_STATUSES and not logs_available:
                 return 0
@@ -415,8 +415,8 @@ def _stream_logs(
         except MacrodataCredentialsError:
             raise
         status_retryable_error_count = 0
-        logs_available = isinstance(job_payload.get("job"), dict) and bool(
-            cast(dict[str, Any], job_payload["job"]).get("logsAvailable", True)
+        logs_available = isinstance(job_payload, dict) and bool(
+            job_payload.get("logsAvailable", True)
         )
         if _job_status(job_payload) in TERMINAL_JOB_STATUSES:
             if not logs_available:

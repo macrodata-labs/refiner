@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import heapq
 from collections.abc import Coroutine
-from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, Future, wait
+from concurrent.futures import (
+    ALL_COMPLETED,
+    FIRST_COMPLETED,
+    FIRST_EXCEPTION,
+    Future,
+    wait,
+)
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
@@ -65,8 +71,8 @@ class AsyncWindow(Generic[T]):
         return self._take_ready()
 
     def drain(self) -> list[T]:
-        """Wait for all in-flight work, then return every available result."""
-        self._wait_until(return_when=ALL_COMPLETED)
+        """Wait for in-flight work, failing fast if any future raises."""
+        self._wait_until(return_when=FIRST_EXCEPTION)
         return self._take_ready()
 
     def cancel_pending(self) -> None:
@@ -83,13 +89,18 @@ class AsyncWindow(Generic[T]):
             return
         self._futures.difference_update(done)
         for future in done:
-            idx, value = future.result()
+            try:
+                idx, value = future.result()
+            except BaseException:
+                self.cancel_pending()
+                raise
             self._store_result(idx, value)
 
     def _wait_until(self, *, return_when: str) -> None:
         """Block until the requested completion condition and collect results."""
         while self._futures and (
-            return_when == ALL_COMPLETED or len(self._futures) >= self.max_in_flight
+            return_when in {ALL_COMPLETED, FIRST_EXCEPTION}
+            or len(self._futures) >= self.max_in_flight
         ):
             done, _ = wait(self._futures, return_when=return_when)
             self._collect_done(done)

@@ -71,6 +71,12 @@ class LanceSource(BaseSource):
     def schema(self) -> pa.Schema:
         return self._schema
 
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("lance",)
+
+    def _io_refiner_extras(self) -> tuple[str, ...]:
+        return self.input.required_refiner_extras()
+
     def _dataset(self) -> Any:
         return _import_lance().dataset(self.dataset_uri, version=self.version)
 

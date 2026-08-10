@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 
-from refiner.cli.auth import cmd_login, cmd_logout, cmd_whoami
-
 
 def register_auth_commands(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
@@ -22,12 +20,12 @@ def register_auth_commands(
         action="store_true",
         help="Suppress the banner and key-creation link prompt",
     )
-    login.set_defaults(handler=cmd_login)
+    login.set_defaults(handler_module="refiner.cli.auth", handler="cmd_login")
 
     whoami = subparsers.add_parser(
         "whoami", help="Validate local credentials and show identity"
     )
-    whoami.set_defaults(handler=cmd_whoami)
+    whoami.set_defaults(handler_module="refiner.cli.auth", handler="cmd_whoami")
 
     logout = subparsers.add_parser("logout", help="Remove local Macrodata credentials")
-    logout.set_defaults(handler=cmd_logout)
+    logout.set_defaults(handler_module="refiner.cli.auth", handler="cmd_logout")

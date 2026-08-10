@@ -23,7 +23,7 @@ from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import (
     FileCleanupReducerSink,
-    _compile_managed_path_pattern,
+    _compile_output_path_patterns,
 )
 from refiner.pipeline.sources.lance import LANCE_ROW_POSITION_COLUMN
 from refiner.worker.context import (
@@ -362,6 +362,9 @@ class LanceSink(BaseSink):
         self.filename_template = filename_template
         self._writers: dict[str, Any] = {}
 
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("lance",)
+
     def _relpath(self, shard_id: str) -> str:
         return self.filename_template.format(
             shard_id=shard_id,
@@ -454,6 +457,9 @@ class LanceDatasetSink(BaseSink):
         self._pending_rows_by_shard: dict[str, dict[int, dict[str, Any]]] = {}
         self._add_columns_schema: pa.Schema | None = None
         self._existing_schema: pa.Schema | None = None
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("lance",)
 
     def _dataset_uri(self) -> str:
         return self.output.abs_path()
@@ -741,10 +747,13 @@ class LanceDatasetCommitReducerSink(BaseSink):
         self.output = DataFolder.resolve(output)
         self.mode = mode
         self.source_version = source_version
-        self._managed_path_pattern = _compile_managed_path_pattern(
+        self._managed_path_pattern = _compile_output_path_patterns(
             _METADATA_FILENAME_TEMPLATE
-        )
+        )[-1]
         self._commit_ran = False
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("lance",)
 
     def _dataset_uri(self) -> str:
         return self.output.abs_path()

@@ -156,7 +156,9 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             "filter",
             _callable_step_args(step.predicate),
         )
-    if isinstance(step, FnFlatMapStep):
+    from refiner.pipeline.sources.task import TaskStep
+
+    if isinstance(step, FnFlatMapStep | TaskStep):
         inferred_name = (
             explicit_name
             if explicit_name and explicit_name != "flat_map"
@@ -329,10 +331,19 @@ def _builtin_description(fn: Any) -> dict[str, Any] | None:
     return {"name": name, "args": args, "services": tuple(parsed_services)}
 
 
-def describe_builtin(name: str, **args: Any) -> Any:
+def describe_builtin(
+    name: str, *, refiner_extras: tuple[str, ...] = (), **args: Any
+) -> Any:
     def _decorate(fn: Any) -> Any:
         setattr(
-            fn, _REFINER_BUILTIN_CALL_ATTR, {"name": name, "args": args, "services": ()}
+            fn,
+            _REFINER_BUILTIN_CALL_ATTR,
+            {
+                "name": name,
+                "args": args,
+                "services": (),
+                "refiner_extras": refiner_extras,
+            },
         )
         return fn
 

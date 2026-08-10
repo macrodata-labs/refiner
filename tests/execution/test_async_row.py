@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from refiner.pipeline.data.row import Row
 from refiner.pipeline import from_items
 
 
@@ -31,3 +32,23 @@ def test_map_async_without_order_preservation_still_emits_all_rows() -> None:
 
     out = list(pipeline.iter_rows())
     assert sorted(int(row["x"]) for row in out) == [1, 2, 3]
+
+
+def test_map_async_closes_async_callable_after_iteration() -> None:
+    class AsyncCallable:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def __call__(self, row: Row) -> dict[str, int]:
+            return {"x": int(row["item"])}
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    fn = AsyncCallable()
+    pipeline = from_items([1, 2, 3]).map_async(fn)
+
+    out = list(pipeline.iter_rows())
+
+    assert [int(row["x"]) for row in out] == [1, 2, 3]
+    assert fn.closed is True

@@ -1,25 +1,155 @@
 from __future__ import annotations
 
+import importlib
 import io
-from typing import Optional
+from collections.abc import Mapping, Sequence
+from typing import Any, Optional
+from typing import cast
 
-from fsspec import AbstractFileSystem
+import pyarrow as pa
+
+from refiner.io import DataFile
 
 DEFAULT_TARGET_SHARD_BYTES = 128 * 1024 * 1024
+PathSelection = Mapping[str, str] | Sequence[str] | str
 
 
 # Extensions that generally imply whole-file/container compression (not safely splittable by byte offsets).
 NON_SPLITTABLE_WHOLEFILE_EXTS = (".gz", ".bz2", ".xz", ".zip", ".zst")
 
 
-def is_splittable_by_bytes(fs: AbstractFileSystem, path: str) -> bool:
+def decode_value(
+    value: Any,
+    *,
+    decode_bytes: bool = True,
+    preserve_arrays: bool = False,
+) -> Any:
+    if isinstance(value, bytes):
+        if not decode_bytes:
+            return value
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return value
+    if isinstance(value, str) and any("\udc80" <= char <= "\udcff" for char in value):
+        return value.encode("utf-8", errors="surrogateescape")
+    if hasattr(value, "shape") and value.shape == ():
+        return decode_value(
+            value.item(),
+            decode_bytes=decode_bytes,
+            preserve_arrays=preserve_arrays,
+        )
+    if hasattr(value, "tolist"):
+        if preserve_arrays and getattr(
+            getattr(value, "dtype", None), "kind", None
+        ) not in (
+            "O",
+            "S",
+        ):
+            return value
+        return decode_value(
+            value.tolist(),
+            decode_bytes=decode_bytes,
+            preserve_arrays=preserve_arrays,
+        )
+    if isinstance(value, list):
+        return [
+            decode_value(
+                item,
+                decode_bytes=decode_bytes,
+                preserve_arrays=preserve_arrays,
+            )
+            for item in value
+        ]
+    return value
+
+
+def tensorflow_batch_to_table(batch: Mapping[str, Any]) -> pa.Table:
+    """Convert a TensorFlow batch mapping into an Arrow table."""
+    tf = importlib.import_module("tensorflow")
+    return pa.table(
+        {name: _tensorflow_column(value, tf) for name, value in batch.items()}
+    )
+
+
+def _tensorflow_column(value: Any, tf) -> pa.Array | list[Any]:
+    if isinstance(value, Mapping):
+        names = []
+        columns = []
+        for name, child in value.items():
+            column = _tensorflow_column(child, tf)
+            names.append(name)
+            columns.append(column if isinstance(column, pa.Array) else pa.array(column))
+        if not columns:
+            return []
+        return pa.StructArray.from_arrays(columns, names=names)
+
+    if isinstance(value, tf.data.Dataset):
+        return [[tensorflow_value_to_python(row) for row in value.as_numpy_iterator()]]
+    if isinstance(value, tf.SparseTensor):
+        return tf.RaggedTensor.from_sparse(value).to_list()
+    if isinstance(value, tf.RaggedTensor):
+        return value.to_list()
+    array = value.numpy()
+    if not hasattr(array, "ndim"):
+        return pa.array([array])
+    if array.ndim == 0:
+        return pa.array([array.item()])
+    if array.ndim == 1:
+        return pa.array(array)
+    if array.dtype != object:
+        array_type = pa.from_numpy_dtype(array.dtype)
+        for dim in reversed(array.shape[1:]):
+            array_type = pa.list_(array_type, int(dim))
+        return pa.array(array.tolist(), type=array_type)
+    return array.tolist()
+
+
+def tensorflow_value_to_python(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            name: tensorflow_value_to_python(child) for name, child in value.items()
+        }
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    return value
+
+
+def path_selection_map(
+    value: PathSelection | None,
+    *,
+    format_name: str,
+    derive_names_from_paths: bool = True,
+) -> dict[str, str]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        name = value.rsplit("/", 1)[-1] if derive_names_from_paths else value
+        return {name: value}
+    if isinstance(value, Mapping):
+        return dict(cast(Mapping[str, str], value))
+    out: dict[str, str] = {}
+    for path in value:
+        name = path.rsplit("/", 1)[-1] if derive_names_from_paths else path
+        if name in out:
+            raise ValueError(
+                f"{format_name} path selections must have unique derived column names; "
+                f"use an explicit mapping for duplicate name {name!r}"
+            )
+        out[name] = path
+    return out
+
+
+def is_splittable_by_bytes(file: DataFile) -> bool:
     """Return True if the input can be safely sharded by byte offsets."""
-    lp = path.lower()
+    lp = file.path.lower()
     if lp.endswith(NON_SPLITTABLE_WHOLEFILE_EXTS):
         return False
     # best-effort: if raw file object is not seekable, treat as non-splittable
     try:
-        with fs.open(path, mode="rb") as f:
+        with file.open(mode="rb") as f:
             if hasattr(f, "seekable") and callable(f.seekable):
                 return bool(f.seekable())
     except Exception:
@@ -98,6 +228,10 @@ class BoundedBinaryReader(io.RawIOBase):
 __all__ = [
     "DEFAULT_TARGET_SHARD_BYTES",
     "NON_SPLITTABLE_WHOLEFILE_EXTS",
+    "PathSelection",
+    "decode_value",
+    "tensorflow_batch_to_table",
+    "path_selection_map",
     "is_splittable_by_bytes",
     "align_byte_range_to_newlines",
     "BoundedBinaryReader",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 
@@ -57,6 +57,27 @@ class BaseSink(ABC):
         """
         return None
 
+    def required_refiner_extras(self) -> tuple[str, ...]:
+        """macrodata-refiner extras required by this sink."""
+        return tuple(
+            sorted(
+                {
+                    *self._declared_refiner_extras(),
+                    *self._io_refiner_extras(),
+                }
+            )
+        )
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        """Feature extras declared by this sink."""
+        return ()
+
+    def _io_refiner_extras(self) -> tuple[str, ...]:
+        """Storage extras required by this sink's output, if it has one."""
+        if not hasattr(self, "output"):
+            return ()
+        return cast(Any, self).output.required_refiner_extras()
+
     def build_reducer(self) -> "BaseSink | None":
         """Return an optional 1-worker reducer sink for launched execution.
 
@@ -85,6 +106,10 @@ class BaseSink(ABC):
         Override this only when the sink keeps shard-local buffered state that
         should be finalized before `close()`.
         """
+        del shard_id
+
+    def on_shard_finalized(self, shard_id: str) -> None:
+        """Run cleanup after the shard has been marked complete."""
         del shard_id
 
     def close(self) -> None:

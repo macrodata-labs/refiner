@@ -20,32 +20,36 @@ _FIELD_PATTERNS = {
 _DEFAULT_FIELD_PATTERN = r"[^/]+"
 
 
-def _compile_managed_path_pattern(filename_template: str) -> re.Pattern[str]:
-    parts: list[str] = []
+def _compile_output_path_patterns(filename_template: str) -> list[re.Pattern[str]]:
+    path_parts: list[str] = []
+    patterns: list[re.Pattern[str]] = []
     seen_fields: set[str] = set()
 
-    for literal_text, field_name, format_spec, conversion in Formatter().parse(
-        filename_template
-    ):
-        parts.append(re.escape(literal_text))
-        if field_name is None:
-            continue
-        if conversion is not None or format_spec:
-            raise ValueError(
-                "filename_template reducer matching only supports plain "
-                "named fields without conversion or format specifiers"
-            )
-        if not field_name.isidentifier():
-            raise ValueError(
-                "filename_template reducer matching only supports plain named fields"
-            )
-        if field_name in seen_fields:
-            # Repeated fields in the template must resolve to the same path segment.
-            parts.append(f"(?P={field_name})")
-            continue
-        pattern = _FIELD_PATTERNS.get(field_name, _DEFAULT_FIELD_PATTERN)
-        parts.append(f"(?P<{field_name}>{pattern})")
-        seen_fields.add(field_name)
+    for segment in (part for part in filename_template.split("/") if part):
+        segment_parts: list[str] = []
+        for literal_text, field_name, format_spec, conversion in Formatter().parse(
+            segment
+        ):
+            segment_parts.append(re.escape(literal_text))
+            if field_name is None:
+                continue
+            if conversion is not None or format_spec:
+                raise ValueError(
+                    "filename_template reducer matching only supports plain "
+                    "named fields without conversion or format specifiers"
+                )
+            if not field_name.isidentifier():
+                raise ValueError(
+                    "filename_template reducer matching only supports plain named fields"
+                )
+            if field_name in seen_fields:
+                segment_parts.append(f"(?P={field_name})")
+                continue
+            pattern = _FIELD_PATTERNS.get(field_name, _DEFAULT_FIELD_PATTERN)
+            segment_parts.append(f"(?P<{field_name}>{pattern})")
+            seen_fields.add(field_name)
+        path_parts.append("".join(segment_parts))
+        patterns.append(re.compile("^" + "/".join(path_parts) + "$"))
 
     missing_fields = sorted(_REQUIRED_TEMPLATE_FIELDS.difference(seen_fields))
     if missing_fields:
@@ -54,7 +58,7 @@ def _compile_managed_path_pattern(filename_template: str) -> re.Pattern[str]:
             + ", ".join(f"{{{field_name}}}" for field_name in missing_fields)
         )
 
-    return re.compile("^" + "".join(parts) + "$")
+    return patterns
 
 
 class FileCleanupReducerSink(BaseSink):
@@ -72,7 +76,7 @@ class FileCleanupReducerSink(BaseSink):
         self.filename_template = filename_template
         self.reducer_name = reducer_name
         self.assets_subdir = assets_subdir
-        self._managed_path_pattern = _compile_managed_path_pattern(filename_template)
+        self._output_path_patterns = _compile_output_path_patterns(filename_template)
         self._cleanup_ran = False
 
     def write_shard_block(self, shard_id, block) -> None:
@@ -108,56 +112,67 @@ class FileCleanupReducerSink(BaseSink):
             )
 
         keep_pairs = {
-            (
-                row.shard_id,
-                row.worker_token,
-            )
+            (row.shard_id, row.worker_token)
             for row in get_finalized_workers(stage_index=stage_index - 1)
         }
 
-        try:
-            listed_paths = self.output.find("")
-        except FileNotFoundError:
-            listed_paths = []
-
-        assets_prefix = (
-            f"{self.assets_subdir.rstrip('/')}/"
-            if self.assets_subdir is not None
-            else None
+        literal_prefix = ""
+        for literal_text, field_name, _format_spec, _conversion in Formatter().parse(
+            self.filename_template
+        ):
+            literal_prefix += literal_text
+            if field_name is not None:
+                break
+        listing_prefix = (
+            "" if "/" not in literal_prefix else literal_prefix.rsplit("/", 1)[0]
         )
+        paths = [listing_prefix]
+        prefix_parts = [part for part in listing_prefix.split("/") if part]
+        for pattern in self._output_path_patterns[len(prefix_parts) :]:
+            next_paths: list[str] = []
+            for path in paths:
+                try:
+                    next_paths.extend(
+                        item
+                        for item in self.output.ls(path, detail=False)
+                        if pattern.fullmatch(item)
+                    )
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+            paths = next_paths
 
-        removed_asset_attempts: set[str] = set()
-        # Extra template fields are treated as structure only. Authority is decided
-        # solely from the finalized (shard_id, worker_id) pair extracted from each
-        # managed path.
-        for rel_path in listed_paths:
-            if not isinstance(rel_path, str) or not rel_path or rel_path == ".":
+        paths_to_delete: set[str] = set()
+        # Extra template fields are structure only. Authority is decided from
+        # the finalized (shard_id, worker_id) pair extracted from the path.
+        for rel_path in paths:
+            match = self._output_path_patterns[-1].fullmatch(rel_path)
+            if match is None:
                 continue
-            if assets_prefix is not None and (
-                rel_path == self.assets_subdir or rel_path.startswith(assets_prefix)
-            ):
-                attempt_dir = rel_path[len(assets_prefix) :].split("/", maxsplit=1)[0]
+            if (match.group("shard_id"), match.group("worker_id")) not in keep_pairs:
+                paths_to_delete.add(rel_path)
+
+        if self.assets_subdir is not None:
+            asset_prefix = f"{self.assets_subdir.rstrip('/')}/"
+            try:
+                asset_paths = self.output.find(self.assets_subdir)
+            except FileNotFoundError:
+                asset_paths = []
+            for rel_path in asset_paths:
+                if not rel_path.startswith(asset_prefix):
+                    continue
+                attempt_dir = rel_path[len(asset_prefix) :].split("/", maxsplit=1)[0]
                 match = ASSET_ATTEMPT_DIR_RE.fullmatch(attempt_dir)
                 if match is None:
                     continue
-                if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
-                    continue
-                if attempt_dir in removed_asset_attempts:
-                    continue
-                removed_asset_attempts.add(attempt_dir)
-                try:
-                    self.output.rm(f"{assets_prefix}{attempt_dir}", recursive=True)
-                except FileNotFoundError:
-                    continue
-                continue
+                if (
+                    match.group("shard_id"),
+                    match.group("worker_id"),
+                ) not in keep_pairs:
+                    paths_to_delete.add(f"{asset_prefix}{attempt_dir}")
 
-            match = self._managed_path_pattern.fullmatch(rel_path)
-            if match is None:
-                continue
-            if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
-                continue
+        for path in sorted(paths_to_delete):
             try:
-                self.output.rm(rel_path)
+                self.output.rm(path, recursive=True)
             except FileNotFoundError:
                 continue
 

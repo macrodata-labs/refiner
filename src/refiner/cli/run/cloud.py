@@ -268,8 +268,8 @@ def _build_snapshot(
     context: CloudAttachContext,
     job_payload: dict[str, Any],
 ) -> StageSnapshot:
-    job = job_payload.get("job")
-    if not isinstance(job, dict):
+    job = job_payload
+    if not isinstance(job.get("id"), str):
         raise RuntimeError("job details unavailable")
     stage_index, total_stages = _active_stage(job)
     current_stage: dict[str, Any] | None = None
@@ -343,8 +343,8 @@ def _cloud_context_from_job_payload(
     job_id: str,
     payload: dict[str, Any],
 ) -> CloudAttachContext:
-    job = payload.get("job")
-    if not isinstance(job, dict):
+    job = payload
+    if not isinstance(job.get("id"), str):
         raise RuntimeError("job details unavailable")
     workspace_slug = job.get("workspaceSlug")
     return CloudAttachContext(
@@ -482,8 +482,8 @@ def attach_to_cloud_job(
                     next_render_at, refreshed_now + _ATTACH_RENDER_INTERVAL_SECONDS
                 )
 
-            logs_available = isinstance(job_payload.get("job"), dict) and bool(
-                cast(dict[str, Any], job_payload["job"]).get("logsAvailable", True)
+            logs_available = isinstance(job_payload, dict) and bool(
+                job_payload.get("logsAvailable", True)
             )
             if log_mode == "none":
                 logs_available = False

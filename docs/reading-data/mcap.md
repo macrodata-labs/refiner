@@ -1,0 +1,500 @@
+---
+title: "MCAP reader"
+description: "Read MCAP robotics logs as episode rows"
+---
+
+# MCAP reader
+
+Use `read_mcap` for robotics or autonomy logs stored as MCAP files.
+
+```python
+import refiner as mdr
+
+pipeline = (
+    mdr.read_mcap(
+        "/data/logs/*.mcap",
+        fields={
+            "state": "/joint_states.position",
+            "action": "/joint_states.velocity",
+        },
+        videos={"front": "/camera/image/compressed"},
+        sync_primary="state",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="records",
+        state_key="state",
+        action_key="action",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+    )
+)
+```
+
+Install `macrodata-refiner[mcap]` to use this reader.
+
+Directory inputs are filtered to paths ending in `.mcap`. Explicit file paths
+and glob patterns are honored as written.
+
+## Output rows
+
+`read_mcap` emits one row per episode. By default, each input file is one
+episode. Use `episode_splitting` to split a file into multiple episodes; the
+next section describes the supported splitting modes.
+
+Each row includes:
+
+| Column | Meaning |
+| --- | --- |
+| `file_path` | Source MCAP file path. |
+| `episode_index` | Episode number within the file. |
+| `records` | `Tabular` records table. |
+| `videos` | Mapping of selected video names to video source values, when `videos` is set. |
+| `fps` | Explicit fps, or inferred fps when possible. |
+
+## Episode splitting
+
+`read_mcap` always emits episode rows. By default, each input MCAP file becomes
+one episode:
+
+```python
+mdr.read_mcap("run.mcap")
+```
+
+Use `episode_splitting={"time_gap_s": seconds}` when episodes are separated by a
+long pause in the log:
+
+```python
+mdr.read_mcap(
+    "run.mcap",
+    episode_splitting={"time_gap_s": 5.0},
+)
+```
+
+The reader gathers selected message timestamps, sorts them by log time, and
+starts a new episode whenever the gap between consecutive timestamps is greater
+than the threshold. The split is based on MCAP log timestamps, not file order.
+
+Use `episode_splitting={"marker_topic": topic}` when the log contains explicit
+episode markers:
+
+```python
+mdr.read_mcap(
+    "run.mcap",
+    fields={"state": "/state.q"},
+    episode_splitting={"marker_topic": "/episode_start"},
+)
+```
+
+Each marker timestamp starts an episode. The episode ends at the next marker, or
+at the end of the file for the final marker. Marker messages are used only for
+splitting and are not included as default record columns.
+
+If there are no messages, no time gaps, or no marker messages, the reader falls
+back to one episode for the file.
+
+## Selecting fields
+
+`fields` maps output records table columns to MCAP sources:
+
+```python
+mdr.read_mcap(
+    "run.mcap",
+    fields={
+        "state": "/joint_states.position",
+        "target": "/cmd.target",
+    },
+)
+```
+
+A source can be a whole topic, such as `"/joint_states"`, or a decoded subfield,
+such as `"/joint_states.position"`. The reader first checks whether the exact
+source string is a topic. If not, it treats the longest matching topic prefix as
+the topic and the remainder as a dotted field path.
+
+If `fields` is omitted, decoded object messages are expanded into default
+columns like `"/joint_states.position"`. Selected video topics and marker topics
+are excluded from those default record columns.
+
+When `fields` is set, the reader loads the topics needed by `fields`, `videos`,
+`sync_primary`, and marker-based episode splitting. When `fields` is omitted, it reads
+all topics and builds default record columns from decoded non-video messages.
+
+## Decoding
+
+`read_mcap` decodes JSON messages, ROS2 messages, and protobuf messages when the
+matching optional decoder is available. Decoded object messages can be selected
+with dotted field paths like `"/joint_states.position"`.
+
+Unknown encodings are preserved as raw bytes. Field paths cannot be applied to
+raw bytes; select the whole topic or decode the payload before using subfields.
+
+## Synchronization
+
+MCAP logs usually contain multiple topics with different rates: robot state,
+actions, camera frames, commands, diagnostics, and events may not share exactly
+the same timestamps. `read_mcap` supports these synchronization choices:
+
+| Mode | How to select it | Output rows | Best for |
+| --- | --- | --- | --- |
+| Unsynchronized | Leave `sync_primary=None` | One records table row for each selected field value timestamp. Missing fields are null. Selected videos stay separate in `videos`. | Event logs, debugging, preserving each topic's original timing. |
+| Field sync-primary aligned | Set `sync_primary` to a selected field name, topic, or dotted source path. | One records table row for each sync-primary field timestamp. Other fields and videos are aligned with `sync_method`. | Robot state or action streams that define the trajectory clock. |
+| Video sync-primary aligned | Set `sync_primary` to a selected video name, video topic, or dotted video source path. | One records table row for each sync-primary video frame timestamp. Fields and other videos are aligned with `sync_method`. | Camera-driven datasets where image frames define the output rows. |
+
+### Unsynchronized mode
+
+Use unsynchronized mode by leaving `sync_primary` unset:
+
+```python
+mdr.read_mcap(
+    "run.mcap",
+    fields={
+        "state": "/joint_states.position",
+        "command": "/cmd.target",
+    },
+)
+```
+
+This creates one records table over the union of selected field value
+timestamps. Messages where a selected dotted subfield is absent are skipped.
+For example, if state arrives at `0.0` and `1.0` seconds, while commands
+arrive at `0.5` seconds, the output is:
+
+| timestamp | state | command |
+| --- | --- | --- |
+| `0.0` | `[1, 2]` | null |
+| `0.5` | null | `[10]` |
+| `1.0` | `[3, 4]` | null |
+
+If two selected messages have the exact same timestamp, they become separate
+rows so no message is dropped:
+
+| timestamp | state |
+| --- | --- |
+| `1.0` | `[1, 2]` |
+| `1.0` | `[3, 4]` |
+
+### Sync-Primary-Aligned mode
+
+Use sync-primary-aligned mode by setting `sync_primary` to the source that
+should define the output frame rate:
+
+```python
+mdr.read_mcap(
+    "run.mcap",
+    fields={
+        "state": "/joint_states.position",
+        "command": "/cmd.target",
+    },
+    sync_primary="state",
+)
+```
+
+`sync_primary` can be an output field name (`"state"`), a video name, a topic,
+or a dotted source path. Its timestamps define the output rows. In field
+sync-primary and video sync-primary mode, every non-sync-primary field and
+selected video is aligned to those rows with `sync_method`. In unsynchronized
+mode, no alignment is applied.
+
+`sync_method` applies globally to all non-sync-primary fields and videos:
+
+| Method | Behavior |
+| --- | --- |
+| `"nearest"` | Use the closest source timestamp before or after the sync-primary timestamp. |
+| `"hold"` | Use the most recent source value at or before the sync-primary timestamp. |
+| `"interpolate"` | Linearly interpolate numeric scalar/list/array values. Non-numeric values and videos fall back to nearest. |
+
+For example, if state is the sync-primary source and command messages arrive
+slightly after each state sample:
+
+| state timestamp | nearest command timestamp | state | command |
+| --- | --- | --- | --- |
+| `0.0` | `0.1` | `[1, 2]` | `[10]` |
+| `1.0` | `0.9` | `[3, 4]` | `[20]` |
+| `2.0` | `0.9` | `[5, 6]` | `[20]` |
+
+If `include_skew=True`, `read_mcap` also adds columns such as
+`mcap.command.timestamp` and `mcap.command.skew_ms` so you can inspect how far
+each non-primary aligned value was from the sync-primary timestamp. Set
+`include_skew=False` to omit those diagnostic columns.
+
+The reader does not assume raw MCAP events arrive in timestamp order. It sorts
+timestamps where ordering affects semantics: splitting, unsynchronized record
+rows, sync-primary alignment, and fps inference.
+
+## FPS
+
+Pass a positive `fps=...` when you already know the intended episode frame rate:
+
+```python
+mdr.read_mcap("run.mcap", sync_primary="state", fps=30)
+```
+
+If `fps` is omitted and `sync_primary` is set, the reader infers fps from the
+median gap between sync-primary timestamps. If neither explicit fps nor inferred fps is
+available, the row has no `fps` column. Selected videos still need an fps value,
+so video sources fall back to `30` when no better value is available. Near
+integer inferred rates are normalized, so nanosecond-rounded `30 fps` timelines
+do not become `30.0000003`.
+
+## Videos
+
+`videos` maps video names to MCAP sources:
+
+```python
+mdr.read_mcap(
+    "run.mcap",
+    videos={"front": "/camera/image/compressed"},
+    sync_primary="front",
+    fps=30,
+)
+```
+
+Each selected video becomes a frame sequence under the row's `videos` column.
+When you later call `to_robot_rows`, map those values into semantic video keys:
+
+```python
+pipeline = (
+    mdr.read_mcap(
+        "run.mcap",
+        fields={"state": "/joint_states.position"},
+        videos={"front": "/camera/image/compressed"},
+        sync_primary="state",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="records",
+        state_key="state",
+        action_key=None,
+        timestamp_key="timestamp",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+    )
+)
+```
+
+Video sources must resolve to image-like frame payloads: ROS compressed image
+messages, raw ROS image messages, decoded image arrays, or base64 image bytes.
+H.264 packet topics are decoded when messages include `format="h264"` and
+base64 or bytes `data`; the reader uses MCAP log timestamps as the frame clock.
+
+When `sync_primary` is set, videos are aligned to the sync-primary timestamps with
+`sync_method`, except `"interpolate"` falls back to nearest because video frames
+are not numeric arrays. When `sync_primary` is omitted, each video keeps the frames
+from its own topic timestamps.
+
+Using a video as `sync_primary` is useful when camera frames should define the output
+rows:
+
+```python
+mdr.read_mcap(
+    "run.mcap",
+    fields={"state": "/joint_states.position"},
+    videos={"front": "/camera/image/compressed"},
+    sync_primary="front",
+    fps=30,
+)
+```
+
+## Performance trade-offs
+
+By default, `read_mcap` buffers decoded messages for the whole MCAP file before
+emitting episode rows. This favors sequential reads and is usually best for
+throughput, especially on cloud object storage, but peak memory grows with the
+selected decoded messages and video frames.
+
+For throughput-sensitive reads, pass explicit `fields` and `videos` selections.
+That limits decoding to the required topics and skips default record-column
+discovery across every decoded non-video message. Explicit decoded subfields can
+also avoid normalizing whole protobuf or ROS messages before extracting values.
+
+The `stream_episodes` option is the low-memory path for split episodes. When
+`stream_episodes=True` and `episode_splitting` is not `"single"`, the reader
+uses MCAP log-time ordering and buffers one episode at a time. This lowers peak
+application memory, but it can be slower: seekable indexed MCAPs may require
+chunk seeks, and on S3-like storage those seeks can become ranged requests.
+
+For non-seekable streams, `stream_episodes=True` falls back to buffered reading
+because MCAP log-time ordering would require buffering and sorting the stream.
+If the MCAP was written in log-time order, set `assume_log_time_order=True` to
+stream non-seekable or unindexed files in physical file order instead. When
+`episode_splitting="single"`, `stream_episodes` is ignored because the single
+episode is the whole file.
+
+For non-seekable streams without an MCAP summary, explicit dotted selections may
+still require scanning all topics because the reader cannot resolve source
+strings to exact MCAP topics before reading.
+
+## Conversion examples
+
+Convert the Franka MCAP sample from Hugging Face to LeRobot and Zarr. The
+camera topic is the sync primary, so each output row corresponds to one decoded
+image frame and the robot state/action fields are aligned to that frame clock:
+
+```python
+source = (
+    mdr.read_mcap(
+        "hf://datasets/SLAI-scientific-embodied-2026/"
+        "Franka1_mcap_short_task1_0520/"
+        "task101-bag_20260517_195933/"
+        "task101-bag_20260517_195933_0.mcap",
+        fields={
+            "state": "/joint_states.position",
+            "action": "/joint_states.velocity",
+        },
+        videos={"front": "/cam1/realsense_camera/color/image_raw/compressed"},
+        sync_primary="front",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="records",
+        state_key="state",
+        action_key="action",
+        timestamp_key="timestamp",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+        robot_type="franka",
+    )
+)
+
+source.write_lerobot("s3://bucket/slai-franka-lerobot")
+source.write_zarr("s3://bucket/slai-franka.zarr")
+```
+
+Convert an H.264 packet video topic the same way. Messages on the selected
+topic must include `format="h264"` and base64 or bytes `data`:
+
+```python
+(
+    mdr.read_mcap(
+        "run.mcap",
+        fields={},
+        videos={"front": "/camera/h264"},
+        sync_primary="front",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="records",
+        state_key=None,
+        action_key=None,
+        timestamp_key="timestamp",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+    )
+    .write_lerobot("s3://bucket/h264-video-dataset")
+)
+```
+
+Convert MCAP robot logs to LeRobot:
+
+```python
+(
+    mdr.read_mcap(
+        "run.mcap",
+        fields={
+            "state": "/joint_states.position",
+            "action": "/joint_states.velocity",
+        },
+        videos={"front": "/camera/image/compressed"},
+        sync_primary="state",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="records",
+        state_key="state",
+        action_key="action",
+        timestamp_key="timestamp",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+        robot_type="franka",
+    )
+    .write_lerobot("s3://bucket/robot-dataset")
+)
+```
+
+Convert MCAP robot logs to Zarr:
+
+```python
+(
+    mdr.read_mcap(
+        "run.mcap",
+        fields={"state": "/joint_states.position"},
+        videos={"front": "/camera/image/compressed"},
+        sync_primary="state",
+        fps=30,
+    )
+    .to_robot_rows(
+        nested_frames_key="records",
+        state_key="state",
+        action_key=None,
+        timestamp_key="timestamp",
+        video_keys={"observation.images.front": "videos/front"},
+        fps_key="fps",
+    )
+    .write_zarr("s3://bucket/robot-dataset.zarr")
+)
+```
+
+For non-robotics event logs, write the record fields directly:
+
+```python
+(
+    mdr.read_mcap(
+        "events.mcap",
+        fields={
+            "mouse_x": "mouse/state.x",
+            "key": "keyboard.vk",
+        },
+    )
+    .flat_map(
+        lambda row: [
+            frame.update(
+                {
+                    "file_path": row["file_path"],
+                    "episode_index": row["episode_index"],
+                }
+            )
+            for frame in row["records"]
+        ]
+    )
+    .write_parquet("s3://bucket/mcap-events")
+)
+```
+
+## Limitations
+
+- There is no max-skew cutoff or automatic row dropping. Use the generated
+  `mcap.<field>.skew_ms` columns to filter after reading.
+- H.264 packet topics are decoded only when messages include `format="h264"`
+  and base64 or bytes `data`.
+- MCAP files are read as atomic files. They are not split by byte range across
+  workers.
+- Folder discovery only includes files with the `.mcap` extension. Explicit
+  file paths and glob patterns are honored as written.
+
+## Options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `inputs` | required | MCAP file, glob, folder, or list of inputs. |
+| `fs` | `None` | Optional fsspec filesystem for string inputs. |
+| `storage_options` | `None` | Optional fsspec options when constructing a filesystem. |
+| `recursive` | `False` | Recursively list folder inputs. |
+| `target_shard_bytes` | `128 MiB` | Target file-shard planning size. MCAP files remain atomic. |
+| `num_shards` | `None` | Optional target number of planned shards. |
+| `file_path_column` | `"file_path"` | Source file column name. Set to `None` to omit it. Cannot collide with `records`, `episode_index`, `videos`, or `fps`. |
+| `episode_splitting` | `"single"` | One file per episode, `{"time_gap_s": seconds}`, or `{"marker_topic": topic}`. |
+| `stream_episodes` | `False` | Buffer one split episode at a time for seekable indexed MCAPs. Ignored for single-episode reads. |
+| `assume_log_time_order` | `False` | With `stream_episodes=True`, stream non-seekable or unindexed split files in physical file order. Use only when messages are already ordered by log time. |
+| `fields` | `None` | Mapping, sequence, or string selecting record fields. |
+| `videos` | `None` | Mapping, sequence, or string selecting image-like video frame sources. |
+| `sync_primary` | `None` | Source used for sync-primary-aligned synchronization. |
+| `sync_method` | `"nearest"` | Alignment method for sync-primary-aligned mode: `"nearest"`, `"hold"`, or `"interpolate"`. |
+| `include_skew` | `True` | Add alignment timestamp/skew columns in sync-primary-aligned mode. |
+| `fps` | `None` | Positive explicit frame rate. Overrides inferred fps. |
+
+## Related pages
+
+- [Reader Model](reader-model.md)
+- [Files and Videos](files-and-videos.md)
+- [Converting to Robot Rows](../episode-data/converting-to-robot-rows.md)

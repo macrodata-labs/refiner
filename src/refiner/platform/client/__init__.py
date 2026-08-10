@@ -7,7 +7,14 @@ from refiner.platform.client.api import (
     verify_api_key,
 )
 from refiner.platform.client.models import (
-    CloudPipelinePayload,
+    CloudFileCompleteRequestItem,
+    CloudFileCompleteResponse,
+    CloudFileCompleteResult,
+    CloudFileUploadInstruction,
+    CloudFileUploadRequestItem,
+    CloudFileUploadStatus,
+    CloudFileUploadUrlsResponse,
+    CloudFile,
     CloudRunCreateRequest,
     CloudRunCreateResponse,
     CloudRuntimeConfig,
@@ -23,20 +30,22 @@ from refiner.platform.client.models import (
     WorkspaceIdentity,
     WorkerStartedResponse,
 )
-from refiner.platform.client.serialize import (
-    INLINE_PIPELINE_PAYLOAD_MAX_BYTES,
-    serialize_pipeline_inline,
-)
 
 __all__ = [
-    "CloudPipelinePayload",
+    "CloudFile",
+    "CloudFileCompleteRequestItem",
+    "CloudFileCompleteResponse",
+    "CloudFileCompleteResult",
+    "CloudFileUploadInstruction",
+    "CloudFileUploadRequestItem",
+    "CloudFileUploadStatus",
+    "CloudFileUploadUrlsResponse",
     "CloudRunCreateRequest",
     "CloudRunCreateResponse",
     "CloudRuntimeConfig",
     "CreateJobResponse",
     "FinalizedShardWorker",
     "FinalizedShardWorkersResponse",
-    "INLINE_PIPELINE_PAYLOAD_MAX_BYTES",
     "MacrodataClient",
     "MacrodataApiError",
     "OkResponse",
@@ -50,6 +59,5 @@ __all__ = [
     "request_json",
     "resolve_platform_base_url",
     "sanitize_terminal_text",
-    "serialize_pipeline_inline",
     "verify_api_key",
 ]

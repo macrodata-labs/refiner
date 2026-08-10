@@ -12,14 +12,14 @@ from refiner.services.base import RuntimeServiceBinding, RuntimeServiceSpec
 @dataclass(frozen=True, slots=True)
 class VLLMServiceDefinition:
     model_name_or_path: str
-    config: Literal["correctness", "throughput"] = "correctness"
+    config: Literal["throughput"] = "throughput"
     kind: str = "llm"
 
     def __post_init__(self) -> None:
         if not self.model_name_or_path.strip():
             raise ValueError("model_name_or_path must be non-empty")
-        if self.config not in {"correctness", "throughput"}:
-            raise ValueError("config must be 'correctness' or 'throughput'")
+        if self.config != "throughput":
+            raise ValueError("config must be 'throughput'")
 
     @property
     def name(self) -> str:
