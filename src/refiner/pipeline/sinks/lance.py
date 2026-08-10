@@ -840,20 +840,18 @@ class LanceDatasetCommitReducerSink(BaseSink):
         existing = self._load_existing_dataset(lance)
         if existing is None:
             return False
-        available_versions = {
-            int(version_info["version"])
-            for version_info in existing.versions()
-            if isinstance(version_info.get("version"), int)
-        }
-        candidate_versions = (
-            available_versions
-            if search_history
-            else {int(existing.version), *expected_versions}.intersection(
-                available_versions
-            )
-        )
+        candidate_versions = {int(existing.version), *expected_versions}
+        if search_history:
+            candidate_versions = {
+                int(version_info["version"])
+                for version_info in existing.versions()
+                if isinstance(version_info.get("version"), int)
+            }
         for version in sorted(candidate_versions, reverse=True):
-            transaction = existing.read_transaction(version)
+            try:
+                transaction = existing.read_transaction(version)
+            except (FileNotFoundError, OSError, ValueError):
+                continue
             properties = getattr(transaction, "transaction_properties", None)
             if (
                 isinstance(properties, dict)
