@@ -93,6 +93,7 @@ def execute_segments(
                 max_vectorized_block_bytes=max_vectorized_block_bytes,
                 on_shard_delta=on_shard_delta,
                 input_schema=current_schema,
+                protected_columns=protected_columns,
             )
             current_schema = _segment_schema(current_schema, segment)
         else:
@@ -305,6 +306,7 @@ def _execute_vector_segment(
     max_vectorized_block_bytes: int | None,
     on_shard_delta: ShardDeltaFn | None,
     input_schema: pa.Schema | None,
+    protected_columns: frozenset[str],
 ) -> Iterator[Tabular]:
     pending_rows = RowBuffer()
     current_chunk_rows = max(1, int(vectorized_chunk_rows))
@@ -320,6 +322,7 @@ def _execute_vector_segment(
                 block.table,
                 ops,
                 on_shard_delta=on_shard_delta,
+                protected_columns=protected_columns,
             )
             return block.with_table(table)
         table, row_indices = apply_vectorized_ops(
@@ -327,6 +330,7 @@ def _execute_vector_segment(
             ops,
             on_shard_delta=on_shard_delta,
             return_row_indices=True,
+            protected_columns=protected_columns,
         )
         return block.with_table(table, row_indices=row_indices)
 

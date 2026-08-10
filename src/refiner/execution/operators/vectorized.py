@@ -42,6 +42,7 @@ def apply_vectorized_op(
     shard_counts: dict[str, int] | None = None,
     row_indices: RowIndices = None,
     return_row_indices: bool = False,
+    protected_columns: frozenset[str] = frozenset(),
 ) -> tuple[pa.Table, dict[str, int] | None, RowIndices]:
     if shard_counts is None:
         shard_counts = count_table_by_shard(table)
@@ -144,6 +145,12 @@ def apply_vectorized_op(
             raise TypeError(
                 f"map_table() must return pa.Table, got {type(next_table)!r}"
             )
+        missing_protected = protected_columns.difference(next_table.column_names)
+        if missing_protected:
+            raise ValueError(
+                "map_table() must preserve protected source column "
+                f"{sorted(missing_protected)[0]}"
+            )
         next_row_indices = None
         if return_row_indices:
             if _ROW_INDEX_COLUMN not in next_table.column_names:
@@ -173,6 +180,7 @@ def apply_vectorized_ops(
     *,
     on_shard_delta: ShardDeltaFn | None = None,
     return_row_indices: Literal[False] = False,
+    protected_columns: frozenset[str] = frozenset(),
 ) -> pa.Table: ...
 
 
@@ -183,6 +191,7 @@ def apply_vectorized_ops(
     *,
     on_shard_delta: ShardDeltaFn | None = None,
     return_row_indices: Literal[True],
+    protected_columns: frozenset[str] = frozenset(),
 ) -> tuple[pa.Table, tuple[int, ...] | None]: ...
 
 
@@ -192,6 +201,7 @@ def apply_vectorized_ops(
     *,
     on_shard_delta: ShardDeltaFn | None = None,
     return_row_indices: bool = False,
+    protected_columns: frozenset[str] = frozenset(),
 ) -> pa.Table | tuple[pa.Table, tuple[int, ...] | None]:
     initial_shard_counts = count_table_by_shard(table)
     shard_counts = initial_shard_counts
@@ -214,6 +224,7 @@ def apply_vectorized_ops(
             shard_counts=shard_counts,
             row_indices=row_indices,
             return_row_indices=return_row_indices,
+            protected_columns=protected_columns,
         )
         if next_shard_counts is not None:
             shard_counts = next_shard_counts

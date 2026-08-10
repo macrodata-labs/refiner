@@ -253,6 +253,22 @@ def test_apply_vectorized_ops_requires_map_table_lineage_when_tracking() -> None
         )
 
 
+def test_apply_vectorized_ops_requires_protected_source_columns() -> None:
+    table = pa.table({SHARD_ID_COLUMN: pa.array(["s1"]), "protected": pa.array([1])})
+
+    with pytest.raises(ValueError, match="must preserve protected source column"):
+        apply_vectorized_ops(
+            table,
+            [
+                FnTableStep(
+                    fn=lambda current: current.drop_columns(["protected"]),
+                    index=1,
+                )
+            ],
+            protected_columns=frozenset({"protected"}),
+        )
+
+
 def test_map_table_does_not_fall_back_to_row_execution(monkeypatch) -> None:
     def _unexpected_row_execution(*args, **kwargs):
         raise AssertionError("row execution should not run for fused vectorized ops")
