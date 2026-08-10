@@ -43,6 +43,11 @@ class BaseSource(ABC):
     def schema(self) -> pa.Schema | None:
         return None
 
+    @property
+    def protected_columns(self) -> frozenset[str]:
+        """Columns required during execution but hidden from public output."""
+        return frozenset()
+
     def describe(self) -> dict[str, Any]:
         """Optional source metadata for planning/observability."""
         return {}

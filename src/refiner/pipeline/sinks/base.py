@@ -95,6 +95,11 @@ class BaseSink(ABC):
         """Whether blocks written into this sink should count toward output_rows."""
         return True
 
+    @property
+    def retained_source_columns(self) -> frozenset[str]:
+        """Protected source columns this sink needs at its input boundary."""
+        return frozenset()
+
     def on_shard_complete(self, shard_id: str) -> None:
         """Flush or finalize state for one shard after upstream completion.
 

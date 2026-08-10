@@ -58,7 +58,6 @@ from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
-from refiner.pipeline.sources.lance import LANCE_INTERNAL_COLUMNS
 from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
@@ -123,10 +122,7 @@ class RefinerPipeline:
         self.sink = sink
 
     def _protected_columns(self) -> set[str]:
-        columns = {SHARD_ID_COLUMN}
-        if isinstance(self.source, LanceSource):
-            columns.update(LANCE_INTERNAL_COLUMNS)
-        return columns
+        return {SHARD_ID_COLUMN, *self.source.protected_columns}
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
         """Return a new pipeline with one transform step appended.
@@ -206,22 +202,20 @@ class RefinerPipeline:
         )
 
     def _prepare_sink_block(self, block: Block) -> Block:
-        if not isinstance(self.source, LanceSource) or (
-            isinstance(self.sink, LanceDatasetSink) and self.sink.mode == "add_columns"
-        ):
+        retained = (
+            self.sink.retained_source_columns if self.sink is not None else frozenset()
+        )
+        hidden = self.source.protected_columns.difference(retained)
+        if not hidden:
             return block
         if isinstance(block, Tabular):
-            present = [
-                column
-                for column in LANCE_INTERNAL_COLUMNS
-                if column in block.schema.names
-            ]
+            present = [column for column in hidden if column in block.schema.names]
             return (
                 block.with_table(block.table.drop_columns(present))
                 if present
                 else block
             )
-        return [row.drop(*LANCE_INTERNAL_COLUMNS) for row in block]
+        return [row.drop(*hidden) for row in block]
 
     def _get_compiled_segments(self) -> tuple[Segment, ...]:
         """Compile and cache execution segments for the current step sequence.
@@ -241,10 +235,14 @@ class RefinerPipeline:
         fields not visible here unless they declare ``dtypes``.
         """
         schema = self._execution_output_schema()
-        if schema is None or not isinstance(self.source, LanceSource):
+        if schema is None or not self.source.protected_columns:
             return schema
         return pa.schema(
-            [field for field in schema if field.name not in LANCE_INTERNAL_COLUMNS],
+            [
+                field
+                for field in schema
+                if field.name not in self.source.protected_columns
+            ],
             metadata=schema.metadata,
         )
 
@@ -462,9 +460,7 @@ class RefinerPipeline:
         invalid = internal_columns.intersection(columns)
         if invalid:
             raise ValueError(f"{sorted(invalid)[0]} is an internal column")
-        preserved = (SHARD_ID_COLUMN,)
-        if isinstance(self.source, LanceSource):
-            preserved += tuple(sorted(LANCE_INTERNAL_COLUMNS))
+        preserved = (SHARD_ID_COLUMN, *sorted(self.source.protected_columns))
         return self._add_vectorized_op(
             SelectStep(
                 columns=tuple(columns) + preserved,
@@ -576,11 +572,7 @@ class RefinerPipeline:
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             on_shard_delta=on_shard_delta,
             input_schema=self.source.schema,
-            protected_columns=(
-                LANCE_INTERNAL_COLUMNS
-                if isinstance(self.source, LanceSource)
-                else frozenset()
-            ),
+            protected_columns=self.source.protected_columns,
         )
 
     def iter_rows(self) -> Iterable[Row]:
@@ -591,8 +583,8 @@ class RefinerPipeline:
         ``launch_cloud`` to execute writers.
         """
         rows = iter_rows(self.execute(self.source.read()))
-        if isinstance(self.source, LanceSource):
-            return (row.drop(*LANCE_INTERNAL_COLUMNS) for row in rows)
+        if self.source.protected_columns:
+            return (row.drop(*self.source.protected_columns) for row in rows)
         return rows
 
     def list_shards(self):

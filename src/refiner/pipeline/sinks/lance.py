@@ -17,7 +17,6 @@ from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.sinks.base import BaseSink
-from refiner.pipeline.sinks.lance_file import LanceSink
 from refiner.pipeline.sinks.lance_schema import (
     lance_schema_from_payload as _lance_schema_from_payload,
     lance_schema_to_payload as _lance_schema_to_payload,
@@ -271,8 +270,8 @@ def _relocate_fragment_files(
             )
             target_path = posixpath.join("data", target_fragment_path)
             output.file(source_path).copy(output.file(target_path))
-            output.rm(source_path)
             moved.append((source_path, target_path))
+            output.rm(source_path)
             file_info["path"] = target_fragment_path
             relocated.append(target_path)
     except Exception:
@@ -395,6 +394,10 @@ class LanceDatasetSink(BaseSink):
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("lance",)
+
+    @property
+    def retained_source_columns(self) -> frozenset[str]:
+        return LANCE_INTERNAL_COLUMNS if self.mode == "add_columns" else frozenset()
 
     def _dataset_uri(self) -> str:
         return self.output.abs_path()
@@ -1034,67 +1037,55 @@ class LanceDatasetCommitReducerSink(BaseSink):
         source_fragment_ids: set[int] = set()
         selected_created_files: list[str] = []
         lance_schema_payload: dict[str, object] | None = None
-        for rel_path in sorted(metadata_paths):
-            (
-                next_schema,
-                next_fragments,
-                next_created_files,
-                next_source_version,
-                next_source_fragment_id,
-                next_lance_schema,
-            ) = self._read_metadata(rel_path)
-            next_created_files = self._verified_created_files(
-                lance,
-                fragments=next_fragments,
-                created_files=next_created_files,
-                source_version=next_source_version,
-                source_fragment_id=next_source_fragment_id,
-                metadata_path=rel_path,
-            )
-            if schema is None:
-                schema = next_schema
-            elif not schema.equals(next_schema):
-                raise ValueError(
-                    "Cannot commit Lance fragments with inconsistent schemas."
+        try:
+            for rel_path in sorted(metadata_paths):
+                (
+                    next_schema,
+                    next_fragments,
+                    next_created_files,
+                    next_source_version,
+                    next_source_fragment_id,
+                    next_lance_schema,
+                ) = self._read_metadata(rel_path)
+                next_created_files = self._verified_created_files(
+                    lance,
+                    fragments=next_fragments,
+                    created_files=next_created_files,
+                    source_version=next_source_version,
+                    source_fragment_id=next_source_fragment_id,
+                    metadata_path=rel_path,
                 )
-            fragment_json.extend(next_fragments)
-            selected_created_files.extend(next_created_files)
-            if next_source_version is not None:
-                source_versions.add(next_source_version)
-            if next_source_fragment_id is not None:
-                if next_source_fragment_id in source_fragment_ids:
+                selected_created_files.extend(next_created_files)
+                if schema is None:
+                    schema = next_schema
+                elif not schema.equals(next_schema):
                     raise ValueError(
-                        f"Duplicate Lance fragment result: {next_source_fragment_id}"
+                        "Cannot commit Lance fragments with inconsistent schemas."
                     )
-                source_fragment_ids.add(next_source_fragment_id)
-            if next_lance_schema is not None:
-                if lance_schema_payload is None:
-                    lance_schema_payload = next_lance_schema
-                elif lance_schema_payload != next_lance_schema:
-                    raise ValueError(
-                        "Cannot commit Lance fragments with inconsistent field IDs."
-                    )
+                fragment_json.extend(next_fragments)
+                if next_source_version is not None:
+                    source_versions.add(next_source_version)
+                if next_source_fragment_id is not None:
+                    if next_source_fragment_id in source_fragment_ids:
+                        raise ValueError(
+                            "Duplicate Lance fragment result: "
+                            f"{next_source_fragment_id}"
+                        )
+                    source_fragment_ids.add(next_source_fragment_id)
+                if next_lance_schema is not None:
+                    if lance_schema_payload is None:
+                        lance_schema_payload = next_lance_schema
+                    elif lance_schema_payload != next_lance_schema:
+                        raise ValueError(
+                            "Cannot commit Lance fragments with inconsistent field IDs."
+                        )
+            self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
+        except Exception:
+            self._cleanup_failed_commit(metadata_paths, selected_created_files)
+            raise
 
         if schema is None or not fragment_json:
             return
-
-        try:
-            self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
-        except Exception:
-            self._cleanup_rejected_data(selected_created_files)
-            for rel_path in metadata_paths:
-                try:
-                    self.output.rm(rel_path)
-                except FileNotFoundError:
-                    continue
-                except Exception as err:  # noqa: BLE001
-                    logger.warning(
-                        "Lance failed-commit metadata cleanup failed path={}: {}: {}",
-                        rel_path,
-                        type(err).__name__,
-                        err,
-                    )
-            raise
         commit_message = self._commit_message(
             schema=schema,
             fragments=fragment_json,
@@ -1204,5 +1195,24 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     err,
                 )
 
+    def _cleanup_failed_commit(
+        self,
+        metadata_paths: Sequence[str],
+        created_files: Sequence[str],
+    ) -> None:
+        self._cleanup_rejected_data(created_files)
+        for rel_path in metadata_paths:
+            try:
+                self.output.rm(rel_path)
+            except FileNotFoundError:
+                continue
+            except Exception as err:  # noqa: BLE001
+                logger.warning(
+                    "Lance failed-commit metadata cleanup failed path={}: {}: {}",
+                    rel_path,
+                    type(err).__name__,
+                    err,
+                )
 
-__all__ = ["LanceDatasetCommitReducerSink", "LanceDatasetSink", "LanceSink"]
+
+__all__ = ["LanceDatasetCommitReducerSink", "LanceDatasetSink", "LanceWriteMode"]

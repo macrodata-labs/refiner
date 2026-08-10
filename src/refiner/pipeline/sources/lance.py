@@ -92,6 +92,10 @@ class LanceSource(BaseSource):
     def schema(self) -> pa.Schema:
         return self._schema
 
+    @property
+    def protected_columns(self) -> frozenset[str]:
+        return LANCE_INTERNAL_COLUMNS
+
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("lance",)
 

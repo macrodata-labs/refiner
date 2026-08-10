@@ -825,6 +825,44 @@ def test_lance_reducer_rejects_files_outside_worker_attempt(tmp_path) -> None:
         )
 
 
+def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
+    pytest.importorskip("lance")
+    output_dir = tmp_path / "schema-mismatch.lance"
+    finalized = [
+        FinalizedShardWorker(shard_id="0123456789ab", worker_id="worker-1"),
+        FinalizedShardWorker(shard_id="abcdef012345", worker_id="worker-2"),
+    ]
+    runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime(finalized))
+
+    for finalized_worker, value in zip(finalized, [1, "two"], strict=True):
+        sink = LanceDatasetSink(output_dir)
+        with set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=finalized_worker.worker_id,
+            worker_name=None,
+            runtime_lifecycle=runtime,
+        ):
+            sink.write_block(
+                [DictRow({"x": value}, shard_id=finalized_worker.shard_id)]
+            )
+            sink.on_shard_complete(finalized_worker.shard_id)
+
+    reducer = LanceDatasetCommitReducerSink(output_dir, mode="create")
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        with pytest.raises(ValueError, match="inconsistent schemas"):
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert not list((output_dir / "data").glob("*.lance"))
+    assert not list((output_dir / "_refiner_lance_fragments").glob("**/*.jsonl"))
+
+
 def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> None:
     output_dir = tmp_path / "vectorized-output"
     pipeline = (
