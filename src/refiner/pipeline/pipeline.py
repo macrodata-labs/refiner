@@ -258,13 +258,16 @@ class RefinerPipeline:
             else:
                 steps.append(step)
         for step in steps:
-            if isinstance(step, (WithColumnsStep, FnTableStep)):
-                return False
-            if (
-                isinstance(
-                    step, (FnRowStep, FnAsyncRowStep, FnBatchStep, FnFlatMapStep)
-                )
-                and not step.dtypes
+            if isinstance(
+                step,
+                (
+                    WithColumnsStep,
+                    FnTableStep,
+                    FnRowStep,
+                    FnAsyncRowStep,
+                    FnBatchStep,
+                    FnFlatMapStep,
+                ),
             ):
                 return False
         return True

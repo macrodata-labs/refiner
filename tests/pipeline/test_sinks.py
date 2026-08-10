@@ -543,6 +543,30 @@ def test_lance_empty_create_rejects_partially_inferred_schema(tmp_path) -> None:
     assert not output_uri.exists()
 
 
+def test_lance_empty_create_rejects_typed_replacement_schema(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    input_uri = tmp_path / "typed-replacement-input.lance"
+    output_uri = tmp_path / "typed-replacement-output.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(input_uri))
+    pipeline = (
+        load_lance(input_uri)
+        .map(
+            lambda row: DictRow({"y": 1}, shard_id=row.shard_id),
+            dtypes={"y": datatype.int64()},
+        )
+        .filter(lambda _row: False)
+        .write_lance_dataset(output_uri)
+    )
+
+    with pytest.raises(RuntimeError):
+        pipeline.launch_local(
+            name="lance-empty-typed-replacement-schema",
+            num_workers=1,
+            rundir=str(tmp_path / "typed-replacement-run"),
+        )
+    assert not output_uri.exists()
+
+
 def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "concurrent-version.lance"
