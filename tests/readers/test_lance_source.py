@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 import pytest
+from fsspec.implementations.memory import MemoryFileSystem
 
 from refiner import load_lance
 from refiner.pipeline.data.shard import RowRangeDescriptor
@@ -80,3 +81,18 @@ def test_load_lance_emits_fragment_ids_and_local_row_positions(tmp_path) -> None
     assert len(set(fragment_ids_by_shard[0])) == 1
     assert len(set(fragment_ids_by_shard[1])) == 1
     assert fragment_ids_by_shard[0][0] != fragment_ids_by_shard[1][0]
+
+
+def test_load_lance_hides_internal_columns_from_iter_rows(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "public-rows.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+
+    row = next(iter(load_lance(dataset_uri).iter_rows()))
+
+    assert row.to_dict() == {"x": 1}
+
+
+def test_load_lance_rejects_configured_fsspec_handle() -> None:
+    with pytest.raises(ValueError, match="configured fsspec handles"):
+        load_lance(("bucket/data.lance", MemoryFileSystem()))

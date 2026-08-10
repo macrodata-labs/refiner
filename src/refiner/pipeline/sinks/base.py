@@ -7,10 +7,13 @@ import pyarrow as pa
 
 from refiner.execution.tracking.shards import count_block_by_shard
 from refiner.pipeline.data.block import Block, split_block_by_shard
+from refiner.pipeline.data.tabular import Tabular
 from refiner.worker.metrics.api import log_throughput
 
 
 class BaseSink(ABC):
+    _internal_columns_to_strip: tuple[str, ...] = ()
+
     """Base sink interface with shard-local writes as the default behavior.
 
     Most sinks should implement `write_shard_block(...)` and inherit the default
@@ -27,6 +30,20 @@ class BaseSink(ABC):
         blocks_by_shard, counts = split_block_by_shard(block)
         output_rows = 0
         for shard_id, shard_block in blocks_by_shard.items():
+            columns_to_strip = self._internal_columns_to_strip
+            if columns_to_strip:
+                if isinstance(shard_block, Tabular):
+                    present = [
+                        column
+                        for column in columns_to_strip
+                        if column in shard_block.schema.names
+                    ]
+                    if present:
+                        shard_block = shard_block.with_table(
+                            shard_block.table.drop_columns(present)
+                        )
+                else:
+                    shard_block = [row.drop(*columns_to_strip) for row in shard_block]
             actual_count = self.write_shard_block(shard_id, shard_block)
             output_count = counts[shard_id] if actual_count is None else actual_count
             log_throughput(
@@ -37,6 +54,10 @@ class BaseSink(ABC):
             )
             output_rows += output_count
         return counts, output_rows
+
+    def set_internal_columns_to_strip(self, columns: tuple[str, ...]) -> None:
+        """Hide source bookkeeping columns before dispatching sink blocks."""
+        self._internal_columns_to_strip = columns
 
     def write_shard_block(self, shard_id: str, block: Block) -> int | None:
         """Write one already shard-local block.

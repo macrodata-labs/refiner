@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import concurrent.futures
 import json
 import posixpath
 import queue as queue_module
@@ -18,19 +17,21 @@ from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
+from refiner.pipeline.sinks.lance_file import LanceSink
 from refiner.pipeline.sinks.reducer.file import (
-    FileCleanupReducerSink,
     _compile_output_path_patterns,
 )
 from refiner.pipeline.sources.lance import (
     LANCE_FRAGMENT_ID_COLUMN,
     LANCE_ROW_POSITION_COLUMN,
+    _open_lance_dataset,
 )
 from refiner.worker.context import (
     get_active_stage_index,
     get_active_job_id,
     get_active_worker_token,
     get_finalized_workers,
+    logger,
 )
 from refiner.worker.metrics.api import log_throughput
 from refiner.utils import check_required_dependencies
@@ -40,7 +41,6 @@ _METADATA_FILENAME_TEMPLATE = (
     "_refiner_lance_fragments/{job_id}/{shard_id}__w{worker_id}.jsonl"
 )
 _QUEUE_CLOSED = object()
-_BATCH_QUEUE_SIZE = 8
 
 
 def _import_lance() -> Any:
@@ -50,13 +50,6 @@ def _import_lance() -> Any:
     import lance
 
     return lance
-
-
-def _import_lance_file_writer() -> Any:
-    check_required_dependencies("write_lance", [("lance", "pylance")], dist="lance")
-    from lance.file import LanceFileWriter
-
-    return LanceFileWriter
 
 
 def _validate_write_mode(mode: str) -> None:
@@ -145,6 +138,7 @@ def _managed_paths(
     managed_path_pattern: re.Pattern[str],
     search_path: str,
     reducer_name: str,
+    cleanup_path_prefix: str | None = None,
 ) -> tuple[list[str], list[str]]:
     keep_pairs = _finalized_worker_pairs(reducer_name=reducer_name)
     try:
@@ -160,10 +154,13 @@ def _managed_paths(
         match = managed_path_pattern.fullmatch(rel_path)
         if match is None:
             continue
-        cleanup_paths.append(rel_path)
+        if cleanup_path_prefix is None or rel_path.startswith(
+            cleanup_path_prefix.rstrip("/") + "/"
+        ):
+            cleanup_paths.append(rel_path)
         if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
             finalized_paths.append(rel_path)
-    return finalized_paths, cleanup_paths
+    return sorted(set(finalized_paths)), sorted(set(cleanup_paths))
 
 
 def _fragment_data_paths(fragment_json: str) -> list[str]:
@@ -188,6 +185,21 @@ def _fragment_data_paths(fragment_json: str) -> list[str]:
     return paths
 
 
+def _validate_created_file_path(path: object) -> str:
+    if not isinstance(path, str):
+        raise ValueError("Invalid Lance created-file path")
+    normalized = posixpath.normpath(path)
+    if (
+        normalized != path
+        or normalized == "data"
+        or not normalized.startswith("data/")
+        or normalized.startswith("/")
+        or ".." in normalized.split("/")
+    ):
+        raise ValueError(f"Invalid Lance created-file path: {path}")
+    return normalized
+
+
 def _remove_fragment_data(output: DataFolder, fragment_json: str) -> None:
     for rel_path in _fragment_data_paths(fragment_json):
         try:
@@ -207,26 +219,18 @@ class _StreamingShardWriter:
         self.dataset_uri = dataset_uri
         self.schema = schema
         self.mode = mode
-        self.queue_future: concurrent.futures.Future[
-            queue_module.Queue[pa.RecordBatch | object]
-        ] = concurrent.futures.Future()
-        self.fragments: list[str] | None = None
+        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue()
         self.closed = False
         self.task_future = io_executor().submit(self._run)
 
     def _iter_batches(self):
-        queue = self._queue()
         while True:
-            item = queue.get()
+            item = self.queue.get()
             if item is _QUEUE_CLOSED:
                 return
             yield item
 
     def _run(self) -> list[str]:
-        queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
-            maxsize=_BATCH_QUEUE_SIZE
-        )
-        self.queue_future.set_result(queue)
         lance = _import_lance()
         reader = pa.RecordBatchReader.from_batches(self.schema, self._iter_batches())
         fragments = lance.fragment.write_fragments(
@@ -235,15 +239,10 @@ class _StreamingShardWriter:
             schema=self.schema,
             mode=self.mode,
         )
-        fragments = [_json_dumps(fragment.to_json()) for fragment in fragments]
-        self.fragments = fragments
-        return fragments
-
-    def _queue(self) -> queue_module.Queue[pa.RecordBatch | object]:
-        return self.queue_future.result()
+        return [_json_dumps(fragment.to_json()) for fragment in fragments]
 
     def _raise_if_failed(self) -> None:
-        if self.task_future is None or not self.task_future.done():
+        if not self.task_future.done():
             return
         error = self.task_future.exception()
         if error is not None:
@@ -252,91 +251,17 @@ class _StreamingShardWriter:
     def put_batches(self, batches: list[pa.RecordBatch]) -> None:
         if self.closed:
             raise RuntimeError("Cannot write to a closed Lance shard writer.")
-        queue = self._queue()
         for batch in batches:
             self._raise_if_failed()
-            queue.put(batch)
+            self.queue.put(batch)
             self._raise_if_failed()
 
     def finish(self) -> list[str]:
         if not self.closed:
             self.closed = True
             self._raise_if_failed()
-            self._queue().put(_QUEUE_CLOSED)
-        if self.task_future is None:
-            return []
+            self.queue.put(_QUEUE_CLOSED)
         return list(self.task_future.result())
-
-
-class LanceSink(BaseSink):
-    def __init__(
-        self,
-        output: DataFolderLike,
-        *,
-        filename_template: str = "{shard_id}__w{worker_id}.lance",
-    ) -> None:
-        self.output = DataFolder.resolve(output)
-        self.filename_template = filename_template
-        self._writers: dict[str, Any] = {}
-
-    def _declared_refiner_extras(self) -> tuple[str, ...]:
-        return ("lance",)
-
-    def _relpath(self, shard_id: str) -> str:
-        return self.filename_template.format(
-            shard_id=shard_id,
-            worker_id=get_active_worker_token(),
-        )
-
-    def _writer(self, shard_id: str, schema: pa.Schema) -> Any:
-        writer = self._writers.get(shard_id)
-        if writer is not None:
-            return writer
-        LanceFileWriter = _import_lance_file_writer()
-        writer = LanceFileWriter(self.output.abs_path(self._relpath(shard_id)), schema)
-        self._writers[shard_id] = writer
-        return writer
-
-    def write_shard_block(self, shard_id: str, block: Block) -> None:
-        table = _block_to_table(block)
-        if table.num_rows == 0:
-            return
-        self._writer(shard_id, table.schema).write_batch(table)
-
-    def on_shard_complete(self, shard_id: str) -> None:
-        writer = self._writers.pop(shard_id, None)
-        if writer is not None:
-            writer.close()
-            log_throughput("files_written", 1, shard_id=shard_id, unit="files")
-
-    def close(self) -> None:
-        first_error: Exception | None = None
-        for writer in self._writers.values():
-            try:
-                writer.close()
-            except Exception as err:  # noqa: BLE001
-                if first_error is None:
-                    first_error = err
-        self._writers.clear()
-        if first_error is not None:
-            raise first_error
-
-    def describe(self) -> tuple[str, str, dict[str, object]]:
-        return (
-            "write_lance",
-            "writer",
-            {
-                "path": self.output.abs_path(),
-                "filename_template": self.filename_template,
-            },
-        )
-
-    def build_reducer(self) -> BaseSink | None:
-        return FileCleanupReducerSink(
-            output=self.output,
-            filename_template=self.filename_template,
-            reducer_name="write_lance_reduce",
-        )
 
 
 class LanceDatasetSink(BaseSink):
@@ -348,6 +273,7 @@ class LanceDatasetSink(BaseSink):
         columns: Sequence[str] | None = None,
         source_uri: str | None = None,
         source_version: int | None = None,
+        planned_schema: pa.Schema | None = None,
     ) -> None:
         _validate_write_mode(mode)
         if mode == "add_columns" and not columns:
@@ -359,10 +285,16 @@ class LanceDatasetSink(BaseSink):
         if mode == "add_columns" and (source_uri is None or source_version is None):
             raise ValueError("add_columns requires a version-pinned Lance source")
         self.output = DataFolder.resolve(output)
+        if self.output.has_explicit_filesystem_configuration:
+            raise ValueError(
+                "write_lance_dataset does not support configured fsspec handles; "
+                "pass a URI whose credentials and endpoint are available to Lance"
+            )
         self.mode = mode
         self.columns = tuple(columns) if columns is not None else None
         self.source_uri = source_uri
         self.source_version = source_version
+        self.planned_schema = planned_schema
         if mode == "add_columns" and self.output.abs_path() != source_uri:
             raise ValueError("add_columns must write back to the loaded Lance dataset")
         self._writers_by_shard: dict[str, _StreamingShardWriter] = {}
@@ -370,6 +302,7 @@ class LanceDatasetSink(BaseSink):
         self._add_columns_tables_by_shard: dict[str, list[pa.Table]] = {}
         self._add_columns_schema: pa.Schema | None = None
         self._existing_schema: pa.Schema | None = None
+        self._existing_version: int | None = None
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("lance",)
@@ -398,6 +331,7 @@ class LanceDatasetSink(BaseSink):
                 ) from err
             raise
         self._existing_schema = dataset.schema
+        self._existing_version = int(dataset.version)
         return self._existing_schema
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
@@ -405,11 +339,6 @@ class LanceDatasetSink(BaseSink):
             return
         assert self.columns is not None
         missing = sorted(set(self.columns).difference(schema.names))
-        if missing:
-            raise ValueError(
-                "add_columns outputs are missing from the pipeline schema: "
-                + ", ".join(missing)
-            )
         for internal_column in (
             LANCE_FRAGMENT_ID_COLUMN,
             LANCE_ROW_POSITION_COLUMN,
@@ -420,22 +349,19 @@ class LanceDatasetSink(BaseSink):
                 )
         assert self.source_uri is not None
         assert self.source_version is not None
-        source_schema = (
-            _import_lance()
-            .dataset(
-                self.source_uri,
-                version=self.source_version,
-            )
-            .schema
-        )
+        source_schema = _open_lance_dataset(
+            self.source_uri,
+            self.source_version,
+        ).schema
         conflicts = sorted(set(self.columns).intersection(source_schema.names))
         if conflicts:
             raise ValueError(
                 "add_columns cannot replace existing columns: " + ", ".join(conflicts)
             )
-        self._add_columns_schema = pa.schema(
-            [schema.field(column) for column in self.columns]
-        )
+        if not missing:
+            self._add_columns_schema = pa.schema(
+                [schema.field(column) for column in self.columns]
+            )
 
     def _write_add_columns_block(self, shard_id: str, block: Block) -> None:
         table = _block_to_table(block)
@@ -504,15 +430,22 @@ class LanceDatasetSink(BaseSink):
         fragments = writer.finish()
         if not fragments:
             return
-        payload = {
+        payload: dict[str, object] = {
             "schema": _schema_to_base64(schema),
             "fragments": fragments,
         }
-        with self.output.open(
-            self._relpath(shard_id), mode="wt", encoding="utf-8"
-        ) as f:
-            f.write(_json_dumps(payload))
-            f.write("\n")
+        if self.mode == "append":
+            payload["source_version"] = self._existing_version
+        try:
+            with self.output.open(
+                self._relpath(shard_id), mode="wt", encoding="utf-8"
+            ) as f:
+                f.write(_json_dumps(payload))
+                f.write("\n")
+        except Exception:
+            for fragment in fragments:
+                _remove_fragment_data(self.output, fragment)
+            raise
         log_throughput("files_written", 1, shard_id=shard_id, unit="files")
 
     def _complete_add_columns_shard(self, shard_id: str) -> None:
@@ -533,11 +466,9 @@ class LanceDatasetSink(BaseSink):
             raise ValueError(f"Shard {shard_id} contains multiple Lance fragments")
         fragment_id = int(fragment_id_range["min"])
 
-        fragment = (
-            _import_lance()
-            .dataset(self.source_uri, version=self.source_version)
-            .get_fragment(fragment_id)
-        )
+        fragment = _open_lance_dataset(
+            self.source_uri, self.source_version
+        ).get_fragment(fragment_id)
         num_rows = int(fragment.count_rows())
         if table.num_rows != num_rows:
             raise ValueError(
@@ -583,11 +514,19 @@ class LanceDatasetSink(BaseSink):
             "source_version": self.source_version,
             "source_fragment_id": fragment_id,
         }
-        with self.output.open(
-            self._relpath(shard_id), mode="wt", encoding="utf-8"
-        ) as f:
-            f.write(_json_dumps(payload))
-            f.write("\n")
+        try:
+            with self.output.open(
+                self._relpath(shard_id), mode="wt", encoding="utf-8"
+            ) as f:
+                f.write(_json_dumps(payload))
+                f.write("\n")
+        except Exception:
+            for path in created_files:
+                try:
+                    self.output.rm(path)
+                except FileNotFoundError:
+                    continue
+            raise
         log_throughput("files_written", 1, shard_id=shard_id, unit="files")
 
     def close(self) -> None:
@@ -621,6 +560,7 @@ class LanceDatasetSink(BaseSink):
             self.output,
             mode=self.mode,
             source_version=self.source_version,
+            planned_schema=self.planned_schema,
         )
 
 
@@ -631,11 +571,13 @@ class LanceDatasetCommitReducerSink(BaseSink):
         *,
         mode: LanceWriteMode,
         source_version: int | None = None,
+        planned_schema: pa.Schema | None = None,
     ) -> None:
         _validate_write_mode(mode)
         self.output = DataFolder.resolve(output)
         self.mode = mode
         self.source_version = source_version
+        self.planned_schema = planned_schema
         self._managed_path_pattern = _compile_output_path_patterns(
             _METADATA_FILENAME_TEMPLATE
         )[-1]
@@ -697,7 +639,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         return (
             _schema_from_base64(schema_raw),
             [str(fragment) for fragment in fragment_raw],
-            [str(path) for path in created_raw],
+            [_validate_created_file_path(path) for path in created_raw],
             int(source_version_raw) if source_version_raw is not None else None,
             int(source_fragment_raw) if source_fragment_raw is not None else None,
             lance_schema_raw if isinstance(lance_schema_raw, dict) else None,
@@ -711,6 +653,36 @@ class LanceDatasetCommitReducerSink(BaseSink):
             if "not found" in message or "does not exist" in message:
                 return None
             raise
+
+    def _verified_created_files(
+        self,
+        lance: Any,
+        *,
+        fragments: Sequence[str],
+        created_files: Sequence[str],
+        source_version: int | None,
+        source_fragment_id: int | None,
+    ) -> list[str]:
+        if self.mode != "add_columns":
+            return list(created_files)
+        if (
+            source_version != self.source_version
+            or source_fragment_id is None
+            or len(fragments) != 1
+        ):
+            raise ValueError("Invalid rejected Lance add-columns metadata")
+        base_fragment = lance.dataset(
+            self._dataset_uri(), version=source_version
+        ).get_fragment(source_fragment_id)
+        base_json = _json_dumps(base_fragment.metadata.to_json())
+        expected = set(_fragment_data_paths(fragments[0])).difference(
+            _fragment_data_paths(base_json)
+        )
+        if set(created_files) != expected:
+            raise ValueError(
+                "Lance created-files metadata does not match fragment data"
+            )
+        return list(created_files)
 
     def _validate_add_columns_fragment_coverage(
         self,
@@ -743,6 +715,30 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 + ", ".join(str(fragment_id) for fragment_id in unexpected)
             )
 
+    def _commit_empty_output(self, lance: Any) -> None:
+        existing = self._load_existing_dataset(lance)
+        if self.mode == "create" and existing is not None:
+            raise ValueError(
+                "Cannot create a Lance dataset at a location where one already exists."
+            )
+        if self.mode == "append":
+            if existing is None:
+                raise ValueError("Cannot append to a non-existent Lance dataset.")
+            return
+        if self.mode == "add_columns":
+            self._validate_add_columns_fragment_coverage(lance, set())
+            return
+        if self.planned_schema is None:
+            raise ValueError(
+                f"Cannot {self.mode} an empty Lance dataset without a known schema"
+            )
+        operation = lance.LanceOperation.Overwrite(self.planned_schema, [])
+        lance.LanceDataset.commit(
+            self._dataset_uri(),
+            operation,
+            read_version=existing.version if existing is not None else 0,
+        )
+
     def _run_commit(self) -> None:
         if self._commit_ran:
             return
@@ -751,22 +747,40 @@ class LanceDatasetCommitReducerSink(BaseSink):
         metadata_paths, cleanup_paths = _managed_paths(
             output=self.output,
             managed_path_pattern=self._managed_path_pattern,
-            search_path=_metadata_prefix(),
+            search_path="_refiner_lance_fragments",
             reducer_name="write_lance_dataset_commit",
+            cleanup_path_prefix=_metadata_prefix(),
         )
         rejected_paths = sorted(set(cleanup_paths).difference(metadata_paths))
 
         rejected_fragments: list[str] = []
         rejected_created_files: list[str] = []
+        cleanup_lance = _import_lance() if self.mode == "add_columns" else None
         for rel_path in rejected_paths:
-            (
-                _,
-                next_rejected_fragments,
-                next_created_files,
-                _,
-                _,
-                _,
-            ) = self._read_metadata(rel_path)
+            try:
+                (
+                    _,
+                    next_rejected_fragments,
+                    next_created_files,
+                    next_source_version,
+                    next_source_fragment_id,
+                    _,
+                ) = self._read_metadata(rel_path)
+                next_created_files = self._verified_created_files(
+                    cleanup_lance,
+                    fragments=next_rejected_fragments,
+                    created_files=next_created_files,
+                    source_version=next_source_version,
+                    source_fragment_id=next_source_fragment_id,
+                )
+            except Exception as err:  # noqa: BLE001
+                logger.warning(
+                    "ignoring invalid rejected Lance metadata path={}: {}: {}",
+                    rel_path,
+                    type(err).__name__,
+                    err,
+                )
+                continue
             rejected_fragments.extend(next_rejected_fragments)
             rejected_created_files.extend(next_created_files)
 
@@ -780,8 +794,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     self.output.rm(rel_path)
                 except FileNotFoundError:
                     continue
-            if self.mode == "add_columns":
-                self._validate_add_columns_fragment_coverage(_import_lance(), set())
+            self._commit_empty_output(_import_lance())
             return
 
         lance = _import_lance()
@@ -835,13 +848,22 @@ class LanceDatasetCommitReducerSink(BaseSink):
         if self.mode == "append":
             if existing is None:
                 raise ValueError("Cannot append to a non-existent Lance dataset.")
+            if len(source_versions) != 1:
+                raise ValueError(
+                    "Cannot append Lance fragments from different versions"
+                )
+            read_version = next(iter(source_versions))
+            if existing.version != read_version:
+                raise ValueError(
+                    "Cannot append Lance fragments because the dataset changed "
+                    f"from version {read_version} to {existing.version}"
+                )
             operation = lance.LanceOperation.Append(
                 [
                     lance.fragment.FragmentMetadata.from_json(fragment)
                     for fragment in fragment_json
                 ]
             )
-            read_version = existing.version
         elif self.mode == "add_columns":
             if existing is None:
                 raise ValueError("Cannot add columns to a non-existent Lance dataset.")
@@ -849,6 +871,11 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 raise ValueError("add_columns reducer is missing its source version")
             if source_versions != {self.source_version}:
                 raise ValueError("Cannot merge Lance fragments from different versions")
+            if existing.version != self.source_version:
+                raise ValueError(
+                    "Cannot add columns because the Lance dataset changed "
+                    f"from version {self.source_version} to {existing.version}"
+                )
             if lance_schema_payload is None:
                 raise ValueError("add_columns metadata is missing the Lance schema")
             operation = lance.LanceOperation.Merge(
@@ -869,7 +896,9 @@ class LanceDatasetCommitReducerSink(BaseSink):
             )
             read_version = existing.version if existing is not None else 0
 
-        commit_options = {"max_retries": 0} if self.mode == "add_columns" else {}
+        commit_options = (
+            {"max_retries": 0} if self.mode in {"add_columns", "append"} else {}
+        )
         lance.LanceDataset.commit(
             self._dataset_uri(),
             operation,
@@ -880,11 +909,18 @@ class LanceDatasetCommitReducerSink(BaseSink):
             rejected_fragments,
             rejected_created_files,
         )
-        for rel_path in cleanup_paths:
+        for rel_path in sorted(set(cleanup_paths).union(metadata_paths)):
             try:
                 self.output.rm(rel_path)
             except FileNotFoundError:
                 continue
+            except Exception as err:  # noqa: BLE001
+                logger.warning(
+                    "post-commit Lance metadata cleanup failed path={}: {}: {}",
+                    rel_path,
+                    type(err).__name__,
+                    err,
+                )
 
     def _cleanup_rejected_data(
         self,
@@ -897,9 +933,23 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     self.output.rm(path)
                 except FileNotFoundError:
                     continue
+                except Exception as err:  # noqa: BLE001
+                    logger.warning(
+                        "Lance rejected-file cleanup failed path={}: {}: {}",
+                        path,
+                        type(err).__name__,
+                        err,
+                    )
             return
         for fragment in rejected_fragments:
-            _remove_fragment_data(self.output, fragment)
+            try:
+                _remove_fragment_data(self.output, fragment)
+            except Exception as err:  # noqa: BLE001
+                logger.warning(
+                    "Lance rejected-fragment cleanup failed: {}: {}",
+                    type(err).__name__,
+                    err,
+                )
 
 
 __all__ = ["LanceDatasetCommitReducerSink", "LanceDatasetSink", "LanceSink"]

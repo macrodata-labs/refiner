@@ -29,6 +29,10 @@ for the pipeline. Column projection is pushed into Lance, and `batch_size`
 controls the streamed Arrow batch size. Use `blob_handling` to select Lance's
 blob materialization behavior when reading blob columns.
 
+`load_lance` uses Lance's native storage layer. It rejects configured fsspec
+filesystem objects and `storage_options`; provide a URI whose endpoint and
+credentials are available to Lance instead.
+
 Each Lance fragment becomes one Refiner shard. A worker may claim and process
 multiple fragments over its lifetime.
 

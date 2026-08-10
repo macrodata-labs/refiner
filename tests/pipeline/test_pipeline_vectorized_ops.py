@@ -80,6 +80,12 @@ def test_vectorized_ops_reject_internal_shard_column_exprs() -> None:
         pipeline.filter(col(SHARD_ID_COLUMN) == "abc")
 
 
+def test_non_lance_pipeline_allows_lance_bookkeeping_names() -> None:
+    name = "__refiner_lance_fragment_id"
+    rows = from_items([{name: 7}]).select(name).materialize()
+    assert [int(row[name]) for row in rows] == [7]
+
+
 def test_vectorized_and_row_udf_segments_interoperate() -> None:
     out = (
         from_items([{"x": 1}, {"x": 2}, {"x": 3}])

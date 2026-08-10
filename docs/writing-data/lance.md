@@ -37,6 +37,13 @@ pipeline = (
 ```
 
 Supported modes are `create`, `overwrite`, `append`, and `add_columns`.
+Empty `create` and `overwrite` jobs commit an empty dataset when Refiner can
+determine the output Arrow schema statically; otherwise they fail explicitly.
+
+Lance opens dataset URIs through its native storage layer. Configured fsspec
+filesystem objects and `storage_options` are therefore rejected instead of
+being silently ignored. Put the endpoint and credentials in the URI or Lance's
+supported environment/configuration.
 
 ## Adding columns
 

@@ -120,6 +120,12 @@ class RefinerPipeline:
         self.max_vectorized_block_bytes = max_vectorized_block_bytes
         self.sink = sink
 
+    def _protected_columns(self) -> set[str]:
+        columns = {SHARD_ID_COLUMN}
+        if isinstance(self.source, LanceSource):
+            columns.update(LANCE_INTERNAL_COLUMNS)
+        return columns
+
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
         """Return a new pipeline with one transform step appended.
 
@@ -190,6 +196,13 @@ class RefinerPipeline:
         method. Passing ``None`` removes the sink and leaves a read/transform
         pipeline suitable for inspection.
         """
+        if sink is not None and isinstance(self.source, LanceSource):
+            preserve_lance_columns = (
+                isinstance(sink, LanceDatasetSink) and sink.mode == "add_columns"
+            )
+            sink.set_internal_columns_to_strip(
+                () if preserve_lance_columns else tuple(sorted(LANCE_INTERNAL_COLUMNS))
+            )
         return self.__class__(
             self.source,
             self.pipeline_steps,
@@ -403,7 +416,7 @@ class RefinerPipeline:
         """
         if not columns:
             raise ValueError("select requires at least one column")
-        internal_columns = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}
+        internal_columns = self._protected_columns()
         invalid = internal_columns.intersection(columns)
         if invalid:
             raise ValueError(f"{sorted(invalid)[0]} is an internal column")
@@ -425,7 +438,7 @@ class RefinerPipeline:
         """
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
-        invalid = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(assignments)
+        invalid = self._protected_columns().intersection(assignments)
         if invalid:
             raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         exprs = {
@@ -442,7 +455,7 @@ class RefinerPipeline:
         This is a convenience wrapper around ``with_columns`` for a single
         assignment. Non-expression values are treated as literals.
         """
-        if name in {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}:
+        if name in self._protected_columns():
             raise ValueError(f"{name} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
         return self._add_vectorized_op(
@@ -457,7 +470,7 @@ class RefinerPipeline:
         """
         if not columns:
             raise ValueError("drop requires at least one column")
-        invalid = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(columns)
+        invalid = self._protected_columns().intersection(columns)
         if invalid:
             raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
@@ -472,7 +485,7 @@ class RefinerPipeline:
         """
         if not mapping:
             raise ValueError("rename requires at least one mapping")
-        internal_columns = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}
+        internal_columns = self._protected_columns()
         invalid = internal_columns.intersection(
             mapping
         ) | internal_columns.intersection(mapping.values())
@@ -490,7 +503,7 @@ class RefinerPipeline:
         """
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
-        invalid = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(dtypes)
+        invalid = self._protected_columns().intersection(dtypes)
         if invalid:
             raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
@@ -530,7 +543,10 @@ class RefinerPipeline:
         processes and does not run attached sinks; use ``launch_local`` or
         ``launch_cloud`` to execute writers.
         """
-        return iter_rows(self.execute(self.source.read()))
+        rows = iter_rows(self.execute(self.source.read()))
+        if isinstance(self.source, LanceSource):
+            return (row.drop(*LANCE_INTERNAL_COLUMNS) for row in rows)
+        return rows
 
     def list_shards(self):
         """Return the source shards that would be processed by a launch.
@@ -662,6 +678,17 @@ class RefinerPipeline:
         """Attach a distributed Lance dataset writer or schema-evolution sink."""
         source_uri: str | None = None
         source_version: int | None = None
+        planned_schema = self.output_schema()
+        if isinstance(self.source, LanceSource) and mode != "add_columns":
+            if planned_schema is not None:
+                planned_schema = pa.schema(
+                    [
+                        field
+                        for field in planned_schema
+                        if field.name not in LANCE_INTERNAL_COLUMNS
+                    ],
+                    metadata=planned_schema.metadata,
+                )
         if mode == "add_columns":
             if not isinstance(self.source, LanceSource):
                 raise ValueError(
@@ -676,6 +703,7 @@ class RefinerPipeline:
                 columns=columns,
                 source_uri=source_uri,
                 source_version=source_version,
+                planned_schema=planned_schema,
             )
         )
 

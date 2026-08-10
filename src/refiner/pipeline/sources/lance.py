@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from functools import lru_cache
 from typing import Any
 
 import pyarrow as pa
@@ -23,6 +24,11 @@ def _import_lance() -> Any:
     import lance
 
     return lance
+
+
+@lru_cache(maxsize=16)
+def _open_lance_dataset(dataset_uri: str, version: int) -> Any:
+    return _import_lance().dataset(dataset_uri, version=version)
 
 
 class LanceSource(BaseSource):
@@ -49,6 +55,11 @@ class LanceSource(BaseSource):
             raise ValueError("Lance columns must be unique")
 
         self.input = DataFolder.resolve(input)
+        if self.input.has_explicit_filesystem_configuration:
+            raise ValueError(
+                "load_lance does not support configured fsspec handles; pass a URI "
+                "whose credentials and endpoint are available to Lance"
+            )
         self.dataset_uri = self.input.abs_path()
         self.columns = tuple(columns) if columns is not None else None
         self.batch_size = int(batch_size)
@@ -89,7 +100,7 @@ class LanceSource(BaseSource):
         return self.input.required_refiner_extras()
 
     def _dataset(self) -> Any:
-        return _import_lance().dataset(self.dataset_uri, version=self.version)
+        return _open_lance_dataset(self.dataset_uri, self.version)
 
     def list_shards(self) -> list[Shard]:
         return [

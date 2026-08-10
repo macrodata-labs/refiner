@@ -7,6 +7,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from fsspec.implementations.memory import MemoryFileSystem
 
 from refiner import col
 from refiner.pipeline.data import datatype
@@ -17,6 +18,7 @@ from refiner.pipeline.sinks import JsonlSink
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
+    _schema_to_base64,
 )
 from refiner.pipeline.sinks.parquet import ParquetSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
@@ -201,6 +203,22 @@ def test_launch_local_writes_lance_dataset(tmp_path) -> None:
     ]
 
 
+def test_lance_dataset_writer_handles_more_shards_than_io_threads(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    output_dir = tmp_path / "many-shards.lance"
+    values = [{"x": index} for index in range(12)]
+
+    from_items(values, items_per_shard=1).write_lance_dataset(output_dir).launch_local(
+        name="lance-many-shards",
+        num_workers=1,
+        rundir=str(tmp_path / "many-shards-run"),
+    )
+
+    assert sorted(lance.dataset(str(output_dir)).to_table()["x"].to_pylist()) == list(
+        range(12)
+    )
+
+
 def test_launch_local_adds_lance_columns_without_rewriting_base_files(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "evolved.lance"
@@ -317,6 +335,69 @@ def test_lance_add_columns_preserves_existing_field_ids(tmp_path) -> None:
     }
 
 
+def test_lance_dataset_copy_strips_internal_columns(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    source_uri = tmp_path / "source-copy.lance"
+    output_uri = tmp_path / "output-copy.lance"
+    lance.write_dataset(pa.table({"x": [1, 2]}), str(source_uri))
+
+    load_lance(source_uri).write_lance_dataset(output_uri).launch_local(
+        name="lance-copy",
+        num_workers=1,
+        rundir=str(tmp_path / "copy-run"),
+    )
+
+    output = lance.dataset(str(output_uri))
+    assert output.schema.names == ["x"]
+    assert output.to_table().to_pydict() == {"x": [1, 2]}
+
+
+def test_lance_add_columns_accepts_expression_created_column(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "expression-column.lance"
+    base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+
+    (
+        load_lance(dataset_uri, version=base.version)
+        .with_column("y", col("x") + 1)
+        .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
+        .launch_local(
+            name="lance-expression-column",
+            num_workers=1,
+            rundir=str(tmp_path / "expression-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": [1, 2],
+        "y": [2, 3],
+    }
+
+
+def test_lance_empty_create_and_overwrite_preserve_schema(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    input_uri = tmp_path / "empty-input.lance"
+    create_uri = tmp_path / "empty-create.lance"
+    overwrite_uri = tmp_path / "empty-overwrite.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(input_uri))
+    lance.write_dataset(pa.table({"x": [1]}), str(overwrite_uri))
+
+    for mode, output_uri in (("create", create_uri), ("overwrite", overwrite_uri)):
+        (
+            load_lance(input_uri)
+            .filter(lambda _row: False)
+            .write_lance_dataset(output_uri, mode=mode)
+            .launch_local(
+                name=f"lance-empty-{mode}",
+                num_workers=1,
+                rundir=str(tmp_path / f"empty-{mode}-run"),
+            )
+        )
+        output = lance.dataset(str(output_uri))
+        assert output.schema.names == ["x"]
+        assert output.count_rows() == 0
+
+
 def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "concurrent-version.lance"
@@ -346,6 +427,50 @@ def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:
     latest = lance.dataset(str(dataset_uri))
     assert latest.version == appended.version
     assert latest.to_table().to_pydict() == {"x": [1, 2]}
+
+
+def test_lance_append_rejects_concurrent_dataset_version(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "concurrent-append.lance"
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
+        ),
+    )
+    sink = LanceDatasetSink(dataset_uri, mode="append")
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        sink.write_block([DictRow({"x": 2}, shard_id=shard_id)])
+        sink.on_shard_complete(shard_id)
+
+    appended = lance.write_dataset(
+        pa.table({"x": [3]}), str(dataset_uri), mode="append"
+    )
+    reducer = sink.build_reducer()
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        with pytest.raises(ValueError, match="dataset changed"):
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    latest = lance.dataset(str(dataset_uri))
+    assert latest.version == appended.version
+    assert latest.to_table().to_pydict() == {"x": [1, 3]}
+    assert base.version < appended.version
 
 
 def test_lance_add_columns_rejects_missing_rows(tmp_path) -> None:
@@ -504,6 +629,29 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
     assert all(
         (dataset_uri / path).exists() for path in created_by_worker[worker_ids[1]]
     )
+
+
+def test_lance_reducer_rejects_unsafe_created_file_paths(tmp_path) -> None:
+    reducer = LanceDatasetCommitReducerSink(
+        tmp_path / "unsafe-cleanup.lance",
+        mode="add_columns",
+        source_version=1,
+    )
+    rel_path = "_refiner_lance_fragments/job/0123456789ab__w0123456789ab.jsonl"
+    with reducer.output.open(rel_path, mode="wt", encoding="utf-8") as metadata:
+        json.dump(
+            {
+                "schema": _schema_to_base64(pa.schema([("y", pa.int64())])),
+                "fragments": ["{}"],
+                "created_files": ["../victim"],
+                "source_version": 1,
+                "source_fragment_id": 0,
+            },
+            metadata,
+        )
+
+    with pytest.raises(ValueError, match="Invalid Lance created-file path"):
+        reducer._read_metadata(rel_path)
 
 
 def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> None:
@@ -1345,7 +1493,8 @@ def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
 
     def _recording_find(path: str):
         listed_prefixes.append(path)
-        return original_find(path)
+        paths = original_find(path)
+        return [*paths, *paths]
 
     monkeypatch.setattr(reducer.output, "find", _recording_find)
     with set_active_run_context(
@@ -1365,8 +1514,101 @@ def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
     table = lance.dataset(str(output_dir)).to_table()
     assert table.column("x").to_pylist() == [9]
     assert len(list((output_dir / "data").glob("*.lance"))) == 1
-    assert listed_prefixes == ["_refiner_lance_fragments/job"]
+    assert listed_prefixes == ["_refiner_lance_fragments"]
     assert not any((output_dir / "_refiner_lance_fragments" / "job").glob("*.jsonl"))
+
+
+def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    output_dir = tmp_path / "lance-resume.lance"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
+        ),
+    )
+    sink = LanceDatasetSink(output_dir)
+    with set_active_run_context(
+        job_id="original-job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        sink.write_block([DictRow({"x": 9}, shard_id=shard_id)])
+        sink.on_shard_complete(shard_id)
+
+    reducer = sink.build_reducer()
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+    with set_active_run_context(
+        job_id="resumed-job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert lance.dataset(str(output_dir)).to_table().to_pydict() == {"x": [9]}
+    assert not any(
+        (output_dir / "_refiner_lance_fragments" / "original-job").glob("*.jsonl")
+    )
+
+
+def test_lance_sinks_reject_configured_fsspec_handles() -> None:
+    configured_output = ("bucket/output", MemoryFileSystem())
+
+    with pytest.raises(ValueError, match="configured fsspec handles"):
+        from_items([]).write_lance(configured_output)
+    with pytest.raises(ValueError, match="configured fsspec handles"):
+        from_items([]).write_lance_dataset(configured_output)
+
+
+def test_lance_dataset_post_commit_metadata_cleanup_is_best_effort(
+    tmp_path, monkeypatch
+) -> None:
+    pytest.importorskip("lance")
+    output_dir = tmp_path / "cleanup-failure.lance"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
+        ),
+    )
+    sink = LanceDatasetSink(output_dir)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        sink.write_block([DictRow({"x": 1}, shard_id=shard_id)])
+        sink.on_shard_complete(shard_id)
+
+    reducer = sink.build_reducer()
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+
+    def _failed_rm(_path: str) -> None:
+        raise OSError("injected cleanup failure")
+
+    monkeypatch.setattr(reducer.output, "rm", _failed_rm)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert LanceDatasetSink(output_dir)._load_existing_schema().names == ["x"]
 
 
 def test_lance_dataset_sink_close_removes_unfinished_fragment_data(tmp_path) -> None:
