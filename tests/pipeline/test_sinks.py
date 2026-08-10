@@ -20,6 +20,10 @@ from refiner.pipeline.sinks.lance import (
 )
 from refiner.pipeline.sinks.parquet import ParquetSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
+from refiner.pipeline.sources.lance import (
+    LANCE_FRAGMENT_ID_COLUMN,
+    LANCE_ROW_POSITION_COLUMN,
+)
 from refiner.worker.context import set_active_run_context
 from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 from refiner.worker.context import worker_token_for
@@ -376,6 +380,7 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
     dataset_uri = tmp_path / "retry-cleanup.lance"
     base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
     shard = load_lance(dataset_uri, version=base.version).list_shards()[0]
+    fragment_id = int(base.get_fragments()[0].fragment_id)
     worker_ids = ["worker-1", "worker-2"]
     created_by_worker: dict[str, set[str]] = {}
 
@@ -391,7 +396,8 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
             pa.schema(
                 [
                     pa.field("y", pa.int64()),
-                    pa.field("__refiner_lance_row_position", pa.uint64()),
+                    pa.field(LANCE_FRAGMENT_ID_COLUMN, pa.uint64()),
+                    pa.field(LANCE_ROW_POSITION_COLUMN, pa.uint64()),
                 ]
             )
         )
@@ -414,7 +420,8 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
                     pa.table(
                         {
                             "y": values,
-                            "__refiner_lance_row_position": [0, 1],
+                            LANCE_FRAGMENT_ID_COLUMN: [fragment_id, fragment_id],
+                            LANCE_ROW_POSITION_COLUMN: [0, 1],
                         }
                     )
                 ),

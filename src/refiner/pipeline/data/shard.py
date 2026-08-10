@@ -143,60 +143,7 @@ class RowRangeDescriptor:
         return None
 
 
-@dataclass(frozen=True, slots=True)
-class LanceFragmentDescriptor:
-    """One fragment from an immutable Lance dataset version."""
-
-    dataset_uri: str
-    version: int
-    fragment_id: int
-    num_rows: int
-
-    def __post_init__(self) -> None:
-        if self.version < 0:
-            raise ValueError("Lance dataset version must be >= 0")
-        if self.fragment_id < 0:
-            raise ValueError("Lance fragment id must be >= 0")
-        if self.num_rows < 0:
-            raise ValueError("Lance fragment row count must be >= 0")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "kind": "lance_fragment",
-            "dataset_uri": self.dataset_uri,
-            "version": self.version,
-            "fragment_id": self.fragment_id,
-            "num_rows": self.num_rows,
-        }
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> LanceFragmentDescriptor:
-        return cls(
-            dataset_uri=str(payload["dataset_uri"]),
-            version=int(payload["version"]),
-            fragment_id=int(payload["fragment_id"]),
-            num_rows=int(payload["num_rows"]),
-        )
-
-    def update_hash(self, h: _HashWriter) -> None:
-        h.update(b"lance_fragment\0")
-        h.update(self.dataset_uri.encode("utf-8"))
-        h.update(b"\0")
-        h.update(str(self.version).encode("ascii"))
-        h.update(b"\0")
-        h.update(str(self.fragment_id).encode("ascii"))
-        h.update(b"\0")
-
-    @property
-    def descriptor_start_key(self) -> str:
-        return f"{self.dataset_uri}@{self.version}:{self.fragment_id}"
-
-    @property
-    def descriptor_end_key(self) -> str:
-        return self.descriptor_start_key
-
-
-ShardDescriptor = FilePartsDescriptor | RowRangeDescriptor | LanceFragmentDescriptor
+ShardDescriptor = FilePartsDescriptor | RowRangeDescriptor
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,26 +203,6 @@ class Shard:
             end_key=end_key,
         )
 
-    @classmethod
-    def from_lance_fragment(
-        cls,
-        *,
-        dataset_uri: str,
-        version: int,
-        fragment_id: int,
-        num_rows: int,
-        global_ordinal: int | None = None,
-    ) -> Shard:
-        return cls(
-            descriptor=LanceFragmentDescriptor(
-                dataset_uri=dataset_uri,
-                version=version,
-                fragment_id=fragment_id,
-                num_rows=num_rows,
-            ),
-            global_ordinal=global_ordinal,
-        )
-
     @property
     def id(self) -> str:
         h = hashlib.blake2b(digest_size=6)
@@ -308,8 +235,6 @@ class Shard:
             )
         elif kind == "row_range":
             parsed_descriptor = RowRangeDescriptor.from_dict(descriptor)
-        elif kind == "lance_fragment":
-            parsed_descriptor = LanceFragmentDescriptor.from_dict(descriptor)
         else:
             raise ValueError(f"unsupported shard descriptor kind: {kind!r}")
         global_ordinal = payload.get("global_ordinal")
@@ -340,7 +265,6 @@ def path_hash(path: str, *, source_index: int = 0) -> str:
 __all__ = [
     "FilePart",
     "FilePartsDescriptor",
-    "LanceFragmentDescriptor",
     "RowRangeDescriptor",
     "Shard",
     "ShardDescriptor",

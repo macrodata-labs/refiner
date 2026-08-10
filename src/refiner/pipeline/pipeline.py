@@ -57,7 +57,7 @@ from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
-from refiner.pipeline.sources.lance import LANCE_ROW_POSITION_COLUMN
+from refiner.pipeline.sources.lance import LANCE_INTERNAL_COLUMNS
 from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
@@ -403,13 +403,13 @@ class RefinerPipeline:
         """
         if not columns:
             raise ValueError("select requires at least one column")
-        internal_columns = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}
+        internal_columns = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}
         invalid = internal_columns.intersection(columns)
         if invalid:
             raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         preserved = (SHARD_ID_COLUMN,)
         if isinstance(self.source, LanceSource):
-            preserved += (LANCE_ROW_POSITION_COLUMN,)
+            preserved += tuple(sorted(LANCE_INTERNAL_COLUMNS))
         return self._add_vectorized_op(
             SelectStep(
                 columns=tuple(columns) + preserved,
@@ -425,7 +425,7 @@ class RefinerPipeline:
         """
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
-        invalid = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}.intersection(assignments)
+        invalid = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(assignments)
         if invalid:
             raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         exprs = {
@@ -442,7 +442,7 @@ class RefinerPipeline:
         This is a convenience wrapper around ``with_columns`` for a single
         assignment. Non-expression values are treated as literals.
         """
-        if name in {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}:
+        if name in {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}:
             raise ValueError(f"{name} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
         return self._add_vectorized_op(
@@ -457,7 +457,7 @@ class RefinerPipeline:
         """
         if not columns:
             raise ValueError("drop requires at least one column")
-        invalid = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}.intersection(columns)
+        invalid = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(columns)
         if invalid:
             raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
@@ -472,7 +472,7 @@ class RefinerPipeline:
         """
         if not mapping:
             raise ValueError("rename requires at least one mapping")
-        internal_columns = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}
+        internal_columns = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}
         invalid = internal_columns.intersection(
             mapping
         ) | internal_columns.intersection(mapping.values())
@@ -490,7 +490,7 @@ class RefinerPipeline:
         """
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
-        invalid = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}.intersection(dtypes)
+        invalid = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(dtypes)
         if invalid:
             raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(

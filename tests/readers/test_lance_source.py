@@ -4,8 +4,11 @@ import pyarrow as pa
 import pytest
 
 from refiner import load_lance
-from refiner.pipeline.data.shard import LanceFragmentDescriptor, Shard
-from refiner.pipeline.sources.lance import LANCE_ROW_POSITION_COLUMN
+from refiner.pipeline.data.shard import RowRangeDescriptor
+from refiner.pipeline.sources.lance import (
+    LANCE_FRAGMENT_ID_COLUMN,
+    LANCE_ROW_POSITION_COLUMN,
+)
 from refiner.pipeline.sources.lance import LanceSource
 from refiner.pipeline.data.tabular import Tabular
 
@@ -35,29 +38,15 @@ def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
     assert isinstance(pipeline.source, LanceSource)
     assert pipeline.source.version == version_one
     assert len(shards) == 2
-    assert all(
-        isinstance(shard.descriptor, LanceFragmentDescriptor) for shard in shards
-    )
-    assert sum(shard.descriptor.num_rows for shard in shards) == 3
+    assert all(isinstance(shard.descriptor, RowRangeDescriptor) for shard in shards)
+    assert [(shard.descriptor.start, shard.descriptor.end) for shard in shards] == [
+        (0, 1),
+        (1, 2),
+    ]
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [1, 2, 3]
 
 
-def test_lance_fragment_descriptor_roundtrips() -> None:
-    shard = Shard.from_lance_fragment(
-        dataset_uri="s3://bucket/data.lance",
-        version=42,
-        fragment_id=7,
-        num_rows=123,
-        global_ordinal=2,
-    )
-
-    restored = Shard.from_dict(shard.to_dict())
-
-    assert restored == shard
-    assert isinstance(restored.descriptor, LanceFragmentDescriptor)
-
-
-def test_load_lance_emits_fragment_local_row_positions(tmp_path) -> None:
+def test_load_lance_emits_fragment_ids_and_local_row_positions(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "positions.lance"
     lance.write_dataset(
@@ -68,15 +57,26 @@ def test_load_lance_emits_fragment_local_row_positions(tmp_path) -> None:
 
     pipeline = load_lance(dataset_uri, batch_size=1)
     positions_by_shard = []
+    fragment_ids_by_shard = []
     for shard in pipeline.list_shards():
         positions = []
+        fragment_ids = []
         for unit in pipeline.source.read_shard(shard):
             assert isinstance(unit, Tabular)
+            fragment_ids.extend(
+                int(value.as_py())
+                for chunk in unit.table[LANCE_FRAGMENT_ID_COLUMN].chunks
+                for value in chunk
+            )
             positions.extend(
                 int(value.as_py())
                 for chunk in unit.table[LANCE_ROW_POSITION_COLUMN].chunks
                 for value in chunk
             )
         positions_by_shard.append(positions)
+        fragment_ids_by_shard.append(fragment_ids)
 
     assert positions_by_shard == [[0, 1], [0]]
+    assert len(set(fragment_ids_by_shard[0])) == 1
+    assert len(set(fragment_ids_by_shard[1])) == 1
+    assert fragment_ids_by_shard[0][0] != fragment_ids_by_shard[1][0]

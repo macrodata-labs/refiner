@@ -34,7 +34,8 @@ multiple fragments over its lifetime.
 
 ## Internal Notes
 
-The source records the dataset URI, resolved version, fragment ID, and visible
-row count in each shard descriptor. It also attaches a protected
-fragment-local row position used by the `add_columns` writer to restore output
-order and validate one-to-one row alignment.
+The source keeps the dataset URI and resolved version on the pipeline. It uses
+ordinary row-range shards to assign fragment indices and attaches protected
+fragment-ID and fragment-local-row-position columns to the rows. The
+`add_columns` writer uses those columns to restore output order and validate
+one-to-one row alignment.

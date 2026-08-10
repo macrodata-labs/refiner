@@ -16,7 +16,7 @@ from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import (
     SHARD_ID_COLUMN,
-    LanceFragmentDescriptor,
+    RowRangeDescriptor,
     Shard,
 )
 from refiner.pipeline.data.tabular import Tabular
@@ -25,7 +25,10 @@ from refiner.pipeline.sinks.reducer.file import (
     FileCleanupReducerSink,
     _compile_output_path_patterns,
 )
-from refiner.pipeline.sources.lance import LANCE_ROW_POSITION_COLUMN
+from refiner.pipeline.sources.lance import (
+    LANCE_FRAGMENT_ID_COLUMN,
+    LANCE_ROW_POSITION_COLUMN,
+)
 from refiner.worker.context import (
     get_active_stage_index,
     get_active_job_id,
@@ -452,7 +455,7 @@ class LanceDatasetSink(BaseSink):
             str, _StreamingShardWriter | _StreamingMergeColumnsWriter
         ] = {}
         self._schema_by_shard: dict[str, pa.Schema] = {}
-        self._source_fragment_by_shard: dict[str, LanceFragmentDescriptor] = {}
+        self._source_fragment_by_shard: dict[str, tuple[int, int]] = {}
         self._next_position_by_shard: dict[str, int] = {}
         self._pending_rows_by_shard: dict[str, dict[int, dict[str, Any]]] = {}
         self._add_columns_schema: pa.Schema | None = None
@@ -497,10 +500,14 @@ class LanceDatasetSink(BaseSink):
                 "add_columns outputs are missing from the pipeline schema: "
                 + ", ".join(missing)
             )
-        if LANCE_ROW_POSITION_COLUMN not in schema.names:
-            raise ValueError(
-                f"add_columns requires internal column {LANCE_ROW_POSITION_COLUMN}"
-            )
+        for internal_column in (
+            LANCE_FRAGMENT_ID_COLUMN,
+            LANCE_ROW_POSITION_COLUMN,
+        ):
+            if internal_column not in schema.names:
+                raise ValueError(
+                    f"add_columns requires internal column {internal_column}"
+                )
         assert self.source_uri is not None
         assert self.source_version is not None
         source_schema = (
@@ -524,13 +531,29 @@ class LanceDatasetSink(BaseSink):
         if self.mode != "add_columns":
             return
         descriptor = shard.descriptor
-        if not isinstance(descriptor, LanceFragmentDescriptor):
-            raise TypeError("add_columns requires Lance-fragment shards")
-        if descriptor.dataset_uri != self.source_uri:
-            raise ValueError("Lance shard belongs to a different dataset")
-        if descriptor.version != self.source_version:
-            raise ValueError("Lance shard belongs to a different dataset version")
-        self._source_fragment_by_shard[shard.id] = descriptor
+        if not isinstance(descriptor, RowRangeDescriptor):
+            raise TypeError("add_columns requires row-range shards")
+        if descriptor.end != descriptor.start + 1:
+            raise ValueError("Lance shards must identify exactly one fragment")
+        assert self.source_uri is not None
+        assert self.source_version is not None
+        fragments = (
+            _import_lance()
+            .dataset(
+                self.source_uri,
+                version=self.source_version,
+            )
+            .get_fragments()
+        )
+        if descriptor.start < 0 or descriptor.start >= len(fragments):
+            raise ValueError(
+                f"Lance fragment index {descriptor.start} is out of bounds"
+            )
+        fragment = fragments[descriptor.start]
+        self._source_fragment_by_shard[shard.id] = (
+            int(fragment.fragment_id),
+            int(fragment.count_rows()),
+        )
         self._next_position_by_shard[shard.id] = 0
         self._pending_rows_by_shard[shard.id] = {}
 
@@ -544,13 +567,16 @@ class LanceDatasetSink(BaseSink):
             if not isinstance(writer, _StreamingMergeColumnsWriter):
                 raise TypeError("Invalid writer for add_columns")
             return writer
-        descriptor = self._source_fragment_by_shard.get(shard_id)
-        if descriptor is None:
+        fragment_metadata = self._source_fragment_by_shard.get(shard_id)
+        if fragment_metadata is None:
             raise ValueError(f"Missing Lance source metadata for shard {shard_id}")
+        fragment_id, _ = fragment_metadata
+        assert self.source_uri is not None
+        assert self.source_version is not None
         writer = _StreamingMergeColumnsWriter(
-            dataset_uri=descriptor.dataset_uri,
-            version=descriptor.version,
-            fragment_id=descriptor.fragment_id,
+            dataset_uri=self.source_uri,
+            version=self.source_version,
+            fragment_id=fragment_id,
             schema=schema,
         )
         self._writers_by_shard[shard_id] = writer
@@ -560,10 +586,12 @@ class LanceDatasetSink(BaseSink):
         table = _block_to_table(block)
         if table.num_rows == 0:
             return
-        if LANCE_ROW_POSITION_COLUMN not in table.schema.names:
-            raise ValueError(
-                f"add_columns output is missing {LANCE_ROW_POSITION_COLUMN}"
-            )
+        for internal_column in (
+            LANCE_FRAGMENT_ID_COLUMN,
+            LANCE_ROW_POSITION_COLUMN,
+        ):
+            if internal_column not in table.schema.names:
+                raise ValueError(f"add_columns output is missing {internal_column}")
         assert self.columns is not None
         missing = sorted(set(self.columns).difference(table.schema.names))
         if missing:
@@ -579,17 +607,26 @@ class LanceDatasetSink(BaseSink):
         elif not self._add_columns_schema.equals(output_schema):
             raise ValueError("add_columns output schema changed between blocks")
 
-        descriptor = self._source_fragment_by_shard.get(shard_id)
-        if descriptor is None:
+        fragment_metadata = self._source_fragment_by_shard.get(shard_id)
+        if fragment_metadata is None:
             raise ValueError(f"Missing Lance source metadata for shard {shard_id}")
+        fragment_id, num_rows = fragment_metadata
         next_position = self._next_position_by_shard[shard_id]
         pending = self._pending_rows_by_shard[shard_id]
         for row in table.to_pylist():
+            raw_fragment_id = row[LANCE_FRAGMENT_ID_COLUMN]
+            if not isinstance(raw_fragment_id, int):
+                raise ValueError("Lance fragment id must be an integer")
+            if int(raw_fragment_id) != fragment_id:
+                raise ValueError(
+                    f"Lance row belongs to fragment {raw_fragment_id}; "
+                    f"expected {fragment_id}"
+                )
             raw_position = row[LANCE_ROW_POSITION_COLUMN]
             if not isinstance(raw_position, int):
                 raise ValueError("Lance row position must be an integer")
             position = int(raw_position)
-            if position < 0 or position >= descriptor.num_rows:
+            if position < 0 or position >= num_rows:
                 raise ValueError(
                     f"Lance row position {position} is outside fragment bounds"
                 )
@@ -658,31 +695,30 @@ class LanceDatasetSink(BaseSink):
         log_throughput("files_written", 1, shard_id=shard_id, unit="files")
 
     def _complete_add_columns_shard(self, shard_id: str) -> None:
-        descriptor = self._source_fragment_by_shard.pop(shard_id, None)
+        fragment_metadata = self._source_fragment_by_shard.pop(shard_id, None)
         pending = self._pending_rows_by_shard.pop(shard_id, {})
         written = self._next_position_by_shard.pop(shard_id, 0)
-        if descriptor is None:
+        if fragment_metadata is None:
             raise ValueError(f"Missing Lance source metadata for shard {shard_id}")
-        if pending or written != descriptor.num_rows:
+        fragment_id, num_rows = fragment_metadata
+        if pending or written != num_rows:
             raise ValueError(
-                f"Lance fragment {descriptor.fragment_id} produced {written} contiguous "
-                f"rows out of {descriptor.num_rows}"
+                f"Lance fragment {fragment_id} produced {written} contiguous "
+                f"rows out of {num_rows}"
             )
         writer = self._writers_by_shard.pop(shard_id, None)
         if not isinstance(writer, _StreamingMergeColumnsWriter):
-            if descriptor.num_rows == 0:
+            if num_rows == 0:
                 return
-            raise ValueError(
-                f"Lance fragment {descriptor.fragment_id} produced no output"
-            )
+            raise ValueError(f"Lance fragment {fragment_id} produced no output")
         updated_fragment, schema, lance_schema, created_files = writer.finish()
         payload = {
             "schema": _schema_to_base64(schema),
             "lance_schema": lance_schema,
             "fragments": [updated_fragment],
             "created_files": created_files,
-            "source_version": descriptor.version,
-            "source_fragment_id": descriptor.fragment_id,
+            "source_version": self.source_version,
+            "source_fragment_id": fragment_id,
         }
         with self.output.open(
             self._relpath(shard_id), mode="wt", encoding="utf-8"
