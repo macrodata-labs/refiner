@@ -71,6 +71,7 @@ class DataFolder(DirFileSystem):
     @fs.setter
     def fs(self, value: AbstractFileSystem | None) -> None:
         self._fs = value
+        self._explicit_fs = value is not None
 
     @property
     def path(self) -> str:

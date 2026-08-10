@@ -96,3 +96,24 @@ def test_load_lance_hides_internal_columns_from_iter_rows(tmp_path) -> None:
 def test_load_lance_rejects_configured_fsspec_handle() -> None:
     with pytest.raises(ValueError, match="configured fsspec handles"):
         load_lance(("bucket/data.lance", MemoryFileSystem()))
+
+
+def test_load_lance_rejects_configured_fsspec_setter() -> None:
+    from refiner.io.datafolder import DataFolder
+
+    input_folder = DataFolder("bucket/data.lance")
+    input_folder.fs = MemoryFileSystem()
+
+    with pytest.raises(ValueError, match="configured fsspec handles"):
+        load_lance(input_folder)
+
+
+def test_load_lance_rejects_reserved_shard_id_column(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "reserved-shard-id.lance"
+    lance.write_dataset(
+        pa.table({"__shard_id": ["user-value"], "x": [1]}), str(dataset_uri)
+    )
+
+    with pytest.raises(ValueError, match="reserved column __shard_id"):
+        load_lance(dataset_uri)

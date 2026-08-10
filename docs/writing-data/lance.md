@@ -75,7 +75,8 @@ The `columns` argument is required and only those columns are written. Existing
 columns, including large blob columns, remain referenced by their original
 files. Results may arrive out of order; Refiner restores fragment-local source
 order before writing. Missing or duplicate results fail execution and do not
-create a new dataset version.
+create a new dataset version. `add_columns` also fails explicitly for a dataset
+with no rows because no fragment exists to receive the new column files.
 
 ## Internal Notes
 

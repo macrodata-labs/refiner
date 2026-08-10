@@ -63,6 +63,7 @@ from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.tabular import Tabular
 from refiner.execution.engine import (
     Block,
     Segment,
@@ -196,19 +197,30 @@ class RefinerPipeline:
         method. Passing ``None`` removes the sink and leaves a read/transform
         pipeline suitable for inspection.
         """
-        if sink is not None and isinstance(self.source, LanceSource):
-            preserve_lance_columns = (
-                isinstance(sink, LanceDatasetSink) and sink.mode == "add_columns"
-            )
-            sink.set_internal_columns_to_strip(
-                () if preserve_lance_columns else tuple(sorted(LANCE_INTERNAL_COLUMNS))
-            )
         return self.__class__(
             self.source,
             self.pipeline_steps,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=sink,
         )
+
+    def _prepare_sink_block(self, block: Block) -> Block:
+        if not isinstance(self.source, LanceSource) or (
+            isinstance(self.sink, LanceDatasetSink) and self.sink.mode == "add_columns"
+        ):
+            return block
+        if isinstance(block, Tabular):
+            present = [
+                column
+                for column in LANCE_INTERNAL_COLUMNS
+                if column in block.schema.names
+            ]
+            return (
+                block.with_table(block.table.drop_columns(present))
+                if present
+                else block
+            )
+        return [row.drop(*LANCE_INTERNAL_COLUMNS) for row in block]
 
     def _get_compiled_segments(self) -> tuple[Segment, ...]:
         """Compile and cache execution segments for the current step sequence.

@@ -7,7 +7,7 @@ from typing import Any
 import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN, RowRangeDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.utils import check_required_dependencies
@@ -68,7 +68,9 @@ class LanceSource(BaseSource):
         dataset = _import_lance().dataset(self.dataset_uri, version=version)
         self.version = int(dataset.version)
         source_schema = dataset.schema
-        reserved = LANCE_INTERNAL_COLUMNS.intersection(source_schema.names)
+        reserved = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(
+            source_schema.names
+        )
         if reserved:
             raise ValueError(
                 f"Lance dataset contains reserved column {sorted(reserved)[0]}"

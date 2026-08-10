@@ -5,13 +5,14 @@ import json
 import posixpath
 import queue as queue_module
 import re
+import concurrent.futures
+import threading
 from collections.abc import Sequence
 from typing import Any, Literal, cast, get_args
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from refiner.execution.asyncio.runtime import io_executor
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
@@ -41,6 +42,8 @@ _METADATA_FILENAME_TEMPLATE = (
     "_refiner_lance_fragments/{job_id}/{shard_id}__w{worker_id}.jsonl"
 )
 _QUEUE_CLOSED = object()
+_BATCH_QUEUE_SIZE = 8
+_QUEUE_POLL_SECONDS = 0.1
 
 
 def _import_lance() -> Any:
@@ -141,25 +144,42 @@ def _managed_paths(
     cleanup_path_prefix: str | None = None,
 ) -> tuple[list[str], list[str]]:
     keep_pairs = _finalized_worker_pairs(reducer_name=reducer_name)
-    try:
-        listed_paths = output.find(search_path)
-    except FileNotFoundError:
-        return [], []
-
     finalized_paths: list[str] = []
-    cleanup_paths: list[str] = []
-    for rel_path in listed_paths:
-        if not isinstance(rel_path, str) or not rel_path or rel_path == ".":
+    cleanup_prefixes = (
+        {cleanup_path_prefix} if cleanup_path_prefix is not None else set()
+    )
+    for shard_id, worker_id in keep_pairs:
+        pattern = f"{search_path}/*/{shard_id}__w{worker_id}.jsonl"
+        try:
+            matches = output.glob(pattern)
+        except FileNotFoundError:
             continue
-        match = managed_path_pattern.fullmatch(rel_path)
-        if match is None:
-            continue
-        if cleanup_path_prefix is None or rel_path.startswith(
-            cleanup_path_prefix.rstrip("/") + "/"
-        ):
-            cleanup_paths.append(rel_path)
-        if (match.group("shard_id"), match.group("worker_id")) in keep_pairs:
+        for rel_path in matches:
+            if not isinstance(rel_path, str):
+                continue
+            match = managed_path_pattern.fullmatch(rel_path)
+            if match is None or (match.group("shard_id"), match.group("worker_id")) != (
+                shard_id,
+                worker_id,
+            ):
+                continue
             finalized_paths.append(rel_path)
+            cleanup_prefixes.add(posixpath.dirname(rel_path))
+
+    cleanup_paths: list[str] = []
+    for prefix in cleanup_prefixes:
+        if prefix is None:
+            continue
+        try:
+            listed_paths = output.find(prefix)
+        except FileNotFoundError:
+            continue
+        cleanup_paths.extend(
+            rel_path
+            for rel_path in listed_paths
+            if isinstance(rel_path, str)
+            and managed_path_pattern.fullmatch(rel_path) is not None
+        )
     return sorted(set(finalized_paths)), sorted(set(cleanup_paths))
 
 
@@ -219,9 +239,21 @@ class _StreamingShardWriter:
         self.dataset_uri = dataset_uri
         self.schema = schema
         self.mode = mode
-        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue()
+        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
+            maxsize=_BATCH_QUEUE_SIZE
+        )
         self.closed = False
-        self.task_future = io_executor().submit(self._run)
+        self.task_future: concurrent.futures.Future[list[str]] = (
+            concurrent.futures.Future()
+        )
+        self.thread = threading.Thread(target=self._run_task, daemon=True)
+        self.thread.start()
+
+    def _run_task(self) -> None:
+        try:
+            self.task_future.set_result(self._run())
+        except BaseException as err:
+            self.task_future.set_exception(err)
 
     def _iter_batches(self):
         while True:
@@ -248,19 +280,25 @@ class _StreamingShardWriter:
         if error is not None:
             raise RuntimeError("Lance fragment writer failed") from error
 
+    def _put(self, item: pa.RecordBatch | object) -> None:
+        while True:
+            self._raise_if_failed()
+            try:
+                self.queue.put(item, timeout=_QUEUE_POLL_SECONDS)
+                return
+            except queue_module.Full:
+                continue
+
     def put_batches(self, batches: list[pa.RecordBatch]) -> None:
         if self.closed:
             raise RuntimeError("Cannot write to a closed Lance shard writer.")
         for batch in batches:
-            self._raise_if_failed()
-            self.queue.put(batch)
-            self._raise_if_failed()
+            self._put(batch)
 
     def finish(self) -> list[str]:
         if not self.closed:
             self.closed = True
-            self._raise_if_failed()
-            self.queue.put(_QUEUE_CLOSED)
+            self._put(_QUEUE_CLOSED)
         return list(self.task_future.result())
 
 
@@ -727,7 +765,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             return
         if self.mode == "add_columns":
             self._validate_add_columns_fragment_coverage(lance, set())
-            return
+            raise ValueError("Cannot add columns to an empty Lance dataset")
         if self.planned_schema is None:
             raise ValueError(
                 f"Cannot {self.mode} an empty Lance dataset without a known schema"
