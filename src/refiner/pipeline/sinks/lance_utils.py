@@ -11,9 +11,14 @@ from refiner.pipeline.data.tabular import Tabular
 
 def validate_lance_uri(uri: str) -> None:
     parsed = urlsplit(uri)
-    if parsed.username is not None or parsed.password is not None or parsed.query:
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ValueError(
-            "Lance URIs must not contain credentials or query parameters; "
+            "Lance URIs must not contain credentials, query parameters, or fragments; "
             "configure storage credentials through the environment or Lance settings"
         )
 

@@ -113,7 +113,11 @@ def test_load_lance_rejects_configured_fsspec_setter() -> None:
 
 @pytest.mark.parametrize(
     "uri",
-    ["s3://user:password@bucket/dataset.lance", "s3://bucket/data.lance?token=x"],
+    [
+        "s3://user:password@bucket/dataset.lance",
+        "s3://bucket/data.lance?token=x",
+        "s3://bucket/data.lance#token=x",
+    ],
 )
 def test_load_lance_rejects_secret_bearing_uri(uri: str) -> None:
     with pytest.raises(ValueError, match="must not contain credentials"):
