@@ -586,6 +586,7 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
         first = LanceDatasetCommitReducerSink(
             dataset_uri,
             mode="overwrite",
+            source_version=1,
             planned_schema=pa.schema([("x", pa.int64())]),
         )
         first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
@@ -595,6 +596,7 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
         retry = LanceDatasetCommitReducerSink(
             dataset_uri,
             mode="overwrite",
+            source_version=1,
             planned_schema=pa.schema([("x", pa.int64())]),
         )
         retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
@@ -602,6 +604,35 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
     latest = lance.dataset(str(dataset_uri))
     assert latest.version == concurrent_version
     assert latest.to_table().to_pydict() == {"x": [99]}
+
+
+def test_lance_empty_overwrite_rejects_concurrent_update(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "empty-overwrite-conflict.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    pipeline = from_items([]).write_lance_dataset(dataset_uri, mode="overwrite")
+    reducer = pipeline.sink.build_reducer()
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+
+    lance.write_dataset(pa.table({"x": [2]}), str(dataset_uri), mode="append")
+
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id="input-shard", worker_id="worker-1")]
+        ),
+    )
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        with pytest.raises(ValueError, match="dataset changed from version 1 to 2"):
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {"x": [1, 2]}
 
 
 def test_lance_empty_create_rejects_partially_inferred_schema(tmp_path) -> None:

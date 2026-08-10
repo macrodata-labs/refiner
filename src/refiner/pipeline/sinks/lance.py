@@ -493,6 +493,14 @@ class LanceDatasetSink(BaseSink):
             self._existing_version = 0
         else:
             self._existing_version = int(dataset.version)
+        if (
+            self.source_version is not None
+            and self._existing_version != self.source_version
+        ):
+            raise ValueError(
+                "Cannot overwrite Lance fragments because the dataset changed "
+                f"from version {self.source_version} to {self._existing_version}"
+            )
         return self._existing_version
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
@@ -744,6 +752,11 @@ class LanceDatasetSink(BaseSink):
         return ("write_lance_dataset", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:
+        if self.mode == "overwrite" and self.source_version is None:
+            # Pin the destination before workers start.  Empty outputs have no
+            # fragment sidecar from which the reducer could otherwise recover
+            # the optimistic-concurrency version.
+            self.source_version = self._load_overwrite_version()
         return LanceDatasetCommitReducerSink(
             self.output,
             mode=self.mode,
@@ -766,6 +779,8 @@ class LanceDatasetCommitReducerSink(BaseSink):
         validate_lance_uri(self.output.abs_path())
         self.mode = mode
         self.source_version = source_version
+        if mode == "overwrite" and source_version is None:
+            raise ValueError("overwrite reducer requires a pinned source version")
         self.planned_schema = planned_schema
         self._managed_path_pattern = _compile_output_path_patterns(
             _METADATA_FILENAME_TEMPLATE
@@ -1015,18 +1030,24 @@ class LanceDatasetCommitReducerSink(BaseSink):
             raise ValueError(
                 f"Cannot {self.mode} an empty Lance dataset without a known schema"
             )
+        overwrite_source_version = self.source_version
+        if self.mode == "overwrite" and overwrite_source_version is None:
+            raise ValueError("overwrite reducer requires a pinned source version")
         finalized = _finalized_workers(reducer_name="write_lance_dataset_commit")
         commit_message = self._commit_message(
             schema=self.planned_schema,
             fragments=[f"{row.shard_id}/{row.worker_token}" for row in finalized],
-            source_versions=set(),
+            source_versions=(
+                {self.source_version}
+                if self.mode == "overwrite" and self.source_version is not None
+                else set()
+            ),
             lance_schema_payload=None,
         )
-        expected_version = (
-            1
-            if self.mode == "create"
-            else (int(existing.version) if existing is not None else 0)
-        )
+        expected_version = 1
+        if self.mode == "overwrite":
+            assert overwrite_source_version is not None
+            expected_version = overwrite_source_version + 1
         if self._was_committed(
             lance,
             commit_message,
@@ -1038,11 +1059,21 @@ class LanceDatasetCommitReducerSink(BaseSink):
             raise ValueError(
                 "Cannot create a Lance dataset at a location where one already exists."
             )
+        existing_version = int(existing.version) if existing is not None else 0
+        if self.mode == "overwrite" and existing_version != overwrite_source_version:
+            raise ValueError(
+                "Cannot overwrite Lance fragments because the dataset changed "
+                f"from version {overwrite_source_version} to {existing_version}"
+            )
         operation = lance.LanceOperation.Overwrite(self.planned_schema, [])
+        read_version = 0
+        if self.mode == "overwrite":
+            assert overwrite_source_version is not None
+            read_version = overwrite_source_version
         lance.LanceDataset.commit(
             self._dataset_uri(),
             operation,
-            read_version=existing.version if existing is not None else 0,
+            read_version=read_version,
             max_retries=0,
             commit_message=commit_message,
         )
