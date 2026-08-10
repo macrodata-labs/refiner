@@ -727,16 +727,6 @@ class RefinerPipeline:
         planned_schema = (
             self.output_schema() if self._output_schema_is_complete() else None
         )
-        if isinstance(self.source, LanceSource) and mode != "add_columns":
-            if planned_schema is not None:
-                planned_schema = pa.schema(
-                    [
-                        field
-                        for field in planned_schema
-                        if field.name not in LANCE_INTERNAL_COLUMNS
-                    ],
-                    metadata=planned_schema.metadata,
-                )
         if mode == "add_columns":
             if not isinstance(self.source, LanceSource):
                 raise ValueError(

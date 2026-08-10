@@ -1824,6 +1824,53 @@ def test_lance_dataset_reducer_retry_is_idempotent(tmp_path) -> None:
     assert not any((output_dir / "_refiner_lance_fragments").glob("**/*.jsonl"))
 
 
+def test_lance_overwrite_retry_finds_historical_commit(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    output_dir = tmp_path / "lance-overwrite-retry.lance"
+    lance.write_dataset(pa.table({"x": [0]}), str(output_dir))
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
+        ),
+    )
+    sink = LanceDatasetSink(output_dir, mode="overwrite")
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        sink.write_block([DictRow({"x": 9}, shard_id=shard_id)])
+        sink.on_shard_complete(shard_id)
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        first = sink.build_reducer()
+        assert isinstance(first, LanceDatasetCommitReducerSink)
+        first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+        lance.write_dataset(
+            pa.table({"x": [10]}), str(output_dir), mode="append"
+        )
+        concurrent_version = lance.dataset(str(output_dir)).version
+
+        retry = sink.build_reducer()
+        assert isinstance(retry, LanceDatasetCommitReducerSink)
+        retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    latest = lance.dataset(str(output_dir))
+    assert latest.version == concurrent_version
+    assert latest.to_table().to_pydict() == {"x": [9, 10]}
+
+
 def test_lance_dataset_reducer_rejects_ambiguous_resume_metadata(tmp_path) -> None:
     pytest.importorskip("lance")
     output_dir = tmp_path / "lance-ambiguous-resume.lance"

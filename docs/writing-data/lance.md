@@ -78,21 +78,3 @@ files. Results may arrive out of order; Refiner restores fragment-local source
 order before writing. Missing or duplicate results fail execution and do not
 create a new dataset version. `add_columns` also fails explicitly for a dataset
 with no rows because no fragment exists to receive the new column files.
-
-## Internal Notes
-
-Workers buffer only the requested output columns plus internal ordering columns
-as Arrow tables. At fragment completion, they reorder those tables with Arrow,
-write uncommitted column files, and record replacement-fragment metadata. The
-reducer commits finalized attempts once against the pinned read version with a
-Lance merge operation. Before committing, it verifies that every non-empty
-fragment in the pinned source version has exactly one finalized result. Cleanup
-records only files created by each attempt, so rejected retries cannot delete
-base dataset files.
-
-This follows the worker-output/coordinator-commit pattern used by Spark,
-Beam/Dataflow, Daft, and Ray Data. Refiner keeps Lance fragments as its work
-unit because Lance schema evolution is fragment-based; repartitioning first
-would require a keyed join or staging dataset. Hugging Face Datasets generally
-materializes a new dataset revision instead of attaching column files to
-existing fragments.

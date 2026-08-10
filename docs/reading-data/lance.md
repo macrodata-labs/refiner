@@ -36,11 +36,3 @@ query parameters are rejected so pipeline plans do not serialize secrets.
 
 Each Lance fragment becomes one Refiner shard. A worker may claim and process
 multiple fragments over its lifetime.
-
-## Internal Notes
-
-The source keeps the dataset URI and resolved version on the pipeline. It uses
-ordinary row-range shards to assign fragment indices and attaches protected
-fragment-ID and fragment-local-row-position columns to the rows. The
-`add_columns` writer uses those columns to restore output order and validate
-one-to-one row alignment.

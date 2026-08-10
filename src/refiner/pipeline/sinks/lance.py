@@ -790,13 +790,19 @@ class LanceDatasetCommitReducerSink(BaseSink):
         existing = self._load_existing_dataset(lance)
         if existing is None:
             return False
-        versions = {int(existing.version), *expected_versions}
         available_versions = {
             int(version_info["version"])
             for version_info in existing.versions()
             if isinstance(version_info.get("version"), int)
         }
-        for version in sorted(versions.intersection(available_versions), reverse=True):
+        candidate_versions = (
+            available_versions
+            if self.mode == "overwrite"
+            else {int(existing.version), *expected_versions}.intersection(
+                available_versions
+            )
+        )
+        for version in sorted(candidate_versions, reverse=True):
             transaction = existing.read_transaction(version)
             properties = getattr(transaction, "transaction_properties", None)
             if (
@@ -997,7 +1003,6 @@ class LanceDatasetCommitReducerSink(BaseSink):
         )
         rejected_paths = sorted(set(cleanup_paths).difference(metadata_paths))
 
-        rejected_fragments: list[str] = []
         rejected_created_files: list[str] = []
         cleanup_lance = _import_lance() if self.mode == "add_columns" else None
         for rel_path in rejected_paths:
@@ -1026,14 +1031,10 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     err,
                 )
                 continue
-            rejected_fragments.extend(next_rejected_fragments)
             rejected_created_files.extend(next_created_files)
 
         if not metadata_paths:
-            self._cleanup_rejected_data(
-                rejected_fragments,
-                rejected_created_files,
-            )
+            self._cleanup_rejected_data(rejected_created_files)
             self._commit_empty_output(_import_lance())
             self._pending_metadata_cleanup = tuple(sorted(set(cleanup_paths)))
             return
@@ -1092,7 +1093,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         try:
             self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
         except Exception:
-            self._cleanup_rejected_data([], selected_created_files)
+            self._cleanup_rejected_data(selected_created_files)
             for rel_path in metadata_paths:
                 try:
                     self.output.rm(rel_path)
@@ -1124,10 +1125,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         if self._was_committed(
             lance, commit_message, expected_versions=expected_versions
         ):
-            self._cleanup_rejected_data(
-                rejected_fragments,
-                rejected_created_files,
-            )
+            self._cleanup_rejected_data(rejected_created_files)
             self._pending_metadata_cleanup = tuple(
                 sorted(set(cleanup_paths).union(metadata_paths))
             )
@@ -1196,20 +1194,15 @@ class LanceDatasetCommitReducerSink(BaseSink):
             commit_message=commit_message,
             max_retries=0,
         )
-        self._cleanup_rejected_data(
-            rejected_fragments,
-            rejected_created_files,
-        )
+        self._cleanup_rejected_data(rejected_created_files)
         self._pending_metadata_cleanup = tuple(
             sorted(set(cleanup_paths).union(metadata_paths))
         )
 
     def _cleanup_rejected_data(
         self,
-        rejected_fragments: Sequence[str],
         rejected_created_files: Sequence[str],
     ) -> None:
-        del rejected_fragments
         for path in rejected_created_files:
             try:
                 self.output.rm(path)
