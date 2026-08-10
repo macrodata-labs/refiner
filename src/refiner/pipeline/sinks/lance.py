@@ -8,17 +8,20 @@ import re
 import concurrent.futures
 import threading
 from collections.abc import Sequence
-from typing import Any, Literal, cast, get_args
+from typing import Any, Literal, get_args
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
-from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.lance_file import LanceSink
+from refiner.pipeline.sinks.lance_schema import (
+    lance_schema_from_payload as _lance_schema_from_payload,
+    lance_schema_to_payload as _lance_schema_to_payload,
+)
+from refiner.pipeline.sinks.lance_utils import block_to_table
 from refiner.pipeline.sinks.reducer.file import (
     _compile_output_path_patterns,
 )
@@ -61,58 +64,12 @@ def _validate_write_mode(mode: str) -> None:
         raise ValueError("mode must be one of: " + ", ".join(sorted(valid_modes)))
 
 
-def _block_to_table(block: Block) -> pa.Table:
-    table = (
-        block.table
-        if isinstance(block, Tabular)
-        else (
-            Tabular.from_rows(block).table
-            if not block
-            else block[0].tabular_type.from_rows(block).table
-        )
-    )
-    if SHARD_ID_COLUMN in table.schema.names:
-        table = table.drop_columns([SHARD_ID_COLUMN])
-    return table
-
-
 def _schema_to_base64(schema: pa.Schema) -> str:
     return base64.b64encode(schema.serialize().to_pybytes()).decode("ascii")
 
 
 def _schema_from_base64(value: str) -> pa.Schema:
     return pa.ipc.read_schema(pa.BufferReader(base64.b64decode(value)))
-
-
-def _lance_schema_to_payload(schema: Any) -> dict[str, object]:
-    _, args = schema.__reduce__()
-    metadata, *field_protos = args
-    return {
-        "metadata": str(metadata),
-        "fields": [
-            base64.b64encode(bytes(field_proto)).decode("ascii")
-            for field_proto in field_protos
-        ],
-    }
-
-
-def _lance_schema_from_payload(lance: Any, payload: object) -> Any:
-    if not isinstance(payload, dict):
-        raise ValueError("Invalid Lance schema metadata payload")
-    payload_dict = cast(dict[str, object], payload)
-    metadata = payload_dict.get("metadata")
-    fields = payload_dict.get("fields")
-    if not isinstance(metadata, str) or not isinstance(fields, list):
-        raise ValueError("Invalid Lance schema metadata payload")
-    encoded_fields: list[str] = []
-    for field in fields:
-        if not isinstance(field, str):
-            raise ValueError("Invalid Lance schema field payload")
-        encoded_fields.append(field)
-    return lance.schema.LanceSchema._from_protos(
-        metadata,
-        *(base64.b64decode(field) for field in encoded_fields),
-    )
 
 
 def _json_dumps(value: object) -> str:
@@ -144,43 +101,67 @@ def _managed_paths(
     cleanup_path_prefix: str | None = None,
 ) -> tuple[list[str], list[str]]:
     keep_pairs = _finalized_worker_pairs(reducer_name=reducer_name)
-    finalized_paths: list[str] = []
-    cleanup_prefixes = (
-        {cleanup_path_prefix} if cleanup_path_prefix is not None else set()
-    )
-    for shard_id, worker_id in keep_pairs:
-        pattern = f"{search_path}/*/{shard_id}__w{worker_id}.jsonl"
+    current_paths: set[str] = set()
+    if cleanup_path_prefix is not None:
         try:
-            matches = output.glob(pattern)
+            listed = output.find(cleanup_path_prefix)
         except FileNotFoundError:
-            continue
-        for rel_path in matches:
-            if not isinstance(rel_path, str):
-                continue
-            match = managed_path_pattern.fullmatch(rel_path)
-            if match is None or (match.group("shard_id"), match.group("worker_id")) != (
-                shard_id,
-                worker_id,
-            ):
-                continue
-            finalized_paths.append(rel_path)
-            cleanup_prefixes.add(posixpath.dirname(rel_path))
-
-    cleanup_paths: list[str] = []
-    for prefix in cleanup_prefixes:
-        if prefix is None:
-            continue
-        try:
-            listed_paths = output.find(prefix)
-        except FileNotFoundError:
-            continue
-        cleanup_paths.extend(
+            listed = []
+        current_paths = {
             rel_path
-            for rel_path in listed_paths
+            for rel_path in listed
             if isinstance(rel_path, str)
             and managed_path_pattern.fullmatch(rel_path) is not None
-        )
-    return sorted(set(finalized_paths)), sorted(set(cleanup_paths))
+        }
+
+    finalized_by_pair: dict[tuple[str, str], str] = {}
+    for rel_path in current_paths:
+        match = managed_path_pattern.fullmatch(rel_path)
+        assert match is not None
+        pair = (match.group("shard_id"), match.group("worker_id"))
+        if pair in keep_pairs:
+            finalized_by_pair[pair] = rel_path
+
+    missing_pairs = keep_pairs.difference(finalized_by_pair)
+    historical_paths: set[str] = set()
+    if missing_pairs:
+        try:
+            listed = output.find(search_path)
+        except FileNotFoundError:
+            listed = []
+        candidates: dict[tuple[str, str], set[str]] = {
+            pair: set() for pair in missing_pairs
+        }
+        for rel_path in listed:
+            if not isinstance(rel_path, str) or rel_path in current_paths:
+                continue
+            match = managed_path_pattern.fullmatch(rel_path)
+            if match is None:
+                continue
+            pair = (match.group("shard_id"), match.group("worker_id"))
+            if pair in candidates:
+                candidates[pair].add(rel_path)
+
+        selected_prefixes: set[str] = set()
+        for pair, paths in candidates.items():
+            if len(paths) > 1:
+                raise ValueError(
+                    "Ambiguous resumed Lance metadata for shard/worker "
+                    f"{pair[0]}/{pair[1]}"
+                )
+            if paths:
+                selected = next(iter(paths))
+                finalized_by_pair[pair] = selected
+                selected_prefixes.add(posixpath.dirname(selected))
+        historical_paths = {
+            rel_path
+            for rel_path in listed
+            if isinstance(rel_path, str)
+            and posixpath.dirname(rel_path) in selected_prefixes
+            and managed_path_pattern.fullmatch(rel_path) is not None
+        }
+
+    return sorted(finalized_by_pair.values()), sorted(current_paths | historical_paths)
 
 
 def _fragment_data_paths(fragment_json: str) -> list[str]:
@@ -402,7 +383,7 @@ class LanceDatasetSink(BaseSink):
             )
 
     def _write_add_columns_block(self, shard_id: str, block: Block) -> None:
-        table = _block_to_table(block)
+        table = block_to_table(block)
         if table.num_rows == 0:
             return
         for internal_column in (
@@ -438,7 +419,7 @@ class LanceDatasetSink(BaseSink):
         if self.mode == "add_columns":
             self._write_add_columns_block(shard_id, block)
             return
-        table = _block_to_table(block)
+        table = block_to_table(block)
         if table.num_rows == 0:
             return
         if self.mode == "append":

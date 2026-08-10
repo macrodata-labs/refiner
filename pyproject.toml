@@ -68,7 +68,7 @@ s3 = [
     "s3fs",
 ]
 lance = [
-    "pylance>=4.0.1",
+    "pylance>=4.0.1,<11",
 ]
 gcs = [
     "gcsfs",

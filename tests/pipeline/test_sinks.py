@@ -1510,22 +1510,14 @@ def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
     reducer = LanceDatasetSink(output_dir).build_reducer()
     assert isinstance(reducer, LanceDatasetCommitReducerSink)
     listed_prefixes: list[str] = []
-    listed_patterns: list[str] = []
     original_find = reducer.output.find
-    original_glob = reducer.output.glob
 
     def _recording_find(path: str):
         listed_prefixes.append(path)
         paths = original_find(path)
         return [*paths, *paths]
 
-    def _recording_glob(path: str):
-        listed_patterns.append(path)
-        paths = original_glob(path)
-        return [*paths, *paths]
-
     monkeypatch.setattr(reducer.output, "find", _recording_find)
-    monkeypatch.setattr(reducer.output, "glob", _recording_glob)
     with set_active_run_context(
         job_id="job",
         stage_index=1,
@@ -1543,9 +1535,6 @@ def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
     table = lance.dataset(str(output_dir)).to_table()
     assert table.column("x").to_pylist() == [9]
     assert len(list((output_dir / "data").glob("*.lance"))) == 1
-    assert listed_patterns == [
-        f"_refiner_lance_fragments/*/{shard_id}__w{worker_token_for(worker_ids[1])}.jsonl"
-    ]
     assert listed_prefixes == ["_refiner_lance_fragments/job"]
     assert not any((output_dir / "_refiner_lance_fragments" / "job").glob("*.jsonl"))
 
@@ -1591,6 +1580,79 @@ def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
     assert not any(
         (output_dir / "_refiner_lance_fragments" / "original-job").glob("*.jsonl")
     )
+
+
+def test_lance_dataset_reducer_prefers_current_job_metadata(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    output_dir = tmp_path / "lance-current-job.lance"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
+        ),
+    )
+    for job_id, value in (("old-job", 1), ("current-job", 9)):
+        sink = LanceDatasetSink(output_dir)
+        with set_active_run_context(
+            job_id=job_id,
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=runtime,
+        ):
+            sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
+            sink.on_shard_complete(shard_id)
+
+    reducer = sink.build_reducer()
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+    with set_active_run_context(
+        job_id="current-job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert lance.dataset(str(output_dir)).to_table().to_pydict() == {"x": [9]}
+
+
+def test_lance_dataset_reducer_rejects_ambiguous_resume_metadata(tmp_path) -> None:
+    pytest.importorskip("lance")
+    output_dir = tmp_path / "lance-ambiguous-resume.lance"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id=shard_id, worker_id=worker_id)]
+        ),
+    )
+    for job_id, value in (("old-job-1", 1), ("old-job-2", 2)):
+        sink = LanceDatasetSink(output_dir)
+        with set_active_run_context(
+            job_id=job_id,
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=runtime,
+        ):
+            sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
+            sink.on_shard_complete(shard_id)
+
+    reducer = sink.build_reducer()
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+    with set_active_run_context(
+        job_id="resumed-job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        with pytest.raises(ValueError, match="Ambiguous resumed Lance metadata"):
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
 
 def test_lance_sinks_reject_configured_fsspec_handles() -> None:

@@ -2245,7 +2245,7 @@ requires-dist = [
     { name = "pillow", marker = "extra == 'video'" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pylance", marker = "extra == 'lance'", specifier = ">=4.0.1" },
+    { name = "pylance", marker = "extra == 'lance'", specifier = ">=4.0.1,<11" },
     { name = "pytest", marker = "extra == 'testing'", specifier = ">=8.0.0" },
     { name = "pytest-cov", marker = "extra == 'testing'", specifier = ">=5.0.0" },
     { name = "s3fs", marker = "extra == 's3'" },
