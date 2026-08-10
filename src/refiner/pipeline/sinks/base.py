@@ -7,6 +7,7 @@ import pyarrow as pa
 
 from refiner.execution.tracking.shards import count_block_by_shard
 from refiner.pipeline.data.block import Block, split_block_by_shard
+from refiner.pipeline.data.shard import Shard
 from refiner.worker.metrics.api import log_throughput
 
 
@@ -68,6 +69,10 @@ class BaseSink(ABC):
     def set_input_schema(self, schema: pa.Schema | None) -> None:
         """Receive the schema expected at this sink boundary before writing starts."""
         del schema
+
+    def on_shard_start(self, shard: Shard) -> None:
+        """Receive source-shard provenance before its first output is written."""
+        del shard
 
     @property
     def counts_output_rows(self) -> bool:

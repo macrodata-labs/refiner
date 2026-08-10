@@ -12,7 +12,7 @@ from refiner import col
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline import from_items
+from refiner.pipeline import from_items, load_lance
 from refiner.pipeline.sinks import JsonlSink
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
@@ -195,6 +195,272 @@ def test_launch_local_writes_lance_dataset(tmp_path) -> None:
         20,
         30,
     ]
+
+
+def test_launch_local_adds_lance_columns_without_rewriting_base_files(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "evolved.lance"
+    base = lance.write_dataset(
+        pa.table({"x": [1, 2, 3, 4]}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+    base_files = {
+        file["path"]
+        for fragment in base.get_fragments()
+        for file in fragment.metadata.to_json()["files"]
+    }
+
+    pipeline = (
+        load_lance(dataset_uri, version=base.version, columns=["x"], batch_size=1)
+        .map(
+            lambda row: {"y": int(row["x"]) * 10},
+            dtypes={"y": datatype.int64()},
+        )
+        .write_lance_dataset(
+            dataset_uri,
+            mode="add_columns",
+            columns=["y"],
+        )
+    )
+
+    stats = pipeline.launch_local(
+        name="lance-add-columns",
+        num_workers=1,
+        rundir=str(tmp_path / "run"),
+    )
+
+    evolved = lance.dataset(str(dataset_uri))
+    evolved_files = {
+        file["path"]
+        for fragment in evolved.get_fragments()
+        for file in fragment.metadata.to_json()["files"]
+    }
+    assert stats.completed == 3
+    assert stats.output_rows == 4
+    assert evolved.version == base.version + 1
+    assert evolved.to_table().to_pydict() == {
+        "x": [1, 2, 3, 4],
+        "y": [10, 20, 30, 40],
+    }
+    assert base_files < evolved_files
+
+
+def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "reordered.lance"
+    base = lance.write_dataset(pa.table({"x": [1, 2, 3]}), str(dataset_uri))
+
+    def reverse_batch(rows: list[Row]):
+        for row in reversed(rows):
+            yield row.update({"y": int(row["x"]) * 10})
+
+    pipeline = (
+        load_lance(dataset_uri, version=base.version, columns=["x"], batch_size=3)
+        .batch_map(
+            reverse_batch,
+            batch_size=3,
+            dtypes={"y": datatype.int64()},
+        )
+        .write_lance_dataset(
+            dataset_uri,
+            mode="add_columns",
+            columns=["y"],
+        )
+    )
+
+    pipeline.launch_local(
+        name="lance-reorder-columns",
+        num_workers=1,
+        rundir=str(tmp_path / "run"),
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": [1, 2, 3],
+        "y": [10, 20, 30],
+    }
+
+
+def test_lance_add_columns_preserves_existing_field_ids(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "field-ids.lance"
+    dataset = lance.write_dataset(
+        pa.table({"x": [1], "removed": [2], "z": [3]}),
+        str(dataset_uri),
+    )
+    dataset.drop_columns(["removed"])
+    base = lance.dataset(str(dataset_uri))
+
+    pipeline = (
+        load_lance(dataset_uri, version=base.version)
+        .map(lambda row: {"w": 4}, dtypes={"w": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode="add_columns",
+            columns=["w"],
+        )
+    )
+    pipeline.launch_local(
+        name="lance-preserve-field-ids",
+        num_workers=1,
+        rundir=str(tmp_path / "run"),
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": [1],
+        "z": [3],
+        "w": [4],
+    }
+
+
+def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "concurrent-version.lance"
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    pipeline = (
+        load_lance(dataset_uri, version=base.version)
+        .map(lambda row: {"y": 10}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode="add_columns",
+            columns=["y"],
+        )
+    )
+    appended = lance.write_dataset(
+        pa.table({"x": [2]}),
+        str(dataset_uri),
+        mode="append",
+    )
+
+    with pytest.raises(RuntimeError):
+        pipeline.launch_local(
+            name="lance-version-conflict",
+            num_workers=1,
+            rundir=str(tmp_path / "run"),
+        )
+
+    latest = lance.dataset(str(dataset_uri))
+    assert latest.version == appended.version
+    assert latest.to_table().to_pydict() == {"x": [1, 2]}
+
+
+def test_lance_add_columns_rejects_missing_rows(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "missing.lance"
+    base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+    pipeline = (
+        load_lance(dataset_uri, version=base.version)
+        .filter(lambda row: int(row["x"]) == 1)
+        .map(lambda row: {"y": 10}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode="add_columns",
+            columns=["y"],
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="failed shard"):
+        pipeline.launch_local(
+            name="lance-missing-columns",
+            num_workers=1,
+            rundir=str(tmp_path / "run"),
+        )
+
+    assert lance.dataset(str(dataset_uri)).version == base.version
+
+
+def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "retry-cleanup.lance"
+    base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+    shard = load_lance(dataset_uri, version=base.version).list_shards()[0]
+    worker_ids = ["worker-1", "worker-2"]
+    created_by_worker: dict[str, set[str]] = {}
+
+    for worker_id, values in zip(worker_ids, [[10, 20], [90, 99]], strict=True):
+        sink = LanceDatasetSink(
+            dataset_uri,
+            mode="add_columns",
+            columns=["y"],
+            source_uri=str(dataset_uri),
+            source_version=base.version,
+        )
+        sink.set_input_schema(
+            pa.schema(
+                [
+                    pa.field("y", pa.int64()),
+                    pa.field("__refiner_lance_row_position", pa.uint64()),
+                ]
+            )
+        )
+        with set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(
+                RuntimeLifecycle,
+                _FinalizedWorkersRuntime(
+                    [FinalizedShardWorker(shard_id=shard.id, worker_id=worker_ids[1])]
+                ),
+            ),
+        ):
+            sink.on_shard_start(shard)
+            sink.write_shard_block(
+                shard.id,
+                Tabular(
+                    pa.table(
+                        {
+                            "y": values,
+                            "__refiner_lance_row_position": [0, 1],
+                        }
+                    )
+                ),
+            )
+            sink.on_shard_complete(shard.id)
+            with sink.output.open(
+                sink._relpath(shard.id), mode="rt", encoding="utf-8"
+            ) as metadata_file:
+                payload = json.load(metadata_file)
+            created_by_worker[worker_id] = set(payload["created_files"])
+
+    base_paths = {
+        dataset_uri / "data" / file["path"]
+        for fragment in base.get_fragments()
+        for file in fragment.metadata.to_json()["files"]
+    }
+    reducer = LanceDatasetCommitReducerSink(
+        dataset_uri,
+        mode="add_columns",
+        source_version=base.version,
+    )
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=cast(
+            RuntimeLifecycle,
+            _FinalizedWorkersRuntime(
+                [FinalizedShardWorker(shard_id=shard.id, worker_id=worker_ids[1])]
+            ),
+        ),
+    ):
+        reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": [1, 2],
+        "y": [90, 99],
+    }
+    assert all(path.exists() for path in base_paths)
+    assert all(
+        not (dataset_uri / path).exists() for path in created_by_worker[worker_ids[0]]
+    )
+    assert all(
+        (dataset_uri / path).exists() for path in created_by_worker[worker_ids[1]]
+    )
 
 
 def test_launch_local_vectorized_filter_with_sink_completes_shards(tmp_path) -> None:

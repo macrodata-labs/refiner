@@ -45,11 +45,13 @@ from refiner.pipeline.sources import (
     HFDatasetReader,
     Hdf5Reader,
     JsonReader,
+    LanceSource,
     ParquetReader,
 )
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy, PathSelection
 from refiner.pipeline.sources.items import ItemsSource
+from refiner.pipeline.sources.lance import LANCE_ROW_POSITION_COLUMN
 from refiner.pipeline.sources.task import TaskSource
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
@@ -293,11 +295,16 @@ class RefinerPipeline:
     def select(self, *columns: str) -> "RefinerPipeline":
         if not columns:
             raise ValueError("select requires at least one column")
-        if SHARD_ID_COLUMN in columns:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        internal_columns = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}
+        invalid = internal_columns.intersection(columns)
+        if invalid:
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
+        preserved = (SHARD_ID_COLUMN,)
+        if isinstance(self.source, LanceSource):
+            preserved += (LANCE_ROW_POSITION_COLUMN,)
         return self._add_vectorized_op(
             SelectStep(
-                columns=tuple(columns) + (SHARD_ID_COLUMN,),
+                columns=tuple(columns) + preserved,
                 index=self._next_step_index(),
             )
         )
@@ -305,8 +312,9 @@ class RefinerPipeline:
     def with_columns(self, **assignments: Expr | Any) -> "RefinerPipeline":
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
-        if SHARD_ID_COLUMN in assignments:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        invalid = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}.intersection(assignments)
+        if invalid:
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         exprs = {
             name: value if isinstance(value, Expr) else lit(value)
             for name, value in assignments.items()
@@ -316,8 +324,8 @@ class RefinerPipeline:
         )
 
     def with_column(self, name: str, value: Expr | Any) -> "RefinerPipeline":
-        if name == SHARD_ID_COLUMN:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if name in {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}:
+            raise ValueError(f"{name} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
         return self._add_vectorized_op(
             WithColumnsStep(assignments={name: expr}, index=self._next_step_index())
@@ -326,8 +334,9 @@ class RefinerPipeline:
     def drop(self, *columns: str) -> "RefinerPipeline":
         if not columns:
             raise ValueError("drop requires at least one column")
-        if SHARD_ID_COLUMN in columns:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        invalid = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}.intersection(columns)
+        if invalid:
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             DropStep(columns=tuple(columns), index=self._next_step_index())
         )
@@ -335,8 +344,12 @@ class RefinerPipeline:
     def rename(self, **mapping: str) -> "RefinerPipeline":
         if not mapping:
             raise ValueError("rename requires at least one mapping")
-        if SHARD_ID_COLUMN in mapping or SHARD_ID_COLUMN in mapping.values():
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        internal_columns = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}
+        invalid = internal_columns.intersection(
+            mapping
+        ) | internal_columns.intersection(mapping.values())
+        if invalid:
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             RenameStep(mapping=mapping, index=self._next_step_index())
         )
@@ -344,8 +357,9 @@ class RefinerPipeline:
     def cast(self, **dtypes: DTypeLike) -> "RefinerPipeline":
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
-        if SHARD_ID_COLUMN in dtypes:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        invalid = {SHARD_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}.intersection(dtypes)
+        if invalid:
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             CastStep(dtypes=dtypes, index=self._next_step_index())
         )
@@ -454,12 +468,25 @@ class RefinerPipeline:
         self,
         output: DataFolderLike,
         *,
-        mode: Literal["create", "append", "overwrite"] = "create",
+        mode: Literal["create", "append", "overwrite", "add_columns"] = "create",
+        columns: Sequence[str] | None = None,
     ) -> "RefinerPipeline":
+        source_uri: str | None = None
+        source_version: int | None = None
+        if mode == "add_columns":
+            if not isinstance(self.source, LanceSource):
+                raise ValueError(
+                    "add_columns requires a pipeline created by load_lance"
+                )
+            source_uri = self.source.dataset_uri
+            source_version = self.source.version
         return self.with_sink(
             LanceDatasetSink(
                 output=output,
                 mode=mode,
+                columns=columns,
+                source_uri=source_uri,
+                source_version=source_version,
             )
         )
 
@@ -877,6 +904,26 @@ def read_parquet(
             split_row_groups=split_row_groups,
             file_path_column=file_path_column,
             dtypes=dtypes,
+        )
+    )
+
+
+def load_lance(
+    input: DataFolderLike,
+    *,
+    version: int | str | None = None,
+    columns: Sequence[str] | None = None,
+    batch_size: int = 65_536,
+    blob_handling: str | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline over one immutable version of a Lance dataset."""
+    return RefinerPipeline(
+        source=LanceSource(
+            input,
+            version=version,
+            columns=columns,
+            batch_size=batch_size,
+            blob_handling=blob_handling,
         )
     )
 

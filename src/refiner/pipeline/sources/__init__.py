@@ -9,6 +9,7 @@ from refiner.pipeline.sources.readers import (
     LeRobotEpisodeReader,
     ParquetReader,
 )
+from refiner.pipeline.sources.lance import LanceSource
 
 __all__ = [
     "BaseSource",
@@ -18,6 +19,7 @@ __all__ = [
     "HFDatasetReader",
     "Hdf5Reader",
     "JsonReader",
+    "LanceSource",
     "LeRobotEpisodeReader",
     "ParquetReader",
 ]

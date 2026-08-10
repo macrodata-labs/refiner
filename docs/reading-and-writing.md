@@ -26,6 +26,7 @@ Built-in readers:
 | `read_parquet(...)` | Parquet datasets or files | row views backed by Arrow columns |
 | `read_hf_dataset(...)` | Hugging Face datasets | rows from generated Parquet shards, with optional file path resolution |
 | `read_lerobot(...)` | LeRobot robotics datasets | one row per episode, including frame/video metadata |
+| `load_lance(...)` | a versioned Lance dataset | Arrow batches with one Refiner shard per Lance fragment |
 | `text.read_commoncrawl(...)` | Common Crawl WARC or WET files | one row per WARC/WET record with selected WARC/HTTP fields |
 | `text.read_commoncrawl_from_index(...)` | Common Crawl WARC records via the parquet index | one row per fetched WARC record, planned from index rows |
 | `from_items(...)` | in-memory Python values | rows from mappings directly, or `{"item": value}` for primitives |
@@ -406,6 +407,24 @@ Lance support is optional:
 uv add "macrodata-refiner[lance]"
 ```
 
+Load an immutable Lance dataset version with `load_lance(...)`. When `version`
+is omitted, Refiner resolves the latest version once and pins that version for
+the pipeline:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.load_lance(
+    "s3://my-bucket/hands.lance",
+    version=42,
+    columns=["image", "frame_id"],
+    batch_size=128,
+)
+```
+
+Each Lance fragment becomes one Refiner shard. A worker may claim and process
+multiple fragments over its lifetime.
+
 Use `write_lance(...)` when you want independent Lance files, similar to
 `write_parquet(...)` but using Lance's file format:
 
@@ -438,6 +457,39 @@ Supported modes are:
 - `create`: create a new Lance dataset; fail if one already exists
 - `overwrite`: replace the target dataset with a new version
 - `append`: append fragments to an existing dataset
+- `add_columns`: attach new columns to the exact dataset version loaded by
+  `load_lance(...)`
+
+Use `add_columns` for row-preserving enrichment such as model inference:
+
+```python
+pipeline = (
+    mdr.load_lance(
+        "s3://my-bucket/hands.lance",
+        version=42,
+        columns=["image"],
+    )
+    .map(
+        detect_hands,
+        dtypes={
+            "hand_boxes": mdr.datatype.list(mdr.datatype.float32()),
+            "detector_score": mdr.datatype.float32(),
+        },
+    )
+    .write_lance_dataset(
+        "s3://my-bucket/hands.lance",
+        mode="add_columns",
+        columns=["hand_boxes", "detector_score"],
+    )
+)
+```
+
+The `columns` argument is required and only those columns are written. Existing
+columns, including large blob columns, remain referenced by their original
+files. Results may arrive out of order; Refiner restores their fragment-local
+source order before writing. Every source row must still produce exactly one
+output row. Missing or duplicate results fail the shard and do not create a new
+dataset version.
 
 `write_lance_dataset(...)` follows Lance's distributed write model. Each worker
 streams rows for a Refiner shard into one uncommitted Lance fragment, then
@@ -584,3 +636,18 @@ Writers matter when you launch the pipeline with:
 - [Expressions](expressions.md)
 - [Robotics](robotics.md)
 - [Launchers](launchers.md)
+
+## Internal Notes
+
+Lance reads are planned at fragment boundaries. In `add_columns` mode, shard
+workers write uncommitted column files and complete replacement-fragment
+metadata. The reducer commits those results once with Lance's merge operation
+against the pinned read version. Cleanup records only files created by each
+attempt so rejected retries cannot delete files referenced by the base dataset.
+
+This follows the same broad worker-output/coordinator-commit pattern used by
+Spark, Beam/Dataflow, Daft, and Ray Data sinks. Refiner keeps Lance fragments as
+the unit of work because Lance's schema-evolution transaction is itself
+fragment-based; repartitioning rows first would require an additional keyed
+join or staging dataset. Hugging Face Datasets generally materializes a new
+dataset revision instead of attaching column files to existing fragments.
