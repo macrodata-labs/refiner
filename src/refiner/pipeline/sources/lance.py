@@ -94,11 +94,11 @@ class LanceSource(BaseSource):
     def list_shards(self) -> list[Shard]:
         return [
             Shard.from_row_range(
-                start=index,
-                end=index + 1,
+                start=int(fragment.fragment_id),
+                end=int(fragment.fragment_id) + 1,
                 global_ordinal=index,
             )
-            for index, _ in enumerate(self._dataset().get_fragments())
+            for index, fragment in enumerate(self._dataset().get_fragments())
         ]
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
@@ -107,12 +107,7 @@ class LanceSource(BaseSource):
             raise TypeError("LanceSource requires row-range shards")
         if descriptor.end != descriptor.start + 1:
             raise ValueError("Lance shards must identify exactly one fragment")
-        fragments = self._dataset().get_fragments()
-        if descriptor.start < 0 or descriptor.start >= len(fragments):
-            raise ValueError(
-                f"Lance fragment index {descriptor.start} is out of bounds"
-            )
-        fragment = fragments[descriptor.start]
+        fragment = self._dataset().get_fragment(descriptor.start)
         fragment_id = int(fragment.fragment_id)
         expected_rows = int(fragment.count_rows())
         next_position = 0
@@ -126,9 +121,9 @@ class LanceSource(BaseSource):
                 type=pa.uint64(),
             )
             next_position += batch.num_rows
-            fragment_ids = pa.array(
-                [fragment_id] * batch.num_rows,
-                type=pa.uint64(),
+            fragment_ids = pa.repeat(
+                pa.scalar(fragment_id, type=pa.uint64()),
+                batch.num_rows,
             )
             yield Tabular(
                 pa.Table.from_batches([batch])

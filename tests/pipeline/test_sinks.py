@@ -452,8 +452,12 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
                     pa.table(
                         {
                             "y": values,
-                            LANCE_FRAGMENT_ID_COLUMN: [fragment_id, fragment_id],
-                            LANCE_ROW_POSITION_COLUMN: [0, 1],
+                            LANCE_FRAGMENT_ID_COLUMN: pa.array(
+                                [fragment_id, fragment_id], type=pa.uint64()
+                            ),
+                            LANCE_ROW_POSITION_COLUMN: pa.array(
+                                [0, 1], type=pa.uint64()
+                            ),
                         }
                     )
                 ),

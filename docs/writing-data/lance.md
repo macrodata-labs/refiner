@@ -72,7 +72,9 @@ create a new dataset version.
 
 ## Internal Notes
 
-Workers stream uncommitted column files and replacement-fragment metadata. The
+Workers buffer only the requested output columns plus internal ordering columns
+as Arrow tables. At fragment completion, they reorder those tables with Arrow,
+write uncommitted column files, and record replacement-fragment metadata. The
 reducer commits finalized attempts once against the pinned read version with a
 Lance merge operation. Before committing, it verifies that every non-empty
 fragment in the pinned source version has exactly one finalized result. Cleanup
