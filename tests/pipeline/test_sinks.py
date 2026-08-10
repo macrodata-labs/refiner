@@ -612,6 +612,33 @@ def test_lance_empty_create_rejects_missing_cast_column(tmp_path) -> None:
     assert not output_uri.exists()
 
 
+@pytest.mark.parametrize("operation", ["drop", "filter"])
+def test_lance_empty_create_rejects_missing_transform_column(
+    tmp_path, operation: str
+) -> None:
+    lance = pytest.importorskip("lance")
+    input_uri = tmp_path / f"empty-{operation}-input.lance"
+    output_uri = tmp_path / f"empty-{operation}-output.lance"
+    lance.write_dataset(pa.table({"x": pa.array([], type=pa.int64())}), str(input_uri))
+
+    pipeline = load_lance(input_uri)
+    pipeline = (
+        pipeline.drop("missing")
+        if operation == "drop"
+        else pipeline.filter(col("missing") > 0)
+    )
+    pipeline = pipeline.write_lance_dataset(output_uri)
+
+    with pytest.raises(RuntimeError):
+        pipeline.launch_local(
+            name=f"lance-empty-missing-{operation}",
+            num_workers=1,
+            rundir=str(tmp_path / f"empty-{operation}-run"),
+        )
+
+    assert not output_uri.exists()
+
+
 def test_lance_fragment_relocation_cleans_partial_move_target(
     tmp_path, monkeypatch
 ) -> None:

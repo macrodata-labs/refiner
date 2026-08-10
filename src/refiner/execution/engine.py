@@ -264,6 +264,10 @@ def _vector_segment_schema(
             continue
         if schema is None:
             continue
+        if isinstance(op, FilterExprStep):
+            if op.predicate.referenced_columns().difference(schema.names):
+                schema = None
+            continue
         if isinstance(op, SelectStep):
             missing = [
                 name
@@ -285,6 +289,9 @@ def _vector_segment_schema(
             continue
         if isinstance(op, DropStep):
             drop = set(op.columns)
+            if drop.difference(schema.names):
+                schema = None
+                continue
             schema = pa.schema(
                 [field for field in schema if field.name not in drop],
                 metadata=schema.metadata,
