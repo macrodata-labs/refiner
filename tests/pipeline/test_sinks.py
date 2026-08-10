@@ -179,6 +179,18 @@ def test_launch_local_writes_lance_files_per_shard(tmp_path) -> None:
     ]
 
 
+def test_lance_source_hides_lineage_from_ordinary_sink_schema(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    input_uri = tmp_path / "schema-filter-input.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(input_uri))
+
+    pipeline = load_lance(input_uri).write_jsonl(tmp_path / "schema-filter-output")
+
+    schema = pipeline._sink_input_schema()
+    assert schema is not None
+    assert schema.names == ["x"]
+
+
 @pytest.mark.parametrize(
     "filename_template",
     [

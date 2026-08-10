@@ -250,6 +250,21 @@ class RefinerPipeline:
         """Return the sink-boundary schema, including source bookkeeping fields."""
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
+    def _sink_input_schema(self) -> pa.Schema | None:
+        schema = self._execution_output_schema()
+        if schema is None:
+            return None
+        retained = (
+            self.sink.retained_source_columns if self.sink is not None else frozenset()
+        )
+        hidden = self.source.protected_columns.difference(retained)
+        if not hidden:
+            return schema
+        return pa.schema(
+            [field for field in schema if field.name not in hidden],
+            metadata=schema.metadata,
+        )
+
     def _output_schema_is_complete(self) -> bool:
         steps: list[RefinerStep | VectorizedOp] = []
         for step in self.pipeline_steps:
