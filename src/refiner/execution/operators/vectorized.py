@@ -49,7 +49,12 @@ def apply_vectorized_op(
         shard_counts = count_table_by_shard(table)
 
     if isinstance(op, SelectStep):
-        return table.select(list(op.columns)), None, row_indices
+        columns = [
+            column
+            for column in op.columns
+            if column in table.column_names or column not in op.optional_columns
+        ]
+        return table.select(columns), None, row_indices
 
     if isinstance(op, DropStep):
         return table.drop_columns(list(op.columns)), None, row_indices

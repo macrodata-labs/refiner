@@ -128,6 +128,7 @@ class FilterRowStep(RefinerStep):
 class SelectStep(RefinerStep):
     columns: tuple[str, ...]
     index: int
+    optional_columns: tuple[str, ...] = ()
     op_name: str | None = "select"
 
 

@@ -47,6 +47,7 @@ _METADATA_FILENAME_TEMPLATE = (
     "_refiner_lance_fragments/{job_id}/{shard_id}__w{worker_id}.jsonl"
 )
 _QUEUE_CLOSED = object()
+_QUEUE_POLL_SECONDS = 0.1
 _LANCE_WRITER_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=8,
     thread_name_prefix="refiner-lance-writer",
@@ -345,8 +346,13 @@ class _StreamingShardWriter:
             raise RuntimeError("Lance fragment writer failed") from error
 
     def _put(self, item: pa.RecordBatch | object) -> None:
-        self._raise_if_failed()
-        self.queue.put(item)
+        while True:
+            self._raise_if_failed()
+            try:
+                self.queue.put(item, timeout=_QUEUE_POLL_SECONDS)
+                return
+            except queue_module.Full:
+                continue
 
     def put_batches(self, batches: list[pa.RecordBatch]) -> None:
         if self.closed:

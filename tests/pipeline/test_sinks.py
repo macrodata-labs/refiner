@@ -361,6 +361,7 @@ def test_lance_map_table_can_drop_lineage_without_add_columns(tmp_path) -> None:
     rows = list(
         load_lance(source_uri)
         .map_table(lambda table: table.select(["x", SHARD_ID_COLUMN]))
+        .select("x")
         .iter_rows()
     )
 
