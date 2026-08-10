@@ -21,6 +21,7 @@ from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
     _StreamingAddColumnsWriter,
+    _job_token,
     _schema_to_base64,
 )
 from refiner.pipeline.sinks.parquet import ParquetSink
@@ -478,6 +479,24 @@ def test_lance_add_columns_accepts_expression_created_column(tmp_path) -> None:
     }
 
 
+def test_lance_add_columns_rejects_existing_column_without_inferred_schema(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "existing-column.lance"
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    sink = LanceDatasetSink(
+        dataset_uri,
+        mode="add_columns",
+        columns=["x"],
+        source_uri=str(dataset_uri),
+        source_version=base.version,
+    )
+
+    with pytest.raises(ValueError, match="cannot replace existing columns: x"):
+        sink.set_input_schema(None)
+
+
 def test_lance_add_columns_preserves_internal_columns_across_replacement_row(
     tmp_path,
 ) -> None:
@@ -632,9 +651,7 @@ def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
     dataset_uri = tmp_path / "empty-create-retry.lance"
     runtime = cast(
         RuntimeLifecycle,
-        _FinalizedWorkersRuntime(
-            [FinalizedShardWorker(shard_id="input-shard", worker_id="worker-1")]
-        ),
+        _FinalizedWorkersRuntime([]),
     )
     with set_active_run_context(
         job_id="job",
@@ -660,9 +677,7 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
     base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
     runtime = cast(
         RuntimeLifecycle,
-        _FinalizedWorkersRuntime(
-            [FinalizedShardWorker(shard_id="input-shard", worker_id="worker-1")]
-        ),
+        _FinalizedWorkersRuntime([]),
     )
     with set_active_run_context(
         job_id="job",
@@ -700,9 +715,7 @@ def test_lance_empty_overwrite_rejects_concurrent_dataset_version(tmp_path) -> N
     base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
     runtime = cast(
         RuntimeLifecycle,
-        _FinalizedWorkersRuntime(
-            [FinalizedShardWorker(shard_id="input-shard", worker_id="worker-1")]
-        ),
+        _FinalizedWorkersRuntime([]),
     )
     sink = LanceDatasetSink(
         dataset_uri,
@@ -749,7 +762,8 @@ def test_lance_empty_create_rejects_partially_inferred_schema(tmp_path) -> None:
             num_workers=1,
             rundir=str(tmp_path / "empty-partial-schema-run"),
         )
-    assert not output_uri.exists()
+    with pytest.raises((FileNotFoundError, OSError, ValueError)):
+        lance.dataset(str(output_uri))
 
 
 def test_lance_empty_create_rejects_typed_replacement_schema(tmp_path) -> None:
@@ -773,7 +787,8 @@ def test_lance_empty_create_rejects_typed_replacement_schema(tmp_path) -> None:
             num_workers=1,
             rundir=str(tmp_path / "typed-replacement-run"),
         )
-    assert not output_uri.exists()
+    with pytest.raises((FileNotFoundError, OSError, ValueError)):
+        lance.dataset(str(output_uri))
 
 
 def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:
@@ -2088,8 +2103,71 @@ def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
     table = lance.dataset(str(output_dir)).to_table()
     assert table.column("x").to_pylist() == [9]
     assert len(list((output_dir / "data").glob("*.lance"))) == 1
-    assert listed_prefixes == ["_refiner_lance_fragments/job"]
-    assert not any((output_dir / "_refiner_lance_fragments" / "job").glob("*.jsonl"))
+    job_token = _job_token("job")
+    assert listed_prefixes == [f"_refiner_lance_fragments/{job_token}"]
+    assert not any(
+        (output_dir / "_refiner_lance_fragments" / job_token).glob("*.jsonl")
+    )
+
+
+def test_lance_dataset_sidecar_path_tokenizes_job_id(tmp_path) -> None:
+    output_dir = tmp_path / "safe-job-id.lance"
+    sink = LanceDatasetSink(output_dir)
+    shard_id = "0123456789ab"
+
+    with set_active_run_context(
+        job_id="../../escaped",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        sink.on_shard_complete(shard_id)
+        rel_path = sink._relpath(shard_id)
+
+    assert rel_path.startswith(
+        f"_refiner_lance_fragments/{_job_token('../../escaped')}/"
+    )
+    assert ".." not in rel_path
+    assert (output_dir / rel_path).is_file()
+    assert not (tmp_path / "escaped").exists()
+
+
+def test_lance_dataset_reducer_rejects_missing_finalized_sidecar(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    output_dir = tmp_path / "missing-sidecar.lance"
+    finalized = [
+        FinalizedShardWorker(shard_id="0123456789ab", worker_id="worker-1"),
+        FinalizedShardWorker(shard_id="abcdef012345", worker_id="worker-2"),
+    ]
+    runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime(finalized))
+    sink = LanceDatasetSink(output_dir)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        sink.write_block([DictRow({"x": 1}, shard_id=finalized[0].shard_id)])
+        sink.on_shard_complete(finalized[0].shard_id)
+
+    reducer = sink.build_reducer()
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        with pytest.raises(ValueError, match="Missing Lance metadata"):
+            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    with pytest.raises((FileNotFoundError, OSError, ValueError)):
+        lance.dataset(str(output_dir))
+    assert list((output_dir / "data").glob("*.lance"))
+    assert list((output_dir / "_refiner_lance_fragments").glob("**/*.jsonl"))
 
 
 def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
@@ -2138,7 +2216,11 @@ def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
     assert lance.dataset(str(output_dir)).to_table().to_pydict() == {"x": [9]}
     assert len(list((output_dir / "data").glob("*.lance"))) == 1
     assert not any(
-        (output_dir / "_refiner_lance_fragments" / "original-job").glob("*.jsonl")
+        (
+            output_dir
+            / "_refiner_lance_fragments"
+            / _job_token("original-job")
+        ).glob("*.jsonl")
     )
 
 
