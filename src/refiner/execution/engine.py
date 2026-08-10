@@ -262,6 +262,14 @@ def _vector_segment_schema(
         if schema is None:
             continue
         if isinstance(op, SelectStep):
+            missing = [
+                name
+                for name in op.columns
+                if schema.get_field_index(name) < 0 and name not in op.optional_columns
+            ]
+            if missing:
+                schema = None
+                continue
             fields = [
                 schema.field(idx)
                 for name in op.columns

@@ -275,14 +275,20 @@ def _relocate_fragment_files(
             # Use the filesystem's native move operation.  Local and other
             # rename-capable filesystems avoid a second full-data copy; object
             # stores can still implement this as their native copy/delete.
-            output.mv(source_path, target_path)
             moved.append((source_path, target_path))
+            output.mv(source_path, target_path)
             file_info["path"] = target_fragment_path
             relocated.append(target_path)
     except Exception:
         for source_path, target_path in reversed(moved):
             try:
-                output.mv(target_path, source_path)
+                if output.exists(source_path):
+                    # A copy/delete-backed move may have created the target and
+                    # then failed while deleting the source.
+                    if output.exists(target_path):
+                        output.rm(target_path)
+                elif output.exists(target_path):
+                    output.mv(target_path, source_path)
             except Exception:  # noqa: BLE001
                 continue
         raise

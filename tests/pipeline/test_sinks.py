@@ -19,6 +19,7 @@ from refiner.pipeline.sinks import JsonlSink
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
+    _relocate_fragment_files,
     _schema_to_base64,
 )
 from refiner.pipeline.sinks.parquet import ParquetSink
@@ -516,6 +517,50 @@ def test_lance_empty_create_and_overwrite_preserve_schema(tmp_path) -> None:
         output = lance.dataset(str(output_uri))
         assert output.schema.names == ["x"]
         assert output.count_rows() == 0
+
+
+def test_lance_empty_create_rejects_missing_selected_column(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    input_uri = tmp_path / "empty-select-input.lance"
+    output_uri = tmp_path / "empty-select-output.lance"
+    lance.write_dataset(pa.table({"x": pa.array([], type=pa.int64())}), str(input_uri))
+
+    pipeline = (
+        load_lance(input_uri).select("x", "missing").write_lance_dataset(output_uri)
+    )
+
+    with pytest.raises(RuntimeError):
+        pipeline.launch_local(
+            name="lance-empty-missing-select",
+            num_workers=1,
+            rundir=str(tmp_path / "empty-select-run"),
+        )
+
+    assert not output_uri.exists()
+
+
+def test_lance_fragment_relocation_cleans_partial_move_target(
+    tmp_path, monkeypatch
+) -> None:
+    from refiner.io.datafolder import DataFolder
+
+    output = DataFolder.resolve(tmp_path)
+    output.makedirs("data", exist_ok=True)
+    with output.open("data/source.lance", mode="wb") as file:
+        file.write(b"fragment")
+
+    def partial_move(source: str, target: str) -> None:
+        output.file(source).copy(output.file(target))
+        raise OSError("source deletion failed")
+
+    monkeypatch.setattr(output, "mv", partial_move)
+    fragment = json.dumps({"files": [{"path": "source.lance"}]})
+
+    with pytest.raises(OSError, match="source deletion failed"):
+        _relocate_fragment_files(output, fragment, attempt_prefix="attempt")
+
+    assert output.exists("data/source.lance")
+    assert output.find("data") == ["data/source.lance"]
 
 
 def test_lance_add_columns_rejects_empty_dataset(tmp_path) -> None:
