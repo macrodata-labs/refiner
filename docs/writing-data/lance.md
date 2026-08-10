@@ -42,9 +42,11 @@ determine the output Arrow schema statically; otherwise they fail explicitly.
 
 Lance opens dataset URIs through its native storage layer. Configured fsspec
 filesystem objects and `storage_options` are therefore rejected instead of
-being silently ignored. Configure the endpoint and credentials through Lance's
-supported environment/configuration. Credential-bearing URIs and URI query
-parameters are rejected so pipeline plans do not serialize secrets.
+being silently ignored. Configure the endpoint and credentials through
+provider-standard environment settings recognized by both Lance and fsspec;
+the dataset writer uses Lance for fragments and fsspec for attempt handoff
+metadata. Credential-bearing URIs and URI query parameters are rejected so
+pipeline plans do not serialize secrets.
 
 ## Adding columns
 

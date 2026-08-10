@@ -622,12 +622,20 @@ class LanceDatasetSink(BaseSink):
         original_created_files = set(_fragment_data_paths(updated_json)).difference(
             _fragment_data_paths(base_json)
         )
-        updated_json, created_files = _relocate_fragment_files(
-            self.output,
-            updated_json,
-            attempt_prefix=_attempt_fragment_prefix(shard_id),
-            only_paths=original_created_files,
-        )
+        try:
+            updated_json, created_files = _relocate_fragment_files(
+                self.output,
+                updated_json,
+                attempt_prefix=_attempt_fragment_prefix(shard_id),
+                only_paths=original_created_files,
+            )
+        except Exception:
+            for path in original_created_files:
+                try:
+                    self.output.rm(path)
+                except FileNotFoundError:
+                    continue
+            raise
         created_files = sorted(created_files)
         payload = {
             "schema": _schema_to_base64(merged_schema.to_pyarrow()),
@@ -1112,18 +1120,22 @@ class LanceDatasetCommitReducerSink(BaseSink):
 
         existing = self._load_existing_dataset(lance)
         if self.mode == "create" and existing is not None:
+            self._cleanup_failed_commit(metadata_paths, selected_created_files)
             raise ValueError(
                 "Cannot create a Lance dataset at a location where one already exists."
             )
         if self.mode == "append":
             if existing is None:
+                self._cleanup_failed_commit(metadata_paths, selected_created_files)
                 raise ValueError("Cannot append to a non-existent Lance dataset.")
             if len(source_versions) != 1:
+                self._cleanup_failed_commit(metadata_paths, selected_created_files)
                 raise ValueError(
                     "Cannot append Lance fragments from different versions"
                 )
             read_version = next(iter(source_versions))
             if existing.version != read_version:
+                self._cleanup_failed_commit(metadata_paths, selected_created_files)
                 raise ValueError(
                     "Cannot append Lance fragments because the dataset changed "
                     f"from version {read_version} to {existing.version}"
@@ -1136,17 +1148,22 @@ class LanceDatasetCommitReducerSink(BaseSink):
             )
         elif self.mode == "add_columns":
             if existing is None:
+                self._cleanup_failed_commit(metadata_paths, selected_created_files)
                 raise ValueError("Cannot add columns to a non-existent Lance dataset.")
             if self.source_version is None:
+                self._cleanup_failed_commit(metadata_paths, selected_created_files)
                 raise ValueError("add_columns reducer is missing its source version")
             if source_versions != {self.source_version}:
+                self._cleanup_failed_commit(metadata_paths, selected_created_files)
                 raise ValueError("Cannot merge Lance fragments from different versions")
             if existing.version != self.source_version:
+                self._cleanup_failed_commit(metadata_paths, selected_created_files)
                 raise ValueError(
                     "Cannot add columns because the Lance dataset changed "
                     f"from version {self.source_version} to {existing.version}"
                 )
             if lance_schema_payload is None:
+                self._cleanup_failed_commit(metadata_paths, selected_created_files)
                 raise ValueError("add_columns metadata is missing the Lance schema")
             operation = lance.LanceOperation.Merge(
                 [

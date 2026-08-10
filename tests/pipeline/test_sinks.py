@@ -404,6 +404,34 @@ def test_lance_add_columns_preserves_internal_columns_across_replacement_row(
     }
 
 
+def test_lance_add_columns_ignores_row_lineage_overwrites(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "lineage-overwrite.lance"
+    base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+    pipeline = (
+        load_lance(dataset_uri, version=base.version)
+        .map(
+            lambda row: {
+                "y": int(row["x"]) * 10,
+                LANCE_ROW_POSITION_COLUMN: 1 - int(row[LANCE_ROW_POSITION_COLUMN]),
+            },
+            dtypes={"y": datatype.int64()},
+        )
+        .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
+    )
+
+    pipeline.launch_local(
+        name="lance-lineage-overwrite",
+        num_workers=1,
+        rundir=str(tmp_path / "lineage-overwrite-run"),
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": [1, 2],
+        "y": [10, 20],
+    }
+
+
 def test_lance_add_columns_rejects_unaligned_replacement_batch(
     tmp_path,
 ) -> None:
@@ -596,6 +624,8 @@ def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:
     latest = lance.dataset(str(dataset_uri))
     assert latest.version == appended.version
     assert latest.to_table().to_pydict() == {"x": [1, 2]}
+    assert not list((dataset_uri / "data").glob("_refiner_lance_attempt_*"))
+    assert not list((dataset_uri / "_refiner_lance_fragments").glob("**/*.jsonl"))
 
 
 def test_lance_append_rejects_concurrent_dataset_version(tmp_path) -> None:
@@ -640,6 +670,8 @@ def test_lance_append_rejects_concurrent_dataset_version(tmp_path) -> None:
     assert latest.version == appended.version
     assert latest.to_table().to_pydict() == {"x": [1, 3]}
     assert base.version < appended.version
+    assert not list((dataset_uri / "data").glob("_refiner_lance_attempt_*"))
+    assert not list((dataset_uri / "_refiner_lance_fragments").glob("**/*.jsonl"))
 
 
 def test_lance_add_columns_rejects_missing_rows(tmp_path) -> None:

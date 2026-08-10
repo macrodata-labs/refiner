@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from collections import Counter
 from typing import Literal, overload
 
 import numpy as np
@@ -151,6 +152,24 @@ def apply_vectorized_op(
                 "map_table() must preserve protected source column "
                 f"{sorted(missing_protected)[0]}"
             )
+        if protected_columns:
+            ordered_protected = sorted(protected_columns)
+            source_identities = Counter(
+                zip(
+                    *(table[column].to_pylist() for column in ordered_protected),
+                    strict=True,
+                )
+            )
+            for identity in zip(
+                *(next_table[column].to_pylist() for column in ordered_protected),
+                strict=True,
+            ):
+                if source_identities[identity] <= 0:
+                    raise ValueError(
+                        "map_table() must not modify or duplicate protected source "
+                        "column values"
+                    )
+                source_identities[identity] -= 1
         next_row_indices = None
         if return_row_indices:
             if _ROW_INDEX_COLUMN not in next_table.column_names:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from collections import Counter
 from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
 from typing import cast
 
@@ -27,12 +28,10 @@ AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
 def _preserve_internal_columns(
     source: Row, result: Row, protected_columns: frozenset[str]
 ) -> Row:
-    missing = {
-        column: source[column]
-        for column in protected_columns
-        if column in source and column not in result
+    protected = {
+        column: source[column] for column in protected_columns if column in source
     }
-    return result.update(missing) if missing else result
+    return result.update(protected) if protected else result
 
 
 def execute_row_steps(
@@ -81,7 +80,9 @@ def execute_row_steps(
             if isinstance(result, Row):
                 return _preserve_internal_columns(row, result, protected_columns)
             if isinstance(result, dict):
-                return row.update(result)
+                return _preserve_internal_columns(
+                    row, row.update(result), protected_columns
+                )
             raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
 
     def _run_step(i: int, *, flush_all: bool) -> None:
@@ -100,7 +101,11 @@ def execute_row_steps(
                             _preserve_internal_columns(row, result, protected_columns)
                         )
                     elif isinstance(result, dict):
-                        out.append(row.update(result))
+                        out.append(
+                            _preserve_internal_columns(
+                                row, row.update(result), protected_columns
+                            )
+                        )
                     else:
                         raise TypeError(
                             f"Unsupported map() result type: {type(result)!r}"
@@ -148,7 +153,9 @@ def execute_row_steps(
                                     row, item, protected_columns
                                 )
                             elif isinstance(item, dict):
-                                emitted = row.update(item)
+                                emitted = _preserve_internal_columns(
+                                    row, row.update(item), protected_columns
+                                )
                             else:
                                 raise TypeError(
                                     f"Unsupported flat_map result type: {type(item)!r}"
@@ -180,6 +187,10 @@ def execute_row_steps(
                     return
                 with ShardDeltaTracker(on_shard_delta) as delta:
                     delta.remove_rows(batch_in)
+                    protected_identities = Counter(
+                        tuple(row[column] for column in sorted(protected_columns))
+                        for row in batch_in
+                    )
                     for item in step.apply_batch(batch_in):
                         if protected_columns and any(
                             column not in item for column in protected_columns
@@ -188,6 +199,16 @@ def execute_row_steps(
                                 "batch_map replacement rows must preserve protected "
                                 "source columns; return updates of the input rows"
                             )
+                        if protected_columns:
+                            identity = tuple(
+                                item[column] for column in sorted(protected_columns)
+                            )
+                            if protected_identities[identity] <= 0:
+                                raise ValueError(
+                                    "batch_map must not modify or duplicate protected "
+                                    "source column values"
+                                )
+                            protected_identities[identity] -= 1
                         item.log_throughput("rows_out", 1, unit="rows")
                         if item.shard_id is not None:
                             delta.add(item.shard_id, 1)
