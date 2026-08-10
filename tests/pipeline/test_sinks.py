@@ -540,6 +540,28 @@ def test_lance_empty_create_rejects_missing_selected_column(tmp_path) -> None:
     assert not output_uri.exists()
 
 
+def test_lance_empty_create_rejects_missing_cast_column(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    input_uri = tmp_path / "empty-cast-input.lance"
+    output_uri = tmp_path / "empty-cast-output.lance"
+    lance.write_dataset(pa.table({"x": pa.array([], type=pa.int64())}), str(input_uri))
+
+    pipeline = (
+        load_lance(input_uri)
+        .cast(missing=datatype.int64())
+        .write_lance_dataset(output_uri)
+    )
+
+    with pytest.raises(RuntimeError):
+        pipeline.launch_local(
+            name="lance-empty-missing-cast",
+            num_workers=1,
+            rundir=str(tmp_path / "empty-cast-run"),
+        )
+
+    assert not output_uri.exists()
+
+
 def test_lance_fragment_relocation_cleans_partial_move_target(
     tmp_path, monkeypatch
 ) -> None:
@@ -1070,6 +1092,17 @@ def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
                 [DictRow({"x": value}, shard_id=finalized_worker.shard_id)]
             )
             sink.on_shard_complete(finalized_worker.shard_id)
+
+    loser = LanceDatasetSink(output_dir)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-loser",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        loser.write_block([DictRow({"x": 99}, shard_id=finalized[0].shard_id)])
+        loser.on_shard_complete(finalized[0].shard_id)
 
     reducer = LanceDatasetCommitReducerSink(output_dir, mode="create")
     with set_active_run_context(

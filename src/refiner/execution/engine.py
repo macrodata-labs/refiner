@@ -253,6 +253,9 @@ def _vector_segment_schema(
             schema = None
             continue
         if isinstance(op, CastStep):
+            if schema is None or any(name not in schema.names for name in op.dtypes):
+                schema = None
+                continue
             schema = schema_with_dtypes(
                 schema,
                 op.dtypes,

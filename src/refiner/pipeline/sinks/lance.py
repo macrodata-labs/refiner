@@ -1124,8 +1124,13 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 continue
             rejected_created_files.extend(next_created_files)
 
+        # These files belong to attempts that cannot participate in this
+        # reducer commit.  Reclaim them before validating selected metadata so
+        # a terminal validation failure cannot strand loser artifacts.
+        self._cleanup_rejected_data(rejected_created_files)
+        rejected_created_files = []
+
         if not metadata_paths:
-            self._cleanup_rejected_data(rejected_created_files)
             self._commit_empty_output(_import_lance())
             self._pending_metadata_cleanup = tuple(sorted(set(cleanup_paths)))
             return
