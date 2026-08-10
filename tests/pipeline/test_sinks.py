@@ -697,6 +697,24 @@ def test_lance_add_columns_rejects_empty_dataset(tmp_path) -> None:
     assert lance.dataset(str(dataset_uri)).schema.names == ["x"]
 
 
+def test_lance_add_columns_rejects_existing_column_with_unknown_schema(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "unknown-schema-conflict.lance"
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    pipeline = (
+        load_lance(dataset_uri, version=base.version)
+        .map_table(lambda table: table)
+        .write_lance_dataset(dataset_uri, mode="add_columns", columns=["x"])
+    )
+    sink = pipeline.sink
+    assert isinstance(sink, LanceDatasetSink)
+
+    with pytest.raises(ValueError, match="cannot replace existing columns: x"):
+        sink.set_input_schema(None)
+
+
 def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "empty-create-retry.lance"

@@ -514,9 +514,19 @@ class LanceDatasetSink(BaseSink):
         return self._existing_version
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
-        if self.mode != "add_columns" or schema is None:
+        if self.mode != "add_columns":
             return
         assert self.columns is not None
+        assert self.source_uri is not None
+        assert self.source_version is not None
+        source_schema = self._source_dataset().schema
+        conflicts = sorted(set(self.columns).intersection(source_schema.names))
+        if conflicts:
+            raise ValueError(
+                "add_columns cannot replace existing columns: " + ", ".join(conflicts)
+            )
+        if schema is None:
+            return
         missing = sorted(set(self.columns).difference(schema.names))
         for internal_column in (
             LANCE_FRAGMENT_ID_COLUMN,
@@ -526,14 +536,6 @@ class LanceDatasetSink(BaseSink):
                 raise ValueError(
                     f"add_columns requires internal column {internal_column}"
                 )
-        assert self.source_uri is not None
-        assert self.source_version is not None
-        source_schema = self._source_dataset().schema
-        conflicts = sorted(set(self.columns).intersection(source_schema.names))
-        if conflicts:
-            raise ValueError(
-                "add_columns cannot replace existing columns: " + ", ".join(conflicts)
-            )
         if not missing:
             self._add_columns_schema = pa.schema(
                 [schema.field(column) for column in self.columns]
