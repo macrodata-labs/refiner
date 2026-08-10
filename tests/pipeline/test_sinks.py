@@ -21,6 +21,7 @@ from refiner.pipeline.sinks.lance import (
     LanceDatasetSink,
     _attempt_fragment_prefix,
     _fragment_data_paths,
+    _job_token,
     _relocate_fragment_files,
     _schema_to_base64,
 )
@@ -1224,7 +1225,9 @@ def test_lance_reducer_rejects_missing_created_file(tmp_path) -> None:
         )
         + "__file.lance"
     )
-    rel_path = f"_refiner_lance_fragments/{job_id}/{shard_id}__w{worker_id}.jsonl"
+    rel_path = (
+        f"_refiner_lance_fragments/{_job_token(job_id)}/{shard_id}__w{worker_id}.jsonl"
+    )
 
     with pytest.raises(ValueError, match="created file is missing"):
         reducer._verified_created_files(
@@ -1235,6 +1238,23 @@ def test_lance_reducer_rejects_missing_created_file(tmp_path) -> None:
             source_fragment_id=None,
             metadata_path=rel_path,
         )
+
+
+def test_lance_sidecar_path_hashes_job_id(tmp_path) -> None:
+    sink = LanceDatasetSink(tmp_path / "safe-job-path.lance")
+    with set_active_run_context(
+        job_id="../../escaped",
+        stage_index=0,
+        worker_id="0123456789ab",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        relpath = sink._relpath("0123456789ab")
+
+    assert ".." not in relpath
+    assert relpath.startswith(
+        f"_refiner_lance_fragments/{_job_token('../../escaped')}/"
+    )
 
 
 def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
@@ -2162,8 +2182,11 @@ def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
     table = lance.dataset(str(output_dir)).to_table()
     assert table.column("x").to_pylist() == [9]
     assert len(list((output_dir / "data").glob("*.lance"))) == 1
-    assert listed_prefixes == ["_refiner_lance_fragments/job"]
-    assert not any((output_dir / "_refiner_lance_fragments" / "job").glob("*.jsonl"))
+    job_token = _job_token("job")
+    assert listed_prefixes == [f"_refiner_lance_fragments/{job_token}"]
+    assert not any(
+        (output_dir / "_refiner_lance_fragments" / job_token).glob("*.jsonl")
+    )
 
 
 def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(

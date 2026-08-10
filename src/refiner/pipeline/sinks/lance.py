@@ -81,8 +81,12 @@ def _json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
 
 
+def _job_token(job_id: str) -> str:
+    return hashlib.sha256(job_id.encode()).hexdigest()[:16]
+
+
 def _metadata_prefix() -> str:
-    return f"_refiner_lance_fragments/{get_active_job_id()}"
+    return f"_refiner_lance_fragments/{_job_token(get_active_job_id())}"
 
 
 def _finalized_workers(*, reducer_name: str) -> list[Any]:
@@ -245,7 +249,7 @@ def _attempt_fragment_prefix(
 ) -> str:
     resolved_job_id = get_active_job_id() if job_id is None else job_id
     resolved_worker_id = get_active_worker_token() if worker_id is None else worker_id
-    job_token = hashlib.sha256(resolved_job_id.encode()).hexdigest()[:16]
+    job_token = _job_token(resolved_job_id)
     return f"_refiner_lance_attempt_{job_token}_{shard_id}__w{resolved_worker_id}"
 
 
@@ -469,7 +473,7 @@ class LanceDatasetSink(BaseSink):
 
     def _relpath(self, shard_id: str) -> str:
         return _METADATA_FILENAME_TEMPLATE.format(
-            job_id=get_active_job_id(),
+            job_id=_job_token(get_active_job_id()),
             shard_id=shard_id,
             worker_id=get_active_worker_token(),
         )
@@ -955,15 +959,10 @@ class LanceDatasetCommitReducerSink(BaseSink):
         match = self._managed_path_pattern.fullmatch(metadata_path)
         if match is None:
             raise ValueError(f"Invalid Lance metadata path: {metadata_path}")
-        job_id = posixpath.basename(posixpath.dirname(metadata_path))
+        job_token = posixpath.basename(posixpath.dirname(metadata_path))
         attempt_prefix = (
-            "data/"
-            + _attempt_fragment_prefix(
-                match.group("shard_id"),
-                job_id=job_id,
-                worker_id=match.group("worker_id"),
-            )
-            + "__"
+            f"data/_refiner_lance_attempt_{job_token}_{match.group('shard_id')}"
+            f"__w{match.group('worker_id')}__"
         )
         if any(not path.startswith(attempt_prefix) for path in created_files):
             raise ValueError(
@@ -971,7 +970,11 @@ class LanceDatasetCommitReducerSink(BaseSink):
             )
 
         def require_created_files() -> list[str]:
-            missing = [path for path in created_files if not self.output.exists(path)]
+            paths = list(created_files)
+            exists = _LANCE_WRITER_POOL.map(self.output.exists, paths)
+            missing = [
+                path for path, present in zip(paths, exists, strict=True) if not present
+            ]
             if missing:
                 if source_version is not None and self.mode in {
                     "append",
