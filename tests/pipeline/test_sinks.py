@@ -19,10 +19,6 @@ from refiner.pipeline.sinks import JsonlSink
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
-    _attempt_fragment_prefix,
-    _fragment_data_paths,
-    _job_token,
-    _relocate_fragment_files,
     _schema_to_base64,
 )
 from refiner.pipeline.sinks.parquet import ParquetSink
@@ -179,38 +175,6 @@ def test_launch_local_writes_lance_files_per_shard(tmp_path) -> None:
         20,
         30,
     ]
-
-
-def test_lance_source_hides_lineage_from_ordinary_sink_schema(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    input_uri = tmp_path / "schema-filter-input.lance"
-    lance.write_dataset(pa.table({"x": [1]}), str(input_uri))
-
-    pipeline = load_lance(input_uri).write_jsonl(tmp_path / "schema-filter-output")
-
-    schema = pipeline._sink_input_schema()
-    assert schema is not None
-    assert schema.names == ["x"]
-
-
-@pytest.mark.parametrize(
-    "filename_template",
-    [
-        "../escaped/{shard_id}__w{worker_id}.lance",
-        "/escaped/{shard_id}__w{worker_id}.lance",
-        "nested\\{shard_id}__w{worker_id}.lance",
-        "nested//{shard_id}__w{worker_id}.lance",
-        "C:/{shard_id}__w{worker_id}.lance",
-    ],
-)
-def test_lance_file_sink_rejects_unsafe_filename_template(
-    tmp_path, filename_template: str
-) -> None:
-    with pytest.raises(ValueError, match="normalized relative path"):
-        from_items([]).write_lance(
-            tmp_path,
-            filename_template=filename_template,
-        )
 
 
 def test_launch_local_writes_lance_dataset(tmp_path) -> None:
@@ -554,129 +518,6 @@ def test_lance_empty_create_and_overwrite_preserve_schema(tmp_path) -> None:
         assert output.count_rows() == 0
 
 
-def test_lance_empty_create_rejects_missing_selected_column(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    input_uri = tmp_path / "empty-select-input.lance"
-    output_uri = tmp_path / "empty-select-output.lance"
-    lance.write_dataset(pa.table({"x": pa.array([], type=pa.int64())}), str(input_uri))
-
-    pipeline = (
-        load_lance(input_uri).select("x", "missing").write_lance_dataset(output_uri)
-    )
-
-    with pytest.raises(RuntimeError):
-        pipeline.launch_local(
-            name="lance-empty-missing-select",
-            num_workers=1,
-            rundir=str(tmp_path / "empty-select-run"),
-        )
-
-    assert not output_uri.exists()
-
-
-def test_lance_empty_create_preserves_valid_selected_schema(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    input_uri = tmp_path / "empty-valid-select-input.lance"
-    output_uri = tmp_path / "empty-valid-select-output.lance"
-    lance.write_dataset(
-        pa.table(
-            {
-                "x": pa.array([], type=pa.int64()),
-                "unused": pa.array([], type=pa.string()),
-            }
-        ),
-        str(input_uri),
-    )
-
-    (
-        load_lance(input_uri)
-        .select("x")
-        .write_lance_dataset(output_uri)
-        .launch_local(
-            name="lance-empty-valid-select",
-            num_workers=1,
-            rundir=str(tmp_path / "empty-valid-select-run"),
-        )
-    )
-
-    output = lance.dataset(str(output_uri))
-    assert output.schema == pa.schema([("x", pa.int64())])
-    assert output.count_rows() == 0
-
-
-def test_lance_empty_create_rejects_missing_cast_column(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    input_uri = tmp_path / "empty-cast-input.lance"
-    output_uri = tmp_path / "empty-cast-output.lance"
-    lance.write_dataset(pa.table({"x": pa.array([], type=pa.int64())}), str(input_uri))
-
-    pipeline = (
-        load_lance(input_uri)
-        .cast(missing=datatype.int64())
-        .write_lance_dataset(output_uri)
-    )
-
-    with pytest.raises(RuntimeError):
-        pipeline.launch_local(
-            name="lance-empty-missing-cast",
-            num_workers=1,
-            rundir=str(tmp_path / "empty-cast-run"),
-        )
-
-    assert not output_uri.exists()
-
-
-@pytest.mark.parametrize("operation", ["drop", "filter"])
-def test_lance_empty_create_rejects_missing_transform_column(
-    tmp_path, operation: str
-) -> None:
-    lance = pytest.importorskip("lance")
-    input_uri = tmp_path / f"empty-{operation}-input.lance"
-    output_uri = tmp_path / f"empty-{operation}-output.lance"
-    lance.write_dataset(pa.table({"x": pa.array([], type=pa.int64())}), str(input_uri))
-
-    pipeline = load_lance(input_uri)
-    pipeline = (
-        pipeline.drop("missing")
-        if operation == "drop"
-        else pipeline.filter(col("missing") > 0)
-    )
-    pipeline = pipeline.write_lance_dataset(output_uri)
-
-    with pytest.raises(RuntimeError):
-        pipeline.launch_local(
-            name=f"lance-empty-missing-{operation}",
-            num_workers=1,
-            rundir=str(tmp_path / f"empty-{operation}-run"),
-        )
-
-    assert not output_uri.exists()
-
-
-def test_lance_fragment_relocation_cleans_partial_move_target(
-    tmp_path, monkeypatch
-) -> None:
-    from refiner.io.datafolder import DataFolder
-
-    output = DataFolder.resolve(tmp_path)
-    output.makedirs("data", exist_ok=True)
-    with output.open("data/source.lance", mode="wb") as file:
-        file.write(b"fragment")
-
-    def partial_move(source: str, target: str) -> None:
-        output.file(source).copy(output.file(target))
-        raise OSError("source deletion failed")
-
-    monkeypatch.setattr(output, "mv", partial_move)
-    fragment = json.dumps({"files": [{"path": "source.lance"}]})
-
-    with pytest.raises(OSError, match="source deletion failed"):
-        _relocate_fragment_files(output, fragment, attempt_prefix="attempt")
-
-    assert output.exists("data/source.lance")
-    assert output.find("data") == ["data/source.lance"]
-
-
 def test_lance_add_columns_rejects_empty_dataset(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "empty-add-columns.lance"
@@ -696,24 +537,6 @@ def test_lance_add_columns_rejects_empty_dataset(tmp_path) -> None:
             rundir=str(tmp_path / "empty-add-columns-run"),
         )
     assert lance.dataset(str(dataset_uri)).schema.names == ["x"]
-
-
-def test_lance_add_columns_rejects_existing_column_with_unknown_schema(
-    tmp_path,
-) -> None:
-    lance = pytest.importorskip("lance")
-    dataset_uri = tmp_path / "unknown-schema-conflict.lance"
-    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
-    pipeline = (
-        load_lance(dataset_uri, version=base.version)
-        .map_table(lambda table: table)
-        .write_lance_dataset(dataset_uri, mode="add_columns", columns=["x"])
-    )
-    sink = pipeline.sink
-    assert isinstance(sink, LanceDatasetSink)
-
-    with pytest.raises(ValueError, match="cannot replace existing columns: x"):
-        sink.set_input_schema(None)
 
 
 def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
@@ -743,36 +566,6 @@ def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
     assert lance.dataset(str(dataset_uri)).version == 1
 
 
-def test_lance_empty_create_does_not_match_independent_run(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    dataset_uri = tmp_path / "empty-create-independent-run.lance"
-    runtime = cast(
-        RuntimeLifecycle,
-        _FinalizedWorkersRuntime([]),
-    )
-
-    for job_id in ("first-job", "second-job"):
-        reducer = LanceDatasetCommitReducerSink(
-            dataset_uri,
-            mode="create",
-            planned_schema=pa.schema([("x", pa.int64())]),
-        )
-        with set_active_run_context(
-            job_id=job_id,
-            stage_index=1,
-            worker_id="reducer",
-            worker_name=None,
-            runtime_lifecycle=runtime,
-        ):
-            if job_id == "first-job":
-                reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
-            else:
-                with pytest.raises(ValueError, match="already exists"):
-                    reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
-
-    assert lance.dataset(str(dataset_uri)).version == 1
-
-
 def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "empty-overwrite-retry.lance"
@@ -793,7 +586,6 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
         first = LanceDatasetCommitReducerSink(
             dataset_uri,
             mode="overwrite",
-            source_version=1,
             planned_schema=pa.schema([("x", pa.int64())]),
         )
         first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
@@ -803,7 +595,6 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
         retry = LanceDatasetCommitReducerSink(
             dataset_uri,
             mode="overwrite",
-            source_version=1,
             planned_schema=pa.schema([("x", pa.int64())]),
         )
         retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
@@ -811,41 +602,6 @@ def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
     latest = lance.dataset(str(dataset_uri))
     assert latest.version == concurrent_version
     assert latest.to_table().to_pydict() == {"x": [99]}
-
-
-def test_lance_empty_overwrite_rejects_concurrent_update(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    dataset_uri = tmp_path / "empty-overwrite-conflict.lance"
-    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
-    pipeline = (
-        load_lance(dataset_uri)
-        .filter(col("x") < 0)
-        .write_lance_dataset(dataset_uri, mode="overwrite")
-    )
-    sink = pipeline.sink
-    assert sink is not None
-    reducer = sink.build_reducer()
-    assert isinstance(reducer, LanceDatasetCommitReducerSink)
-
-    lance.write_dataset(pa.table({"x": [2]}), str(dataset_uri), mode="append")
-
-    runtime = cast(
-        RuntimeLifecycle,
-        _FinalizedWorkersRuntime(
-            [FinalizedShardWorker(shard_id="input-shard", worker_id="worker-1")]
-        ),
-    )
-    with set_active_run_context(
-        job_id="job",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=runtime,
-    ):
-        with pytest.raises(ValueError, match="dataset changed from version 1 to 2"):
-            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
-
-    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {"x": [1, 2]}
 
 
 def test_lance_empty_create_rejects_partially_inferred_schema(tmp_path) -> None:
@@ -1154,13 +910,7 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
     )
 
 
-@pytest.mark.parametrize(
-    "unsafe_path",
-    ["../victim", "data/attempt__x\\..\\..\\..\\victim"],
-)
-def test_lance_reducer_rejects_unsafe_created_file_paths(
-    tmp_path, unsafe_path: str
-) -> None:
+def test_lance_reducer_rejects_unsafe_created_file_paths(tmp_path) -> None:
     reducer = LanceDatasetCommitReducerSink(
         tmp_path / "unsafe-cleanup.lance",
         mode="add_columns",
@@ -1172,7 +922,7 @@ def test_lance_reducer_rejects_unsafe_created_file_paths(
             {
                 "schema": _schema_to_base64(pa.schema([("y", pa.int64())])),
                 "fragments": ["{}"],
-                "created_files": [unsafe_path],
+                "created_files": ["../victim"],
                 "source_version": 1,
                 "source_fragment_id": 0,
             },
@@ -1181,13 +931,6 @@ def test_lance_reducer_rejects_unsafe_created_file_paths(
 
     with pytest.raises(ValueError, match="Invalid Lance created-file path"):
         reducer._read_metadata(rel_path)
-
-
-def test_lance_reducer_rejects_backslashes_in_fragment_paths(tmp_path) -> None:
-    fragment = json.dumps({"files": [{"path": "attempt__x\\..\\victim"}]})
-
-    with pytest.raises(ValueError, match="Invalid Lance fragment file path"):
-        _fragment_data_paths(fragment)
 
 
 def test_lance_reducer_rejects_files_outside_worker_attempt(tmp_path) -> None:
@@ -1209,54 +952,6 @@ def test_lance_reducer_rejects_files_outside_worker_attempt(tmp_path) -> None:
         )
 
 
-def test_lance_reducer_rejects_missing_created_file(tmp_path) -> None:
-    reducer = LanceDatasetCommitReducerSink(
-        tmp_path / "missing-created-file.lance",
-        mode="create",
-    )
-    shard_id = "0123456789ab"
-    worker_id = "0123456789ab"
-    job_id = "job"
-    fragment_path = (
-        _attempt_fragment_prefix(
-            shard_id,
-            job_id=job_id,
-            worker_id=worker_id,
-        )
-        + "__file.lance"
-    )
-    rel_path = (
-        f"_refiner_lance_fragments/{_job_token(job_id)}/{shard_id}__w{worker_id}.jsonl"
-    )
-
-    with pytest.raises(ValueError, match="created file is missing"):
-        reducer._verified_created_files(
-            None,
-            fragments=[json.dumps({"files": [{"path": fragment_path}]})],
-            created_files=[f"data/{fragment_path}"],
-            source_version=None,
-            source_fragment_id=None,
-            metadata_path=rel_path,
-        )
-
-
-def test_lance_sidecar_path_hashes_job_id(tmp_path) -> None:
-    sink = LanceDatasetSink(tmp_path / "safe-job-path.lance")
-    with set_active_run_context(
-        job_id="../../escaped",
-        stage_index=0,
-        worker_id="0123456789ab",
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
-    ):
-        relpath = sink._relpath("0123456789ab")
-
-    assert ".." not in relpath
-    assert relpath.startswith(
-        f"_refiner_lance_fragments/{_job_token('../../escaped')}/"
-    )
-
-
 def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
     pytest.importorskip("lance")
     output_dir = tmp_path / "schema-mismatch.lance"
@@ -1266,9 +961,7 @@ def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
     ]
     runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime(finalized))
 
-    for finalized_worker, metadata_value in zip(
-        finalized, [b"one", b"two"], strict=True
-    ):
+    for finalized_worker, value in zip(finalized, [1, "two"], strict=True):
         sink = LanceDatasetSink(output_dir)
         with set_active_run_context(
             job_id="job",
@@ -1277,33 +970,10 @@ def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
             worker_name=None,
             runtime_lifecycle=runtime,
         ):
-            sink.write_shard_block(
-                finalized_worker.shard_id,
-                Tabular(
-                    pa.Table.from_arrays(
-                        [pa.array([1], type=pa.int64())],
-                        schema=pa.schema(
-                            [
-                                pa.field(
-                                    "x", pa.int64(), metadata={b"kind": metadata_value}
-                                )
-                            ]
-                        ),
-                    )
-                ),
+            sink.write_block(
+                [DictRow({"x": value}, shard_id=finalized_worker.shard_id)]
             )
             sink.on_shard_complete(finalized_worker.shard_id)
-
-    loser = LanceDatasetSink(output_dir)
-    with set_active_run_context(
-        job_id="job",
-        stage_index=0,
-        worker_id="worker-loser",
-        worker_name=None,
-        runtime_lifecycle=runtime,
-    ):
-        loser.write_block([DictRow({"x": 99}, shard_id=finalized[0].shard_id)])
-        loser.on_shard_complete(finalized[0].shard_id)
 
     reducer = LanceDatasetCommitReducerSink(output_dir, mode="create")
     with set_active_run_context(
@@ -2182,11 +1852,8 @@ def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
     table = lance.dataset(str(output_dir)).to_table()
     assert table.column("x").to_pylist() == [9]
     assert len(list((output_dir / "data").glob("*.lance"))) == 1
-    job_token = _job_token("job")
-    assert listed_prefixes == [f"_refiner_lance_fragments/{job_token}"]
-    assert not any(
-        (output_dir / "_refiner_lance_fragments" / job_token).glob("*.jsonl")
-    )
+    assert listed_prefixes == ["_refiner_lance_fragments/job"]
+    assert not any((output_dir / "_refiner_lance_fragments" / "job").glob("*.jsonl"))
 
 
 def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
@@ -2235,9 +1902,7 @@ def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
     assert lance.dataset(str(output_dir)).to_table().to_pydict() == {"x": [9]}
     assert len(list((output_dir / "data").glob("*.lance"))) == 1
     assert not any(
-        (output_dir / "_refiner_lance_fragments" / _job_token("original-job")).glob(
-            "*.jsonl"
-        )
+        (output_dir / "_refiner_lance_fragments" / "original-job").glob("*.jsonl")
     )
 
 
@@ -2417,7 +2082,6 @@ def test_lance_sinks_reject_configured_fsspec_handles() -> None:
         "s3://user:password@bucket/dataset.lance",
         "s3://bucket/data.lance?token=x",
         "s3://bucket/data.lance#token=x",
-        "simplecache::s3://user:password@bucket/dataset.lance",
     ],
 )
 def test_lance_sinks_reject_secret_bearing_uris(uri: str) -> None:

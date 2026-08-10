@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from collections import Counter
 from typing import Literal, overload
 
 import numpy as np
@@ -158,26 +159,22 @@ def apply_vectorized_op(
             )
         if protected_columns:
             ordered_protected = sorted(protected_columns)
-            source_identities = table.select(ordered_protected)
-            output_identities = next_table.select(ordered_protected)
-            unique_output_identities = output_identities.group_by(
-                ordered_protected
-            ).aggregate([])
-            has_duplicates = (
-                unique_output_identities.num_rows != output_identities.num_rows
-            )
-            has_unknown_identity = bool(
-                unique_output_identities.join(
-                    source_identities,
-                    keys=ordered_protected,
-                    join_type="left anti",
-                ).num_rows
-            )
-            if has_duplicates or has_unknown_identity:
-                raise ValueError(
-                    "map_table() must not modify or duplicate protected source "
-                    "column values"
+            source_identities = Counter(
+                zip(
+                    *(table[column].to_pylist() for column in ordered_protected),
+                    strict=True,
                 )
+            )
+            for identity in zip(
+                *(next_table[column].to_pylist() for column in ordered_protected),
+                strict=True,
+            ):
+                if source_identities[identity] <= 0:
+                    raise ValueError(
+                        "map_table() must not modify or duplicate protected source "
+                        "column values"
+                    )
+                source_identities[identity] -= 1
         next_row_indices = None
         if return_row_indices:
             if _ROW_INDEX_COLUMN not in next_table.column_names:

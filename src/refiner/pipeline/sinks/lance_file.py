@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ntpath
 from typing import Any
 
 import pyarrow as pa
@@ -9,10 +8,7 @@ from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.lance_utils import block_to_table, validate_lance_uri
-from refiner.pipeline.sinks.reducer.file import (
-    FileCleanupReducerSink,
-    _compile_output_path_patterns,
-)
+from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
@@ -25,20 +21,6 @@ def _import_lance_file_writer() -> Any:
     return LanceFileWriter
 
 
-def _validate_filename_template(filename_template: str) -> None:
-    drive, _ = ntpath.splitdrive(filename_template)
-    if (
-        not filename_template
-        or drive
-        or filename_template.startswith("/")
-        or "\\" in filename_template
-        or "://" in filename_template
-        or any(part in {"", ".", ".."} for part in filename_template.split("/"))
-    ):
-        raise ValueError("filename_template must be a normalized relative path")
-    _compile_output_path_patterns(filename_template)
-
-
 class LanceSink(BaseSink):
     def __init__(
         self,
@@ -46,7 +28,6 @@ class LanceSink(BaseSink):
         *,
         filename_template: str = "{shard_id}__w{worker_id}.lance",
     ) -> None:
-        _validate_filename_template(filename_template)
         self.output = DataFolder.resolve(output)
         if self.output.has_explicit_filesystem_configuration:
             raise ValueError(

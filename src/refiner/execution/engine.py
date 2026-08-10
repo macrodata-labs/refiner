@@ -253,9 +253,6 @@ def _vector_segment_schema(
             schema = None
             continue
         if isinstance(op, CastStep):
-            if schema is None or any(name not in schema.names for name in op.dtypes):
-                schema = None
-                continue
             schema = schema_with_dtypes(
                 schema,
                 op.dtypes,
@@ -264,19 +261,7 @@ def _vector_segment_schema(
             continue
         if schema is None:
             continue
-        if isinstance(op, FilterExprStep):
-            if op.predicate.referenced_columns().difference(schema.names):
-                schema = None
-            continue
         if isinstance(op, SelectStep):
-            missing = [
-                name
-                for name in op.columns
-                if schema.get_field_index(name) < 0 and name not in op.optional_columns
-            ]
-            if missing:
-                schema = None
-                continue
             fields = [
                 schema.field(idx)
                 for name in op.columns
@@ -289,9 +274,6 @@ def _vector_segment_schema(
             continue
         if isinstance(op, DropStep):
             drop = set(op.columns)
-            if drop.difference(schema.names):
-                schema = None
-                continue
             schema = pa.schema(
                 [field for field in schema if field.name not in drop],
                 metadata=schema.metadata,

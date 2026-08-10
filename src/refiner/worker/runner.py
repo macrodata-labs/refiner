@@ -90,7 +90,7 @@ class Worker:
         )
         runtime_services = self.runtime_services
         sink = self.pipeline.sink or NullSink()
-        sink_schema = self.pipeline._sink_input_schema()
+        sink_schema = self.pipeline._execution_output_schema()
         sink.set_input_schema(sink_schema)
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
