@@ -181,11 +181,14 @@ def execute_row_steps(
                 with ShardDeltaTracker(on_shard_delta) as delta:
                     delta.remove_rows(batch_in)
                     batch_out = list(step.apply_batch(batch_in))
-                    if len(batch_out) == len(batch_in):
-                        batch_out = [
-                            _preserve_internal_columns(source, item, protected_columns)
-                            for source, item in zip(batch_in, batch_out, strict=True)
-                        ]
+                    if protected_columns and any(
+                        any(column not in item for column in protected_columns)
+                        for item in batch_out
+                    ):
+                        raise ValueError(
+                            "batch_map replacement rows must preserve Lance "
+                            "bookkeeping columns; return updates of the input rows"
+                        )
                     for item in batch_out:
                         item.log_throughput("rows_out", 1, unit="rows")
                         if item.shard_id is not None:

@@ -404,7 +404,7 @@ def test_lance_add_columns_preserves_internal_columns_across_replacement_row(
     }
 
 
-def test_lance_add_columns_preserves_internal_columns_across_replacement_batch(
+def test_lance_add_columns_rejects_unaligned_replacement_batch(
     tmp_path,
 ) -> None:
     lance = pytest.importorskip("lance")
@@ -414,8 +414,7 @@ def test_lance_add_columns_preserves_internal_columns_across_replacement_batch(
         load_lance(dataset_uri, version=base.version)
         .batch_map(
             lambda rows: [
-                DictRow({"y": int(row["x"]) + 1}, shard_id=row.shard_id)
-                for row in rows
+                DictRow({"y": int(row["x"]) + 1}, shard_id=row.shard_id) for row in rows
             ],
             batch_size=2,
             dtypes={"y": datatype.int64()},
@@ -423,16 +422,14 @@ def test_lance_add_columns_preserves_internal_columns_across_replacement_batch(
         .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
     )
 
-    pipeline.launch_local(
-        name="lance-replacement-batch",
-        num_workers=1,
-        rundir=str(tmp_path / "replacement-batch-run"),
-    )
+    with pytest.raises(RuntimeError, match="failed shard"):
+        pipeline.launch_local(
+            name="lance-replacement-batch",
+            num_workers=1,
+            rundir=str(tmp_path / "replacement-batch-run"),
+        )
 
-    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
-        "x": [1, 2],
-        "y": [2, 3],
-    }
+    assert lance.dataset(str(dataset_uri)).version == base.version
 
 
 def test_non_lance_replacement_rows_do_not_preserve_lance_internal_columns() -> None:
@@ -1857,9 +1854,7 @@ def test_lance_overwrite_retry_finds_historical_commit(tmp_path) -> None:
         first = sink.build_reducer()
         assert isinstance(first, LanceDatasetCommitReducerSink)
         first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
-        lance.write_dataset(
-            pa.table({"x": [10]}), str(output_dir), mode="append"
-        )
+        lance.write_dataset(pa.table({"x": [10]}), str(output_dir), mode="append")
         concurrent_version = lance.dataset(str(output_dir)).version
 
         retry = sink.build_reducer()

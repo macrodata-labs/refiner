@@ -7,7 +7,6 @@ import json
 import posixpath
 import queue as queue_module
 import re
-import threading
 from collections.abc import Sequence
 from typing import Any, Literal, get_args
 
@@ -47,8 +46,10 @@ _METADATA_FILENAME_TEMPLATE = (
     "_refiner_lance_fragments/{job_id}/{shard_id}__w{worker_id}.jsonl"
 )
 _QUEUE_CLOSED = object()
-_BATCH_QUEUE_SIZE = 8
-_QUEUE_POLL_SECONDS = 0.1
+_LANCE_WRITER_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=8,
+    thread_name_prefix="refiner-lance-writer",
+)
 
 
 def _import_lance() -> Any:
@@ -237,9 +238,7 @@ def _attempt_fragment_prefix(
     worker_id: str | None = None,
 ) -> str:
     resolved_job_id = get_active_job_id() if job_id is None else job_id
-    resolved_worker_id = (
-        get_active_worker_token() if worker_id is None else worker_id
-    )
+    resolved_worker_id = get_active_worker_token() if worker_id is None else worker_id
     job_token = hashlib.sha256(resolved_job_id.encode()).hexdigest()[:16]
     return f"_refiner_lance_attempt_{job_token}_{shard_id}__w{resolved_worker_id}"
 
@@ -298,21 +297,9 @@ class _StreamingShardWriter:
         self.dataset_uri = dataset_uri
         self.schema = schema
         self.mode = mode
-        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
-            maxsize=_BATCH_QUEUE_SIZE
-        )
+        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue()
         self.closed = False
-        self.task_future: concurrent.futures.Future[list[str]] = (
-            concurrent.futures.Future()
-        )
-        self.thread = threading.Thread(target=self._run_task, daemon=True)
-        self.thread.start()
-
-    def _run_task(self) -> None:
-        try:
-            self.task_future.set_result(self._run())
-        except BaseException as err:
-            self.task_future.set_exception(err)
+        self.task_future = _LANCE_WRITER_POOL.submit(self._run)
 
     def _iter_batches(self):
         while True:
@@ -340,13 +327,8 @@ class _StreamingShardWriter:
             raise RuntimeError("Lance fragment writer failed") from error
 
     def _put(self, item: pa.RecordBatch | object) -> None:
-        while True:
-            self._raise_if_failed()
-            try:
-                self.queue.put(item, timeout=_QUEUE_POLL_SECONDS)
-                return
-            except queue_module.Full:
-                continue
+        self._raise_if_failed()
+        self.queue.put(item)
 
     def put_batches(self, batches: list[pa.RecordBatch]) -> None:
         if self.closed:
@@ -879,18 +861,24 @@ class LanceDatasetCommitReducerSink(BaseSink):
         if match is None:
             raise ValueError(f"Invalid Lance metadata path: {metadata_path}")
         job_id = posixpath.basename(posixpath.dirname(metadata_path))
-        attempt_prefix = "data/" + _attempt_fragment_prefix(
-            match.group("shard_id"),
-            job_id=job_id,
-            worker_id=match.group("worker_id"),
-        ) + "__"
+        attempt_prefix = (
+            "data/"
+            + _attempt_fragment_prefix(
+                match.group("shard_id"),
+                job_id=job_id,
+                worker_id=match.group("worker_id"),
+            )
+            + "__"
+        )
         if any(not path.startswith(attempt_prefix) for path in created_files):
             raise ValueError(
                 "Lance created-files metadata is outside its worker attempt"
             )
         if self.mode != "add_columns":
             expected = {
-                path for fragment in fragments for path in _fragment_data_paths(fragment)
+                path
+                for fragment in fragments
+                for path in _fragment_data_paths(fragment)
             }
             if set(created_files) != expected:
                 raise ValueError(

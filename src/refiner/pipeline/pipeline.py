@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, Literal, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from fsspec import AbstractFileSystem
 
@@ -35,6 +35,7 @@ from refiner.pipeline.sinks import (
     JsonlSink,
     LanceDatasetSink,
     LanceSink,
+    LanceWriteMode,
     ParquetSink,
     ZarrSink,
 )
@@ -718,7 +719,7 @@ class RefinerPipeline:
         self,
         output: DataFolderLike,
         *,
-        mode: Literal["create", "append", "overwrite", "add_columns"] = "create",
+        mode: LanceWriteMode = "create",
         columns: Sequence[str] | None = None,
     ) -> "RefinerPipeline":
         """Attach a distributed Lance dataset writer or schema-evolution sink."""
