@@ -272,16 +272,17 @@ def _relocate_fragment_files(
                 f"{attempt_prefix}__{path_token}__{posixpath.basename(path)}"
             )
             target_path = posixpath.join("data", target_fragment_path)
-            output.file(source_path).copy(output.file(target_path))
+            # Use the filesystem's native move operation.  Local and other
+            # rename-capable filesystems avoid a second full-data copy; object
+            # stores can still implement this as their native copy/delete.
+            output.mv(source_path, target_path)
             moved.append((source_path, target_path))
-            output.rm(source_path)
             file_info["path"] = target_fragment_path
             relocated.append(target_path)
     except Exception:
         for source_path, target_path in reversed(moved):
             try:
-                output.file(target_path).copy(output.file(source_path))
-                output.rm(target_path)
+                output.mv(target_path, source_path)
             except Exception:  # noqa: BLE001
                 continue
         raise
