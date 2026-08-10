@@ -468,7 +468,7 @@ class RefinerPipeline:
             SelectStep(
                 columns=tuple(columns) + preserved,
                 index=self._next_step_index(),
-                optional_columns=tuple(sorted(self.source.protected_columns)),
+                optional_columns=preserved,
             )
         )
 

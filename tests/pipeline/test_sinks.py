@@ -179,6 +179,26 @@ def test_launch_local_writes_lance_files_per_shard(tmp_path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "filename_template",
+    [
+        "../escaped/{shard_id}__w{worker_id}.lance",
+        "/escaped/{shard_id}__w{worker_id}.lance",
+        "nested\\{shard_id}__w{worker_id}.lance",
+        "nested//{shard_id}__w{worker_id}.lance",
+        "C:/{shard_id}__w{worker_id}.lance",
+    ],
+)
+def test_lance_file_sink_rejects_unsafe_filename_template(
+    tmp_path, filename_template: str
+) -> None:
+    with pytest.raises(ValueError, match="normalized relative path"):
+        from_items([]).write_lance(
+            tmp_path,
+            filename_template=filename_template,
+        )
+
+
 def test_launch_local_writes_lance_dataset(tmp_path) -> None:
     lance = pytest.importorskip("lance")
 
@@ -538,6 +558,36 @@ def test_lance_empty_create_rejects_missing_selected_column(tmp_path) -> None:
         )
 
     assert not output_uri.exists()
+
+
+def test_lance_empty_create_preserves_valid_selected_schema(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    input_uri = tmp_path / "empty-valid-select-input.lance"
+    output_uri = tmp_path / "empty-valid-select-output.lance"
+    lance.write_dataset(
+        pa.table(
+            {
+                "x": pa.array([], type=pa.int64()),
+                "unused": pa.array([], type=pa.string()),
+            }
+        ),
+        str(input_uri),
+    )
+
+    (
+        load_lance(input_uri)
+        .select("x")
+        .write_lance_dataset(output_uri)
+        .launch_local(
+            name="lance-empty-valid-select",
+            num_workers=1,
+            rundir=str(tmp_path / "empty-valid-select-run"),
+        )
+    )
+
+    output = lance.dataset(str(output_uri))
+    assert output.schema == pa.schema([("x", pa.int64())])
+    assert output.count_rows() == 0
 
 
 def test_lance_empty_create_rejects_missing_cast_column(tmp_path) -> None:
@@ -1079,7 +1129,9 @@ def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
     ]
     runtime = cast(RuntimeLifecycle, _FinalizedWorkersRuntime(finalized))
 
-    for finalized_worker, value in zip(finalized, [1, "two"], strict=True):
+    for finalized_worker, metadata_value in zip(
+        finalized, [b"one", b"two"], strict=True
+    ):
         sink = LanceDatasetSink(output_dir)
         with set_active_run_context(
             job_id="job",
@@ -1088,8 +1140,20 @@ def test_lance_reducer_cleans_files_after_schema_mismatch(tmp_path) -> None:
             worker_name=None,
             runtime_lifecycle=runtime,
         ):
-            sink.write_block(
-                [DictRow({"x": value}, shard_id=finalized_worker.shard_id)]
+            sink.write_shard_block(
+                finalized_worker.shard_id,
+                Tabular(
+                    pa.Table.from_arrays(
+                        [pa.array([1], type=pa.int64())],
+                        schema=pa.schema(
+                            [
+                                pa.field(
+                                    "x", pa.int64(), metadata={b"kind": metadata_value}
+                                )
+                            ]
+                        ),
+                    )
+                ),
             )
             sink.on_shard_complete(finalized_worker.shard_id)
 

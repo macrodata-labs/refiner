@@ -561,7 +561,7 @@ class LanceDatasetSink(BaseSink):
         )
         if self._add_columns_schema is None:
             self._add_columns_schema = output_schema
-        elif not self._add_columns_schema.equals(output_schema):
+        elif not self._add_columns_schema.equals(output_schema, check_metadata=True):
             raise ValueError("add_columns output schema changed between blocks")
         buffered = table.select(
             [
@@ -585,7 +585,7 @@ class LanceDatasetSink(BaseSink):
             self._load_overwrite_version()
 
         existing_schema = self._schema_by_shard.setdefault(shard_id, table.schema)
-        if not existing_schema.equals(table.schema):
+        if not existing_schema.equals(table.schema, check_metadata=True):
             raise ValueError("Cannot write one Lance shard with inconsistent schemas.")
         writer = self._writers_by_shard.get(shard_id)
         if writer is None:
@@ -1163,7 +1163,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 selected_created_files.extend(next_created_files)
                 if schema is None:
                     schema = next_schema
-                elif not schema.equals(next_schema):
+                elif not schema.equals(next_schema, check_metadata=True):
                     raise ValueError(
                         "Cannot commit Lance fragments with inconsistent schemas."
                     )
