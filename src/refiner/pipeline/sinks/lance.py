@@ -1046,6 +1046,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         source_versions: set[int] = set()
         source_fragment_ids: set[int] = set()
         selected_created_files: list[str] = []
+        selected_metadata_paths: list[str] = []
         lance_schema_payload: dict[str, object] | None = None
         try:
             for rel_path in sorted(metadata_paths):
@@ -1066,6 +1067,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     metadata_path=rel_path,
                 )
                 selected_created_files.extend(next_created_files)
+                selected_metadata_paths.append(rel_path)
                 if schema is None:
                     schema = next_schema
                 elif not schema.equals(next_schema):
@@ -1091,7 +1093,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                         )
             self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
         except Exception:
-            self._cleanup_failed_commit(metadata_paths, selected_created_files)
+            self._cleanup_failed_commit(selected_metadata_paths, selected_created_files)
             raise
 
         if schema is None or not fragment_json:
