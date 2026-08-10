@@ -835,6 +835,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         commit_message: str,
         *,
         expected_versions: Sequence[int] = (),
+        search_history: bool = False,
     ) -> bool:
         existing = self._load_existing_dataset(lance)
         if existing is None:
@@ -844,8 +845,12 @@ class LanceDatasetCommitReducerSink(BaseSink):
             for version_info in existing.versions()
             if isinstance(version_info.get("version"), int)
         }
-        candidate_versions = {int(existing.version), *expected_versions}.intersection(
+        candidate_versions = (
             available_versions
+            if search_history
+            else {int(existing.version), *expected_versions}.intersection(
+                available_versions
+            )
         )
         for version in sorted(candidate_versions, reverse=True):
             transaction = existing.read_transaction(version)
@@ -1024,7 +1029,10 @@ class LanceDatasetCommitReducerSink(BaseSink):
             else (int(existing.version) if existing is not None else 0)
         )
         if self._was_committed(
-            lance, commit_message, expected_versions=[expected_version]
+            lance,
+            commit_message,
+            expected_versions=[expected_version],
+            search_history=self.mode == "overwrite",
         ):
             return
         if self.mode == "create" and existing is not None:

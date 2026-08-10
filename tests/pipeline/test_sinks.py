@@ -566,6 +566,44 @@ def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
     assert lance.dataset(str(dataset_uri)).version == 1
 
 
+def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "empty-overwrite-retry.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    runtime = cast(
+        RuntimeLifecycle,
+        _FinalizedWorkersRuntime(
+            [FinalizedShardWorker(shard_id="input-shard", worker_id="worker-1")]
+        ),
+    )
+    with set_active_run_context(
+        job_id="job",
+        stage_index=1,
+        worker_id="reducer",
+        worker_name=None,
+        runtime_lifecycle=runtime,
+    ):
+        first = LanceDatasetCommitReducerSink(
+            dataset_uri,
+            mode="overwrite",
+            planned_schema=pa.schema([("x", pa.int64())]),
+        )
+        first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+        lance.write_dataset(pa.table({"x": [99]}), str(dataset_uri), mode="append")
+        concurrent_version = lance.dataset(str(dataset_uri)).version
+
+        retry = LanceDatasetCommitReducerSink(
+            dataset_uri,
+            mode="overwrite",
+            planned_schema=pa.schema([("x", pa.int64())]),
+        )
+        retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
+
+    latest = lance.dataset(str(dataset_uri))
+    assert latest.version == concurrent_version
+    assert latest.to_table().to_pydict() == {"x": [99]}
+
+
 def test_lance_empty_create_rejects_partially_inferred_schema(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     input_uri = tmp_path / "partial-schema-input.lance"
