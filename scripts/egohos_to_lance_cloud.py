@@ -169,7 +169,12 @@ if __name__ == "__main__":
         mem_mb_per_worker=8192,
         dependencies=["opencv-python-headless>=4.10,<5"],
         secrets=mdr.Secrets.env(
-            name="default",
-            keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
+            name="researcher",
+            keys=[
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "AWS_DEFAULT_REGION",
+            ],
         ),
     )
