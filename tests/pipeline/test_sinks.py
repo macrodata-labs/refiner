@@ -447,7 +447,10 @@ def test_lance_map_table_cannot_drop_source_identity(tmp_path) -> None:
         lambda table: table.select(["x", SHARD_ID_COLUMN])
     )
 
-    with pytest.raises(ValueError, match="must preserve __refiner_row_index"):
+    with pytest.raises(
+        ValueError,
+        match="must preserve internal columns: __refiner_row_index",
+    ):
         list(pipeline.iter_rows())
 
 

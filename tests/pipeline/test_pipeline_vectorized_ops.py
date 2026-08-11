@@ -248,15 +248,18 @@ def test_apply_vectorized_ops_tracks_map_table_lineage() -> None:
     assert row_indices == (2, 1, 0)
 
 
-def test_apply_vectorized_ops_requires_map_table_lineage_when_tracking() -> None:
-    table = pa.table({"x": pa.array([1, 2])})
+@pytest.mark.parametrize("dropped", [SHARD_ID_COLUMN, "__refiner_row_index"])
+def test_apply_vectorized_ops_requires_map_table_execution_identity(
+    dropped: str,
+) -> None:
+    table = pa.table({SHARD_ID_COLUMN: pa.array(["s1", "s1"]), "x": pa.array([1, 2])})
 
-    with pytest.raises(ValueError, match="must preserve __refiner_row_index"):
+    with pytest.raises(ValueError, match=rf"must preserve internal columns: {dropped}"):
         apply_vectorized_ops(
             table,
             [
                 FnTableStep(
-                    fn=lambda current: current.drop_columns(["__refiner_row_index"]),
+                    fn=lambda current: current.drop_columns([dropped]),
                     index=1,
                 )
             ],

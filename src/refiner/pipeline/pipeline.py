@@ -394,9 +394,9 @@ class RefinerPipeline:
 
         ``fn`` receives a ``pyarrow.Table`` and must return a ``pyarrow.Table``.
         Adjacent vectorized operations are fused so they can run inside the same
-        Arrow segment. The returned table must preserve Refiner's internal row
-        index column so source identity stays aligned through filters and
-        reordering.
+        Arrow segment. The returned table must preserve Refiner's internal shard
+        ID and row-index columns so execution identity stays aligned through
+        filters and reordering.
         """
         return self._add_vectorized_op(
             FnTableStep(fn=fn, index=self._next_step_index())

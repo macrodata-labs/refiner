@@ -12,6 +12,7 @@ from refiner.execution.tracking.shards import (
     counts_delta,
 )
 from refiner.pipeline.data.datatype import apply_dtypes_to_table
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN
 from refiner.pipeline.data.tabular import repeat_scalar
 from refiner.pipeline.expressions import eval_expr_arrow
 from refiner.pipeline.steps import (
@@ -130,6 +131,9 @@ def apply_vectorized_op(
         return next_table, next_shard_counts, next_row_indices
 
     if isinstance(op, FnTableStep):
+        required_internal_columns = (
+            [SHARD_ID_COLUMN] if SHARD_ID_COLUMN in table.column_names else []
+        )
         if return_row_indices:
             if _ROW_INDEX_COLUMN in table.column_names:
                 raise ValueError(f"{_ROW_INDEX_COLUMN} is an internal column")
@@ -138,18 +142,25 @@ def apply_vectorized_op(
                 _ROW_INDEX_COLUMN,
                 pa.array(lineage, type=pa.int64()),
             )
+            required_internal_columns.append(_ROW_INDEX_COLUMN)
         with set_active_step_index(op.index):
             next_table = op.fn(table)
         if not isinstance(next_table, pa.Table):
             raise TypeError(
                 f"map_table() must return pa.Table, got {type(next_table)!r}"
             )
+        missing_internal_columns = [
+            name
+            for name in required_internal_columns
+            if name not in next_table.column_names
+        ]
+        if missing_internal_columns:
+            raise ValueError(
+                "map_table() must preserve internal columns: "
+                + ", ".join(missing_internal_columns)
+            )
         next_row_indices = None
         if return_row_indices:
-            if _ROW_INDEX_COLUMN not in next_table.column_names:
-                raise ValueError(
-                    f"map_table() must preserve {_ROW_INDEX_COLUMN} for this input"
-                )
             lineage_column = next_table.column(_ROW_INDEX_COLUMN).combine_chunks()
             lineage = tuple(
                 int(value) for value in lineage_column.to_numpy(zero_copy_only=False)
