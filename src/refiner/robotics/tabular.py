@@ -103,8 +103,8 @@ class RoboticsTabular(Tabular):
         return self._tabular.source_row_idx
 
     @property
-    def requires_row_indices(self) -> bool:
-        return bool(self.side_data) or self._tabular.requires_row_indices
+    def needs_row_indices(self) -> bool:
+        return bool(self.side_data)
 
     def with_table(
         self,

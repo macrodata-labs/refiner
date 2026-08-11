@@ -42,9 +42,8 @@ class Tabular:
         if all(_is_arrow_backed(row) for row in rows):
             # Fast path for Arrow-backed rows: sort by backing tabular source and row index so
             # we can rebuild with slice/take instead of materializing every cell in Python.
-            ordered_rows = _sorted_arrow_rows(rows)
             tables = _arrow_tables_from_rows(
-                ordered_rows,
+                _sorted_arrow_rows(rows),
                 schema=schema,
             )
             if len(tables) == 1:
@@ -75,8 +74,7 @@ class Tabular:
         return self.unit.schema
 
     @property
-    def requires_row_indices(self) -> bool:
-        """Whether non-lineage side data must be realigned after row changes."""
+    def needs_row_indices(self) -> bool:
         return False
 
     def column(self, name: str) -> pa.Array | pa.ChunkedArray:
@@ -103,7 +101,6 @@ class Tabular:
         *,
         row_indices: Sequence[int] | None = None,
     ) -> "Tabular":
-        del row_indices
         return Tabular(table)
 
 

@@ -352,9 +352,7 @@ class RefinerPipeline:
 
         ``fn`` receives batches of rows and returns rows or row patches according
         to the batch transform contract. Use this for APIs that are more
-        efficient when called on multiple rows at once. Returned ``Row`` objects
-        must retain their source identity; update the input rows instead of
-        constructing unrelated replacements.
+        efficient when called on multiple rows at once.
         """
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")

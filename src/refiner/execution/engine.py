@@ -203,11 +203,7 @@ def _execute_row_segment(
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
     rows = iter_rows(stream)
-    step_out = execute_row_steps(
-        rows,
-        steps,
-        on_shard_delta=on_shard_delta,
-    )
+    step_out = execute_row_steps(rows, steps, on_shard_delta=on_shard_delta)
     if not output_tabular:
         yield from _chunk_output_rows(step_out, output_block_rows)
         return
@@ -310,7 +306,7 @@ def _execute_vector_segment(
     )
 
     def _run_block(block: Tabular) -> Tabular:
-        return_row_indices = segment_changes_rows and block.requires_row_indices
+        return_row_indices = block.needs_row_indices and segment_changes_rows
         if not return_row_indices:
             table = apply_vectorized_ops(
                 block.table,

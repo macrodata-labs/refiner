@@ -59,10 +59,6 @@ def add_batch_rank(rows):
 pipeline = pipeline.batch_map(add_batch_rank, batch_size=32)
 ```
 
-Update and return the supplied rows as shown above. Refiner attaches source
-identity outside the user data mapping, and replacement `Row` objects must
-preserve that identity.
-
 Use this for perception pipelines or model APIs that naturally process batches.
 
 ## Order and backpressure

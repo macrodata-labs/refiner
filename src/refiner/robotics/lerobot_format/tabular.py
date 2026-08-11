@@ -107,7 +107,7 @@ class LeRobotTabular(Tabular):
         return self._tabular.source_row_idx
 
     @property
-    def requires_row_indices(self) -> bool:
+    def needs_row_indices(self) -> bool:
         return True
 
     def with_table(
@@ -135,7 +135,7 @@ class LeRobotTabular(Tabular):
             frames_by_row = tuple(self.frames_by_row[int(idx)] for idx in row_indices)
             roots_by_row = tuple(self.roots_by_row[int(idx)] for idx in row_indices)
         return LeRobotTabular(
-            self._tabular.with_table(table, row_indices=row_indices),
+            self._tabular.with_table(table),
             metadata_by_row=metadata_by_row,
             frames_by_row=frames_by_row,
             roots_by_row=roots_by_row,
