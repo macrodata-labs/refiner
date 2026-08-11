@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 import tempfile
+from urllib.request import urlretrieve
 import zipfile
 
 import pyarrow as pa
@@ -11,7 +12,8 @@ import refiner as mdr
 
 
 DATASET_URL = (
-    "https://drive.google.com/file/d/1sk0TVEhZESNF67OW3fz9D5coqpIWkwuK/view?usp=sharing"
+    "https://www.modelscope.cn/datasets/OmniData/EgoHOS/resolve/"
+    "master/raw/egohos_dataset.zip"
 )
 OUTPUT_URI = "s3://macrodata-hands-research/data-lake/hand-detection/ego-hos"
 SPLITS = ("train", "val", "test_indomain", "test_outdomain")
@@ -76,19 +78,10 @@ def iter_egohos_rows(dataset_root: Path) -> Iterator[dict[str, object]]:
 
 
 def download_egohos(_task_rank: int, _num_tasks: int) -> Iterator[dict[str, object]]:
-    import gdown
-
     with tempfile.TemporaryDirectory(prefix="egohos-") as temp_dir_raw:
         temp_dir = Path(temp_dir_raw)
         archive_path = temp_dir / "egohos_dataset.zip"
-        downloaded = gdown.download(
-            DATASET_URL,
-            str(archive_path),
-            quiet=False,
-            fuzzy=True,
-        )
-        if downloaded is None or not archive_path.is_file():
-            raise RuntimeError("EgoHOS dataset download failed")
+        urlretrieve(DATASET_URL, archive_path)
         extracted_dir = temp_dir / "dataset"
         extracted_dir.mkdir()
         _safe_extract(archive_path, extracted_dir)
@@ -162,7 +155,6 @@ if __name__ == "__main__":
         num_workers=1,
         cpus_per_worker=2,
         mem_mb_per_worker=8192,
-        dependencies=["gdown>=5.2,<6"],
         secrets=mdr.Secrets.env(
             name="default",
             keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
