@@ -11,7 +11,7 @@ from refiner.pipeline.data.datatype import (
     dtype_to_plan,
     schema_with_dtypes,
 )
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.block import strip_internal_columns
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.assets import AssetUploadManager, MissingAssetPolicy
 from refiner.pipeline.sinks.base import BaseSink
@@ -91,8 +91,7 @@ class ParquetSink(BaseSink):
                 if not block
                 else block[0].tabular_type.from_rows(block, schema=self._schema).table
             )
-        if SHARD_ID_COLUMN in table.schema.names:
-            table = table.drop_columns([SHARD_ID_COLUMN])
+        table = strip_internal_columns(table)
         if self._assets is None:
             self._writer(shard_id, table.schema).write_table(table)
             return table.num_rows

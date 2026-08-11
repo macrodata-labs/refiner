@@ -8,7 +8,7 @@ import numpy as np
 import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.block import Block, strip_internal_columns
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.assets import AssetUploadManager, MissingAssetPolicy
@@ -103,7 +103,10 @@ class JsonlSink(BaseSink):
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
         if isinstance(block, Tabular):
-            return self._write_table_rows(shard_id, block.table)
+            return self._write_table_rows(
+                shard_id,
+                strip_internal_columns(block.table),
+            )
         rows = block
         if self._assets is not None:
             rows = self._assets.rewrite_rows(shard_id, rows)

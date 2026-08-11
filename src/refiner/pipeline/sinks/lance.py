@@ -17,7 +17,7 @@ import pyarrow.compute as pc
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block, source_row_ids
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.lance_schema import (
@@ -576,7 +576,7 @@ class LanceDatasetSink(BaseSink):
         if columns is not None and len(set(columns)) != len(columns):
             raise ValueError("Lance output columns must be unique")
         if columns is not None:
-            reserved_columns = {SHARD_ID_COLUMN}.intersection(columns)
+            reserved_columns = set(INTERNAL_ROW_COLUMNS).intersection(columns)
             if reserved_columns:
                 raise ValueError(f"{sorted(reserved_columns)[0]} is an internal column")
         if mode != "add_columns" and columns is not None:

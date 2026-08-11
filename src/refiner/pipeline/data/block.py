@@ -6,7 +6,11 @@ import numpy as np
 import pyarrow as pa
 
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import (
+    INTERNAL_ROW_COLUMNS,
+    SHARD_ID_COLUMN,
+    SOURCE_ROW_ID_COLUMN,
+)
 from refiner.pipeline.data.tabular import Tabular
 
 Block = list[Row] | Tabular
@@ -16,17 +20,19 @@ StreamItem = Row | Block
 def source_row_ids(block: Block) -> pa.Array:
     """Return the opaque source row IDs aligned with a block."""
     if isinstance(block, Tabular):
-        if block.source_row_ids is None:
+        if SOURCE_ROW_ID_COLUMN not in block.table.column_names:
             raise ValueError("sink input is missing source row identities")
-        return (
-            block.source_row_ids.combine_chunks()
-            if isinstance(block.source_row_ids, pa.ChunkedArray)
-            else block.source_row_ids
-        )
+        return block.table.column(SOURCE_ROW_ID_COLUMN).combine_chunks()
     values = [row.source_row_id for row in block]
     if any(value is None for value in values):
         raise ValueError("sink input is missing source row identities")
     return pa.array(values, type=pa.uint64())
+
+
+def strip_internal_columns(table: pa.Table) -> pa.Table:
+    """Remove execution-identity columns before exposing or persisting user data."""
+    present = [name for name in INTERNAL_ROW_COLUMNS if name in table.column_names]
+    return table.drop_columns(present) if present else table
 
 
 def split_block_by_shard(block: Block) -> tuple[dict[str, Block], dict[str, int]]:
@@ -148,4 +154,10 @@ def _split_tabular_by_shard_sorted(
     return dict(tables_by_shard), counts
 
 
-__all__ = ["Block", "StreamItem", "split_block_by_shard"]
+__all__ = [
+    "Block",
+    "StreamItem",
+    "source_row_ids",
+    "split_block_by_shard",
+    "strip_internal_columns",
+]

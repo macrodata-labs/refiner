@@ -12,7 +12,7 @@ from refiner.execution.tracking.shards import (
     counts_delta,
 )
 from refiner.pipeline.data.datatype import apply_dtypes_to_table
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS
 from refiner.pipeline.data.tabular import repeat_scalar
 from refiner.pipeline.expressions import eval_expr_arrow
 from refiner.pipeline.steps import (
@@ -131,9 +131,9 @@ def apply_vectorized_op(
         return next_table, next_shard_counts, next_row_indices
 
     if isinstance(op, FnTableStep):
-        required_internal_columns = (
-            [SHARD_ID_COLUMN] if SHARD_ID_COLUMN in table.column_names else []
-        )
+        required_internal_columns = [
+            name for name in INTERNAL_ROW_COLUMNS if name in table.column_names
+        ]
         if return_row_indices:
             if _ROW_INDEX_COLUMN in table.column_names:
                 raise ValueError(f"{_ROW_INDEX_COLUMN} is an internal column")

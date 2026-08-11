@@ -99,21 +99,12 @@ class RoboticsTabular(Tabular):
         return self._tabular.shard_idx
 
     @property
-    def source_row_ids(self) -> pa.Array | pa.ChunkedArray | None:
-        return self._tabular.source_row_ids
+    def source_row_idx(self) -> int | None:
+        return self._tabular.source_row_idx
 
     @property
     def requires_row_indices(self) -> bool:
         return bool(self.side_data) or self._tabular.requires_row_indices
-
-    def with_source_row_ids(
-        self, source_row_ids: pa.Array | pa.ChunkedArray | None
-    ) -> "RoboticsTabular":
-        return RoboticsTabular(
-            self._tabular.with_source_row_ids(source_row_ids),
-            spec=self.spec,
-            side_data=self.side_data,
-        )
 
     def with_table(
         self,

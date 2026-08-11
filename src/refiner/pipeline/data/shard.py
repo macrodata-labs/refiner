@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 SHARD_ID_COLUMN = "__shard_id"
+SOURCE_ROW_ID_COLUMN = "__source_row_id"
+INTERNAL_ROW_COLUMNS = (SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN)
 
 
 class _HashWriter(Protocol):

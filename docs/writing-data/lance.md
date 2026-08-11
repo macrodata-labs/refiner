@@ -88,7 +88,8 @@ produce no rows. The reducer requires complete metadata coverage before it
 commits, so a missing worker result fails explicitly instead of silently
 omitting rows.
 
-Source row identity is carried as execution metadata rather than hidden Arrow
-columns. Ordinary readers receive a shard-local row ordinal; Lance supplies its
-physical row address so `add_columns` can restore fragment-local order after
-asynchronous or batched transforms.
+Source row identity is carried in the hidden `__source_row_id` execution column,
+alongside `__shard_id`. Ordinary readers receive a shard-local row ordinal;
+Lance supplies its physical row address so `add_columns` can restore
+fragment-local order after asynchronous or batched transforms. Both columns are
+removed before user data is persisted.

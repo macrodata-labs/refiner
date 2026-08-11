@@ -8,7 +8,11 @@ import pyarrow as pa
 import numpy as np
 
 from refiner.pipeline.expressions import Expr, eval_expr_arrow
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import (
+    INTERNAL_ROW_COLUMNS,
+    SHARD_ID_COLUMN,
+    SOURCE_ROW_ID_COLUMN,
+)
 from refiner.pipeline.data.row import ArrowRowView, Row, _OverlayRow
 
 _NEXT_TABULAR_ID = count()
@@ -17,30 +21,24 @@ _NEXT_TABULAR_ID = count()
 class Tabular:
     unit: pa.Table
 
-    def __init__(
-        self,
-        unit: pa.Table,
-        *,
-        source_row_ids: pa.Array | pa.ChunkedArray | None = None,
-    ) -> None:
-        if source_row_ids is not None:
-            source_row_ids = (
-                source_row_ids.combine_chunks()
-                if isinstance(source_row_ids, pa.ChunkedArray)
-                else source_row_ids
-            )
-            if len(source_row_ids) != unit.num_rows:
-                raise ValueError("source_row_ids length must match tabular row count")
+    def __init__(self, unit: pa.Table) -> None:
+        if SOURCE_ROW_ID_COLUMN in unit.column_names:
+            source_row_ids = unit.column(SOURCE_ROW_ID_COLUMN)
             if source_row_ids.null_count:
-                raise ValueError("source_row_ids cannot contain nulls")
-            source_row_ids = source_row_ids.cast(pa.uint64())
+                raise ValueError(f"{SOURCE_ROW_ID_COLUMN} cannot contain nulls")
+            if source_row_ids.type != pa.uint64():
+                unit = unit.set_column(
+                    unit.column_names.index(SOURCE_ROW_ID_COLUMN),
+                    SOURCE_ROW_ID_COLUMN,
+                    source_row_ids.cast(pa.uint64()),
+                )
         self.unit = unit
-        self.source_row_ids = source_row_ids
         self.tabular_id = next(_NEXT_TABULAR_ID)
         self.names = tuple(str(name) for name in unit.column_names)
         self.columns = tuple(unit.column(name) for name in self.names)
         self.index_by_name = {name: i for i, name in enumerate(self.names)}
         self.shard_idx = self.index_by_name.get(SHARD_ID_COLUMN)
+        self.source_row_idx = self.index_by_name.get(SOURCE_ROW_ID_COLUMN)
 
     @classmethod
     def from_rows(
@@ -60,20 +58,11 @@ class Tabular:
                 schema=schema,
             )
             if len(tables) == 1:
-                return cls(
-                    tables[0],
-                    source_row_ids=_source_row_ids_from_rows(ordered_rows),
-                )
-            return cls(
-                _concat_tables(tables),
-                source_row_ids=_source_row_ids_from_rows(ordered_rows),
-            )
+                return cls(tables[0])
+            return cls(_concat_tables(tables))
         # Generic row fallback. A union-of-names pass plus row.get(...) was as fast as the
         # earlier DictRow-specific special case and simpler to keep correct for mixed rows.
-        return cls(
-            _table_from_rows(rows, schema=schema),
-            source_row_ids=_source_row_ids_from_rows(rows),
-        )
+        return cls(_table_from_rows(rows, schema=schema))
 
     @classmethod
     def from_batch(cls, batch: pa.RecordBatch) -> "Tabular":
@@ -113,11 +102,6 @@ class Tabular:
                 tabular=self,
                 row_idx=row_idx,
                 shard_id=shard_id,
-                source_row_id=(
-                    int(self.source_row_ids[row_idx].as_py())
-                    if self.source_row_ids is not None
-                    else None
-                ),
             )
 
     def to_rows(self) -> list[Row]:
@@ -129,17 +113,8 @@ class Tabular:
         *,
         row_indices: Sequence[int] | None = None,
     ) -> "Tabular":
-        source_row_ids = self.source_row_ids
-        if source_row_ids is not None and row_indices is not None:
-            source_row_ids = source_row_ids.take(pa.array(row_indices, type=pa.int64()))
-        elif source_row_ids is not None and table.num_rows != self.num_rows:
-            source_row_ids = None
-        return Tabular(table, source_row_ids=source_row_ids)
-
-    def with_source_row_ids(
-        self, source_row_ids: pa.Array | pa.ChunkedArray | None
-    ) -> "Tabular":
-        return Tabular(self.table, source_row_ids=source_row_ids)
+        del row_indices
+        return Tabular(table)
 
 
 def set_or_append_column(
@@ -186,7 +161,7 @@ def _table_from_rows(
     seen: set[str] = set()
     for row in rows:
         for name in row:
-            if name == SHARD_ID_COLUMN or name in seen:
+            if name in INTERNAL_ROW_COLUMNS or name in seen:
                 continue
             seen.add(name)
             names.append(name)
@@ -197,6 +172,7 @@ def _table_from_rows(
         }
         if any(row.shard_id is not None for row in rows):
             columns[SHARD_ID_COLUMN] = [row.shard_id for row in rows]
+        _append_source_row_ids(columns, rows)
         return pa.table(columns)
 
     arrays: dict[str, pa.Array] = {}
@@ -216,6 +192,7 @@ def _table_from_rows(
             [row.shard_id for row in rows],
             type=pa.string(),
         )
+    _append_source_row_ids(arrays, rows)
     if not metadata_by_name:
         return pa.table(arrays)
     fields = [
@@ -232,15 +209,16 @@ def _concat_tables(tables: Sequence[pa.Table]) -> pa.Table:
         return pa.concat_tables(tables, promote_options="default")
 
 
-def _source_row_ids_from_rows(
+def _append_source_row_ids(
+    columns: dict[str, Any],
     rows: Sequence[Row],
-) -> pa.Array | None:
+) -> None:
     values = [row.source_row_id for row in rows]
     if all(value is None for value in values):
-        return None
+        return
     if any(value is None for value in values):
         raise ValueError("source_row_id must be present on every row in a block")
-    return pa.array(values, type=pa.uint64())
+    columns[SOURCE_ROW_ID_COLUMN] = pa.array(values, type=pa.uint64())
 
 
 def _sorted_arrow_rows(rows: Sequence[Row]) -> Sequence[Row]:
@@ -315,7 +293,7 @@ def _arrow_table_from_group(
         else {}
     )
     if schema is None and not changed_columns:
-        return _with_shard_id(table, rows[0].shard_id, len(rows))
+        return _with_execution_identity(table, rows)
 
     for name, changes in changed_columns.items():
         if all(name not in row for row in rows):
@@ -359,17 +337,25 @@ def _arrow_table_from_group(
         changed_names=set(changed_columns),
     )
 
-    return _with_shard_id(table, rows[0].shard_id, len(rows))
+    return _with_execution_identity(table, rows)
 
 
-def _with_shard_id(
+def _with_execution_identity(
     table: pa.Table,
-    shard_id: str | None,
-    num_rows: int,
+    rows: Sequence[Row],
 ) -> pa.Table:
+    shard_id = rows[0].shard_id
     if shard_id is not None:
-        shard_col = pa.array([shard_id] * num_rows, type=pa.string())
+        shard_col = pa.array([shard_id] * len(rows), type=pa.string())
         table = set_or_append_column(table, SHARD_ID_COLUMN, shard_col)
+    source_ids: dict[str, Any] = {}
+    _append_source_row_ids(source_ids, rows)
+    if SOURCE_ROW_ID_COLUMN in source_ids:
+        table = set_or_append_column(
+            table,
+            SOURCE_ROW_ID_COLUMN,
+            source_ids[SOURCE_ROW_ID_COLUMN],
+        )
     return table
 
 

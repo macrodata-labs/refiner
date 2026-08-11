@@ -62,7 +62,7 @@ from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS
 from refiner.execution.engine import (
     Block,
     Segment,
@@ -395,7 +395,7 @@ class RefinerPipeline:
         ``fn`` receives a ``pyarrow.Table`` and must return a ``pyarrow.Table``.
         Adjacent vectorized operations are fused so they can run inside the same
         Arrow segment. The returned table must preserve Refiner's internal shard
-        ID and row-index columns so execution identity stays aligned through
+        ID and source-row-ID columns so execution identity stays aligned through
         filters and reordering.
         """
         return self._add_vectorized_op(
@@ -424,16 +424,16 @@ class RefinerPipeline:
     def select(self, *columns: str) -> "RefinerPipeline":
         """Keep only the named columns.
 
-        The internal shard id column is preserved automatically for execution
-        bookkeeping and is not part of the public column selection.
+        Internal execution-identity columns are preserved automatically and are
+        not part of the public column selection.
         """
         if not columns:
             raise ValueError("select requires at least one column")
-        if SHARD_ID_COLUMN in columns:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(columns).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             SelectStep(
-                columns=tuple(columns) + (SHARD_ID_COLUMN,),
+                columns=tuple(columns) + INTERNAL_ROW_COLUMNS,
                 index=self._next_step_index(),
             )
         )
@@ -446,8 +446,8 @@ class RefinerPipeline:
         """
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
-        if SHARD_ID_COLUMN in assignments:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(assignments).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         exprs = {
             name: value if isinstance(value, Expr) else lit(value)
             for name, value in assignments.items()
@@ -462,8 +462,8 @@ class RefinerPipeline:
         This is a convenience wrapper around ``with_columns`` for a single
         assignment. Non-expression values are treated as literals.
         """
-        if name == SHARD_ID_COLUMN:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if name in INTERNAL_ROW_COLUMNS:
+            raise ValueError(f"{name} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
         return self._add_vectorized_op(
             WithColumnsStep(assignments={name: expr}, index=self._next_step_index())
@@ -473,12 +473,12 @@ class RefinerPipeline:
         """Drop the named columns from each row or Arrow block.
 
         ``drop`` is vectorized and can be fused with adjacent expression-backed
-        operations. The internal shard id column cannot be dropped.
+        operations. Internal execution-identity columns cannot be dropped.
         """
         if not columns:
             raise ValueError("drop requires at least one column")
-        if SHARD_ID_COLUMN in columns:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(columns).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             DropStep(columns=tuple(columns), index=self._next_step_index())
         )
@@ -487,12 +487,14 @@ class RefinerPipeline:
         """Rename columns using ``old_name=new_name`` keyword arguments.
 
         For example, ``pipeline.rename(old="new")`` renames column ``old`` to
-        ``new``. The internal shard id column cannot be renamed.
+        ``new``. Internal execution-identity columns cannot be renamed.
         """
         if not mapping:
             raise ValueError("rename requires at least one mapping")
-        if SHARD_ID_COLUMN in mapping or SHARD_ID_COLUMN in mapping.values():
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(mapping).intersection(INTERNAL_ROW_COLUMNS) | set(
+            mapping.values()
+        ).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             RenameStep(mapping=mapping, index=self._next_step_index())
         )
@@ -505,8 +507,8 @@ class RefinerPipeline:
         """
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
-        if SHARD_ID_COLUMN in dtypes:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(dtypes).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             CastStep(dtypes=dtypes, index=self._next_step_index())
         )

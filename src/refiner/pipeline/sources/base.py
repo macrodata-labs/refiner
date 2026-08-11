@@ -8,10 +8,9 @@ import pyarrow as pa
 
 from refiner.pipeline.data.tabular import Tabular, repeat_scalar, set_or_append_column
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.data.shard import Shard
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN, Shard
 from refiner.worker.metrics.api import log_throughput
 
-_INTERNAL_SHARD_ID_KEY = "__shard_id"
 SourceUnit: TypeAlias = Row | Tabular
 
 
@@ -91,7 +90,7 @@ def _with_source_lineage(
     first_source_row_id: int,
 ) -> SourceUnit:
     if isinstance(unit, Row):
-        row = unit.update(**{_INTERNAL_SHARD_ID_KEY: shard_id})
+        row = unit.update(**{SHARD_ID_COLUMN: shard_id})
         return (
             row.with_source_row_id(first_source_row_id)
             if row.source_row_id is None
@@ -105,14 +104,18 @@ def _with_source_lineage(
 
         shard_col = repeat_scalar(pa.scalar(shard_id, type=pa.string()), table.num_rows)
         with_shard_id = unit.with_table(
-            set_or_append_column(table, _INTERNAL_SHARD_ID_KEY, shard_col)
+            set_or_append_column(table, SHARD_ID_COLUMN, shard_col)
         )
-        if with_shard_id.source_row_ids is not None:
+        if SOURCE_ROW_ID_COLUMN in with_shard_id.table.column_names:
             return with_shard_id
-        return with_shard_id.with_source_row_ids(
-            pa.array(
-                range(first_source_row_id, first_source_row_id + table.num_rows),
-                type=pa.uint64(),
+        return with_shard_id.with_table(
+            set_or_append_column(
+                with_shard_id.table,
+                SOURCE_ROW_ID_COLUMN,
+                pa.array(
+                    range(first_source_row_id, first_source_row_id + table.num_rows),
+                    type=pa.uint64(),
+                ),
             )
         )
 

@@ -13,7 +13,7 @@ from fsspec.implementations.memory import MemoryFileSystem
 from refiner import col
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow, Row
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline import from_items, load_lance
 from refiner.pipeline.sinks import JsonlSink
@@ -449,7 +449,7 @@ def test_lance_map_table_cannot_drop_source_identity(tmp_path) -> None:
 
     with pytest.raises(
         ValueError,
-        match="must preserve internal columns: __refiner_row_index",
+        match=f"must preserve internal columns: {SOURCE_ROW_ID_COLUMN}",
     ):
         list(pipeline.iter_rows())
 
@@ -1000,11 +1000,15 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
             sink.write_shard_block(
                 shard.id,
                 Tabular(
-                    pa.table({"y": values}),
-                    source_row_ids=pa.array(
-                        [fragment_id << 32, (fragment_id << 32) + 1],
-                        type=pa.uint64(),
-                    ),
+                    pa.table(
+                        {
+                            "y": values,
+                            SOURCE_ROW_ID_COLUMN: pa.array(
+                                [fragment_id << 32, (fragment_id << 32) + 1],
+                                type=pa.uint64(),
+                            ),
+                        }
+                    )
                 ),
             )
             sink.on_shard_complete(shard.id)

@@ -6,7 +6,7 @@ import pyarrow as pa
 import pytest
 
 from refiner.pipeline.data.row import DictRow
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 import refiner.pipeline.pipeline as pipeline_module
 import refiner.execution.engine as engine_module
@@ -41,28 +41,33 @@ def test_vectorized_pipeline_ops_execute_in_order() -> None:
     assert [str(r["text_clean"]) for r in out] == ["bee", "cee"]
 
 
-def test_select_preserves_internal_shard_column() -> None:
+def test_select_preserves_internal_execution_columns() -> None:
     pipeline = from_items([{"x": 1}, {"x": 2}]).select("x")
     blocks = list(pipeline.execute(pipeline.source.read()))
     assert blocks
     tabular = next(block for block in blocks if isinstance(block, Tabular))
     assert SHARD_ID_COLUMN in tabular.table.column_names
+    assert SOURCE_ROW_ID_COLUMN in tabular.table.column_names
 
 
+@pytest.mark.parametrize("internal_column", [SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN])
 @pytest.mark.parametrize(
-    ("builder", "kwargs"),
+    ("builder", "kwargs_factory"),
     [
-        ("select", (SHARD_ID_COLUMN,)),
-        ("drop", (SHARD_ID_COLUMN,)),
-        ("with_column", (SHARD_ID_COLUMN, 1)),
-        ("with_columns", {SHARD_ID_COLUMN: 1}),
-        ("rename", {SHARD_ID_COLUMN: "renamed"}),
-        ("rename", {"x": SHARD_ID_COLUMN}),
-        ("cast", {SHARD_ID_COLUMN: "string"}),
+        ("select", lambda name: (name,)),
+        ("drop", lambda name: (name,)),
+        ("with_column", lambda name: (name, 1)),
+        ("with_columns", lambda name: {name: 1}),
+        ("rename", lambda name: {name: "renamed"}),
+        ("rename", lambda name: {"x": name}),
+        ("cast", lambda name: {name: "string"}),
     ],
 )
-def test_vectorized_ops_reject_internal_shard_column(builder, kwargs) -> None:
+def test_vectorized_ops_reject_internal_columns(
+    internal_column, builder, kwargs_factory
+) -> None:
     pipeline = from_items([{"x": 1}])
+    kwargs = kwargs_factory(internal_column)
     with pytest.raises(ValueError, match="internal column"):
         if isinstance(kwargs, tuple):
             getattr(pipeline, builder)(*kwargs)
@@ -70,14 +75,15 @@ def test_vectorized_ops_reject_internal_shard_column(builder, kwargs) -> None:
             getattr(pipeline, builder)(**kwargs)
 
 
-def test_vectorized_ops_reject_internal_shard_column_exprs() -> None:
+@pytest.mark.parametrize("internal_column", [SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN])
+def test_vectorized_ops_reject_internal_column_exprs(internal_column: str) -> None:
     pipeline = from_items([{"x": 1}])
     with pytest.raises(ValueError, match="internal column"):
-        pipeline.with_column("sid", col(SHARD_ID_COLUMN))
+        pipeline.with_column("sid", col(internal_column))
     with pytest.raises(ValueError, match="internal column"):
-        pipeline.with_columns(sid=col(SHARD_ID_COLUMN))
+        pipeline.with_columns(sid=col(internal_column))
     with pytest.raises(ValueError, match="internal column"):
-        pipeline.filter(col(SHARD_ID_COLUMN) == "abc")
+        pipeline.filter(col(internal_column) == "abc")
 
 
 def test_non_lance_pipeline_allows_lance_bookkeeping_names() -> None:
@@ -248,11 +254,17 @@ def test_apply_vectorized_ops_tracks_map_table_lineage() -> None:
     assert row_indices == (2, 1, 0)
 
 
-@pytest.mark.parametrize("dropped", [SHARD_ID_COLUMN, "__refiner_row_index"])
+@pytest.mark.parametrize("dropped", [SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN])
 def test_apply_vectorized_ops_requires_map_table_execution_identity(
     dropped: str,
 ) -> None:
-    table = pa.table({SHARD_ID_COLUMN: pa.array(["s1", "s1"]), "x": pa.array([1, 2])})
+    table = pa.table(
+        {
+            SHARD_ID_COLUMN: pa.array(["s1", "s1"]),
+            SOURCE_ROW_ID_COLUMN: pa.array([0, 1], type=pa.uint64()),
+            "x": pa.array([1, 2]),
+        }
+    )
 
     with pytest.raises(ValueError, match=rf"must preserve internal columns: {dropped}"):
         apply_vectorized_ops(

@@ -5,19 +5,23 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
 
+from refiner.pipeline.data.shard import (
+    INTERNAL_ROW_COLUMNS,
+    SHARD_ID_COLUMN,
+    SOURCE_ROW_ID_COLUMN,
+)
 from refiner.worker.metrics.api import log_histogram, log_throughput
 
 if TYPE_CHECKING:
     from refiner.pipeline.data.tabular import Tabular
 
 _MISSING = object()
-_SHARD_ID_KEY = "__shard_id"
 
 
 def _next_shard_id(current: str | None, patch: Mapping[str, Any]) -> str | None:
-    if _SHARD_ID_KEY not in patch:
+    if SHARD_ID_COLUMN not in patch:
         return current
-    value = patch[_SHARD_ID_KEY]
+    value = patch[SHARD_ID_COLUMN]
     if value is None:
         return None
     return value if isinstance(value, str) else str(value)
@@ -98,8 +102,17 @@ class Row(Mapping[str, Any]):
             merged.update(kwargs)
 
         shard_id = _next_shard_id(self.shard_id, merged)
-        merged.pop(_SHARD_ID_KEY, None)
-        if not merged and shard_id == self.shard_id:
+        source_row_id = self.source_row_id
+        if SOURCE_ROW_ID_COLUMN in merged:
+            value = merged[SOURCE_ROW_ID_COLUMN]
+            source_row_id = None if value is None else int(value)
+        merged.pop(SHARD_ID_COLUMN, None)
+        merged.pop(SOURCE_ROW_ID_COLUMN, None)
+        if (
+            not merged
+            and shard_id == self.shard_id
+            and source_row_id == self.source_row_id
+        ):
             return self
 
         if isinstance(self, _OverlayRow):
@@ -112,7 +125,7 @@ class Row(Mapping[str, Any]):
                 patch=combined_patch,
                 deleted=deleted,
                 shard_id=shard_id,
-                source_row_id=self.source_row_id,
+                source_row_id=source_row_id,
             )
 
         return _OverlayRow(
@@ -120,11 +133,11 @@ class Row(Mapping[str, Any]):
             patch=merged,
             deleted=frozenset(),
             shard_id=shard_id,
-            source_row_id=self.source_row_id,
+            source_row_id=source_row_id,
         )
 
     def with_shard_id(self, shard_id: str) -> "Row":
-        return self.update({_SHARD_ID_KEY: shard_id})
+        return self.update({SHARD_ID_COLUMN: shard_id})
 
     def with_source_row_id(self, source_row_id: int) -> "Row":
         if source_row_id < 0:
@@ -233,7 +246,7 @@ class DictRow(Row):
     def __post_init__(self) -> None:
         if self.shard_id is not None:
             return
-        value = self.data.get(_SHARD_ID_KEY)
+        value = self.data.get(SHARD_ID_COLUMN)
         if value is None:
             return
         object.__setattr__(
@@ -241,18 +254,18 @@ class DictRow(Row):
         )
 
     def __getitem__(self, key: str) -> Any:
-        if key == _SHARD_ID_KEY:
+        if key in INTERNAL_ROW_COLUMNS:
             raise KeyError(key)
         return self.data[key]
 
     def __iter__(self) -> Iterator[str]:
         for key in self.data:
-            if key == _SHARD_ID_KEY:
+            if key in INTERNAL_ROW_COLUMNS:
                 continue
             yield key
 
     def __len__(self) -> int:
-        return len(self.data) - (1 if _SHARD_ID_KEY in self.data else 0)
+        return len(self.data) - sum(name in self.data for name in INTERNAL_ROW_COLUMNS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,10 +280,17 @@ class ArrowRowView(Row):
     tabular: "Tabular"
     row_idx: int
     shard_id: str | None = None
-    source_row_id: int | None = None
+
+    @property
+    def source_row_id(self) -> int | None:
+        source_idx = self.tabular.source_row_idx
+        if source_idx is None:
+            return None
+        value = self.tabular.columns[source_idx][self.row_idx].as_py()
+        return int(value) if value is not None else None
 
     def __getitem__(self, key: str) -> Any:
-        if key == _SHARD_ID_KEY:
+        if key in INTERNAL_ROW_COLUMNS:
             raise KeyError(key)
         try:
             j = self.tabular.index_by_name[key]
@@ -280,13 +300,13 @@ class ArrowRowView(Row):
 
     def __iter__(self) -> Iterator[str]:
         for key in self.tabular.names:
-            if key == _SHARD_ID_KEY:
+            if key in INTERNAL_ROW_COLUMNS:
                 continue
             yield key
 
     def __len__(self) -> int:
-        return len(self.tabular.names) - (
-            1 if _SHARD_ID_KEY in self.tabular.index_by_name else 0
+        return len(self.tabular.names) - sum(
+            name in self.tabular.index_by_name for name in INTERNAL_ROW_COLUMNS
         )
 
 

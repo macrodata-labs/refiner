@@ -6,8 +6,13 @@ from typing import Any
 import pyarrow as pa
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN, RowRangeDescriptor, Shard
-from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.data.shard import (
+    INTERNAL_ROW_COLUMNS,
+    SOURCE_ROW_ID_COLUMN,
+    RowRangeDescriptor,
+    Shard,
+)
+from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.sinks.lance_utils import validate_lance_uri
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.utils import check_required_dependencies
@@ -57,7 +62,7 @@ class LanceSource(BaseSource):
         dataset = _import_lance().dataset(self.dataset_uri, version=version)
         self.version = int(dataset.version)
         source_schema = dataset.schema
-        reserved = {SHARD_ID_COLUMN}.intersection(source_schema.names)
+        reserved = set(INTERNAL_ROW_COLUMNS).intersection(source_schema.names)
         if reserved:
             raise ValueError(
                 f"Lance dataset contains reserved column {sorted(reserved)[0]}"
@@ -127,8 +132,11 @@ class LanceSource(BaseSource):
             row_addresses = table.column(_LANCE_ROW_ADDRESS_COLUMN)
             rows_read += batch.num_rows
             yield Tabular(
-                table.drop_columns([_LANCE_ROW_ADDRESS_COLUMN]),
-                source_row_ids=row_addresses,
+                set_or_append_column(
+                    table.drop_columns([_LANCE_ROW_ADDRESS_COLUMN]),
+                    SOURCE_ROW_ID_COLUMN,
+                    row_addresses,
+                )
             )
         if rows_read != expected_rows:
             raise ValueError(

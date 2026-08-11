@@ -5,7 +5,7 @@ import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
 from refiner import load_lance
-from refiner.pipeline.data.shard import RowRangeDescriptor
+from refiner.pipeline.data.shard import SOURCE_ROW_ID_COLUMN, RowRangeDescriptor
 from refiner.pipeline.sources.lance import LanceSource
 from refiner.pipeline.data.tabular import Tabular
 
@@ -58,9 +58,10 @@ def test_load_lance_uses_physical_row_addresses_as_source_row_ids(tmp_path) -> N
         addresses = []
         for unit in pipeline.source.read_shard(shard):
             assert isinstance(unit, Tabular)
-            assert unit.source_row_ids is not None
-            addresses.extend(int(value.as_py()) for value in unit.source_row_ids)
-            assert unit.table.column_names == ["x"]
+            addresses.extend(
+                int(value.as_py()) for value in unit.table.column(SOURCE_ROW_ID_COLUMN)
+            )
+            assert unit.table.column_names == ["x", SOURCE_ROW_ID_COLUMN]
         addresses_by_shard.append(addresses)
 
     assert addresses_by_shard == [[0, 1], [1 << 32]]

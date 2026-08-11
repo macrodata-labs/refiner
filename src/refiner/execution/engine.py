@@ -310,9 +310,7 @@ def _execute_vector_segment(
     )
 
     def _run_block(block: Tabular) -> Tabular:
-        return_row_indices = segment_changes_rows and (
-            block.requires_row_indices or block.source_row_ids is not None
-        )
+        return_row_indices = segment_changes_rows and block.requires_row_indices
         if not return_row_indices:
             table = apply_vectorized_ops(
                 block.table,
