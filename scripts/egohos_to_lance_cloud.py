@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 import tempfile
-from urllib.request import urlretrieve
 import zipfile
 
 import pyarrow as pa
@@ -12,10 +11,8 @@ import refiner as mdr
 from refiner.io import DataFolder
 
 
-DATASET_URL = (
-    "https://www.modelscope.cn/datasets/OmniData/EgoHOS/resolve/"
-    "master/raw/egohos_dataset.zip"
-)
+SOURCE_BUCKET = "macrodata-hands-research"
+SOURCE_KEY = "data-lake/hand-detection/ego-hos-source/egohos_dataset.zip"
 OUTPUT_URI = "s3://macrodata-hands-research/data-lake/hand-detection/ego-hos"
 SPLITS = ("train", "val", "test_indomain", "test_outdomain")
 
@@ -87,11 +84,13 @@ def iter_egohos_rows(dataset_root: Path) -> Iterator[dict[str, object]]:
 
 
 def download_egohos(_task_rank: int, _num_tasks: int) -> Iterator[dict[str, object]]:
+    import boto3
+
     # The sink materializes asset paths after this generator is exhausted, so the
     # extracted files must remain available for the lifetime of the worker process.
     temp_dir = Path(tempfile.mkdtemp(prefix="egohos-"))
     archive_path = temp_dir / "egohos_dataset.zip"
-    urlretrieve(DATASET_URL, archive_path)
+    boto3.client("s3").download_file(SOURCE_BUCKET, SOURCE_KEY, str(archive_path))
     extracted_dir = temp_dir / "dataset"
     extracted_dir.mkdir()
     _safe_extract(archive_path, extracted_dir)
@@ -167,7 +166,7 @@ if __name__ == "__main__":
         num_workers=1,
         cpus_per_worker=2,
         mem_mb_per_worker=8192,
-        dependencies=["opencv-python-headless>=4.10,<5"],
+        dependencies=["boto3>=1.34,<2", "opencv-python-headless>=4.10,<5"],
         secrets=mdr.Secrets.env(
             name="researcher",
             keys=[
