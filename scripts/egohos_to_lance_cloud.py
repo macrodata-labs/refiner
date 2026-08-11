@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 from collections.abc import Iterator
 from pathlib import Path
 import tempfile
@@ -43,15 +44,22 @@ def _dataset_root(extracted_dir: Path) -> Path:
     return candidates[0]
 
 
-def _contact_path(split_dir: Path, stem: str) -> Path:
-    candidates = (
-        split_dir / "contact" / f"{stem}.png",
-        split_dir / "label_contact" / f"{stem}.png",
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise FileNotFoundError(f"Missing contact mask for {split_dir.name}/{stem}")
+def _contact_png_bytes(semantic_path: Path) -> bytes:
+    from PIL import Image, ImageChops, ImageFilter
+
+    with Image.open(semantic_path) as semantic:
+        semantic = semantic.convert("L")
+        hand = semantic.point([255 if value in (1, 2) else 0 for value in range(256)])
+        first_order_object = semantic.point(
+            [255 if value in (3, 4, 5) else 0 for value in range(256)]
+        )
+        for _ in range(semantic.width // 456):
+            hand = hand.filter(ImageFilter.MaxFilter(5))
+            first_order_object = first_order_object.filter(ImageFilter.MaxFilter(5))
+        contact = ImageChops.multiply(hand, first_order_object).point([0] + [1] * 255)
+        output = BytesIO()
+        contact.save(output, format="PNG")
+        return output.getvalue()
 
 
 def iter_egohos_rows(dataset_root: Path) -> Iterator[dict[str, object]]:
@@ -65,14 +73,13 @@ def iter_egohos_rows(dataset_root: Path) -> Iterator[dict[str, object]]:
             semantic_path = split_dir / "label" / f"{stem}.png"
             if not semantic_path.is_file():
                 raise FileNotFoundError(f"Missing semantic mask for {split}/{stem}")
-            contact_path = _contact_path(split_dir, stem)
             yield {
                 "sample_id": f"{split}/{stem}",
                 "split": split,
                 "image": str(image_path),
                 "annotations": {
                     "semantic_mask": semantic_path.read_bytes(),
-                    "contact_mask": contact_path.read_bytes(),
+                    "contact_mask": _contact_png_bytes(semantic_path),
                 },
             }
 
@@ -119,6 +126,8 @@ def build_pipeline() -> mdr.RefinerPipeline:
                         **mask_metadata,
                         b"logical_type": b"binary_contact_mask",
                         b"foreground_value": b"1",
+                        b"derived_from": b"semantic_mask",
+                        b"derivation": b"egohos_generate_contact_boundary",
                     },
                 ),
             ]
@@ -155,6 +164,7 @@ if __name__ == "__main__":
         num_workers=1,
         cpus_per_worker=2,
         mem_mb_per_worker=8192,
+        dependencies=["pillow>=10,<13"],
         secrets=mdr.Secrets.env(
             name="default",
             keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
