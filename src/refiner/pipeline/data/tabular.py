@@ -204,8 +204,6 @@ def _source_row_id_array(
     values = [row.source_row_id for row in rows]
     if all(value is None for value in values):
         return None
-    if any(value is None for value in values):
-        raise ValueError("source_row_id must be present on every row in a block")
     return pa.array(values, type=pa.uint64())
 
 
@@ -336,12 +334,13 @@ def _with_execution_identity(
     if shard_id is not None:
         shard_col = pa.array([shard_id] * len(rows), type=pa.string())
         table = set_or_append_column(table, SHARD_ID_COLUMN, shard_col)
-    if (source_row_ids := _source_row_id_array(rows)) is not None:
-        table = set_or_append_column(
-            table,
-            SOURCE_ROW_ID_COLUMN,
-            source_row_ids,
-        )
+    if SOURCE_ROW_ID_COLUMN not in table.column_names:
+        if (source_row_ids := _source_row_id_array(rows)) is not None:
+            table = set_or_append_column(
+                table,
+                SOURCE_ROW_ID_COLUMN,
+                source_row_ids,
+            )
     return table
 
 

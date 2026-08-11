@@ -50,6 +50,38 @@ def test_select_preserves_internal_execution_columns() -> None:
     assert SOURCE_ROW_ID_COLUMN in tabular.table.column_names
 
 
+def test_tabular_allows_partial_source_row_identity() -> None:
+    table = Tabular.from_rows(
+        [
+            DictRow({"x": 1}, source_row_id=0),
+            DictRow({"x": 2}),
+        ]
+    ).table
+
+    assert table.column(SOURCE_ROW_ID_COLUMN).type == pa.uint64()
+    assert table.column(SOURCE_ROW_ID_COLUMN).to_pylist() == [0, None]
+
+
+def test_arrow_backed_rows_reuse_source_row_identity_column() -> None:
+    source = Tabular(
+        pa.table(
+            {
+                "x": [1, 2],
+                SOURCE_ROW_ID_COLUMN: pa.array([10, 11], type=pa.uint64()),
+            }
+        )
+    )
+    rows = [row.update(y=int(row["x"]) + 1) for row in source]
+
+    output = Tabular.from_rows(rows).table
+
+    source_buffer = source.table.column(SOURCE_ROW_ID_COLUMN).chunk(0).buffers()[1]
+    output_buffer = output.column(SOURCE_ROW_ID_COLUMN).chunk(0).buffers()[1]
+    assert source_buffer is not None
+    assert output_buffer is not None
+    assert output_buffer.address == source_buffer.address
+
+
 @pytest.mark.parametrize("internal_column", [SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN])
 @pytest.mark.parametrize(
     ("builder", "kwargs_factory"),
