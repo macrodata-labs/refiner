@@ -80,8 +80,15 @@ files. Results may arrive out of order; Refiner restores fragment-local source
 order before writing. Missing or duplicate results fail execution and do not
 create a new dataset version. `add_columns` also fails explicitly for a dataset
 with no rows because no fragment exists to receive the new column files.
+Fragments containing deleted rows are currently rejected because their physical
+row layout cannot yet be safely reconstructed by the column writer.
 
 Every finalized shard emits coordination metadata, including shards that
 produce no rows. The reducer requires complete metadata coverage before it
 commits, so a missing worker result fails explicitly instead of silently
 omitting rows.
+
+Source row identity is carried as execution metadata rather than hidden Arrow
+columns. Ordinary readers receive a shard-local row ordinal; Lance supplies its
+physical row address so `add_columns` can restore fragment-local order after
+asynchronous or batched transforms.

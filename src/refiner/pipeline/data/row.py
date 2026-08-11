@@ -38,6 +38,11 @@ class Row(Mapping[str, Any]):
     def shard_id(self) -> str | None:
         return None
 
+    @property
+    def source_row_id(self) -> int | None:
+        """Opaque source row identity, scoped to this row's source shard."""
+        return None
+
     def require_shard_id(self) -> str:
         if self.shard_id is None:
             raise ValueError("row is missing shard_id")
@@ -107,6 +112,7 @@ class Row(Mapping[str, Any]):
                 patch=combined_patch,
                 deleted=deleted,
                 shard_id=shard_id,
+                source_row_id=self.source_row_id,
             )
 
         return _OverlayRow(
@@ -114,10 +120,30 @@ class Row(Mapping[str, Any]):
             patch=merged,
             deleted=frozenset(),
             shard_id=shard_id,
+            source_row_id=self.source_row_id,
         )
 
     def with_shard_id(self, shard_id: str) -> "Row":
         return self.update({_SHARD_ID_KEY: shard_id})
+
+    def with_source_row_id(self, source_row_id: int) -> "Row":
+        if source_row_id < 0:
+            raise ValueError("source_row_id must be non-negative")
+        if isinstance(self, _OverlayRow):
+            return _OverlayRow(
+                base=self.base,
+                patch=self.patch,
+                deleted=self.deleted,
+                shard_id=self.shard_id,
+                source_row_id=source_row_id,
+            )
+        return _OverlayRow(
+            base=self,
+            patch={},
+            deleted=frozenset(),
+            shard_id=self.shard_id,
+            source_row_id=source_row_id,
+        )
 
     def drop(self, *keys: str) -> "Row":
         """Return a new Row with the given keys hidden (immutable).
@@ -139,6 +165,7 @@ class Row(Mapping[str, Any]):
                 patch=patch,
                 deleted=deleted,
                 shard_id=self.shard_id,
+                source_row_id=self.source_row_id,
             )
 
         return _OverlayRow(
@@ -146,6 +173,7 @@ class Row(Mapping[str, Any]):
             patch={},
             deleted=frozenset(keys),
             shard_id=self.shard_id,
+            source_row_id=self.source_row_id,
         )
 
     def pop(self, key: str, default: Any = _MISSING) -> tuple["Row", Any]:
@@ -167,6 +195,7 @@ class _OverlayRow(Row):
     patch: Mapping[str, Any]
     deleted: frozenset[str]
     shard_id: str | None = None
+    source_row_id: int | None = None
 
     def __getitem__(self, key: str) -> Any:
         if key in self.deleted:
@@ -238,6 +267,7 @@ class ArrowRowView(Row):
     tabular: "Tabular"
     row_idx: int
     shard_id: str | None = None
+    source_row_id: int | None = None
 
     def __getitem__(self, key: str) -> Any:
         if key == _SHARD_ID_KEY:

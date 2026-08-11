@@ -13,6 +13,22 @@ Block = list[Row] | Tabular
 StreamItem = Row | Block
 
 
+def source_row_ids(block: Block) -> pa.Array:
+    """Return the opaque source row IDs aligned with a block."""
+    if isinstance(block, Tabular):
+        if block.source_row_ids is None:
+            raise ValueError("sink input is missing source row identities")
+        return (
+            block.source_row_ids.combine_chunks()
+            if isinstance(block.source_row_ids, pa.ChunkedArray)
+            else block.source_row_ids
+        )
+    values = [row.source_row_id for row in block]
+    if any(value is None for value in values):
+        raise ValueError("sink input is missing source row identities")
+    return pa.array(values, type=pa.uint64())
+
+
 def split_block_by_shard(block: Block) -> tuple[dict[str, Block], dict[str, int]]:
     if not isinstance(block, Tabular):
         rows_by_shard: dict[str, list[Row]] = {}

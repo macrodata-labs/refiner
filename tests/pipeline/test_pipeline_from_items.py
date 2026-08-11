@@ -18,6 +18,7 @@ def test_from_items_yields_rows_across_shards() -> None:
 
     out = list(pipeline.iter_rows())
     assert [int(r["y"]) for r in out] == [10, 20, 30, 40, 50]
+    assert [r.source_row_id for r in out] == [0, 1, 0, 1, 0]
     shards = pipeline.source.list_shards()
     assert len(shards) == 3
     assert isinstance(shards[0].descriptor, RowRangeDescriptor)

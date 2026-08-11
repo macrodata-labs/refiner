@@ -6,10 +6,6 @@ from fsspec.implementations.memory import MemoryFileSystem
 
 from refiner import load_lance
 from refiner.pipeline.data.shard import RowRangeDescriptor
-from refiner.pipeline.sources.lance import (
-    LANCE_FRAGMENT_ID_COLUMN,
-    LANCE_ROW_POSITION_COLUMN,
-)
 from refiner.pipeline.sources.lance import LanceSource
 from refiner.pipeline.data.tabular import Tabular
 
@@ -47,7 +43,7 @@ def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [1, 2, 3]
 
 
-def test_load_lance_emits_fragment_ids_and_local_row_positions(tmp_path) -> None:
+def test_load_lance_uses_physical_row_addresses_as_source_row_ids(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "positions.lance"
     lance.write_dataset(
@@ -57,30 +53,17 @@ def test_load_lance_emits_fragment_ids_and_local_row_positions(tmp_path) -> None
     )
 
     pipeline = load_lance(dataset_uri, batch_size=1)
-    positions_by_shard = []
-    fragment_ids_by_shard = []
+    addresses_by_shard = []
     for shard in pipeline.list_shards():
-        positions = []
-        fragment_ids = []
+        addresses = []
         for unit in pipeline.source.read_shard(shard):
             assert isinstance(unit, Tabular)
-            fragment_ids.extend(
-                int(value.as_py())
-                for chunk in unit.table[LANCE_FRAGMENT_ID_COLUMN].chunks
-                for value in chunk
-            )
-            positions.extend(
-                int(value.as_py())
-                for chunk in unit.table[LANCE_ROW_POSITION_COLUMN].chunks
-                for value in chunk
-            )
-        positions_by_shard.append(positions)
-        fragment_ids_by_shard.append(fragment_ids)
+            assert unit.source_row_ids is not None
+            addresses.extend(int(value.as_py()) for value in unit.source_row_ids)
+            assert unit.table.column_names == ["x"]
+        addresses_by_shard.append(addresses)
 
-    assert positions_by_shard == [[0, 1], [0]]
-    assert len(set(fragment_ids_by_shard[0])) == 1
-    assert len(set(fragment_ids_by_shard[1])) == 1
-    assert fragment_ids_by_shard[0][0] != fragment_ids_by_shard[1][0]
+    assert addresses_by_shard == [[0, 1], [1 << 32]]
 
 
 def test_load_lance_hides_internal_columns_from_iter_rows(tmp_path) -> None:

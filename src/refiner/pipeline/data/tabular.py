@@ -17,8 +17,25 @@ _NEXT_TABULAR_ID = count()
 class Tabular:
     unit: pa.Table
 
-    def __init__(self, unit: pa.Table) -> None:
+    def __init__(
+        self,
+        unit: pa.Table,
+        *,
+        source_row_ids: pa.Array | pa.ChunkedArray | None = None,
+    ) -> None:
+        if source_row_ids is not None:
+            source_row_ids = (
+                source_row_ids.combine_chunks()
+                if isinstance(source_row_ids, pa.ChunkedArray)
+                else source_row_ids
+            )
+            if len(source_row_ids) != unit.num_rows:
+                raise ValueError("source_row_ids length must match tabular row count")
+            if source_row_ids.null_count:
+                raise ValueError("source_row_ids cannot contain nulls")
+            source_row_ids = source_row_ids.cast(pa.uint64())
         self.unit = unit
+        self.source_row_ids = source_row_ids
         self.tabular_id = next(_NEXT_TABULAR_ID)
         self.names = tuple(str(name) for name in unit.column_names)
         self.columns = tuple(unit.column(name) for name in self.names)
@@ -37,16 +54,26 @@ class Tabular:
         if all(_is_arrow_backed(row) for row in rows):
             # Fast path for Arrow-backed rows: sort by backing tabular source and row index so
             # we can rebuild with slice/take instead of materializing every cell in Python.
+            ordered_rows = _sorted_arrow_rows(rows)
             tables = _arrow_tables_from_rows(
-                _sorted_arrow_rows(rows),
+                ordered_rows,
                 schema=schema,
             )
             if len(tables) == 1:
-                return cls(tables[0])
-            return cls(_concat_tables(tables))
+                return cls(
+                    tables[0],
+                    source_row_ids=_source_row_ids_from_rows(ordered_rows),
+                )
+            return cls(
+                _concat_tables(tables),
+                source_row_ids=_source_row_ids_from_rows(ordered_rows),
+            )
         # Generic row fallback. A union-of-names pass plus row.get(...) was as fast as the
         # earlier DictRow-specific special case and simpler to keep correct for mixed rows.
-        return cls(_table_from_rows(rows, schema=schema))
+        return cls(
+            _table_from_rows(rows, schema=schema),
+            source_row_ids=_source_row_ids_from_rows(rows),
+        )
 
     @classmethod
     def from_batch(cls, batch: pa.RecordBatch) -> "Tabular":
@@ -70,6 +97,11 @@ class Tabular:
 
     @property
     def needs_row_indices(self) -> bool:
+        return self.requires_row_indices or self.source_row_ids is not None
+
+    @property
+    def requires_row_indices(self) -> bool:
+        """Whether non-lineage side data must be realigned after row changes."""
         return False
 
     def column(self, name: str) -> pa.Array | pa.ChunkedArray:
@@ -85,6 +117,11 @@ class Tabular:
                 tabular=self,
                 row_idx=row_idx,
                 shard_id=shard_id,
+                source_row_id=(
+                    int(self.source_row_ids[row_idx].as_py())
+                    if self.source_row_ids is not None
+                    else None
+                ),
             )
 
     def to_rows(self) -> list[Row]:
@@ -96,7 +133,17 @@ class Tabular:
         *,
         row_indices: Sequence[int] | None = None,
     ) -> "Tabular":
-        return Tabular(table)
+        source_row_ids = self.source_row_ids
+        if source_row_ids is not None and row_indices is not None:
+            source_row_ids = source_row_ids.take(pa.array(row_indices, type=pa.int64()))
+        elif source_row_ids is not None and table.num_rows != self.num_rows:
+            source_row_ids = None
+        return Tabular(table, source_row_ids=source_row_ids)
+
+    def with_source_row_ids(
+        self, source_row_ids: pa.Array | pa.ChunkedArray | None
+    ) -> "Tabular":
+        return Tabular(self.table, source_row_ids=source_row_ids)
 
 
 def set_or_append_column(
@@ -187,6 +234,17 @@ def _concat_tables(tables: Sequence[pa.Table]) -> pa.Table:
         return pa.concat_tables(tables)
     except pa.ArrowInvalid:
         return pa.concat_tables(tables, promote_options="default")
+
+
+def _source_row_ids_from_rows(
+    rows: Sequence[Row],
+) -> pa.Array | None:
+    values = [row.source_row_id for row in rows]
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError("source_row_id must be present on every row in a block")
+    return pa.array(values, type=pa.uint64())
 
 
 def _sorted_arrow_rows(rows: Sequence[Row]) -> Sequence[Row]:

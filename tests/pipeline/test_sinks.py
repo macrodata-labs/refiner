@@ -26,10 +26,6 @@ from refiner.pipeline.sinks.lance import (
 )
 from refiner.pipeline.sinks.parquet import ParquetSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
-from refiner.pipeline.sources.lance import (
-    LANCE_FRAGMENT_ID_COLUMN,
-    LANCE_ROW_POSITION_COLUMN,
-)
 from refiner.worker.context import set_active_run_context
 from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 from refiner.worker.context import worker_token_for
@@ -527,17 +523,14 @@ def test_lance_add_columns_preserves_internal_columns_across_replacement_row(
     }
 
 
-def test_lance_add_columns_ignores_row_lineage_overwrites(tmp_path) -> None:
+def test_lance_add_columns_keeps_source_lineage_out_of_user_rows(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "lineage-overwrite.lance"
     base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
     pipeline = (
         load_lance(dataset_uri, version=base.version)
         .map(
-            lambda row: {
-                "y": int(row["x"]) * 10,
-                LANCE_ROW_POSITION_COLUMN: 1 - int(row[LANCE_ROW_POSITION_COLUMN]),
-            },
+            lambda row: {"y": int(row["x"]) * 10},
             dtypes={"y": datatype.int64()},
         )
         .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
@@ -583,22 +576,15 @@ def test_lance_add_columns_rejects_unaligned_replacement_batch(
     assert lance.dataset(str(dataset_uri)).version == base.version
 
 
-def test_non_lance_replacement_rows_do_not_preserve_lance_internal_columns() -> None:
+def test_source_row_identity_is_not_a_user_column() -> None:
     rows = list(
-        from_items(
-            [
-                {
-                    "x": 1,
-                    LANCE_FRAGMENT_ID_COLUMN: 7,
-                    LANCE_ROW_POSITION_COLUMN: 0,
-                }
-            ]
-        )
+        from_items([{"x": 1}])
         .map(lambda row: DictRow({"x": 2}, shard_id=row.shard_id))
         .iter_rows()
     )
 
     assert rows[0].to_dict() == {"x": 2}
+    assert rows[0].source_row_id == 0
 
 
 def test_lance_empty_create_and_overwrite_preserve_schema(tmp_path) -> None:
@@ -644,6 +630,28 @@ def test_lance_add_columns_rejects_empty_dataset(tmp_path) -> None:
             rundir=str(tmp_path / "empty-add-columns-run"),
         )
     assert lance.dataset(str(dataset_uri)).schema.names == ["x"]
+
+
+def test_lance_add_columns_rejects_fragments_with_deletions(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "deleted-rows.lance"
+    dataset = lance.write_dataset(pa.table({"x": [1, 2, 3]}), str(dataset_uri))
+    dataset.delete("x = 2")
+    source_version = int(lance.dataset(str(dataset_uri)).version)
+    pipeline = (
+        load_lance(dataset_uri, version=source_version)
+        .with_column("y", col("x") * 10)
+        .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
+    )
+
+    with pytest.raises(RuntimeError, match="failed shard"):
+        pipeline.launch_local(
+            name="lance-deletion-bearing-fragment",
+            num_workers=1,
+            rundir=str(tmp_path / "deleted-rows-run"),
+        )
+
+    assert lance.dataset(str(dataset_uri)).version == source_version
 
 
 def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
@@ -975,15 +983,7 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
             source_uri=str(dataset_uri),
             source_version=base.version,
         )
-        sink.set_input_schema(
-            pa.schema(
-                [
-                    pa.field("y", pa.int64()),
-                    pa.field(LANCE_FRAGMENT_ID_COLUMN, pa.uint64()),
-                    pa.field(LANCE_ROW_POSITION_COLUMN, pa.uint64()),
-                ]
-            )
-        )
+        sink.set_input_schema(pa.schema([pa.field("y", pa.int64())]))
         with set_active_run_context(
             job_id="job",
             stage_index=0,
@@ -999,17 +999,11 @@ def test_lance_add_columns_reducer_cleans_only_rejected_new_files(
             sink.write_shard_block(
                 shard.id,
                 Tabular(
-                    pa.table(
-                        {
-                            "y": values,
-                            LANCE_FRAGMENT_ID_COLUMN: pa.array(
-                                [fragment_id, fragment_id], type=pa.uint64()
-                            ),
-                            LANCE_ROW_POSITION_COLUMN: pa.array(
-                                [0, 1], type=pa.uint64()
-                            ),
-                        }
-                    )
+                    pa.table({"y": values}),
+                    source_row_ids=pa.array(
+                        [fragment_id << 32, (fragment_id << 32) + 1],
+                        type=pa.uint64(),
+                    ),
                 ),
             )
             sink.on_shard_complete(shard.id)
@@ -2405,17 +2399,6 @@ def test_lance_sinks_reject_secret_bearing_uris(uri: str) -> None:
         from_items([]).write_lance(uri)
     with pytest.raises(ValueError, match="must not contain credentials"):
         from_items([]).write_lance_dataset(uri)
-
-
-def test_lance_add_columns_rejects_internal_column_names(tmp_path) -> None:
-    with pytest.raises(ValueError, match="internal column"):
-        LanceDatasetSink(
-            tmp_path / "reserved-columns.lance",
-            mode="add_columns",
-            columns=[LANCE_ROW_POSITION_COLUMN],
-            source_uri=str(tmp_path / "reserved-columns.lance"),
-            source_version=1,
-        )
 
 
 def test_lance_dataset_post_commit_metadata_cleanup_is_best_effort(

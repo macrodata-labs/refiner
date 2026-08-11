@@ -12,11 +12,7 @@ from refiner.pipeline.sinks.lance_utils import validate_lance_uri
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.utils import check_required_dependencies
 
-LANCE_FRAGMENT_ID_COLUMN = "__refiner_lance_fragment_id"
-LANCE_ROW_POSITION_COLUMN = "__refiner_lance_row_position"
-LANCE_INTERNAL_COLUMNS = frozenset(
-    {LANCE_FRAGMENT_ID_COLUMN, LANCE_ROW_POSITION_COLUMN}
-)
+_LANCE_ROW_ADDRESS_COLUMN = "_rowaddr"
 
 
 def _import_lance() -> Any:
@@ -42,10 +38,6 @@ class LanceSource(BaseSource):
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0")
-        if columns is not None:
-            invalid = LANCE_INTERNAL_COLUMNS.intersection(columns)
-            if invalid:
-                raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         if columns is not None and len(set(columns)) != len(columns):
             raise ValueError("Lance columns must be unique")
 
@@ -65,9 +57,7 @@ class LanceSource(BaseSource):
         dataset = _import_lance().dataset(self.dataset_uri, version=version)
         self.version = int(dataset.version)
         source_schema = dataset.schema
-        reserved = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(
-            source_schema.names
-        )
+        reserved = {SHARD_ID_COLUMN}.intersection(source_schema.names)
         if reserved:
             raise ValueError(
                 f"Lance dataset contains reserved column {sorted(reserved)[0]}"
@@ -84,17 +74,11 @@ class LanceSource(BaseSource):
                 [source_schema.field(name) for name in self.columns],
                 metadata=source_schema.metadata,
             )
-        self._schema = projected_schema.append(
-            pa.field(LANCE_FRAGMENT_ID_COLUMN, pa.uint64(), nullable=False)
-        ).append(pa.field(LANCE_ROW_POSITION_COLUMN, pa.uint64(), nullable=False))
+        self._schema = projected_schema
 
     @property
     def schema(self) -> pa.Schema:
         return self._schema
-
-    @property
-    def protected_columns(self) -> frozenset[str]:
-        return LANCE_INTERNAL_COLUMNS
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("lance",)
@@ -131,31 +115,24 @@ class LanceSource(BaseSource):
         if descriptor.end != descriptor.start + 1:
             raise ValueError("Lance shards must identify exactly one fragment")
         fragment = self._dataset().get_fragment(descriptor.start)
-        fragment_id = int(fragment.fragment_id)
         expected_rows = int(fragment.count_rows())
-        next_position = 0
+        rows_read = 0
         for batch in fragment.to_batches(
             columns=list(self.columns) if self.columns is not None else None,
             batch_size=self.batch_size,
+            with_row_address=True,
             blob_handling=self.blob_handling,
         ):
-            positions = pa.array(
-                range(next_position, next_position + batch.num_rows),
-                type=pa.uint64(),
-            )
-            next_position += batch.num_rows
-            fragment_ids = pa.repeat(
-                pa.scalar(fragment_id, type=pa.uint64()),
-                batch.num_rows,
-            )
+            table = pa.Table.from_batches([batch])
+            row_addresses = table.column(_LANCE_ROW_ADDRESS_COLUMN)
+            rows_read += batch.num_rows
             yield Tabular(
-                pa.Table.from_batches([batch])
-                .append_column(LANCE_FRAGMENT_ID_COLUMN, fragment_ids)
-                .append_column(LANCE_ROW_POSITION_COLUMN, positions)
+                table.drop_columns([_LANCE_ROW_ADDRESS_COLUMN]),
+                source_row_ids=row_addresses,
             )
-        if next_position != expected_rows:
+        if rows_read != expected_rows:
             raise ValueError(
-                f"Lance fragment {fragment_id} yielded {next_position} rows; "
+                f"Lance fragment {fragment.fragment_id} yielded {rows_read} rows; "
                 f"expected {expected_rows}"
             )
 
@@ -170,8 +147,5 @@ class LanceSource(BaseSource):
 
 
 __all__ = [
-    "LANCE_FRAGMENT_ID_COLUMN",
-    "LANCE_INTERNAL_COLUMNS",
-    "LANCE_ROW_POSITION_COLUMN",
     "LanceSource",
 ]

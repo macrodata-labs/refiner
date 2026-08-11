@@ -153,6 +153,17 @@ def test_map_table_runs_on_vectorized_path() -> None:
     assert [int(r["y"]) for r in out] == [11, 12, 13]
 
 
+def test_untracked_map_table_reorder_drops_source_row_identity() -> None:
+    pipeline = from_items([{"x": 1}, {"x": 2}, {"x": 3}]).map_table(
+        lambda table: table.sort_by([("x", "descending")])
+    )
+
+    rows = [row for block in pipeline.execute(pipeline.source.read()) for row in block]
+
+    assert [int(row["x"]) for row in rows] == [3, 2, 1]
+    assert [row.source_row_id for row in rows] == [None, None, None]
+
+
 def test_apply_vectorized_op_filter_without_explicit_shard_counts() -> None:
     table = pa.table(
         {SHARD_ID_COLUMN: pa.array(["s1", "s1", "s2"]), "x": pa.array([1, 2, 3])}
@@ -250,22 +261,6 @@ def test_apply_vectorized_ops_requires_map_table_lineage_when_tracking() -> None
                 )
             ],
             return_row_indices=True,
-        )
-
-
-def test_apply_vectorized_ops_requires_protected_source_columns() -> None:
-    table = pa.table({SHARD_ID_COLUMN: pa.array(["s1"]), "protected": pa.array([1])})
-
-    with pytest.raises(ValueError, match="must preserve protected source column"):
-        apply_vectorized_ops(
-            table,
-            [
-                FnTableStep(
-                    fn=lambda current: current.drop_columns(["protected"]),
-                    index=1,
-                )
-            ],
-            protected_columns=frozenset({"protected"}),
         )
 
 

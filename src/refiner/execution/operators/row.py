@@ -25,13 +25,11 @@ from refiner.worker.metrics.api import register_gauge
 AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
 
 
-def _preserve_internal_columns(
-    source: Row, result: Row, protected_columns: frozenset[str]
-) -> Row:
-    protected = {
-        column: source[column] for column in protected_columns if column in source
-    }
-    return result.update(protected) if protected else result
+def _preserve_source_lineage(source: Row, result: Row) -> Row:
+    source_row_id = source.source_row_id
+    if source_row_id is None or result.source_row_id == source_row_id:
+        return result
+    return result.with_source_row_id(source_row_id)
 
 
 def execute_row_steps(
@@ -39,7 +37,7 @@ def execute_row_steps(
     steps: Sequence[RefinerStep],
     *,
     on_shard_delta: ShardDeltaFn | None = None,
-    protected_columns: frozenset[str] = frozenset(),
+    preserve_source_lineage: bool = False,
 ) -> Iterator[Row]:
     """Execute row/batch/flatmap steps using per-step queues.
 
@@ -78,11 +76,9 @@ def execute_row_steps(
                 result = await result
             result = cast(MapResult, result)
             if isinstance(result, Row):
-                return _preserve_internal_columns(row, result, protected_columns)
+                return _preserve_source_lineage(row, result)
             if isinstance(result, dict):
-                return _preserve_internal_columns(
-                    row, row.update(result), protected_columns
-                )
+                return _preserve_source_lineage(row, row.update(result))
             raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
 
     def _run_step(i: int, *, flush_all: bool) -> None:
@@ -97,15 +93,9 @@ def execute_row_steps(
                     row.log_throughput("rows_processed", 1, unit="rows")
                     result = step.apply_row(row)
                     if isinstance(result, Row):
-                        out.append(
-                            _preserve_internal_columns(row, result, protected_columns)
-                        )
+                        out.append(_preserve_source_lineage(row, result))
                     elif isinstance(result, dict):
-                        out.append(
-                            _preserve_internal_columns(
-                                row, row.update(result), protected_columns
-                            )
-                        )
+                        out.append(_preserve_source_lineage(row, row.update(result)))
                     else:
                         raise TypeError(
                             f"Unsupported map() result type: {type(result)!r}"
@@ -149,12 +139,10 @@ def execute_row_steps(
                         emitted_by_shard: dict[str, int] = {}
                         for item in step.apply_row_many(row):
                             if isinstance(item, Row):
-                                emitted = _preserve_internal_columns(
-                                    row, item, protected_columns
-                                )
+                                emitted = _preserve_source_lineage(row, item)
                             elif isinstance(item, dict):
-                                emitted = _preserve_internal_columns(
-                                    row, row.update(item), protected_columns
+                                emitted = _preserve_source_lineage(
+                                    row, row.update(item)
                                 )
                             else:
                                 raise TypeError(
@@ -187,28 +175,27 @@ def execute_row_steps(
                     return
                 with ShardDeltaTracker(on_shard_delta) as delta:
                     delta.remove_rows(batch_in)
-                    protected_identities = Counter(
-                        tuple(row[column] for column in sorted(protected_columns))
-                        for row in batch_in
+                    source_identities = (
+                        Counter(row.source_row_id for row in batch_in)
+                        if preserve_source_lineage
+                        else Counter()
                     )
                     for item in step.apply_batch(batch_in):
-                        if protected_columns and any(
-                            column not in item for column in protected_columns
+                        if preserve_source_lineage and item.source_row_id is None:
+                            raise ValueError(
+                                "batch_map replacement rows must preserve source "
+                                "row identities; return updates of the input rows"
+                            )
+                        if (
+                            preserve_source_lineage
+                            and source_identities[item.source_row_id] <= 0
                         ):
                             raise ValueError(
-                                "batch_map replacement rows must preserve protected "
-                                "source columns; return updates of the input rows"
+                                "batch_map must not modify or duplicate source row "
+                                "identities"
                             )
-                        if protected_columns:
-                            identity = tuple(
-                                item[column] for column in sorted(protected_columns)
-                            )
-                            if protected_identities[identity] <= 0:
-                                raise ValueError(
-                                    "batch_map must not modify or duplicate protected "
-                                    "source column values"
-                                )
-                            protected_identities[identity] -= 1
+                        if preserve_source_lineage:
+                            source_identities[item.source_row_id] -= 1
                         item.log_throughput("rows_out", 1, unit="rows")
                         if item.shard_id is not None:
                             delta.add(item.shard_id, 1)

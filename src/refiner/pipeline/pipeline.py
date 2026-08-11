@@ -63,7 +63,6 @@ from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
-from refiner.pipeline.data.tabular import Tabular
 from refiner.execution.engine import (
     Block,
     Segment,
@@ -120,9 +119,6 @@ class RefinerPipeline:
         self._compiled_segments = None
         self.max_vectorized_block_bytes = max_vectorized_block_bytes
         self.sink = sink
-
-    def _protected_columns(self) -> set[str]:
-        return {SHARD_ID_COLUMN, *self.source.protected_columns}
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
         """Return a new pipeline with one transform step appended.
@@ -201,22 +197,6 @@ class RefinerPipeline:
             sink=sink,
         )
 
-    def _prepare_sink_block(self, block: Block) -> Block:
-        retained = (
-            self.sink.retained_source_columns if self.sink is not None else frozenset()
-        )
-        hidden = self.source.protected_columns.difference(retained)
-        if not hidden:
-            return block
-        if isinstance(block, Tabular):
-            present = [column for column in hidden if column in block.schema.names]
-            return (
-                block.with_table(block.table.drop_columns(present))
-                if present
-                else block
-            )
-        return [row.drop(*hidden) for row in block]
-
     def _get_compiled_segments(self) -> tuple[Segment, ...]:
         """Compile and cache execution segments for the current step sequence.
 
@@ -234,20 +214,6 @@ class RefinerPipeline:
         not expose a static schema. Row-level Python callbacks may still emit
         fields not visible here unless they declare ``dtypes``.
         """
-        schema = self._execution_output_schema()
-        if schema is None or not self.source.protected_columns:
-            return schema
-        return pa.schema(
-            [
-                field
-                for field in schema
-                if field.name not in self.source.protected_columns
-            ],
-            metadata=schema.metadata,
-        )
-
-    def _execution_output_schema(self) -> pa.Schema | None:
-        """Return the sink-boundary schema, including source bookkeeping fields."""
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
     def _output_schema_is_complete(self) -> bool:
@@ -459,16 +425,12 @@ class RefinerPipeline:
         """
         if not columns:
             raise ValueError("select requires at least one column")
-        internal_columns = self._protected_columns()
-        invalid = internal_columns.intersection(columns)
-        if invalid:
-            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
-        preserved = (SHARD_ID_COLUMN, *sorted(self.source.protected_columns))
+        if SHARD_ID_COLUMN in columns:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(
             SelectStep(
-                columns=tuple(columns) + preserved,
+                columns=tuple(columns) + (SHARD_ID_COLUMN,),
                 index=self._next_step_index(),
-                optional_columns=tuple(sorted(self.source.protected_columns)),
             )
         )
 
@@ -480,9 +442,8 @@ class RefinerPipeline:
         """
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
-        invalid = self._protected_columns().intersection(assignments)
-        if invalid:
-            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
+        if SHARD_ID_COLUMN in assignments:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         exprs = {
             name: value if isinstance(value, Expr) else lit(value)
             for name, value in assignments.items()
@@ -497,8 +458,8 @@ class RefinerPipeline:
         This is a convenience wrapper around ``with_columns`` for a single
         assignment. Non-expression values are treated as literals.
         """
-        if name in self._protected_columns():
-            raise ValueError(f"{name} is an internal column")
+        if name == SHARD_ID_COLUMN:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
         return self._add_vectorized_op(
             WithColumnsStep(assignments={name: expr}, index=self._next_step_index())
@@ -512,9 +473,8 @@ class RefinerPipeline:
         """
         if not columns:
             raise ValueError("drop requires at least one column")
-        invalid = self._protected_columns().intersection(columns)
-        if invalid:
-            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
+        if SHARD_ID_COLUMN in columns:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(
             DropStep(columns=tuple(columns), index=self._next_step_index())
         )
@@ -527,12 +487,8 @@ class RefinerPipeline:
         """
         if not mapping:
             raise ValueError("rename requires at least one mapping")
-        internal_columns = self._protected_columns()
-        invalid = internal_columns.intersection(
-            mapping
-        ) | internal_columns.intersection(mapping.values())
-        if invalid:
-            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
+        if SHARD_ID_COLUMN in mapping or SHARD_ID_COLUMN in mapping.values():
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(
             RenameStep(mapping=mapping, index=self._next_step_index())
         )
@@ -545,9 +501,8 @@ class RefinerPipeline:
         """
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
-        invalid = self._protected_columns().intersection(dtypes)
-        if invalid:
-            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
+        if SHARD_ID_COLUMN in dtypes:
+            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
         return self._add_vectorized_op(
             CastStep(dtypes=dtypes, index=self._next_step_index())
         )
@@ -570,16 +525,15 @@ class RefinerPipeline:
             on_shard_delta: Optional callback used by workers to track shard
                 progress as rows move through the pipeline.
         """
-        retained = (
-            self.sink.retained_source_columns if self.sink is not None else frozenset()
-        )
         yield from execute_segments(
             rows,
             self._get_compiled_segments(),
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             on_shard_delta=on_shard_delta,
             input_schema=self.source.schema,
-            protected_columns=self.source.protected_columns.intersection(retained),
+            preserve_source_lineage=(
+                self.sink.requires_source_lineage if self.sink is not None else False
+            ),
         )
 
     def iter_rows(self) -> Iterable[Row]:
@@ -589,10 +543,7 @@ class RefinerPipeline:
         processes and does not run attached sinks; use ``launch_local`` or
         ``launch_cloud`` to execute writers.
         """
-        rows = iter_rows(self.execute(self.source.read()))
-        if self.source.protected_columns:
-            return (row.drop(*self.source.protected_columns) for row in rows)
-        return rows
+        return iter_rows(self.execute(self.source.read()))
 
     def list_shards(self):
         """Return the source shards that would be processed by a launch.

@@ -90,7 +90,7 @@ class Worker:
         )
         runtime_services = self.runtime_services
         sink = self.pipeline.sink or NullSink()
-        sink_schema = self.pipeline._execution_output_schema()
+        sink_schema = self.pipeline.output_schema()
         sink.set_input_schema(sink_schema)
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
@@ -281,9 +281,7 @@ class Worker:
                         if heartbeat_error is not None:
                             raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                         with set_active_step_index(sink_step_index):
-                            written, written_output_rows = sink.write_block(
-                                self.pipeline._prepare_sink_block(block)
-                            )
+                            written, written_output_rows = sink.write_block(block)
                         _apply_row_delta(
                             {
                                 shard_id: -count

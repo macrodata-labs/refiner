@@ -103,8 +103,26 @@ class LeRobotTabular(Tabular):
         return self._tabular.shard_idx
 
     @property
+    def source_row_ids(self) -> pa.Array | pa.ChunkedArray | None:
+        return self._tabular.source_row_ids
+
+    @property
     def needs_row_indices(self) -> bool:
         return True
+
+    @property
+    def requires_row_indices(self) -> bool:
+        return True
+
+    def with_source_row_ids(
+        self, source_row_ids: pa.Array | pa.ChunkedArray | None
+    ) -> "LeRobotTabular":
+        return LeRobotTabular(
+            self._tabular.with_source_row_ids(source_row_ids),
+            metadata_by_row=self.metadata_by_row,
+            frames_by_row=self.frames_by_row,
+            roots_by_row=self.roots_by_row,
+        )
 
     def with_table(
         self,
@@ -131,7 +149,7 @@ class LeRobotTabular(Tabular):
             frames_by_row = tuple(self.frames_by_row[int(idx)] for idx in row_indices)
             roots_by_row = tuple(self.roots_by_row[int(idx)] for idx in row_indices)
         return LeRobotTabular(
-            self._tabular.with_table(table),
+            self._tabular.with_table(table, row_indices=row_indices),
             metadata_by_row=metadata_by_row,
             frames_by_row=frames_by_row,
             roots_by_row=roots_by_row,
@@ -150,6 +168,11 @@ class LeRobotTabular(Tabular):
                     tabular=self,
                     row_idx=row_idx,
                     shard_id=shard_id,
+                    source_row_id=(
+                        int(self.source_row_ids[row_idx].as_py())
+                        if self.source_row_ids is not None
+                        else None
+                    ),
                 ),
                 metadata=self.metadata_by_row[row_idx],
                 frames=self.frames_by_row[row_idx],

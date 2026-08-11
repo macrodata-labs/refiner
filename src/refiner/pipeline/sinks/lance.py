@@ -16,8 +16,9 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.block import Block, source_row_ids
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.lance_schema import (
     lance_schema_from_payload as _lance_schema_from_payload,
@@ -26,11 +27,6 @@ from refiner.pipeline.sinks.lance_schema import (
 from refiner.pipeline.sinks.lance_utils import block_to_table, validate_lance_uri
 from refiner.pipeline.sinks.reducer.file import (
     _compile_output_path_patterns,
-)
-from refiner.pipeline.sources.lance import (
-    LANCE_FRAGMENT_ID_COLUMN,
-    LANCE_INTERNAL_COLUMNS,
-    LANCE_ROW_POSITION_COLUMN,
 )
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import (
@@ -54,6 +50,8 @@ _LANCE_WRITER_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=8,
     thread_name_prefix="refiner-lance-writer",
 )
+_LANCE_ROW_ADDRESS_FRAGMENT_SHIFT = 32
+_LANCE_ROW_ADDRESS_POSITION_MASK = (1 << _LANCE_ROW_ADDRESS_FRAGMENT_SHIFT) - 1
 
 
 def _import_lance() -> Any:
@@ -578,9 +576,7 @@ class LanceDatasetSink(BaseSink):
         if columns is not None and len(set(columns)) != len(columns):
             raise ValueError("Lance output columns must be unique")
         if columns is not None:
-            reserved_columns = {SHARD_ID_COLUMN, *LANCE_INTERNAL_COLUMNS}.intersection(
-                columns
-            )
+            reserved_columns = {SHARD_ID_COLUMN}.intersection(columns)
             if reserved_columns:
                 raise ValueError(f"{sorted(reserved_columns)[0]} is an internal column")
         if mode != "add_columns" and columns is not None:
@@ -615,8 +611,8 @@ class LanceDatasetSink(BaseSink):
         return ("lance",)
 
     @property
-    def retained_source_columns(self) -> frozenset[str]:
-        return LANCE_INTERNAL_COLUMNS if self.mode == "add_columns" else frozenset()
+    def requires_source_lineage(self) -> bool:
+        return self.mode == "add_columns"
 
     def _dataset_uri(self) -> str:
         return self.output.abs_path()
@@ -688,29 +684,23 @@ class LanceDatasetSink(BaseSink):
         if schema is None:
             return
         missing = sorted(set(self.columns).difference(schema.names))
-        for internal_column in (
-            LANCE_FRAGMENT_ID_COLUMN,
-            LANCE_ROW_POSITION_COLUMN,
-        ):
-            if internal_column not in schema.names:
-                raise ValueError(
-                    f"add_columns requires internal column {internal_column}"
-                )
         if not missing:
             self._add_columns_schema = pa.schema(
                 [schema.field(column) for column in self.columns]
             )
 
     def _write_add_columns_block(self, shard_id: str, block: Block) -> None:
-        table = block_to_table(block)
+        if not isinstance(block, Tabular) and not block:
+            return
+        tabular = (
+            block
+            if isinstance(block, Tabular)
+            else block[0].tabular_type.from_rows(block)
+        )
+        row_addresses = source_row_ids(tabular)
+        table = block_to_table(tabular)
         if table.num_rows == 0:
             return
-        for internal_column in (
-            LANCE_FRAGMENT_ID_COLUMN,
-            LANCE_ROW_POSITION_COLUMN,
-        ):
-            if internal_column not in table.schema.names:
-                raise ValueError(f"add_columns output is missing {internal_column}")
         assert self.columns is not None
         missing = sorted(set(self.columns).difference(table.schema.names))
         if missing:
@@ -725,9 +715,10 @@ class LanceDatasetSink(BaseSink):
             self._add_columns_schema = output_schema
         elif not self._add_columns_schema.equals(output_schema, check_metadata=True):
             raise ValueError("add_columns output schema changed between blocks")
-        fragment_ids = pc.cast(table.column(LANCE_FRAGMENT_ID_COLUMN), pa.uint64())
-        if fragment_ids.null_count:
-            raise ValueError("Lance fragment id cannot be null")
+        fragment_ids = pc.call_function(
+            "shift_right",
+            [row_addresses, pa.scalar(_LANCE_ROW_ADDRESS_FRAGMENT_SHIFT, pa.uint64())],
+        )
         fragment_id_range = pc.call_function("min_max", [fragment_ids]).as_py()
         if fragment_id_range["min"] != fragment_id_range["max"]:
             raise ValueError(f"Shard {shard_id} contains multiple Lance fragments")
@@ -736,20 +727,29 @@ class LanceDatasetSink(BaseSink):
         writer = self._add_columns_writers_by_shard.get(shard_id)
         if writer is None:
             fragment = self._source_dataset().get_fragment(fragment_id)
+            if int(fragment.num_deletions) > 0:
+                raise ValueError(
+                    f"Lance fragment {fragment_id} has deletions; add_columns does "
+                    "not yet support deletion-bearing fragments"
+                )
             writer = _StreamingAddColumnsWriter(
                 fragment=fragment,
                 fragment_id=fragment_id,
-                num_rows=int(fragment.count_rows()),
+                num_rows=int(fragment.physical_rows),
                 schema=output_schema,
                 output=self.output,
             )
             self._add_columns_writers_by_shard[shard_id] = writer
         elif writer.fragment_id != fragment_id:
             raise ValueError(f"Shard {shard_id} contains multiple Lance fragments")
-        writer.put(
-            table.column(LANCE_ROW_POSITION_COLUMN),
-            table.select(self.columns),
+        positions = pc.call_function(
+            "bit_wise_and",
+            [
+                row_addresses,
+                pa.scalar(_LANCE_ROW_ADDRESS_POSITION_MASK, pa.uint64()),
+            ],
         )
+        writer.put(pa.chunked_array([positions]), table.select(self.columns))
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
         if self.mode == "add_columns":
