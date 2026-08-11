@@ -107,10 +107,6 @@ class LeRobotTabular(Tabular):
         return self._tabular.source_row_ids
 
     @property
-    def needs_row_indices(self) -> bool:
-        return True
-
-    @property
     def requires_row_indices(self) -> bool:
         return True
 

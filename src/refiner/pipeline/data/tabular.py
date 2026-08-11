@@ -96,10 +96,6 @@ class Tabular:
         return self.unit.schema
 
     @property
-    def needs_row_indices(self) -> bool:
-        return self.requires_row_indices or self.source_row_ids is not None
-
-    @property
     def requires_row_indices(self) -> bool:
         """Whether non-lineage side data must be realigned after row changes."""
         return False
