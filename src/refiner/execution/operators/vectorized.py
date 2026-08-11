@@ -28,7 +28,7 @@ from refiner.pipeline.steps import (
 from refiner.worker.context import set_active_step_index
 from refiner.worker.metrics.api import log_throughput
 
-_SIDE_DATA_ROW_INDEX_COLUMN = "__refiner_side_data_row_index"
+_ROW_INDEX_COLUMN = "__refiner_row_index"
 RowIndices = tuple[int, ...] | None
 
 
@@ -131,39 +131,40 @@ def apply_vectorized_op(
         return next_table, next_shard_counts, next_row_indices
 
     if isinstance(op, FnTableStep):
-        required_internal_columns = [
+        required_source_columns = [
             name for name in INTERNAL_ROW_COLUMNS if name in table.column_names
         ]
         if return_row_indices:
-            if _SIDE_DATA_ROW_INDEX_COLUMN in table.column_names:
-                raise ValueError(f"{_SIDE_DATA_ROW_INDEX_COLUMN} is an internal column")
+            if _ROW_INDEX_COLUMN in table.column_names:
+                raise ValueError(f"{_ROW_INDEX_COLUMN} is an internal column")
             lineage = range(table.num_rows) if row_indices is None else row_indices
             table = table.append_column(
-                _SIDE_DATA_ROW_INDEX_COLUMN,
+                _ROW_INDEX_COLUMN,
                 pa.array(lineage, type=pa.int64()),
             )
-            required_internal_columns.append(_SIDE_DATA_ROW_INDEX_COLUMN)
         with set_active_step_index(op.index):
             next_table = op.fn(table)
         if not isinstance(next_table, pa.Table):
             raise TypeError(
                 f"map_table() must return pa.Table, got {type(next_table)!r}"
             )
-        missing_internal_columns = [
+        missing_source_columns = [
             name
-            for name in required_internal_columns
+            for name in required_source_columns
             if name not in next_table.column_names
         ]
-        if missing_internal_columns:
+        if missing_source_columns:
             raise ValueError(
                 "map_table() must preserve internal columns: "
-                + ", ".join(missing_internal_columns)
+                + ", ".join(missing_source_columns)
             )
         next_row_indices = None
         if return_row_indices:
-            lineage_column = next_table.column(
-                _SIDE_DATA_ROW_INDEX_COLUMN
-            ).combine_chunks()
+            if _ROW_INDEX_COLUMN not in next_table.column_names:
+                raise ValueError(
+                    f"map_table() must preserve {_ROW_INDEX_COLUMN} for this input"
+                )
+            lineage_column = next_table.column(_ROW_INDEX_COLUMN).combine_chunks()
             lineage = tuple(
                 int(value) for value in lineage_column.to_numpy(zero_copy_only=False)
             )
@@ -172,7 +173,7 @@ def apply_vectorized_op(
                 if row_indices is None
                 else lineage
             )
-            next_table = next_table.drop_columns([_SIDE_DATA_ROW_INDEX_COLUMN])
+            next_table = next_table.drop_columns([_ROW_INDEX_COLUMN])
         next_shard_counts = count_table_by_shard(next_table)
         return next_table, next_shard_counts, next_row_indices
 
