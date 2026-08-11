@@ -11,7 +11,14 @@ from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block, strip_internal_columns
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline.sinks.assets import AssetUploadManager, MissingAssetPolicy
+from refiner.pipeline.sinks.assets import (
+    AssetUploadManager,
+    AssetWriteConfig,
+    BlobAssetConfig,
+    BlobAssetManager,
+    FileAssetConfig,
+    asset_config_to_plan,
+)
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import get_active_worker_token
@@ -32,35 +39,33 @@ class JsonlSink(BaseSink):
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}__w{worker_id}.jsonl",
-        upload_assets: bool = False,
-        assets_subdir: str = "assets",
-        max_asset_uploads_in_flight: int = 16,
-        missing_asset_policy: MissingAssetPolicy = "error",
+        assets: AssetWriteConfig | None = None,
     ):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
-        self.upload_assets = upload_assets
-        self.assets_subdir = assets_subdir
-        self.missing_asset_policy = missing_asset_policy
+        self.assets = assets
         self._files: dict[str, IO[str]] = {}
         self._encoder = json.JSONEncoder(
             ensure_ascii=True,
             separators=(",", ":"),
             default=_json_default,
         )
-        self._assets = (
-            AssetUploadManager(
+        if isinstance(assets, FileAssetConfig):
+            self._assets = AssetUploadManager(
                 self.output,
-                assets_subdir=assets_subdir,
+                assets_subdir=assets.subdir,
                 filename_template=filename_template,
-                max_uploads_in_flight=max_asset_uploads_in_flight,
-                missing_asset_policy=missing_asset_policy,
+                max_uploads_in_flight=assets.max_in_flight,
+                missing_asset_policy=assets.missing_policy,
             )
-            if upload_assets
-            else None
-        )
-        if self._assets is not None:
-            self.assets_subdir = self._assets.assets_subdir
+        elif isinstance(assets, BlobAssetConfig):
+            self._assets = BlobAssetManager(
+                self.output,
+                config=assets,
+                filename_template=filename_template,
+            )
+        else:
+            self._assets = None
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
         if self._assets is not None:
@@ -113,6 +118,8 @@ class JsonlSink(BaseSink):
         return self._write_rows(shard_id, rows)
 
     def on_shard_complete(self, shard_id: str) -> None:
+        if self._assets is not None:
+            self._assets.on_shard_complete(shard_id)
         file = self._files.pop(shard_id, None)
         if file is not None:
             file.close()
@@ -132,10 +139,8 @@ class JsonlSink(BaseSink):
             "path": self.output.abs_path(),
             "filename_template": self.filename_template,
         }
-        if self.upload_assets:
-            args["upload_assets"] = True
-            args["assets_subdir"] = self.assets_subdir
-            args["missing_asset_policy"] = self.missing_asset_policy
+        if self.assets is not None:
+            args["assets"] = asset_config_to_plan(self.assets)
         return ("write_jsonl", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:
@@ -143,7 +148,7 @@ class JsonlSink(BaseSink):
             output=self.output,
             filename_template=self.filename_template,
             reducer_name="write_jsonl_reduce",
-            assets_subdir=self.assets_subdir if self.upload_assets else None,
+            assets_subdir=self.assets.subdir if self.assets is not None else None,
         )
 
 

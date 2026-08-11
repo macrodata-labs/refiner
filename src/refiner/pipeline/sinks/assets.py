@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 import posixpath
 import re
-from typing import Literal
+from typing import IO, Literal, TypeAlias, cast
 from urllib.parse import unquote, urlsplit
 
 import pyarrow as pa
@@ -23,6 +24,68 @@ from refiner.worker.metrics.api import log_throughput
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 MissingAssetPolicy = Literal["error", "drop_row", "set_null"]
 AssetCopyResult = bool | list[bool]
+
+
+def _validate_config(
+    *,
+    subdir: str,
+    missing_policy: MissingAssetPolicy,
+) -> None:
+    if missing_policy not in {"error", "drop_row", "set_null"}:
+        raise ValueError(
+            "missing_policy must be one of: 'error', 'drop_row', 'set_null'"
+        )
+    if (
+        not subdir
+        or subdir.strip("/") != subdir
+        or "\\" in subdir
+        or "://" in subdir
+        or any(part in {"", ".", ".."} for part in subdir.split("/"))
+    ):
+        raise ValueError("subdir must be a non-empty relative path")
+
+
+@dataclass(frozen=True, slots=True)
+class FileAssetConfig:
+    subdir: str = "assets"
+    max_in_flight: int = 16
+    missing_policy: MissingAssetPolicy = "error"
+
+    def __post_init__(self) -> None:
+        _validate_config(subdir=self.subdir, missing_policy=self.missing_policy)
+        if self.max_in_flight <= 0:
+            raise ValueError("max_in_flight must be > 0")
+
+
+@dataclass(frozen=True, slots=True)
+class BlobAssetConfig:
+    subdir: str = "assets"
+    target_bytes: int = 1 << 30
+    missing_policy: MissingAssetPolicy = "error"
+
+    def __post_init__(self) -> None:
+        _validate_config(subdir=self.subdir, missing_policy=self.missing_policy)
+        if self.target_bytes <= 0:
+            raise ValueError("target_bytes must be > 0")
+
+
+AssetWriteConfig: TypeAlias = FileAssetConfig | BlobAssetConfig
+
+
+def asset_config_to_plan(config: AssetWriteConfig) -> dict[str, object]:
+    if isinstance(config, FileAssetConfig):
+        return {
+            "mode": "file",
+            "subdir": config.subdir,
+            "max_in_flight": config.max_in_flight,
+            "missing_policy": config.missing_policy,
+        }
+    return {
+        "mode": "blob",
+        "subdir": config.subdir,
+        "target_bytes": config.target_bytes,
+        "missing_policy": config.missing_policy,
+    }
 
 
 class AssetUploadManager:
@@ -70,16 +133,19 @@ class AssetUploadManager:
             preserve_order=True,
         )
         self._next_row_index: dict[str, int] = {}
-        self._asset_columns: dict[str, str] = {}
+        self._asset_columns: dict[str, tuple[str, str, str]] = {}
         self._asset_column_segments: dict[str, str] = {}
         self._input_schema_set = False
         self.missing_asset_policy = missing_asset_policy
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
-        self._set_asset_columns(asset_columns_from_schema(schema))
+        self._set_asset_columns(_asset_columns_from_schema(schema))
         self._input_schema_set = True
 
-    def _set_asset_columns(self, columns: dict[str, str]) -> None:
+    def _set_asset_columns(
+        self,
+        columns: dict[str, tuple[str, str, str]],
+    ) -> None:
         self._asset_columns = columns
         self._asset_column_segments = {}
         used_segments: set[str] = set()
@@ -100,8 +166,14 @@ class AssetUploadManager:
                 "dtypes=... or cast(...), or call set_input_schema(...)."
             )
 
+    def output_schema(self, schema: pa.Schema | None) -> pa.Schema | None:
+        return _asset_output_schema(schema, mode="file")
+
     def close(self) -> None:
         self._window.cancel_pending()
+
+    def on_shard_complete(self, shard_id: str) -> None:
+        pass
 
     def rewrite_table(self, shard_id: str, table: pa.Table) -> pa.Table:
         start = self._next_row_index.get(shard_id, 0)
@@ -110,11 +182,11 @@ class AssetUploadManager:
         # Tables may already carry asset metadata, while row-derived tables rely on
         # the schema passed through set_input_schema().
         columns = dict(self._asset_columns)
-        columns.update(asset_columns_from_schema(table.schema))
+        columns.update(_asset_columns_from_schema(table.schema))
         if columns != self._asset_columns:
             self._set_asset_columns(columns)
             columns = self._asset_columns
-        for column_name, kind in columns.items():
+        for column_name, (kind, storage, asset_type) in columns.items():
             idx = out.schema.get_field_index(column_name)
             if idx < 0:
                 continue
@@ -133,15 +205,13 @@ class AssetUploadManager:
                         column_name=column_name,
                         row_index=start + row_offset,
                         list_items=kind == "list",
+                        storage=storage,
                     )
                 )
-            rewritten_array = pa.array(rewritten, type=field.type)
-            out = set_or_append_column(
-                out,
-                column_name,
-                rewritten_array,
-            )
-            result_columns.append((column_name, field))
+            output_field = _file_asset_output_field(field, kind, asset_type)
+            rewritten_array = pa.array(rewritten, type=output_field.type)
+            out = out.set_column(idx, output_field, rewritten_array)
+            result_columns.append((column_name, output_field))
         # Do not expose output rows that point at assets until those copies have
         # completed; otherwise a later copy failure leaves dangling references.
         results = self._window.drain()
@@ -243,7 +313,11 @@ class AssetUploadManager:
             row_count += 1
             patch: dict[str, object] = {}
             result_columns: list[str] = []
-            for column_name, kind in self._asset_columns.items():
+            for column_name, (
+                kind,
+                storage,
+                _asset_type,
+            ) in self._asset_columns.items():
                 if column_name not in row:
                     continue
                 if self.missing_asset_policy == "error" and row[column_name] is None:
@@ -254,6 +328,7 @@ class AssetUploadManager:
                     column_name=column_name,
                     row_index=row_index,
                     list_items=kind == "list",
+                    storage=storage,
                 )
                 patch[column_name] = value
                 result_columns.append(column_name)
@@ -296,9 +371,34 @@ class AssetUploadManager:
             f"{self.assets_subdir}/{attempt_dir}/{column_segment}/{prefix}-{basename}"
         )
 
-    def _copy_asset(self, value: str, relpath: str, *, shard_id: str) -> bool:
+    def _copy_asset(
+        self,
+        value: object,
+        storage: str,
+        relpath: str,
+        *,
+        shard_id: str,
+    ) -> bool:
         try:
-            DataFile.resolve(value).copy(self.output.file(relpath))
+            if storage == "path" and isinstance(value, str):
+                DataFile.resolve(value).copy(self.output.file(relpath))
+            else:
+                source, offset, size = BlobAssetManager._source(value, storage)
+                with self.output.open(relpath, mode="wb") as target:
+                    if isinstance(source, bytes):
+                        target.write(source)
+                    else:
+                        remaining = size
+                        with source.open("rb") as stream:
+                            stream.seek(offset)
+                            while remaining:
+                                chunk = stream.read(min(remaining, 2 * 1024 * 1024))
+                                if not chunk:
+                                    raise EOFError(
+                                        "asset ended before its declared size"
+                                    )
+                                target.write(chunk)
+                                remaining -= len(chunk)
         except Exception as e:
             message = str(e).lower()
             missing = isinstance(e, FileNotFoundError) or any(
@@ -319,6 +419,7 @@ class AssetUploadManager:
         column_name: str,
         row_index: int,
         list_items: bool,
+        storage: str,
     ) -> object:
         if value is None:
             self._window.submit_result(True)
@@ -330,17 +431,14 @@ class AssetUploadManager:
             ):
                 raise TypeError(f"Asset column {column_name!r} expected list values")
             rewritten: list[object] = []
-            copies: list[tuple[str, str]] | tuple[str, str] = []
+            copies: list[tuple[object, str]] | tuple[object, str] = []
             for item_index, item in enumerate(value):
                 if item is None:
                     rewritten.append(None)
                     continue
-                if not isinstance(item, str) or not item:
-                    raise TypeError(
-                        f"Asset value for column {column_name!r} must be a path"
-                    )
+                source_name = _asset_source_name(item, storage)
                 relpath = self._asset_relpath(
-                    item,
+                    source_name,
                     shard_id=shard_id,
                     column_name=column_name,
                     row_index=row_index,
@@ -349,12 +447,9 @@ class AssetUploadManager:
                 rewritten.append(self.output.abs_path(relpath))
                 copies.append((item, relpath))
         else:
-            if not isinstance(value, str) or not value:
-                raise TypeError(
-                    f"Asset value for column {column_name!r} must be a path"
-                )
+            source_name = _asset_source_name(value, storage)
             relpath = self._asset_relpath(
-                value,
+                source_name,
                 shard_id=shard_id,
                 column_name=column_name,
                 row_index=row_index,
@@ -366,11 +461,11 @@ class AssetUploadManager:
         def copy_assets_sync() -> AssetCopyResult:
             if isinstance(copies, list):
                 return [
-                    self._copy_asset(item, relpath, shard_id=shard_id)
+                    self._copy_asset(item, storage, relpath, shard_id=shard_id)
                     for item, relpath in copies
                 ]
             item, relpath = copies
-            return self._copy_asset(item, relpath, shard_id=shard_id)
+            return self._copy_asset(item, storage, relpath, shard_id=shard_id)
 
         async def copy_assets() -> AssetCopyResult:
             loop = asyncio.get_running_loop()
@@ -380,27 +475,400 @@ class AssetUploadManager:
         return rewritten
 
 
+@dataclass(slots=True)
+class _BlobBlock:
+    stream: IO[bytes]
+    path: str
+    size: int
+    index: int
+
+
+class BlobAssetManager:
+    def __init__(
+        self,
+        output: DataFolder,
+        *,
+        config: BlobAssetConfig,
+        filename_template: str,
+    ) -> None:
+        self.output = output
+        self.config = config
+        self.assets_subdir = config.subdir
+        normalized_template = posixpath.normpath(filename_template)
+        if normalized_template == self.assets_subdir or normalized_template.startswith(
+            f"{self.assets_subdir}/"
+        ):
+            raise ValueError("filename_template must not write into asset subdir")
+        self.missing_asset_policy = config.missing_policy
+        self._asset_columns: dict[str, tuple[str, str, str]] = {}
+        self._asset_column_segments: dict[str, str] = {}
+        self._input_schema_set = False
+        self._blocks: dict[tuple[str, str], _BlobBlock] = {}
+
+    def set_input_schema(self, schema: pa.Schema | None) -> None:
+        self._set_asset_columns(_asset_columns_from_schema(schema))
+        self._input_schema_set = True
+
+    def _set_asset_columns(
+        self,
+        columns: dict[str, tuple[str, str, str]],
+    ) -> None:
+        self._asset_columns = columns
+        self._asset_column_segments = {}
+        used_segments: set[str] = set()
+        for column_name in columns:
+            base = _SAFE_NAME_RE.sub("_", column_name).strip("._-") or "column"
+            segment = base
+            suffix = 2
+            while segment in used_segments:
+                segment = f"{base}_{suffix}"
+                suffix += 1
+            self._asset_column_segments[column_name] = segment
+            used_segments.add(segment)
+
+    def require_input_schema(self) -> None:
+        if not self._input_schema_set:
+            raise ValueError(
+                "Row asset writing requires an input schema. Mark asset columns "
+                "with dtypes=... or cast(...), or call set_input_schema(...)."
+            )
+
+    def output_schema(self, schema: pa.Schema | None) -> pa.Schema | None:
+        return _asset_output_schema(schema, mode="blob")
+
+    def _block_relpath(self, shard_id: str, column_name: str, index: int) -> str:
+        attempt = f"{shard_id}__w{get_active_worker_token()}"
+        segment = self._asset_column_segments[column_name]
+        return f"{self.assets_subdir}/{attempt}/{segment}/{index:05d}.blob"
+
+    def _block(
+        self,
+        shard_id: str,
+        column_name: str,
+        payload_size: int,
+    ) -> _BlobBlock:
+        key = (shard_id, column_name)
+        block = self._blocks.get(key)
+        if (
+            block is not None
+            and block.size > 0
+            and block.size + payload_size > self.config.target_bytes
+        ):
+            block.stream.close()
+            block = None
+        if block is None:
+            next_index = self._blocks[key].index + 1 if key in self._blocks else 0
+            relpath = self._block_relpath(shard_id, column_name, next_index)
+            block = _BlobBlock(
+                stream=self.output.open(relpath, mode="wb"),
+                path=self.output.abs_path(relpath),
+                size=0,
+                index=next_index,
+            )
+            self._blocks[key] = block
+        return block
+
+    @staticmethod
+    def _source(value: object, storage: str) -> tuple[bytes | DataFile, int, int]:
+        if storage == "bytes":
+            if not isinstance(value, bytes):
+                raise TypeError("bytes-backed asset value must be bytes")
+            return value, 0, len(value)
+        if storage == "bytes_with_path":
+            if not isinstance(value, Mapping):
+                raise TypeError("bytes_with_path asset value must be a mapping")
+            mapping = cast(Mapping[str, object], value)
+            data = mapping.get("bytes")
+            path = mapping.get("path")
+            if isinstance(data, bytes):
+                return data, 0, len(data)
+            if not isinstance(path, str) or not path:
+                raise FileNotFoundError("asset has neither bytes nor a path")
+            source = DataFile.resolve(path)
+            return source, 0, int(source.fs.size(source.path))
+        if storage == "blob_reference":
+            if not isinstance(value, Mapping):
+                raise TypeError("blob reference must be a mapping")
+            mapping = cast(Mapping[str, object], value)
+            path = mapping.get("path")
+            offset = mapping.get("offset")
+            size = mapping.get("size")
+            if (
+                not isinstance(path, str)
+                or not path
+                or not isinstance(offset, int)
+                or isinstance(offset, bool)
+                or offset < 0
+                or not isinstance(size, int)
+                or isinstance(size, bool)
+                or size < 0
+            ):
+                raise ValueError("invalid blob reference")
+            return DataFile.resolve(path), offset, size
+        if storage == "path":
+            if not isinstance(value, str) or not value:
+                raise TypeError("path-backed asset value must be a path")
+            source = DataFile.resolve(value)
+            return source, 0, int(source.fs.size(source.path))
+        raise TypeError(f"Asset storage {storage!r} cannot be written as a blob")
+
+    def _append(
+        self,
+        value: object,
+        *,
+        shard_id: str,
+        column_name: str,
+        storage: str,
+    ) -> tuple[object, bool]:
+        if value is None:
+            return None, True
+        try:
+            source, source_offset, size = self._source(value, storage)
+            block = self._block(shard_id, column_name, size)
+            output_offset = block.size
+            if isinstance(source, bytes):
+                block.stream.write(source)
+            else:
+                remaining = size
+                with source.open("rb") as stream:
+                    stream.seek(source_offset)
+                    while remaining:
+                        chunk = stream.read(min(remaining, 2 * 1024 * 1024))
+                        if not chunk:
+                            raise EOFError("asset ended before its declared size")
+                        block.stream.write(chunk)
+                        remaining -= len(chunk)
+            block.size += size
+        except Exception as error:
+            message = str(error).lower()
+            missing = isinstance(error, FileNotFoundError) or any(
+                text in message for text in ("404", "entry not found", "no such file")
+            )
+            if self.missing_asset_policy == "error" or not missing:
+                raise
+            log_throughput("asset_uploads_failed", 1, shard_id, unit="assets")
+            return None, False
+        log_throughput("assets_uploaded", 1, shard_id=shard_id, unit="assets")
+        return {
+            "path": block.path,
+            "offset": output_offset,
+            "size": size,
+        }, True
+
+    def _rewrite_value(
+        self,
+        value: object,
+        *,
+        shard_id: str,
+        column_name: str,
+        kind: str,
+        storage: str,
+    ) -> tuple[object, bool]:
+        if kind == "scalar" or value is None:
+            return self._append(
+                value,
+                shard_id=shard_id,
+                column_name=column_name,
+                storage=storage,
+            )
+        if not isinstance(value, Sequence) or isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            raise TypeError(f"Asset column {column_name!r} expected list values")
+        rewritten: list[object] = []
+        valid = True
+        for item in value:
+            next_value, copied = self._append(
+                item,
+                shard_id=shard_id,
+                column_name=column_name,
+                storage=storage,
+            )
+            rewritten.append(next_value)
+            valid = valid and copied
+        return rewritten, valid
+
+    def rewrite_table(self, shard_id: str, table: pa.Table) -> pa.Table:
+        columns = dict(self._asset_columns)
+        columns.update(_asset_columns_from_schema(table.schema))
+        if columns != self._asset_columns:
+            self._set_asset_columns(columns)
+        out = table
+        keep = [True] * table.num_rows
+        for column_name, (kind, storage, asset_type) in self._asset_columns.items():
+            index = out.schema.get_field_index(column_name)
+            if index < 0:
+                continue
+            values: list[object] = []
+            for row_offset, value in enumerate(out.column(index).to_pylist()):
+                rewritten, valid = self._rewrite_value(
+                    value,
+                    shard_id=shard_id,
+                    column_name=column_name,
+                    kind=kind,
+                    storage=storage,
+                )
+                values.append(rewritten)
+                if not valid and self.missing_asset_policy == "drop_row":
+                    keep[row_offset] = False
+            field = _asset_output_field(out.schema.field(index), kind, asset_type)
+            out = out.set_column(index, field, pa.array(values, type=field.type))
+        if self.missing_asset_policy == "drop_row" and not all(keep):
+            out = out.filter(pa.array(keep, type=pa.bool_()))
+        return out
+
+    def rewrite_rows(self, shard_id: str, rows: Iterable[Row]) -> Iterable[Row]:
+        self.require_input_schema()
+        for row in rows:
+            patch: dict[str, object] = {}
+            valid = True
+            for column_name, (
+                kind,
+                storage,
+                _asset_type,
+            ) in self._asset_columns.items():
+                if column_name not in row:
+                    continue
+                rewritten, copied = self._rewrite_value(
+                    row[column_name],
+                    shard_id=shard_id,
+                    column_name=column_name,
+                    kind=kind,
+                    storage=storage,
+                )
+                patch[column_name] = rewritten
+                valid = valid and copied
+            if not valid and self.missing_asset_policy == "drop_row":
+                continue
+            yield row.update(patch) if patch else row
+
+    def close(self) -> None:
+        for block in self._blocks.values():
+            block.stream.close()
+        self._blocks.clear()
+
+    def on_shard_complete(self, shard_id: str) -> None:
+        keys = [key for key in self._blocks if key[0] == shard_id]
+        for key in keys:
+            self._blocks.pop(key).stream.close()
+
+
 ASSET_ATTEMPT_DIR_RE = re.compile(
     r"^(?P<shard_id>[0-9a-f]{12})__w(?P<worker_id>[0-9a-f]{12})$"
 )
 
 
-def asset_columns_from_schema(schema: pa.Schema | None) -> dict[str, str]:
+def _asset_columns_from_schema(
+    schema: pa.Schema | None,
+) -> dict[str, tuple[str, str, str]]:
     if schema is None:
         return {}
-    columns: dict[str, str] = {}
+    columns: dict[str, tuple[str, str, str]] = {}
     for field in schema:
-        if datatype.is_asset_path_field(field):
-            columns[field.name] = "scalar"
+        storage = datatype.asset_storage(field)
+        asset_type = datatype.asset_type(field)
+        if storage is not None and asset_type is not None:
+            columns[field.name] = ("scalar", storage, asset_type)
             continue
         field_type = field.type
-        if (
+        if not (
             pa.types.is_list(field_type)
             or pa.types.is_large_list(field_type)
             or pa.types.is_fixed_size_list(field_type)
-        ) and datatype.is_asset_path_field(field_type.value_field):
-            columns[field.name] = "list"
+        ):
+            continue
+        storage = datatype.asset_storage(field_type.value_field)
+        asset_type = datatype.asset_type(field_type.value_field)
+        if storage is not None and asset_type is not None:
+            columns[field.name] = ("list", storage, asset_type)
     return columns
+
+
+def _asset_source_name(value: object, storage: str) -> str:
+    if storage == "path" and isinstance(value, str) and value:
+        return value
+    if storage in {"bytes_with_path", "blob_reference"} and isinstance(value, Mapping):
+        path = cast(Mapping[str, object], value).get("path")
+        if isinstance(path, str) and path:
+            return path
+    if storage == "bytes" and isinstance(value, bytes):
+        return "asset"
+    if storage == "bytes_with_path":
+        return "asset"
+    raise TypeError("asset value does not match its declared storage")
+
+
+def _file_asset_output_field(field: pa.Field, kind: str, asset_type: str) -> pa.Field:
+    value_field = datatype.asset_path(asset_type)
+    if kind == "scalar":
+        return pa.field(
+            field.name,
+            value_field.type,
+            nullable=field.nullable,
+            metadata=value_field.metadata,
+        )
+    field_type = field.type
+    child = value_field.with_name(field_type.value_field.name)
+    if pa.types.is_large_list(field_type):
+        output_type = pa.large_list(child)
+    elif pa.types.is_fixed_size_list(field_type):
+        output_type = pa.list_(child, list_size=field_type.list_size)
+    else:
+        output_type = pa.list_(child)
+    return pa.field(
+        field.name,
+        output_type,
+        nullable=field.nullable,
+        metadata=field.metadata,
+    )
+
+
+def _asset_output_field(field: pa.Field, kind: str, asset_type: str) -> pa.Field:
+    value_field = datatype.blob_reference(asset_type)
+    if kind == "scalar":
+        return pa.field(
+            field.name,
+            value_field.type,
+            nullable=field.nullable,
+            metadata=value_field.metadata,
+        )
+    field_type = field.type
+    child = value_field.with_name(field_type.value_field.name)
+    if pa.types.is_large_list(field_type):
+        output_type = pa.large_list(child)
+    elif pa.types.is_fixed_size_list(field_type):
+        output_type = pa.list_(child, list_size=field_type.list_size)
+    else:
+        output_type = pa.list_(child)
+    return pa.field(
+        field.name,
+        output_type,
+        nullable=field.nullable,
+        metadata=field.metadata,
+    )
+
+
+def _asset_output_schema(
+    schema: pa.Schema | None,
+    *,
+    mode: Literal["file", "blob"],
+) -> pa.Schema | None:
+    if schema is None:
+        return None
+    columns = _asset_columns_from_schema(schema)
+    fields: list[pa.Field] = []
+    for field in schema:
+        column = columns.get(field.name)
+        if column is None:
+            fields.append(field)
+            continue
+        kind, _storage, asset_type = column
+        fields.append(
+            _file_asset_output_field(field, kind, asset_type)
+            if mode == "file"
+            else _asset_output_field(field, kind, asset_type)
+        )
+    return pa.schema(fields, metadata=schema.metadata)
 
 
 def _set_null_value(value: object, result: AssetCopyResult) -> object:
@@ -427,4 +895,45 @@ def _set_null_value(value: object, result: AssetCopyResult) -> object:
     raise ValueError("Asset list result has more entries than list path values")
 
 
-__all__ = ["AssetUploadManager", "MissingAssetPolicy"]
+def cleanup_rejected_asset_attempts(
+    output: DataFolder,
+    assets_subdir: str,
+    keep_pairs: set[tuple[str, str]],
+) -> None:
+    asset_prefix = f"{assets_subdir.rstrip('/')}/"
+    try:
+        asset_paths = output.find(assets_subdir)
+    except FileNotFoundError:
+        return
+    attempt_dirs: set[str] = set()
+    for rel_path in asset_paths:
+        if not rel_path.startswith(asset_prefix):
+            continue
+        attempt_dir = rel_path[len(asset_prefix) :].split("/", maxsplit=1)[0]
+        match = ASSET_ATTEMPT_DIR_RE.fullmatch(attempt_dir)
+        if (
+            match is not None
+            and (
+                match.group("shard_id"),
+                match.group("worker_id"),
+            )
+            not in keep_pairs
+        ):
+            attempt_dirs.add(f"{asset_prefix}{attempt_dir}")
+    for path in sorted(attempt_dirs):
+        try:
+            output.rm(path, recursive=True)
+        except FileNotFoundError:
+            continue
+
+
+__all__ = [
+    "AssetUploadManager",
+    "AssetWriteConfig",
+    "BlobAssetConfig",
+    "BlobAssetManager",
+    "FileAssetConfig",
+    "MissingAssetPolicy",
+    "asset_config_to_plan",
+    "cleanup_rejected_asset_attempts",
+]

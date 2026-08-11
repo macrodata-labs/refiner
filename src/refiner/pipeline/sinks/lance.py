@@ -20,6 +20,15 @@ from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
+from refiner.pipeline.sinks.assets import (
+    AssetUploadManager,
+    AssetWriteConfig,
+    BlobAssetConfig,
+    BlobAssetManager,
+    FileAssetConfig,
+    asset_config_to_plan,
+    cleanup_rejected_asset_attempts,
+)
 from refiner.pipeline.sinks.lance_schema import (
     lance_schema_from_payload as _lance_schema_from_payload,
     lance_schema_to_payload as _lance_schema_to_payload,
@@ -568,6 +577,7 @@ class LanceDatasetSink(BaseSink):
         columns: Sequence[str] | None = None,
         source_uri: str | None = None,
         source_version: int | None = None,
+        assets: AssetWriteConfig | None = None,
     ) -> None:
         _validate_write_mode(mode)
         if mode == "add_columns" and not columns:
@@ -595,8 +605,25 @@ class LanceDatasetSink(BaseSink):
         self.columns = tuple(columns) if columns is not None else None
         self.source_uri = source_uri
         self.source_version = source_version
+        self.assets = assets
         if mode == "add_columns" and self.output.abs_path() != source_uri:
             raise ValueError("add_columns must write back to the loaded Lance dataset")
+        if isinstance(assets, FileAssetConfig):
+            self._assets = AssetUploadManager(
+                self.output,
+                assets_subdir=assets.subdir,
+                filename_template=_METADATA_FILENAME_TEMPLATE,
+                max_uploads_in_flight=assets.max_in_flight,
+                missing_asset_policy=assets.missing_policy,
+            )
+        elif isinstance(assets, BlobAssetConfig):
+            self._assets = BlobAssetManager(
+                self.output,
+                config=assets,
+                filename_template=_METADATA_FILENAME_TEMPLATE,
+            )
+        else:
+            self._assets = None
         self._writers_by_shard: dict[str, _StreamingShardWriter] = {}
         self._schema_by_shard: dict[str, pa.Schema] = {}
         self._add_columns_writers_by_shard: dict[
@@ -666,6 +693,9 @@ class LanceDatasetSink(BaseSink):
         return self._existing_version
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
+        if self._assets is not None:
+            self._assets.set_input_schema(schema)
+            schema = self._assets.output_schema(schema)
         if self.mode != "add_columns":
             return
         assert self.columns is not None
@@ -703,6 +733,8 @@ class LanceDatasetSink(BaseSink):
         table = block_to_table(tabular)
         if table.num_rows == 0:
             return
+        if self._assets is not None:
+            table = self._assets.rewrite_table(shard_id, table)
         assert self.columns is not None
         missing = sorted(set(self.columns).difference(table.schema.names))
         if missing:
@@ -763,6 +795,8 @@ class LanceDatasetSink(BaseSink):
         table = block_to_table(block)
         if table.num_rows == 0:
             return
+        if self._assets is not None:
+            table = self._assets.rewrite_table(shard_id, table)
         if self.mode == "append":
             table = table.cast(self._load_existing_schema())
         elif self.mode == "overwrite":
@@ -820,6 +854,8 @@ class LanceDatasetSink(BaseSink):
         self._write_sidecar(shard_id, payload)
 
     def on_shard_complete(self, shard_id: str) -> None:
+        if self._assets is not None:
+            self._assets.on_shard_complete(shard_id)
         if self.mode == "add_columns":
             self._complete_add_columns_shard(shard_id)
             return
@@ -906,6 +942,8 @@ class LanceDatasetSink(BaseSink):
 
     def close(self) -> None:
         first_error: Exception | None = None
+        if self._assets is not None:
+            self._assets.close()
         for writer in self._writers_by_shard.values():
             try:
                 for fragment in writer.finish():
@@ -935,6 +973,8 @@ class LanceDatasetSink(BaseSink):
             args["columns"] = list(self.columns)
         if self.source_version is not None:
             args["source_version"] = self.source_version
+        if self.assets is not None:
+            args["assets"] = asset_config_to_plan(self.assets)
         return ("write_lance_dataset", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:
@@ -945,6 +985,7 @@ class LanceDatasetSink(BaseSink):
             self.output,
             mode=self.mode,
             source_version=source_version,
+            assets_subdir=self.assets.subdir if self.assets is not None else None,
         )
 
 
@@ -955,12 +996,14 @@ class LanceDatasetCommitReducerSink(BaseSink):
         *,
         mode: LanceWriteMode,
         source_version: int | None = None,
+        assets_subdir: str | None = None,
     ) -> None:
         _validate_write_mode(mode)
         self.output = DataFolder.resolve(output)
         validate_lance_uri(self.output.abs_path())
         self.mode = mode
         self.source_version = source_version
+        self.assets_subdir = assets_subdir
         self._managed_path_pattern = _compile_output_path_patterns(
             _METADATA_FILENAME_TEMPLATE
         )[-1]
@@ -984,6 +1027,8 @@ class LanceDatasetCommitReducerSink(BaseSink):
         }
         if self.source_version is not None:
             args["source_version"] = self.source_version
+        if self.assets_subdir is not None:
+            args["assets_subdir"] = self.assets_subdir
         return ("write_lance_dataset_commit", "writer", args)
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
@@ -1224,6 +1269,13 @@ class LanceDatasetCommitReducerSink(BaseSink):
             reducer_name="write_lance_dataset_commit",
             cleanup_path_prefix=_metadata_prefix(),
         )
+        if self.assets_subdir is not None:
+            finalized = _finalized_workers(reducer_name="write_lance_dataset_commit")
+            cleanup_rejected_asset_attempts(
+                self.output,
+                self.assets_subdir,
+                {(row.shard_id, row.worker_token) for row in finalized},
+            )
         rejected_paths = sorted(set(cleanup_paths).difference(metadata_paths))
 
         rejected_created_files: list[str] = []

@@ -10,13 +10,14 @@ import pyarrow.parquet as pq
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
-from refiner import col
+from refiner import col, read_blob
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline import from_items, load_lance
 from refiner.pipeline.sinks import JsonlSink
+from refiner.pipeline.sinks.assets import BlobAssetConfig, FileAssetConfig
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
@@ -237,6 +238,70 @@ def test_lance_dataset_writer_handles_more_shards_than_io_threads(tmp_path) -> N
     assert sorted(lance.dataset(str(output_dir)).to_table()["x"].to_pylist()) == list(
         range(12)
     )
+
+
+def test_lance_dataset_writer_packs_assets_as_generic_blob_references(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    output_dir = tmp_path / "asset-blocks.lance"
+
+    (
+        from_items([{"image": b"abc"}, {"image": b"defg"}])
+        .map(
+            lambda row: {"image": row["image"]},
+            dtypes={"image": datatype.image_bytes()},
+        )
+        .write_lance_dataset(
+            output_dir,
+            assets=BlobAssetConfig(target_bytes=1024),
+        )
+        .launch_local(
+            name="lance-blob-assets",
+            num_workers=1,
+            rundir=str(tmp_path / "asset-blocks-run"),
+        )
+    )
+
+    table = lance.dataset(str(output_dir)).to_table()
+    references = table.column("image").to_pylist()
+    assert [read_blob(reference) for reference in references] == [b"abc", b"defg"]
+    assert datatype.asset_type(table.schema.field("image")) == "image"
+    assert datatype.asset_storage(table.schema.field("image")) == "blob_reference"
+
+
+def test_lance_add_columns_packs_assets_as_generic_blob_references(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "asset-column.lance"
+    base = lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+
+    (
+        load_lance(
+            dataset_uri,
+            version=base.version,
+            columns=["x"],
+            batch_size=1,
+        )
+        .map(
+            lambda row: {"image": bytes([int(row["x"])])},
+            dtypes={"image": datatype.image_bytes()},
+        )
+        .write_lance_dataset(
+            dataset_uri,
+            mode="add_columns",
+            columns=["image"],
+            assets=BlobAssetConfig(target_bytes=1024),
+        )
+        .launch_local(
+            name="lance-add-blob-assets",
+            num_workers=1,
+            rundir=str(tmp_path / "asset-column-run"),
+        )
+    )
+
+    table = lance.dataset(str(dataset_uri)).to_table()
+    references = table.column("image").to_pylist()
+    assert [read_blob(reference) for reference in references] == [b"\x01", b"\x02"]
+    assert datatype.asset_type(table.schema.field("image")) == "image"
+    assert datatype.asset_storage(table.schema.field("image")) == "blob_reference"
 
 
 def test_launch_local_adds_lance_columns_without_rewriting_base_files(tmp_path) -> None:
@@ -1213,7 +1278,7 @@ def test_parquet_sink_uploads_asset_columns(tmp_path) -> None:
         pa.table({"video": [str(source), None], "label": ["keep", "none"]}),
         {"video": datatype.video_path()},
     )
-    sink = ParquetSink(output_dir, upload_assets=True)
+    sink = ParquetSink(output_dir, assets=FileAssetConfig())
 
     with set_active_run_context(
         job_id="job",
@@ -1236,7 +1301,7 @@ def test_parquet_sink_uploads_asset_columns(tmp_path) -> None:
     assert out.schema.field("video").metadata == {b"asset_type": b"video"}
 
 
-def test_parquet_sink_does_not_upload_embedded_assets(tmp_path) -> None:
+def test_parquet_sink_writes_embedded_assets_as_individual_files(tmp_path) -> None:
     output_dir = tmp_path / "embedded-assets"
     shard_id = "0123456789ab"
     worker_id = "worker-1"
@@ -1250,7 +1315,7 @@ def test_parquet_sink_does_not_upload_embedded_assets(tmp_path) -> None:
         ],
         schema=pa.schema([field]),
     )
-    sink = ParquetSink(output_dir, upload_assets=True)
+    sink = ParquetSink(output_dir, assets=FileAssetConfig())
 
     with set_active_run_context(
         job_id="job",
@@ -1263,13 +1328,49 @@ def test_parquet_sink_does_not_upload_embedded_assets(tmp_path) -> None:
         sink.on_shard_complete(shard_id)
 
     worker = worker_token_for(worker_id)
+    asset = output_dir / "assets" / f"{shard_id}__w{worker}" / "image" / "0-source.png"
     written = output_dir / f"{shard_id}__w{worker}.parquet"
     out = pq.read_table(written)
-    assert not (output_dir / "assets").exists()
-    assert out.column("image").to_pylist() == [
-        {"bytes": b"image-bytes", "path": "source.png"}
+    assert asset.read_bytes() == b"image-bytes"
+    assert out.column("image").to_pylist() == [str(asset)]
+    assert datatype.asset_storage(out.schema.field("image")) == "path"
+
+
+def test_parquet_sink_packs_embedded_assets_into_blob_files(tmp_path) -> None:
+    output_dir = tmp_path / "blob-assets"
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    field = datatype.image_bytes().with_name("image")
+    table = pa.Table.from_arrays(
+        [pa.array([b"abc", b"de", b"fghi"], type=field.type)],
+        schema=pa.schema([field]),
+    )
+    sink = ParquetSink(output_dir, assets=BlobAssetConfig(target_bytes=6))
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        sink.write_shard_block(shard_id, Tabular(table))
+        sink.on_shard_complete(shard_id)
+
+    worker = worker_token_for(worker_id)
+    asset_dir = output_dir / "assets" / f"{shard_id}__w{worker}" / "image"
+    assert (asset_dir / "00000.blob").read_bytes() == b"abcde"
+    assert (asset_dir / "00001.blob").read_bytes() == b"fghi"
+    written = output_dir / f"{shard_id}__w{worker}.parquet"
+    out = pq.read_table(written)
+    references = out.column("image").to_pylist()
+    assert references == [
+        {"path": str(asset_dir / "00000.blob"), "offset": 0, "size": 3},
+        {"path": str(asset_dir / "00000.blob"), "offset": 3, "size": 2},
+        {"path": str(asset_dir / "00001.blob"), "offset": 0, "size": 4},
     ]
-    assert datatype.asset_storage(out.schema.field("image")) == "bytes_with_path"
+    assert datatype.asset_type(out.schema.field("image")) == "image"
+    assert datatype.asset_storage(out.schema.field("image")) == "blob_reference"
 
 
 def test_parquet_sink_can_drop_rows_with_missing_assets(tmp_path) -> None:
@@ -1292,7 +1393,7 @@ def test_parquet_sink_can_drop_rows_with_missing_assets(tmp_path) -> None:
             "images": datatype.list(datatype.image_path()),
         },
     )
-    sink = ParquetSink(output_dir, upload_assets=True, missing_asset_policy="drop_row")
+    sink = ParquetSink(output_dir, assets=FileAssetConfig(missing_policy="drop_row"))
 
     with set_active_run_context(
         job_id="job",
@@ -1334,7 +1435,7 @@ def test_parquet_sink_can_set_missing_list_assets_to_null(tmp_path) -> None:
         ),
         {"images": datatype.list(datatype.image_path())},
     )
-    sink = ParquetSink(output_dir, upload_assets=True, missing_asset_policy="set_null")
+    sink = ParquetSink(output_dir, assets=FileAssetConfig(missing_policy="set_null"))
 
     with set_active_run_context(
         job_id="job",
@@ -1364,7 +1465,7 @@ def test_jsonl_sink_can_set_missing_assets_to_null(tmp_path) -> None:
     output_dir = tmp_path / "jsonl-null-missing-assets"
     shard_id = "0123456789ab"
     worker_id = "worker-1"
-    sink = JsonlSink(output_dir, upload_assets=True, missing_asset_policy="set_null")
+    sink = JsonlSink(output_dir, assets=FileAssetConfig(missing_policy="set_null"))
     sink.set_input_schema(
         pa.schema(
             [
@@ -1424,7 +1525,7 @@ def test_jsonl_sink_error_policy_raises_on_later_failed_asset(tmp_path) -> None:
     output_dir = tmp_path / "jsonl-error-missing-assets"
     shard_id = "0123456789ab"
     worker_id = "worker-1"
-    sink = JsonlSink(output_dir, upload_assets=True)
+    sink = JsonlSink(output_dir, assets=FileAssetConfig())
     sink.set_input_schema(pa.schema([datatype.image_path().with_name("image")]))
 
     with set_active_run_context(
@@ -1445,14 +1546,13 @@ def test_jsonl_sink_error_policy_raises_on_later_failed_asset(tmp_path) -> None:
 
 
 def test_asset_upload_rejects_unsafe_assets_subdir(tmp_path) -> None:
-    with pytest.raises(ValueError, match="assets_subdir"):
-        JsonlSink(tmp_path / "jsonl-assets", upload_assets=True, assets_subdir="../x")
+    with pytest.raises(ValueError, match="subdir"):
+        JsonlSink(tmp_path / "jsonl-assets", assets=FileAssetConfig(subdir="../x"))
 
-    with pytest.raises(ValueError, match="assets_subdir"):
+    with pytest.raises(ValueError, match="subdir"):
         ParquetSink(
             tmp_path / "parquet-assets",
-            upload_assets=True,
-            assets_subdir="a/../x",
+            assets=FileAssetConfig(subdir="a/../x"),
         )
 
 
@@ -1467,7 +1567,7 @@ def test_asset_upload_sanitizes_column_path_segment(tmp_path) -> None:
         [pa.array([str(source)], type=field.type)],
         schema=pa.schema([field]),
     )
-    sink = ParquetSink(output_dir, upload_assets=True)
+    sink = ParquetSink(output_dir, assets=FileAssetConfig())
 
     with set_active_run_context(
         job_id="job",
@@ -1505,7 +1605,7 @@ def test_asset_upload_disambiguates_sanitized_column_segments(tmp_path) -> None:
         {"a/b": [str(first)], "a?b": [str(second)]},
         schema=schema,
     )
-    sink = ParquetSink(output_dir, upload_assets=True)
+    sink = ParquetSink(output_dir, assets=FileAssetConfig())
 
     with set_active_run_context(
         job_id="job",
@@ -1540,7 +1640,7 @@ def test_jsonl_sink_uploads_assets_with_shard_local_row_indexes(tmp_path) -> Non
     output_dir = tmp_path / "jsonl-assets"
     shard_id = "0123456789ab"
     worker_id = "worker-1"
-    sink = JsonlSink(output_dir, upload_assets=True)
+    sink = JsonlSink(output_dir, assets=FileAssetConfig())
 
     with set_active_run_context(
         job_id="job",
@@ -1577,7 +1677,7 @@ def test_jsonl_sink_uploads_assets_from_row_blocks_without_tabularizing(
     output_dir = tmp_path / "jsonl-row-assets"
     shard_id = "0123456789ab"
     worker_id = "worker-1"
-    sink = JsonlSink(output_dir, upload_assets=True)
+    sink = JsonlSink(output_dir, assets=FileAssetConfig())
     sink.set_input_schema(pa.schema([datatype.image_path().with_name("image")]))
 
     with set_active_run_context(
@@ -1600,11 +1700,11 @@ def test_jsonl_sink_uploads_assets_from_row_blocks_without_tabularizing(
 def test_row_asset_upload_requires_input_schema(tmp_path) -> None:
     row: list[Row] = [DictRow({"image": str(tmp_path / "frame.png")})]
 
-    jsonl = JsonlSink(tmp_path / "jsonl-row-assets", upload_assets=True)
+    jsonl = JsonlSink(tmp_path / "jsonl-row-assets", assets=FileAssetConfig())
     with pytest.raises(ValueError, match="input schema"):
         jsonl.write_shard_block("0123456789ab", row)
 
-    parquet = ParquetSink(tmp_path / "parquet-row-assets", upload_assets=True)
+    parquet = ParquetSink(tmp_path / "parquet-row-assets", assets=FileAssetConfig())
     with pytest.raises(ValueError, match="input schema"):
         parquet.write_shard_block("0123456789ab", row)
 
@@ -1619,7 +1719,7 @@ def test_jsonl_pipeline_uploads_row_assets_from_dtype_schema(tmp_path) -> None:
             lambda row: {"image": row["image"]},
             dtypes={"image": datatype.image_path()},
         )
-        .write_jsonl(output_dir, upload_assets=True)
+        .write_jsonl(output_dir, assets=FileAssetConfig())
     )
 
     stats = pipeline.launch_local(
@@ -1648,8 +1748,7 @@ def test_jsonl_pipeline_counts_rows_after_missing_asset_drop(tmp_path) -> None:
         )
         .write_jsonl(
             output_dir,
-            upload_assets=True,
-            missing_asset_policy="drop_row",
+            assets=FileAssetConfig(missing_policy="drop_row"),
         )
     )
 
@@ -1677,7 +1776,7 @@ def test_parquet_pipeline_uploads_row_assets_from_dtype_schema(tmp_path) -> None
             lambda row: {"image": row["image"]},
             dtypes={"image": datatype.image_path()},
         )
-        .write_parquet(output_dir, upload_assets=True)
+        .write_parquet(output_dir, assets=FileAssetConfig())
     )
 
     stats = pipeline.launch_local(
@@ -1708,7 +1807,7 @@ def test_parquet_sink_uploads_list_asset_columns(tmp_path) -> None:
         [pa.array([[str(first), str(second)], None], type=field.type)],
         schema=pa.schema([field]),
     )
-    sink = ParquetSink(output_dir, upload_assets=True)
+    sink = ParquetSink(output_dir, assets=FileAssetConfig())
 
     with set_active_run_context(
         job_id="job",
@@ -1743,7 +1842,7 @@ def test_jsonl_sink_uploads_tuple_asset_columns(tmp_path) -> None:
     output_dir = tmp_path / "jsonl-tuple-assets"
     shard_id = "0123456789ab"
     worker_id = "worker-1"
-    sink = JsonlSink(output_dir, upload_assets=True)
+    sink = JsonlSink(output_dir, assets=FileAssetConfig())
     sink.set_input_schema(
         pa.schema([pa.field("images", pa.list_(datatype.image_path()))])
     )
@@ -2674,14 +2773,14 @@ def test_jsonl_sink_rejects_asset_subdir_filename_template(tmp_path) -> None:
         JsonlSink(
             tmp_path / "jsonl-custom",
             filename_template="assets/{shard_id}__w{worker_id}.jsonl",
-            upload_assets=True,
+            assets=FileAssetConfig(),
         )
 
     with pytest.raises(ValueError, match="assets_subdir"):
         JsonlSink(
             tmp_path / "jsonl-custom",
             filename_template="tmp/../assets/{shard_id}__w{worker_id}.jsonl",
-            upload_assets=True,
+            assets=FileAssetConfig(),
         )
 
 

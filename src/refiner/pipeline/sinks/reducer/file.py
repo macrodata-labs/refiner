@@ -4,7 +4,7 @@ import re
 from string import Formatter
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.pipeline.sinks.assets import ASSET_ATTEMPT_DIR_RE
+from refiner.pipeline.sinks.assets import cleanup_rejected_asset_attempts
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.worker.context import get_active_stage_index, get_finalized_workers
 
@@ -152,23 +152,11 @@ class FileCleanupReducerSink(BaseSink):
                 paths_to_delete.add(rel_path)
 
         if self.assets_subdir is not None:
-            asset_prefix = f"{self.assets_subdir.rstrip('/')}/"
-            try:
-                asset_paths = self.output.find(self.assets_subdir)
-            except FileNotFoundError:
-                asset_paths = []
-            for rel_path in asset_paths:
-                if not rel_path.startswith(asset_prefix):
-                    continue
-                attempt_dir = rel_path[len(asset_prefix) :].split("/", maxsplit=1)[0]
-                match = ASSET_ATTEMPT_DIR_RE.fullmatch(attempt_dir)
-                if match is None:
-                    continue
-                if (
-                    match.group("shard_id"),
-                    match.group("worker_id"),
-                ) not in keep_pairs:
-                    paths_to_delete.add(f"{asset_prefix}{attempt_dir}")
+            cleanup_rejected_asset_attempts(
+                self.output,
+                self.assets_subdir,
+                keep_pairs,
+            )
 
         for path in sorted(paths_to_delete):
             try:

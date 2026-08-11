@@ -9,6 +9,14 @@ import pyarrow as pa
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.sinks.base import BaseSink
+from refiner.pipeline.sinks.assets import (
+    AssetUploadManager,
+    AssetWriteConfig,
+    BlobAssetConfig,
+    BlobAssetManager,
+    FileAssetConfig,
+    asset_config_to_plan,
+)
 from refiner.pipeline.sinks.lance_utils import block_to_table, validate_lance_uri
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.utils import check_required_dependencies
@@ -29,6 +37,7 @@ class LanceSink(BaseSink):
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}__w{worker_id}.lance",
+        assets: AssetWriteConfig | None = None,
     ) -> None:
         self.output = DataFolder.resolve(output)
         if self.output.has_explicit_filesystem_configuration:
@@ -50,7 +59,28 @@ class LanceSink(BaseSink):
         ):
             raise ValueError("filename_template must be a normalized relative path")
         self.filename_template = filename_template
+        self.assets = assets
+        if isinstance(assets, FileAssetConfig):
+            self._assets = AssetUploadManager(
+                self.output,
+                assets_subdir=assets.subdir,
+                filename_template=filename_template,
+                max_uploads_in_flight=assets.max_in_flight,
+                missing_asset_policy=assets.missing_policy,
+            )
+        elif isinstance(assets, BlobAssetConfig):
+            self._assets = BlobAssetManager(
+                self.output,
+                config=assets,
+                filename_template=filename_template,
+            )
+        else:
+            self._assets = None
         self._writers: dict[str, Any] = {}
+
+    def set_input_schema(self, schema: pa.Schema | None) -> None:
+        if self._assets is not None:
+            self._assets.set_input_schema(schema)
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("lance",)
@@ -76,9 +106,13 @@ class LanceSink(BaseSink):
         table = block_to_table(block)
         if table.num_rows == 0:
             return
+        if self._assets is not None:
+            table = self._assets.rewrite_table(shard_id, table)
         self._writer(shard_id, table.schema).write_batch(table)
 
     def on_shard_complete(self, shard_id: str) -> None:
+        if self._assets is not None:
+            self._assets.on_shard_complete(shard_id)
         writer = self._writers.pop(shard_id, None)
         if writer is not None:
             writer.close()
@@ -86,6 +120,8 @@ class LanceSink(BaseSink):
 
     def close(self) -> None:
         first_error: Exception | None = None
+        if self._assets is not None:
+            self._assets.close()
         for writer in self._writers.values():
             try:
                 writer.close()
@@ -97,18 +133,18 @@ class LanceSink(BaseSink):
             raise first_error
 
     def describe(self) -> tuple[str, str, dict[str, object]]:
-        return (
-            "write_lance",
-            "writer",
-            {
-                "path": self.output.abs_path(),
-                "filename_template": self.filename_template,
-            },
-        )
+        args: dict[str, object] = {
+            "path": self.output.abs_path(),
+            "filename_template": self.filename_template,
+        }
+        if self.assets is not None:
+            args["assets"] = asset_config_to_plan(self.assets)
+        return ("write_lance", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:
         return FileCleanupReducerSink(
             output=self.output,
             filename_template=self.filename_template,
             reducer_name="write_lance_reduce",
+            assets_subdir=self.assets.subdir if self.assets is not None else None,
         )

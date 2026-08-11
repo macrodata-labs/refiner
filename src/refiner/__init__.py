@@ -16,6 +16,8 @@ _LAZY_MODULES = {
 
 _LAZY_ATTRS = {
     "CUDAVersion": "refiner.pipeline",
+    "BlobAssetConfig": "refiner.pipeline.sinks.assets",
+    "FileAssetConfig": "refiner.pipeline.sinks.assets",
     "GPU": "refiner.pipeline",
     "GPUType": "refiner.pipeline",
     "SUPPORTED_CUDA_VERSIONS": "refiner.pipeline",
@@ -30,6 +32,7 @@ _LAZY_ATTRS = {
     "read_json": "refiner.pipeline",
     "read_jsonl": "refiner.pipeline",
     "read_lerobot": "refiner.pipeline",
+    "read_blob": "refiner.io",
     "read_mcap": "refiner.pipeline",
     "read_parquet": "refiner.pipeline",
     "read_tfds": "refiner.pipeline",
@@ -53,6 +56,8 @@ _LAZY_ATTRS = {
 __all__ = [
     # sources
     "CUDAVersion",
+    "BlobAssetConfig",
+    "FileAssetConfig",
     "GPU",
     "GPUType",
     "SUPPORTED_CUDA_VERSIONS",
@@ -65,6 +70,7 @@ __all__ = [
     "read_json",
     "read_jsonl",
     "read_lerobot",
+    "read_blob",
     "load_lance",
     "read_mcap",
     "read_parquet",
@@ -125,6 +131,7 @@ if TYPE_CHECKING:
     import refiner.text as text
     import refiner.video as video
     from refiner.launchers.secrets import Secrets
+    from refiner.io import read_blob
     from refiner.pipeline import (
         CUDAVersion,
         GPU,
@@ -151,6 +158,7 @@ if TYPE_CHECKING:
     )
     from refiner.pipeline.data import datatype
     from refiner.pipeline.expressions import coalesce, col, if_else, lit
+    from refiner.pipeline.sinks.assets import BlobAssetConfig, FileAssetConfig
     from refiner.worker.context import logger
     from refiner.worker.metrics.api import (
         log_gauge,

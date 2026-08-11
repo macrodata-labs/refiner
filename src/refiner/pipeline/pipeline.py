@@ -39,7 +39,7 @@ from refiner.pipeline.sinks import (
     ParquetSink,
     ZarrSink,
 )
-from refiner.pipeline.sinks.assets import MissingAssetPolicy
+from refiner.pipeline.sinks.assets import AssetWriteConfig
 from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
@@ -561,10 +561,7 @@ class RefinerPipeline:
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}__w{worker_id}.jsonl",
-        upload_assets: bool = False,
-        assets_subdir: str = "assets",
-        max_asset_uploads_in_flight: int = 16,
-        missing_asset_policy: MissingAssetPolicy = "error",
+        assets: AssetWriteConfig | None = None,
     ) -> "RefinerPipeline":
         """Attach a JSONL writer sink.
 
@@ -572,22 +569,13 @@ class RefinerPipeline:
             output: Output folder or URL prefix.
             filename_template: Per-worker output filename template. Available
                 fields include ``shard_id`` and ``worker_id``.
-            upload_assets: Whether referenced local assets should be copied
-                beside the JSONL output and rewritten to output paths.
-            assets_subdir: Subdirectory used when ``upload_assets`` is enabled.
-            max_asset_uploads_in_flight: Concurrent asset uploads per worker.
-            missing_asset_policy: How missing assets are handled when uploading:
-                error, keep the original reference, or write null depending on
-                the sink policy.
+            assets: Optional individual-file or packed-blob asset configuration.
         """
         return self.with_sink(
             JsonlSink(
                 output=output,
                 filename_template=filename_template,
-                upload_assets=upload_assets,
-                assets_subdir=assets_subdir,
-                max_asset_uploads_in_flight=max_asset_uploads_in_flight,
-                missing_asset_policy=missing_asset_policy,
+                assets=assets,
             )
         )
 
@@ -597,10 +585,7 @@ class RefinerPipeline:
         *,
         filename_template: str = "{shard_id}__w{worker_id}.parquet",
         compression: str | None = None,
-        upload_assets: bool = False,
-        assets_subdir: str = "assets",
-        max_asset_uploads_in_flight: int = 16,
-        missing_asset_policy: MissingAssetPolicy = "error",
+        assets: AssetWriteConfig | None = None,
         dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
         """Attach a Parquet writer sink.
@@ -610,11 +595,7 @@ class RefinerPipeline:
             filename_template: Per-worker output filename template. Available
                 fields include ``shard_id`` and ``worker_id``.
             compression: Optional Parquet compression codec.
-            upload_assets: Whether referenced local assets should be copied
-                beside the Parquet output and rewritten to output paths.
-            assets_subdir: Subdirectory used when ``upload_assets`` is enabled.
-            max_asset_uploads_in_flight: Concurrent asset uploads per worker.
-            missing_asset_policy: How missing assets are handled when uploading.
+            assets: Optional individual-file or packed-blob asset configuration.
             dtypes: Optional dtype overrides for written columns.
         """
         return self.with_sink(
@@ -622,10 +603,7 @@ class RefinerPipeline:
                 output=output,
                 filename_template=filename_template,
                 compression=compression,
-                upload_assets=upload_assets,
-                assets_subdir=assets_subdir,
-                max_asset_uploads_in_flight=max_asset_uploads_in_flight,
-                missing_asset_policy=missing_asset_policy,
+                assets=assets,
                 dtypes=dtypes,
             )
         )
@@ -635,12 +613,14 @@ class RefinerPipeline:
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}__w{worker_id}.lance",
+        assets: AssetWriteConfig | None = None,
     ) -> "RefinerPipeline":
         """Attach a writer that creates one standalone Lance file per shard."""
         return self.with_sink(
             LanceSink(
                 output=output,
                 filename_template=filename_template,
+                assets=assets,
             )
         )
 
@@ -650,6 +630,7 @@ class RefinerPipeline:
         *,
         mode: LanceWriteMode = "create",
         columns: Sequence[str] | None = None,
+        assets: AssetWriteConfig | None = None,
     ) -> "RefinerPipeline":
         """Attach a distributed Lance dataset writer or schema-evolution sink."""
         source_uri: str | None = None
@@ -668,6 +649,7 @@ class RefinerPipeline:
                 columns=columns,
                 source_uri=source_uri,
                 source_version=source_version,
+                assets=assets,
             )
         )
 
@@ -1317,7 +1299,6 @@ def load_lance(
     version: int | str | None = None,
     columns: Sequence[str] | None = None,
     batch_size: int = 65_536,
-    blob_handling: str | None = None,
     num_shards: int | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline over one immutable version of a Lance dataset.
@@ -1331,7 +1312,6 @@ def load_lance(
             version=version,
             columns=columns,
             batch_size=batch_size,
-            blob_handling=blob_handling,
             num_shards=num_shards,
         )
     )

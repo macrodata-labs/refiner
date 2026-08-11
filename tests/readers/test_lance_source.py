@@ -4,7 +4,8 @@ import pyarrow as pa
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
-from refiner import load_lance
+from refiner import load_lance, read_blob
+from refiner.pipeline.data import datatype
 from refiner.pipeline.data.shard import SOURCE_ROW_ID_COLUMN, RowRangeDescriptor
 from refiner.pipeline.sources.lance import LanceSource
 from refiner.pipeline.data.tabular import Tabular
@@ -41,6 +42,64 @@ def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
         (1, 2),
     ]
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [1, 2, 3]
+
+
+def test_load_lance_normalizes_classic_blobs_to_references(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "blobs.lance"
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int64()),
+            pa.field(
+                "image",
+                pa.large_binary(),
+                metadata={b"lance-encoding:blob": b"true"},
+            ),
+        ]
+    )
+    lance.write_dataset(
+        pa.Table.from_arrays(
+            [
+                pa.array([1, 2, 3]),
+                pa.array([b"first", None, b"second"], type=pa.large_binary()),
+            ],
+            schema=schema,
+        ),
+        str(dataset_uri),
+        max_rows_per_file=1,
+    )
+
+    pipeline = load_lance(dataset_uri, batch_size=1)
+    output_schema = pipeline.output_schema()
+    rows = list(pipeline.iter_rows())
+
+    assert output_schema is not None
+    assert datatype.asset_storage(output_schema.field("image")) == "blob_reference"
+    assert read_blob(rows[0]["image"]) == b"first"
+    assert rows[1]["image"] is None
+    assert read_blob(rows[2]["image"]) == b"second"
+    assert rows[0]["image"]["path"].startswith(f"{dataset_uri}/data/")
+    assert rows[0]["image"]["offset"] == 0
+    assert rows[0]["image"]["size"] == 5
+
+
+def test_load_lance_rejects_selected_blob_v2_columns(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    if not hasattr(lance, "blob_array"):
+        pytest.skip("Lance Blob V2 is unavailable")
+    dataset_uri = tmp_path / "blobs-v2.lance"
+    lance.write_dataset(
+        pa.table({"id": [1], "image": lance.blob_array([b"image"])}),
+        str(dataset_uri),
+        data_storage_version="2.2",
+    )
+
+    with pytest.raises(ValueError, match="Lance Blob V2 columns"):
+        load_lance(dataset_uri)
+
+    assert [
+        row["id"] for row in load_lance(dataset_uri, columns=["id"]).iter_rows()
+    ] == [1]
 
 
 def test_load_lance_groups_fragments_into_requested_shards(tmp_path) -> None:

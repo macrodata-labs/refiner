@@ -27,8 +27,22 @@ pipeline = mdr.load_lance(
 
 When `version` is omitted, Refiner resolves the latest version once and pins it
 for the pipeline. Column projection is pushed into Lance, and `batch_size`
-controls the streamed Arrow batch size. Use `blob_handling` to select Lance's
-blob materialization behavior when reading blob columns.
+controls the streamed Arrow batch size.
+
+Classic Lance blob columns are returned as lazy Refiner blob references:
+
+```python
+row = pipeline.take(1)[0]
+encoded = mdr.read_blob(row["image"])
+```
+
+Each reference contains `path`, `offset`, and `size`. `read_blob(...)` performs
+an exact byte-range read, so scanning rows does not materialize the blob bytes.
+The reference remains valid only while the pinned dataset version's data files
+are retained.
+Lance Blob V2 columns are currently rejected because packed and dedicated V2
+storage does not expose a stable physical object path that Refiner can preserve
+in this three-field representation.
 
 `load_lance` uses Lance's native storage layer. It rejects configured fsspec
 filesystem objects and `storage_options`; provide a URI whose endpoint and

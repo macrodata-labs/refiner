@@ -36,6 +36,21 @@ pipeline = (
 )
 ```
 
+Asset output uses the same format-independent configurations as Parquet and
+JSONL. Individual files use `FileAssetConfig`; packed block files use
+`BlobAssetConfig` and are stored as `{path, offset, size}` columns:
+
+```python
+pipeline.write_lance_dataset(
+    "s3://my-bucket/clean.lance",
+    assets=mdr.BlobAssetConfig(target_bytes=1 << 30),
+)
+```
+
+Here `1 << 30` selects a 1 GiB target block size. Refiner does not create
+Lance-native blob columns when writing; it writes generic block files and typed
+`{path, offset, size}` references that can be read with `mdr.read_blob(...)`.
+
 Supported modes are `create`, `overwrite`, `append`, and `add_columns`.
 Empty `create` and `overwrite` jobs fail explicitly. Empty `append` jobs are
 no-ops.
@@ -71,6 +86,17 @@ pipeline = (
         mode="add_columns",
         columns=["hand_boxes", "detector_score"],
     )
+)
+```
+
+New asset columns can use either output layout in the same operation:
+
+```python
+pipeline.write_lance_dataset(
+    "s3://my-bucket/hands.lance",
+    mode="add_columns",
+    columns=["crop"],
+    assets=mdr.BlobAssetConfig(target_bytes=1 << 30),
 )
 ```
 
