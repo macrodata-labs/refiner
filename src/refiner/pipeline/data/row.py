@@ -52,6 +52,11 @@ class Row(Mapping[str, Any]):
             raise ValueError("row is missing shard_id")
         return self.shard_id
 
+    def require_source_row_id(self) -> int:
+        if self.source_row_id is None:
+            raise ValueError("row is missing source_row_id")
+        return self.source_row_id
+
     def log_throughput(
         self,
         label: str,
@@ -242,16 +247,21 @@ class DictRow(Row):
 
     data: Mapping[str, Any]
     shard_id: str | None = None
+    source_row_id: int | None = None
 
     def __post_init__(self) -> None:
-        if self.shard_id is not None:
-            return
-        value = self.data.get(SHARD_ID_COLUMN)
-        if value is None:
-            return
-        object.__setattr__(
-            self, "shard_id", value if isinstance(value, str) else str(value)
-        )
+        if self.shard_id is None:
+            value = self.data.get(SHARD_ID_COLUMN)
+            if value is not None:
+                object.__setattr__(
+                    self, "shard_id", value if isinstance(value, str) else str(value)
+                )
+        if self.source_row_id is None:
+            value = self.data.get(SOURCE_ROW_ID_COLUMN)
+            if value is not None:
+                object.__setattr__(self, "source_row_id", int(value))
+        if self.source_row_id is not None and self.source_row_id < 0:
+            raise ValueError("source_row_id must be non-negative")
 
     def __getitem__(self, key: str) -> Any:
         if key in INTERNAL_ROW_COLUMNS:

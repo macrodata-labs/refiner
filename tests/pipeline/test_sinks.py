@@ -506,6 +506,7 @@ def test_lance_add_columns_preserves_internal_columns_across_replacement_row(
             lambda row: DictRow(
                 {"x": int(row["x"]), "y": int(row["x"]) + 1},
                 shard_id=row.shard_id,
+                source_row_id=row.source_row_id,
             ),
             dtypes={"y": datatype.int64()},
         )
@@ -580,7 +581,13 @@ def test_lance_add_columns_rejects_unaligned_replacement_batch(
 def test_source_row_identity_is_not_a_user_column() -> None:
     rows = list(
         from_items([{"x": 1}])
-        .map(lambda row: DictRow({"x": 2}, shard_id=row.shard_id))
+        .map(
+            lambda row: DictRow(
+                {"x": 2},
+                shard_id=row.shard_id,
+                source_row_id=row.source_row_id,
+            )
+        )
         .iter_rows()
     )
 

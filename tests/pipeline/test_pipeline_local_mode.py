@@ -135,7 +135,7 @@ def test_batch_map_must_preserve_source_row_identity() -> None:
         batch_size=2,
     )
 
-    with pytest.raises(ValueError, match="must preserve source row identities"):
+    with pytest.raises(ValueError, match="missing source_row_id"):
         list(pipeline.iter_rows())
 
 
@@ -155,12 +155,16 @@ def test_flat_map_shard_delta_uses_emitted_row_shards() -> None:
     deltas: list[dict[str, int]] = []
     out = list(
         execute_row_steps(
-            [DictRow({"x": 1}, shard_id="s1")],
+            [DictRow({"x": 1}, shard_id="s1", source_row_id=0)],
             [
                 FnFlatMapStep(
                     fn=lambda row: [
                         row.update(y=10),
-                        DictRow({"x": 2, "y": 20}, shard_id="s2"),
+                        DictRow(
+                            {"x": 2, "y": 20},
+                            shard_id="s2",
+                            source_row_id=0,
+                        ),
                     ],
                     index=1,
                 )

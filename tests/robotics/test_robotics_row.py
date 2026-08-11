@@ -536,7 +536,11 @@ def test_to_robot_rows_falls_back_for_mixed_row_batches() -> None:
             lambda row: (
                 row
                 if cast(RoboticsRow, row).episode_id == "episode-1"
-                else DictRow({"episode_id": row["episode_id"], "keep": row["keep"]})
+                else DictRow(
+                    {"episode_id": row["episode_id"], "keep": row["keep"]},
+                    shard_id=row.shard_id,
+                    source_row_id=row.source_row_id,
+                )
             )
         )
         .filter(col("keep"))
