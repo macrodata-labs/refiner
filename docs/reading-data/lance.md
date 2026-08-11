@@ -21,6 +21,7 @@ pipeline = mdr.load_lance(
     version=42,
     columns=["image", "frame_id"],
     batch_size=128,
+    num_shards=32,
 )
 ```
 
@@ -35,5 +36,7 @@ credentials are available through provider-standard environment configuration
 to both Lance and fsspec. Credential-bearing URIs and URI query parameters are
 rejected so pipeline plans do not serialize secrets.
 
-Each Lance fragment becomes one Refiner shard. A worker may claim and process
-multiple fragments over its lifetime.
+By default, each Lance fragment becomes one Refiner shard. Set `num_shards` to
+group adjacent fragments into fewer scheduling units. Fragments remain atomic,
+so requesting more shards than fragments still produces one shard per fragment.
+A worker may claim and process multiple shards over its lifetime.

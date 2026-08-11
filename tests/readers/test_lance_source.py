@@ -43,6 +43,28 @@ def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [1, 2, 3]
 
 
+def test_load_lance_groups_fragments_into_requested_shards(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "grouped.lance"
+    dataset = lance.write_dataset(
+        pa.table({"x": list(range(5))}),
+        str(dataset_uri),
+        max_rows_per_file=1,
+    )
+    fragment_count = len(dataset.get_fragments())
+
+    pipeline = load_lance(dataset_uri, num_shards=2)
+    shards = pipeline.list_shards()
+
+    assert len(shards) == 2
+    assert [shard.descriptor.end - shard.descriptor.start for shard in shards] == [
+        (fragment_count + 1) // 2,
+        fragment_count // 2,
+    ]
+    assert [int(row["x"]) for row in pipeline.iter_rows()] == list(range(5))
+    assert len(load_lance(dataset_uri, num_shards=100).list_shards()) == fragment_count
+
+
 def test_load_lance_uses_physical_row_addresses_as_source_row_ids(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "positions.lance"

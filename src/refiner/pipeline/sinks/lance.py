@@ -599,7 +599,9 @@ class LanceDatasetSink(BaseSink):
             raise ValueError("add_columns must write back to the loaded Lance dataset")
         self._writers_by_shard: dict[str, _StreamingShardWriter] = {}
         self._schema_by_shard: dict[str, pa.Schema] = {}
-        self._add_columns_writers_by_shard: dict[str, _StreamingAddColumnsWriter] = {}
+        self._add_columns_writers_by_shard: dict[
+            str, dict[int, _StreamingAddColumnsWriter]
+        ] = {}
         self._add_columns_schema: pa.Schema | None = None
         self._existing_schema: pa.Schema | None = None
         self._existing_version: int | None = None
@@ -719,37 +721,40 @@ class LanceDatasetSink(BaseSink):
             "shift_right",
             [row_addresses, pa.scalar(_LANCE_ROW_ADDRESS_FRAGMENT_SHIFT, pa.uint64())],
         )
-        fragment_id_range = pc.call_function("min_max", [fragment_ids]).as_py()
-        if fragment_id_range["min"] != fragment_id_range["max"]:
-            raise ValueError(f"Shard {shard_id} contains multiple Lance fragments")
-        fragment_id = int(fragment_id_range["min"])
-
-        writer = self._add_columns_writers_by_shard.get(shard_id)
-        if writer is None:
-            fragment = self._source_dataset().get_fragment(fragment_id)
-            if int(fragment.num_deletions) > 0:
-                raise ValueError(
-                    f"Lance fragment {fragment_id} has deletions; add_columns does "
-                    "not yet support deletion-bearing fragments"
-                )
-            writer = _StreamingAddColumnsWriter(
-                fragment=fragment,
-                fragment_id=fragment_id,
-                num_rows=int(fragment.physical_rows),
-                schema=output_schema,
-                output=self.output,
+        writers = self._add_columns_writers_by_shard.setdefault(shard_id, {})
+        for fragment_id_raw in pc.unique(fragment_ids).to_pylist():
+            fragment_id = int(fragment_id_raw)
+            mask = pc.equal(
+                fragment_ids,
+                pa.scalar(fragment_id, type=pa.uint64()),
             )
-            self._add_columns_writers_by_shard[shard_id] = writer
-        elif writer.fragment_id != fragment_id:
-            raise ValueError(f"Shard {shard_id} contains multiple Lance fragments")
-        positions = pc.call_function(
-            "bit_wise_and",
-            [
-                row_addresses,
-                pa.scalar(_LANCE_ROW_ADDRESS_POSITION_MASK, pa.uint64()),
-            ],
-        )
-        writer.put(pa.chunked_array([positions]), table.select(self.columns))
+            writer = writers.get(fragment_id)
+            if writer is None:
+                fragment = self._source_dataset().get_fragment(fragment_id)
+                if int(fragment.num_deletions) > 0:
+                    raise ValueError(
+                        f"Lance fragment {fragment_id} has deletions; add_columns "
+                        "does not yet support deletion-bearing fragments"
+                    )
+                writer = _StreamingAddColumnsWriter(
+                    fragment=fragment,
+                    fragment_id=fragment_id,
+                    num_rows=int(fragment.physical_rows),
+                    schema=output_schema,
+                    output=self.output,
+                )
+                writers[fragment_id] = writer
+            positions = pc.call_function(
+                "bit_wise_and",
+                [
+                    pc.filter(row_addresses, mask),
+                    pa.scalar(_LANCE_ROW_ADDRESS_POSITION_MASK, pa.uint64()),
+                ],
+            )
+            writer.put(
+                pa.chunked_array([positions]),
+                table.filter(mask).select(self.columns),
+            )
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
         if self.mode == "add_columns":
@@ -844,25 +849,54 @@ class LanceDatasetSink(BaseSink):
         )
 
     def _complete_add_columns_shard(self, shard_id: str) -> None:
-        writer = self._add_columns_writers_by_shard.pop(shard_id, None)
-        if writer is None:
+        writers = self._add_columns_writers_by_shard.pop(shard_id, None)
+        if not writers:
             self._write_empty_sidecar(shard_id)
             return
         assert self.source_version is not None
-        updated_fragment, merged_schema = writer.finish()
-        updated_json = _json_dumps(updated_fragment.to_json())
-        created_files = sorted(
-            set(_fragment_data_paths(updated_json)).difference(
-                _fragment_data_paths(writer.base_json)
+        updated_jsons: list[str] = []
+        created_files: list[str] = []
+        merged_schema: Any | None = None
+        lance_schema_payload: dict[str, object] | None = None
+        try:
+            for fragment_id, writer in sorted(writers.items()):
+                updated_fragment, next_schema = writer.finish()
+                updated_json = _json_dumps(updated_fragment.to_json())
+                updated_jsons.append(updated_json)
+                created_files.extend(
+                    set(_fragment_data_paths(updated_json)).difference(
+                        _fragment_data_paths(writer.base_json)
+                    )
+                )
+                next_payload = _lance_schema_to_payload(next_schema)
+                if merged_schema is None:
+                    merged_schema = next_schema
+                    lance_schema_payload = next_payload
+                elif lance_schema_payload != next_payload:
+                    raise ValueError(
+                        "Cannot write one Lance shard with inconsistent field IDs."
+                    )
+        except Exception:
+            for writer in writers.values():
+                try:
+                    writer.abort()
+                except Exception:  # noqa: BLE001
+                    pass
+            _remove_paths_best_effort(
+                self.output,
+                created_files,
+                operation="failed Lance shard cleanup",
             )
-        )
+            raise
+        assert merged_schema is not None
+        assert lance_schema_payload is not None
         payload = {
             "schema": _schema_to_base64(merged_schema.to_pyarrow()),
-            "lance_schema": _lance_schema_to_payload(merged_schema),
-            "fragments": [updated_json],
-            "created_files": created_files,
+            "lance_schema": lance_schema_payload,
+            "fragments": updated_jsons,
+            "created_files": sorted(created_files),
             "source_version": self.source_version,
-            "source_fragment_id": writer.fragment_id,
+            "source_fragment_ids": sorted(writers),
         }
         self._write_sidecar(
             shard_id,
@@ -881,12 +915,13 @@ class LanceDatasetSink(BaseSink):
                     first_error = err
         self._writers_by_shard.clear()
         self._schema_by_shard.clear()
-        for writer in self._add_columns_writers_by_shard.values():
-            try:
-                writer.abort()
-            except Exception as err:  # noqa: BLE001
-                if first_error is None:
-                    first_error = err
+        for writers in self._add_columns_writers_by_shard.values():
+            for writer in writers.values():
+                try:
+                    writer.abort()
+                except Exception as err:  # noqa: BLE001
+                    if first_error is None:
+                        first_error = err
         self._add_columns_writers_by_shard.clear()
         if first_error is not None:
             raise first_error
@@ -1020,7 +1055,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         list[str],
         list[str],
         int | None,
-        int | None,
+        list[int],
         dict[str, object] | None,
     ]:
         with self.output.open(rel_path, mode="rt", encoding="utf-8") as f:
@@ -1034,9 +1069,14 @@ class LanceDatasetCommitReducerSink(BaseSink):
         source_version_raw = (
             payload.get("source_version") if isinstance(payload, dict) else None
         )
-        source_fragment_raw = (
-            payload.get("source_fragment_id") if isinstance(payload, dict) else None
+        source_fragments_raw = (
+            payload.get("source_fragment_ids") if isinstance(payload, dict) else None
         )
+        if source_fragments_raw is None and isinstance(payload, dict):
+            source_fragment_raw = payload.get("source_fragment_id")
+            source_fragments_raw = (
+                [] if source_fragment_raw is None else [source_fragment_raw]
+            )
         lance_schema_raw = (
             payload.get("lance_schema") if isinstance(payload, dict) else None
         )
@@ -1048,10 +1088,15 @@ class LanceDatasetCommitReducerSink(BaseSink):
             raise ValueError(f"Invalid Lance metadata payload: {rel_path}")
         if not isinstance(created_raw, list):
             raise ValueError(f"Invalid Lance created-files payload: {rel_path}")
+        if not isinstance(source_fragments_raw, list) or not all(
+            isinstance(fragment_id, int) and not isinstance(fragment_id, bool)
+            for fragment_id in source_fragments_raw
+        ):
+            raise ValueError(f"Invalid Lance source-fragments payload: {rel_path}")
         fragments = [fragment for fragment in fragment_raw if isinstance(fragment, str)]
         created_files = [_validate_created_file_path(path) for path in created_raw]
         if empty_raw:
-            if fragments or created_files or source_fragment_raw is not None:
+            if fragments or created_files or source_fragments_raw:
                 raise ValueError(f"Invalid empty Lance metadata payload: {rel_path}")
         elif not isinstance(schema_raw, str):
             raise ValueError(f"Invalid Lance metadata payload: {rel_path}")
@@ -1060,7 +1105,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             fragments,
             created_files,
             int(source_version_raw) if source_version_raw is not None else None,
-            int(source_fragment_raw) if source_fragment_raw is not None else None,
+            [int(fragment_id) for fragment_id in source_fragments_raw],
             lance_schema_raw if isinstance(lance_schema_raw, dict) else None,
         )
 
@@ -1080,12 +1125,12 @@ class LanceDatasetCommitReducerSink(BaseSink):
         fragments: Sequence[str],
         created_files: Sequence[str],
         source_version: int | None,
-        source_fragment_id: int | None,
+        source_fragment_ids: Sequence[int],
         metadata_path: str,
     ) -> list[str]:
         if self._managed_path_pattern.fullmatch(metadata_path) is None:
             raise ValueError(f"Invalid Lance metadata path: {metadata_path}")
-        if not fragments and not created_files and source_fragment_id is None:
+        if not fragments and not created_files and not source_fragment_ids:
             if self.mode == "add_columns" and source_version != self.source_version:
                 raise ValueError("Invalid empty Lance add-columns metadata")
             return []
@@ -1102,17 +1147,23 @@ class LanceDatasetCommitReducerSink(BaseSink):
             return list(created_files)
         if (
             source_version != self.source_version
-            or source_fragment_id is None
-            or len(fragments) != 1
+            or not source_fragment_ids
+            or len(fragments) != len(source_fragment_ids)
+            or len(set(source_fragment_ids)) != len(source_fragment_ids)
         ):
             raise ValueError("Invalid rejected Lance add-columns metadata")
-        base_fragment = lance.dataset(
-            self._dataset_uri(), version=source_version
-        ).get_fragment(source_fragment_id)
-        base_json = _json_dumps(base_fragment.metadata.to_json())
-        expected = set(_fragment_data_paths(fragments[0])).difference(
-            _fragment_data_paths(base_json)
-        )
+        source = lance.dataset(self._dataset_uri(), version=source_version)
+        expected: set[str] = set()
+        for fragment, source_fragment_id in zip(
+            fragments, source_fragment_ids, strict=True
+        ):
+            base_fragment = source.get_fragment(source_fragment_id)
+            base_json = _json_dumps(base_fragment.metadata.to_json())
+            expected.update(
+                set(_fragment_data_paths(fragment)).difference(
+                    _fragment_data_paths(base_json)
+                )
+            )
         if set(created_files) != expected:
             raise ValueError(
                 "Lance created-files metadata does not match fragment data"
@@ -1184,7 +1235,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     next_rejected_fragments,
                     next_created_files,
                     next_source_version,
-                    next_source_fragment_id,
+                    next_source_fragment_ids,
                     _,
                 ) = self._read_metadata(rel_path)
                 next_created_files = self._verified_created_files(
@@ -1192,7 +1243,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     fragments=next_rejected_fragments,
                     created_files=next_created_files,
                     source_version=next_source_version,
-                    source_fragment_id=next_source_fragment_id,
+                    source_fragment_ids=next_source_fragment_ids,
                     metadata_path=rel_path,
                 )
             except Exception as err:  # noqa: BLE001
@@ -1223,7 +1274,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 next_fragments,
                 next_created_files,
                 next_source_version,
-                next_source_fragment_id,
+                next_source_fragment_ids,
                 next_lance_schema,
             ) = self._read_metadata(rel_path)
             self._verified_created_files(
@@ -1231,7 +1282,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 fragments=next_fragments,
                 created_files=next_created_files,
                 source_version=next_source_version,
-                source_fragment_id=next_source_fragment_id,
+                source_fragment_ids=next_source_fragment_ids,
                 metadata_path=rel_path,
             )
             if next_schema is not None:
@@ -1244,7 +1295,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             fragment_json.extend(next_fragments)
             if next_source_version is not None:
                 source_versions.add(next_source_version)
-            if next_source_fragment_id is not None:
+            for next_source_fragment_id in next_source_fragment_ids:
                 if next_source_fragment_id in source_fragment_ids:
                     raise ValueError(
                         f"Duplicate Lance fragment result: {next_source_fragment_id}"

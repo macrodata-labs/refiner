@@ -254,7 +254,13 @@ def test_launch_local_adds_lance_columns_without_rewriting_base_files(tmp_path) 
     }
 
     pipeline = (
-        load_lance(dataset_uri, version=base.version, columns=["x"], batch_size=1)
+        load_lance(
+            dataset_uri,
+            version=base.version,
+            columns=["x"],
+            batch_size=1,
+            num_shards=1,
+        )
         .map(
             lambda row: {"y": int(row["x"]) * 10},
             dtypes={"y": datatype.int64()},
@@ -278,7 +284,7 @@ def test_launch_local_adds_lance_columns_without_rewriting_base_files(tmp_path) 
         for fragment in evolved.get_fragments()
         for file in fragment.metadata.to_json()["files"]
     }
-    assert stats.completed == 3
+    assert stats.completed == 2
     assert stats.output_rows == 4
     assert evolved.version == base.version + 1
     assert evolved.to_table().to_pydict() == {
@@ -298,7 +304,12 @@ def test_lance_add_columns_handles_more_fragments_than_io_threads(tmp_path) -> N
     )
 
     (
-        load_lance(dataset_uri, version=base.version, batch_size=1)
+        load_lance(
+            dataset_uri,
+            version=base.version,
+            batch_size=1,
+            num_shards=1,
+        )
         .map(lambda row: {"y": int(row["x"]) * 10}, dtypes={"y": datatype.int64()})
         .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
         .launch_local(
@@ -995,7 +1006,7 @@ def test_lance_reducer_accepts_matching_native_fragment_paths(tmp_path) -> None:
         fragments=[fragment],
         created_files=["data/other/file.lance"],
         source_version=None,
-        source_fragment_id=None,
+        source_fragment_ids=[],
         metadata_path=rel_path,
     ) == ["data/other/file.lance"]
 
