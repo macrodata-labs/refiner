@@ -610,10 +610,6 @@ class LanceDatasetSink(BaseSink):
     def _declared_refiner_extras(self) -> tuple[str, ...]:
         return ("lance",)
 
-    @property
-    def requires_source_lineage(self) -> bool:
-        return self.mode == "add_columns"
-
     def _dataset_uri(self) -> str:
         return self.output.abs_path()
 

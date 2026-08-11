@@ -352,7 +352,9 @@ class RefinerPipeline:
 
         ``fn`` receives batches of rows and returns rows or row patches according
         to the batch transform contract. Use this for APIs that are more
-        efficient when called on multiple rows at once.
+        efficient when called on multiple rows at once. Returned ``Row`` objects
+        must retain their source identity; update the input rows instead of
+        constructing unrelated replacements.
         """
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")
@@ -392,7 +394,9 @@ class RefinerPipeline:
 
         ``fn`` receives a ``pyarrow.Table`` and must return a ``pyarrow.Table``.
         Adjacent vectorized operations are fused so they can run inside the same
-        Arrow segment.
+        Arrow segment. The returned table must preserve Refiner's internal row
+        index column so source identity stays aligned through filters and
+        reordering.
         """
         return self._add_vectorized_op(
             FnTableStep(fn=fn, index=self._next_step_index())
@@ -531,9 +535,6 @@ class RefinerPipeline:
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             on_shard_delta=on_shard_delta,
             input_schema=self.source.schema,
-            preserve_source_lineage=(
-                self.sink.requires_source_lineage if self.sink is not None else False
-            ),
         )
 
     def iter_rows(self) -> Iterable[Row]:

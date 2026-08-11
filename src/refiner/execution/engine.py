@@ -75,7 +75,6 @@ def execute_segments(
     max_vectorized_block_bytes: int | None = None,
     on_shard_delta: ShardDeltaFn | None = None,
     input_schema: pa.Schema | None = None,
-    preserve_source_lineage: bool = False,
 ) -> Iterator[Block]:
     """Execute segments and yield row or tabular blocks."""
     current: Iterable[Block] = _normalize_blocks(
@@ -93,7 +92,6 @@ def execute_segments(
                 max_vectorized_block_bytes=max_vectorized_block_bytes,
                 on_shard_delta=on_shard_delta,
                 input_schema=current_schema,
-                preserve_source_lineage=preserve_source_lineage,
             )
             current_schema = _segment_schema(current_schema, segment)
         else:
@@ -106,7 +104,6 @@ def execute_segments(
                 and max_vectorized_block_bytes is None,
                 on_shard_delta=on_shard_delta,
                 output_schema=output_schema,
-                preserve_source_lineage=preserve_source_lineage,
             )
             current_schema = output_schema
     yield from current
@@ -202,7 +199,6 @@ def _execute_row_segment(
     output_tabular: bool,
     on_shard_delta: ShardDeltaFn | None,
     output_schema: pa.Schema | None,
-    preserve_source_lineage: bool,
 ) -> Iterator[Block]:
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
@@ -211,7 +207,6 @@ def _execute_row_segment(
         rows,
         steps,
         on_shard_delta=on_shard_delta,
-        preserve_source_lineage=preserve_source_lineage,
     )
     if not output_tabular:
         yield from _chunk_output_rows(step_out, output_block_rows)
@@ -306,7 +301,6 @@ def _execute_vector_segment(
     max_vectorized_block_bytes: int | None,
     on_shard_delta: ShardDeltaFn | None,
     input_schema: pa.Schema | None,
-    preserve_source_lineage: bool,
 ) -> Iterator[Tabular]:
     pending_rows = RowBuffer()
     current_chunk_rows = max(1, int(vectorized_chunk_rows))
@@ -314,12 +308,10 @@ def _execute_vector_segment(
     segment_changes_rows = any(
         isinstance(op, (FilterExprStep, FnTableStep)) for op in ops
     )
-    segment_has_table_udf = any(isinstance(op, FnTableStep) for op in ops)
 
     def _run_block(block: Tabular) -> Tabular:
         return_row_indices = segment_changes_rows and (
-            block.requires_row_indices
-            or (preserve_source_lineage and block.source_row_ids is not None)
+            block.requires_row_indices or block.source_row_ids is not None
         )
         if not return_row_indices:
             table = apply_vectorized_ops(
@@ -327,13 +319,7 @@ def _execute_vector_segment(
                 ops,
                 on_shard_delta=on_shard_delta,
             )
-            result = block.with_table(table)
-            # A table UDF may reorder rows without changing their count. Unless
-            # the execution path requested row indices, the old source identities
-            # can no longer be associated with the output rows safely.
-            if segment_has_table_udf and result.source_row_ids is not None:
-                return result.with_source_row_ids(None)
-            return result
+            return block.with_table(table)
         table, row_indices = apply_vectorized_ops(
             block.table,
             ops,

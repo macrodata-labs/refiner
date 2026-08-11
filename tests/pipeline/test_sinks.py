@@ -438,19 +438,17 @@ def test_lance_dataset_copy_strips_internal_columns(tmp_path) -> None:
     assert output.to_table().to_pydict() == {"x": [1, 2]}
 
 
-def test_lance_map_table_can_drop_lineage_without_add_columns(tmp_path) -> None:
+def test_lance_map_table_cannot_drop_source_identity(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     source_uri = tmp_path / "map-table-public.lance"
     lance.write_dataset(pa.table({"x": [1, 2]}), str(source_uri))
 
-    rows = list(
-        load_lance(source_uri)
-        .map_table(lambda table: table.select(["x", SHARD_ID_COLUMN]))
-        .select("x")
-        .iter_rows()
+    pipeline = load_lance(source_uri).map_table(
+        lambda table: table.select(["x", SHARD_ID_COLUMN])
     )
 
-    assert [row.to_dict() for row in rows] == [{"x": 1}, {"x": 2}]
+    with pytest.raises(ValueError, match="must preserve __refiner_row_index"):
+        list(pipeline.iter_rows())
 
 
 def test_lance_add_columns_accepts_expression_created_column(tmp_path) -> None:

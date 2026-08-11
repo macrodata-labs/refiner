@@ -25,7 +25,7 @@ from refiner.worker.metrics.api import register_gauge
 AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
 
 
-def _preserve_source_lineage(source: Row, result: Row) -> Row:
+def _preserve_source_identity(source: Row, result: Row) -> Row:
     source_row_id = source.source_row_id
     if source_row_id is None or result.source_row_id == source_row_id:
         return result
@@ -37,7 +37,6 @@ def execute_row_steps(
     steps: Sequence[RefinerStep],
     *,
     on_shard_delta: ShardDeltaFn | None = None,
-    preserve_source_lineage: bool = False,
 ) -> Iterator[Row]:
     """Execute row/batch/flatmap steps using per-step queues.
 
@@ -76,9 +75,9 @@ def execute_row_steps(
                 result = await result
             result = cast(MapResult, result)
             if isinstance(result, Row):
-                return _preserve_source_lineage(row, result)
+                return _preserve_source_identity(row, result)
             if isinstance(result, dict):
-                return _preserve_source_lineage(row, row.update(result))
+                return _preserve_source_identity(row, row.update(result))
             raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
 
     def _run_step(i: int, *, flush_all: bool) -> None:
@@ -93,9 +92,9 @@ def execute_row_steps(
                     row.log_throughput("rows_processed", 1, unit="rows")
                     result = step.apply_row(row)
                     if isinstance(result, Row):
-                        out.append(_preserve_source_lineage(row, result))
+                        out.append(_preserve_source_identity(row, result))
                     elif isinstance(result, dict):
-                        out.append(_preserve_source_lineage(row, row.update(result)))
+                        out.append(_preserve_source_identity(row, row.update(result)))
                     else:
                         raise TypeError(
                             f"Unsupported map() result type: {type(result)!r}"
@@ -139,9 +138,9 @@ def execute_row_steps(
                         emitted_by_shard: dict[str, int] = {}
                         for item in step.apply_row_many(row):
                             if isinstance(item, Row):
-                                emitted = _preserve_source_lineage(row, item)
+                                emitted = _preserve_source_identity(row, item)
                             elif isinstance(item, dict):
-                                emitted = _preserve_source_lineage(
+                                emitted = _preserve_source_identity(
                                     row, row.update(item)
                                 )
                             else:
@@ -175,27 +174,30 @@ def execute_row_steps(
                     return
                 with ShardDeltaTracker(on_shard_delta) as delta:
                     delta.remove_rows(batch_in)
-                    source_identities = (
-                        Counter(row.source_row_id for row in batch_in)
-                        if preserve_source_lineage
-                        else Counter()
+                    source_identities = Counter(
+                        row.source_row_id
+                        for row in batch_in
+                        if row.source_row_id is not None
                     )
+                    identity_required = bool(source_identities)
+                    if identity_required and source_identities.total() != len(batch_in):
+                        raise ValueError(
+                            "batch_map input contains incomplete source identities"
+                        )
                     for item in step.apply_batch(batch_in):
-                        if preserve_source_lineage and item.source_row_id is None:
-                            raise ValueError(
-                                "batch_map replacement rows must preserve source "
-                                "row identities; return updates of the input rows"
-                            )
-                        if (
-                            preserve_source_lineage
-                            and source_identities[item.source_row_id] <= 0
-                        ):
-                            raise ValueError(
-                                "batch_map must not modify or duplicate source row "
-                                "identities"
-                            )
-                        if preserve_source_lineage:
-                            source_identities[item.source_row_id] -= 1
+                        if identity_required:
+                            if item.source_row_id is None:
+                                raise ValueError(
+                                    "batch_map replacement rows must preserve source "
+                                    "row identities; return updates of the input rows"
+                                )
+                            identity = item.source_row_id
+                            if source_identities[identity] <= 0:
+                                raise ValueError(
+                                    "batch_map must not modify or duplicate source row "
+                                    "identities"
+                                )
+                            source_identities[identity] -= 1
                         item.log_throughput("rows_out", 1, unit="rows")
                         if item.shard_id is not None:
                             delta.add(item.shard_id, 1)

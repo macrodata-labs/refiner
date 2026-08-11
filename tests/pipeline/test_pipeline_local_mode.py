@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 
+import pytest
+
 from refiner.execution.operators.row import execute_row_steps
 from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.data.row import DictRow, Row
@@ -121,6 +123,20 @@ def test_downstream_batch_waits_after_upstream_drop() -> None:
     assert len(out) == 2
     # b2 should run once with a full batch collected across two upstream outputs.
     assert seen_b2 == [2]
+
+
+def test_batch_map_must_preserve_source_row_identity() -> None:
+    shard = _shard("a", 0, 1)
+    rows = {shard.id: [DictRow({"x": 1}), DictRow({"x": 2})]}
+    pipeline = RefinerPipeline(source=_LocalFakeReader([shard], rows)).batch_map(
+        lambda batch: [
+            DictRow({"x": row["x"]}, shard_id=row.shard_id) for row in batch
+        ],
+        batch_size=2,
+    )
+
+    with pytest.raises(ValueError, match="must preserve source row identities"):
+        list(pipeline.iter_rows())
 
 
 def test_flat_map_can_expand_rows() -> None:

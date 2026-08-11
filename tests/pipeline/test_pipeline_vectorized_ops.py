@@ -153,7 +153,7 @@ def test_map_table_runs_on_vectorized_path() -> None:
     assert [int(r["y"]) for r in out] == [11, 12, 13]
 
 
-def test_untracked_map_table_reorder_drops_source_row_identity() -> None:
+def test_map_table_reorder_preserves_source_row_identity() -> None:
     pipeline = from_items([{"x": 1}, {"x": 2}, {"x": 3}]).map_table(
         lambda table: table.sort_by([("x", "descending")])
     )
@@ -161,7 +161,7 @@ def test_untracked_map_table_reorder_drops_source_row_identity() -> None:
     rows = [row for block in pipeline.execute(pipeline.source.read()) for row in block]
 
     assert [int(row["x"]) for row in rows] == [3, 2, 1]
-    assert [row.source_row_id for row in rows] == [None, None, None]
+    assert [row.source_row_id for row in rows] == [2, 1, 0]
 
 
 def test_apply_vectorized_op_filter_without_explicit_shard_counts() -> None:
