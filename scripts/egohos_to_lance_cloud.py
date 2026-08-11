@@ -86,14 +86,15 @@ def iter_egohos_rows(dataset_root: Path) -> Iterator[dict[str, object]]:
 
 
 def download_egohos(_task_rank: int, _num_tasks: int) -> Iterator[dict[str, object]]:
-    with tempfile.TemporaryDirectory(prefix="egohos-") as temp_dir_raw:
-        temp_dir = Path(temp_dir_raw)
-        archive_path = temp_dir / "egohos_dataset.zip"
-        urlretrieve(DATASET_URL, archive_path)
-        extracted_dir = temp_dir / "dataset"
-        extracted_dir.mkdir()
-        _safe_extract(archive_path, extracted_dir)
-        yield from iter_egohos_rows(_dataset_root(extracted_dir))
+    # The sink materializes asset paths after this generator is exhausted, so the
+    # extracted files must remain available for the lifetime of the worker process.
+    temp_dir = Path(tempfile.mkdtemp(prefix="egohos-"))
+    archive_path = temp_dir / "egohos_dataset.zip"
+    urlretrieve(DATASET_URL, archive_path)
+    extracted_dir = temp_dir / "dataset"
+    extracted_dir.mkdir()
+    _safe_extract(archive_path, extracted_dir)
+    yield from iter_egohos_rows(_dataset_root(extracted_dir))
 
 
 def identity(row: mdr.Row) -> mdr.Row:
