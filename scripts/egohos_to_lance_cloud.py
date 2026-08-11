@@ -9,6 +9,7 @@ import zipfile
 import pyarrow as pa
 
 import refiner as mdr
+from refiner.io import DataFolder
 
 
 DATASET_URL = (
@@ -149,7 +150,7 @@ def build_pipeline() -> mdr.RefinerPipeline:
         )
         .select("sample_id", "split", "image", "annotations")
         .write_lance_dataset(
-            OUTPUT_URI,
+            DataFolder(OUTPUT_URI, auto_mkdir=False),
             mode="create",
             assets=mdr.BlobAssetConfig(
                 subdir="_assets",
