@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.pipeline.data.block import Block, source_row_ids
+from refiner.pipeline.data.block import Block, source_row_id_column
 from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
@@ -693,7 +693,7 @@ class LanceDatasetSink(BaseSink):
             if isinstance(block, Tabular)
             else block[0].tabular_type.from_rows(block)
         )
-        row_addresses = source_row_ids(tabular)
+        row_addresses = source_row_id_column(tabular)
         table = block_to_table(tabular)
         if table.num_rows == 0:
             return

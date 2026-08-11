@@ -172,7 +172,8 @@ def _table_from_rows(
         }
         if any(row.shard_id is not None for row in rows):
             columns[SHARD_ID_COLUMN] = [row.shard_id for row in rows]
-        _append_source_row_ids(columns, rows)
+        if (source_row_ids := _source_row_id_array(rows)) is not None:
+            columns[SOURCE_ROW_ID_COLUMN] = source_row_ids
         return pa.table(columns)
 
     arrays: dict[str, pa.Array] = {}
@@ -192,7 +193,8 @@ def _table_from_rows(
             [row.shard_id for row in rows],
             type=pa.string(),
         )
-    _append_source_row_ids(arrays, rows)
+    if (source_row_ids := _source_row_id_array(rows)) is not None:
+        arrays[SOURCE_ROW_ID_COLUMN] = source_row_ids
     if not metadata_by_name:
         return pa.table(arrays)
     fields = [
@@ -209,16 +211,15 @@ def _concat_tables(tables: Sequence[pa.Table]) -> pa.Table:
         return pa.concat_tables(tables, promote_options="default")
 
 
-def _append_source_row_ids(
-    columns: dict[str, Any],
+def _source_row_id_array(
     rows: Sequence[Row],
-) -> None:
+) -> pa.Array | None:
     values = [row.source_row_id for row in rows]
     if all(value is None for value in values):
-        return
+        return None
     if any(value is None for value in values):
         raise ValueError("source_row_id must be present on every row in a block")
-    columns[SOURCE_ROW_ID_COLUMN] = pa.array(values, type=pa.uint64())
+    return pa.array(values, type=pa.uint64())
 
 
 def _sorted_arrow_rows(rows: Sequence[Row]) -> Sequence[Row]:
@@ -348,13 +349,11 @@ def _with_execution_identity(
     if shard_id is not None:
         shard_col = pa.array([shard_id] * len(rows), type=pa.string())
         table = set_or_append_column(table, SHARD_ID_COLUMN, shard_col)
-    source_ids: dict[str, Any] = {}
-    _append_source_row_ids(source_ids, rows)
-    if SOURCE_ROW_ID_COLUMN in source_ids:
+    if (source_row_ids := _source_row_id_array(rows)) is not None:
         table = set_or_append_column(
             table,
             SOURCE_ROW_ID_COLUMN,
-            source_ids[SOURCE_ROW_ID_COLUMN],
+            source_row_ids,
         )
     return table
 

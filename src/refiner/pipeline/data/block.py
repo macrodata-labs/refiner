@@ -17,8 +17,8 @@ Block = list[Row] | Tabular
 StreamItem = Row | Block
 
 
-def source_row_ids(block: Block) -> pa.Array:
-    """Return the opaque source row IDs aligned with a block."""
+def source_row_id_column(block: Block) -> pa.Array:
+    """Return the internal source-row-ID column aligned with a block."""
     if isinstance(block, Tabular):
         if SOURCE_ROW_ID_COLUMN not in block.table.column_names:
             raise ValueError("sink input is missing source row identities")
@@ -157,7 +157,7 @@ def _split_tabular_by_shard_sorted(
 __all__ = [
     "Block",
     "StreamItem",
-    "source_row_ids",
+    "source_row_id_column",
     "split_block_by_shard",
     "strip_internal_columns",
 ]

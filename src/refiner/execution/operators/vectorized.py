@@ -28,7 +28,7 @@ from refiner.pipeline.steps import (
 from refiner.worker.context import set_active_step_index
 from refiner.worker.metrics.api import log_throughput
 
-_ROW_INDEX_COLUMN = "__refiner_row_index"
+_SIDE_DATA_ROW_INDEX_COLUMN = "__refiner_side_data_row_index"
 RowIndices = tuple[int, ...] | None
 
 
@@ -135,14 +135,14 @@ def apply_vectorized_op(
             name for name in INTERNAL_ROW_COLUMNS if name in table.column_names
         ]
         if return_row_indices:
-            if _ROW_INDEX_COLUMN in table.column_names:
-                raise ValueError(f"{_ROW_INDEX_COLUMN} is an internal column")
+            if _SIDE_DATA_ROW_INDEX_COLUMN in table.column_names:
+                raise ValueError(f"{_SIDE_DATA_ROW_INDEX_COLUMN} is an internal column")
             lineage = range(table.num_rows) if row_indices is None else row_indices
             table = table.append_column(
-                _ROW_INDEX_COLUMN,
+                _SIDE_DATA_ROW_INDEX_COLUMN,
                 pa.array(lineage, type=pa.int64()),
             )
-            required_internal_columns.append(_ROW_INDEX_COLUMN)
+            required_internal_columns.append(_SIDE_DATA_ROW_INDEX_COLUMN)
         with set_active_step_index(op.index):
             next_table = op.fn(table)
         if not isinstance(next_table, pa.Table):
@@ -161,7 +161,9 @@ def apply_vectorized_op(
             )
         next_row_indices = None
         if return_row_indices:
-            lineage_column = next_table.column(_ROW_INDEX_COLUMN).combine_chunks()
+            lineage_column = next_table.column(
+                _SIDE_DATA_ROW_INDEX_COLUMN
+            ).combine_chunks()
             lineage = tuple(
                 int(value) for value in lineage_column.to_numpy(zero_copy_only=False)
             )
@@ -170,7 +172,7 @@ def apply_vectorized_op(
                 if row_indices is None
                 else lineage
             )
-            next_table = next_table.drop_columns([_ROW_INDEX_COLUMN])
+            next_table = next_table.drop_columns([_SIDE_DATA_ROW_INDEX_COLUMN])
         next_shard_counts = count_table_by_shard(next_table)
         return next_table, next_shard_counts, next_row_indices
 
