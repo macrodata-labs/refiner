@@ -568,7 +568,6 @@ class LanceDatasetSink(BaseSink):
         columns: Sequence[str] | None = None,
         source_uri: str | None = None,
         source_version: int | None = None,
-        planned_schema: pa.Schema | None = None,
     ) -> None:
         _validate_write_mode(mode)
         if mode == "add_columns" and not columns:
@@ -596,7 +595,6 @@ class LanceDatasetSink(BaseSink):
         self.columns = tuple(columns) if columns is not None else None
         self.source_uri = source_uri
         self.source_version = source_version
-        self.planned_schema = planned_schema
         if mode == "add_columns" and self.output.abs_path() != source_uri:
             raise ValueError("add_columns must write back to the loaded Lance dataset")
         self._writers_by_shard: dict[str, _StreamingShardWriter] = {}
@@ -801,20 +799,15 @@ class LanceDatasetSink(BaseSink):
         log_throughput("files_written", 1, shard_id=shard_id, unit="files")
 
     def _write_empty_sidecar(self, shard_id: str) -> None:
-        schema = self.planned_schema
         payload: dict[str, object] = {
             "empty": True,
             "fragments": [],
             "created_files": [],
         }
         if self.mode == "append":
-            schema = self._load_existing_schema()
+            self._load_existing_schema()
         elif self.mode == "overwrite":
             self._load_overwrite_version()
-        elif self.mode == "add_columns":
-            schema = None
-        if schema is not None:
-            payload["schema"] = _schema_to_base64(schema)
         if self.mode in ("append", "overwrite"):
             payload["source_version"] = self._existing_version
         elif self.mode == "add_columns":
@@ -917,7 +910,6 @@ class LanceDatasetSink(BaseSink):
             self.output,
             mode=self.mode,
             source_version=source_version,
-            planned_schema=self.planned_schema,
         )
 
 
@@ -928,14 +920,12 @@ class LanceDatasetCommitReducerSink(BaseSink):
         *,
         mode: LanceWriteMode,
         source_version: int | None = None,
-        planned_schema: pa.Schema | None = None,
     ) -> None:
         _validate_write_mode(mode)
         self.output = DataFolder.resolve(output)
         validate_lance_uri(self.output.abs_path())
         self.mode = mode
         self.source_version = source_version
-        self.planned_schema = planned_schema
         self._managed_path_pattern = _compile_output_path_patterns(
             _METADATA_FILENAME_TEMPLATE
         )[-1]
@@ -1169,49 +1159,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         if self.mode == "add_columns":
             self._validate_add_columns_fragment_coverage(lance, set())
             raise ValueError("Cannot add columns to an empty Lance dataset")
-        if self.planned_schema is None:
-            raise ValueError(
-                f"Cannot {self.mode} an empty Lance dataset without a known schema"
-            )
-        if self.mode == "overwrite" and self.source_version is None:
-            raise ValueError("Empty Lance overwrite is missing its source version")
-        finalized = _finalized_workers(reducer_name="write_lance_dataset_commit")
-        commit_message = self._commit_message(
-            schema=self.planned_schema,
-            fragments=[f"{row.shard_id}/{row.worker_token}" for row in finalized],
-            source_versions=set(),
-            lance_schema_payload=None,
-        )
-        if self.mode == "create":
-            expected_version = 1
-        else:
-            assert self.source_version is not None
-            expected_version = self.source_version + 1
-        if self._was_committed(
-            lance,
-            commit_message,
-            expected_versions=[expected_version],
-            search_history=self.mode == "overwrite",
-        ):
-            return
-        if self.mode == "create" and existing is not None:
-            raise ValueError(
-                "Cannot create a Lance dataset at a location where one already exists."
-            )
-        existing_version = int(existing.version) if existing is not None else 0
-        if self.mode == "overwrite" and existing_version != self.source_version:
-            raise ValueError(
-                "Cannot overwrite an empty Lance dataset because the dataset changed "
-                f"from version {self.source_version} to {existing_version}"
-            )
-        operation = lance.LanceOperation.Overwrite(self.planned_schema, [])
-        lance.LanceDataset.commit(
-            self._dataset_uri(),
-            operation,
-            read_version=existing_version,
-            max_retries=0,
-            commit_message=commit_message,
-        )
+        raise ValueError(f"Cannot {self.mode} an empty Lance dataset")
 
     def _run_commit(self) -> None:
         if self._commit_ran:

@@ -632,28 +632,32 @@ def test_source_row_identity_is_not_a_user_column() -> None:
     assert rows[0].source_row_id == 0
 
 
-def test_lance_empty_create_and_overwrite_preserve_schema(tmp_path) -> None:
+def test_lance_empty_create_and_overwrite_fail(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     input_uri = tmp_path / "empty-input.lance"
     create_uri = tmp_path / "empty-create.lance"
     overwrite_uri = tmp_path / "empty-overwrite.lance"
     lance.write_dataset(pa.table({"x": [1]}), str(input_uri))
-    lance.write_dataset(pa.table({"x": [1]}), str(overwrite_uri))
+    original = lance.write_dataset(pa.table({"x": [1]}), str(overwrite_uri))
 
     for mode, output_uri in (("create", create_uri), ("overwrite", overwrite_uri)):
-        (
-            load_lance(input_uri)
-            .filter(lambda _row: False)
-            .write_lance_dataset(output_uri, mode=mode)
-            .launch_local(
-                name=f"lance-empty-{mode}",
-                num_workers=1,
-                rundir=str(tmp_path / f"empty-{mode}-run"),
+        with pytest.raises(RuntimeError):
+            (
+                load_lance(input_uri)
+                .filter(lambda _row: False)
+                .write_lance_dataset(output_uri, mode=mode)
+                .launch_local(
+                    name=f"lance-empty-{mode}",
+                    num_workers=1,
+                    rundir=str(tmp_path / f"empty-{mode}-run"),
+                )
             )
-        )
-        output = lance.dataset(str(output_uri))
-        assert output.schema.names == ["x"]
-        assert output.count_rows() == 0
+
+    with pytest.raises((FileNotFoundError, OSError, ValueError)):
+        lance.dataset(str(create_uri))
+    overwritten = lance.dataset(str(overwrite_uri))
+    assert overwritten.version == original.version
+    assert overwritten.to_table().to_pydict() == {"x": [1]}
 
 
 def test_lance_add_columns_rejects_empty_dataset(tmp_path) -> None:
@@ -697,151 +701,6 @@ def test_lance_add_columns_rejects_fragments_with_deletions(tmp_path) -> None:
         )
 
     assert lance.dataset(str(dataset_uri)).version == source_version
-
-
-def test_lance_empty_create_reducer_retry_is_idempotent(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    dataset_uri = tmp_path / "empty-create-retry.lance"
-    runtime = cast(
-        RuntimeLifecycle,
-        _FinalizedWorkersRuntime([]),
-    )
-    with set_active_run_context(
-        job_id="job",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=runtime,
-    ):
-        for _ in range(2):
-            reducer = LanceDatasetCommitReducerSink(
-                dataset_uri,
-                mode="create",
-                planned_schema=pa.schema([("x", pa.int64())]),
-            )
-            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
-
-    assert lance.dataset(str(dataset_uri)).version == 1
-
-
-def test_lance_empty_overwrite_retry_finds_historical_commit(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    dataset_uri = tmp_path / "empty-overwrite-retry.lance"
-    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
-    runtime = cast(
-        RuntimeLifecycle,
-        _FinalizedWorkersRuntime([]),
-    )
-    with set_active_run_context(
-        job_id="job",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=runtime,
-    ):
-        first = LanceDatasetCommitReducerSink(
-            dataset_uri,
-            mode="overwrite",
-            source_version=base.version,
-            planned_schema=pa.schema([("x", pa.int64())]),
-        )
-        first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
-        lance.write_dataset(pa.table({"x": [99]}), str(dataset_uri), mode="append")
-        concurrent_version = lance.dataset(str(dataset_uri)).version
-
-        retry = LanceDatasetCommitReducerSink(
-            dataset_uri,
-            mode="overwrite",
-            source_version=base.version,
-            planned_schema=pa.schema([("x", pa.int64())]),
-        )
-        retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
-
-    latest = lance.dataset(str(dataset_uri))
-    assert latest.version == concurrent_version
-    assert latest.to_table().to_pydict() == {"x": [99]}
-
-
-def test_lance_empty_overwrite_rejects_concurrent_dataset_version(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    dataset_uri = tmp_path / "empty-overwrite-concurrent.lance"
-    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
-    runtime = cast(
-        RuntimeLifecycle,
-        _FinalizedWorkersRuntime([]),
-    )
-    sink = LanceDatasetSink(
-        dataset_uri,
-        mode="overwrite",
-        planned_schema=pa.schema([("x", pa.int64())]),
-    )
-    reducer = sink.build_reducer()
-    assert isinstance(reducer, LanceDatasetCommitReducerSink)
-    assert reducer.source_version == base.version
-    concurrent = lance.write_dataset(
-        pa.table({"x": [2]}), str(dataset_uri), mode="append"
-    )
-
-    with set_active_run_context(
-        job_id="job",
-        stage_index=1,
-        worker_id="reducer",
-        worker_name=None,
-        runtime_lifecycle=runtime,
-    ):
-        with pytest.raises(ValueError, match="dataset changed"):
-            reducer.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
-
-    latest = lance.dataset(str(dataset_uri))
-    assert latest.version == concurrent.version
-    assert latest.to_table().to_pydict() == {"x": [1, 2]}
-
-
-def test_lance_empty_create_rejects_partially_inferred_schema(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    input_uri = tmp_path / "partial-schema-input.lance"
-    output_uri = tmp_path / "partial-schema-output.lance"
-    lance.write_dataset(pa.table({"x": [1]}), str(input_uri))
-    pipeline = (
-        load_lance(input_uri)
-        .with_column("y", col("x") + 1)
-        .filter(lambda _row: False)
-        .write_lance_dataset(output_uri)
-    )
-
-    with pytest.raises(RuntimeError):
-        pipeline.launch_local(
-            name="lance-empty-partial-schema",
-            num_workers=1,
-            rundir=str(tmp_path / "empty-partial-schema-run"),
-        )
-    with pytest.raises((FileNotFoundError, OSError, ValueError)):
-        lance.dataset(str(output_uri))
-
-
-def test_lance_empty_create_rejects_typed_replacement_schema(tmp_path) -> None:
-    lance = pytest.importorskip("lance")
-    input_uri = tmp_path / "typed-replacement-input.lance"
-    output_uri = tmp_path / "typed-replacement-output.lance"
-    lance.write_dataset(pa.table({"x": [1]}), str(input_uri))
-    pipeline = (
-        load_lance(input_uri)
-        .map(
-            lambda row: DictRow({"y": 1}, shard_id=row.shard_id),
-            dtypes={"y": datatype.int64()},
-        )
-        .filter(lambda _row: False)
-        .write_lance_dataset(output_uri)
-    )
-
-    with pytest.raises(RuntimeError):
-        pipeline.launch_local(
-            name="lance-empty-typed-replacement-schema",
-            num_workers=1,
-            rundir=str(tmp_path / "typed-replacement-run"),
-        )
-    with pytest.raises((FileNotFoundError, OSError, ValueError)):
-        lance.dataset(str(output_uri))
 
 
 def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:

@@ -216,28 +216,6 @@ class RefinerPipeline:
         """
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
-    def _output_schema_is_complete(self) -> bool:
-        steps: list[RefinerStep | VectorizedOp] = []
-        for step in self.pipeline_steps:
-            if isinstance(step, VectorizedSegmentStep):
-                steps.extend(step.ops)
-            else:
-                steps.append(step)
-        for step in steps:
-            if isinstance(
-                step,
-                (
-                    WithColumnsStep,
-                    FnTableStep,
-                    FnRowStep,
-                    FnAsyncRowStep,
-                    FnBatchStep,
-                    FnFlatMapStep,
-                ),
-            ):
-                return False
-        return True
-
     def map(
         self, fn: MapFn, *, dtypes: DTypeMapping | None = None
     ) -> "RefinerPipeline":
@@ -676,9 +654,6 @@ class RefinerPipeline:
         """Attach a distributed Lance dataset writer or schema-evolution sink."""
         source_uri: str | None = None
         source_version: int | None = None
-        planned_schema = (
-            self.output_schema() if self._output_schema_is_complete() else None
-        )
         if mode == "add_columns":
             if not isinstance(self.source, LanceSource):
                 raise ValueError(
@@ -693,7 +668,6 @@ class RefinerPipeline:
                 columns=columns,
                 source_uri=source_uri,
                 source_version=source_version,
-                planned_schema=planned_schema,
             )
         )
 
