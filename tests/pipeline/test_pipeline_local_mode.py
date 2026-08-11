@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 
-import pytest
-
 from refiner.execution.operators.row import execute_row_steps
 from refiner.pipeline import RefinerPipeline
 from refiner.pipeline.data.row import DictRow, Row
@@ -125,20 +123,6 @@ def test_downstream_batch_waits_after_upstream_drop() -> None:
     assert seen_b2 == [2]
 
 
-def test_batch_map_must_preserve_source_row_identity() -> None:
-    shard = _shard("a", 0, 1)
-    rows = {shard.id: [DictRow({"x": 1}), DictRow({"x": 2})]}
-    pipeline = RefinerPipeline(source=_LocalFakeReader([shard], rows)).batch_map(
-        lambda batch: [
-            DictRow({"x": row["x"]}, shard_id=row.shard_id) for row in batch
-        ],
-        batch_size=2,
-    )
-
-    with pytest.raises(ValueError, match="missing source_row_id"):
-        list(pipeline.iter_rows())
-
-
 def test_flat_map_can_expand_rows() -> None:
     s = _shard("a", 0, 1)
     rows = {s.id: [DictRow({"x": 1}), DictRow({"x": 2})]}
@@ -155,16 +139,12 @@ def test_flat_map_shard_delta_uses_emitted_row_shards() -> None:
     deltas: list[dict[str, int]] = []
     out = list(
         execute_row_steps(
-            [DictRow({"x": 1}, shard_id="s1", source_row_id=0)],
+            [DictRow({"x": 1}, shard_id="s1")],
             [
                 FnFlatMapStep(
                     fn=lambda row: [
                         row.update(y=10),
-                        DictRow(
-                            {"x": 2, "y": 20},
-                            shard_id="s2",
-                            source_row_id=0,
-                        ),
+                        DictRow({"x": 2, "y": 20}, shard_id="s2"),
                     ],
                     index=1,
                 )

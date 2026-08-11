@@ -16,8 +16,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
-from refiner.pipeline.data.block import Block, source_row_id_column
-from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS
+from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.lance_schema import (
@@ -693,7 +693,9 @@ class LanceDatasetSink(BaseSink):
             if isinstance(block, Tabular)
             else block[0].tabular_type.from_rows(block)
         )
-        row_addresses = source_row_id_column(tabular)
+        if SOURCE_ROW_ID_COLUMN not in tabular.table.column_names:
+            raise ValueError("sink input is missing source row identities")
+        row_addresses = tabular.table.column(SOURCE_ROW_ID_COLUMN).combine_chunks()
         table = block_to_table(tabular)
         if table.num_rows == 0:
             return

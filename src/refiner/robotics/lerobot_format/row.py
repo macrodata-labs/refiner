@@ -173,14 +173,6 @@ class LeRobotRow(Row, RoboticsRow):
     def source_row_id(self) -> int | None:
         return self._row.source_row_id
 
-    def with_source_row_id(self, source_row_id: int) -> "LeRobotRow":
-        return LeRobotRow(
-            self._row.with_source_row_id(source_row_id),
-            metadata=self.metadata,
-            frames=self.frames,
-            root=self.root,
-        )
-
     @property
     def episode_index(self) -> int:
         return int(self._row["episode_index"])

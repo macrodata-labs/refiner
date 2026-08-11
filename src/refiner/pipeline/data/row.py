@@ -52,11 +52,6 @@ class Row(Mapping[str, Any]):
             raise ValueError("row is missing shard_id")
         return self.shard_id
 
-    def require_source_row_id(self) -> int:
-        if self.source_row_id is None:
-            raise ValueError("row is missing source_row_id")
-        return self.source_row_id
-
     def log_throughput(
         self,
         label: str,
@@ -143,25 +138,6 @@ class Row(Mapping[str, Any]):
 
     def with_shard_id(self, shard_id: str) -> "Row":
         return self.update({SHARD_ID_COLUMN: shard_id})
-
-    def with_source_row_id(self, source_row_id: int) -> "Row":
-        if source_row_id < 0:
-            raise ValueError("source_row_id must be non-negative")
-        if isinstance(self, _OverlayRow):
-            return _OverlayRow(
-                base=self.base,
-                patch=self.patch,
-                deleted=self.deleted,
-                shard_id=self.shard_id,
-                source_row_id=source_row_id,
-            )
-        return _OverlayRow(
-            base=self,
-            patch={},
-            deleted=frozenset(),
-            shard_id=self.shard_id,
-            source_row_id=source_row_id,
-        )
 
     def drop(self, *keys: str) -> "Row":
         """Return a new Row with the given keys hidden (immutable).

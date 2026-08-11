@@ -9,24 +9,11 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import (
     INTERNAL_ROW_COLUMNS,
     SHARD_ID_COLUMN,
-    SOURCE_ROW_ID_COLUMN,
 )
 from refiner.pipeline.data.tabular import Tabular
 
 Block = list[Row] | Tabular
 StreamItem = Row | Block
-
-
-def source_row_id_column(block: Block) -> pa.Array:
-    """Return the internal source-row-ID column aligned with a block."""
-    if isinstance(block, Tabular):
-        if SOURCE_ROW_ID_COLUMN not in block.table.column_names:
-            raise ValueError("sink input is missing source row identities")
-        return block.table.column(SOURCE_ROW_ID_COLUMN).combine_chunks()
-    values = [row.source_row_id for row in block]
-    if any(value is None for value in values):
-        raise ValueError("sink input is missing source row identities")
-    return pa.array(values, type=pa.uint64())
 
 
 def strip_internal_columns(table: pa.Table) -> pa.Table:
@@ -157,7 +144,6 @@ def _split_tabular_by_shard_sorted(
 __all__ = [
     "Block",
     "StreamItem",
-    "source_row_id_column",
     "split_block_by_shard",
     "strip_internal_columns",
 ]

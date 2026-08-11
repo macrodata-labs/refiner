@@ -90,12 +90,10 @@ def _with_source_lineage(
     first_source_row_id: int,
 ) -> SourceUnit:
     if isinstance(unit, Row):
-        row = unit.update(**{SHARD_ID_COLUMN: shard_id})
-        return (
-            row.with_source_row_id(first_source_row_id)
-            if row.source_row_id is None
-            else row
-        )
+        identity: dict[str, str | int] = {SHARD_ID_COLUMN: shard_id}
+        if unit.source_row_id is None:
+            identity[SOURCE_ROW_ID_COLUMN] = first_source_row_id
+        return unit.update(identity)
 
     if isinstance(unit, Tabular):
         table = unit.table

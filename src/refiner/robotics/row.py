@@ -159,8 +159,6 @@ class RoboticsRow(Protocol):
         **kwargs: Any,
     ) -> RoboticsRowT: ...
 
-    def with_source_row_id(self: RoboticsRowT, source_row_id: int) -> RoboticsRowT: ...
-
 
 class _RoboticsRowView(Row, RoboticsRow):
     def __init__(
@@ -177,9 +175,6 @@ class _RoboticsRowView(Row, RoboticsRow):
     @property
     def source_row_id(self) -> int | None:
         return self._row.source_row_id
-
-    def with_source_row_id(self, source_row_id: int) -> "_RoboticsRowView":
-        return self._replace(self._row.with_source_row_id(source_row_id))
 
     def __iter__(self) -> Iterator[str]:
         hidden = set(self._source_frame_keys())

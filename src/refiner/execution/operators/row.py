@@ -24,27 +24,6 @@ from refiner.worker.metrics.api import register_gauge
 AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
 
 
-def _require_execution_identity(
-    row: Row,
-    *,
-    require_shard_id: bool,
-    require_source_row_id: bool,
-) -> Row:
-    if require_shard_id:
-        row.require_shard_id()
-    if require_source_row_id:
-        row.require_source_row_id()
-    return row
-
-
-def _require_input_identity(source: Row, result: Row) -> Row:
-    return _require_execution_identity(
-        result,
-        require_shard_id=source.shard_id is not None,
-        require_source_row_id=source.source_row_id is not None,
-    )
-
-
 def execute_row_steps(
     rows: Iterable[Row],
     steps: Sequence[RefinerStep],
@@ -88,9 +67,9 @@ def execute_row_steps(
                 result = await result
             result = cast(MapResult, result)
             if isinstance(result, Row):
-                return _require_input_identity(row, result)
+                return result
             if isinstance(result, dict):
-                return _require_input_identity(row, row.update(result))
+                return row.update(result)
             raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
 
     def _run_step(i: int, *, flush_all: bool) -> None:
@@ -105,9 +84,9 @@ def execute_row_steps(
                     row.log_throughput("rows_processed", 1, unit="rows")
                     result = step.apply_row(row)
                     if isinstance(result, Row):
-                        out.append(_require_input_identity(row, result))
+                        out.append(result)
                     elif isinstance(result, dict):
-                        out.append(_require_input_identity(row, row.update(result)))
+                        out.append(row.update(result))
                     else:
                         raise TypeError(
                             f"Unsupported map() result type: {type(result)!r}"
@@ -151,9 +130,9 @@ def execute_row_steps(
                         emitted_by_shard: dict[str, int] = {}
                         for item in step.apply_row_many(row):
                             if isinstance(item, Row):
-                                emitted = _require_input_identity(row, item)
+                                emitted = item
                             elif isinstance(item, dict):
-                                emitted = _require_input_identity(row, row.update(item))
+                                emitted = row.update(item)
                             else:
                                 raise TypeError(
                                     f"Unsupported flat_map result type: {type(item)!r}"
@@ -185,16 +164,7 @@ def execute_row_steps(
                     return
                 with ShardDeltaTracker(on_shard_delta) as delta:
                     delta.remove_rows(batch_in)
-                    require_shard_id = any(row.shard_id is not None for row in batch_in)
-                    require_source_row_id = any(
-                        row.source_row_id is not None for row in batch_in
-                    )
                     for item in step.apply_batch(batch_in):
-                        item = _require_execution_identity(
-                            item,
-                            require_shard_id=require_shard_id,
-                            require_source_row_id=require_source_row_id,
-                        )
                         item.log_throughput("rows_out", 1, unit="rows")
                         if item.shard_id is not None:
                             delta.add(item.shard_id, 1)
