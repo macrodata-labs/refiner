@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from io import BytesIO
 from collections.abc import Iterator
 from pathlib import Path
 import tempfile
@@ -45,21 +44,23 @@ def _dataset_root(extracted_dir: Path) -> Path:
 
 
 def _contact_png_bytes(semantic_path: Path) -> bytes:
-    from PIL import Image, ImageChops, ImageFilter
+    import cv2
+    import numpy as np
 
-    with Image.open(semantic_path) as semantic:
-        semantic = semantic.convert("L")
-        hand = semantic.point([255 if value in (1, 2) else 0 for value in range(256)])
-        first_order_object = semantic.point(
-            [255 if value in (3, 4, 5) else 0 for value in range(256)]
-        )
-        for _ in range(semantic.width // 456):
-            hand = hand.filter(ImageFilter.MaxFilter(5))
-            first_order_object = first_order_object.filter(ImageFilter.MaxFilter(5))
-        contact = ImageChops.multiply(hand, first_order_object).point([0] + [1] * 255)
-        output = BytesIO()
-        contact.save(output, format="PNG")
-        return output.getvalue()
+    semantic = cv2.imread(str(semantic_path), cv2.IMREAD_UNCHANGED)
+    if semantic is None or semantic.ndim != 2:
+        raise ValueError(f"Invalid EgoHOS semantic mask: {semantic_path}")
+    hand = np.isin(semantic, (1, 2)).astype(np.uint8)
+    first_order_object = np.isin(semantic, (3, 4, 5)).astype(np.uint8)
+    kernel = np.ones((5, 5), dtype=np.uint8)
+    iterations = semantic.shape[1] // 456
+    hand = cv2.dilate(hand, kernel, iterations=iterations)
+    first_order_object = cv2.dilate(first_order_object, kernel, iterations=iterations)
+    contact = ((hand + first_order_object) == 2).astype(np.uint8)
+    encoded, png = cv2.imencode(".png", contact)
+    if not encoded:
+        raise ValueError(f"Could not encode EgoHOS contact mask: {semantic_path}")
+    return png.tobytes()
 
 
 def iter_egohos_rows(dataset_root: Path) -> Iterator[dict[str, object]]:
@@ -164,7 +165,7 @@ if __name__ == "__main__":
         num_workers=1,
         cpus_per_worker=2,
         mem_mb_per_worker=8192,
-        dependencies=["pillow>=10,<13"],
+        dependencies=["opencv-python-headless>=4.10,<5"],
         secrets=mdr.Secrets.env(
             name="default",
             keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
