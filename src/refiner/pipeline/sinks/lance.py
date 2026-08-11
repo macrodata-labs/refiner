@@ -696,6 +696,10 @@ class LanceDatasetSink(BaseSink):
         if SOURCE_ROW_ID_COLUMN not in tabular.table.column_names:
             raise ValueError("sink input is missing source row identities")
         row_addresses = tabular.table.column(SOURCE_ROW_ID_COLUMN).combine_chunks()
+        if row_addresses.null_count:
+            raise ValueError("sink input source row identities cannot contain nulls")
+        if row_addresses.type != pa.uint64():
+            raise ValueError("sink input source row identities must be uint64")
         table = block_to_table(tabular)
         if table.num_rows == 0:
             return

@@ -494,6 +494,43 @@ def test_lance_add_columns_rejects_existing_column_without_inferred_schema(
         sink.set_input_schema(None)
 
 
+@pytest.mark.parametrize(
+    ("source_row_ids", "error"),
+    [
+        (pa.array([0], type=pa.int64()), "must be uint64"),
+        (pa.array([None], type=pa.uint64()), "cannot contain nulls"),
+    ],
+)
+def test_lance_add_columns_validates_source_row_id_column(
+    tmp_path,
+    source_row_ids: pa.Array,
+    error: str,
+) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "invalid-source-row-id.lance"
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+    sink = LanceDatasetSink(
+        dataset_uri,
+        mode="add_columns",
+        columns=["y"],
+        source_uri=str(dataset_uri),
+        source_version=base.version,
+    )
+
+    with pytest.raises(ValueError, match=error):
+        sink.write_shard_block(
+            "shard",
+            Tabular(
+                pa.table(
+                    {
+                        "y": [2],
+                        SOURCE_ROW_ID_COLUMN: source_row_ids,
+                    }
+                )
+            ),
+        )
+
+
 def test_lance_add_columns_preserves_internal_columns_across_replacement_row(
     tmp_path,
 ) -> None:

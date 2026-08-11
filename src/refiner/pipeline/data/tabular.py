@@ -22,16 +22,6 @@ class Tabular:
     unit: pa.Table
 
     def __init__(self, unit: pa.Table) -> None:
-        if SOURCE_ROW_ID_COLUMN in unit.column_names:
-            source_row_ids = unit.column(SOURCE_ROW_ID_COLUMN)
-            if source_row_ids.null_count:
-                raise ValueError(f"{SOURCE_ROW_ID_COLUMN} cannot contain nulls")
-            if source_row_ids.type != pa.uint64():
-                unit = unit.set_column(
-                    unit.column_names.index(SOURCE_ROW_ID_COLUMN),
-                    SOURCE_ROW_ID_COLUMN,
-                    source_row_ids.cast(pa.uint64()),
-                )
         self.unit = unit
         self.tabular_id = next(_NEXT_TABULAR_ID)
         self.names = tuple(str(name) for name in unit.column_names)
