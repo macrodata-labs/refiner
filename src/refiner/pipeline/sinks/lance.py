@@ -592,6 +592,14 @@ class LanceDatasetSink(BaseSink):
             raise ValueError("columns is only supported with mode='add_columns'")
         if mode == "add_columns" and (source_uri is None or source_version is None):
             raise ValueError("add_columns requires a version-pinned Lance source")
+        if (
+            mode == "add_columns"
+            and assets is not None
+            and assets.missing_policy == "drop_row"
+        ):
+            raise ValueError(
+                "add_columns cannot use assets with missing_policy='drop_row'"
+            )
         self.output = DataFolder.resolve(output)
         if self.output.has_explicit_filesystem_configuration:
             raise ValueError(
@@ -733,14 +741,15 @@ class LanceDatasetSink(BaseSink):
         table = block_to_table(tabular)
         if table.num_rows == 0:
             return
-        if self._assets is not None:
-            table = self._assets.rewrite_table(shard_id, table)
         assert self.columns is not None
         missing = sorted(set(self.columns).difference(table.schema.names))
         if missing:
             raise ValueError(
                 "add_columns output is missing columns: " + ", ".join(missing)
             )
+        table = table.select(self.columns)
+        if self._assets is not None:
+            table = self._assets.rewrite_table(shard_id, table)
 
         output_schema = pa.schema(
             [table.schema.field(column) for column in self.columns]
@@ -754,11 +763,12 @@ class LanceDatasetSink(BaseSink):
             [row_addresses, pa.scalar(_LANCE_ROW_ADDRESS_FRAGMENT_SHIFT, pa.uint64())],
         )
         writers = self._add_columns_writers_by_shard.setdefault(shard_id, {})
-        for fragment_id_raw in pc.unique(fragment_ids).to_pylist():
+        unique_fragment_ids = pc.call_function("unique", [fragment_ids])
+        for fragment_id_raw in unique_fragment_ids.to_pylist():
             fragment_id = int(fragment_id_raw)
-            mask = pc.equal(
-                fragment_ids,
-                pa.scalar(fragment_id, type=pa.uint64()),
+            mask = pc.call_function(
+                "equal",
+                [fragment_ids, pa.scalar(fragment_id, type=pa.uint64())],
             )
             writer = writers.get(fragment_id)
             if writer is None:
@@ -779,7 +789,7 @@ class LanceDatasetSink(BaseSink):
             positions = pc.call_function(
                 "bit_wise_and",
                 [
-                    pc.filter(row_addresses, mask),
+                    pc.call_function("filter", [row_addresses, mask]),
                     pa.scalar(_LANCE_ROW_ADDRESS_POSITION_MASK, pa.uint64()),
                 ],
             )
@@ -978,13 +988,10 @@ class LanceDatasetSink(BaseSink):
         return ("write_lance_dataset", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:
-        source_version = self.source_version
-        if self.mode == "overwrite":
-            source_version = self._load_overwrite_version()
         return LanceDatasetCommitReducerSink(
             self.output,
             mode=self.mode,
-            source_version=source_version,
+            source_version=self.source_version,
             assets_subdir=self.assets.subdir if self.assets is not None else None,
         )
 

@@ -42,7 +42,7 @@ def _dataset_root(extracted_dir: Path) -> Path:
 
 
 def _contact_png_bytes(semantic_path: Path) -> bytes:
-    import cv2
+    import cv2  # ty: ignore[unresolved-import]
     import numpy as np
 
     semantic = cv2.imread(str(semantic_path), cv2.IMREAD_UNCHANGED)
@@ -84,7 +84,7 @@ def iter_egohos_rows(dataset_root: Path) -> Iterator[dict[str, object]]:
 
 
 def download_egohos(_task_rank: int, _num_tasks: int) -> Iterator[dict[str, object]]:
-    import boto3
+    import boto3  # ty: ignore[unresolved-import]
 
     # The sink materializes asset paths after this generator is exhausted, so the
     # extracted files must remain available for the lifetime of the worker process.

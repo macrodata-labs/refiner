@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 import random
 import time
+from typing import Any, Callable, cast
 from urllib.parse import urlsplit
 
 import pyarrow as pa
@@ -48,10 +49,10 @@ def _consume_binary_array(array: pa.Array | pa.ChunkedArray) -> tuple[int, int]:
     return images, payload_bytes
 
 
-def _read_blob(client: object, reference: dict[str, object]) -> tuple[int, int]:
+def _read_blob(client: Any, reference: dict[str, object]) -> tuple[int, int]:
     parsed = urlsplit(str(reference["path"]))
-    offset = int(reference["offset"])
-    size = int(reference["size"])
+    offset = cast(int, reference["offset"])
+    size = cast(int, reference["size"])
     response = client.get_object(
         Bucket=parsed.netloc,
         Key=parsed.path.lstrip("/"),
@@ -63,7 +64,7 @@ def _read_blob(client: object, reference: dict[str, object]) -> tuple[int, int]:
     return 1, len(data)
 
 
-def _read_file(client: object, path: str) -> tuple[int, int]:
+def _read_file(client: Any, path: str) -> tuple[int, int]:
     parsed = urlsplit(path)
     response = client.get_object(
         Bucket=parsed.netloc,
@@ -75,7 +76,9 @@ def _read_file(client: object, path: str) -> tuple[int, int]:
     return 1, len(data)
 
 
-def _parallel_payloads(reader: object, values: list[object]) -> tuple[int, int]:
+def _parallel_payloads(
+    reader: Callable[[object], tuple[int, int]], values: list[object]
+) -> tuple[int, int]:
     images = 0
     payload_bytes = 0
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
@@ -87,7 +90,7 @@ def _parallel_payloads(reader: object, values: list[object]) -> tuple[int, int]:
 
 
 def _inline_lance(
-    dataset: object,
+    dataset: Any,
     indices: list[int] | None,
     repetition: int,
 ) -> BenchmarkResult:
@@ -116,8 +119,8 @@ def _inline_lance(
 
 def _external_lance(
     layout: str,
-    dataset: object,
-    client: object,
+    dataset: Any,
+    client: Any,
     indices: list[int] | None,
     repetition: int,
     *,
@@ -149,7 +152,7 @@ def _external_lance(
 
 
 def _parquet(
-    parquet: object,
+    parquet: Any,
     indices: list[int] | None,
     repetition: int,
 ) -> BenchmarkResult:
@@ -188,7 +191,7 @@ def _parquet(
     )
 
 
-def _parquet_key(client: object) -> str:
+def _parquet_key(client: Any) -> str:
     response = client.list_objects_v2(
         Bucket=BUCKET,
         Prefix=f"{ROOT}/ego-hos-images-inside-parquet/",
@@ -202,7 +205,7 @@ def benchmark_reads(
     _task_rank: int,
     _num_tasks: int,
 ):
-    import boto3
+    import boto3  # ty: ignore[unresolved-import]
     from botocore.config import Config
     import lance
     import pyarrow.fs as pafs

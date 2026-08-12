@@ -81,7 +81,7 @@ def append_one_sample(_task_rank: int, _num_tasks: int):
 
 
 def add_zero_column(_task_rank: int, _num_tasks: int):
-    import boto3
+    import boto3  # ty: ignore[unresolved-import]
     from botocore.exceptions import ClientError
     import lance
     from loguru import logger
@@ -169,7 +169,7 @@ def add_zero_column(_task_rank: int, _num_tasks: int):
 def inspect_fragments(_task_rank: int, _num_tasks: int):
     import json
 
-    import boto3
+    import boto3  # ty: ignore[unresolved-import]
     import lance
     from loguru import logger
 

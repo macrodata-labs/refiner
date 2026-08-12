@@ -43,7 +43,7 @@ def _dataset_root(extracted_dir: Path) -> Path:
 
 
 def _contact_png_bytes(semantic_path: Path) -> bytes:
-    import cv2
+    import cv2  # ty: ignore[unresolved-import]
     import numpy as np
 
     semantic = cv2.imread(str(semantic_path), cv2.IMREAD_UNCHANGED)
@@ -89,7 +89,7 @@ def _iter_rows(
 
 
 def _download_egohos(*, inline_images: bool) -> Iterator[dict[str, object]]:
-    import boto3
+    import boto3  # ty: ignore[unresolved-import]
 
     # Path-backed assets are materialized after the generator is exhausted, so
     # extracted files must remain available for the worker process lifetime.

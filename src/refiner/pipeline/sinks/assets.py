@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import posixpath
 import re
+import tempfile
 from typing import IO, Literal, TypeAlias, cast
 from urllib.parse import unquote, urlsplit
 
@@ -404,6 +405,10 @@ class AssetUploadManager:
             missing = isinstance(e, FileNotFoundError) or any(
                 text in message for text in ("404", "entry not found", "no such file")
             )
+            try:
+                self.output.rm(relpath)
+            except FileNotFoundError:
+                pass
             if self.missing_asset_policy == "error" or not missing:
                 raise
             log_throughput("asset_uploads_failed", 1, shard_id, unit="assets")
@@ -624,20 +629,36 @@ class BlobAssetManager:
             return None, True
         try:
             source, source_offset, size = self._source(value, storage)
-            block = self._block(shard_id, column_name, size)
-            output_offset = block.size
             if isinstance(source, bytes):
-                block.stream.write(source)
+                staged = None
             else:
-                remaining = size
-                with source.open("rb") as stream:
-                    stream.seek(source_offset)
-                    while remaining:
-                        chunk = stream.read(min(remaining, 2 * 1024 * 1024))
-                        if not chunk:
-                            raise EOFError("asset ended before its declared size")
+                staged = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+                try:
+                    remaining = size
+                    with source.open("rb") as stream:
+                        stream.seek(source_offset)
+                        while remaining:
+                            chunk = stream.read(min(remaining, 2 * 1024 * 1024))
+                            if not chunk:
+                                raise EOFError("asset ended before its declared size")
+                            staged.write(chunk)
+                            remaining -= len(chunk)
+                    staged.seek(0)
+                except Exception:
+                    staged.close()
+                    raise
+            if staged is None:
+                block = self._block(shard_id, column_name, size)
+                output_offset = block.size
+                block.stream.write(cast(bytes, source))
+            else:
+                try:
+                    block = self._block(shard_id, column_name, size)
+                    output_offset = block.size
+                    while chunk := staged.read(2 * 1024 * 1024):
                         block.stream.write(chunk)
-                        remaining -= len(chunk)
+                finally:
+                    staged.close()
             block.size += size
         except Exception as error:
             message = str(error).lower()

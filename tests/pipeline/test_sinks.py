@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Mapping
 from typing import cast
 
 import numpy as np
@@ -11,13 +12,19 @@ import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
 from refiner import col, read_blob
+from refiner.io import DataFolder
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline import from_items, load_lance
 from refiner.pipeline.sinks import JsonlSink
-from refiner.pipeline.sinks.assets import BlobAssetConfig, FileAssetConfig
+from refiner.pipeline.sinks.assets import (
+    AssetUploadManager,
+    BlobAssetConfig,
+    BlobAssetManager,
+    FileAssetConfig,
+)
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
@@ -41,6 +48,31 @@ class _FinalizedWorkersRuntime:
     ) -> list[FinalizedShardWorker]:
         assert stage_index == 0
         return self._rows
+
+
+class _PartialMissingStream:
+    def __init__(self) -> None:
+        self._reads = 0
+
+    def __enter__(self) -> "_PartialMissingStream":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        pass
+
+    def seek(self, _offset: int) -> None:
+        pass
+
+    def read(self, _size: int) -> bytes:
+        self._reads += 1
+        if self._reads == 1:
+            return b"partial"
+        raise FileNotFoundError("source disappeared")
+
+
+class _PartialMissingSource:
+    def open(self, _mode: str) -> _PartialMissingStream:
+        return _PartialMissingStream()
 
 
 def test_iter_rows_ignores_sink(tmp_path) -> None:
@@ -302,6 +334,69 @@ def test_lance_add_columns_packs_assets_as_generic_blob_references(tmp_path) -> 
     assert [read_blob(reference) for reference in references] == [b"\x01", b"\x02"]
     assert datatype.asset_type(table.schema.field("image")) == "image"
     assert datatype.asset_storage(table.schema.field("image")) == "blob_reference"
+
+
+def test_lance_add_columns_rewrites_only_requested_asset_columns(
+    tmp_path, monkeypatch
+) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = str(tmp_path / "project-assets.lance")
+    image_field = datatype.image_path().with_name("existing_image")
+    source = lance.write_dataset(
+        pa.Table.from_arrays(
+            [pa.array(["missing.png"], type=image_field.type)],
+            schema=pa.schema([image_field]),
+        ),
+        dataset_uri,
+    )
+    table = pa.Table.from_arrays(
+        [
+            pa.array(["missing.png"], type=image_field.type),
+            pa.array([7], type=pa.int64()),
+            pa.array([0], type=pa.uint64()),
+        ],
+        schema=pa.schema(
+            [
+                image_field,
+                pa.field("y", pa.int64()),
+                pa.field(SOURCE_ROW_ID_COLUMN, pa.uint64()),
+            ]
+        ),
+    )
+    sink = LanceDatasetSink(
+        dataset_uri,
+        mode="add_columns",
+        columns=["y"],
+        source_uri=dataset_uri,
+        source_version=source.version,
+        assets=BlobAssetConfig(target_bytes=1024),
+    )
+    sink.set_input_schema(table.schema)
+    assert sink._assets is not None
+    seen_columns: list[str] = []
+
+    def capture_columns(_shard_id: str, value: pa.Table) -> pa.Table:
+        seen_columns.extend(value.column_names)
+        raise RuntimeError("captured projection")
+
+    monkeypatch.setattr(sink._assets, "rewrite_table", capture_columns)
+
+    with pytest.raises(RuntimeError, match="captured projection"):
+        sink.write_shard_block("shard", Tabular(table))
+
+    assert seen_columns == ["y"]
+
+
+def test_lance_add_columns_rejects_drop_row_asset_policy(tmp_path) -> None:
+    with pytest.raises(ValueError, match="missing_policy='drop_row'"):
+        LanceDatasetSink(
+            tmp_path / "drop-assets.lance",
+            mode="add_columns",
+            columns=["image"],
+            source_uri=str(tmp_path / "drop-assets.lance"),
+            source_version=1,
+            assets=FileAssetConfig(missing_policy="drop_row"),
+        )
 
 
 def test_launch_local_adds_lance_columns_without_rewriting_base_files(tmp_path) -> None:
@@ -755,6 +850,22 @@ def test_source_row_identity_is_not_a_user_column() -> None:
 
     assert rows[0].to_dict() == {"x": 2}
     assert rows[0].source_row_id == 0
+
+
+def test_lance_overwrite_build_reducer_does_not_open_dataset(
+    tmp_path, monkeypatch
+) -> None:
+    sink = LanceDatasetSink(tmp_path / "overwrite.lance", mode="overwrite")
+    monkeypatch.setattr(
+        sink,
+        "_load_overwrite_version",
+        lambda: pytest.fail("submission host opened the output dataset"),
+    )
+
+    reducer = sink.build_reducer()
+
+    assert isinstance(reducer, LanceDatasetCommitReducerSink)
+    assert reducer.source_version is None
 
 
 def test_lance_empty_create_and_overwrite_fail(tmp_path) -> None:
@@ -1420,6 +1531,74 @@ def test_parquet_sink_packs_embedded_assets_into_blob_files(tmp_path) -> None:
     ]
     assert datatype.asset_type(out.schema.field("image")) == "image"
     assert datatype.asset_storage(out.schema.field("image")) == "blob_reference"
+
+
+def test_file_asset_copy_removes_partial_output_when_source_disappears(
+    tmp_path, monkeypatch
+) -> None:
+    output = DataFolder.resolve(tmp_path / "file-assets")
+    manager = AssetUploadManager(
+        output,
+        assets_subdir="assets",
+        filename_template="{shard_id}.parquet",
+        max_uploads_in_flight=1,
+        missing_asset_policy="set_null",
+    )
+    relpath = "assets/shard/image/0-source.png"
+    monkeypatch.setattr(
+        BlobAssetManager,
+        "_source",
+        staticmethod(lambda *_args: (_PartialMissingSource(), 0, 14)),
+    )
+
+    assert not manager._copy_asset({}, "blob_reference", relpath, shard_id="shard")
+    assert not (tmp_path / "file-assets" / relpath).exists()
+
+
+def test_blob_asset_copy_stages_source_before_mutating_output(
+    tmp_path, monkeypatch
+) -> None:
+    output = DataFolder.resolve(tmp_path / "blob-assets")
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024, missing_policy="set_null"),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(
+        pa.schema([datatype.blob_reference("image").with_name("image")])
+    )
+    monkeypatch.setattr(
+        BlobAssetManager,
+        "_source",
+        staticmethod(lambda *_args: (_PartialMissingSource(), 0, 14)),
+    )
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        reference, copied = manager._append(
+            {}, shard_id="shard", column_name="image", storage="blob_reference"
+        )
+        assert reference is None
+        assert not copied
+
+        monkeypatch.setattr(
+            BlobAssetManager,
+            "_source",
+            staticmethod(lambda *_args: (b"complete", 0, 8)),
+        )
+        reference, copied = manager._append(
+            {}, shard_id="shard", column_name="image", storage="blob_reference"
+        )
+        manager.close()
+
+    assert copied
+    assert isinstance(reference, dict)
+    assert read_blob(cast(Mapping[str, object], reference)) == b"complete"
 
 
 def test_parquet_sink_can_drop_rows_with_missing_assets(tmp_path) -> None:

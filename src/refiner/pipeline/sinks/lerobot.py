@@ -16,7 +16,7 @@ from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.video import VideoSource
 from refiner.video.writer import VideoStreamWriter, VideoTranscodeConfig
-from refiner.pipeline.data.block import Block
+from refiner.pipeline.data.block import Block, strip_internal_columns
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.sinks.base import BaseSink
@@ -216,7 +216,9 @@ class LeRobotWriterSink(BaseSink):
 
         episode_count = len(state.episode_rows)
         if state.episode_rows:
-            episodes = Tabular.from_rows(state.episode_rows).table
+            episodes = strip_internal_columns(
+                Tabular.from_rows(state.episode_rows).table
+            )
             with self.output.open(
                 f"meta/chunk-{state.chunk_key}/episodes/file-000.parquet",
                 mode="wb",
