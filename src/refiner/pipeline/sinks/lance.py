@@ -908,7 +908,7 @@ class LanceDatasetSink(BaseSink):
                 if merged_schema is None:
                     merged_schema = next_schema
                     lance_schema_payload = next_payload
-                elif lance_schema_payload != next_payload:
+                elif merged_schema != next_schema:
                     raise ValueError(
                         "Cannot write one Lance shard with inconsistent field IDs."
                     )
@@ -1320,6 +1320,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         source_versions: set[int] = set()
         source_fragment_ids: set[int] = set()
         lance_schema_payload: dict[str, object] | None = None
+        lance_schema: Any | None = None
         for rel_path in metadata_paths:
             (
                 next_schema,
@@ -1354,9 +1355,13 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     )
                 source_fragment_ids.add(next_source_fragment_id)
             if next_lance_schema is not None:
+                next_lance_schema_object = _lance_schema_from_payload(
+                    lance, next_lance_schema
+                )
                 if lance_schema_payload is None:
                     lance_schema_payload = next_lance_schema
-                elif lance_schema_payload != next_lance_schema:
+                    lance_schema = next_lance_schema_object
+                elif lance_schema != next_lance_schema_object:
                     raise ValueError(
                         "Cannot commit Lance fragments with inconsistent field IDs."
                     )

@@ -390,6 +390,55 @@ def test_lance_add_columns_handles_more_fragments_than_io_threads(tmp_path) -> N
     }
 
 
+def test_lance_add_columns_accepts_equivalent_nested_metadata_order(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "nested-metadata-fragments.lance"
+    mask_type = pa.struct(
+        [
+            pa.field(
+                "mask",
+                pa.large_binary(),
+                metadata={
+                    b"encoding": b"png",
+                    b"label_space": b"semantic",
+                    b"logical_type": b"mask",
+                    b"dtype": b"uint8",
+                },
+            )
+        ]
+    )
+    base = lance.write_dataset(
+        pa.table({"annotations": pa.array([{"mask": b"a"}], type=mask_type)}),
+        str(dataset_uri),
+    )
+    lance.write_dataset(
+        pa.table({"annotations": pa.array([{"mask": b"b"}], type=mask_type)}),
+        str(dataset_uri),
+        mode="append",
+    )
+    source = lance.dataset(str(dataset_uri))
+
+    (
+        load_lance(
+            dataset_uri,
+            version=source.version,
+            columns=["annotations"],
+        )
+        .with_column("y", 0)
+        .write_lance_dataset(dataset_uri, mode="add_columns", columns=["y"])
+        .launch_local(
+            name="lance-equivalent-nested-metadata",
+            num_workers=1,
+            rundir=str(tmp_path / "nested-metadata-run"),
+        )
+    )
+
+    evolved = lance.dataset(str(dataset_uri))
+    assert evolved.version == source.version + 1
+    assert evolved.to_table(columns=["y"])["y"].to_pylist() == [0, 0]
+    assert base.version < source.version
+
+
 def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "reordered.lance"
