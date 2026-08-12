@@ -14,7 +14,7 @@ from refiner.io import DataFolder
 
 BUCKET = "macrodata-hands-research"
 ROOT = "data-lake/hand-detection"
-OUTPUT_URI = f"s3://{BUCKET}/{ROOT}/ego-hos-read-benchmark-results-20260812"
+OUTPUT_URI = f"s3://{BUCKET}/{ROOT}/ego-hos-read-benchmark-results-20260812-v2"
 ROW_COUNT = 11_743
 RANDOM_COUNT = 256
 CONCURRENCY = 32
@@ -286,7 +286,7 @@ if __name__ == "__main__":
             num_workers=1,
             cpus_per_worker=2,
             mem_mb_per_worker=8192,
-            dependencies=["boto3>=1.34,<2"],
+            dependencies=["boto3>=1.34,<2", "pylance>=4.0.1,<11"],
             secrets=mdr.Secrets.env(
                 name="default",
                 keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
