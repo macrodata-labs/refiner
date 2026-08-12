@@ -14,6 +14,7 @@ from refiner.pipeline.planning import (
     plan_pipeline_stages,
 )
 from refiner.pipeline.resources import GPU
+from refiner.launchers.types import WorkerCount
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -25,7 +26,7 @@ class BaseLauncher(ABC):
         *,
         pipeline: RefinerPipeline,
         name: str,
-        num_workers: int = 1,
+        num_workers: WorkerCount = 1,
         cpus_per_worker: int | None = None,
         gpu: GPU | None = None,
     ):
@@ -33,8 +34,12 @@ class BaseLauncher(ABC):
             raise ValueError("name must be non-empty")
         self.pipeline = pipeline
         self.name = name
-        if num_workers <= 0:
-            raise ValueError("num_workers must be > 0")
+        if num_workers != "auto" and (
+            not isinstance(num_workers, int)
+            or isinstance(num_workers, bool)
+            or num_workers <= 0
+        ):
+            raise ValueError("num_workers must be 'auto' or an integer > 0")
         self.num_workers = num_workers
         if cpus_per_worker is not None and cpus_per_worker <= 0:
             raise ValueError("cpus_per_worker must be > 0")
@@ -56,6 +61,9 @@ class BaseLauncher(ABC):
             default_num_workers=default_num_workers,
         )
 
+    def _auto_num_workers(self, stage: PlannedStage) -> int:
+        return max(1, len(stage.pipeline.list_shards()))
+
     def _compiled_plan(
         self,
         stages: list[PlannedStage] | None = None,
@@ -71,10 +79,18 @@ class BaseLauncher(ABC):
         self,
         stages: list[PlannedStage] | None = None,
     ) -> list[PlannedStage]:
-        return [
-            replace(stage, compute=self._stage_compute_requirements(stage.compute))
-            for stage in (stages or self._planned_stages())
-        ]
+        resolved: list[PlannedStage] = []
+        for stage in stages or self._planned_stages():
+            compute = stage.compute
+            if self.num_workers == "auto" and compute.inherit_launcher_resources:
+                compute = replace(
+                    compute,
+                    num_workers=self._auto_num_workers(stage),
+                )
+            resolved.append(
+                replace(stage, compute=self._stage_compute_requirements(compute))
+            )
+        return resolved
 
     def _stage_compute_requirements(
         self, compute: StageComputeRequirements

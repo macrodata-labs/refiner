@@ -24,6 +24,21 @@ pipeline.launch_cloud(
 )
 ```
 
+Pass `num_workers="auto"` to request one worker per planned shard. Cloud
+resource and workspace limits still apply:
+
+```python
+pipeline.launch_cloud(
+    name="aloha-trim",
+    num_workers="auto",
+)
+```
+
+Cloud auto-sizing plans shards on the submission machine before uploading the
+pipeline. The submitting environment therefore needs enough access to list the
+source shards. Use an explicit integer when source metadata is accessible only
+inside the cloud runtime.
+
 ## What gets submitted
 
 A cloud submission includes:

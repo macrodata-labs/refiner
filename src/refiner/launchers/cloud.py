@@ -36,6 +36,7 @@ from refiner.services.discovery import collect_pipeline_services
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
+from refiner.launchers.types import WorkerCount
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
@@ -117,7 +118,7 @@ class CloudLauncher(BaseLauncher):
         *,
         pipeline: "RefinerPipeline",
         name: str,
-        num_workers: int = 1,
+        num_workers: WorkerCount = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,

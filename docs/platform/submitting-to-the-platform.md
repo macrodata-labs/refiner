@@ -83,7 +83,7 @@ Common launch settings:
 | Setting | Meaning |
 | --- | --- |
 | `name` | Display name in [Jobs](/jobs). |
-| `num_workers` | Number of workers that claim shards. |
+| `num_workers` | Number of workers that claim shards, or `"auto"` for one worker per planned shard. |
 | `cpus_per_worker` | CPU allocation per worker. |
 | `mem_mb_per_worker` | Memory allocation per worker. |
 | `gpu` | GPU type/count per worker. |

@@ -258,6 +258,22 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert captured["events"] == ["upload-urls", "upload", "complete", "submit"]
 
 
+def test_pipeline_launch_cloud_auto_workers_follow_shard_count(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    pipeline = mdr.from_items(list(range(4)), items_per_shard=1)
+
+    pipeline.launch_cloud(name="cloud-auto-workers", num_workers="auto")
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.plan["stages"][0]["requested_num_workers"] == 4
+    assert request.stage_payloads[0].runtime is not None
+    assert request.stage_payloads[0].runtime.num_workers == 4
+
+
 def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
+
+import pytest
 
 from refiner.job_urls import build_job_tracking_url
 from refiner.platform.client import MacrodataClient
-from refiner.pipeline import RefinerPipeline
+from refiner.pipeline import RefinerPipeline, from_items
 from refiner.launchers.base import BaseLauncher
 from refiner.pipeline.planning import (
     PlannedStage,
@@ -27,6 +29,49 @@ class _ResourceHintLauncher(_DummyLauncher):
             cpus_per_worker=1,
             gpu=GPU(count=2, type="h100", cuda_version="12.4"),
         )
+
+
+def test_launcher_auto_workers_follow_shard_count() -> None:
+    pipeline = from_items([{"x": 1}, {"x": 2}, {"x": 3}], items_per_shard=1)
+    launcher = _DummyLauncher(
+        pipeline=pipeline,
+        name="auto-workers",
+        num_workers="auto",
+    )
+
+    stages = launcher._resolved_stages(
+        [
+            PlannedStage(
+                index=0,
+                name="map",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(num_workers=1),
+            ),
+            PlannedStage(
+                index=1,
+                name="reduce",
+                pipeline=pipeline,
+                compute=StageComputeRequirements(
+                    num_workers=1,
+                    inherit_launcher_resources=False,
+                ),
+            ),
+        ]
+    )
+
+    assert [stage.compute.num_workers for stage in stages] == [3, 1]
+
+
+def test_launcher_rejects_invalid_worker_count() -> None:
+    pipeline = from_items([{"x": 1}])
+
+    for value in (0, -1, True, "all"):
+        with pytest.raises(ValueError, match="num_workers"):
+            _DummyLauncher(
+                pipeline=pipeline,
+                name="invalid-workers",
+                num_workers=cast(Any, value),
+            )
 
 
 def test_job_tracking_url_sanitizes_terminal_control_characters() -> None:

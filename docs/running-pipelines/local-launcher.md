@@ -15,6 +15,20 @@ pipeline.launch_local(
 )
 ```
 
+Pass `num_workers="auto"` to use one worker per planned shard, capped by the
+CPU and GPU capacity visible on the local machine:
+
+```python
+pipeline.launch_local(
+    name="debug-local",
+    num_workers="auto",
+)
+```
+
+An explicit integer remains useful when you want a lower concurrency limit.
+One worker may process multiple shards; `"auto"` changes concurrency, not the
+reader's shard layout.
+
 The local launcher is useful for:
 
 - verifying a writer on a small dataset

@@ -21,6 +21,7 @@ from refiner.cli.run.local import (
 from refiner.cli.ui.terminal import stdout_is_interactive
 from refiner.job_urls import build_job_tracking_url
 from refiner.launchers.base import BaseLauncher
+from refiner.launchers.types import WorkerCount
 from refiner.pipeline.planning import PlannedStage
 from refiner.pipeline.resources import GPU
 from refiner.platform.auth import MacrodataCredentialsError, current_api_key
@@ -33,7 +34,7 @@ from refiner.services.discovery import (
 from refiner.worker.context import logger
 from refiner.worker.lifecycle import read_finalized_workers
 from refiner.worker.resources.cpu import available_cpu_ids
-from refiner.worker.resources.gpu import build_gpu_sets
+from refiner.worker.resources.gpu import available_gpu_ids, build_gpu_sets
 from refiner.worker.workdir import resolve_workdir
 
 if TYPE_CHECKING:
@@ -52,7 +53,7 @@ class LocalLauncher(BaseLauncher):
         *,
         pipeline: RefinerPipeline,
         name: str,
-        num_workers: int = 1,
+        num_workers: WorkerCount = 1,
         rundir: str | None = None,
         gpu: GPU | None = None,
     ):
@@ -68,6 +69,18 @@ class LocalLauncher(BaseLauncher):
         )
         self.job_tracking_url: str | None = None
         self._total_stages = 1
+
+    def _auto_num_workers(self, stage: PlannedStage) -> int:
+        capacity = len(available_cpu_ids())
+        gpu = stage.compute.gpu if stage.compute.gpu is not None else self.gpu
+        if gpu is not None:
+            capacity = min(
+                capacity,
+                len(available_gpu_ids()) // gpu.count,
+            )
+        if capacity <= 0:
+            raise ValueError("No local worker capacity is available for this stage")
+        return min(super()._auto_num_workers(stage), capacity)
 
     def _collect_worker_results(
         self,
@@ -381,7 +394,7 @@ class LocalLauncher(BaseLauncher):
         if attach_mode_override() == "detach":
             raise SystemExit("--detach is only supported for cloud launches.")
         available_cpus = len(available_cpu_ids())
-        if self.num_workers > available_cpus:
+        if isinstance(self.num_workers, int) and self.num_workers > available_cpus:
             logger.warning(
                 f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )

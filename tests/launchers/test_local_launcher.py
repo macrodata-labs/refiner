@@ -25,7 +25,7 @@ from refiner.cli.ui.console import (
     stream_stage_logs,
 )
 from refiner.pipeline.data.shard import FilePart, Shard
-from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
+from refiner.pipeline import RefinerPipeline, from_items, read_csv, read_jsonl
 from refiner.pipeline.resources import GPU
 from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
@@ -1515,6 +1515,45 @@ def test_launch_local_runs_planned_stages_sequentially(
     assert stats.output_rows == 3
     assert (rundir / "stage-0").exists()
     assert (rundir / "stage-1").exists()
+
+
+def test_local_auto_workers_are_capped_by_available_cpus(monkeypatch) -> None:
+    pipeline = from_items(list(range(5)), items_per_shard=1)
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-auto-workers",
+        num_workers="auto",
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.local.available_cpu_ids",
+        lambda: [0, 1],
+    )
+
+    stages = launcher._resolved_stages()
+
+    assert stages[0].compute.num_workers == 2
+
+
+def test_local_auto_workers_are_capped_by_launcher_gpu_request(monkeypatch) -> None:
+    pipeline = from_items(list(range(5)), items_per_shard=1)
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="local-auto-gpu-workers",
+        num_workers="auto",
+        gpu=GPU(count=2, type="h100"),
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.local.available_cpu_ids",
+        lambda: list(range(8)),
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.local.available_gpu_ids",
+        lambda: ["0", "1", "2", "3"],
+    )
+
+    stages = launcher._resolved_stages()
+
+    assert stages[0].compute.num_workers == 2
 
 
 def test_launch_local_uses_explicit_rundir(tmp_path) -> None:
