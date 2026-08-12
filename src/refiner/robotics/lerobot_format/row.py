@@ -170,6 +170,10 @@ class LeRobotRow(Row, RoboticsRow):
         return self._row.shard_id
 
     @property
+    def source_row_id(self) -> int | None:
+        return self._row.source_row_id
+
+    @property
     def episode_index(self) -> int:
         return int(self._row["episode_index"])
 

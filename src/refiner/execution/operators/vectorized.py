@@ -12,6 +12,7 @@ from refiner.execution.tracking.shards import (
     counts_delta,
 )
 from refiner.pipeline.data.datatype import apply_dtypes_to_table
+from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS
 from refiner.pipeline.data.tabular import repeat_scalar
 from refiner.pipeline.expressions import eval_expr_arrow
 from refiner.pipeline.steps import (
@@ -47,7 +48,7 @@ def apply_vectorized_op(
         shard_counts = count_table_by_shard(table)
 
     if isinstance(op, SelectStep):
-        return table.select(list(op.columns)), None, row_indices
+        return table.select(op.columns), None, row_indices
 
     if isinstance(op, DropStep):
         return table.drop_columns(list(op.columns)), None, row_indices
@@ -130,6 +131,9 @@ def apply_vectorized_op(
         return next_table, next_shard_counts, next_row_indices
 
     if isinstance(op, FnTableStep):
+        required_source_columns = [
+            name for name in INTERNAL_ROW_COLUMNS if name in table.column_names
+        ]
         if return_row_indices:
             if _ROW_INDEX_COLUMN in table.column_names:
                 raise ValueError(f"{_ROW_INDEX_COLUMN} is an internal column")
@@ -143,6 +147,16 @@ def apply_vectorized_op(
         if not isinstance(next_table, pa.Table):
             raise TypeError(
                 f"map_table() must return pa.Table, got {type(next_table)!r}"
+            )
+        missing_source_columns = [
+            name
+            for name in required_source_columns
+            if name not in next_table.column_names
+        ]
+        if missing_source_columns:
+            raise ValueError(
+                "map_table() must preserve internal columns: "
+                + ", ".join(missing_source_columns)
             )
         next_row_indices = None
         if return_row_indices:

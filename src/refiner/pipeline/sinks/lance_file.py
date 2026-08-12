@@ -1,18 +1,14 @@
 from __future__ import annotations
 
+import posixpath
+from pathlib import PureWindowsPath
+from typing import Any
+
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
-from refiner.pipeline.data.datatype import (
-    DTypeMapping,
-    apply_dtypes_to_table,
-    dtype_to_plan,
-    schema_with_dtypes,
-)
-from refiner.pipeline.data.block import strip_internal_columns
-from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.assets import (
     AssetUploadManager,
     AssetWriteConfig,
@@ -21,29 +17,49 @@ from refiner.pipeline.sinks.assets import (
     FileAssetConfig,
     asset_config_to_plan,
 )
-from refiner.pipeline.sinks.base import BaseSink
+from refiner.pipeline.sinks.lance_utils import block_to_table, validate_lance_uri
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
+from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
 
 
-class ParquetSink(BaseSink):
+def _import_lance_file_writer() -> Any:
+    check_required_dependencies("write_lance", [("lance", "pylance")], dist="lance")
+    from lance.file import LanceFileWriter
+
+    return LanceFileWriter
+
+
+class LanceSink(BaseSink):
     def __init__(
         self,
         output: DataFolderLike,
         *,
-        filename_template: str = "{shard_id}__w{worker_id}.parquet",
-        compression: str | None = None,
+        filename_template: str = "{shard_id}__w{worker_id}.lance",
         assets: AssetWriteConfig | None = None,
-        dtypes: DTypeMapping | None = None,
-    ):
+    ) -> None:
         self.output = DataFolder.resolve(output)
+        if self.output.has_explicit_filesystem_configuration:
+            raise ValueError(
+                "write_lance does not support configured fsspec handles; pass a URI "
+                "whose credentials and endpoint are available to Lance"
+            )
+        validate_lance_uri(self.output.abs_path())
+        normalized_template = posixpath.normpath(filename_template)
+        if (
+            not filename_template
+            or normalized_template != filename_template
+            or normalized_template in {".", ".."}
+            or normalized_template.startswith("../")
+            or normalized_template.startswith("/")
+            or "\\" in filename_template
+            or "://" in filename_template
+            or PureWindowsPath(filename_template).drive
+        ):
+            raise ValueError("filename_template must be a normalized relative path")
         self.filename_template = filename_template
-        self.compression = compression
         self.assets = assets
-        self.dtypes = dtypes
-        self._writers: dict[str, pq.ParquetWriter] = {}
-        self._schema: pa.Schema | None = None
         if isinstance(assets, FileAssetConfig):
             self._assets = AssetUploadManager(
                 self.output,
@@ -60,11 +76,14 @@ class ParquetSink(BaseSink):
             )
         else:
             self._assets = None
+        self._writers: dict[str, Any] = {}
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
-        self._schema = schema_with_dtypes(schema, self.dtypes, preserve_metadata=False)
         if self._assets is not None:
-            self._assets.set_input_schema(self._schema)
+            self._assets.set_input_schema(schema)
+
+    def _declared_refiner_extras(self) -> tuple[str, ...]:
+        return ("lance",)
 
     def _relpath(self, shard_id: str) -> str:
         return self.filename_template.format(
@@ -72,39 +91,24 @@ class ParquetSink(BaseSink):
             worker_id=get_active_worker_token(),
         )
 
-    def _writer(self, shard_id: str, schema: pa.Schema) -> pq.ParquetWriter:
+    def _writer(self, shard_id: str, schema: pa.Schema) -> Any:
         writer = self._writers.get(shard_id)
         if writer is not None:
             return writer
-        sink = self.output.open(self._relpath(shard_id), mode="wb")
-        writer = pq.ParquetWriter(sink, schema, compression=self.compression)
+        lance_file_writer = _import_lance_file_writer()
+        writer = lance_file_writer(
+            self.output.abs_path(self._relpath(shard_id)), schema
+        )
         self._writers[shard_id] = writer
         return writer
 
-    def write_shard_block(self, shard_id: str, block: Block) -> int:
-        if isinstance(block, Tabular):
-            table = apply_dtypes_to_table(
-                block.table,
-                self.dtypes,
-                preserve_metadata=False,
-            )
-        else:
-            if self._assets is not None:
-                self._assets.require_input_schema()
-            table = (
-                Tabular.from_rows(block, schema=self._schema).table
-                if not block
-                else block[0].tabular_type.from_rows(block, schema=self._schema).table
-            )
-        table = strip_internal_columns(table)
-        if self._assets is None:
-            self._writer(shard_id, table.schema).write_table(table)
-            return table.num_rows
-        self._writer(
-            shard_id,
-            (table := self._assets.rewrite_table(shard_id, table)).schema,
-        ).write_table(table)
-        return table.num_rows
+    def write_shard_block(self, shard_id: str, block: Block) -> None:
+        table = block_to_table(block)
+        if table.num_rows == 0:
+            return
+        if self._assets is not None:
+            table = self._assets.rewrite_table(shard_id, table)
+        self._writer(shard_id, table.schema).write_batch(table)
 
     def on_shard_complete(self, shard_id: str) -> None:
         if self._assets is not None:
@@ -115,36 +119,32 @@ class ParquetSink(BaseSink):
             log_throughput("files_written", 1, shard_id=shard_id, unit="files")
 
     def close(self) -> None:
-        try:
-            if self._assets is not None:
-                self._assets.close()
-        finally:
-            for writer in self._writers.values():
+        first_error: Exception | None = None
+        if self._assets is not None:
+            self._assets.close()
+        for writer in self._writers.values():
+            try:
                 writer.close()
-            self._writers.clear()
+            except Exception as err:  # noqa: BLE001
+                if first_error is None:
+                    first_error = err
+        self._writers.clear()
+        if first_error is not None:
+            raise first_error
 
     def describe(self) -> tuple[str, str, dict[str, object]]:
         args: dict[str, object] = {
             "path": self.output.abs_path(),
             "filename_template": self.filename_template,
         }
-        if self.compression is not None:
-            args["compression"] = self.compression
         if self.assets is not None:
             args["assets"] = asset_config_to_plan(self.assets)
-        if self.dtypes:
-            args["dtypes"] = {
-                key: dtype_to_plan(dtype) for key, dtype in self.dtypes.items()
-            }
-        return ("write_parquet", "writer", args)
+        return ("write_lance", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:
         return FileCleanupReducerSink(
             output=self.output,
             filename_template=self.filename_template,
-            reducer_name="write_parquet_reduce",
+            reducer_name="write_lance_reduce",
             assets_subdir=self.assets.subdir if self.assets is not None else None,
         )
-
-
-__all__ = ["ParquetSink"]

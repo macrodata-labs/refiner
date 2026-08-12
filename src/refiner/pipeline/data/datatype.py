@@ -14,6 +14,13 @@ _BYTES_WITH_PATH_TYPE = pa.struct(
         pa.field("path", pa.string()),
     ]
 )
+_BLOB_REFERENCE_TYPE = pa.struct(
+    [
+        pa.field("path", pa.string(), nullable=False),
+        pa.field("offset", pa.uint64(), nullable=False),
+        pa.field("size", pa.uint64(), nullable=False),
+    ]
+)
 _VIDEO_FRAME_ARRAY_TYPE = pa.large_list(
     pa.large_list(
         pa.large_list(
@@ -94,6 +101,10 @@ def asset_bytes(asset_type: str) -> pa.Field:
 
 def asset_bytes_with_path(asset_type: str) -> pa.Field:
     return _asset_field(asset_type, _BYTES_WITH_PATH_TYPE)
+
+
+def blob_reference(asset_type: str = "file") -> pa.Field:
+    return _asset_field(asset_type, _BLOB_REFERENCE_TYPE)
 
 
 def file_path() -> pa.Field:
@@ -236,6 +247,8 @@ def asset_storage(field: pa.Field) -> str | None:
         return "bytes"
     if _is_bytes_with_path_type(field_type):
         return "bytes_with_path"
+    if _is_blob_reference_type(field_type):
+        return "blob_reference"
     if _is_video_frame_array_type(field_type):
         return "frame_array"
     return None
@@ -284,6 +297,10 @@ def _is_bytes_with_path_type(field_type: pa.DataType) -> builtins.bool:
     return (
         pa.types.is_binary(bytes_type) or pa.types.is_large_binary(bytes_type)
     ) and (pa.types.is_string(path_type) or pa.types.is_large_string(path_type))
+
+
+def _is_blob_reference_type(field_type: pa.DataType) -> builtins.bool:
+    return field_type.equals(_BLOB_REFERENCE_TYPE)
 
 
 def _is_video_frame_array_type(field_type: pa.DataType) -> builtins.bool:
@@ -366,6 +383,7 @@ __all__ = [
     "audio_bytes_with_path",
     "audio_path",
     "binary",
+    "blob_reference",
     "bool",
     "date",
     "dtype_to_plan",

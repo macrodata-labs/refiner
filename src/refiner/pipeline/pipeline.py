@@ -30,8 +30,16 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
-from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink, ZarrSink
-from refiner.pipeline.sinks.assets import MissingAssetPolicy
+from refiner.pipeline.sinks import (
+    BaseSink,
+    JsonlSink,
+    LanceDatasetSink,
+    LanceSink,
+    LanceWriteMode,
+    ParquetSink,
+    ZarrSink,
+)
+from refiner.pipeline.sinks.assets import AssetWriteConfig
 from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
@@ -39,6 +47,7 @@ from refiner.pipeline.sources import (
     HFDatasetReader,
     Hdf5Reader,
     JsonReader,
+    LanceSource,
     McapReader,
     ParquetReader,
     TfdsReader,
@@ -53,7 +62,7 @@ from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS
 from refiner.execution.engine import (
     Block,
     Segment,
@@ -361,7 +370,9 @@ class RefinerPipeline:
 
         ``fn`` receives a ``pyarrow.Table`` and must return a ``pyarrow.Table``.
         Adjacent vectorized operations are fused so they can run inside the same
-        Arrow segment.
+        Arrow segment. The returned table must preserve Refiner's internal shard
+        ID and source-row-ID columns so execution identity stays aligned through
+        filters and reordering.
         """
         return self._add_vectorized_op(
             FnTableStep(fn=fn, index=self._next_step_index())
@@ -389,16 +400,16 @@ class RefinerPipeline:
     def select(self, *columns: str) -> "RefinerPipeline":
         """Keep only the named columns.
 
-        The internal shard id column is preserved automatically for execution
-        bookkeeping and is not part of the public column selection.
+        Internal execution-identity columns are preserved automatically and are
+        not part of the public column selection.
         """
         if not columns:
             raise ValueError("select requires at least one column")
-        if SHARD_ID_COLUMN in columns:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(columns).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             SelectStep(
-                columns=tuple(columns) + (SHARD_ID_COLUMN,),
+                columns=tuple(columns) + INTERNAL_ROW_COLUMNS,
                 index=self._next_step_index(),
             )
         )
@@ -411,8 +422,8 @@ class RefinerPipeline:
         """
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
-        if SHARD_ID_COLUMN in assignments:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(assignments).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         exprs = {
             name: value if isinstance(value, Expr) else lit(value)
             for name, value in assignments.items()
@@ -427,8 +438,8 @@ class RefinerPipeline:
         This is a convenience wrapper around ``with_columns`` for a single
         assignment. Non-expression values are treated as literals.
         """
-        if name == SHARD_ID_COLUMN:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if name in INTERNAL_ROW_COLUMNS:
+            raise ValueError(f"{name} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
         return self._add_vectorized_op(
             WithColumnsStep(assignments={name: expr}, index=self._next_step_index())
@@ -438,12 +449,12 @@ class RefinerPipeline:
         """Drop the named columns from each row or Arrow block.
 
         ``drop`` is vectorized and can be fused with adjacent expression-backed
-        operations. The internal shard id column cannot be dropped.
+        operations. Internal execution-identity columns cannot be dropped.
         """
         if not columns:
             raise ValueError("drop requires at least one column")
-        if SHARD_ID_COLUMN in columns:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(columns).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             DropStep(columns=tuple(columns), index=self._next_step_index())
         )
@@ -452,12 +463,14 @@ class RefinerPipeline:
         """Rename columns using ``old_name=new_name`` keyword arguments.
 
         For example, ``pipeline.rename(old="new")`` renames column ``old`` to
-        ``new``. The internal shard id column cannot be renamed.
+        ``new``. Internal execution-identity columns cannot be renamed.
         """
         if not mapping:
             raise ValueError("rename requires at least one mapping")
-        if SHARD_ID_COLUMN in mapping or SHARD_ID_COLUMN in mapping.values():
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(mapping).intersection(INTERNAL_ROW_COLUMNS) | set(
+            mapping.values()
+        ).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             RenameStep(mapping=mapping, index=self._next_step_index())
         )
@@ -470,8 +483,8 @@ class RefinerPipeline:
         """
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
-        if SHARD_ID_COLUMN in dtypes:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(dtypes).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             CastStep(dtypes=dtypes, index=self._next_step_index())
         )
@@ -548,10 +561,7 @@ class RefinerPipeline:
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}__w{worker_id}.jsonl",
-        upload_assets: bool = False,
-        assets_subdir: str = "assets",
-        max_asset_uploads_in_flight: int = 16,
-        missing_asset_policy: MissingAssetPolicy = "error",
+        assets: AssetWriteConfig | None = None,
     ) -> "RefinerPipeline":
         """Attach a JSONL writer sink.
 
@@ -559,22 +569,13 @@ class RefinerPipeline:
             output: Output folder or URL prefix.
             filename_template: Per-worker output filename template. Available
                 fields include ``shard_id`` and ``worker_id``.
-            upload_assets: Whether referenced local assets should be copied
-                beside the JSONL output and rewritten to output paths.
-            assets_subdir: Subdirectory used when ``upload_assets`` is enabled.
-            max_asset_uploads_in_flight: Concurrent asset uploads per worker.
-            missing_asset_policy: How missing assets are handled when uploading:
-                error, keep the original reference, or write null depending on
-                the sink policy.
+            assets: Optional individual-file or packed-blob asset configuration.
         """
         return self.with_sink(
             JsonlSink(
                 output=output,
                 filename_template=filename_template,
-                upload_assets=upload_assets,
-                assets_subdir=assets_subdir,
-                max_asset_uploads_in_flight=max_asset_uploads_in_flight,
-                missing_asset_policy=missing_asset_policy,
+                assets=assets,
             )
         )
 
@@ -584,10 +585,7 @@ class RefinerPipeline:
         *,
         filename_template: str = "{shard_id}__w{worker_id}.parquet",
         compression: str | None = None,
-        upload_assets: bool = False,
-        assets_subdir: str = "assets",
-        max_asset_uploads_in_flight: int = 16,
-        missing_asset_policy: MissingAssetPolicy = "error",
+        assets: AssetWriteConfig | None = None,
         dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
         """Attach a Parquet writer sink.
@@ -597,11 +595,7 @@ class RefinerPipeline:
             filename_template: Per-worker output filename template. Available
                 fields include ``shard_id`` and ``worker_id``.
             compression: Optional Parquet compression codec.
-            upload_assets: Whether referenced local assets should be copied
-                beside the Parquet output and rewritten to output paths.
-            assets_subdir: Subdirectory used when ``upload_assets`` is enabled.
-            max_asset_uploads_in_flight: Concurrent asset uploads per worker.
-            missing_asset_policy: How missing assets are handled when uploading.
+            assets: Optional individual-file or packed-blob asset configuration.
             dtypes: Optional dtype overrides for written columns.
         """
         return self.with_sink(
@@ -609,11 +603,53 @@ class RefinerPipeline:
                 output=output,
                 filename_template=filename_template,
                 compression=compression,
-                upload_assets=upload_assets,
-                assets_subdir=assets_subdir,
-                max_asset_uploads_in_flight=max_asset_uploads_in_flight,
-                missing_asset_policy=missing_asset_policy,
+                assets=assets,
                 dtypes=dtypes,
+            )
+        )
+
+    def write_lance(
+        self,
+        output: DataFolderLike,
+        *,
+        filename_template: str = "{shard_id}__w{worker_id}.lance",
+        assets: AssetWriteConfig | None = None,
+    ) -> "RefinerPipeline":
+        """Attach a writer that creates one standalone Lance file per shard."""
+        return self.with_sink(
+            LanceSink(
+                output=output,
+                filename_template=filename_template,
+                assets=assets,
+            )
+        )
+
+    def write_lance_dataset(
+        self,
+        output: DataFolderLike,
+        *,
+        mode: LanceWriteMode = "create",
+        columns: Sequence[str] | None = None,
+        assets: AssetWriteConfig | None = None,
+    ) -> "RefinerPipeline":
+        """Attach a distributed Lance dataset writer or schema-evolution sink."""
+        source_uri: str | None = None
+        source_version: int | None = None
+        if mode == "add_columns":
+            if not isinstance(self.source, LanceSource):
+                raise ValueError(
+                    "add_columns requires a pipeline created by load_lance"
+                )
+            source_uri = self.source.dataset_uri
+            source_version = self.source.version
+        return self.with_sink(
+            LanceDatasetSink(
+                output=output,
+                mode=mode,
+                columns=columns,
+                source_uri=source_uri,
+                source_version=source_version,
+                assets=assets,
             )
         )
 
@@ -1253,6 +1289,30 @@ def read_parquet(
             split_row_groups=split_row_groups,
             file_path_column=file_path_column,
             dtypes=dtypes,
+        )
+    )
+
+
+def load_lance(
+    input: DataFolderLike,
+    *,
+    version: int | str | None = None,
+    columns: Sequence[str] | None = None,
+    batch_size: int = 65_536,
+    num_shards: int | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline over one immutable version of a Lance dataset.
+
+    ``num_shards`` groups whole, adjacent Lance fragments into the requested
+    number of scheduling shards without splitting individual fragments.
+    """
+    return RefinerPipeline(
+        source=LanceSource(
+            input,
+            version=version,
+            columns=columns,
+            batch_size=batch_size,
+            num_shards=num_shards,
         )
     )
 

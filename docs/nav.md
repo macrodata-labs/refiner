@@ -24,6 +24,7 @@
 - [Files and videos](reading-data/files-and-videos.md)
 - [Hugging Face](reading-data/hugging-face.md)
 - [TensorFlow](reading-data/tensorflow.md)
+- [Lance](reading-data/lance.md)
 - [Custom readers](reading-data/custom-readers.md)
 
 ## Episode data
@@ -65,6 +66,7 @@
 - [LeRobot](writing-data/lerobot.md)
 - [Zarr](writing-data/zarr.md)
 - [Parquet and JSONL](writing-data/parquet-and-jsonl.md)
+- [Lance](writing-data/lance.md)
 - [Media assets and reducers](writing-data/media-assets-and-reducers.md)
 
 ## Examples

@@ -67,6 +67,9 @@ mcap = [
 s3 = [
     "s3fs",
 ]
+lance = [
+    "pylance>=4.0.1,<11",
+]
 gcs = [
     "gcsfs",
 ]
@@ -87,6 +90,7 @@ all = [
     "macrodata-refiner[hdf5]",
     "macrodata-refiner[hf]",
     "macrodata-refiner[mcap]",
+    "macrodata-refiner[lance]",
     "macrodata-refiner[video]",
     "macrodata-refiner[zarr]",
     "macrodata-refiner[text]",

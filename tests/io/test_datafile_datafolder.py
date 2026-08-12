@@ -1,11 +1,28 @@
 from fsspec.implementations.memory import MemoryFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.http import HTTPFileSystem
+import pytest
 from typing import Any, cast
 
+from refiner.io import read_blob
 from refiner.io.datafile import DataFile, _file_cache_key
 from refiner.io.datafolder import DataFolder
 from refiner.io.fileset import DataFileSet
+
+
+def test_read_blob_reads_exact_byte_range(tmp_path) -> None:
+    block = tmp_path / "block.bin"
+    block.write_bytes(b"prefix-payload-suffix")
+
+    assert read_blob({"path": str(block), "offset": 7, "size": 7}) == b"payload"
+
+
+def test_read_blob_rejects_short_range(tmp_path) -> None:
+    block = tmp_path / "block.bin"
+    block.write_bytes(b"short")
+
+    with pytest.raises(EOFError, match="only 2 bytes were available"):
+        read_blob({"path": str(block), "offset": 3, "size": 10})
 
 
 def test_datafile_resolve_with_path_string(tmp_path):
