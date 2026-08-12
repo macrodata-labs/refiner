@@ -978,6 +978,36 @@ def test_lance_add_columns_rejects_concurrent_dataset_version(tmp_path) -> None:
         )
 
 
+def test_lance_append_rejects_incompatible_asset_layout(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "asset-layout.lance"
+    lance.write_dataset(pa.table({"image": [b"existing"]}), str(dataset_uri))
+    table = datatype.apply_dtypes_to_table(
+        pa.table({"image": [b"appended"]}),
+        {"image": datatype.image_bytes()},
+    )
+    sink = LanceDatasetSink(
+        dataset_uri,
+        mode="append",
+        assets=FileAssetConfig(),
+    )
+    sink.set_input_schema(table.schema)
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        with pytest.raises(ValueError, match="incompatible asset layouts: image"):
+            sink.write_shard_block("shard", Tabular(table))
+        sink.close()
+
+    dataset = lance.dataset(str(dataset_uri))
+    assert dataset.to_table().column("image").to_pylist() == [b"existing"]
+
+
 def test_lance_append_rejects_concurrent_dataset_version(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "concurrent-append.lance"

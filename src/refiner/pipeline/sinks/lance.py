@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from refiner.io.datafolder import DataFolder, DataFolderLike
+from refiner.pipeline.data import datatype
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
@@ -76,6 +77,51 @@ def _validate_write_mode(mode: str) -> None:
     valid_modes = get_args(LanceWriteMode)
     if mode not in valid_modes:
         raise ValueError("mode must be one of: " + ", ".join(sorted(valid_modes)))
+
+
+def _asset_value_field(field: pa.Field) -> pa.Field | None:
+    if datatype.is_asset_field(field):
+        return field
+    field_type = field.type
+    if (
+        pa.types.is_list(field_type)
+        or pa.types.is_large_list(field_type)
+        or pa.types.is_fixed_size_list(field_type)
+    ) and datatype.is_asset_field(field_type.value_field):
+        return field_type.value_field
+    return None
+
+
+def _validate_append_asset_layout(
+    output_schema: pa.Schema,
+    destination_schema: pa.Schema,
+) -> None:
+    incompatible: list[str] = []
+    for output_field in output_schema:
+        destination_index = destination_schema.get_field_index(output_field.name)
+        if destination_index < 0:
+            continue
+        destination_field = destination_schema.field(destination_index)
+        output_asset = _asset_value_field(output_field)
+        destination_asset = _asset_value_field(destination_field)
+        if output_asset is None and destination_asset is None:
+            continue
+        asset_types_match = (
+            output_asset is None
+            or destination_asset is None
+            or datatype.asset_type(output_asset)
+            == datatype.asset_type(destination_asset)
+        )
+        if (
+            not output_field.type.equals(destination_field.type)
+            or not asset_types_match
+        ):
+            incompatible.append(output_field.name)
+    if incompatible:
+        raise ValueError(
+            "Cannot append columns with incompatible asset layouts: "
+            + ", ".join(sorted(incompatible))
+        )
 
 
 def _schema_to_base64(schema: pa.Schema) -> str:
@@ -808,7 +854,9 @@ class LanceDatasetSink(BaseSink):
         if self._assets is not None:
             table = self._assets.rewrite_table(shard_id, table)
         if self.mode == "append":
-            table = table.cast(self._load_existing_schema())
+            existing_schema = self._load_existing_schema()
+            _validate_append_asset_layout(table.schema, existing_schema)
+            table = table.cast(existing_schema)
         elif self.mode == "overwrite":
             self._load_overwrite_version()
 
