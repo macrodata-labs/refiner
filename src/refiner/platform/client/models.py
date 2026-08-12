@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 import msgspec
 
@@ -123,7 +123,7 @@ class StageLifecycleResponse(msgspec.Struct, frozen=True):
 
 @dataclass(frozen=True, slots=True)
 class CloudRuntimeConfig:
-    num_workers: int
+    num_workers: int | Literal["auto"]
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpu: GPU | None = None
@@ -265,6 +265,7 @@ class StagePayload:
     stage_index: int
     pipeline_payload: CloudFile
     runtime: CloudRuntimeConfig
+    num_shards: int | None = None
     runtime_services: tuple[RuntimeServiceSpec, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -273,6 +274,8 @@ class StagePayload:
             "pipeline_payload": self.pipeline_payload.to_dict(),
             "runtime": self.runtime.to_dict(),
         }
+        if self.num_shards is not None:
+            payload["num_shards"] = self.num_shards
         if self.runtime_services:
             payload["runtime_services"] = [
                 service.to_dict() for service in self.runtime_services

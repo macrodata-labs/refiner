@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 from fsspec import AbstractFileSystem
 
@@ -676,7 +676,7 @@ class RefinerPipeline:
         self,
         *,
         name: str,
-        num_workers: int = 1,
+        num_workers: int | Literal["auto"] = 1,
         rundir: str | None = None,
         gpu: GPU | None = None,
     ) -> "LaunchStats":
@@ -684,7 +684,8 @@ class RefinerPipeline:
 
         Args:
             name: Human-readable run name.
-            num_workers: Number of local worker processes.
+            num_workers: Number of local worker processes, or ``"auto"`` to
+                launch one worker per stage shard.
             rundir: Optional explicit local run directory. Reuse it to resume a prior local run.
             gpu: Optional GPU devices exposed per worker. `cuda_version` is accepted
                 for API consistency but ignored by local launch.
@@ -704,7 +705,7 @@ class RefinerPipeline:
         self,
         *,
         name: str,
-        num_workers: int = 1,
+        num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
@@ -720,7 +721,8 @@ class RefinerPipeline:
 
         Args:
             name: Human-readable run name.
-            num_workers: Requested logical worker count.
+            num_workers: Requested logical worker count, or ``"auto"`` to
+                launch one worker per stage shard.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpu: Optional structured GPU request.

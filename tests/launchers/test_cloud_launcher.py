@@ -258,6 +258,25 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert captured["events"] == ["upload-urls", "upload", "complete", "submit"]
 
 
+@pytest.mark.parametrize(("items", "expected_shards"), [([1, 2, 3, 4, 5], 3), ([], 0)])
+def test_pipeline_launch_cloud_auto_workers_uses_stage_shard_count(
+    monkeypatch, items, expected_shards
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+
+    mdr.from_items(items, items_per_shard=2).launch_cloud(
+        name="auto workers",
+        num_workers="auto",
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    stage = request.stage_payloads[0]
+    assert request.plan["stages"][0]["requested_num_workers"] == "auto"
+    assert stage.runtime.num_workers == "auto"
+    assert stage.num_shards == expected_shards
+    assert stage.to_dict()["num_shards"] == expected_shards
+
+
 def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(

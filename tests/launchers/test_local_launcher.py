@@ -25,7 +25,7 @@ from refiner.cli.ui.console import (
     stream_stage_logs,
 )
 from refiner.pipeline.data.shard import FilePart, Shard
-from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
+from refiner.pipeline import RefinerPipeline, from_items, read_csv, read_jsonl
 from refiner.pipeline.resources import GPU
 from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
@@ -1515,6 +1515,21 @@ def test_launch_local_runs_planned_stages_sequentially(
     assert stats.output_rows == 3
     assert (rundir / "stage-0").exists()
     assert (rundir / "stage-1").exists()
+
+
+@pytest.mark.parametrize(("items", "expected_workers"), [([1, 2, 3], 2), ([], 0)])
+def test_local_launcher_auto_workers_uses_stage_shard_count(
+    items, expected_workers
+) -> None:
+    launcher = LocalLauncher(
+        pipeline=from_items(items, items_per_shard=2),
+        name="local-auto-workers",
+        num_workers="auto",
+    )
+
+    stages = launcher._resolved_stages()
+
+    assert stages[0].compute.num_workers == expected_workers
 
 
 def test_launch_local_uses_explicit_rundir(tmp_path) -> None:

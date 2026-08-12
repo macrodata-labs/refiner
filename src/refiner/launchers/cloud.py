@@ -5,7 +5,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from refiner.cli.run.modes import (
     CloudAttachContext,
@@ -97,7 +97,8 @@ class CloudLauncher(BaseLauncher):
     Args:
         pipeline: Pipeline to execute.
         name: Human-readable run name.
-        num_workers: Requested logical worker count for cloud execution.
+        num_workers: Requested logical worker count for cloud execution, or
+            ``"auto"`` to launch one worker per stage shard.
         cpus_per_worker: Optional requested CPU cores per worker.
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
         gpu: Optional GPU runtime request for cloud scheduling.
@@ -117,7 +118,7 @@ class CloudLauncher(BaseLauncher):
         *,
         pipeline: "RefinerPipeline",
         name: str,
-        num_workers: int = 1,
+        num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
@@ -313,6 +314,11 @@ class CloudLauncher(BaseLauncher):
                             cpus_per_worker=stage.compute.cpus_per_worker,
                             mem_mb_per_worker=stage.compute.memory_mb_per_worker,
                             gpu=stage.compute.gpu,
+                        ),
+                        num_shards=(
+                            len(stage.pipeline.list_shards())
+                            if stage.compute.num_workers == "auto"
+                            else None
                         ),
                         runtime_services=collect_pipeline_services(stage.pipeline),
                     )
