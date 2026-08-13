@@ -315,11 +315,6 @@ class CloudLauncher(BaseLauncher):
                             mem_mb_per_worker=stage.compute.memory_mb_per_worker,
                             gpu=stage.compute.gpu,
                         ),
-                        num_shards=(
-                            len(stage.pipeline.list_shards())
-                            if stage.compute.num_workers == "auto"
-                            else None
-                        ),
                         runtime_services=collect_pipeline_services(stage.pipeline),
                     )
                     for stage in stages

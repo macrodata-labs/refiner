@@ -258,13 +258,18 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert captured["events"] == ["upload-urls", "upload", "complete", "submit"]
 
 
-@pytest.mark.parametrize(("items", "expected_shards"), [([1, 2, 3, 4, 5], 3), ([], 0)])
-def test_pipeline_launch_cloud_auto_workers_uses_stage_shard_count(
-    monkeypatch, items, expected_shards
+def test_pipeline_launch_cloud_preserves_auto_workers_without_listing_shards(
+    monkeypatch,
 ) -> None:
     captured = _stub_cloud_submit(monkeypatch)
+    pipeline = mdr.from_items([1, 2, 3], items_per_shard=2)
+    monkeypatch.setattr(
+        type(pipeline.source),
+        "list_shards",
+        lambda _: pytest.fail("cloud submission must not list shards locally"),
+    )
 
-    mdr.from_items(items, items_per_shard=2).launch_cloud(
+    pipeline.launch_cloud(
         name="auto workers",
         num_workers="auto",
     )
@@ -273,8 +278,7 @@ def test_pipeline_launch_cloud_auto_workers_uses_stage_shard_count(
     stage = request.stage_payloads[0]
     assert request.plan["stages"][0]["requested_num_workers"] == "auto"
     assert stage.runtime.num_workers == "auto"
-    assert stage.num_shards == expected_shards
-    assert stage.to_dict()["num_shards"] == expected_shards
+    assert "num_shards" not in stage.to_dict()
 
 
 def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:

@@ -265,7 +265,6 @@ class StagePayload:
     stage_index: int
     pipeline_payload: CloudFile
     runtime: CloudRuntimeConfig
-    num_shards: int | None = None
     runtime_services: tuple[RuntimeServiceSpec, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -274,8 +273,6 @@ class StagePayload:
             "pipeline_payload": self.pipeline_payload.to_dict(),
             "runtime": self.runtime.to_dict(),
         }
-        if self.num_shards is not None:
-            payload["num_shards"] = self.num_shards
         if self.runtime_services:
             payload["runtime_services"] = [
                 service.to_dict() for service in self.runtime_services

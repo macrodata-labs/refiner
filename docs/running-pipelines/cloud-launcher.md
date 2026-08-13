@@ -25,10 +25,11 @@ pipeline.launch_cloud(
 ```
 
 Set `num_workers="auto"` to request one worker for every shard in each stage.
-Refiner plans the shard count before submission, and Macrodata Cloud applies its
-normal worker and GPU limits to the resulting count. An empty stage starts no
-worker containers and completes after shard registration. Pass a positive
-integer when you want a fixed worker count instead.
+The cloud registration runtime discovers shards after secrets and environment
+variables are mounted, then Macrodata Cloud applies its normal worker and GPU
+limits to the resulting count. The submitting machine does not need access to
+private inputs. An empty stage starts no worker containers and completes after
+shard registration. Pass a positive integer when you want a fixed worker count.
 
 ## What gets submitted
 

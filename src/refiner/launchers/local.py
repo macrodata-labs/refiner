@@ -308,11 +308,6 @@ class LocalLauncher(BaseLauncher):
             raise RuntimeError(
                 "local launcher must be initialized in launch() before running stages"
             )
-        available_cpus = len(available_cpu_ids())
-        if stage_workers > available_cpus:
-            logger.warning(
-                f"stage {stage.index} requested {stage_workers} workers, but only {available_cpus} CPUs are available on this machine."
-            )
         completed_shard_ids = {
             row.shard_id
             for row in read_finalized_workers(
@@ -336,6 +331,14 @@ class LocalLauncher(BaseLauncher):
                 completed=0,
                 failed=0,
                 output_rows=0,
+            )
+
+        if self.num_workers == "auto" and stage.compute.inherit_launcher_resources:
+            stage_workers = len(shards)
+        available_cpus = len(available_cpu_ids())
+        if stage_workers > available_cpus:
+            logger.warning(
+                f"stage {stage.index} requested {stage_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )
 
         gpu_sets = (

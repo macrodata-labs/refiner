@@ -1555,6 +1555,53 @@ def test_empty_auto_workers_stage_skips_gpu_discovery(
     assert stats.claimed == 0
 
 
+def test_resumed_auto_workers_use_remaining_shard_count(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = from_items([1, 2, 3], items_per_shard=1)
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="resume-auto-workers",
+        num_workers="auto",
+        rundir=str(tmp_path / "run"),
+    )
+    launcher.job_id = "job-1"
+    first_two_shards = pipeline.list_shards()[:2]
+    monkeypatch.setattr(
+        "refiner.launchers.local.read_finalized_workers",
+        lambda **_: [
+            type("Finalized", (), {"shard_id": shard.id})()
+            for shard in first_two_shards
+        ],
+    )
+    captured: dict[str, int] = {}
+    monkeypatch.setattr(
+        launcher,
+        "_assign_shards",
+        lambda shards, *, num_workers: (
+            captured.update(num_workers=num_workers) or [shards]
+        ),
+    )
+    monkeypatch.setattr(launcher, "_spawn_local_worker", lambda **_: object())
+    monkeypatch.setattr(
+        launcher,
+        "_collect_worker_results",
+        lambda **kwargs: LaunchStats(
+            job_id="job-1",
+            workers=kwargs["stage_workers"],
+            claimed=0,
+            completed=0,
+            failed=0,
+            output_rows=0,
+        ),
+    )
+
+    stats = launcher._launch_stage(stage=launcher._resolved_stages()[0])
+
+    assert captured["num_workers"] == 1
+    assert stats.workers == 1
+
+
 def test_launch_local_uses_explicit_rundir(tmp_path) -> None:
     path = tmp_path / "a.jsonl"
     path.write_text('{"x": 1}\n')
