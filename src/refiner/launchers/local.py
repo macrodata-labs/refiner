@@ -313,14 +313,6 @@ class LocalLauncher(BaseLauncher):
             logger.warning(
                 f"stage {stage.index} requested {stage_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )
-        gpu_sets = (
-            build_gpu_sets(
-                num_workers=stage_workers,
-                gpu_count_per_worker=stage.compute.gpu.count,
-            )
-            if stage.compute.gpu is not None
-            else [[] for _ in range(stage_workers)]
-        )
         completed_shard_ids = {
             row.shard_id
             for row in read_finalized_workers(
@@ -345,6 +337,15 @@ class LocalLauncher(BaseLauncher):
                 failed=0,
                 output_rows=0,
             )
+
+        gpu_sets = (
+            build_gpu_sets(
+                num_workers=stage_workers,
+                gpu_count_per_worker=stage.compute.gpu.count,
+            )
+            if stage.compute.gpu is not None
+            else [[] for _ in range(stage_workers)]
+        )
 
         # Persist the stage payload and worker assignments under the rundir.
         stage_run_dir = Path(self.rundir) / f"stage-{stage.index}"

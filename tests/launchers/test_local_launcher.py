@@ -1532,6 +1532,29 @@ def test_local_launcher_auto_workers_uses_stage_shard_count(
     assert stages[0].compute.num_workers == expected_workers
 
 
+def test_empty_auto_workers_stage_skips_gpu_discovery(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launcher = LocalLauncher(
+        pipeline=from_items([]),
+        name="empty-auto-gpu",
+        num_workers="auto",
+        rundir=str(tmp_path / "run"),
+        gpu=GPU(count=1, type="h100"),
+    )
+    launcher.job_id = "job-1"
+    stage = launcher._resolved_stages()[0]
+    monkeypatch.setattr(
+        "refiner.launchers.local.build_gpu_sets",
+        lambda **_: pytest.fail("empty stage must not discover GPUs"),
+    )
+
+    stats = launcher._launch_stage(stage=stage)
+
+    assert stats.workers == 0
+    assert stats.claimed == 0
+
+
 def test_launch_local_uses_explicit_rundir(tmp_path) -> None:
     path = tmp_path / "a.jsonl"
     path.write_text('{"x": 1}\n')
