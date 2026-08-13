@@ -19,6 +19,10 @@ def test_cloud_followup_commands_include_stage_metrics_when_stage_known() -> Non
     )
 
     assert "Metrics: macrodata jobs metrics job-1 2\n" in output.getvalue()
+    assert (
+        "Resource metrics: macrodata jobs resource-metrics job-1 2\n"
+        in output.getvalue()
+    )
 
 
 def test_cloud_followup_commands_skip_metrics_when_stage_unknown() -> None:
@@ -35,3 +39,4 @@ def test_cloud_followup_commands_skip_metrics_when_stage_unknown() -> None:
     )
 
     assert "Metrics:" not in output.getvalue()
+    assert "Resource metrics:" not in output.getvalue()

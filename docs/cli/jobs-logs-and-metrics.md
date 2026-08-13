@@ -274,11 +274,11 @@ requires `--metric`. `--asc` and `--desc` apply to worker rankings.
 macrodata jobs resource-metrics job_123 0
 ```
 
-`resource-metrics` reads runtime resource samples for a stage: CPU, memory,
-network, and accelerator usage where available. Use it to debug resource
-limits, GPU utilization, and worker imbalance.
+`resource-metrics` reads runtime CPU, memory, GPU compute, and GPU memory
+samples for a stage. Use it to debug resource limits, GPU utilization, and
+worker imbalance.
 
-Resource metrics cover CPU, memory, network, and runtime resource samples:
+Resource metrics cover CPU, memory, and GPU runtime samples:
 
 ```bash
 macrodata jobs resource-metrics job_123 0 --range 15m
@@ -293,7 +293,7 @@ Job: job_123  Stage: 0
 Range: 15m
 Latest sample: 2026-05-28 12:45:00 UTC
 CPU: 3100m / 4000m  Memory: 12.4 GiB / 16 GiB
-Network In: 183 MB  Network Out: 42 MB
+GPU Compute: 74.2 / 100  GPU Memory: 12288 / 16384
 Samples: 240
 ```
 
