@@ -2025,8 +2025,10 @@ def test_jobs_resource_metrics_plain_output_accepts_second_timestamps(
                             "cpuQuota": 1.0,
                             "memoryUsage": 256.0,
                             "memoryLimit": 512.0,
-                            "networkInMb": 12.0,
-                            "networkOutMb": 2.0,
+                            "gpuComputeUsage": 75.0,
+                            "gpuComputeLimit": 100.0,
+                            "gpuMemoryUsage": 12_288.0,
+                            "gpuMemoryLimit": 16_384.0,
                         }
                     ]
                 },
@@ -2050,6 +2052,9 @@ def test_jobs_resource_metrics_plain_output_accepts_second_timestamps(
 
     assert rc == 0
     assert "Latest sample: 2023-11-14 22:13:21 UTC" in out.out
+    assert "GPU Compute: 75.0 / 100.0" in out.out
+    assert "GPU Memory: 12288.0 / 16384.0" in out.out
+    assert "Network" not in out.out
 
 
 def test_jobs_list_plain_output_ignores_invalid_timestamps(monkeypatch, capsys) -> None:

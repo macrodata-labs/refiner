@@ -65,5 +65,14 @@ def emit_cloud_followup_commands(
             f"Logs: macrodata jobs logs {context.job_id} --stage {context.stage_index}",
             file=output,
         )
+        print(
+            f"Metrics: macrodata jobs metrics {context.job_id} {context.stage_index}",
+            file=output,
+        )
+        print(
+            "Resource metrics: "
+            f"macrodata jobs resource-metrics {context.job_id} {context.stage_index}",
+            file=output,
+        )
     print(f"Workers: macrodata jobs workers {context.job_id}", file=output)
     print(f"Cancel: macrodata jobs cancel {context.job_id}", file=output)

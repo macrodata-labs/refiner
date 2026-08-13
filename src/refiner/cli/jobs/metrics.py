@@ -259,8 +259,8 @@ def _render_resource_metrics(payload: dict[str, Any]) -> int:
         f"  {_label_text('Memory')}: {_value_text(latest.get('memoryUsage'))} / {_value_text(latest.get('memoryLimit'))}"
     )
     print(
-        f"{_label_text('Network In')}: {_value_text(latest.get('networkInMb'))} MB"
-        f"  {_label_text('Network Out')}: {_value_text(latest.get('networkOutMb'))} MB"
+        f"{_label_text('GPU Compute')}: {_value_text(latest.get('gpuComputeUsage'))} / {_value_text(latest.get('gpuComputeLimit'))}"
+        f"  {_label_text('GPU Memory')}: {_value_text(latest.get('gpuMemoryUsage'))} / {_value_text(latest.get('gpuMemoryLimit'))}"
     )
     print(f"{_label_text('Samples')}: {_value_text(len(resources))}")
     return 0

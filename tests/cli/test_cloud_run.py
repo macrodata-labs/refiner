@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import itertools
 import re
 from typing import cast
@@ -59,6 +60,43 @@ def _job_payload(*, stage_index: int, status: str) -> dict[str, object]:
             },
         ],
     }
+
+
+def test_cloud_followup_commands_include_stage_metrics_when_stage_known() -> None:
+    output = io.StringIO()
+
+    cloud_run.emit_cloud_followup_commands(
+        context=cloud_run.CloudAttachContext(
+            job_id="job-1",
+            job_name="cloud pipeline",
+            tracking_url="https://example.test/jobs/job-1",
+            stage_index=2,
+        ),
+        file=output,
+    )
+
+    assert "Metrics: macrodata jobs metrics job-1 2\n" in output.getvalue()
+    assert (
+        "Resource metrics: macrodata jobs resource-metrics job-1 2\n"
+        in output.getvalue()
+    )
+
+
+def test_cloud_followup_commands_skip_metrics_when_stage_unknown() -> None:
+    output = io.StringIO()
+
+    cloud_run.emit_cloud_followup_commands(
+        context=cloud_run.CloudAttachContext(
+            job_id="job-1",
+            job_name="cloud pipeline",
+            tracking_url="https://example.test/jobs/job-1",
+            stage_index=None,
+        ),
+        file=output,
+    )
+
+    assert "Metrics:" not in output.getvalue()
+    assert "Resource metrics:" not in output.getvalue()
 
 
 def test_active_stage_prefers_failed_started_stage_over_later_queued_stage() -> None:
