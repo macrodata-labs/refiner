@@ -105,8 +105,7 @@ class RefinerPipeline:
                 more block boundaries.
             max_in_flight_shards: Optional maximum number of source shards a
                 worker may claim before downstream work and sink finalization
-                complete. Task sources default to one; other sources are
-                unbounded unless configured explicitly.
+                complete. ``None`` leaves shard admission unbounded.
             sink: Optional writer sink attached by a ``write_*`` method.
         """
         if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
@@ -117,11 +116,7 @@ class RefinerPipeline:
         self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
         self._compiled_segments = None
         self.max_vectorized_block_bytes = max_vectorized_block_bytes
-        self.max_in_flight_shards = (
-            1
-            if max_in_flight_shards is None and isinstance(source, TaskSource)
-            else max_in_flight_shards
-        )
+        self.max_in_flight_shards = max_in_flight_shards
         self.sink = sink
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":

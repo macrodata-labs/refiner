@@ -31,15 +31,11 @@ and local modes remain open to all users.
 For input planning details, see [Reader Model](../reading-data/reader-model.md)
 and [Sharding](../reading-data/sharding.md).
 
-## Limit worker shard concurrency
+## Task shard concurrency
 
-Pipelines created with `mdr.task(...)` let each worker run one task shard at a
-time by default. The worker finishes the task's transforms and sink output
-before it claims another task shard. This prevents a few workers from claiming
-many inexpensive task rows before expensive task callbacks begin.
-
-Increase the worker-local limit when a task pipeline benefits from admitting
-multiple shards together:
+Each worker runs one `mdr.task(...)` shard at a time by default. It finishes the
+task's transforms and sink output before claiming another shard. Increase the
+worker-local limit when tasks benefit from being admitted together:
 
 ```python
 import refiner as mdr
@@ -60,6 +56,5 @@ cross-shard batching behavior.
 
 ## Internal Notes
 
-The limit controls worker shard admission rather than reader row batch sizes.
-At each admission boundary, Refiner drains downstream transforms and shard sink
-hooks before the worker requests more source work.
+The limit controls worker shard admission, not reader row batch sizes. Refiner
+drains downstream transforms and sink hooks before requesting another pass.

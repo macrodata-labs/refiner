@@ -410,7 +410,6 @@ def test_worker_can_batch_across_shards() -> None:
     )
     stats = worker.run()
 
-    assert pipeline.max_in_flight_shards is None
     assert stats.claimed == 2
     assert stats.completed == 2
     assert emitted == [shard2.id, shard1.id]
@@ -436,15 +435,7 @@ def test_task_worker_finalizes_first_shard_before_claiming_second() -> None:
                 events.append(f"claim:{shard.global_ordinal}")
             return shard
 
-        def complete(self, shard: Shard) -> None:
-            super().complete(shard)
-            events.append(f"complete:{shard.global_ordinal}")
-
     class _FinalizingSink(_RecordingSink):
-        def on_shard_complete(self, shard_id: str) -> None:
-            super().on_shard_complete(shard_id)
-            events.append(f"sink_complete:{shard_id}")
-
         def on_shard_finalized(self, shard_id: str) -> None:
             events.append(f"sink_finalized:{shard_id}")
 

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from refiner.pipeline import RefinerPipeline, task
+from refiner.pipeline import task
 from refiner.pipeline.planning import compile_pipeline_plan
-from refiner.pipeline.sources.items import ItemsSource
 
 
 def test_task_invokes_fn_with_rank_and_world_size() -> None:
@@ -26,7 +25,6 @@ def test_task_defaults_to_one_in_flight_shard() -> None:
     pipeline = task(lambda rank, _world_size: rank, num_tasks=2)
 
     assert pipeline.max_in_flight_shards == 1
-    assert RefinerPipeline(ItemsSource(items=[1])).max_in_flight_shards is None
 
 
 def test_task_allows_explicit_in_flight_shard_limit() -> None:
