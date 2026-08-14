@@ -182,8 +182,8 @@ class Worker:
 
         def _source_rows(max_claims: int | None = None):
             nonlocal previous, claimed, runtime_services_started, source_exhausted
-            group_claimed = 0
-            while max_claims is None or group_claimed < max_claims:
+            shards_claimed_this_pass = 0
+            while max_claims is None or shards_claimed_this_pass < max_claims:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                 shard = self.runtime_lifecycle.claim(previous=previous)
@@ -196,7 +196,7 @@ class Worker:
                     )
                     break
                 claimed += 1
-                group_claimed += 1
+                shards_claimed_this_pass += 1
                 rows_read = 0
                 with inflight_lock:
                     inflight_by_id[shard.id] = shard
