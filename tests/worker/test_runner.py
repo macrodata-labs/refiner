@@ -7,6 +7,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 
+import refiner.pipeline.pipeline as pipeline_module
 from refiner.pipeline.data.shard import Shard
 from refiner import register_gauge
 from refiner.pipeline import RefinerPipeline, task
@@ -515,14 +516,14 @@ def test_task_worker_keeps_async_callable_open_across_claim_windows(
         max_in_flight=1,
     )
     execute_calls = 0
-    original_execute = pipeline.execute
+    original_execute_segments = pipeline_module.execute_segments
 
-    def recording_execute(*args, **kwargs):
+    def recording_execute_segments(*args, **kwargs):
         nonlocal execute_calls
         execute_calls += 1
-        return original_execute(*args, **kwargs)
+        return original_execute_segments(*args, **kwargs)
 
-    monkeypatch.setattr(pipeline, "execute", recording_execute)
+    monkeypatch.setattr(pipeline_module, "execute_segments", recording_execute_segments)
     runtime_lifecycle = _FakeRuntimeLifecycle(pipeline.list_shards())
     worker = Worker(
         pipeline=pipeline,

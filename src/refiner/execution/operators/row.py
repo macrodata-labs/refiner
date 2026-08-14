@@ -43,7 +43,6 @@ def execute_row_steps(
     steps: Sequence[RefinerStep],
     *,
     on_shard_delta: ShardDeltaFn | None = None,
-    close_async_callables: bool = True,
 ) -> Iterator[Row]:
     """Execute row/batch/flatmap steps using per-step queues.
 
@@ -192,11 +191,6 @@ def execute_row_steps(
         for i in range(len(ordered)):
             _run_step(i, flush_all=flush_all)
 
-    def _cancel_async_windows() -> None:
-        for window in async_windows:
-            if window is not None:
-                window.cancel_pending()
-
     def _drain_output() -> Iterator[Row]:
         outq = queues[-1]
         if not outq:
@@ -212,9 +206,9 @@ def execute_row_steps(
         _pump(flush_all=True)
         yield from _drain_output()
     finally:
-        _cancel_async_windows()
-        if close_async_callables:
-            close_async_steps(ordered)
+        for window in async_windows:
+            if window is not None:
+                window.cancel_pending()
 
 
 __all__ = ["close_async_steps", "execute_row_steps", "ShardDeltaFn"]
