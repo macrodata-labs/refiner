@@ -13,6 +13,7 @@ reader, transforms, and writer stages.
 | [LeRobot](lerobot.md) | Training-ready robotics datasets. |
 | [Zarr](zarr.md) | Array stores and replay buffers. |
 | [Parquet and JSONL](parquet-and-jsonl.md) | Tabular outputs and logs. |
+| [Lance](lance.md) | Lance files, datasets, and distributed column additions. |
 | [Media Assets and Reducers](media-assets-and-reducers.md) | Asset uploads, video handling, and reducer stages. |
 
 ## Writer pattern
@@ -26,4 +27,3 @@ pipeline = (
 ```
 
 The writer does work when the pipeline is launched.
-

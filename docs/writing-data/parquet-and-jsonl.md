@@ -33,10 +33,21 @@ Both writers can upload asset columns:
 ```python
 pipeline.write_parquet(
     "/tmp/output",
-    upload_assets=True,
-    assets_subdir="assets",
+    assets=mdr.FileAssetConfig(),
 )
 ```
 
-See [Media Assets and Reducers](media-assets-and-reducers.md).
+Use `BlobAssetConfig` to pack many assets into large range-addressable block
+files instead of creating one output file per asset:
 
+```python
+pipeline.write_parquet(
+    "/tmp/output",
+    assets=mdr.BlobAssetConfig(target_bytes=1 << 30),
+)
+```
+
+Here `1 << 30` means a 1 GiB target block size. Use `assets=None` (the
+default) to leave the existing asset representation unchanged.
+
+See [Media Assets and Reducers](media-assets-and-reducers.md).
