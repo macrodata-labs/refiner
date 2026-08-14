@@ -30,19 +30,22 @@ def test_task_defaults_to_one_in_flight_shard() -> None:
 
 
 def test_task_allows_explicit_in_flight_shard_limit() -> None:
-    pipeline = task(lambda rank, _world_size: rank, num_tasks=2)
+    pipeline = task(
+        lambda rank, _world_size: rank,
+        num_tasks=2,
+        max_in_flight_shards=2,
+    )
 
-    configured = pipeline.with_max_in_flight_shards(2)
-
-    assert configured.max_in_flight_shards == 2
-    assert pipeline.max_in_flight_shards == 1
+    assert pipeline.max_in_flight_shards == 2
 
 
 def test_in_flight_shard_limit_must_be_positive() -> None:
-    pipeline = task(lambda rank, _world_size: rank, num_tasks=1)
-
     with pytest.raises(ValueError, match="max_in_flight_shards must be > 0"):
-        pipeline.with_max_in_flight_shards(0)
+        task(
+            lambda rank, _world_size: rank,
+            num_tasks=1,
+            max_in_flight_shards=0,
+        )
 
 
 def test_task_wraps_scalar_return_as_result() -> None:

@@ -44,12 +44,11 @@ multiple shards together:
 ```python
 import refiner as mdr
 
-pipeline = mdr.task(run_partition, num_tasks=32).with_max_in_flight_shards(4)
+pipeline = mdr.task(run_partition, num_tasks=32, max_in_flight_shards=4)
 ```
 
 Reader pipelines remain unbounded by default, preserving their existing
-cross-shard batching behavior. Call `with_max_in_flight_shards(...)` to apply an
-explicit limit to any pipeline.
+cross-shard batching behavior.
 
 ## Related pages
 

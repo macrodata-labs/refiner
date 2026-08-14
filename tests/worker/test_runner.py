@@ -473,7 +473,7 @@ def test_explicit_task_shard_limit_allows_configured_claim_window() -> None:
         events.append(f"execute:{rank}")
         return {"rank": rank}
 
-    pipeline = task(run_task, num_tasks=2).with_max_in_flight_shards(2)
+    pipeline = task(run_task, num_tasks=2, max_in_flight_shards=2)
     shards = pipeline.list_shards()
 
     class _OrderedRuntimeLifecycle(_FakeRuntimeLifecycle):

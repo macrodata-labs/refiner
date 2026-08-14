@@ -190,21 +190,6 @@ class RefinerPipeline:
             sink=self.sink,
         )
 
-    def with_max_in_flight_shards(self, max_in_flight_shards: int) -> "RefinerPipeline":
-        """Return a copy with a worker-local source shard concurrency limit.
-
-        The next shard is not claimed until capacity is available after prior
-        shards have drained through transforms and sink finalization. Task
-        pipelines default to one; ordinary readers remain unbounded.
-        """
-        return self.__class__(
-            self.source,
-            self.pipeline_steps,
-            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
-            max_in_flight_shards=max_in_flight_shards,
-            sink=self.sink,
-        )
-
     def with_sink(self, sink: BaseSink | None) -> "RefinerPipeline":
         """Return a copy with the given sink attached or removed.
 
@@ -1508,14 +1493,18 @@ def task(
     fn: Callable[[int, int], Any],
     *,
     num_tasks: int,
+    max_in_flight_shards: int = 1,
 ) -> RefinerPipeline:
     """Create a task-style pipeline with one callback invocation per rank.
 
     ``fn`` receives ``(task_rank, num_tasks)`` and is invoked once for each
     integer rank in ``range(num_tasks)``. This is useful for jobs that perform
-    side effects or generate work without reading an input dataset.
+    side effects or generate work without reading an input dataset. Each worker
+    processes one shard at a time by default; increase ``max_in_flight_shards``
+    to admit multiple task shards together.
     """
     source = TaskSource(num_tasks=num_tasks)
-    return RefinerPipeline(source=source).add_step(
-        TaskStep(fn=fn, num_tasks=num_tasks, index=1)
-    )
+    return RefinerPipeline(
+        source=source,
+        max_in_flight_shards=max_in_flight_shards,
+    ).add_step(TaskStep(fn=fn, num_tasks=num_tasks, index=1))
