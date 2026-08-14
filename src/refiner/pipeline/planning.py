@@ -483,6 +483,7 @@ def plan_pipeline_stages(
             source=TaskSource(num_tasks=1),
             pipeline_steps=(),
             max_vectorized_block_bytes=pipeline.max_vectorized_block_bytes,
+            max_in_flight_shards=pipeline.max_in_flight_shards,
             sink=reducer,
         )
         sink_description = sink.describe()

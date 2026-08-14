@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from refiner.pipeline import task
+import pytest
+
+from refiner.pipeline import RefinerPipeline, task
 from refiner.pipeline.planning import compile_pipeline_plan
+from refiner.pipeline.sources.items import ItemsSource
 
 
 def test_task_invokes_fn_with_rank_and_world_size() -> None:
@@ -17,6 +20,29 @@ def test_task_invokes_fn_with_rank_and_world_size() -> None:
     assert seen == [(0, 4), (1, 4), (2, 4), (3, 4)]
     assert [int(row["rank"]) for row in out] == [0, 1, 2, 3]
     assert all(int(row["world_size"]) == 4 for row in out)
+
+
+def test_task_defaults_to_one_in_flight_shard() -> None:
+    pipeline = task(lambda rank, _world_size: rank, num_tasks=2)
+
+    assert pipeline.max_in_flight_shards == 1
+    assert RefinerPipeline(ItemsSource(items=[1])).max_in_flight_shards is None
+
+
+def test_task_allows_explicit_in_flight_shard_limit() -> None:
+    pipeline = task(lambda rank, _world_size: rank, num_tasks=2)
+
+    configured = pipeline.with_max_in_flight_shards(2)
+
+    assert configured.max_in_flight_shards == 2
+    assert pipeline.max_in_flight_shards == 1
+
+
+def test_in_flight_shard_limit_must_be_positive() -> None:
+    pipeline = task(lambda rank, _world_size: rank, num_tasks=1)
+
+    with pytest.raises(ValueError, match="max_in_flight_shards must be > 0"):
+        pipeline.with_max_in_flight_shards(0)
 
 
 def test_task_wraps_scalar_return_as_result() -> None:

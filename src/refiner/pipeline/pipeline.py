@@ -83,6 +83,7 @@ class RefinerPipeline:
     pipeline_steps: tuple[RefinerStep, ...]
     _compiled_segments: tuple[Segment, ...] | None
     max_vectorized_block_bytes: int | None
+    max_in_flight_shards: int | None
     sink: BaseSink | None
 
     def __init__(
@@ -91,6 +92,7 @@ class RefinerPipeline:
         pipeline_steps: Sequence[RefinerStep] | None = None,
         *,
         max_vectorized_block_bytes: int | None = None,
+        max_in_flight_shards: int | None = None,
         sink: BaseSink | None = None,
     ):
         """Create an immutable pipeline value.
@@ -101,14 +103,25 @@ class RefinerPipeline:
             max_vectorized_block_bytes: Optional target byte cap for vectorized
                 Arrow blocks. Smaller values reduce peak memory at the cost of
                 more block boundaries.
+            max_in_flight_shards: Optional maximum number of source shards a
+                worker may claim before downstream work and sink finalization
+                complete. Task sources default to one; other sources are
+                unbounded unless configured explicitly.
             sink: Optional writer sink attached by a ``write_*`` method.
         """
         if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
             raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
+        if max_in_flight_shards is not None and max_in_flight_shards <= 0:
+            raise ValueError("max_in_flight_shards must be > 0 when provided")
         self.source = source
         self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
         self._compiled_segments = None
         self.max_vectorized_block_bytes = max_vectorized_block_bytes
+        self.max_in_flight_shards = (
+            1
+            if max_in_flight_shards is None and isinstance(source, TaskSource)
+            else max_in_flight_shards
+        )
         self.sink = sink
 
     def add_step(self, step: RefinerStep) -> "RefinerPipeline":
@@ -122,6 +135,7 @@ class RefinerPipeline:
             self.source,
             self.pipeline_steps + (step,),
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            max_in_flight_shards=self.max_in_flight_shards,
             sink=self.sink,
         )
 
@@ -154,6 +168,7 @@ class RefinerPipeline:
                 self.source,
                 self.pipeline_steps[:-1] + (merged,),
                 max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+                max_in_flight_shards=self.max_in_flight_shards,
                 sink=self.sink,
             )
         return self.add_step(VectorizedSegmentStep(ops=(op,)))
@@ -171,6 +186,22 @@ class RefinerPipeline:
             self.source,
             self.pipeline_steps,
             max_vectorized_block_bytes=max_vectorized_block_bytes,
+            max_in_flight_shards=self.max_in_flight_shards,
+            sink=self.sink,
+        )
+
+    def with_max_in_flight_shards(self, max_in_flight_shards: int) -> "RefinerPipeline":
+        """Return a copy with a worker-local source shard concurrency limit.
+
+        The next shard is not claimed until capacity is available after prior
+        shards have drained through transforms and sink finalization. Task
+        pipelines default to one; ordinary readers remain unbounded.
+        """
+        return self.__class__(
+            self.source,
+            self.pipeline_steps,
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            max_in_flight_shards=max_in_flight_shards,
             sink=self.sink,
         )
 
@@ -185,6 +216,7 @@ class RefinerPipeline:
             self.source,
             self.pipeline_steps,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            max_in_flight_shards=self.max_in_flight_shards,
             sink=sink,
         )
 

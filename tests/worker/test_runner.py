@@ -9,7 +9,7 @@ import pytest
 
 from refiner.pipeline.data.shard import Shard
 from refiner import register_gauge
-from refiner.pipeline import RefinerPipeline
+from refiner.pipeline import RefinerPipeline, task
 from refiner.pipeline.expressions import col
 from refiner.execution.engine import iter_rows
 from refiner.pipeline.sinks import BaseSink
@@ -410,9 +410,92 @@ def test_worker_can_batch_across_shards() -> None:
     )
     stats = worker.run()
 
+    assert pipeline.max_in_flight_shards is None
     assert stats.claimed == 2
     assert stats.completed == 2
     assert emitted == [shard2.id, shard1.id]
+
+
+def test_task_worker_finalizes_first_shard_before_claiming_second() -> None:
+    events: list[str] = []
+
+    def run_task(rank: int, _world_size: int) -> dict[str, int]:
+        events.append(f"execute:{rank}")
+        return {"rank": rank}
+
+    pipeline = task(run_task, num_tasks=2).batch_map(
+        lambda rows: rows,
+        batch_size=8,
+    )
+    shards = pipeline.list_shards()
+
+    class _OrderedRuntimeLifecycle(_FakeRuntimeLifecycle):
+        def claim(self, previous: Shard | None = None) -> Shard | None:
+            shard = super().claim(previous)
+            if shard is not None:
+                events.append(f"claim:{shard.global_ordinal}")
+            return shard
+
+        def complete(self, shard: Shard) -> None:
+            super().complete(shard)
+            events.append(f"complete:{shard.global_ordinal}")
+
+    class _FinalizingSink(_RecordingSink):
+        def on_shard_complete(self, shard_id: str) -> None:
+            super().on_shard_complete(shard_id)
+            events.append(f"sink_complete:{shard_id}")
+
+        def on_shard_finalized(self, shard_id: str) -> None:
+            events.append(f"sink_finalized:{shard_id}")
+
+    runtime_lifecycle = _OrderedRuntimeLifecycle(shards)
+    worker = Worker(
+        pipeline=pipeline.with_sink(_FinalizingSink()),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    first_finalized = events.index(f"sink_finalized:{shards[0].id}")
+    second_claimed = events.index("claim:1")
+    assert first_finalized < second_claimed
+    assert events.index("execute:0") < second_claimed
+    assert stats.completed == 2
+
+
+def test_explicit_task_shard_limit_allows_configured_claim_window() -> None:
+    events: list[str] = []
+
+    def run_task(rank: int, _world_size: int) -> dict[str, int]:
+        events.append(f"execute:{rank}")
+        return {"rank": rank}
+
+    pipeline = task(run_task, num_tasks=2).with_max_in_flight_shards(2)
+    shards = pipeline.list_shards()
+
+    class _OrderedRuntimeLifecycle(_FakeRuntimeLifecycle):
+        def claim(self, previous: Shard | None = None) -> Shard | None:
+            shard = super().claim(previous)
+            if shard is not None:
+                events.append(f"claim:{shard.global_ordinal}")
+            return shard
+
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
+        runtime_lifecycle=_OrderedRuntimeLifecycle(shards),
+    )
+
+    stats = worker.run()
+
+    assert events[:2] == ["claim:0", "claim:1"]
+    assert events.index("claim:1") < events.index("execute:0")
+    assert stats.completed == 2
 
 
 def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> None:

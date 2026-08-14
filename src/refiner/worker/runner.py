@@ -96,6 +96,7 @@ class Worker:
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
         runtime_services_started = False
+        source_exhausted = False
 
         def _heartbeat_once() -> None:
             with inflight_lock:
@@ -179,13 +180,15 @@ class Worker:
             )
             heartbeat_thread.start()
 
-        def _source_rows():
-            nonlocal previous, claimed, runtime_services_started
-            while True:
+        def _source_rows(max_claims: int | None = None):
+            nonlocal previous, claimed, runtime_services_started, source_exhausted
+            group_claimed = 0
+            while max_claims is None or group_claimed < max_claims:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                 shard = self.runtime_lifecycle.claim(previous=previous)
                 if shard is None:
+                    source_exhausted = True
                     logger.info(
                         "no more shards worker_id={} claimed={}",
                         self.worker_id,
@@ -193,6 +196,7 @@ class Worker:
                     )
                     break
                 claimed += 1
+                group_claimed += 1
                 rows_read = 0
                 with inflight_lock:
                     inflight_by_id[shard.id] = shard
@@ -237,6 +241,22 @@ class Worker:
                 _maybe_complete_shard(shard.id)
                 previous = shard
 
+        def _execute_source_rows(source_rows) -> None:
+            nonlocal output_rows
+            for block in self.pipeline.execute(
+                source_rows,
+                on_shard_delta=_apply_row_delta,
+            ):
+                if heartbeat_error is not None:
+                    raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
+                with set_active_step_index(sink_step_index):
+                    written, written_output_rows = sink.write_block(block)
+                _apply_row_delta(
+                    {shard_id: -count for shard_id, count in written.items() if count}
+                )
+                if sink.counts_output_rows:
+                    output_rows += written_output_rows
+
         with set_active_run_context(
             job_id=self.job_id,
             stage_index=self.stage_index,
@@ -274,23 +294,14 @@ class Worker:
 
             try:
                 try:
-                    for block in self.pipeline.execute(
-                        _source_rows(),
-                        on_shard_delta=_apply_row_delta,
-                    ):
-                        if heartbeat_error is not None:
-                            raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
-                        with set_active_step_index(sink_step_index):
-                            written, written_output_rows = sink.write_block(block)
-                        _apply_row_delta(
-                            {
-                                shard_id: -count
-                                for shard_id, count in written.items()
-                                if count
-                            }
-                        )
-                        if sink.counts_output_rows:
-                            output_rows += written_output_rows
+                    max_in_flight_shards = self.pipeline.max_in_flight_shards
+                    if max_in_flight_shards is None:
+                        _execute_source_rows(_source_rows())
+                    else:
+                        while not source_exhausted:
+                            _execute_source_rows(
+                                _source_rows(max_claims=max_in_flight_shards)
+                            )
                 except KeyboardInterrupt as e:
                     execution_error = e
                     logger.warning(
