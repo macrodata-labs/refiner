@@ -75,6 +75,7 @@ def execute_segments(
     max_vectorized_block_bytes: int | None = None,
     on_shard_delta: ShardDeltaFn | None = None,
     input_schema: pa.Schema | None = None,
+    close_async_callables: bool = True,
 ) -> Iterator[Block]:
     """Execute segments and yield row or tabular blocks."""
     current: Iterable[Block] = _normalize_blocks(
@@ -104,6 +105,7 @@ def execute_segments(
                 and max_vectorized_block_bytes is None,
                 on_shard_delta=on_shard_delta,
                 output_schema=output_schema,
+                close_async_callables=close_async_callables,
             )
             current_schema = output_schema
     yield from current
@@ -199,11 +201,17 @@ def _execute_row_segment(
     output_tabular: bool,
     on_shard_delta: ShardDeltaFn | None,
     output_schema: pa.Schema | None,
+    close_async_callables: bool,
 ) -> Iterator[Block]:
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
     rows = iter_rows(stream)
-    step_out = execute_row_steps(rows, steps, on_shard_delta=on_shard_delta)
+    step_out = execute_row_steps(
+        rows,
+        steps,
+        on_shard_delta=on_shard_delta,
+        close_async_callables=close_async_callables,
+    )
     if not output_tabular:
         yield from _chunk_output_rows(step_out, output_block_rows)
         return

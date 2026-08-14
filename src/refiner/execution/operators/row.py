@@ -24,11 +24,26 @@ from refiner.worker.metrics.api import register_gauge
 AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
 
 
+def close_async_steps(steps: Sequence[RefinerStep]) -> None:
+    """Close async callables owned by the provided pipeline steps."""
+    close_fns: list[AsyncCloseFn] = []
+    for step in steps:
+        if not isinstance(step, AsyncRowStep):
+            continue
+        fn = getattr(step, "fn", None)
+        close = getattr(fn, "aclose", None)
+        if close is not None:
+            close_fns.append(cast(AsyncCloseFn, close))
+    for close in close_fns:
+        submit(close()).result()
+
+
 def execute_row_steps(
     rows: Iterable[Row],
     steps: Sequence[RefinerStep],
     *,
     on_shard_delta: ShardDeltaFn | None = None,
+    close_async_callables: bool = True,
 ) -> Iterator[Row]:
     """Execute row/batch/flatmap steps using per-step queues.
 
@@ -177,20 +192,10 @@ def execute_row_steps(
         for i in range(len(ordered)):
             _run_step(i, flush_all=flush_all)
 
-    def _close_async_steps() -> None:
+    def _cancel_async_windows() -> None:
         for window in async_windows:
             if window is not None:
                 window.cancel_pending()
-        close_fns: list[AsyncCloseFn] = []
-        for step in ordered:
-            if not isinstance(step, AsyncRowStep):
-                continue
-            fn = getattr(step, "fn", None)
-            close = getattr(fn, "aclose", None)
-            if close is not None:
-                close_fns.append(cast(AsyncCloseFn, close))
-        for close in close_fns:
-            submit(close()).result()
 
     def _drain_output() -> Iterator[Row]:
         outq = queues[-1]
@@ -207,7 +212,9 @@ def execute_row_steps(
         _pump(flush_all=True)
         yield from _drain_output()
     finally:
-        _close_async_steps()
+        _cancel_async_windows()
+        if close_async_callables:
+            close_async_steps(ordered)
 
 
-__all__ = ["execute_row_steps", "ShardDeltaFn"]
+__all__ = ["close_async_steps", "execute_row_steps", "ShardDeltaFn"]

@@ -493,6 +493,7 @@ class RefinerPipeline:
         rows: Iterable[SourceUnit],
         *,
         on_shard_delta: ShardDeltaFn | None = None,
+        close_async_callables: bool = True,
     ) -> Iterable[Block]:
         """Execute source stream through compiled segments.
 
@@ -505,6 +506,8 @@ class RefinerPipeline:
             rows: Source units from ``source.read()`` or a compatible stream.
             on_shard_delta: Optional callback used by workers to track shard
                 progress as rows move through the pipeline.
+            close_async_callables: Whether to close async transform callables
+                when this execution stream ends.
         """
         yield from execute_segments(
             rows,
@@ -512,6 +515,7 @@ class RefinerPipeline:
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             on_shard_delta=on_shard_delta,
             input_schema=self.source.schema,
+            close_async_callables=close_async_callables,
         )
 
     def iter_rows(self) -> Iterable[Row]:

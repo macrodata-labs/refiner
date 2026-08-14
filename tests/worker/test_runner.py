@@ -489,6 +489,57 @@ def test_explicit_task_shard_limit_allows_configured_claim_window() -> None:
     assert stats.completed == 2
 
 
+def test_task_worker_keeps_async_callable_open_across_claim_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _AsyncCallable:
+        def __init__(self) -> None:
+            self.closed = False
+            self.close_calls = 0
+            self.ranks: list[int] = []
+
+        async def __call__(self, row: Row) -> dict[str, int]:
+            if self.closed:
+                raise RuntimeError("async callable reused after close")
+            rank = int(row["task_rank"])
+            self.ranks.append(rank)
+            return {"rank": rank}
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            self.closed = True
+
+    fn = _AsyncCallable()
+    pipeline = task(lambda rank, _world_size: {"rank": rank}, num_tasks=2).map_async(
+        fn,
+        max_in_flight=1,
+    )
+    execute_calls = 0
+    original_execute = pipeline.execute
+
+    def recording_execute(*args, **kwargs):
+        nonlocal execute_calls
+        execute_calls += 1
+        return original_execute(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "execute", recording_execute)
+    runtime_lifecycle = _FakeRuntimeLifecycle(pipeline.list_shards())
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 2
+    assert fn.ranks == [0, 1]
+    assert fn.close_calls == 1
+    assert execute_calls == 2
+
+
 def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> None:
     shard = _shard("p", 0, 1)
     rows_by_shard = {shard.id: [DictRow({"x": 1})]}
