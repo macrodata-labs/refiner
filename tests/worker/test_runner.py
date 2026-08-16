@@ -401,7 +401,7 @@ def test_worker_can_batch_across_shards() -> None:
         .batch_map(lambda rows: list(reversed(rows)), batch_size=2)
         .map(tap)
     )
-    assert pipeline.source.max_in_flight_shards is None
+    assert pipeline.source.claim_shards_sequentially is False
 
     worker = Worker(
         pipeline=pipeline,
@@ -459,32 +459,26 @@ def test_task_worker_finalizes_first_shard_before_claiming_second() -> None:
     assert stats.completed == 2
 
 
-def test_explicit_task_shard_limit_refills_after_each_completed_shard() -> None:
+def test_task_can_claim_shards_without_waiting_for_completion() -> None:
     events: list[str] = []
-    active_shards = 0
-    max_active_shards = 0
 
     def run_task(rank: int, _world_size: int) -> dict[str, int]:
         events.append(f"execute:{rank}")
         return {"rank": rank}
 
-    pipeline = task(run_task, num_tasks=4, max_in_flight_shards=2)
+    pipeline = task(
+        run_task,
+        num_tasks=2,
+        claim_shards_sequentially=False,
+    ).batch_map(lambda rows: rows, batch_size=2)
     shards = pipeline.list_shards()
 
     class _OrderedRuntimeLifecycle(_FakeRuntimeLifecycle):
         def claim(self, previous: Shard | None = None) -> Shard | None:
-            nonlocal active_shards, max_active_shards
             shard = super().claim(previous)
             if shard is not None:
                 events.append(f"claim:{shard.global_ordinal}")
-                active_shards += 1
-                max_active_shards = max(max_active_shards, active_shards)
             return shard
-
-        def complete(self, shard: Shard) -> None:
-            nonlocal active_shards
-            super().complete(shard)
-            active_shards -= 1
 
     class _FinalizingSink(_RecordingSink):
         def on_shard_finalized(self, shard_id: str) -> None:
@@ -501,14 +495,8 @@ def test_explicit_task_shard_limit_refills_after_each_completed_shard() -> None:
 
     stats = worker.run()
 
-    assert events[:2] == ["claim:0", "claim:1"]
-    assert events.index(f"sink_finalized:{shards[0].id}") < events.index("claim:2")
-    assert events.index("claim:2") < events.index("execute:1")
-    assert events.index("claim:2") < events.index(f"sink_finalized:{shards[1].id}")
-    assert events.index(f"sink_finalized:{shards[1].id}") < events.index("claim:3")
-    assert max_active_shards == 2
-    assert active_shards == 0
-    assert stats.completed == 4
+    assert events.index("claim:1") < events.index(f"sink_finalized:{shards[0].id}")
+    assert stats.completed == 2
 
 
 def test_task_worker_keeps_async_callable_open_across_claim_windows() -> None:

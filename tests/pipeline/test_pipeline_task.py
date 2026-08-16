@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from refiner.pipeline import task
 from refiner.pipeline.planning import compile_pipeline_plan
 
@@ -21,29 +19,20 @@ def test_task_invokes_fn_with_rank_and_world_size() -> None:
     assert all(int(row["world_size"]) == 4 for row in out)
 
 
-def test_task_defaults_to_one_in_flight_shard() -> None:
+def test_task_claims_shards_sequentially_by_default() -> None:
     pipeline = task(lambda rank, _world_size: rank, num_tasks=2)
 
-    assert pipeline.source.max_in_flight_shards == 1
+    assert pipeline.source.claim_shards_sequentially is True
 
 
-def test_task_allows_explicit_in_flight_shard_limit() -> None:
+def test_task_allows_unbounded_shard_claiming() -> None:
     pipeline = task(
         lambda rank, _world_size: rank,
         num_tasks=2,
-        max_in_flight_shards=2,
+        claim_shards_sequentially=False,
     )
 
-    assert pipeline.source.max_in_flight_shards == 2
-
-
-def test_in_flight_shard_limit_must_be_positive() -> None:
-    with pytest.raises(ValueError, match="max_in_flight_shards must be > 0"):
-        task(
-            lambda rank, _world_size: rank,
-            num_tasks=1,
-            max_in_flight_shards=0,
-        )
+    assert pipeline.source.claim_shards_sequentially is False
 
 
 def test_task_wraps_scalar_return_as_result() -> None:

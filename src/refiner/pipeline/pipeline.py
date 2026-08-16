@@ -1551,20 +1551,19 @@ def task(
     fn: Callable[[int, int], Any],
     *,
     num_tasks: int,
-    max_in_flight_shards: int = 1,
+    claim_shards_sequentially: bool = True,
 ) -> RefinerPipeline:
     """Create a task-style pipeline with one callback invocation per rank.
 
     ``fn`` receives ``(task_rank, num_tasks)`` and is invoked once for each
     integer rank in ``range(num_tasks)``. This is useful for jobs that perform
-    side effects or generate work without reading an input dataset. Each worker
-    processes one shard at a time by default; increase ``max_in_flight_shards``
-    to keep a rolling queue of claimed task shards while processing them
-    sequentially.
+    side effects or generate work without reading an input dataset. By default,
+    each worker fully processes one shard before claiming another. Set
+    ``claim_shards_sequentially=False`` to preserve unbounded shard claiming.
     """
     source = TaskSource(
         num_tasks=num_tasks,
-        max_in_flight_shards=max_in_flight_shards,
+        claim_shards_sequentially=claim_shards_sequentially,
     )
     return RefinerPipeline(source=source).add_step(
         TaskStep(fn=fn, num_tasks=num_tasks, index=1)

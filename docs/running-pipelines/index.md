@@ -31,17 +31,20 @@ and local modes remain open to all users.
 For input planning details, see [Reader Model](../reading-data/reader-model.md)
 and [Sharding](../reading-data/sharding.md).
 
-## Task shard concurrency
+## Task shard claiming
 
 Each worker processes `mdr.task(...)` shards sequentially and claims one shard
-at a time by default. Increase the worker-local limit to keep a rolling queue of
-claimed task shards. After a shard's transforms and sink output finish, the
-worker claims a replacement before processing the next queued shard:
+at a time by default. The worker does not claim another shard until the current
+shard's transforms and sink output finish. To preserve unbounded shard claiming:
 
 ```python
 import refiner as mdr
 
-pipeline = mdr.task(run_partition, num_tasks=32, max_in_flight_shards=4)
+pipeline = mdr.task(
+    run_partition,
+    num_tasks=32,
+    claim_shards_sequentially=False,
+)
 ```
 
 Reader pipelines remain unbounded by default, preserving their existing

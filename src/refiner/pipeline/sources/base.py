@@ -18,7 +18,7 @@ class BaseSource(ABC):
     """Base class for pipeline sources."""
 
     name: str
-    max_in_flight_shards: int | None = None
+    claim_shards_sequentially = False
 
     @abstractmethod
     def list_shards(self) -> list[Shard]:
