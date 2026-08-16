@@ -53,8 +53,3 @@ cross-shard batching behavior.
 - [Cloud Launcher](cloud-launcher.md)
 - [Resources, GPUs, and Services](resources-gpus-and-services.md)
 - [Observability](observability.md)
-
-## Internal Notes
-
-The limit controls worker shard admission, not reader row batch sizes. Refiner
-drains downstream transforms and sink hooks before requesting another pass.
