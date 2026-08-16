@@ -254,6 +254,8 @@ class Worker:
                 yield _source_rows(max_claims=max_in_flight_shards)
                 if max_in_flight_shards is None or source_exhausted:
                     break
+                if heartbeat_error is not None:
+                    raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                 preclaimed_shard = self.runtime_lifecycle.claim(previous=previous)
                 if preclaimed_shard is None:
                     source_exhausted = True

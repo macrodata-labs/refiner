@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator, Mapping, Sequence
 from collections import defaultdict
 from typing import Any, cast
@@ -539,6 +540,47 @@ def test_task_worker_keeps_async_callable_open_across_claim_windows(
     assert fn.ranks == [0, 1]
     assert fn.close_calls == 1
     assert execute_calls == 2
+
+
+def test_task_worker_does_not_preclaim_after_heartbeat_failure() -> None:
+    heartbeat_should_fail = threading.Event()
+
+    class _HeartbeatFailingRuntimeLifecycle(_FakeRuntimeLifecycle):
+        def heartbeat(self, shards: list[Shard]) -> None:
+            super().heartbeat(shards)
+            if heartbeat_should_fail.is_set():
+                raise RuntimeError("heartbeat unavailable")
+
+    class _FailHeartbeatAfterWriteSink(_RecordingSink):
+        def write_block(self, block) -> tuple[dict[str, int], int]:
+            result = super().write_block(block)
+            heartbeat_should_fail.set()
+            heartbeat_thread = next(
+                thread
+                for thread in threading.enumerate()
+                if thread.name == "refiner-heartbeat-test-worker"
+            )
+            heartbeat_thread.join(timeout=2)
+            assert not heartbeat_thread.is_alive()
+            return result
+
+    pipeline = task(lambda rank, _world_size: {"rank": rank}, num_tasks=2)
+    runtime_lifecycle = _HeartbeatFailingRuntimeLifecycle(pipeline.list_shards())
+    worker = Worker(
+        pipeline=pipeline.with_sink(_FailHeartbeatAfterWriteSink()),
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
+        worker_name="test-worker",
+        heartbeat_interval_seconds=1,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert len(runtime_lifecycle.claim_previous) == 1
+    assert stats.claimed == 1
+    assert stats.completed == 1
 
 
 def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> None:
