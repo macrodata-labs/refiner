@@ -20,6 +20,7 @@ from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
+from refiner.worker.metrics.emitter import UserMetricsEmitter
 from refiner.worker.lifecycle import FinalizedShardWorker, sort_finalized_workers
 
 
@@ -86,7 +87,7 @@ def test_sort_finalized_workers_uses_legacy_order_when_any_ordinal_is_missing() 
     ]
 
 
-class _NoopTelemetryEmitter:
+class _NoopTelemetryEmitter(UserMetricsEmitter):
     def emit_user_counter(self, **kwargs) -> None:
         del kwargs
 
@@ -518,6 +519,7 @@ def test_task_worker_keeps_async_callable_open_across_claim_windows() -> None:
             self.closed = True
 
     fn = _AsyncCallable()
+    metrics = _MetricRecordingTelemetryEmitter()
     pipeline = task(lambda rank, _world_size: {"rank": rank}, num_tasks=2).map_async(
         fn,
         max_in_flight=1,
@@ -529,6 +531,7 @@ def test_task_worker_keeps_async_callable_open_across_claim_windows() -> None:
         stage_index=0,
         worker_id="local",
         runtime_lifecycle=runtime_lifecycle,
+        user_metrics_emitter=metrics,
     )
 
     stats = worker.run()
@@ -536,6 +539,36 @@ def test_task_worker_keeps_async_callable_open_across_claim_windows() -> None:
     assert stats.completed == 2
     assert fn.ranks == [0, 1]
     assert fn.close_calls == 1
+    assert len(metrics.registered_gauges) == 1
+
+
+def test_worker_propagates_async_teardown_failure_after_completion() -> None:
+    class _AsyncCallable:
+        async def __call__(self, row: Row) -> dict[str, int]:
+            return {"rank": int(row["task_rank"])}
+
+        async def aclose(self) -> None:
+            raise RuntimeError("async teardown failed")
+
+    pipeline = task(
+        lambda rank, _world_size: {"rank": rank},
+        num_tasks=1,
+    ).map_async(_AsyncCallable())
+    shards = pipeline.list_shards()
+    runtime_lifecycle = _FakeRuntimeLifecycle(shards)
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    with pytest.raises(RuntimeError, match="async teardown failed"):
+        worker.run()
+
+    assert runtime_lifecycle.completed_ids == [shards[0].id]
+    assert runtime_lifecycle.failed_ids == []
 
 
 def test_task_worker_stops_claiming_after_heartbeat_failure() -> None:

@@ -84,11 +84,16 @@ def test_task_allows_yielding_multiple_rows() -> None:
 
 
 def test_task_compiles_source_and_task_step_plan() -> None:
-    pipeline = task(lambda rank, world_size: {"ok": rank < world_size}, num_tasks=3)
+    pipeline = task(
+        lambda rank, world_size: {"ok": rank < world_size},
+        num_tasks=3,
+        claim_shards_sequentially=False,
+    )
     payload = compile_pipeline_plan(pipeline)
     steps = payload["stages"][0]["steps"]
     assert steps[0]["name"] == "task"
     assert steps[0]["args"]["num_tasks"] == 3
+    assert steps[0]["args"]["claim_shards_sequentially"] is False
     assert steps[1]["name"] == "task_2"
     assert steps[1]["type"] == "flat_map"
     assert "fn" in steps[1]["args"]

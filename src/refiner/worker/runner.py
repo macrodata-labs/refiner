@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from refiner.execution.engine import block_num_rows
+from refiner.execution.operators.row import AsyncStepTeardownError
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
@@ -328,7 +329,10 @@ class Worker:
                         failed_error,
                     )
                     self.user_metrics_emitter.force_flush_logs()
-                    failed += _fail_inflight_shards(failed_error)
+                    failed_inflight = _fail_inflight_shards(failed_error)
+                    failed += failed_inflight
+                    if isinstance(e, AsyncStepTeardownError) and failed_inflight == 0:
+                        raise
                 else:
                     _heartbeat_once()
                     with inflight_lock:

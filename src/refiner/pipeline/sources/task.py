@@ -41,8 +41,11 @@ class TaskSource(BaseSource):
             raise ValueError(f"Invalid task rank {rank} for {self._num_tasks} tasks")
         yield DictRow({"task_rank": rank})
 
-    def describe(self) -> dict[str, int]:
-        return {"num_tasks": self._num_tasks}
+    def describe(self) -> dict[str, Any]:
+        return {
+            "num_tasks": self._num_tasks,
+            "claim_shards_sequentially": self.claim_shards_sequentially,
+        }
 
 
 @dataclass(frozen=True, slots=True)
