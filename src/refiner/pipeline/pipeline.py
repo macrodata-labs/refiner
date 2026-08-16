@@ -1571,7 +1571,8 @@ def task(
     integer rank in ``range(num_tasks)``. This is useful for jobs that perform
     side effects or generate work without reading an input dataset. Each worker
     processes one shard at a time by default; increase ``max_in_flight_shards``
-    to admit multiple task shards together.
+    to keep a rolling queue of claimed task shards while processing them
+    sequentially.
     """
     source = TaskSource(num_tasks=num_tasks)
     return RefinerPipeline(

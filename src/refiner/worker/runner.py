@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -181,72 +182,87 @@ class Worker:
             )
             heartbeat_thread.start()
 
-        def _source_rows(max_claims: int | None = None):
+        def _claim_shard() -> Shard | None:
             nonlocal previous, claimed, runtime_services_started, source_exhausted
-            shards_claimed_this_pass = 0
-            while max_claims is None or shards_claimed_this_pass < max_claims:
-                if heartbeat_error is not None:
-                    raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
-                shard = self.runtime_lifecycle.claim(previous=previous)
+            if heartbeat_error is not None:
+                raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
+            shard = self.runtime_lifecycle.claim(previous=previous)
+            if shard is None:
+                source_exhausted = True
+                logger.info(
+                    "no more shards worker_id={} claimed={}",
+                    self.worker_id,
+                    claimed,
+                )
+                return None
+            previous = shard
+            claimed += 1
+            with inflight_lock:
+                inflight_by_id[shard.id] = shard
+            if runtime_services and not runtime_services_started:
+                asyncio.run(service_manager.start_services(runtime_services))
+                runtime_services_started = True
+            logger.info(
+                "shard claimed shard_id={} global_ordinal={} start_key={} end_key={}",
+                shard.id,
+                shard.global_ordinal,
+                shard.start_key,
+                shard.end_key,
+            )
+            return shard
+
+        def _read_shard(shard: Shard):
+            rows_read = 0
+            logger.info(
+                "shard source started shard_id={} global_ordinal={}",
+                shard.id,
+                shard.global_ordinal,
+            )
+            source_iter = iter(self.pipeline.source.iter_shard_units(shard))
+            while True:
+                with set_active_step_index(0):
+                    try:
+                        unit = next(source_iter)
+                    except StopIteration:
+                        break
+                rows = block_num_rows(unit)
+                if rows > 0:
+                    rows_read += rows
+                    with inflight_lock:
+                        pending_rows_by_shard[shard.id] = (
+                            pending_rows_by_shard.get(shard.id, 0) + rows
+                        )
+                yield unit
+            logger.info(
+                "shard source finished shard_id={} global_ordinal={} rows_read={}",
+                shard.id,
+                shard.global_ordinal,
+                rows_read,
+            )
+            with inflight_lock:
+                source_done_shards.add(shard.id)
+            _maybe_complete_shard(shard.id)
+
+        def _source_rows():
+            while not source_exhausted:
+                shard = _claim_shard()
                 if shard is None:
-                    source_exhausted = True
-                    logger.info(
-                        "no more shards worker_id={} claimed={}",
-                        self.worker_id,
-                        claimed,
-                    )
                     break
-                claimed += 1
-                shards_claimed_this_pass += 1
-                rows_read = 0
-                with inflight_lock:
-                    inflight_by_id[shard.id] = shard
-                if runtime_services and not runtime_services_started:
-                    asyncio.run(service_manager.start_services(runtime_services))
-                    runtime_services_started = True
-                logger.info(
-                    "shard claimed shard_id={} global_ordinal={} start_key={} end_key={}",
-                    shard.id,
-                    shard.global_ordinal,
-                    shard.start_key,
-                    shard.end_key,
-                )
-                logger.info(
-                    "shard source started shard_id={} global_ordinal={}",
-                    shard.id,
-                    shard.global_ordinal,
-                )
-                source_iter = iter(self.pipeline.source.iter_shard_units(shard))
-                while True:
-                    with set_active_step_index(0):
-                        try:
-                            unit = next(source_iter)
-                        except StopIteration:
-                            break
-                    rows = block_num_rows(unit)
-                    if rows > 0:
-                        rows_read += rows
-                        with inflight_lock:
-                            pending_rows_by_shard[shard.id] = (
-                                pending_rows_by_shard.get(shard.id, 0) + rows
-                            )
-                    yield unit
-                logger.info(
-                    "shard source finished shard_id={} global_ordinal={} rows_read={}",
-                    shard.id,
-                    shard.global_ordinal,
-                    rows_read,
-                )
-                with inflight_lock:
-                    source_done_shards.add(shard.id)
-                _maybe_complete_shard(shard.id)
-                previous = shard
+                yield from _read_shard(shard)
 
         def _source_windows():
-            while True:
-                yield _source_rows(max_claims=max_in_flight_shards)
-                if max_in_flight_shards is None or source_exhausted:
-                    break
+            if max_in_flight_shards is None:
+                yield _source_rows()
+                return
+
+            admitted: deque[Shard] = deque()
+            while admitted or not source_exhausted:
+                while len(admitted) < max_in_flight_shards and not source_exhausted:
+                    shard = _claim_shard()
+                    if shard is not None:
+                        admitted.append(shard)
+                if admitted:
+                    yield _read_shard(admitted.popleft())
 
         with set_active_run_context(
             job_id=self.job_id,

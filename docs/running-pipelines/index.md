@@ -33,9 +33,10 @@ and [Sharding](../reading-data/sharding.md).
 
 ## Task shard concurrency
 
-Each worker runs one `mdr.task(...)` shard at a time by default. It finishes the
-task's transforms and sink output before claiming another shard. Increase the
-worker-local limit when tasks benefit from being admitted together:
+Each worker processes `mdr.task(...)` shards sequentially and claims one shard
+at a time by default. Increase the worker-local limit to keep a rolling queue of
+claimed task shards. After a shard's transforms and sink output finish, the
+worker claims a replacement before processing the next queued shard:
 
 ```python
 import refiner as mdr
