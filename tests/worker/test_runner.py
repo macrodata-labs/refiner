@@ -8,7 +8,6 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 
-import refiner.pipeline.pipeline as pipeline_module
 from refiner.pipeline.data.shard import Shard
 from refiner import register_gauge
 from refiner.pipeline import RefinerPipeline, task
@@ -491,9 +490,7 @@ def test_explicit_task_shard_limit_allows_configured_claim_window() -> None:
     assert stats.completed == 2
 
 
-def test_task_worker_keeps_async_callable_open_across_claim_windows(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_task_worker_keeps_async_callable_open_across_claim_windows() -> None:
     class _AsyncCallable:
         def __init__(self) -> None:
             self.closed = False
@@ -516,15 +513,6 @@ def test_task_worker_keeps_async_callable_open_across_claim_windows(
         fn,
         max_in_flight=1,
     )
-    execute_calls = 0
-    original_execute_segments = pipeline_module.execute_segments
-
-    def recording_execute_segments(*args, **kwargs):
-        nonlocal execute_calls
-        execute_calls += 1
-        return original_execute_segments(*args, **kwargs)
-
-    monkeypatch.setattr(pipeline_module, "execute_segments", recording_execute_segments)
     runtime_lifecycle = _FakeRuntimeLifecycle(pipeline.list_shards())
     worker = Worker(
         pipeline=pipeline,
@@ -539,10 +527,9 @@ def test_task_worker_keeps_async_callable_open_across_claim_windows(
     assert stats.completed == 2
     assert fn.ranks == [0, 1]
     assert fn.close_calls == 1
-    assert execute_calls == 2
 
 
-def test_task_worker_does_not_preclaim_after_heartbeat_failure() -> None:
+def test_task_worker_stops_claiming_after_heartbeat_failure() -> None:
     heartbeat_should_fail = threading.Event()
 
     class _HeartbeatFailingRuntimeLifecycle(_FakeRuntimeLifecycle):

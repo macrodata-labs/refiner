@@ -97,7 +97,6 @@ class Worker:
         )
         runtime_services_started = False
         source_exhausted = False
-        preclaimed_shard: Shard | None = None
         max_in_flight_shards = self.pipeline.max_in_flight_shards
 
         def _heartbeat_once() -> None:
@@ -184,16 +183,11 @@ class Worker:
 
         def _source_rows(max_claims: int | None = None):
             nonlocal previous, claimed, runtime_services_started, source_exhausted
-            nonlocal preclaimed_shard
             shards_claimed_this_pass = 0
             while max_claims is None or shards_claimed_this_pass < max_claims:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
-                shard = preclaimed_shard
-                if shard is None:
-                    shard = self.runtime_lifecycle.claim(previous=previous)
-                else:
-                    preclaimed_shard = None
+                shard = self.runtime_lifecycle.claim(previous=previous)
                 if shard is None:
                     source_exhausted = True
                     logger.info(
@@ -249,21 +243,9 @@ class Worker:
                 previous = shard
 
         def _source_windows():
-            nonlocal preclaimed_shard, source_exhausted
             while True:
                 yield _source_rows(max_claims=max_in_flight_shards)
                 if max_in_flight_shards is None or source_exhausted:
-                    break
-                if heartbeat_error is not None:
-                    raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
-                preclaimed_shard = self.runtime_lifecycle.claim(previous=previous)
-                if preclaimed_shard is None:
-                    source_exhausted = True
-                    logger.info(
-                        "no more shards worker_id={} claimed={}",
-                        self.worker_id,
-                        claimed,
-                    )
                     break
 
         with set_active_run_context(
