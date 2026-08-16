@@ -97,7 +97,6 @@ class Worker:
         )
         runtime_services_started = False
         source_exhausted = False
-        claim_shards_sequentially = self.pipeline.source.claim_shards_sequentially
 
         def _heartbeat_once() -> None:
             with inflight_lock:
@@ -181,10 +180,9 @@ class Worker:
             )
             heartbeat_thread.start()
 
-        def _source_rows(max_shards: int | None = None):
+        def _source_rows(*, claim_one_shard: bool = False):
             nonlocal previous, claimed, runtime_services_started, source_exhausted
-            shards_claimed_this_pass = 0
-            while max_shards is None or shards_claimed_this_pass < max_shards:
+            while True:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                 shard = self.runtime_lifecycle.claim(previous=previous)
@@ -197,7 +195,6 @@ class Worker:
                     )
                     break
                 claimed += 1
-                shards_claimed_this_pass += 1
                 rows_read = 0
                 with inflight_lock:
                     inflight_by_id[shard.id] = shard
@@ -241,14 +238,16 @@ class Worker:
                     source_done_shards.add(shard.id)
                 _maybe_complete_shard(shard.id)
                 previous = shard
+                if claim_one_shard:
+                    break
 
         def _source_windows():
-            if not claim_shards_sequentially:
+            if not self.pipeline.source.claim_shards_sequentially:
                 yield _source_rows()
                 return
 
             while not source_exhausted:
-                yield _source_rows(max_shards=1)
+                yield _source_rows(claim_one_shard=True)
 
         with set_active_run_context(
             job_id=self.job_id,
