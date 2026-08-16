@@ -96,6 +96,7 @@ class Worker:
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
         runtime_services_started = False
+        source_exhausted = False
 
         def _heartbeat_once() -> None:
             with inflight_lock:
@@ -179,13 +180,14 @@ class Worker:
             )
             heartbeat_thread.start()
 
-        def _source_rows():
-            nonlocal previous, claimed, runtime_services_started
+        def _source_rows(*, claim_one_shard: bool = False):
+            nonlocal previous, claimed, runtime_services_started, source_exhausted
             while True:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                 shard = self.runtime_lifecycle.claim(previous=previous)
                 if shard is None:
+                    source_exhausted = True
                     logger.info(
                         "no more shards worker_id={} claimed={}",
                         self.worker_id,
@@ -236,6 +238,16 @@ class Worker:
                     source_done_shards.add(shard.id)
                 _maybe_complete_shard(shard.id)
                 previous = shard
+                if claim_one_shard:
+                    break
+
+        def _source_windows():
+            if not self.pipeline.source.claim_shards_sequentially:
+                yield _source_rows()
+                return
+
+            while not source_exhausted:
+                yield _source_rows(claim_one_shard=True)
 
         with set_active_run_context(
             job_id=self.job_id,
@@ -274,8 +286,8 @@ class Worker:
 
             try:
                 try:
-                    for block in self.pipeline.execute(
-                        _source_rows(),
+                    for block in self.pipeline._execute_windows(
+                        _source_windows(),
                         on_shard_delta=_apply_row_delta,
                     ):
                         if heartbeat_error is not None:

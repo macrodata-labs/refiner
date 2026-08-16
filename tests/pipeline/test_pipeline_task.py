@@ -19,6 +19,22 @@ def test_task_invokes_fn_with_rank_and_world_size() -> None:
     assert all(int(row["world_size"]) == 4 for row in out)
 
 
+def test_task_claims_shards_sequentially_by_default() -> None:
+    pipeline = task(lambda rank, _world_size: rank, num_tasks=2)
+
+    assert pipeline.source.claim_shards_sequentially is True
+
+
+def test_task_allows_unbounded_shard_claiming() -> None:
+    pipeline = task(
+        lambda rank, _world_size: rank,
+        num_tasks=2,
+        claim_shards_sequentially=False,
+    )
+
+    assert pipeline.source.claim_shards_sequentially is False
+
+
 def test_task_wraps_scalar_return_as_result() -> None:
     pipeline = task(lambda rank, _world_size: rank, num_tasks=3)
 

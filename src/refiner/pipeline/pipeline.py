@@ -71,7 +71,7 @@ from refiner.execution.engine import (
     iter_rows,
     schema_after_segments,
 )
-from refiner.execution.operators.row import ShardDeltaFn
+from refiner.execution.operators.row import ShardDeltaFn, close_async_steps
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -489,6 +489,24 @@ class RefinerPipeline:
             CastStep(dtypes=dtypes, index=self._next_step_index())
         )
 
+    def _execute_windows(
+        self,
+        windows: Iterable[Iterable[SourceUnit]],
+        *,
+        on_shard_delta: ShardDeltaFn | None = None,
+    ) -> Iterable[Block]:
+        try:
+            for rows in windows:
+                yield from execute_segments(
+                    rows,
+                    self._get_compiled_segments(),
+                    max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+                    on_shard_delta=on_shard_delta,
+                    input_schema=self.source.schema,
+                )
+        finally:
+            close_async_steps(self.pipeline_steps)
+
     def execute(
         self,
         rows: Iterable[SourceUnit],
@@ -507,12 +525,9 @@ class RefinerPipeline:
             on_shard_delta: Optional callback used by workers to track shard
                 progress as rows move through the pipeline.
         """
-        yield from execute_segments(
-            rows,
-            self._get_compiled_segments(),
-            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+        yield from self._execute_windows(
+            (rows,),
             on_shard_delta=on_shard_delta,
-            input_schema=self.source.schema,
         )
 
     def iter_rows(self) -> Iterable[Row]:
@@ -1536,14 +1551,20 @@ def task(
     fn: Callable[[int, int], Any],
     *,
     num_tasks: int,
+    claim_shards_sequentially: bool = True,
 ) -> RefinerPipeline:
     """Create a task-style pipeline with one callback invocation per rank.
 
     ``fn`` receives ``(task_rank, num_tasks)`` and is invoked once for each
     integer rank in ``range(num_tasks)``. This is useful for jobs that perform
-    side effects or generate work without reading an input dataset.
+    side effects or generate work without reading an input dataset. By default,
+    each worker fully processes one shard before claiming another. Set
+    ``claim_shards_sequentially=False`` to preserve unbounded shard claiming.
     """
-    source = TaskSource(num_tasks=num_tasks)
+    source = TaskSource(
+        num_tasks=num_tasks,
+        claim_shards_sequentially=claim_shards_sequentially,
+    )
     return RefinerPipeline(source=source).add_step(
         TaskStep(fn=fn, num_tasks=num_tasks, index=1)
     )

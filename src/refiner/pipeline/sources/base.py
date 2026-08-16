@@ -18,6 +18,7 @@ class BaseSource(ABC):
     """Base class for pipeline sources."""
 
     name: str
+    claim_shards_sequentially = False
 
     @abstractmethod
     def list_shards(self) -> list[Shard]:

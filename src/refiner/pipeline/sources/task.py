@@ -15,10 +15,16 @@ class TaskSource(BaseSource):
 
     name = "task"
 
-    def __init__(self, *, num_tasks: int) -> None:
+    def __init__(
+        self,
+        *,
+        num_tasks: int,
+        claim_shards_sequentially: bool = True,
+    ) -> None:
         if num_tasks <= 0:
             raise ValueError("num_tasks must be > 0")
         self._num_tasks = num_tasks
+        self.claim_shards_sequentially = claim_shards_sequentially
 
     def list_shards(self) -> list[Shard]:
         return [
