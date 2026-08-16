@@ -27,7 +27,11 @@ from refiner.pipeline.steps import (
     WithColumnsStep,
 )
 from refiner.execution.buffer import RowBuffer
-from refiner.execution.operators.row import ShardDeltaFn, execute_row_steps
+from refiner.execution.operators.row import (
+    AsyncWindowRegistry,
+    ShardDeltaFn,
+    execute_row_steps,
+)
 from refiner.execution.operators.vectorized import (
     apply_vectorized_ops,
 )
@@ -75,6 +79,7 @@ def execute_segments(
     max_vectorized_block_bytes: int | None = None,
     on_shard_delta: ShardDeltaFn | None = None,
     input_schema: pa.Schema | None = None,
+    async_window_registry: AsyncWindowRegistry | None = None,
 ) -> Iterator[Block]:
     """Execute segments and yield row or tabular blocks."""
     current: Iterable[Block] = _normalize_blocks(
@@ -104,6 +109,7 @@ def execute_segments(
                 and max_vectorized_block_bytes is None,
                 on_shard_delta=on_shard_delta,
                 output_schema=output_schema,
+                async_window_registry=async_window_registry,
             )
             current_schema = output_schema
     yield from current
@@ -199,11 +205,17 @@ def _execute_row_segment(
     output_tabular: bool,
     on_shard_delta: ShardDeltaFn | None,
     output_schema: pa.Schema | None,
+    async_window_registry: AsyncWindowRegistry | None,
 ) -> Iterator[Block]:
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
     rows = iter_rows(stream)
-    step_out = execute_row_steps(rows, steps, on_shard_delta=on_shard_delta)
+    step_out = execute_row_steps(
+        rows,
+        steps,
+        on_shard_delta=on_shard_delta,
+        async_window_registry=async_window_registry,
+    )
     if not output_tabular:
         yield from _chunk_output_rows(step_out, output_block_rows)
         return

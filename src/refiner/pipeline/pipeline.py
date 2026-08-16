@@ -71,7 +71,11 @@ from refiner.execution.engine import (
     iter_rows,
     schema_after_segments,
 )
-from refiner.execution.operators.row import ShardDeltaFn, close_async_steps
+from refiner.execution.operators.row import (
+    AsyncWindowRegistry,
+    ShardDeltaFn,
+    close_async_steps,
+)
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -495,6 +499,7 @@ class RefinerPipeline:
         *,
         on_shard_delta: ShardDeltaFn | None = None,
     ) -> Iterable[Block]:
+        async_window_registry: AsyncWindowRegistry = {}
         try:
             for rows in windows:
                 yield from execute_segments(
@@ -503,6 +508,7 @@ class RefinerPipeline:
                     max_vectorized_block_bytes=self.max_vectorized_block_bytes,
                     on_shard_delta=on_shard_delta,
                     input_schema=self.source.schema,
+                    async_window_registry=async_window_registry,
                 )
         finally:
             close_async_steps(self.pipeline_steps)
