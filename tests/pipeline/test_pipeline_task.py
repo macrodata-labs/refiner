@@ -24,7 +24,7 @@ def test_task_invokes_fn_with_rank_and_world_size() -> None:
 def test_task_defaults_to_one_in_flight_shard() -> None:
     pipeline = task(lambda rank, _world_size: rank, num_tasks=2)
 
-    assert pipeline.max_in_flight_shards == 1
+    assert pipeline.source.max_in_flight_shards == 1
 
 
 def test_task_allows_explicit_in_flight_shard_limit() -> None:
@@ -34,7 +34,7 @@ def test_task_allows_explicit_in_flight_shard_limit() -> None:
         max_in_flight_shards=2,
     )
 
-    assert pipeline.max_in_flight_shards == 2
+    assert pipeline.source.max_in_flight_shards == 2
 
 
 def test_in_flight_shard_limit_must_be_positive() -> None:

@@ -401,6 +401,7 @@ def test_worker_can_batch_across_shards() -> None:
         .batch_map(lambda rows: list(reversed(rows)), batch_size=2)
         .map(tap)
     )
+    assert pipeline.source.max_in_flight_shards is None
 
     worker = Worker(
         pipeline=pipeline,

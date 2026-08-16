@@ -15,10 +15,13 @@ class TaskSource(BaseSource):
 
     name = "task"
 
-    def __init__(self, *, num_tasks: int) -> None:
+    def __init__(self, *, num_tasks: int, max_in_flight_shards: int = 1) -> None:
         if num_tasks <= 0:
             raise ValueError("num_tasks must be > 0")
+        if max_in_flight_shards <= 0:
+            raise ValueError("max_in_flight_shards must be > 0")
         self._num_tasks = num_tasks
+        self.max_in_flight_shards = max_in_flight_shards
 
     def list_shards(self) -> list[Shard]:
         return [
