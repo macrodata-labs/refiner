@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import IO, Any
+from typing import IO, Any, cast
 from typing import TYPE_CHECKING
 
 from refiner.io import DataFolder
@@ -16,6 +16,7 @@ from refiner.pipeline.utils.cache.decoder_cache import (
 )
 from refiner.pipeline.utils.cache.lease_cache import CacheLease
 from refiner.utils import check_required_dependencies
+from refiner.video.s3_mp4 import S3MultipartSeekableWriter, supports_s3_multipart
 
 if TYPE_CHECKING:
     from refiner.video.types import VideoBytes, VideoFile
@@ -80,10 +81,19 @@ class RemuxWriter:
         probe: VideoSourceProbe,
     ) -> "RemuxWriter":
         check_required_dependencies("video remuxing", ["av"], dist="video")
-        output_file = folder.open(output_rel, mode="wb")
+        output_abs = folder._join(output_rel)
+        if supports_s3_multipart(folder.fs):
+            output_file = cast(
+                IO[bytes], S3MultipartSeekableWriter(folder.fs, output_abs)
+            )
+            movflags = None
+        else:
+            output_file = folder.open(output_rel, mode="wb")
+            movflags = _SEGMENTED_MP4_MOVFLAGS
         return cls.open_file(
             output_file=output_file,
             probe=probe,
+            movflags=movflags,
         )
 
     @classmethod
@@ -106,7 +116,11 @@ class RemuxWriter:
                 options=options,
             )
         except Exception:
-            output_file.close()
+            abort = getattr(output_file, "abort", None)
+            if callable(abort):
+                abort()
+            else:
+                output_file.close()
             raise
         return cls(probe=probe, output_file=output_file, container=container)
 
@@ -115,7 +129,13 @@ class RemuxWriter:
         return int(self.output_file.tell())
 
     def close(self) -> None:
-        self.container.close()
+        try:
+            self.container.close()
+        except Exception:
+            abort = getattr(self.output_file, "abort", None)
+            if callable(abort):
+                abort()
+            raise
         self.output_file.close()
 
     def append_prepared_video(

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from fractions import Fraction
 import os
-from typing import IO, Any
+from typing import IO, Any, cast
 import numpy as np
 
 from refiner.io import DataFolder
@@ -15,6 +15,7 @@ from refiner.video.remux import (
     video_from_timestamp_s,
     video_to_timestamp_s,
 )
+from refiner.video.s3_mp4 import S3MultipartSeekableWriter, supports_s3_multipart
 
 _SEGMENTED_MP4_MOVFLAGS = "frag_keyframe+default_base_moof"
 
@@ -74,11 +75,20 @@ class TranscodeWriter:
         fps: float,
     ) -> "TranscodeWriter":
         check_required_dependencies("video transcoding", ["av"], dist="video")
-        output_file = folder.open(output_rel, mode="wb")
+        output_abs = folder._join(output_rel)
+        if supports_s3_multipart(folder.fs):
+            output_file = cast(
+                IO[bytes], S3MultipartSeekableWriter(folder.fs, output_abs)
+            )
+            movflags = None
+        else:
+            output_file = folder.open(output_rel, mode="wb")
+            movflags = _SEGMENTED_MP4_MOVFLAGS
         return cls.open_file(
             output_file=output_file,
             config=config,
             fps=fps,
+            movflags=movflags,
         )
 
     @classmethod
@@ -103,7 +113,11 @@ class TranscodeWriter:
                 options=options,
             )
         except Exception:
-            output_file.close()
+            abort = getattr(output_file, "abort", None)
+            if callable(abort):
+                abort()
+            else:
+                output_file.close()
             raise
         return writer
 
@@ -212,8 +226,13 @@ class TranscodeWriter:
             if self.stream is not None:
                 for packet in self.stream.encode(None):
                     container.mux(packet)
-        finally:
             container.close()
+        except Exception:
+            abort = getattr(self.output_file, "abort", None)
+            if callable(abort):
+                abort()
+            raise
+        finally:
             self.container = None
             self.stream = None
         if self.output_file is not None:
