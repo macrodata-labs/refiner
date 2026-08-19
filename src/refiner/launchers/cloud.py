@@ -23,6 +23,8 @@ from refiner.platform.client import (
     CloudFileUploadStatus,
     CloudRunCreateRequest,
     CloudRuntimeConfig,
+    CloudProvider,
+    CloudRegion,
     MacrodataApiError,
     MacrodataClient,
     StagePayload,
@@ -44,6 +46,22 @@ if TYPE_CHECKING:
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
 _CLOUD_FILE_BATCH_SIZE = 100
+_SUPPORTED_CLOUDS = frozenset({"aws", "oci", "gcp"})
+_SUPPORTED_REGIONS = frozenset(
+    {
+        "us",
+        "eu",
+        "ca",
+        "uk",
+        "us-east",
+        "us-central",
+        "us-south",
+        "us-west",
+        "eu-west",
+        "eu-north",
+        "eu-south",
+    }
+)
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -81,6 +99,27 @@ def _parse_continue_from_job(value: str | None) -> str | None:
     if stage_index < 0:
         raise ValueError("continue_from_job stage index must be >= 0")
     return f"{normalized_job_id}:{stage_index}"
+
+
+def _normalize_cloud(value: str) -> CloudProvider:
+    if value not in _SUPPORTED_CLOUDS:
+        supported = ", ".join(sorted(_SUPPORTED_CLOUDS))
+        raise ValueError(f"cloud must be one of: {supported}")
+    return cast(CloudProvider, value)
+
+
+def _normalize_regions(value: str | Sequence[str]) -> tuple[CloudRegion, ...]:
+    values = (value,) if isinstance(value, str) else tuple(value)
+    if not values:
+        raise ValueError("region must contain at least one selector")
+    invalid = sorted({item for item in values if item not in _SUPPORTED_REGIONS})
+    if invalid:
+        supported = ", ".join(sorted(_SUPPORTED_REGIONS))
+        raise ValueError(
+            f"unsupported region selector(s): {', '.join(invalid)}; "
+            f"expected one or more of: {supported}"
+        )
+    return cast(tuple[CloudRegion, ...], tuple(dict.fromkeys(values)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +161,8 @@ class CloudLauncher(BaseLauncher):
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
+        cloud: CloudProvider = "aws",
+        region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
@@ -144,6 +185,8 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("mem_mb_per_worker must be > 0")
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
+        self.cloud = _normalize_cloud(cloud)
+        self.region = _normalize_regions(region)
         self.sync_local_dependencies = sync_local_dependencies
         self.dependencies = dependencies
         self.refiner_extras = refiner_extras
@@ -311,6 +354,8 @@ class CloudLauncher(BaseLauncher):
                         pipeline_payload=pipeline_payloads[stage.index],
                         runtime=CloudRuntimeConfig(
                             num_workers=stage.compute.num_workers,
+                            cloud=self.cloud,
+                            region=self.region,
                             cpus_per_worker=stage.compute.cpus_per_worker,
                             mem_mb_per_worker=stage.compute.memory_mb_per_worker,
                             gpu=stage.compute.gpu,
