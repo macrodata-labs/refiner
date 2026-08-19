@@ -17,6 +17,7 @@ from refiner.worker.metrics.emitter import (
     NOOP_USER_METRICS_EMITTER,
     UserMetricsEmitter,
 )
+from refiner.worker.metrics.api import log_throughput
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,13 +124,21 @@ class Worker:
                     return
 
         def _complete_shard(shard_id: str) -> None:
-            nonlocal completed
+            nonlocal completed, output_rows
             with inflight_lock:
                 shard = inflight_by_id.get(shard_id)
                 if shard is None:
                     return
             with set_active_step_index(sink_step_index):
-                sink.on_shard_complete(shard_id)
+                finalized_rows = sink.on_shard_complete(shard_id)
+            if finalized_rows is not None and sink.counts_output_rows:
+                output_rows += finalized_rows
+                log_throughput(
+                    "rows_written",
+                    finalized_rows,
+                    shard_id=shard_id,
+                    unit="rows",
+                )
             self.user_metrics_emitter.force_flush_user_metrics()
             self.runtime_lifecycle.complete(shard)
             try:

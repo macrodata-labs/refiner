@@ -17,6 +17,7 @@ from refiner.pipeline.sinks.assets import (
     BlobAssetConfig,
     BlobAssetManager,
     FileAssetConfig,
+    ReadyAssetBlock,
     asset_config_to_plan,
 )
 from refiner.pipeline.sinks.base import BaseSink
@@ -45,6 +46,7 @@ class JsonlSink(BaseSink):
         self.filename_template = filename_template
         self.assets = assets
         self._files: dict[str, IO[str]] = {}
+        self._asset_rows_written: dict[str, int] = {}
         self._encoder = json.JSONEncoder(
             ensure_ascii=True,
             separators=(",", ":"),
@@ -97,7 +99,9 @@ class JsonlSink(BaseSink):
         return count
 
     def _write_table_rows(self, shard_id: str, table: pa.Table) -> int:
-        if self._assets is not None:
+        if self._assets is not None and not isinstance(
+            self._assets, AssetUploadManager
+        ):
             return self._write_rows(
                 shard_id, self._assets.rewrite_table(shard_id, table).to_pylist()
             )
@@ -107,6 +111,15 @@ class JsonlSink(BaseSink):
         return count
 
     def write_shard_block(self, shard_id: str, block: Block) -> int:
+        if isinstance(self._assets, AssetUploadManager):
+            if isinstance(block, Tabular):
+                ready = self._assets.submit_table(
+                    shard_id, strip_internal_columns(block.table)
+                )
+            else:
+                ready = self._assets.submit_rows(shard_id, block)
+            self._write_ready_asset_blocks(ready)
+            return self._asset_rows_written.pop(shard_id, 0)
         if isinstance(block, Tabular):
             return self._write_table_rows(
                 shard_id,
@@ -117,13 +130,30 @@ class JsonlSink(BaseSink):
             rows = self._assets.rewrite_rows(shard_id, rows)
         return self._write_rows(shard_id, rows)
 
-    def on_shard_complete(self, shard_id: str) -> None:
-        if self._assets is not None:
+    def _write_ready_asset_blocks(self, blocks: list[ReadyAssetBlock]) -> None:
+        for ready in blocks:
+            rows = (
+                ready.block.to_pylist()
+                if isinstance(ready.block, pa.Table)
+                else ready.block
+            )
+            count = self._write_rows(ready.shard_id, rows)
+            self._asset_rows_written[ready.shard_id] = (
+                self._asset_rows_written.get(ready.shard_id, 0) + count
+            )
+
+    def on_shard_complete(self, shard_id: str) -> int | None:
+        if isinstance(self._assets, AssetUploadManager):
+            self._write_ready_asset_blocks(self._assets.on_shard_complete(shard_id))
+        elif self._assets is not None:
             self._assets.on_shard_complete(shard_id)
         file = self._files.pop(shard_id, None)
         if file is not None:
             file.close()
             log_throughput("files_written", 1, shard_id=shard_id, unit="files")
+        if isinstance(self._assets, AssetUploadManager):
+            return self._asset_rows_written.pop(shard_id, 0)
+        return None
 
     def close(self) -> None:
         try:

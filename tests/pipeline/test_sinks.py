@@ -1585,6 +1585,59 @@ def test_file_asset_copy_removes_partial_output_when_source_disappears(
     assert not (tmp_path / "file-assets" / relpath).exists()
 
 
+def test_file_asset_upload_window_overlaps_one_row_blocks(
+    tmp_path, monkeypatch
+) -> None:
+    output_dir = tmp_path / "overlapping-file-assets"
+    shard_id = "0123456789ab"
+    sink = JsonlSink(output_dir, assets=FileAssetConfig(max_in_flight=2))
+    sink.set_input_schema(pa.schema([datatype.image_path().with_name("image")]))
+    assert isinstance(sink._assets, AssetUploadManager)
+    both_started = threading.Event()
+    release = threading.Event()
+    started = 0
+    lock = threading.Lock()
+
+    def blocked_copy(
+        _value: object,
+        _storage: str,
+        _relpath: str,
+        *,
+        shard_id: str,
+    ) -> bool:
+        nonlocal started
+        del shard_id
+        with lock:
+            started += 1
+            if started == 2:
+                both_started.set()
+        assert release.wait(timeout=5)
+        return True
+
+    monkeypatch.setattr(sink._assets, "_copy_asset", blocked_copy)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        assert sink.write_shard_block(
+            shard_id, [DictRow({"image": "first.png", "value": 1})]
+        ) == 0
+        assert sink.write_shard_block(
+            shard_id, [DictRow({"image": "second.png", "value": 2})]
+        ) == 0
+        assert both_started.wait(timeout=5)
+        assert not list(output_dir.glob("*.jsonl"))
+        release.set()
+        assert sink.on_shard_complete(shard_id) == 2
+
+    output_file = next(output_dir.glob("*.jsonl"))
+    rows = [json.loads(line) for line in output_file.read_text().splitlines()]
+    assert [row["value"] for row in rows] == [1, 2]
+
+
 def test_blob_asset_copy_stages_source_before_mutating_output(
     tmp_path, monkeypatch
 ) -> None:
@@ -1793,14 +1846,15 @@ def test_jsonl_sink_error_policy_raises_on_later_failed_asset(tmp_path) -> None:
         worker_name=None,
         runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
     ):
+        sink.write_shard_block(
+            shard_id,
+            [
+                DictRow({"image": str(source), "label": "valid"}),
+                DictRow({"image": str(missing), "label": "missing"}),
+            ],
+        )
         with pytest.raises(FileNotFoundError):
-            sink.write_shard_block(
-                shard_id,
-                [
-                    DictRow({"image": str(source), "label": "valid"}),
-                    DictRow({"image": str(missing), "label": "missing"}),
-                ],
-            )
+            sink.on_shard_complete(shard_id)
 
 
 def test_asset_upload_rejects_unsafe_assets_subdir(tmp_path) -> None:

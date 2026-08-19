@@ -19,6 +19,7 @@ from refiner.pipeline.sinks.assets import (
     BlobAssetConfig,
     BlobAssetManager,
     FileAssetConfig,
+    ReadyAssetBlock,
     asset_config_to_plan,
 )
 from refiner.pipeline.sinks.base import BaseSink
@@ -43,6 +44,7 @@ class ParquetSink(BaseSink):
         self.assets = assets
         self.dtypes = dtypes
         self._writers: dict[str, pq.ParquetWriter] = {}
+        self._asset_rows_written: dict[str, int] = {}
         self._schema: pa.Schema | None = None
         if isinstance(assets, FileAssetConfig):
             self._assets = AssetUploadManager(
@@ -100,19 +102,35 @@ class ParquetSink(BaseSink):
         if self._assets is None:
             self._writer(shard_id, table.schema).write_table(table)
             return table.num_rows
+        if isinstance(self._assets, AssetUploadManager):
+            self._write_ready_asset_blocks(self._assets.submit_table(shard_id, table))
+            return self._asset_rows_written.pop(shard_id, 0)
         self._writer(
             shard_id,
             (table := self._assets.rewrite_table(shard_id, table)).schema,
         ).write_table(table)
         return table.num_rows
 
-    def on_shard_complete(self, shard_id: str) -> None:
-        if self._assets is not None:
+    def _write_ready_asset_blocks(self, blocks: list[ReadyAssetBlock]) -> None:
+        for ready in blocks:
+            assert isinstance(ready.block, pa.Table)
+            self._writer(ready.shard_id, ready.block.schema).write_table(ready.block)
+            self._asset_rows_written[ready.shard_id] = (
+                self._asset_rows_written.get(ready.shard_id, 0) + ready.block.num_rows
+            )
+
+    def on_shard_complete(self, shard_id: str) -> int | None:
+        if isinstance(self._assets, AssetUploadManager):
+            self._write_ready_asset_blocks(self._assets.on_shard_complete(shard_id))
+        elif self._assets is not None:
             self._assets.on_shard_complete(shard_id)
         writer = self._writers.pop(shard_id, None)
         if writer is not None:
             writer.close()
             log_throughput("files_written", 1, shard_id=shard_id, unit="files")
+        if isinstance(self._assets, AssetUploadManager):
+            return self._asset_rows_written.pop(shard_id, 0)
+        return None
 
     def close(self) -> None:
         try:

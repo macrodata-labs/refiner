@@ -27,6 +27,7 @@ from refiner.pipeline.sinks.assets import (
     BlobAssetConfig,
     BlobAssetManager,
     FileAssetConfig,
+    ReadyAssetBlock,
     asset_config_to_plan,
     cleanup_rejected_asset_attempts,
 )
@@ -680,6 +681,8 @@ class LanceDatasetSink(BaseSink):
             self._assets = None
         self._writers_by_shard: dict[str, _StreamingShardWriter] = {}
         self._schema_by_shard: dict[str, pa.Schema] = {}
+        self._asset_rows_written: dict[str, int] = {}
+        self._pending_add_columns_addresses: dict[str, list[pa.Array]] = {}
         self._add_columns_writers_by_shard: dict[
             str, dict[int, _StreamingAddColumnsWriter]
         ] = {}
@@ -794,8 +797,24 @@ class LanceDatasetSink(BaseSink):
                 "add_columns output is missing columns: " + ", ".join(missing)
             )
         table = table.select(self.columns)
+        if isinstance(self._assets, AssetUploadManager):
+            self._pending_add_columns_addresses.setdefault(shard_id, []).append(
+                row_addresses
+            )
+            self._write_ready_asset_blocks(self._assets.submit_table(shard_id, table))
+            return
         if self._assets is not None:
             table = self._assets.rewrite_table(shard_id, table)
+
+        self._write_add_columns_table(shard_id, table, row_addresses)
+
+    def _write_add_columns_table(
+        self,
+        shard_id: str,
+        table: pa.Table,
+        row_addresses: pa.Array,
+    ) -> None:
+        assert self.columns is not None
 
         output_schema = pa.schema(
             [table.schema.field(column) for column in self.columns]
@@ -844,15 +863,30 @@ class LanceDatasetSink(BaseSink):
                 table.filter(mask).select(self.columns),
             )
 
-    def write_shard_block(self, shard_id: str, block: Block) -> None:
+    def write_shard_block(self, shard_id: str, block: Block) -> int | None:
         if self.mode == "add_columns":
             self._write_add_columns_block(shard_id, block)
-            return
+            if isinstance(self._assets, AssetUploadManager):
+                return self._asset_rows_written.pop(shard_id, 0)
+            return None
         table = block_to_table(block)
         if table.num_rows == 0:
             return
+        if isinstance(self._assets, AssetUploadManager):
+            output_schema = self._assets.output_schema(table.schema)
+            assert output_schema is not None
+            if self.mode == "append":
+                existing_schema = self._load_existing_schema()
+                _validate_append_asset_layout(output_schema, existing_schema)
+            elif self.mode == "overwrite":
+                self._load_overwrite_version()
+            self._write_ready_asset_blocks(self._assets.submit_table(shard_id, table))
+            return self._asset_rows_written.pop(shard_id, 0)
         if self._assets is not None:
             table = self._assets.rewrite_table(shard_id, table)
+        self._write_table(shard_id, table)
+
+    def _write_table(self, shard_id: str, table: pa.Table) -> None:
         if self.mode == "append":
             existing_schema = self._load_existing_schema()
             _validate_append_asset_layout(table.schema, existing_schema)
@@ -872,6 +906,21 @@ class LanceDatasetSink(BaseSink):
             )
             self._writers_by_shard[shard_id] = writer
         writer.put_batches(table.to_batches())
+
+    def _write_ready_asset_blocks(self, blocks: list[ReadyAssetBlock]) -> None:
+        for ready in blocks:
+            assert isinstance(ready.block, pa.Table)
+            if self.mode == "add_columns":
+                addresses = self._pending_add_columns_addresses[ready.shard_id].pop(0)
+                self._write_add_columns_table(
+                    ready.shard_id, ready.block, addresses
+                )
+            else:
+                self._write_table(ready.shard_id, ready.block)
+            self._asset_rows_written[ready.shard_id] = (
+                self._asset_rows_written.get(ready.shard_id, 0)
+                + ready.block.num_rows
+            )
 
     def _write_sidecar(
         self,
@@ -911,21 +960,25 @@ class LanceDatasetSink(BaseSink):
             payload["source_version"] = self.source_version
         self._write_sidecar(shard_id, payload)
 
-    def on_shard_complete(self, shard_id: str) -> None:
-        if self._assets is not None:
+    def on_shard_complete(self, shard_id: str) -> int | None:
+        if isinstance(self._assets, AssetUploadManager):
+            self._write_ready_asset_blocks(self._assets.on_shard_complete(shard_id))
+        elif self._assets is not None:
             self._assets.on_shard_complete(shard_id)
+        asset_rows = self._asset_rows_written.pop(shard_id, 0)
+        self._pending_add_columns_addresses.pop(shard_id, None)
         if self.mode == "add_columns":
             self._complete_add_columns_shard(shard_id)
-            return
+            return asset_rows if isinstance(self._assets, AssetUploadManager) else None
         writer = self._writers_by_shard.pop(shard_id, None)
         schema = self._schema_by_shard.pop(shard_id, None)
         if writer is None or schema is None:
             self._write_empty_sidecar(shard_id)
-            return
+            return asset_rows if isinstance(self._assets, AssetUploadManager) else None
         fragments = writer.finish()
         if not fragments:
             self._write_empty_sidecar(shard_id)
-            return
+            return asset_rows if isinstance(self._assets, AssetUploadManager) else None
         created_files = [
             path for fragment in fragments for path in _fragment_data_paths(fragment)
         ]
@@ -941,6 +994,7 @@ class LanceDatasetSink(BaseSink):
             payload,
             created_files=created_files,
         )
+        return asset_rows if isinstance(self._assets, AssetUploadManager) else None
 
     def _complete_add_columns_shard(self, shard_id: str) -> None:
         writers = self._add_columns_writers_by_shard.pop(shard_id, None)

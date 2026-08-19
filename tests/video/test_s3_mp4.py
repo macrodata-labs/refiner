@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from typing import IO, cast
 
 import numpy as np
 import pytest
@@ -106,7 +107,7 @@ def test_conventional_mp4_uses_moov_not_moof() -> None:
     fs = _FakeS3FileSystem()
     output = S3MultipartSeekableWriter(fs, "bucket/video.mp4")
     writer = TranscodeWriter.open_file(
-        output_file=output,
+        output_file=cast(IO[bytes], output),
         config=VideoTranscodeConfig(codec="h264"),
         fps=5,
         movflags=None,
@@ -125,6 +126,8 @@ def test_conventional_mp4_uses_moov_not_moof() -> None:
     with av.open(io.BytesIO(data), mode="r") as container:
         stream = container.streams.video[0]
         assert stream.frames == 10
+        assert stream.duration is not None
+        assert stream.time_base is not None
         assert float(stream.duration * stream.time_base) == pytest.approx(2.0)
 
 

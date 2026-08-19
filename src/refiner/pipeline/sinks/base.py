@@ -95,13 +95,15 @@ class BaseSink(ABC):
         """Whether blocks written into this sink should count toward output_rows."""
         return True
 
-    def on_shard_complete(self, shard_id: str) -> None:
+    def on_shard_complete(self, shard_id: str) -> int | None:
         """Flush or finalize state for one shard after upstream completion.
 
         Override this only when the sink keeps shard-local buffered state that
-        should be finalized before `close()`.
+        should be finalized before `close()`. Return the number of output rows
+        written during finalization, if any.
         """
         del shard_id
+        return None
 
     def on_shard_finalized(self, shard_id: str) -> None:
         """Run cleanup after the shard has been marked complete."""

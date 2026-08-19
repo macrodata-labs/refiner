@@ -27,6 +27,30 @@ MissingAssetPolicy = Literal["error", "drop_row", "set_null"]
 AssetCopyResult = bool | list[bool]
 
 
+@dataclass(frozen=True, slots=True)
+class ReadyAssetBlock:
+    shard_id: str
+    block: pa.Table | list[Row]
+
+
+@dataclass(slots=True)
+class _PendingTable:
+    shard_id: str
+    table: pa.Table
+    result_columns: list[tuple[str, pa.Field]]
+    result_count: int
+
+
+@dataclass(slots=True)
+class _PendingRows:
+    shard_id: str
+    rows: list[tuple[Row, dict[str, object], list[str]]]
+    result_count: int
+
+
+_PendingAssetBlock: TypeAlias = _PendingTable | _PendingRows
+
+
 def _validate_config(
     *,
     subdir: str,
@@ -138,6 +162,8 @@ class AssetUploadManager:
         self._asset_column_segments: dict[str, str] = {}
         self._input_schema_set = False
         self.missing_asset_policy = missing_asset_policy
+        self._pending: deque[_PendingAssetBlock] = deque()
+        self._results: deque[AssetCopyResult] = deque()
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
         self._set_asset_columns(_asset_columns_from_schema(schema))
@@ -172,11 +198,32 @@ class AssetUploadManager:
 
     def close(self) -> None:
         self._window.cancel_pending()
+        self._pending.clear()
+        self._results.clear()
 
-    def on_shard_complete(self, shard_id: str) -> None:
-        pass
+    def on_shard_complete(self, shard_id: str) -> list[ReadyAssetBlock]:
+        del shard_id
+        self._results.extend(self._window.drain())
+        return self._take_ready()
+
+    def submit_table(
+        self,
+        shard_id: str,
+        table: pa.Table,
+    ) -> list[ReadyAssetBlock]:
+        pending = self._prepare_table(shard_id, table)
+        self._pending.append(pending)
+        self._results.extend(self._window.take_completed())
+        return self._take_ready()
 
     def rewrite_table(self, shard_id: str, table: pa.Table) -> pa.Table:
+        ready = self.submit_table(shard_id, table)
+        ready.extend(self.on_shard_complete(shard_id))
+        if len(ready) != 1 or not isinstance(ready[0].block, pa.Table):
+            raise RuntimeError("rewrite_table cannot be mixed with deferred asset blocks")
+        return ready[0].block
+
+    def _prepare_table(self, shard_id: str, table: pa.Table) -> _PendingTable:
         start = self._next_row_index.get(shard_id, 0)
         out = table
         result_columns: list[tuple[str, pa.Field]] = []
@@ -197,6 +244,7 @@ class AssetUploadManager:
             rewritten = []
             for row_offset, value in enumerate(values):
                 if self.missing_asset_policy == "error" and value is None:
+                    self._window.submit_result(True)
                     rewritten.append(None)
                     continue
                 rewritten.append(
@@ -213,10 +261,22 @@ class AssetUploadManager:
             rewritten_array = pa.array(rewritten, type=output_field.type)
             out = out.set_column(idx, output_field, rewritten_array)
             result_columns.append((column_name, output_field))
-        # Do not expose output rows that point at assets until those copies have
-        # completed; otherwise a later copy failure leaves dangling references.
-        results = self._window.drain()
         self._next_row_index[shard_id] = start + table.num_rows
+        return _PendingTable(
+            shard_id=shard_id,
+            table=out,
+            result_columns=result_columns,
+            result_count=len(result_columns) * table.num_rows,
+        )
+
+    def _finish_table(
+        self,
+        pending: _PendingTable,
+        results: list[AssetCopyResult],
+    ) -> pa.Table:
+        out = pending.table
+        table = pending.table
+        result_columns = pending.result_columns
         if self.missing_asset_policy == "set_null":
             # Each result lines up with one rewritten table cell. Scalar cells
             # return bool; list cells return one bool per non-null path element.
@@ -259,56 +319,45 @@ class AssetUploadManager:
                     log_throughput(
                         "asset_rows_dropped",
                         dropped,
-                        shard_id,
+                        pending.shard_id,
                         unit="rows",
                     )
         return out
+
+    def submit_rows(
+        self,
+        shard_id: str,
+        rows: Iterable[Row],
+    ) -> list[ReadyAssetBlock]:
+        pending = self._prepare_rows(shard_id, rows)
+        self._pending.append(pending)
+        self._results.extend(self._window.take_completed())
+        return self._take_ready()
 
     def rewrite_rows(
         self,
         shard_id: str,
         rows: Iterable[Row],
     ) -> Iterable[Row]:
+        ready = self.submit_rows(shard_id, rows)
+        ready.extend(self.on_shard_complete(shard_id))
+        if len(ready) != 1 or not isinstance(ready[0].block, list):
+            raise RuntimeError("rewrite_rows cannot be mixed with deferred asset blocks")
+        yield from ready[0].block
+
+    def _prepare_rows(
+        self,
+        shard_id: str,
+        rows: Iterable[Row],
+    ) -> _PendingRows:
         self.require_input_schema()
         if not self._asset_columns:
-            yield from rows
-            return
+            materialized = list(rows)
+            return _PendingRows(shard_id, [(row, {}, []) for row in materialized], 0)
 
         start = self._next_row_index.get(shard_id, 0)
-        # Results are ordered by the same nested loop used to build patches:
-        # row, then asset column. Keep only rows whose copy results are still
-        # pending instead of materializing the full input block.
-        pending_rows: deque[tuple[Row, dict[str, object], list[str]]] = deque()
-        results: deque[AssetCopyResult] = deque()
-        dropped = 0
+        pending_rows: list[tuple[Row, dict[str, object], list[str]]] = []
         row_count = 0
-
-        def emit_ready() -> Iterable[Row]:
-            nonlocal dropped
-            while pending_rows:
-                row, patch, result_columns = pending_rows[0]
-                result_count = len(result_columns)
-                if len(results) < result_count:
-                    break
-                pending_rows.popleft()
-                row_results = [results.popleft() for _ in range(result_count)]
-                if self.missing_asset_policy == "drop_row" and not all(
-                    all(result) if isinstance(result, list) else result
-                    for result in row_results
-                ):
-                    dropped += 1
-                    continue
-                if self.missing_asset_policy == "set_null":
-                    for column_name, copied in zip(
-                        result_columns,
-                        row_results,
-                        strict=True,
-                    ):
-                        patch[column_name] = _set_null_value(
-                            patch[column_name],
-                            copied,
-                        )
-                yield row.update(patch) if patch else row
 
         for row_index, row in enumerate(rows, start=start):
             row_count += 1
@@ -335,20 +384,58 @@ class AssetUploadManager:
                 result_columns.append(column_name)
 
             pending_rows.append((row, patch, result_columns))
-            # Error policy must remain block-atomic for row sinks: JSONL writes
-            # rows as they are yielded, so do not expose any rewritten asset paths
-            # until every copy in the block has succeeded.
-            if self.missing_asset_policy != "error":
-                # Non-error policies can stream bounded rows as soon as their
-                # copy results are available.
-                results.extend(self._window.take_completed())
-                yield from emit_ready()
-
-        results.extend(self._window.drain())
-        yield from emit_ready()
         self._next_row_index[shard_id] = start + row_count
+        return _PendingRows(
+            shard_id,
+            pending_rows,
+            sum(len(result_columns) for _, _, result_columns in pending_rows),
+        )
+
+    def _finish_rows(
+        self,
+        pending: _PendingRows,
+        results: list[AssetCopyResult],
+    ) -> list[Row]:
+        output: list[Row] = []
+        result_offset = 0
+        dropped = 0
+        for row, patch, result_columns in pending.rows:
+            row_results = results[result_offset : result_offset + len(result_columns)]
+            result_offset += len(result_columns)
+            if self.missing_asset_policy == "drop_row" and not all(
+                all(result) if isinstance(result, list) else result
+                for result in row_results
+            ):
+                dropped += 1
+                continue
+            if self.missing_asset_policy == "set_null":
+                for column_name, copied in zip(
+                    result_columns,
+                    row_results,
+                    strict=True,
+                ):
+                    patch[column_name] = _set_null_value(patch[column_name], copied)
+            output.append(row.update(patch) if patch else row)
         if dropped:
-            log_throughput("asset_rows_dropped", dropped, shard_id, unit="rows")
+            log_throughput(
+                "asset_rows_dropped", dropped, pending.shard_id, unit="rows"
+            )
+        return output
+
+    def _take_ready(self) -> list[ReadyAssetBlock]:
+        ready: list[ReadyAssetBlock] = []
+        while self._pending:
+            pending = self._pending[0]
+            if len(self._results) < pending.result_count:
+                break
+            self._pending.popleft()
+            results = [self._results.popleft() for _ in range(pending.result_count)]
+            if isinstance(pending, _PendingTable):
+                block: pa.Table | list[Row] = self._finish_table(pending, results)
+            else:
+                block = self._finish_rows(pending, results)
+            ready.append(ReadyAssetBlock(pending.shard_id, block))
+        return ready
 
     def _asset_relpath(
         self,
@@ -955,6 +1042,7 @@ __all__ = [
     "BlobAssetManager",
     "FileAssetConfig",
     "MissingAssetPolicy",
+    "ReadyAssetBlock",
     "asset_config_to_plan",
     "cleanup_rejected_asset_attempts",
 ]

@@ -70,6 +70,13 @@ The configuration fields are:
 | `FileAssetConfig` | `subdir`, `max_in_flight`, `missing_policy` |
 | `BlobAssetConfig` | `subdir`, `target_bytes`, `missing_policy` |
 
+`FileAssetConfig.max_in_flight` bounds concurrent asset uploads per writer. The
+upload window stays active across input blocks, so even one-row blocks can
+overlap when `max_in_flight` is greater than one. Refiner applies backpressure
+when the window is full and waits for all remaining uploads when the shard is
+finalized. Output rows are kept in order and are not written until every asset
+referenced by that row's input block has finished uploading.
+
 To migrate the previous individual-file API:
 
 ```python
