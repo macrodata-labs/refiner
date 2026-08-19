@@ -31,6 +31,38 @@ limits to the resulting count. The submitting machine does not need access to
 private inputs. An empty stage starts no worker containers and completes after
 shard registration. Pass a positive integer when you want a fixed worker count.
 
+## Cloud and region placement
+
+Workers use AWS by default. Select one supported public cloud with `cloud`:
+
+```python
+pipeline.launch_cloud(
+    name="gcp-workers",
+    cloud="gcp",  # "aws", "oci", or "gcp"
+)
+```
+
+By default, workers may run in the US, EEA, or Canada. Pass one selector or a
+list; a worker is accepted when it matches any selector:
+
+```python
+pipeline.launch_cloud(
+    name="north-america-workers",
+    cloud="aws",
+    region=["us-east", "ca"],
+)
+```
+
+Broad selectors are `us`, `eu`, `ca`, and `uk`. Narrow selectors are
+`us-east`, `us-central`, `us-south`, `us-west`, `eu-west`, `eu-north`, and
+`eu-south`. `eu` excludes the UK. Madrid is classified as `eu-south`; the
+defensive `FRA*` and `AMS` aliases are classified as `eu-west`.
+
+Region selection does not purchase a Modal region lock. Macrodata starts an
+unconstrained worker, checks its actual placement before initializing the
+pipeline or claiming shards, and replaces it when it does not match. A worker
+range is retried up to 20 total placement attempts.
+
 ## What gets submitted
 
 A cloud submission includes:
