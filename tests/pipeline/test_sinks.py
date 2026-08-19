@@ -1622,12 +1622,18 @@ def test_file_asset_upload_window_overlaps_one_row_blocks(
         worker_name=None,
         runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
     ):
-        assert sink.write_shard_block(
-            shard_id, [DictRow({"image": "first.png", "value": 1})]
-        ) == 0
-        assert sink.write_shard_block(
-            shard_id, [DictRow({"image": "second.png", "value": 2})]
-        ) == 0
+        assert (
+            sink.write_shard_block(
+                shard_id, [DictRow({"image": "first.png", "value": 1})]
+            )
+            == 0
+        )
+        assert (
+            sink.write_shard_block(
+                shard_id, [DictRow({"image": "second.png", "value": 2})]
+            )
+            == 0
+        )
         assert both_started.wait(timeout=5)
         assert not list(output_dir.glob("*.jsonl"))
         release.set()

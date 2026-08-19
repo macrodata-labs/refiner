@@ -220,7 +220,9 @@ class AssetUploadManager:
         ready = self.submit_table(shard_id, table)
         ready.extend(self.on_shard_complete(shard_id))
         if len(ready) != 1 or not isinstance(ready[0].block, pa.Table):
-            raise RuntimeError("rewrite_table cannot be mixed with deferred asset blocks")
+            raise RuntimeError(
+                "rewrite_table cannot be mixed with deferred asset blocks"
+            )
         return ready[0].block
 
     def _prepare_table(self, shard_id: str, table: pa.Table) -> _PendingTable:
@@ -342,7 +344,9 @@ class AssetUploadManager:
         ready = self.submit_rows(shard_id, rows)
         ready.extend(self.on_shard_complete(shard_id))
         if len(ready) != 1 or not isinstance(ready[0].block, list):
-            raise RuntimeError("rewrite_rows cannot be mixed with deferred asset blocks")
+            raise RuntimeError(
+                "rewrite_rows cannot be mixed with deferred asset blocks"
+            )
         yield from ready[0].block
 
     def _prepare_rows(
@@ -417,9 +421,7 @@ class AssetUploadManager:
                     patch[column_name] = _set_null_value(patch[column_name], copied)
             output.append(row.update(patch) if patch else row)
         if dropped:
-            log_throughput(
-                "asset_rows_dropped", dropped, pending.shard_id, unit="rows"
-            )
+            log_throughput("asset_rows_dropped", dropped, pending.shard_id, unit="rows")
         return output
 
     def _take_ready(self) -> list[ReadyAssetBlock]:

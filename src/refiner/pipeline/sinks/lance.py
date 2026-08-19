@@ -912,14 +912,11 @@ class LanceDatasetSink(BaseSink):
             assert isinstance(ready.block, pa.Table)
             if self.mode == "add_columns":
                 addresses = self._pending_add_columns_addresses[ready.shard_id].pop(0)
-                self._write_add_columns_table(
-                    ready.shard_id, ready.block, addresses
-                )
+                self._write_add_columns_table(ready.shard_id, ready.block, addresses)
             else:
                 self._write_table(ready.shard_id, ready.block)
             self._asset_rows_written[ready.shard_id] = (
-                self._asset_rows_written.get(ready.shard_id, 0)
-                + ready.block.num_rows
+                self._asset_rows_written.get(ready.shard_id, 0) + ready.block.num_rows
             )
 
     def _write_sidecar(
