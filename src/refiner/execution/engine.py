@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+import sys
 from typing import cast
 
 import pyarrow as pa
@@ -75,16 +76,18 @@ def execute_segments(
     stream: Iterable[StreamItem],
     segments: Sequence[Segment],
     *,
-    vectorized_chunk_rows: int = _DEFAULT_VECTORIZED_CHUNK_ROWS,
+    vectorized_chunk_rows: int | None = None,
     max_vectorized_block_bytes: int | None = None,
     on_shard_delta: ShardDeltaFn | None = None,
     input_schema: pa.Schema | None = None,
     async_window_registry: AsyncWindowRegistry | None = None,
 ) -> Iterator[Block]:
     """Execute segments and yield row or tabular blocks."""
+    configured_block_rows = vectorized_chunk_rows
+    chunk_rows = vectorized_chunk_rows or _DEFAULT_VECTORIZED_CHUNK_ROWS
     current: Iterable[Block] = _normalize_blocks(
         stream,
-        block_rows=vectorized_chunk_rows,
+        block_rows=chunk_rows,
     )
     current_schema = input_schema
     for idx, segment in enumerate(segments):
@@ -93,7 +96,7 @@ def execute_segments(
             current = _execute_vector_segment(
                 current,
                 segment.ops,
-                vectorized_chunk_rows=vectorized_chunk_rows,
+                vectorized_chunk_rows=chunk_rows,
                 max_vectorized_block_bytes=max_vectorized_block_bytes,
                 on_shard_delta=on_shard_delta,
                 input_schema=current_schema,
@@ -104,7 +107,8 @@ def execute_segments(
             current = _execute_row_segment(
                 current,
                 segment.steps,
-                output_block_rows=vectorized_chunk_rows,
+                output_block_rows=chunk_rows,
+                max_output_block_bytes=max_vectorized_block_bytes,
                 output_tabular=isinstance(next_segment, VectorSegment)
                 and max_vectorized_block_bytes is None,
                 on_shard_delta=on_shard_delta,
@@ -112,7 +116,11 @@ def execute_segments(
                 async_window_registry=async_window_registry,
             )
             current_schema = output_schema
-    yield from current
+    yield from _limit_output_blocks(
+        current,
+        max_block_rows=configured_block_rows,
+        max_block_bytes=max_vectorized_block_bytes,
+    )
 
 
 def schema_after_segments(
@@ -202,6 +210,7 @@ def _execute_row_segment(
     steps: Sequence[RefinerStep],
     *,
     output_block_rows: int,
+    max_output_block_bytes: int | None,
     output_tabular: bool,
     on_shard_delta: ShardDeltaFn | None,
     output_schema: pa.Schema | None,
@@ -217,9 +226,17 @@ def _execute_row_segment(
         async_window_registry=async_window_registry,
     )
     if not output_tabular:
-        yield from _chunk_output_rows(step_out, output_block_rows)
+        yield from _chunk_output_rows(
+            step_out,
+            output_block_rows,
+            max_block_bytes=max_output_block_bytes,
+        )
         return
-    for batch in _chunk_output_rows(step_out, output_block_rows):
+    for batch in _chunk_output_rows(
+        step_out,
+        output_block_rows,
+        max_block_bytes=max_output_block_bytes,
+    ):
         block = (
             Tabular.from_rows(batch, schema=output_schema)
             if not batch
@@ -469,16 +486,133 @@ def _execute_vector_segment(
     yield from _drain_rows(force=True)
 
 
-def _chunk_output_rows(rows: Iterable[Row], block_rows: int) -> Iterator[list[Row]]:
+def _estimate_value_bytes(value: object, active_containers: set[int]) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return 1
+    if isinstance(value, int | float):
+        return 8
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    if isinstance(value, bytes | bytearray | memoryview):
+        return len(value)
+
+    container_id = id(value)
+    if container_id in active_containers:
+        return 0
+    if isinstance(value, Mapping):
+        active_containers.add(container_id)
+        try:
+            return sum(
+                _estimate_value_bytes(item, active_containers)
+                for item in value.values()
+            )
+        finally:
+            active_containers.remove(container_id)
+    if isinstance(value, list | tuple | set | frozenset):
+        active_containers.add(container_id)
+        try:
+            return sum(_estimate_value_bytes(item, active_containers) for item in value)
+        finally:
+            active_containers.remove(container_id)
+
+    nbytes = getattr(value, "nbytes", None)
+    if isinstance(nbytes, int) and nbytes >= 0:
+        return nbytes
+    return sys.getsizeof(value)
+
+
+def _estimate_row_bytes(row: Row) -> int:
+    active_containers: set[int] = set()
+    return max(
+        1,
+        sum(_estimate_value_bytes(row[name], active_containers) for name in row),
+    )
+
+
+def _chunk_output_rows(
+    rows: Iterable[Row],
+    block_rows: int,
+    *,
+    max_block_bytes: int | None = None,
+) -> Iterator[list[Row]]:
     pending: list[Row] = []
+    pending_bytes = 0
     for row in rows:
+        row_bytes = _estimate_row_bytes(row) if max_block_bytes is not None else 0
+        if (
+            pending
+            and max_block_bytes is not None
+            and pending_bytes + row_bytes > max_block_bytes
+        ):
+            yield pending
+            pending = []
+            pending_bytes = 0
         pending.append(row)
-        if len(pending) >= block_rows:
+        pending_bytes += row_bytes
+        if len(pending) >= block_rows or (
+            max_block_bytes is not None and pending_bytes >= max_block_bytes
+        ):
             out = pending
             pending = []
+            pending_bytes = 0
             yield out
     if pending:
         yield pending
+
+
+def _limit_tabular_block(
+    block: Tabular,
+    *,
+    max_block_rows: int | None,
+    max_block_bytes: int | None,
+) -> Iterator[Tabular]:
+    total_rows = int(block.table.num_rows)
+    start = 0
+    while start < total_rows:
+        chunk_rows = min(max_block_rows or total_rows, total_rows - start)
+        while True:
+            chunk = block.table.slice(start, chunk_rows)
+            if (
+                max_block_bytes is None
+                or chunk_rows <= 1
+                or chunk.nbytes <= max_block_bytes
+            ):
+                break
+            scaled_rows = int(
+                chunk_rows * (max_block_bytes / max(1, int(chunk.nbytes)))
+            )
+            chunk_rows = min(chunk_rows - 1, max(1, scaled_rows))
+        yield block.with_table(
+            chunk,
+            row_indices=range(start, start + chunk_rows),
+        )
+        start += chunk_rows
+
+
+def _limit_output_blocks(
+    stream: Iterable[Block],
+    *,
+    max_block_rows: int | None,
+    max_block_bytes: int | None,
+) -> Iterator[Block]:
+    if max_block_rows is None and max_block_bytes is None:
+        yield from stream
+        return
+    for block in stream:
+        if isinstance(block, Tabular):
+            yield from _limit_tabular_block(
+                block,
+                max_block_rows=max_block_rows,
+                max_block_bytes=max_block_bytes,
+            )
+            continue
+        yield from _chunk_output_rows(
+            block,
+            max_block_rows or max(1, len(block)),
+            max_block_bytes=max_block_bytes,
+        )
 
 
 __all__ = [

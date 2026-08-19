@@ -482,6 +482,7 @@ def plan_pipeline_stages(
         reducer_stage = RefinerPipeline(
             source=TaskSource(num_tasks=1),
             pipeline_steps=(),
+            max_block_rows=pipeline.max_block_rows,
             max_vectorized_block_bytes=pipeline.max_vectorized_block_bytes,
             sink=reducer,
         )
