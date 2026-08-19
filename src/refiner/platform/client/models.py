@@ -139,11 +139,11 @@ class StageLifecycleResponse(msgspec.Struct, frozen=True):
 @dataclass(frozen=True, slots=True)
 class CloudRuntimeConfig:
     num_workers: int | Literal["auto"]
-    cloud: CloudProvider = "aws"
-    region: tuple[CloudRegion, ...] = ("us", "eu", "ca")
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpu: GPU | None = None
+    cloud: CloudProvider = "aws"
+    region: tuple[CloudRegion, ...] = ("us", "eu", "ca")
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
