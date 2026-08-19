@@ -12,6 +12,7 @@ from refiner.pipeline.planning import (
     StageComputeRequirements,
     compile_planned_stages,
     plan_pipeline_stages,
+    WorkerCount,
 )
 from refiner.pipeline.resources import GPU
 
@@ -25,7 +26,7 @@ class BaseLauncher(ABC):
         *,
         pipeline: RefinerPipeline,
         name: str,
-        num_workers: int = 1,
+        num_workers: WorkerCount = 1,
         cpus_per_worker: int | None = None,
         gpu: GPU | None = None,
     ):
@@ -33,8 +34,10 @@ class BaseLauncher(ABC):
             raise ValueError("name must be non-empty")
         self.pipeline = pipeline
         self.name = name
-        if num_workers <= 0:
-            raise ValueError("num_workers must be > 0")
+        if num_workers != "auto" and (
+            not isinstance(num_workers, int) or num_workers <= 0
+        ):
+            raise ValueError("num_workers must be > 0 or 'auto'")
         self.num_workers = num_workers
         if cpus_per_worker is not None and cpus_per_worker <= 0:
             raise ValueError("cpus_per_worker must be > 0")
@@ -47,10 +50,7 @@ class BaseLauncher(ABC):
         return f"{slug}-{int(time.time())}-{uuid4().hex[:8]}"
 
     def _planned_stages(self) -> list[PlannedStage]:
-        requested_workers = getattr(self, "num_workers", None)
-        default_num_workers = (
-            requested_workers if isinstance(requested_workers, int) else 1
-        )
+        default_num_workers = getattr(self, "num_workers", 1)
         return plan_pipeline_stages(
             self.pipeline,
             default_num_workers=default_num_workers,
