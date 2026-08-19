@@ -58,11 +58,6 @@ Broad selectors are `us`, `eu`, `ca`, and `uk`. Narrow selectors are
 `eu-south`. `eu` excludes the UK. Madrid is classified as `eu-south`; the
 defensive `FRA*` and `AMS` aliases are classified as `eu-west`.
 
-Region selection does not purchase a Modal region lock. Macrodata starts an
-unconstrained worker, checks its actual placement before initializing the
-pipeline or claiming shards, and replaces it when it does not match. A worker
-range is retried up to 20 total placement attempts.
-
 ## What gets submitted
 
 A cloud submission includes:
