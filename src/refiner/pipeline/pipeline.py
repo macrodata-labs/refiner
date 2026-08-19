@@ -96,6 +96,7 @@ class RefinerPipeline:
     source: BaseSource
     pipeline_steps: tuple[RefinerStep, ...]
     _compiled_segments: tuple[Segment, ...] | None
+    max_block_rows: int | None
     max_vectorized_block_bytes: int | None
     sink: BaseSink | None
 
@@ -104,6 +105,7 @@ class RefinerPipeline:
         source: BaseSource,
         pipeline_steps: Sequence[RefinerStep] | None = None,
         *,
+        max_block_rows: int | None = None,
         max_vectorized_block_bytes: int | None = None,
         sink: BaseSink | None = None,
     ):
@@ -112,16 +114,20 @@ class RefinerPipeline:
         Args:
             source: Source that plans shards and emits source rows or blocks.
             pipeline_steps: Ordered transform steps applied after the source.
-            max_vectorized_block_bytes: Optional target byte cap for vectorized
-                Arrow blocks. Smaller values reduce peak memory at the cost of
-                more block boundaries.
+            max_block_rows: Optional maximum rows emitted in one execution block.
+            max_vectorized_block_bytes: Optional soft byte cap for execution
+                blocks. Row blocks are estimated from their values; Arrow blocks
+                use their buffer sizes. A single row may exceed the cap.
             sink: Optional writer sink attached by a ``write_*`` method.
         """
+        if max_block_rows is not None and max_block_rows <= 0:
+            raise ValueError("max_block_rows must be > 0 when provided")
         if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
             raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
         self.source = source
         self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
         self._compiled_segments = None
+        self.max_block_rows = max_block_rows
         self.max_vectorized_block_bytes = max_vectorized_block_bytes
         self.sink = sink
 
@@ -135,6 +141,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps + (step,),
+            max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=self.sink,
         )
@@ -167,23 +174,39 @@ class RefinerPipeline:
             return self.__class__(
                 self.source,
                 self.pipeline_steps[:-1] + (merged,),
+                max_block_rows=self.max_block_rows,
                 max_vectorized_block_bytes=self.max_vectorized_block_bytes,
                 sink=self.sink,
             )
         return self.add_step(VectorizedSegmentStep(ops=(op,)))
 
-    def with_max_vectorized_block_bytes(
-        self, max_vectorized_block_bytes: int | None
-    ) -> "RefinerPipeline":
-        """Return a copy with a different vectorized block byte cap.
+    def with_max_block_rows(self, max_block_rows: int | None) -> "RefinerPipeline":
+        """Return a copy with a different execution block row limit.
 
-        Set this when vectorized expression/table operations should operate on
-        smaller Arrow chunks to reduce memory pressure. ``None`` leaves block
-        sizing to the execution engine.
+        Set this to emit source and transformed blocks after at most this many
+        rows. ``None`` uses the execution engine's default block sizing.
         """
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            max_block_rows=max_block_rows,
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            sink=self.sink,
+        )
+
+    def with_max_vectorized_block_bytes(
+        self, max_vectorized_block_bytes: int | None
+    ) -> "RefinerPipeline":
+        """Return a copy with a different execution block byte cap.
+
+        Set this to emit completed row and Arrow blocks sooner when they contain
+        large values. The cap is soft because one indivisible row may exceed it.
+        ``None`` leaves block sizing to the execution engine.
+        """
+        return self.__class__(
+            self.source,
+            self.pipeline_steps,
+            max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=max_vectorized_block_bytes,
             sink=self.sink,
         )
@@ -198,6 +221,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=sink,
         )
@@ -506,6 +530,7 @@ class RefinerPipeline:
                 yield from execute_segments(
                     rows,
                     self._get_compiled_segments(),
+                    vectorized_chunk_rows=self.max_block_rows,
                     max_vectorized_block_bytes=self.max_vectorized_block_bytes,
                     on_shard_delta=on_shard_delta,
                     input_schema=self.source.schema,
