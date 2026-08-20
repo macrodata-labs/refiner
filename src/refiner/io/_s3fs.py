@@ -142,10 +142,9 @@ def _build_concurrent_s3_file(original: type[Any]) -> type[Any]:
         ) -> None:
             if "r" not in mode:
                 requested_block_size = args[0] if args else kwargs.get("block_size")
-                default_block_size = getattr(s3, "default_block_size", None)
                 requested_part_bytes = (
                     requested_block_size
-                    if requested_block_size not in (None, default_block_size)
+                    if isinstance(requested_block_size, int)
                     else DEFAULT_PART_BYTES
                 )
                 configured_part_bytes = getattr(

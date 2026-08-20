@@ -136,11 +136,12 @@ Consequently, subsequent binary s3fs streaming writes in that worker use
 concurrent multipart batches, not only packed asset writes. Reads and non-s3fs
 fsspec backends retain their standard behavior.
 
-Each writer normally accumulates four 64 MiB parts and uploads the batch
-concurrently. Packed asset writers pass their maximum final block size to s3fs,
-allowing the part size to grow automatically so objects through S3's 5 TiB
-limit remain below 10,000 parts. A direct s3fs write with no final `size` hint
-uses 64 MiB parts and therefore cannot exceed 10,000 parts; it fails and aborts
-cleanly instead. Peak memory includes the batch buffer and materialized input
-bytes. The patch subclasses s3fs's file class and keeps its normal multipart
-creation, commit, abort, endpoint, credential, and cache behavior.
+Each writer accumulates up to four parts using the block size configured on
+s3fs (50 MiB by default) and uploads the batch concurrently. Packed asset
+writers pass their maximum final block size to s3fs, allowing the part size to
+grow automatically so objects through S3's 5 TiB limit remain below 10,000
+parts. A direct s3fs write with no final `size` hint retains its configured part
+size and therefore cannot exceed 10,000 parts; it fails and aborts cleanly
+instead. Peak memory includes the batch buffer and materialized input bytes.
+The patch subclasses s3fs's file class and keeps its normal multipart creation,
+commit, abort, endpoint, credential, and cache behavior.

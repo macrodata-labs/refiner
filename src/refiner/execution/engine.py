@@ -528,6 +528,9 @@ def _limit_output_blocks(
     if max_block_rows is None and max_vectorized_block_bytes is None:
         yield from stream
         return
+    # TODO: Propagate block-size hints into cooperative sources (for example,
+    # Parquet scanners). This boundary limits blocks seen downstream, but a source
+    # may already have materialized a larger block before it reaches this point.
     for block in stream:
         if isinstance(block, Tabular):
             yield from _limit_tabular_block(

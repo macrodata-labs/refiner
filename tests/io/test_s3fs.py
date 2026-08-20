@@ -138,6 +138,25 @@ def test_explicit_s3fs_block_size_remains_the_part_size() -> None:
         writer.write(b"x")
 
 
+def test_s3fs_filesystem_default_remains_the_part_size() -> None:
+    recorder = _S3Recorder()
+    filesystem = s3fs.S3FileSystem(
+        anon=True,
+        default_block_size=_PART_BYTES,
+        skip_instance_cache=True,
+    )
+    filesystem.call_s3 = recorder
+
+    with filesystem.open(
+        "bucket/custom-default.blob",
+        "wb",
+        size=1,
+    ) as writer:
+        assert writer.blocksize == _PART_BYTES
+        assert writer._refiner_batch_bytes == 4 * _PART_BYTES
+        writer.write(b"x")
+
+
 def test_small_write_retains_s3fs_one_shot_put() -> None:
     recorder = _S3Recorder()
     filesystem = _filesystem(recorder)
