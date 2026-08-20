@@ -75,16 +75,18 @@ def execute_segments(
     stream: Iterable[StreamItem],
     segments: Sequence[Segment],
     *,
-    vectorized_chunk_rows: int = _DEFAULT_VECTORIZED_CHUNK_ROWS,
+    vectorized_chunk_rows: int | None = None,
     max_vectorized_block_bytes: int | None = None,
     on_shard_delta: ShardDeltaFn | None = None,
     input_schema: pa.Schema | None = None,
     async_window_registry: AsyncWindowRegistry | None = None,
 ) -> Iterator[Block]:
     """Execute segments and yield row or tabular blocks."""
+    configured_block_rows = vectorized_chunk_rows
+    chunk_rows = vectorized_chunk_rows or _DEFAULT_VECTORIZED_CHUNK_ROWS
     current: Iterable[Block] = _normalize_blocks(
         stream,
-        block_rows=vectorized_chunk_rows,
+        block_rows=chunk_rows,
     )
     current_schema = input_schema
     for idx, segment in enumerate(segments):
@@ -93,7 +95,7 @@ def execute_segments(
             current = _execute_vector_segment(
                 current,
                 segment.ops,
-                vectorized_chunk_rows=vectorized_chunk_rows,
+                vectorized_chunk_rows=chunk_rows,
                 max_vectorized_block_bytes=max_vectorized_block_bytes,
                 on_shard_delta=on_shard_delta,
                 input_schema=current_schema,
@@ -104,7 +106,7 @@ def execute_segments(
             current = _execute_row_segment(
                 current,
                 segment.steps,
-                output_block_rows=vectorized_chunk_rows,
+                output_block_rows=chunk_rows,
                 output_tabular=isinstance(next_segment, VectorSegment)
                 and max_vectorized_block_bytes is None,
                 on_shard_delta=on_shard_delta,
@@ -112,7 +114,11 @@ def execute_segments(
                 async_window_registry=async_window_registry,
             )
             current_schema = output_schema
-    yield from current
+    yield from _limit_output_blocks(
+        current,
+        max_block_rows=configured_block_rows,
+        max_vectorized_block_bytes=max_vectorized_block_bytes,
+    )
 
 
 def schema_after_segments(
@@ -469,7 +475,10 @@ def _execute_vector_segment(
     yield from _drain_rows(force=True)
 
 
-def _chunk_output_rows(rows: Iterable[Row], block_rows: int) -> Iterator[list[Row]]:
+def _chunk_output_rows(
+    rows: Iterable[Row],
+    block_rows: int,
+) -> Iterator[list[Row]]:
     pending: list[Row] = []
     for row in rows:
         pending.append(row)
@@ -479,6 +488,61 @@ def _chunk_output_rows(rows: Iterable[Row], block_rows: int) -> Iterator[list[Ro
             yield out
     if pending:
         yield pending
+
+
+def _limit_tabular_block(
+    block: Tabular,
+    *,
+    max_block_rows: int | None,
+    max_block_bytes: int | None,
+) -> Iterator[Tabular]:
+    total_rows = int(block.table.num_rows)
+    start = 0
+    while start < total_rows:
+        chunk_rows = min(max_block_rows or total_rows, total_rows - start)
+        while True:
+            chunk = block.table.slice(start, chunk_rows)
+            if (
+                max_block_bytes is None
+                or chunk_rows <= 1
+                or chunk.nbytes <= max_block_bytes
+            ):
+                break
+            scaled_rows = int(
+                chunk_rows * (max_block_bytes / max(1, int(chunk.nbytes)))
+            )
+            chunk_rows = min(chunk_rows - 1, max(1, scaled_rows))
+        yield block.with_table(
+            chunk,
+            row_indices=range(start, start + chunk_rows),
+        )
+        start += chunk_rows
+
+
+def _limit_output_blocks(
+    stream: Iterable[Block],
+    *,
+    max_block_rows: int | None,
+    max_vectorized_block_bytes: int | None,
+) -> Iterator[Block]:
+    if max_block_rows is None and max_vectorized_block_bytes is None:
+        yield from stream
+        return
+    # TODO: Propagate block-size hints into cooperative sources (for example,
+    # Parquet scanners). This boundary limits blocks seen downstream, but a source
+    # may already have materialized a larger block before it reaches this point.
+    for block in stream:
+        if isinstance(block, Tabular):
+            yield from _limit_tabular_block(
+                block,
+                max_block_rows=max_block_rows,
+                max_block_bytes=max_vectorized_block_bytes,
+            )
+            continue
+        if max_block_rows is None:
+            yield block
+        else:
+            yield from _chunk_output_rows(block, max_block_rows)
 
 
 __all__ = [

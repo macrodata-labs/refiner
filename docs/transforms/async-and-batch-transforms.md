@@ -28,6 +28,20 @@ pipeline = pipeline.map_async(
 Use `max_in_flight` to match provider rate limits, memory limits, or open file
 limits.
 
+When callbacks return large values such as image or video bytes, set a small
+execution block row limit:
+
+```python
+pipeline = pipeline.with_max_block_rows(16)
+```
+
+The row limit applies to source and transformed Python row blocks before they
+reach the sink. Callback results that are still in flight are separate, so
+choose `max_in_flight` and `max_block_rows` with the largest expected result in
+mind. `with_max_vectorized_block_bytes(...)` applies only to Arrow blocks from
+sources or vectorized operations; it does not estimate the size of Python row
+values.
+
 ## Inference helpers
 
 Most model calls should use Refiner's inference helpers instead of calling an

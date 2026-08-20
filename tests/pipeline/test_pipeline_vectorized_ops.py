@@ -453,6 +453,75 @@ def test_max_vectorized_block_bytes_can_force_smaller_blocks() -> None:
     assert all(int(block.table.num_rows) <= 1 for block in tabular_blocks)
 
 
+def test_max_vectorized_block_bytes_does_not_split_row_blocks() -> None:
+    pipeline = (
+        from_items([{"payload": b"x" * 6} for _ in range(5)])
+        .map(lambda row: row)
+        .with_max_vectorized_block_bytes(12)
+    )
+
+    blocks = list(pipeline.execute(pipeline.source.read()))
+
+    block_lengths = []
+    for block in blocks:
+        assert isinstance(block, list)
+        block_lengths.append(len(block))
+    assert block_lengths == [5]
+
+
+def test_block_limits_apply_to_source_only_rows() -> None:
+    pipeline = (
+        from_items([{"payload": b"x" * 6} for _ in range(5)])
+        .with_max_block_rows(3)
+        .with_max_vectorized_block_bytes(12)
+    )
+
+    blocks = list(pipeline.execute(pipeline.source.read()))
+
+    block_lengths = []
+    for block in blocks:
+        assert isinstance(block, list)
+        block_lengths.append(len(block))
+    assert block_lengths == [3, 2]
+
+
+def test_max_block_rows_splits_source_tabular_blocks() -> None:
+    source = Tabular(pa.table({"x": list(range(5))}))
+
+    blocks = list(
+        engine_module.execute_segments(
+            [source],
+            (),
+            vectorized_chunk_rows=2,
+        )
+    )
+
+    block_lengths = []
+    for block in blocks:
+        assert isinstance(block, Tabular)
+        block_lengths.append(int(block.table.num_rows))
+    assert block_lengths == [2, 2, 1]
+
+
+def test_max_block_rows_limits_map_async_results() -> None:
+    async def add_payload(row):
+        return {"payload": b"x" * 8}
+
+    pipeline = (
+        from_items([{"id": index} for index in range(5)])
+        .map_async(add_payload, max_in_flight=2)
+        .with_max_block_rows(2)
+    )
+
+    blocks = list(pipeline.execute(pipeline.source.read()))
+
+    block_lengths = []
+    for block in blocks:
+        assert isinstance(block, list)
+        block_lengths.append(len(block))
+    assert block_lengths == [2, 2, 1]
+
+
 def test_vectorized_chunk_shrink_is_run_local(monkeypatch) -> None:
     calls: list[int] = []
     original_from_rows = engine_module.Tabular.from_rows
@@ -509,6 +578,11 @@ def test_row_segment_to_vectorized_chunk_shrink_is_budgeted(monkeypatch) -> None
 def test_with_max_vectorized_block_bytes_validates_positive() -> None:
     with pytest.raises(ValueError):
         from_items([{"x": 1}]).with_max_vectorized_block_bytes(0)
+
+
+def test_with_max_block_rows_validates_positive() -> None:
+    with pytest.raises(ValueError):
+        from_items([{"x": 1}]).with_max_block_rows(0)
 
 
 def test_vectorized_expression_extensions() -> None:
