@@ -59,6 +59,11 @@ pipeline.write_parquet(
 target, not a hard limit: an individual asset larger than the target is written
 to its own larger block.
 
+When the destination is S3 or an S3-compatible service such as Cloudflare R2,
+Refiner uploads large packed blocks with bounded multipart concurrency. No
+additional configuration is required. The destination credentials must permit
+multipart create, part upload, completion, abort, and failed-output deletion.
+
 The same configurations work with JSONL and Lance writers. These are generic
 Refiner block files, not Lance-native blob columns. With `assets=None`, writers
 preserve each asset's existing path, bytes, or reference representation.
@@ -121,3 +126,11 @@ workers finish shard-local writes.
 | Zarr | Merge shard-local stores into a single store when configured. |
 
 Reducers are part of the launched pipeline plan and are visible in job progress.
+
+## Internal Notes
+
+The s3fs blob path keeps at most four 64 MiB parts in flight for each active
+packed block. Part size increases automatically for unusually large targets so
+an object stays below S3's 10,000-part limit. Other fsspec backends retain the
+normal streaming writer. Peak memory includes the active part buffer and
+in-flight multipart payloads in addition to upstream materialized asset bytes.
