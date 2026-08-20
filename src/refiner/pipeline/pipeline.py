@@ -114,9 +114,9 @@ class RefinerPipeline:
             source: Source that plans shards and emits source rows or blocks.
             pipeline_steps: Ordered transform steps applied after the source.
             max_block_rows: Optional maximum rows emitted in one execution block.
-            max_vectorized_block_bytes: Optional soft byte cap for execution
-                blocks. Row blocks are estimated from their values; Arrow blocks
-                use their buffer sizes. A single row may exceed the cap.
+            max_vectorized_block_bytes: Optional soft byte cap for vectorized
+                Arrow blocks. Python row blocks are controlled by
+                ``max_block_rows`` instead.
             sink: Optional writer sink attached by a ``write_*`` method.
         """
         if max_block_rows is not None and max_block_rows <= 0:
@@ -196,11 +196,12 @@ class RefinerPipeline:
     def with_max_vectorized_block_bytes(
         self, max_vectorized_block_bytes: int | None
     ) -> "RefinerPipeline":
-        """Return a copy with a different execution block byte cap.
+        """Return a copy with a different vectorized block byte cap.
 
-        Set this to emit completed row and Arrow blocks sooner when they contain
-        large values. The cap is soft because one indivisible row may exceed it.
-        ``None`` leaves block sizing to the execution engine.
+        This applies to Arrow blocks from sources and vectorized operations. Use
+        ``with_max_block_rows`` to control Python row blocks. The byte cap is soft
+        because one indivisible Arrow row may exceed it. ``None`` leaves
+        vectorized block sizing to the execution engine.
         """
         return self.__class__(
             self.source,

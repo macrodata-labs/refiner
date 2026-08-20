@@ -453,7 +453,7 @@ def test_max_vectorized_block_bytes_can_force_smaller_blocks() -> None:
     assert all(int(block.table.num_rows) <= 1 for block in tabular_blocks)
 
 
-def test_max_vectorized_block_bytes_limits_row_blocks() -> None:
+def test_max_vectorized_block_bytes_does_not_split_row_blocks() -> None:
     pipeline = (
         from_items([{"payload": b"x" * 6} for _ in range(5)])
         .map(lambda row: row)
@@ -466,7 +466,7 @@ def test_max_vectorized_block_bytes_limits_row_blocks() -> None:
     for block in blocks:
         assert isinstance(block, list)
         block_lengths.append(len(block))
-    assert block_lengths == [2, 2, 1]
+    assert block_lengths == [5]
 
 
 def test_block_limits_apply_to_source_only_rows() -> None:
@@ -482,7 +482,7 @@ def test_block_limits_apply_to_source_only_rows() -> None:
     for block in blocks:
         assert isinstance(block, list)
         block_lengths.append(len(block))
-    assert block_lengths == [2, 1, 2]
+    assert block_lengths == [3, 2]
 
 
 def test_max_block_rows_splits_source_tabular_blocks() -> None:
@@ -503,36 +503,14 @@ def test_max_block_rows_splits_source_tabular_blocks() -> None:
     assert block_lengths == [2, 2, 1]
 
 
-def test_max_vectorized_block_bytes_emits_oversized_row_alone() -> None:
-    pipeline = (
-        from_items(
-            [
-                {"payload": b"x" * 20},
-                {"payload": b"x" * 3},
-                {"payload": b"x" * 3},
-            ]
-        )
-        .map(lambda row: row)
-        .with_max_vectorized_block_bytes(10)
-    )
-
-    blocks = list(pipeline.execute(pipeline.source.read()))
-
-    block_lengths = []
-    for block in blocks:
-        assert isinstance(block, list)
-        block_lengths.append(len(block))
-    assert block_lengths == [1, 2]
-
-
-def test_max_vectorized_block_bytes_limits_map_async_results() -> None:
+def test_max_block_rows_limits_map_async_results() -> None:
     async def add_payload(row):
         return {"payload": b"x" * 8}
 
     pipeline = (
-        from_items([{"id": index} for index in range(4)])
+        from_items([{"id": index} for index in range(5)])
         .map_async(add_payload, max_in_flight=2)
-        .with_max_vectorized_block_bytes(24)
+        .with_max_block_rows(2)
     )
 
     blocks = list(pipeline.execute(pipeline.source.read()))
@@ -541,7 +519,7 @@ def test_max_vectorized_block_bytes_limits_map_async_results() -> None:
     for block in blocks:
         assert isinstance(block, list)
         block_lengths.append(len(block))
-    assert block_lengths == [1, 1, 1, 1]
+    assert block_lengths == [2, 2, 1]
 
 
 def test_vectorized_chunk_shrink_is_run_local(monkeypatch) -> None:
