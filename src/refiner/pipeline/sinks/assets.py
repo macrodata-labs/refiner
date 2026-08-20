@@ -16,14 +16,10 @@ from refiner.execution.asyncio.runtime import io_executor
 from refiner.execution.asyncio.window import AsyncWindow
 from refiner.io import DataFile
 from refiner.io.datafolder import DataFolder
+from refiner.io._s3fs import is_s3fs
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.tabular import set_or_append_column
-from refiner.pipeline.sinks._s3_multipart import (
-    ConcurrentS3MultipartWriter,
-    is_s3fs,
-    part_bytes_for_size,
-)
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
 
@@ -569,21 +565,12 @@ class BlobAssetManager:
         if block is None:
             next_index = self._blocks[key].index + 1 if key in self._blocks else 0
             relpath = self._block_relpath(shard_id, column_name, next_index)
-            target = self.output.file(relpath)
-            stream = (
-                cast(
-                    IO[bytes],
-                    ConcurrentS3MultipartWriter(
-                        self.output.fs,
-                        target.path,
-                        part_bytes=part_bytes_for_size(
-                            max(self.config.target_bytes, payload_size)
-                        ),
-                    ),
-                )
+            open_kwargs = (
+                {"size": max(self.config.target_bytes, payload_size)}
                 if is_s3fs(self.output.fs)
-                else self.output.open(relpath, mode="wb")
+                else {}
             )
+            stream = self.output.open(relpath, mode="wb", **open_kwargs)
             block = _BlobBlock(
                 stream=stream,
                 path=self.output.abs_path(relpath),

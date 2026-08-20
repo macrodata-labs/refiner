@@ -59,10 +59,11 @@ pipeline.write_parquet(
 target, not a hard limit: an individual asset larger than the target is written
 to its own larger block.
 
-When the destination is S3 or an S3-compatible service such as Cloudflare R2,
-Refiner uploads large packed blocks with bounded multipart concurrency. No
-additional configuration is required. The destination credentials must permit
-multipart create, part upload, completion, abort, and failed-output deletion.
+When the destination uses s3fs, including AWS S3 and Cloudflare R2, Refiner
+uploads large files with bounded multipart concurrency. No additional
+configuration is required. Small files retain s3fs's one-shot PUT behavior.
+Credentials must permit object writes and multipart creation, part upload,
+completion, and abort.
 
 The same configurations work with JSONL and Lance writers. These are generic
 Refiner block files, not Lance-native blob columns. With `assets=None`, writers
@@ -129,8 +130,17 @@ Reducers are part of the launched pipeline plan and are visible in job progress.
 
 ## Internal Notes
 
-The s3fs blob path keeps at most four 64 MiB parts in flight for each active
-packed block. Part size increases automatically for unusually large targets so
-an object stays below S3's 10,000-part limit. Other fsspec backends retain the
-normal streaming writer. Peak memory includes the active part buffer and
-in-flight multipart payloads in addition to upstream materialized asset bytes.
+When a Refiner `DataFile` or `DataFolder` resolves an s3fs filesystem, Refiner
+installs an idempotent, process-wide replacement for s3fs's `S3File` class.
+Consequently, subsequent binary s3fs streaming writes in that worker use
+concurrent multipart batches, not only packed asset writes. Reads and non-s3fs
+fsspec backends retain their standard behavior.
+
+Each writer normally accumulates four 64 MiB parts and uploads the batch
+concurrently. Packed asset writers pass their maximum final block size to s3fs,
+allowing the part size to grow automatically so objects through S3's 5 TiB
+limit remain below 10,000 parts. A direct s3fs write with no final `size` hint
+uses 64 MiB parts and therefore cannot exceed 10,000 parts; it fails and aborts
+cleanly instead. Peak memory includes the batch buffer and materialized input
+bytes. The patch subclasses s3fs's file class and keeps its normal multipart
+creation, commit, abort, endpoint, credential, and cache behavior.

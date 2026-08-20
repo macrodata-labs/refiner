@@ -8,6 +8,7 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
+from refiner.io._s3fs import install_s3fs_concurrent_writes_for
 from refiner.io.datafile import DataFile, _storage_options_for_path
 from refiner.io.utils import required_refiner_extras
 
@@ -62,6 +63,7 @@ class DataFolder(DirFileSystem):
             )
             if not self._path:
                 self._path = "/"
+        install_s3fs_concurrent_writes_for(self._fs)
         return self._fs, self._path
 
     @property
