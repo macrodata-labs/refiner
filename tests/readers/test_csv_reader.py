@@ -65,8 +65,8 @@ def test_csv_rejects_explicit_shard_count_above_limit(tmp_path):
     path = tmp_path / "data.csv"
     path.write_text("id\n1\n")
 
-    with pytest.raises(ValueError, match=r"num_shards must be <= 50,000"):
-        CsvReader(str(path), num_shards=50001)
+    with pytest.raises(ValueError, match=r"num_shards must be <= 10,000"):
+        CsvReader(str(path), num_shards=10_001)
 
 
 def test_csv_automatic_shard_planning_caps_atomic_files(tmp_path):

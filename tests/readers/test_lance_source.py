@@ -12,8 +12,8 @@ from refiner.pipeline.data.tabular import Tabular
 
 
 def test_load_lance_rejects_explicit_shard_count_above_limit() -> None:
-    with pytest.raises(ValueError, match=r"num_shards must be <= 50,000"):
-        LanceSource("unused.lance", num_shards=50_001)
+    with pytest.raises(ValueError, match=r"num_shards must be <= 10,000"):
+        LanceSource("unused.lance", num_shards=10_001)
 
 
 def test_load_lance_caps_automatic_shards_without_dropping_fragments() -> None:

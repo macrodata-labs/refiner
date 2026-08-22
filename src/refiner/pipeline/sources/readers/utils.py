@@ -12,7 +12,7 @@ from refiner.io import DataFile
 
 DEFAULT_TARGET_SHARD_BYTES = 128 * 1024 * 1024
 DEFAULT_MAX_AUTOMATIC_SHARDS = 1_000
-MAX_EXPLICIT_SHARDS = 50_000
+MAX_EXPLICIT_SHARDS = 10_000
 PathSelection = Mapping[str, str] | Sequence[str] | str
 
 
