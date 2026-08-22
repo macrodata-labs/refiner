@@ -45,6 +45,14 @@ def _episode_rows(reader: LeRobotEpisodeReader) -> list[LeRobotRow]:
     return rows
 
 
+def test_lerobot_rejects_explicit_shard_count_above_limit(tmp_path: Path) -> None:
+    root = tmp_path / "dataset"
+    root.mkdir()
+
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        LeRobotEpisodeReader(root, num_shards=10_001)
+
+
 def _build_sample_dataset(
     root: Path,
     *,

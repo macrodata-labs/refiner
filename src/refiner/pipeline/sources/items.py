@@ -5,6 +5,7 @@ from typing import Any
 
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource
+from refiner.pipeline.sources.shard_limit import validate_shard_count
 from refiner.pipeline.data.row import DictRow, Row
 
 _DEFAULT_ITEMS_PER_SHARD = 1_000
@@ -27,6 +28,8 @@ class ItemsSource(BaseSource):
         self._rows = tuple(_normalize_item(item) for item in items)
         self._row_count = len(self._rows)
         self._items_per_shard = items_per_shard
+        shard_count = (self._row_count + items_per_shard - 1) // items_per_shard
+        validate_shard_count(shard_count, source="Items")
 
     def list_shards(self) -> list[Shard]:
         shards: list[Shard] = []

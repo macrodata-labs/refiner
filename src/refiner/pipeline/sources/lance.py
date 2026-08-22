@@ -17,6 +17,10 @@ from refiner.pipeline.data.shard import (
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.sinks.lance_utils import validate_lance_uri
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
+from refiner.pipeline.sources.shard_limit import (
+    validate_num_shards,
+    validate_shard_count,
+)
 from refiner.utils import check_required_dependencies
 
 _LANCE_ROW_ADDRESS_COLUMN = "_rowaddr"
@@ -70,6 +74,7 @@ class LanceSource(BaseSource):
             raise ValueError("batch_size must be > 0")
         if columns is not None and len(set(columns)) != len(columns):
             raise ValueError("Lance columns must be unique")
+        validate_num_shards(num_shards)
 
         self.input = DataFolder.resolve(input)
         if self.input.has_explicit_filesystem_configuration:
@@ -158,6 +163,8 @@ class LanceSource(BaseSource):
         fragment_count = len(self._dataset().get_fragments())
         if fragment_count == 0:
             return []
+        if self.num_shards is None or self.num_shards <= 0:
+            validate_shard_count(fragment_count, source="Lance automatic")
         shard_count = (
             fragment_count
             if self.num_shards is None or self.num_shards <= 0

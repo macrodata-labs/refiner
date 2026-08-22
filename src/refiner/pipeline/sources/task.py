@@ -6,6 +6,7 @@ from typing import Any
 
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource
+from refiner.pipeline.sources.shard_limit import validate_shard_count
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.steps import FlatMapStep, MapResult
 
@@ -23,6 +24,7 @@ class TaskSource(BaseSource):
     ) -> None:
         if num_tasks <= 0:
             raise ValueError("num_tasks must be > 0")
+        validate_shard_count(num_tasks, source="Task")
         self._num_tasks = num_tasks
         self.claim_shards_sequentially = claim_shards_sequentially
 

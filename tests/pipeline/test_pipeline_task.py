@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from refiner.pipeline import task
 from refiner.pipeline.planning import compile_pipeline_plan
+
+
+def test_task_rejects_shard_count_above_limit() -> None:
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        task(lambda rank, _world_size: rank, num_tasks=10_001)
 
 
 def test_task_invokes_fn_with_rank_and_world_size() -> None:

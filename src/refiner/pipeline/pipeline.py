@@ -58,6 +58,7 @@ from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
+from refiner.pipeline.sources.shard_limit import validate_shard_count
 from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
@@ -577,7 +578,9 @@ class RefinerPipeline:
         This delegates to the source shard planner and is useful for debugging
         sharding decisions without executing the pipeline transforms.
         """
-        return list(self.source.list_shards())
+        shards = list(self.source.list_shards())
+        validate_shard_count(len(shards), source="Source")
+        return shards
 
     def materialize(self) -> list[Row]:
         """Execute locally and collect every output row into memory.

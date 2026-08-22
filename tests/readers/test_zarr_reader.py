@@ -444,6 +444,33 @@ def test_read_zarr_plans_row_ends_with_num_shards(tmp_path: Path) -> None:
     np.testing.assert_allclose(rows[0]["action"], [[1.0], [1.1], [1.2]])
 
 
+def test_read_zarr_rejects_explicit_shard_count_above_limit(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zarr"
+    _write_policy_zarr(path)
+
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        mdr.read_zarr(path, num_shards=10_001)
+
+
+def test_read_zarr_rejects_oversized_automatic_leading_axis_plan(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "large.zarr"
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "values", np.arange(10_001, dtype=np.uint16), chunks=(1,))
+
+    reader = mdr.read_zarr(
+        path,
+        arrays={"values": "values"},
+        split_leading_axis=True,
+        target_shard_bytes=1,
+        file_path_column=None,
+    ).source
+
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        reader.list_shards()
+
+
 def test_read_zarr_allows_attrs_only_reads(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
