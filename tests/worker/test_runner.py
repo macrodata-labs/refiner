@@ -356,7 +356,10 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     assert stats.failed == 2
     assert runtime_lifecycle.completed_ids == []
     assert runtime_lifecycle.failed_ids == [shard1.id, shard2.id]
-    assert runtime_lifecycle.failed_errors == ["kaboom", "kaboom"]
+    assert runtime_lifecycle.failed_errors == [
+        "kaboom | step_index=1",
+        "kaboom | step_index=1",
+    ]
 
 
 def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
@@ -379,7 +382,7 @@ def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
     stats = worker.run()
 
     assert stats.failed == 1
-    assert runtime_lifecycle.failed_errors == ["RuntimeError"]
+    assert runtime_lifecycle.failed_errors == ["RuntimeError | step_index=1"]
 
 
 def test_worker_can_batch_across_shards() -> None:
@@ -834,7 +837,7 @@ def test_worker_suppresses_sink_close_errors_after_execution_failure() -> None:
 
     assert stats.failed == 1
     assert runtime_lifecycle.failed_ids == [shard.id]
-    assert runtime_lifecycle.failed_errors == ["kaboom"]
+    assert runtime_lifecycle.failed_errors == ["kaboom | step_index=1"]
 
 
 def test_worker_suppresses_sink_close_errors_after_run_failure() -> None:
@@ -908,7 +911,7 @@ def test_worker_preserves_execution_failure_when_emitter_shutdown_fails() -> Non
 
     assert stats.failed == 1
     assert runtime_lifecycle.failed_ids == [shard.id]
-    assert runtime_lifecycle.failed_errors == ["kaboom"]
+    assert runtime_lifecycle.failed_errors == ["kaboom | step_index=1"]
 
 
 __all__: list[str] = []

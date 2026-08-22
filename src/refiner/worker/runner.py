@@ -12,6 +12,7 @@ from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
 from refiner.services import RuntimeServiceSpec, ServiceManager
 from refiner.worker.context import logger, set_active_run_context, set_active_step_index
+from refiner.worker.errors import describe_lifecycle_error
 from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.metrics.emitter import (
     NOOP_USER_METRICS_EMITTER,
@@ -317,19 +318,18 @@ class Worker:
                     raise
                 except Exception as e:
                     execution_error = e
-                    failed_error = str(e).strip() or type(e).__name__
+                    lifecycle_error = describe_lifecycle_error(e)
                     with inflight_lock:
                         in_flight_count = len(inflight_by_id)
                     logger.exception(
-                        "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
+                        "worker execution failed worker_id={} claimed={} completed={} in_flight={}",
                         self.worker_id,
                         claimed,
                         completed,
                         in_flight_count,
-                        failed_error,
                     )
                     self.user_metrics_emitter.force_flush_logs()
-                    failed_inflight = _fail_inflight_shards(failed_error)
+                    failed_inflight = _fail_inflight_shards(lifecycle_error)
                     failed += failed_inflight
                     if isinstance(e, AsyncStepTeardownError) and failed_inflight == 0:
                         raise
