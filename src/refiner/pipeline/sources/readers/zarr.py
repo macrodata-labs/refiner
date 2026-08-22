@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from math import ceil, prod
 from operator import index as integer_index
@@ -30,6 +30,36 @@ from refiner.pipeline.sources.readers.utils import (
     validate_explicit_num_shards,
 )
 from refiner.utils import check_required_dependencies
+
+
+def _allocate_automatic_range_budget(counts: list[int]) -> list[int]:
+    nonempty = sum(count > 0 for count in counts)
+    if nonempty > DEFAULT_MAX_AUTOMATIC_SHARDS:
+        raise ValueError(
+            "Zarr automatic planning cannot combine more than "
+            f"{DEFAULT_MAX_AUTOMATIC_SHARDS:,} non-empty inputs"
+        )
+    if sum(counts) <= DEFAULT_MAX_AUTOMATIC_SHARDS:
+        return counts
+
+    remaining = DEFAULT_MAX_AUTOMATIC_SHARDS - nonempty
+    weights = [max(0, count - 1) for count in counts]
+    total_weight = sum(weights)
+    allocations = [int(count > 0) for count in counts]
+    remainders: list[tuple[int, int]] = []
+    for index, weight in enumerate(weights):
+        extra, remainder = divmod(remaining * weight, total_weight)
+        allocations[index] += extra
+        remainders.append((remainder, index))
+
+    leftover = DEFAULT_MAX_AUTOMATIC_SHARDS - sum(allocations)
+    for _, index in sorted(remainders, reverse=True):
+        if leftover == 0:
+            break
+        if allocations[index] < counts[index]:
+            allocations[index] += 1
+            leftover -= 1
+    return allocations
 
 
 class ZarrReader(BaseSource):
@@ -186,29 +216,44 @@ class ZarrReader(BaseSource):
     def list_shards(self) -> list[Shard]:
         planned_ranges: list[tuple[int, list[tuple[int, int]]]] = []
         total_ranges = 0
-        automatic_limit = (
-            max(1, DEFAULT_MAX_AUTOMATIC_SHARDS // len(self.inputs))
-            if self.num_shards is None
-            else None
-        )
-        for source_index, (input, _source_path) in enumerate(self.inputs):
+        automatic_limits: Sequence[int | None]
+        if self.num_shards is None:
+            natural_counts: list[int] = []
+            for input, _source_path in self.inputs:
+                with self._open_group(input) as group:
+                    arrays = self._selected_arrays(group)
+                    natural_counts.append(
+                        len(
+                            self._shard_ranges(
+                                group,
+                                arrays,
+                                automatic_limit=DEFAULT_MAX_AUTOMATIC_SHARDS + 1,
+                            )
+                        )
+                    )
+            automatic_limits = _allocate_automatic_range_budget(natural_counts)
+        else:
+            automatic_limits = [None] * len(self.inputs)
+
+        for source_index, ((input, _source_path), automatic_limit) in enumerate(
+            zip(self.inputs, automatic_limits, strict=True)
+        ):
             with self._open_group(input) as group:
                 arrays = self._selected_arrays(group)
                 split_ranges = self._shard_ranges(
                     group,
                     arrays,
-                    automatic_limit=automatic_limit,
+                    automatic_limit=max(1, automatic_limit)
+                    if automatic_limit is not None
+                    else None,
                 )
+            if automatic_limit == 0 and split_ranges:
+                raise ValueError("Zarr input changed during automatic shard planning")
             planned_ranges.append((source_index, split_ranges))
             total_ranges += len(split_ranges)
             if self.num_shards is not None and total_ranges > MAX_EXPLICIT_SHARDS:
                 raise ValueError(
                     f"Zarr shard plan exceeds the {MAX_EXPLICIT_SHARDS:,}-shard limit"
-                )
-            if self.num_shards is None and total_ranges > DEFAULT_MAX_AUTOMATIC_SHARDS:
-                raise ValueError(
-                    "Zarr automatic planning cannot combine more than "
-                    f"{DEFAULT_MAX_AUTOMATIC_SHARDS:,} non-empty inputs"
                 )
 
         shards: list[Shard] = []

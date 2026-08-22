@@ -473,7 +473,8 @@ def test_read_zarr_caps_automatic_leading_axis_shards(
     shards = reader.list_shards()
 
     assert len(shards) == 1000
-    assert planned_counts == [1000]
+    assert planned_counts[-1] == len(shards)
+    assert max(planned_counts) <= 1001
     ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
     assert ranges[0].start == 0
     assert ranges[-1].end == 1001
@@ -514,8 +515,37 @@ def test_read_zarr_bounds_intermediate_row_end_plan(
     shards = reader.list_shards()
 
     assert len(shards) <= 1000
-    assert planned_counts == [len(shards)]
+    assert planned_counts[-1] == len(shards)
+    assert max(planned_counts) <= 1001
     ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
+    assert ranges[0].start == 0
+    assert ranges[-1].end == 1001
+
+
+def test_read_zarr_allocates_automatic_budget_by_input_workload(tmp_path: Path) -> None:
+    small_path = tmp_path / "small.zarr"
+    small = _open_test_zarr(small_path, mode="w")
+    _create_array(small, "values", np.arange(1, dtype=np.uint16), chunks=(1,))
+    large_path = tmp_path / "large.zarr"
+    large = _open_test_zarr(large_path, mode="w")
+    _create_array(large, "values", np.arange(1001, dtype=np.uint16), chunks=(1,))
+
+    shards = mdr.read_zarr(
+        [small_path, large_path],
+        arrays={"values": "values"},
+        split_leading_axis=True,
+        target_shard_bytes=1,
+        file_path_column=None,
+    ).source.list_shards()
+
+    assert len(shards) == 1000
+    assert sum(shard.start_key == "0" for shard in shards) == 1
+    assert sum(shard.start_key == "1" for shard in shards) == 999
+    ranges = [
+        cast(RowRangeDescriptor, shard.descriptor)
+        for shard in shards
+        if shard.start_key == "1"
+    ]
     assert ranges[0].start == 0
     assert ranges[-1].end == 1001
 
