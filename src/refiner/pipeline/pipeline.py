@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 from fsspec import AbstractFileSystem
 
@@ -90,6 +90,7 @@ if TYPE_CHECKING:
     from refiner.launchers.cloud import CloudLaunchResult
     from refiner.launchers.local import LaunchStats
     from refiner.launchers.secrets import SecretInput
+    from refiner.platform.client import CloudProvider, CloudRegion
 
 
 class RefinerPipeline:
@@ -762,7 +763,7 @@ class RefinerPipeline:
         self,
         *,
         name: str,
-        num_workers: int = 1,
+        num_workers: int | Literal["auto"] = 1,
         rundir: str | None = None,
         gpu: GPU | None = None,
     ) -> "LaunchStats":
@@ -770,7 +771,8 @@ class RefinerPipeline:
 
         Args:
             name: Human-readable run name.
-            num_workers: Number of local worker processes.
+            num_workers: Number of local worker processes, or ``"auto"`` to
+                launch one worker per stage shard.
             rundir: Optional explicit local run directory. Reuse it to resume a prior local run.
             gpu: Optional GPU devices exposed per worker. `cuda_version` is accepted
                 for API consistency but ignored by local launch.
@@ -790,10 +792,12 @@ class RefinerPipeline:
         self,
         *,
         name: str,
-        num_workers: int = 1,
+        num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
+        cloud: CloudProvider = "aws",
+        region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
@@ -806,10 +810,16 @@ class RefinerPipeline:
 
         Args:
             name: Human-readable run name.
-            num_workers: Requested logical worker count.
+            num_workers: Requested logical worker count, or ``"auto"`` to
+                launch one worker per stage shard.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpu: Optional structured GPU request.
+            cloud: Public cloud provider. Supported values are ``"aws"``,
+                ``"oci"``, and ``"gcp"``.
+            region: One region selector or a sequence of selectors. Workers are
+                accepted when their placement matches any selector. This does
+                not request a priced Modal region constraint.
             sync_local_dependencies: Include packages detected from the local
                 environment in the cloud runtime.
             dependencies: Additional packages to install in the cloud runtime.
@@ -839,6 +849,8 @@ class RefinerPipeline:
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,
             gpu=gpu,
+            cloud=cloud,
+            region=region,
             sync_local_dependencies=sync_local_dependencies,
             dependencies=dependencies,
             refiner_extras=refiner_extras,

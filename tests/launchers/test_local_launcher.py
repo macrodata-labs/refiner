@@ -25,7 +25,7 @@ from refiner.cli.ui.console import (
     stream_stage_logs,
 )
 from refiner.pipeline.data.shard import FilePart, Shard
-from refiner.pipeline import RefinerPipeline, read_csv, read_jsonl
+from refiner.pipeline import RefinerPipeline, from_items, read_csv, read_jsonl
 from refiner.pipeline.resources import GPU
 from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
@@ -1515,6 +1515,91 @@ def test_launch_local_runs_planned_stages_sequentially(
     assert stats.output_rows == 3
     assert (rundir / "stage-0").exists()
     assert (rundir / "stage-1").exists()
+
+
+@pytest.mark.parametrize(("items", "expected_workers"), [([1, 2, 3], 2), ([], 0)])
+def test_local_launcher_auto_workers_uses_stage_shard_count(
+    items, expected_workers
+) -> None:
+    launcher = LocalLauncher(
+        pipeline=from_items(items, items_per_shard=2),
+        name="local-auto-workers",
+        num_workers="auto",
+    )
+
+    stages = launcher._resolved_stages()
+
+    assert stages[0].compute.num_workers == expected_workers
+
+
+def test_empty_auto_workers_stage_skips_gpu_discovery(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launcher = LocalLauncher(
+        pipeline=from_items([]),
+        name="empty-auto-gpu",
+        num_workers="auto",
+        rundir=str(tmp_path / "run"),
+        gpu=GPU(count=1, type="h100"),
+    )
+    launcher.job_id = "job-1"
+    stage = launcher._resolved_stages()[0]
+    monkeypatch.setattr(
+        "refiner.launchers.local.build_gpu_sets",
+        lambda **_: pytest.fail("empty stage must not discover GPUs"),
+    )
+
+    stats = launcher._launch_stage(stage=stage)
+
+    assert stats.workers == 0
+    assert stats.claimed == 0
+
+
+def test_resumed_auto_workers_use_remaining_shard_count(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = from_items([1, 2, 3], items_per_shard=1)
+    launcher = LocalLauncher(
+        pipeline=pipeline,
+        name="resume-auto-workers",
+        num_workers="auto",
+        rundir=str(tmp_path / "run"),
+    )
+    launcher.job_id = "job-1"
+    first_two_shards = pipeline.list_shards()[:2]
+    monkeypatch.setattr(
+        "refiner.launchers.local.read_finalized_workers",
+        lambda **_: [
+            type("Finalized", (), {"shard_id": shard.id})()
+            for shard in first_two_shards
+        ],
+    )
+    captured: dict[str, int] = {}
+    monkeypatch.setattr(
+        launcher,
+        "_assign_shards",
+        lambda shards, *, num_workers: (
+            captured.update(num_workers=num_workers) or [shards]
+        ),
+    )
+    monkeypatch.setattr(launcher, "_spawn_local_worker", lambda **_: object())
+    monkeypatch.setattr(
+        launcher,
+        "_collect_worker_results",
+        lambda **kwargs: LaunchStats(
+            job_id="job-1",
+            workers=kwargs["stage_workers"],
+            claimed=0,
+            completed=0,
+            failed=0,
+            output_rows=0,
+        ),
+    )
+
+    stats = launcher._launch_stage(stage=launcher._resolved_stages()[0])
+
+    assert captured["num_workers"] == 1
+    assert stats.workers == 1
 
 
 def test_launch_local_uses_explicit_rundir(tmp_path) -> None:
