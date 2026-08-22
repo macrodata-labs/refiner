@@ -15,6 +15,10 @@ from refiner.pipeline.data.datatype import DTypeMapping, schema_with_dtypes
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline.data.tabular import repeat_scalar, set_or_append_column
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
+from refiner.pipeline.sources.shard_limit import (
+    validate_num_shards,
+    validate_shard_count,
+)
 from refiner.pipeline.sources.readers.utils import (
     BoundedBinaryReader,
     DEFAULT_TARGET_SHARD_BYTES,
@@ -75,6 +79,7 @@ class BaseReader(BaseSource):
             extensions=extensions,
             include_file=include_file,
         )
+        validate_num_shards(num_shards)
         self.target_shard_bytes = max(1, target_shard_bytes)
         self.num_shards = num_shards
         self.file_path_column = file_path_column
@@ -243,6 +248,8 @@ class BaseReader(BaseSource):
             shards.append(
                 Shard.from_file_parts(current_parts, global_ordinal=len(shards))
             )
+            if num_shards is None or num_shards <= 0:
+                validate_shard_count(len(shards), source=self.name)
             current_parts = []
             current_size = 0
             if shard_sizes is not None and len(shards) < len(shard_sizes):

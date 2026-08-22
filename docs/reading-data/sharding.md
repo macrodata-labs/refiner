@@ -48,6 +48,17 @@ pipeline = mdr.read_lerobot(
 )
 ```
 
+Refiner rejects plans above 10,000 shards. This applies both to explicit
+`num_shards` values and to automatic plans derived from input sizes or row
+ranges. If an automatic plan exceeds the limit, increase `target_shard_bytes`
+or set `num_shards` to 10,000 or fewer. If the inputs themselves require more
+than 10,000 shards—for example, more than 10,000 non-empty Zarr stores—combine
+them into fewer inputs before reading them.
+
+`mdr.task(..., num_tasks=...)` has the same 10,000-task limit. For larger
+logical workloads, use 10,000 or fewer tasks and process multiple work units
+inside each task.
+
 Do not overfit shard count before measuring. Too few shards leave workers idle;
 too many shards add scheduling and output overhead.
 
@@ -62,4 +73,3 @@ chunks and then reduces metadata; see [Writing LeRobot](../writing-data/lerobot.
 - [Reader Model](reader-model.md)
 - [Local Launcher](../running-pipelines/local-launcher.md)
 - [Cloud Launcher](../running-pipelines/cloud-launcher.md)
-

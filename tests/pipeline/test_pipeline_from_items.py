@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import pytest
+
 from refiner.pipeline import from_items
 from refiner.pipeline import from_source
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline.data.shard import RowRangeDescriptor
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.sources.base import BaseSource
+
+
+def test_from_items_rejects_shard_count_above_limit() -> None:
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        from_items(range(10_001), items_per_shard=1)
 
 
 def test_from_items_yields_rows_across_shards() -> None:
@@ -45,7 +52,24 @@ class _CustomSource(BaseSource):
         yield DictRow({"x": 2})
 
 
+class _OversizedCustomSource(BaseSource):
+    def list_shards(self) -> list[Shard]:
+        shard = Shard.from_file_parts([FilePart(path="custom", start=0, end=1)])
+        return [shard] * 10_001
+
+    def read_shard(self, shard: Shard) -> Iterator[Row]:
+        del shard
+        return iter(())
+
+
 def test_from_source_accepts_custom_source() -> None:
     pipeline = from_source(_CustomSource()).map(lambda row: {"y": int(row["x"]) + 1})
     out = list(pipeline.iter_rows())
     assert [int(row["y"]) for row in out] == [2, 3]
+
+
+def test_from_source_rejects_custom_shard_plan_above_limit() -> None:
+    pipeline = from_source(_OversizedCustomSource())
+
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        pipeline.list_shards()
