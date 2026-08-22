@@ -54,6 +54,11 @@ file, byte range, or row range in the resulting plan. Across readers, explicit
 `num_shards` values may request up to 50,000 shards; larger requests fail with
 a validation error.
 
+Zarr row-range shards refer to one input store, so automatic planning cannot
+combine more than 1,000 non-empty Zarr stores into one plan. For a larger set,
+group the stores upstream or pass an explicit `num_shards` value to opt into a
+plan within the 50,000-shard hard limit.
+
 Do not overfit shard count before measuring. Too few shards leave workers idle;
 too many shards add scheduling and output overhead.
 
