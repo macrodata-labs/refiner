@@ -16,6 +16,10 @@ from refiner.pipeline.sources.readers import TfdsReader
 from refiner.robotics import RoboticsRow
 from refiner.video import VideoFrameSequence
 
+pytestmark = pytest.mark.skip(
+    reason="TensorFlow dataset iteration can deadlock the shared pytest process"
+)
+
 tfds = pytest.importorskip("tensorflow_datasets")
 pytest.importorskip("tensorflow")
 
