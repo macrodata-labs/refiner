@@ -11,6 +11,27 @@ from refiner.pipeline.sources.lance import LanceSource
 from refiner.pipeline.data.tabular import Tabular
 
 
+def test_load_lance_rejects_explicit_shard_count_above_limit() -> None:
+    with pytest.raises(ValueError, match=r"num_shards must be <= 50,000"):
+        LanceSource("unused.lance", num_shards=50_001)
+
+
+def test_load_lance_caps_automatic_shards_without_dropping_fragments() -> None:
+    source = object.__new__(LanceSource)
+    source.num_shards = None
+    source._dataset_cache = type(
+        "Dataset",
+        (),
+        {"get_fragments": lambda self: [None] * 1_001},
+    )()
+
+    shards = source.list_shards()
+
+    assert len(shards) == 1_000
+    assert shards[0].descriptor.start == 0
+    assert shards[-1].descriptor.end == 1_001
+
+
 def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "input.lance"
