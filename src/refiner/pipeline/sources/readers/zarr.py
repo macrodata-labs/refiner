@@ -62,6 +62,33 @@ def _allocate_automatic_range_budget(counts: list[int]) -> list[int]:
     return allocations
 
 
+def _coalesce_ranges(
+    ranges: Iterator[tuple[int, int]],
+    *,
+    range_count: int,
+    limit: int,
+) -> list[tuple[int, int]]:
+    if range_count <= limit:
+        planned = list(ranges)
+        if len(planned) != range_count:
+            raise ValueError("Zarr input changed during automatic shard planning")
+        return planned
+
+    planned: list[tuple[int, int]] = []
+    group_start: int | None = None
+    observed = 0
+    for observed, (start, end) in enumerate(ranges, start=1):
+        if group_start is None:
+            group_start = start
+        next_boundary = (len(planned) + 1) * range_count // limit
+        if observed == next_boundary:
+            planned.append((group_start, end))
+            group_start = None
+    if observed != range_count or len(planned) != limit:
+        raise ValueError("Zarr input changed during automatic shard planning")
+    return planned
+
+
 class ZarrReader(BaseSource):
     """Read a Zarr group as one row, episode rows, or leading-axis rows."""
 
@@ -222,28 +249,26 @@ class ZarrReader(BaseSource):
             for input, _source_path in self.inputs:
                 with self._open_group(input) as group:
                     arrays = self._selected_arrays(group)
-                    natural_counts.append(
-                        len(
-                            self._shard_ranges(
-                                group,
-                                arrays,
-                                automatic_limit=DEFAULT_MAX_AUTOMATIC_SHARDS + 1,
-                            )
-                        )
-                    )
+                    natural_counts.append(self._natural_shard_count(group, arrays))
             automatic_limits = _allocate_automatic_range_budget(natural_counts)
         else:
+            natural_counts = [0] * len(self.inputs)
             automatic_limits = [None] * len(self.inputs)
 
-        for source_index, ((input, _source_path), automatic_limit) in enumerate(
-            zip(self.inputs, automatic_limits, strict=True)
-        ):
+        for source_index, (
+            (input, _source_path),
+            automatic_limit,
+            natural_count,
+        ) in enumerate(zip(self.inputs, automatic_limits, natural_counts, strict=True)):
             with self._open_group(input) as group:
                 arrays = self._selected_arrays(group)
                 split_ranges = self._shard_ranges(
                     group,
                     arrays,
                     automatic_limit=max(1, automatic_limit)
+                    if automatic_limit is not None
+                    else None,
+                    natural_count=natural_count
                     if automatic_limit is not None
                     else None,
                 )
@@ -454,60 +479,25 @@ class ZarrReader(BaseSource):
         arrays: Mapping[str, Any],
         *,
         automatic_limit: int | None = None,
+        natural_count: int | None = None,
     ) -> list[tuple[int, int]]:
         if self.row_ends is None and not self.split_leading_axis:
             return [(0, 1)]
 
         if self.split_leading_axis:
-            if not arrays:
-                raise ValueError(
-                    "split_leading_axis requires at least one selected array"
-                )
-            lengths: set[int] = set()
-            for array in arrays.values():
-                if not array.shape:
-                    raise ValueError(
-                        "Zarr selected arrays must have a leading dimension to split"
-                    )
-                lengths.add(int(array.shape[0]))
-            if len(lengths) != 1:
-                raise ValueError(
-                    "Zarr selected arrays must have the same leading dimension"
-                )
-            length = lengths.pop()
-            if length == 0:
+            row_count = self._leading_axis_row_count(arrays)
+            if row_count == 0:
                 return []
-            if length % self.leading_axis_row_size != 0:
-                raise ValueError("Zarr leading dimension must be divisible by row size")
-            row_count = length // self.leading_axis_row_size
             if self.num_shards is not None:
                 step = ceil(row_count / self.num_shards)
             else:
-                item_bytes = [
-                    (array, _leading_item_bytes(array)) for array in arrays.values()
-                ]
-                bytes_per_row = (
-                    sum(bytes_count for _, bytes_count in item_bytes)
-                    * self.leading_axis_row_size
-                )
-                target_rows = max(1, self.target_shard_bytes // max(1, bytes_per_row))
-                largest_item_bytes = max(bytes_count for _, bytes_count in item_bytes)
-                chunk_rows = max(
-                    1,
-                    ceil(
-                        max(
-                            int(array.chunks[0])
-                            if array.chunks
-                            else int(array.shape[0])
-                            for array, bytes_count in item_bytes
-                            if bytes_count == largest_item_bytes
-                        )
-                        / self.leading_axis_row_size
-                    ),
-                )
-                step = max(chunk_rows, (target_rows // chunk_rows) * chunk_rows)
+                step = self._automatic_leading_axis_step(arrays)
                 if automatic_limit is not None:
                     range_count = ceil(row_count / step)
+                    if natural_count is not None and natural_count != range_count:
+                        raise ValueError(
+                            "Zarr input changed during automatic shard planning"
+                        )
                     if range_count > automatic_limit:
                         return [
                             (
@@ -543,30 +533,109 @@ class ZarrReader(BaseSource):
                 for start in range(0, row_count, step)
             ]
 
+        natural_ranges = self._iter_automatic_row_end_ranges(row_ends_array, arrays)
+        if automatic_limit is None:
+            return list(natural_ranges)
+        if natural_count is None:
+            natural_count = self._natural_shard_count(group, arrays)
+            natural_ranges = self._iter_automatic_row_end_ranges(row_ends_array, arrays)
+        return _coalesce_ranges(
+            natural_ranges,
+            range_count=natural_count,
+            limit=automatic_limit,
+        )
+
+    def _natural_shard_count(
+        self,
+        group: Any,
+        arrays: Mapping[str, Any],
+    ) -> int:
+        if self.row_ends is None and not self.split_leading_axis:
+            return 1
+        if self.split_leading_axis:
+            row_count = self._leading_axis_row_count(arrays)
+            if row_count == 0:
+                return 0
+            return ceil(row_count / self._automatic_leading_axis_step(arrays))
+
+        row_ends_array = self._row_ends_array(group)
+        row_count = int(row_ends_array.shape[0])
+        if row_count == 0:
+            _check_final_end(arrays, 0, label="row_ends", exact=True)
+            return 0
+        if not arrays:
+            final_end = _validate_row_ends(row_ends_array)
+            _check_final_end(arrays, final_end, label="row_ends", exact=True)
+            return 1
+        return sum(
+            1 for _ in self._iter_automatic_row_end_ranges(row_ends_array, arrays)
+        )
+
+    def _leading_axis_row_count(self, arrays: Mapping[str, Any]) -> int:
+        if not arrays:
+            raise ValueError("split_leading_axis requires at least one selected array")
+        lengths: set[int] = set()
+        for array in arrays.values():
+            if not array.shape:
+                raise ValueError(
+                    "Zarr selected arrays must have a leading dimension to split"
+                )
+            lengths.add(int(array.shape[0]))
+        if len(lengths) != 1:
+            raise ValueError(
+                "Zarr selected arrays must have the same leading dimension"
+            )
+        length = lengths.pop()
+        if length % self.leading_axis_row_size != 0:
+            raise ValueError("Zarr leading dimension must be divisible by row size")
+        return length // self.leading_axis_row_size
+
+    def _automatic_leading_axis_step(self, arrays: Mapping[str, Any]) -> int:
+        item_bytes = [(array, _leading_item_bytes(array)) for array in arrays.values()]
+        bytes_per_row = (
+            sum(bytes_count for _, bytes_count in item_bytes)
+            * self.leading_axis_row_size
+        )
+        target_rows = max(1, self.target_shard_bytes // max(1, bytes_per_row))
+        largest_item_bytes = max(bytes_count for _, bytes_count in item_bytes)
+        chunk_rows = max(
+            1,
+            ceil(
+                max(
+                    int(array.chunks[0]) if array.chunks else int(array.shape[0])
+                    for array, bytes_count in item_bytes
+                    if bytes_count == largest_item_bytes
+                )
+                / self.leading_axis_row_size
+            ),
+        )
+        return max(chunk_rows, (target_rows // chunk_rows) * chunk_rows)
+
+    def _iter_automatic_row_end_ranges(
+        self,
+        row_ends_array: Any,
+        arrays: Mapping[str, Any],
+    ) -> Iterator[tuple[int, int]]:
+        row_count = int(row_ends_array.shape[0])
         bytes_per_step = sum(_leading_item_bytes(array) for array in arrays.values())
-        ranges: list[tuple[int, int]] = []
         shard_start = 0
         current_bytes = 0
         previous_end = 0
-        minimum_rows = (
-            ceil(row_count / automatic_limit) if automatic_limit is not None else 1
-        )
         for row_index, end in _iter_row_ends(row_ends_array):
             if end < previous_end:
                 raise ValueError("Zarr row_ends must be monotonic increasing")
             row_bytes = max(1, end - previous_end) * bytes_per_step
             if (
-                row_index - shard_start >= minimum_rows
+                row_index > shard_start
                 and current_bytes + row_bytes > self.target_shard_bytes
             ):
-                ranges.append((shard_start, row_index))
+                yield shard_start, row_index
                 shard_start = row_index
                 current_bytes = 0
             current_bytes += row_bytes
             previous_end = end
-        ranges.append((shard_start, row_count))
+        yield shard_start, row_count
         _check_final_end(arrays, previous_end, label="row_ends", exact=True)
-        return ranges
 
     def _row_ends_array(self, group: Any) -> Any:
         try:

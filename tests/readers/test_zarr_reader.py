@@ -18,7 +18,10 @@ from refiner.pipeline.data.row import Row
 from refiner.pipeline.data.shard import RowRangeDescriptor
 from refiner.pipeline.sinks.reducer.zarr import ZarrReducerSink
 from refiner.pipeline.sinks.zarr import ZarrSink
-from refiner.pipeline.sources.readers.zarr import ZarrReader
+from refiner.pipeline.sources.readers.zarr import (
+    ZarrReader,
+    _allocate_automatic_range_budget,
+)
 from refiner.worker.context import set_active_run_context, worker_token_for
 from refiner.worker.lifecycle import FinalizedShardWorker, RuntimeLifecycle
 
@@ -514,7 +517,7 @@ def test_read_zarr_bounds_intermediate_row_end_plan(
     monkeypatch.setattr(reader, "_shard_ranges", record_planned_count)
     shards = reader.list_shards()
 
-    assert len(shards) <= 1000
+    assert len(shards) == 1000
     assert planned_counts[-1] == len(shards)
     assert max(planned_counts) <= 1001
     ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
@@ -548,6 +551,10 @@ def test_read_zarr_allocates_automatic_budget_by_input_workload(tmp_path: Path) 
     ]
     assert ranges[0].start == 0
     assert ranges[-1].end == 1001
+
+
+def test_read_zarr_preserves_large_automatic_demand_differences() -> None:
+    assert _allocate_automatic_range_budget([1_001, 1_000_000]) == [2, 998]
 
 
 def test_read_zarr_allows_attrs_only_reads(tmp_path: Path) -> None:
